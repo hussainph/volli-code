@@ -48,6 +48,16 @@ describe("readMcpParallelDevConfig (VC-454)", () => {
     ["an unknown field", { reads: [], parallel: true }, /unknown field "parallel"/],
     ["reads that are not a list", { reads: "github:search" }, /reads must be an array/],
     ["a non-string read", { reads: [7] }, /must be a string/],
+    [
+      "a missing concurrency",
+      { limits: { github: { maxStarts: 2 } } },
+      /maxConcurrent must be a number/,
+    ],
+    [
+      "a string window",
+      { limits: { github: { maxConcurrent: 1, windowMs: "100" } } },
+      /windowMs must be a number/,
+    ],
     ["a read with no tool", { reads: ["github:"] }, /is not "<serverId>:<toolName>"/],
     ["a read with no colon", { reads: ["github"] }, /is not "<serverId>:<toolName>"/],
     ["a read with a bad server id", { reads: ["git hub:search"] }, /is not/],

@@ -18,12 +18,15 @@ import {
   mcpProviderToolName,
   mcpRemovalWarning,
   mcpToolKey,
+  narrowParallelReadEligibility,
+  parseMcpToolKey,
   sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   sanitizeMcpToolDefinition,
   validateMcpToolDefinitions,
   withParallelReadEligibility,
   type McpToolCandidate,
+  type McpToolKey,
   type McpToolDefinition,
   type McpToolId,
 } from "./mcp";
@@ -331,9 +334,11 @@ describe("validateMcpToolDefinitions", () => {
     expect(() =>
       validateMcpToolDefinitions([{ ...base, providerName: "mcp__not valid" as McpToolId }]),
     ).toThrow(/invalid MCP provider name/i);
-    expect(() =>
-      validateMcpToolDefinitions([{ ...base, parallelRead: "yes" as unknown as true }]),
-    ).toThrow(/invalid MCP parallel-read mark/i);
+    for (const damaged of ["yes", false, 1]) {
+      expect(() =>
+        validateMcpToolDefinitions([{ ...base, parallelRead: damaged as unknown as true }]),
+      ).toThrow(/invalid MCP parallel-read mark/i);
+    }
     expect(validateMcpToolDefinitions([base])).toEqual([base]);
     expect(validateMcpToolDefinitions([{ ...base, parallelRead: true }])).toEqual([
       { ...base, parallelRead: true },
@@ -351,11 +356,40 @@ function definition(serverId: string, toolName: string, description: string): Mc
   };
 }
 
+/** Exact keys, parsed the way a host-authored allowlist is. */
+function keys(...values: string[]): ReadonlySet<McpToolKey> {
+  return new Set(
+    values.map((value) => {
+      const parsed = parseMcpToolKey(value);
+      if (!parsed.ok) throw new Error(parsed.reason);
+      return parsed.key;
+    }),
+  );
+}
+
 describe("parallel-read eligibility (VC-454)", () => {
   it("keys a tool by its exact server id and tool name, whatever the name holds", () => {
     expect(mcpToolKey({ serverId: "github", toolName: "search:issues" })).toBe(
       "github:search:issues",
     );
+    expect(parseMcpToolKey("github:search:issues")).toEqual({
+      ok: true,
+      key: "github:search:issues",
+    });
+  });
+
+  it.each([
+    [7, /must be a string/],
+    ["github", /is not "<serverId>:<toolName>"/],
+    ["github:", /is not "<serverId>:<toolName>"/],
+    [":search", /is not "<serverId>:<toolName>"/],
+    ["git hub:search", /is not "<serverId>:<toolName>"/],
+    [`${"s".repeat(MCP_SERVER_ID_MAX_CHARS + 1)}:search`, /is not "<serverId>:<toolName>"/],
+    [`github:${"t".repeat(MCP_TOOL_NAME_MAX_CHARS + 1)}`, /too long/],
+  ])("refuses %s as a key", (value, reason) => {
+    const parsed = parseMcpToolKey(value);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok ? "" : parsed.reason).toMatch(reason);
   });
 
   it("marks exactly the allowlisted tools and never reads what a server says about itself", () => {
@@ -370,7 +404,7 @@ describe("parallel-read eligibility (VC-454)", () => {
 
     const marked = withParallelReadEligibility(
       [listed, claimsReadOnly, nearMiss],
-      new Set(["server-1:read_file"]),
+      keys("server-1:read_file"),
     );
 
     expect(marked).toEqual([{ ...listed, parallelRead: true }, claimsReadOnly, nearMiss]);
@@ -391,20 +425,30 @@ describe("parallel-read eligibility (VC-454)", () => {
 
     const production = withParallelReadEligibility([listed, smuggled], new Set());
     expect(production.every((entry) => entry.parallelRead === undefined)).toBe(true);
-    expect(Object.keys(production[0]!)).toEqual([
-      "serverId",
-      "toolName",
-      "providerName",
-      "description",
-      "inputSchema",
-    ]);
+    expect(production.every((entry) => !("parallelRead" in entry))).toBe(true);
 
-    const stillListed = withParallelReadEligibility(
-      [listed, smuggled],
-      new Set(["server-1:read_file"]),
-    );
+    const stillListed = withParallelReadEligibility([listed, smuggled], keys("server-1:read_file"));
     expect(stillListed[0]).toBe(listed);
-    expect(stillListed[1]).not.toHaveProperty("parallelRead");
+    expect(stillListed[1]).toEqual(definition("server-1", "write_file", "Writes."));
+  });
+
+  it("narrows frozen marks to the current allowlist at attach, and never grants one", () => {
+    const kept = { ...definition("server-1", "read_file", "Reads."), parallelRead: true as const };
+    const revoked = { ...definition("server-1", "list", "Lists."), parallelRead: true as const };
+    const bornUnmarked = definition("server-1", "search", "Searches.");
+
+    const narrowed = narrowParallelReadEligibility(
+      [kept, revoked, bornUnmarked],
+      keys("server-1:read_file", "server-1:search"),
+    );
+
+    expect(narrowed[0]).toBe(kept);
+    expect(narrowed[1]).toEqual(definition("server-1", "list", "Lists."));
+    // Allowlisted now, but born without the mark: it stays sequential.
+    expect(narrowed[2]).toBe(bornUnmarked);
+    expect(narrowParallelReadEligibility([kept], new Set())).toEqual([
+      definition("server-1", "read_file", "Reads."),
+    ]);
   });
 });
 

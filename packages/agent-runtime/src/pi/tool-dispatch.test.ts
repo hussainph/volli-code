@@ -2,6 +2,7 @@ import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type Model } from "@earendil-works/pi-ai";
 import {
   mcpProviderToolName,
+  mcpToolKey,
   withParallelReadEligibility,
   type McpToolDefinition,
 } from "@volli/shared";
@@ -60,7 +61,7 @@ describe("applyToolDispatch", () => {
     const log: string[] = [];
     const [read, mutate] = withParallelReadEligibility(
       [definition("read"), definition("mutate")],
-      new Set(["server-1:read"]),
+      new Set([mcpToolKey(definition("read"))]),
     );
     const tools = [
       tool("write", log),
@@ -83,7 +84,7 @@ describe("applyToolDispatch", () => {
     const log: string[] = [];
     const [first, second] = withParallelReadEligibility(
       [definition("first"), definition("second")],
-      new Set(["server-1:first", "server-1:second"]),
+      new Set([mcpToolKey(definition("first")), mcpToolKey(definition("second"))]),
     );
     const { tools, toolExecution } = applyToolDispatch(
       [tool(first!.providerName, log), tool(second!.providerName, log)],
@@ -91,6 +92,7 @@ describe("applyToolDispatch", () => {
       true,
     );
     const approval = Promise.withResolvers<void>();
+    const parked = Promise.withResolvers<void>();
     const { streamFn } = scriptedProvider([
       { toolCalls: [{ name: first!.providerName }, { name: second!.providerName }] },
       { text: "done" },
@@ -102,13 +104,19 @@ describe("applyToolDispatch", () => {
       beforeToolCall: async ({ toolCall }) => {
         log.push(`approve:${toolCall.id}`);
         // The first call waits on a person; nothing may run around it.
-        if (toolCall.id === "tc-1-0") await approval.promise;
+        if (toolCall.id === "tc-1-0") {
+          parked.resolve();
+          await approval.promise;
+        }
         return undefined;
       },
     });
 
     const run = agent.prompt("go");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await parked.promise;
+    // A whole macrotask: anything Pi would start without awaiting the gate
+    // has had every microtask it needs to start by now.
+    await new Promise((resolve) => setImmediate(resolve));
     expect(log).toEqual(["approve:tc-1-0"]);
     approval.resolve();
     await run;

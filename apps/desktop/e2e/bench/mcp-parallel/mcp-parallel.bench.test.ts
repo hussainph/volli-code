@@ -16,7 +16,6 @@ import {
   composeSession,
   DEFAULT_MCP_SERVER_LIMITS,
   fixtureDefinition,
-  FIXTURE_READ_ALLOWLIST,
   runMcpScenario,
 } from "./harness";
 import { buildMcpBenchReport, DEFAULT_REPEATS } from "./report";
@@ -133,6 +132,7 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
     // One slot per server, a 500 ms read, a four-call batch: two calls reach
     // the servers and two wait in the budget when the person presses stop.
     const composed = await composeSession({
+      arm: "parallel",
       latencyMs: 500,
       serverCount: 2,
       hostLimits: { maxConcurrent: 1, maxStarts: Number.POSITIVE_INFINITY, windowMs: 1_000 },
@@ -151,8 +151,7 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
         // Round-robin over the two servers' reads: a, b, a, b.
         definitions: composed.definitions,
         port: composed.port,
-        allowlist: FIXTURE_READ_ALLOWLIST,
-        arm: "parallel",
+        parallelMcpReads: composed.parallelMcpReads,
         batchSize: 4,
         batchShape: "batched",
         providerLatencyMs: 0,
@@ -199,6 +198,7 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
       toolName: "fixture_mutate",
       // The server's claimed read-only description is not authority. Exact
       // allowlist membership (absent here) keeps this tool sequential.
+      mcpMarked: false,
       sideEffects: 1,
     },
     {
@@ -207,22 +207,27 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
       toolName: "fixture_read",
       // Eligible to overlap on its own, but the built-in write in the same
       // emitted batch is not, so Pi runs the whole batch serially.
+      mcpMarked: true,
       sideEffects: 0,
     },
   ] as const)(
     "serializes built-in file writes mixed with $label in a parallel Session",
-    async ({ serverId, toolName, sideEffects }) => {
+    async ({ serverId, toolName, mcpMarked, sideEffects }) => {
       const workspace = mkdtempSync(join(tmpdir(), "vc454-mcp-negative-control-"));
       const filePath = join(workspace, "fixture.txt");
       writeFileSync(filePath, "initial");
       const composed = await composeSession({
+        arm: "parallel",
         latencyMs: 15,
         serverCount: 1,
         ids: [serverId],
         sideEffect: true,
         workspacePath: workspace,
       });
-      const definition = fixtureDefinition(serverId, serverId, toolName);
+      // Born the way main births a root Session under the fixture allowlist:
+      // only the allowlisted read is marked, whatever the mutation claims.
+      const [definition] = composed.born([fixtureDefinition(serverId, serverId, toolName)]);
+      expect(definition!.parallelRead === true).toBe(mcpMarked);
       const seenByMcp: string[] = [];
       const port: RuntimeMcpPort = {
         call: async (request: RuntimeMcpCall, signal) => {
@@ -237,10 +242,9 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
 
       try {
         const turn = await runRuntimeMcpTurn({
-          definitions: [definition],
+          definitions: [definition!],
           port,
-          allowlist: FIXTURE_READ_ALLOWLIST,
-          arm: "parallel",
+          parallelMcpReads: composed.parallelMcpReads,
           batchSize: 3,
           batchShape: "batched",
           providerLatencyMs: 0,
@@ -248,7 +252,7 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
           workspacePath: workspace,
           batch: [
             { name: "write", args: { path: filePath, content: "first" } },
-            { name: definition.providerName, args: {} },
+            { name: definition!.providerName, args: {} },
             { name: "write", args: { path: filePath, content: "last" } },
           ],
         });

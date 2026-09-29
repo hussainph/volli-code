@@ -415,6 +415,72 @@ describe("McpSessionHost", () => {
     expect(protocol.close).toHaveBeenCalledOnce();
   });
 
+  it("closes a connection that finishes opening after the attachment closed", async () => {
+    let finishOpen!: (value: McpProtocolClient) => void;
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      // An opener that ignores its signal: the late connection must still be
+      // closed rather than leaked.
+      open: () =>
+        new Promise<McpProtocolClient>((resolve) => {
+          finishOpen = resolve;
+        }),
+    });
+    const call = host.port.call(
+      { serverId: "server-1", toolName: "one", arguments: {}, toolCallId: "one" },
+      new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(finishOpen).toBeDefined());
+
+    const closing = host.close();
+    await expect(call).rejects.toThrow("MCP attachment closed");
+    const late = client(async () => ({ content: [] }));
+    finishOpen(late);
+    await closing;
+
+    expect(late.close).toHaveBeenCalledOnce();
+  });
+
+  it("answers a call whose transport failed without waiting on the goodbye", async () => {
+    let finishClose!: () => void;
+    const broken: McpProtocolClient = {
+      listTools: async () => [],
+      callTool: async () => Promise.reject(new McpTransportFailure()),
+      close: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishClose = resolve;
+          }),
+      ),
+    };
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () => broken,
+    });
+
+    await expect(
+      host.port.call(
+        { serverId: server.id, toolName: "one", arguments: {}, toolCallId: "one" },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ isError: true });
+    expect(broken.close).toHaveBeenCalledOnce();
+
+    // The attachment's own close waits for the goodbye still in flight.
+    let closed = false;
+    const closing = host.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    finishClose();
+    await closing;
+    expect(closed).toBe(true);
+    expect(broken.close).toHaveBeenCalledOnce();
+  });
+
   it("reports a failed open as a safe result and opens afresh for the next call", async () => {
     const recovered = client(async () => ({ content: [{ type: "text", text: "recovered" }] }));
     const open = vi

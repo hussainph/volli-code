@@ -4,16 +4,18 @@
  *
  * The Pi-facing half — `createPiAgentRuntime` with a scripted provider, the
  * Authority gate and the Agent Tool Surface — comes from the package's bench
- * surface (`@volli/agent-runtime/bench/mcp-parallel`). This file binds its MCP
- * port the way main does: the Session's calls go through one
- * `McpServerBudget` binding into the real desktop `McpSessionHost` and
- * protocol client, connected to local Streamable HTTP fixture servers. Nothing
- * here is imported by the shipping app.
+ * surface (`@volli/agent-runtime/bench/mcp-parallel`). This file composes its
+ * MCP side with main's own `desktopMcpDispatch`, fed an environment the way
+ * main is: the parallel arm sets `VOLLI_DEV_MCP_PARALLEL`, the sequential arm
+ * sets nothing. Sessions are stamped, attachments bound through the budget,
+ * and disposed, by the same code main runs, into the real desktop
+ * `McpSessionHost` and protocol client, connected to local Streamable HTTP
+ * fixture servers. Nothing here is imported by the shipping app.
  */
 import { tmpdir } from "node:os";
 import {
   DEFAULT_MCP_SERVER_LIMITS,
-  McpServerBudget,
+  type McpServerBudget,
   type McpServerLimits,
 } from "@volli/agent-runtime";
 import {
@@ -22,7 +24,6 @@ import {
   sleep,
   type BatchShape,
   type DispatchArm,
-  type McpParallelAllowlist,
   type RuntimeMcpTurnResult,
   type RuntimeMcpTurnSpec,
   type ToolSample,
@@ -36,6 +37,8 @@ import {
 } from "@volli/shared";
 
 import { openMcpProtocolClient } from "../../../src/main/mcp/client";
+import { desktopMcpDispatch } from "../../../src/main/mcp/dispatch-policy";
+import { MCP_PARALLEL_DEV_ENV } from "../../../src/main/mcp/parallel-dev-config";
 import { McpSessionHost, type McpSessionHostOptions } from "../../../src/main/mcp/session-host";
 import { startFixtureMcpServer, type FixtureMcpServer } from "./http-fixture";
 
@@ -85,10 +88,41 @@ export interface McpRunResult extends RuntimeMcpTurnResult {
  * The fixture's host-authored trust policy: exact `serverId:toolName` keys.
  * Tool descriptions (which claim "read-only") never enter this decision.
  */
-export const FIXTURE_READ_ALLOWLIST: McpParallelAllowlist = new Set([
-  "vc444-fixture-1:fixture_read",
-  "vc444-fixture-2:fixture_read",
-]);
+export const FIXTURE_READS = ["vc444-fixture-1:fixture_read", "vc444-fixture-2:fixture_read"];
+
+/**
+ * The environment main would be launched with for one arm: the parallel arm
+ * opts in with the fixture allowlist, the sequential arm is an ordinary
+ * launch. `hostLimits` becomes the developer's per-server `limits`.
+ */
+export function armEnvironment(
+  arm: DispatchArm,
+  serverIds: readonly string[],
+  hostLimits?: McpServerLimits,
+): Record<string, string> {
+  if (arm === "sequential" && hostLimits === undefined) return {};
+  return {
+    [MCP_PARALLEL_DEV_ENV]: JSON.stringify({
+      reads: arm === "parallel" ? FIXTURE_READS : [],
+      ...(hostLimits === undefined
+        ? {}
+        : {
+            limits: Object.fromEntries(
+              serverIds.map((id) => [
+                id,
+                {
+                  maxConcurrent: hostLimits.maxConcurrent,
+                  windowMs: hostLimits.windowMs,
+                  ...(Number.isFinite(hostLimits.maxStarts)
+                    ? { maxStarts: hostLimits.maxStarts }
+                    : {}),
+                },
+              ]),
+            ),
+          }),
+    }),
+  };
+}
 const monotonicNow = (): number => performance.now();
 
 export function fixtureDefinition(
@@ -174,24 +208,31 @@ export interface ComposedSession {
   fixtures: FixtureMcpServer[];
   host: McpSessionHost;
   budget: McpServerBudget;
-  /** The port a Session's runtime is handed: budget binding over the host. */
+  /** The port a Session's runtime is handed: main's budget binding over the host. */
   port: RuntimeMcpPort;
-  definitions: McpToolDefinition[];
+  /** Whether main's runtime would honour parallel-read marks under this environment. */
+  parallelMcpReads: boolean;
+  /** One read per fixture server, as a Session born under this environment freezes it. */
+  definitions: readonly McpToolDefinition[];
+  /** Stamp other definitions the way main stamps a new root Session's. */
+  born(definitions: readonly McpToolDefinition[]): readonly McpToolDefinition[];
   clients: ClientCounters;
+  /** What main would have logged: a config it ignored, or a long queue wait. */
+  dispatchLog: string[];
   /** Calls as the host saw them, after the budget let them through. */
   hostTrace: Array<ToolSample & { serverId: string }>;
   /** Calls as the runtime saw them, queue wait included. */
   sessionTrace: Array<ToolSample & { serverId: string }>;
-  /** Close the binding, the host and every fixture server. */
+  /** Dispose the attachment as main does, then stop every fixture server. */
   dispose(): Promise<boolean>;
 }
 
 /**
- * Local fixture servers plus the desktop's MCP composition: one budget, one
- * attachment host, one bound port. The budget is fresh per trial so one
- * measurement's window never spends the next one's starts.
+ * Local fixture servers plus main's MCP composition, built fresh per trial so
+ * one measurement's window never spends the next one's starts.
  */
 export async function composeSession(scenario: {
+  arm: DispatchArm;
   latencyMs: number;
   serverCount: 1 | 2;
   coldStartMs?: number;
@@ -227,6 +268,21 @@ export async function composeSession(scenario: {
     await Promise.allSettled(fixtures.map((server) => server.close()));
     throw error;
   }
+  const dispatchLog: string[] = [];
+  const dispatch = desktopMcpDispatch({
+    env: armEnvironment(
+      scenario.arm,
+      fixtures.map((fixture) => fixture.id),
+      scenario.hostLimits,
+    ),
+    packaged: false,
+    log: (message) => dispatchLog.push(message),
+  });
+  // The only thing main logs at construction is an environment it ignored.
+  if (dispatchLog.length > 0) {
+    await Promise.allSettled(fixtures.map((server) => server.close()));
+    throw new Error(`The bench built an environment main would ignore: ${dispatchLog.join("; ")}`);
+  }
   const clients: ClientCounters = { opened: 0, closed: 0 };
   const host = new McpSessionHost({
     workspacePath: scenario.workspacePath ?? tmpdir(),
@@ -235,23 +291,28 @@ export async function composeSession(scenario: {
     ),
     open: countingOpen(clients, scenario.coldStartMs ?? 0),
   });
-  const budget = new McpServerBudget({ limitsFor: () => scenario.hostLimits });
   const hostTrace: ComposedSession["hostTrace"] = [];
   const sessionTrace: ComposedSession["sessionTrace"] = [];
-  const bound = budget.bind(traced(host.port, hostTrace));
+  const attachment = dispatch.bind({
+    port: traced(host.port, hostTrace),
+    close: () => host.close(),
+  });
   return {
     fixtures,
     host,
-    budget,
-    port: traced(bound, sessionTrace),
-    definitions: fixtures.map((server) => fixtureDefinition(server.id, server.id)),
+    budget: dispatch.budget,
+    port: traced({ call: attachment.call }, sessionTrace),
+    parallelMcpReads: dispatch.parallelMcpReads,
+    definitions: dispatch.forNewSession(
+      fixtures.map((server) => fixtureDefinition(server.id, server.id)),
+    ),
+    born: (definitions) => dispatch.forNewSession(definitions),
     clients,
+    dispatchLog,
     hostTrace,
     sessionTrace,
     async dispose() {
-      // The desktop's own dispose order: the binding, then the host.
-      bound.close();
-      await host.close();
+      await attachment.dispose();
       await Promise.all(fixtures.map((server) => server.close()));
       // Every client the host opened was closed, and every fixture server
       // has actually stopped listening — not merely been asked to.
@@ -306,8 +367,7 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
     const spec: RuntimeMcpTurnSpec = {
       definitions,
       port: composed.port,
-      allowlist: FIXTURE_READ_ALLOWLIST,
-      arm: scenario.arm,
+      parallelMcpReads: composed.parallelMcpReads,
       batchSize: scenario.batchSize,
       batchShape: scenario.batchShape,
       providerLatencyMs: scenario.providerLatencyMs,

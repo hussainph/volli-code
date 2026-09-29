@@ -224,15 +224,49 @@ export function mcpProviderToolName(
 /**
  * One MCP tool's exact identity as a host-authored allowlist spells it:
  * `serverId:toolName`. A server id cannot contain `:`, so the first colon
- * always splits it, whatever the tool name holds.
+ * always splits it, whatever the tool name holds. Branded so a key is only
+ * ever built by {@link mcpToolKey} or checked by {@link parseMcpToolKey}.
  */
-export function mcpToolKey(definition: Pick<McpToolDefinition, "serverId" | "toolName">): string {
-  return `${definition.serverId}:${definition.toolName}`;
+export type McpToolKey = string & { readonly __mcpToolKey: unique symbol };
+
+export function mcpToolKey(
+  definition: Pick<McpToolDefinition, "serverId" | "toolName">,
+): McpToolKey {
+  return `${definition.serverId}:${definition.toolName}` as McpToolKey;
+}
+
+/**
+ * Read a key a host wrote by hand, or explain why it is not one: a valid
+ * server id, a colon, and a tool name within the tool-name limit.
+ */
+export function parseMcpToolKey(
+  value: unknown,
+): { ok: true; key: McpToolKey } | { ok: false; reason: string } {
+  if (typeof value !== "string") return { ok: false, reason: "an MCP tool key must be a string" };
+  const colon = value.indexOf(":");
+  const serverId = colon < 0 ? "" : value.slice(0, colon);
+  const toolName = colon < 0 ? "" : value.slice(colon + 1);
+  if (!SERVER_ID.test(serverId) || serverId.length > MCP_SERVER_ID_MAX_CHARS) {
+    return { ok: false, reason: `"${value}" is not "<serverId>:<toolName>"` };
+  }
+  if (toolName.length === 0) {
+    return { ok: false, reason: `"${value}" is not "<serverId>:<toolName>"` };
+  }
+  if (toolName.length > MCP_TOOL_NAME_MAX_CHARS) {
+    return { ok: false, reason: `"${value}" names a tool that is too long` };
+  }
+  return { ok: true, key: mcpToolKey({ serverId, toolName }) };
+}
+
+/** `definition` with no parallel-read mark, every other field kept. */
+function unmarked(definition: McpToolDefinition): McpToolDefinition {
+  const { parallelRead: _dropped, ...rest } = definition;
+  return rest;
 }
 
 /**
  * Stamp host-authored parallel-read eligibility onto the definitions a new
- * Session is about to freeze (VC-454).
+ * root Session is about to freeze (VC-454).
  *
  * The only writer of {@link McpToolDefinition.parallelRead}. A definition
  * whose exact {@link mcpToolKey} is in `allowlist` gains the mark; every other
@@ -244,20 +278,33 @@ export function mcpToolKey(definition: Pick<McpToolDefinition, "serverId" | "too
  */
 export function withParallelReadEligibility(
   definitions: readonly McpToolDefinition[],
-  allowlist: ReadonlySet<string>,
+  allowlist: ReadonlySet<McpToolKey>,
 ): readonly McpToolDefinition[] {
   return definitions.map((definition) => {
     const eligible = allowlist.has(mcpToolKey(definition));
     if (eligible === (definition.parallelRead === true)) return definition;
-    const unmarked: McpToolDefinition = {
-      serverId: definition.serverId,
-      toolName: definition.toolName,
-      providerName: definition.providerName,
-      description: definition.description,
-      inputSchema: definition.inputSchema,
-    };
-    return eligible ? { ...unmarked, parallelRead: true } : unmarked;
+    return eligible ? { ...definition, parallelRead: true } : unmarked(definition);
   });
+}
+
+/**
+ * Keep a frozen mark only while the host still allowlists that exact tool
+ * (VC-454).
+ *
+ * Applied when an existing Session attaches. It can take eligibility away and
+ * never grants it: a tool added to the allowlist after a Session was born
+ * stays unmarked for that Session, while a tool removed from it stops running
+ * in parallel everywhere at the next attach. The durable record is untouched.
+ */
+export function narrowParallelReadEligibility(
+  definitions: readonly McpToolDefinition[],
+  allowlist: ReadonlySet<McpToolKey>,
+): readonly McpToolDefinition[] {
+  return definitions.map((definition) =>
+    definition.parallelRead === true && !allowlist.has(mcpToolKey(definition))
+      ? unmarked(definition)
+      : definition,
+  );
 }
 
 export function isMcpToolId(value: unknown): value is McpToolId {

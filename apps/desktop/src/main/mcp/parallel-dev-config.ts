@@ -28,14 +28,18 @@
  * second). Servers it does not name keep `DEFAULT_MCP_SERVER_LIMITS`, which
  * apply whether or not this variable is set.
  */
-import { validateMcpServerLimits, type McpServerLimits } from "@volli/agent-runtime";
-import { MCP_SERVER_ID_MAX_CHARS, MCP_TOOL_NAME_MAX_CHARS } from "@volli/shared";
+import {
+  DEFAULT_MCP_SERVER_LIMITS,
+  validateMcpServerLimits,
+  type McpServerLimits,
+} from "@volli/agent-runtime";
+import { MCP_SERVER_ID_MAX_CHARS, parseMcpToolKey, type McpToolKey } from "@volli/shared";
 
 export const MCP_PARALLEL_DEV_ENV = "VOLLI_DEV_MCP_PARALLEL";
 
 export interface McpParallelDevConfig {
   /** Exact `serverId:toolName` keys, as `mcpToolKey` spells them. */
-  reads: ReadonlySet<string>;
+  reads: ReadonlySet<McpToolKey>;
   limits: ReadonlyMap<string, McpServerLimits>;
 }
 
@@ -50,33 +54,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function serverIdValid(serverId: string): boolean {
-  return SERVER_ID.test(serverId) && serverId.length <= MCP_SERVER_ID_MAX_CHARS;
+function readKey(entry: unknown): McpToolKey {
+  const parsed = parseMcpToolKey(entry);
+  if (!parsed.ok) throw new Error(`reads entry: ${parsed.reason}`);
+  return parsed.key;
 }
 
-function readKey(entry: unknown): string {
-  if (typeof entry !== "string") throw new Error("every reads entry must be a string");
-  const colon = entry.indexOf(":");
-  const serverId = colon < 0 ? "" : entry.slice(0, colon);
-  const toolName = colon < 0 ? "" : entry.slice(colon + 1);
-  if (!serverIdValid(serverId) || toolName.length === 0) {
-    throw new Error(`reads entry "${entry}" is not "<serverId>:<toolName>"`);
-  }
-  if (toolName.length > MCP_TOOL_NAME_MAX_CHARS) {
-    throw new Error(`reads entry "${entry}" names a tool that is too long`);
-  }
-  return entry;
+/** A number field, or `fallback` when absent; anything else is a mistake. */
+function numberField(record: Record<string, unknown>, field: string, fallback?: number): number {
+  const value = record[field] ?? fallback;
+  if (typeof value !== "number") throw new Error(`${field} must be a number`);
+  return value;
 }
 
 function readLimits(serverId: string, value: unknown): McpServerLimits {
-  if (!serverIdValid(serverId)) throw new Error(`limits key "${serverId}" is not a server id`);
+  if (!SERVER_ID.test(serverId) || serverId.length > MCP_SERVER_ID_MAX_CHARS) {
+    throw new Error(`limits key "${serverId}" is not a server id`);
+  }
   if (!isRecord(value)) throw new Error(`limits for "${serverId}" must be an object`);
-  const { maxConcurrent, maxStarts, windowMs } = value;
   try {
     return validateMcpServerLimits({
-      maxConcurrent: maxConcurrent as number,
-      maxStarts: maxStarts === undefined ? Number.POSITIVE_INFINITY : (maxStarts as number),
-      windowMs: windowMs === undefined ? 1_000 : (windowMs as number),
+      maxConcurrent: numberField(value, "maxConcurrent"),
+      maxStarts: numberField(value, "maxStarts", Number.POSITIVE_INFINITY),
+      windowMs: numberField(value, "windowMs", DEFAULT_MCP_SERVER_LIMITS.windowMs),
     });
   } catch (error) {
     throw new Error(`limits for "${serverId}": ${(error as Error).message}`, { cause: error });

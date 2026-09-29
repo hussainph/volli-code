@@ -200,7 +200,7 @@ export class McpSessionHost {
   readonly #servers: ReadonlyMap<string, McpServerDraft>;
   readonly #open: OpenMcpProtocolClient;
   readonly #clients = new Map<string, ClientEntry>();
-  /** Retired clients still draining; owned here so `close()` can reach them. */
+  /** Retired clients still draining or closing; owned here so `close()` can reach them. */
   readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
   #closed = false;
@@ -281,8 +281,12 @@ export class McpSessionHost {
     } finally {
       combined.release();
       entry.inFlight -= 1;
-      if (entry.retired && entry.inFlight === 0 && this.#retired.delete(entry)) {
-        await this.#closeEntry(entry);
+      // Not awaited: this call's answer does not wait on a goodbye to a
+      // connection it no longer uses, which for HTTP is a request of its own.
+      // The entry stays in `#retired` until the close lands, so `close()`
+      // still waits for it.
+      if (entry.retired && entry.inFlight === 0) {
+        void this.#closeEntry(entry).then(() => this.#retired.delete(entry));
       }
     }
   }

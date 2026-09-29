@@ -50,6 +50,7 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   mcpProviderToolName,
+  parseMcpToolKey,
   withParallelReadEligibility,
   sessionToolIds,
   skillPromptResource,
@@ -2390,7 +2391,12 @@ function batchDefinition(serverId: string, toolName: string): McpToolDefinition 
  * stamped by the one production writer of the mark, never by hand.
  */
 function bornWith(definitions: readonly McpToolDefinition[], ...allowlist: string[]) {
-  return withParallelReadEligibility(definitions, new Set(allowlist));
+  const keys = allowlist.map((entry) => {
+    const parsed = parseMcpToolKey(entry);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    return parsed.key;
+  });
+  return withParallelReadEligibility(definitions, new Set(keys));
 }
 
 describe("startSession", () => {
@@ -3680,11 +3686,13 @@ describe("startSession", () => {
         "end:fixture-1:fixture/second",
         "end:fixture-1:fixture/first",
       ]);
-      // Completion order differs; persisted order and lineage do not. Each
-      // model call reached the port exactly once, under its own id.
+      // The transcript the model is sent (and Pi persists and replays) keeps
+      // source order. The durable activity lifecycle records each call when it
+      // actually finished, in completion order, each under its own id. Each
+      // model call reached the port exactly once, under that same id.
       expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
       expect(run.calls.map((call) => call.toolCallId)).toEqual(["tc-0", "tc-1"]);
-      expect(run.activities.toSorted()).toEqual(["tc-0", "tc-1"]);
+      expect(run.activities).toEqual(["tc-1", "tc-0"]);
     });
 
     it("never lets server metadata opt a tool in", async () => {
@@ -3770,6 +3778,77 @@ describe("startSession", () => {
         "start:fixture-1:fixture/first",
         "start:fixture-1:fixture/second",
       ]);
+    });
+
+    it("dispatches nothing while an approval in an opted-in Session's batch is pending", async () => {
+      // A real parked approval: a refused `git reset --hard` on the main
+      // checkout escalates to a person. Only built-ins can ever be refused,
+      // and a built-in in the batch makes the whole batch sequential, so the
+      // marked reads behind it must wait for the answer and then run in order.
+      const answer = Promise.withResolvers<"allow">();
+      const asked = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const definitions = bornWith(
+        twoReads(),
+        "fixture-1:fixture/first",
+        "fixture-1:fixture/second",
+      );
+      const attachment = fixture({
+        tools: { tools: ["execute"], mcp: definitions },
+        mcp: {
+          call: async (request) => {
+            calls.push(`mcp:${request.toolCallId}`);
+            return { content: [{ type: "text", text: "read" }], isError: false };
+          },
+        },
+      });
+      attachment.spec.authority = {
+        ...attachment.spec.authority,
+        location: "main-checkout",
+        fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+      };
+      attachment.spec.ask = async () => {
+        asked.resolve();
+        return answer.promise;
+      };
+      const exec = vi.fn(async () => {
+        calls.push("exec:tc-0");
+        return { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
+      });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        parallelMcpReads: true,
+        executionEnvFactory: async () =>
+          ({
+            cwd: attachment.worktreePath,
+            exec,
+            cleanup: async () => undefined,
+          }) as unknown as ExecutionEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "git reset --hard" });
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("done");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      const delivery = handle.submitUserMessage("Reset, then read.");
+
+      await asked.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toEqual([]);
+      answer.resolve("allow");
+      await delivery;
+      await handle.close();
+
+      expect(calls).toEqual(["exec:tc-0", "mcp:tc-1", "mcp:tc-2"]);
     });
 
     it("withdraws in-flight and queued calls across two servers when the turn is interrupted", async () => {

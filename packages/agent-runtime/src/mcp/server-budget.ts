@@ -88,10 +88,19 @@ export interface McpServerBudgetOptions {
   limitsFor?: (serverId: string) => McpServerLimits | undefined;
   /** Monotonic milliseconds. */
   now?: () => number;
+  /**
+   * Told about every call that had to wait for the bound, as it is admitted.
+   * A queued call otherwise looks exactly like a slow server; this is how a
+   * host says which one it was.
+   */
+  onQueueWait?: (event: { serverId: string; waitedMs: number }) => void;
 }
 
 interface Waiter {
+  readonly signal: AbortSignal;
+  readonly queuedAt: number;
   admit: (slot: StartSlot | undefined) => void;
+  refuse: () => void;
 }
 
 /** One counted start; `Infinity` until its call settles. */
@@ -100,6 +109,7 @@ interface StartSlot {
 }
 
 interface Lane {
+  readonly serverId: string;
   readonly limits: McpServerLimits;
   active: number;
   peakActive: number;
@@ -129,10 +139,12 @@ export class McpServerBudget {
   readonly #lanes = new Map<string, Lane>();
   readonly #limitsFor: (serverId: string) => McpServerLimits | undefined;
   readonly #now: () => number;
+  readonly #onQueueWait: McpServerBudgetOptions["onQueueWait"];
 
   constructor(options: McpServerBudgetOptions = {}) {
     this.#limitsFor = options.limitsFor ?? (() => undefined);
     this.#now = options.now ?? (() => performance.now());
+    this.#onQueueWait = options.onQueueWait;
   }
 
   /** Put `port` behind this budget for one attachment. */
@@ -155,6 +167,7 @@ export class McpServerBudget {
     };
   }
 
+  /** One server's load now: for tests, benches and diagnostics. */
   load(serverId: string): McpServerLoad {
     const lane = this.#lanes.get(serverId);
     return {
@@ -169,6 +182,7 @@ export class McpServerBudget {
     let lane = this.#lanes.get(serverId);
     if (lane === undefined) {
       lane = {
+        serverId,
         limits: validateMcpServerLimits(this.#limitsFor(serverId) ?? DEFAULT_MCP_SERVER_LIMITS),
         active: 0,
         peakActive: 0,
@@ -190,6 +204,8 @@ export class McpServerBudget {
     const lane = this.#lane(serverId);
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
+        signal,
+        queuedAt: this.#now(),
         admit: (slot) => {
           signal.removeEventListener("abort", withdraw);
           resolve(() => {
@@ -198,9 +214,13 @@ export class McpServerBudget {
             this.#pump(lane);
           });
         },
+        refuse: () => {
+          signal.removeEventListener("abort", withdraw);
+          reject(signal.reason);
+        },
       };
-      // Runs only while the waiter is queued: admission removes this listener
-      // before it resolves, so the waiter is always found.
+      // Runs only while the waiter is queued: admission and refusal both
+      // remove this listener first, so the waiter is always found.
       const withdraw = (): void => {
         lane.queue.splice(lane.queue.indexOf(waiter), 1);
         this.#pump(lane);
@@ -216,16 +236,33 @@ export class McpServerBudget {
   #pump(lane: Lane): void {
     const now = this.#now();
     const { maxConcurrent, maxStarts } = lane.limits;
+    const { serverId } = lane;
     const rated = maxStarts !== Number.POSITIVE_INFINITY;
     lane.slots = lane.slots.filter((slot) => slot.expiresAt > now);
     while (lane.queue.length > 0 && lane.active < maxConcurrent && lane.slots.length < maxStarts) {
       const waiter = lane.queue.shift()!;
+      // Aborted but not yet told: one signal's listeners run one at a time,
+      // so a Session closing with several queued calls withdraws the first
+      // while the rest are already aborted. None of them may be admitted.
+      if (waiter.signal.aborted) {
+        waiter.refuse();
+        continue;
+      }
       lane.active += 1;
       lane.admitted += 1;
       lane.peakActive = Math.max(lane.peakActive, lane.active);
       const slot = rated ? { expiresAt: Number.POSITIVE_INFINITY } : undefined;
       if (slot !== undefined) lane.slots.push(slot);
       waiter.admit(slot);
+      // A side channel, never a participant: told after the call is admitted,
+      // and a hook that throws costs the measurement, not the call.
+      if (now > waiter.queuedAt) {
+        try {
+          this.#onQueueWait?.({ serverId, waitedMs: now - waiter.queuedAt });
+        } catch {
+          // The wait went unreported; the call it describes is already running.
+        }
+      }
     }
     if (lane.timer !== undefined) {
       clearTimeout(lane.timer);

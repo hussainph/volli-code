@@ -275,6 +275,119 @@ describe("McpServerBudget", () => {
     expect(limits.load("s")).toMatchObject({ active: 0, queued: 0, admitted: 40 });
   });
 
+  it("withdraws a call from the middle of the queue and keeps the rest in order", async () => {
+    const port = manualPort();
+    const limits = budget({ s: { maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 } });
+    const bound = limits.bind(port);
+    const middle = new AbortController();
+    const calls = [
+      bound.call(mcpCall("s", "running"), never),
+      bound.call(mcpCall("s", "first"), never),
+      bound.call(mcpCall("s", "middle"), middle.signal),
+      bound.call(mcpCall("s", "last"), never),
+    ];
+    await flush();
+
+    middle.abort(new Error("middle withdrawn"));
+    await expect(calls[2]).rejects.toThrow("middle withdrawn");
+    expect(limits.load("s")).toMatchObject({ active: 1, queued: 2 });
+    for (let index = 0; index < 3; index += 1) {
+      port.pending[0]!.finish();
+      await flush();
+    }
+    await Promise.all([calls[0], calls[1], calls[3]]);
+    expect(port.calls.map((call) => call.toolCallId)).toEqual(["running", "first", "last"]);
+  });
+
+  it("never admits a queued call whose signal aborted before its turn came", async () => {
+    // A window that has already lapsed but whose timer has not fired yet: the
+    // first withdrawal re-checks the lane and finds room. The Session's other
+    // queued call is aborted by then, only not yet told, and must not start.
+    const port = manualPort();
+    const limits = budget({ s: { maxConcurrent: 5, maxStarts: 1, windowMs: 100 } });
+    const closing = limits.bind(port);
+    const first = closing.call(mcpCall("s", "first"), never);
+    await flush();
+    port.pending[0]!.finish();
+    await first;
+    const queued = [
+      closing.call(mcpCall("s", "queued-1"), never),
+      closing.call(mcpCall("s", "queued-2"), never),
+    ];
+    await flush();
+    vi.setSystemTime(Date.now() + 150);
+
+    closing.close();
+
+    await expect(queued[0]).rejects.toThrow("MCP attachment closed");
+    await expect(queued[1]).rejects.toThrow("MCP attachment closed");
+    expect(port.calls.map((call) => call.toolCallId)).toEqual(["first"]);
+    expect(limits.load("s")).toMatchObject({ active: 0, queued: 0, admitted: 1 });
+  });
+
+  it("applies the shipped default to a server the host said nothing about", async () => {
+    const port = manualPort();
+    const limits = budget({});
+    const bound = limits.bind(port);
+    const calls = Array.from({ length: DEFAULT_MCP_SERVER_LIMITS.maxConcurrent + 1 }, (_, index) =>
+      bound.call(mcpCall("unconfigured", `c${index}`), never),
+    );
+    await flush();
+
+    expect(limits.load("unconfigured")).toMatchObject({
+      active: DEFAULT_MCP_SERVER_LIMITS.maxConcurrent,
+      queued: 1,
+    });
+    while (port.pending.length > 0) {
+      port.pending[0]!.finish();
+      await flush();
+    }
+    await Promise.all(calls);
+  });
+
+  it("tells the host how long each queued call waited, and says nothing for one that did not", async () => {
+    const waits: Array<{ serverId: string; waitedMs: number }> = [];
+    const port = manualPort();
+    const bound = new McpServerBudget({
+      limitsFor: () => ({ maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 }),
+      now: () => Date.now(),
+      onQueueWait: (event) => waits.push(event),
+    }).bind(port);
+    const first = bound.call(mcpCall("s", "first"), never);
+    const second = bound.call(mcpCall("s", "second"), never);
+    await flush();
+    await vi.advanceTimersByTimeAsync(40);
+    port.pending[0]!.finish();
+    await first;
+    await flush();
+    port.pending[0]!.finish();
+    await second;
+
+    expect(waits).toEqual([{ serverId: "s", waitedMs: 40 }]);
+  });
+
+  it("admits a queued call even when the host's wait hook throws", async () => {
+    const port = manualPort();
+    const bound = new McpServerBudget({
+      limitsFor: () => ({ maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 }),
+      now: () => Date.now(),
+      onQueueWait: () => {
+        throw new Error("sink down");
+      },
+    }).bind(port);
+    const first = bound.call(mcpCall("s", "first"), never);
+    const second = bound.call(mcpCall("s", "second"), never);
+    await flush();
+    await vi.advanceTimersByTimeAsync(5);
+    port.pending[0]!.finish();
+    await first;
+    await flush();
+
+    expect(port.calls.map((call) => call.toolCallId)).toEqual(["first", "second"]);
+    port.pending[0]!.finish();
+    await second;
+  });
+
   it("refuses a call whose signal is already aborted without queuing it", async () => {
     const port = manualPort();
     const limits = budget({});

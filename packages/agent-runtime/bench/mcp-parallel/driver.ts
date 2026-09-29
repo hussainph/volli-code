@@ -6,10 +6,9 @@
  * Authority gate (`beforeToolCall`), the Agent Tool Surface, the MCP tool
  * wrapper and durable activity observations all run for real. Only the
  * provider is scripted, so no credentials or paid requests are involved. The
- * parallel arm is selected the way a Session is selected in the product: the
- * runtime is built with `parallelMcpReads`, and the Session's MCP definitions
- * are stamped by `withParallelReadEligibility` from a host allowlist. The
- * sequential arm is an ordinary Session on a default runtime.
+ * caller hands in a Session's MCP definitions as they were born — stamped, or
+ * not, by the host's own policy — and whether the runtime honours the marks,
+ * which is how a Session is selected in the product.
  *
  * This module is reachable only through the `@volli/agent-runtime/bench/mcp-parallel`
  * subpath and is never imported by the shipping runtime. It takes the MCP side
@@ -27,7 +26,6 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
-  withParallelReadEligibility,
   type AuthoritySnapshot,
   type McpToolDefinition,
   type ObservabilityEvent,
@@ -49,19 +47,15 @@ export type DispatchArm = "sequential" | "parallel";
 const PROVIDER = "vc454-fixture";
 const MODEL_ID = "vc454-fixture-model";
 
-/** Exact `serverId:toolName` keys a host has audited as idempotent reads. */
-export type McpParallelAllowlist = ReadonlySet<string>;
-
 /** One call the script puts in the batch. */
 export type ScriptedCall = Extract<ScriptedReply, { toolCalls: unknown }>["toolCalls"][number];
 
 export interface RuntimeMcpTurnSpec {
-  /** The server's tools as discovery sanitized them, before any stamping. */
+  /** The Session's MCP definitions as it was born: marked by the host, or not. */
   definitions: readonly McpToolDefinition[];
   port: RuntimeMcpPort;
-  /** The host allowlist the parallel arm's Session is born under. */
-  allowlist: McpParallelAllowlist;
-  arm: DispatchArm;
+  /** Whether the runtime honours the definitions' parallel-read marks. */
+  parallelMcpReads: boolean;
   /** Number of MCP calls in the task, distributed round-robin over `definitions`. */
   batchSize: number;
   /** `batched`: one assistant reply carries every call; `unbatched`: one call per reply. */
@@ -103,7 +97,7 @@ export interface RuntimeMcpTurnResult {
   turnState: string;
   /** From `interrupt()` to the turn and the interrupt both settling, before close. */
   interruptSettleMs?: number;
-  /** Whether the runtime ran the Session's batch in Pi's parallel mode. */
+  /** Whether the runtime selected Pi's parallel mode for this Session. */
   toolExecution: DispatchArm;
 }
 
@@ -159,12 +153,7 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
   const workspacePath = spec.workspacePath ?? join(root, "workspace");
   if (spec.workspacePath === undefined) mkdirSync(workspacePath);
   try {
-    // Born the way the desktop births a root Session: stamped from the host
-    // allowlist, or — the ordinary Session — from an empty one.
-    const definitions = withParallelReadEligibility(
-      spec.definitions,
-      spec.arm === "parallel" ? spec.allowlist : new Set(),
-    );
+    const definitions = spec.definitions;
     const { script, expectedOrder } = replies(spec, definitions);
     const provider = scriptedProvider(script, {
       latencyMs: spec.providerLatencyMs,
@@ -192,7 +181,7 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
     const runtime = createPiAgentRuntime({
       sessionDataDir: join(root, "sessions"),
       models,
-      parallelMcpReads: spec.arm === "parallel",
+      parallelMcpReads: spec.parallelMcpReads,
       observability: { record: (event) => void observability.push(event) },
     });
     const observations: RuntimeObservation[] = [];
@@ -279,7 +268,7 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
       turnState: turns.at(-1) ?? "none",
       ...(interruptSettleMs === undefined ? {} : { interruptSettleMs }),
       toolExecution:
-        spec.arm === "parallel" && definitions.some((definition) => definition.parallelRead)
+        spec.parallelMcpReads && definitions.some((definition) => definition.parallelRead)
           ? "parallel"
           : "sequential",
     };
