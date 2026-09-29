@@ -12,6 +12,10 @@
     "./bench/mcp-parallel": {
       "types": "./bench/mcp-parallel/driver.ts",
       "import": "./bench/mcp-parallel/driver.ts"
+    },
+    "./bench/turn-to-completion": {
+      "types": "./bench/turn-to-completion/real-path.ts",
+      "import": "./bench/turn-to-completion/real-path.ts"
     }
   },
   "scripts": {
