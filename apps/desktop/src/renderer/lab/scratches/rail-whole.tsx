@@ -578,6 +578,7 @@ const HOME_SLICE: ChatSessionSlice = {
     interactions: { active: [], resolved: [] },
     liveExecutor: { id: "exec-1" },
     authority: null,
+    scheduledResume: null,
   },
   transcript: EMPTY_TRANSCRIPT,
   lifecycle: "working",
