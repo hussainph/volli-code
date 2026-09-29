@@ -46,6 +46,7 @@ import {
   skillsIndexResource,
   ticketBranchName,
   userInvokableSkills,
+  withParallelReadEligibility,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
@@ -69,6 +70,7 @@ import type {
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
+import { readMcpParallelDevConfig } from "./mcp/parallel-dev-config";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -215,7 +217,12 @@ import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
 } from "./session-rpc-ipc";
-import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
+import {
+  McpServerBudget,
+  piExecutionEnv,
+  piOwnedModelAccess,
+  piSignIn,
+} from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -1047,6 +1054,20 @@ app.whenReady().then(async () => {
   // birth grants and the door later consumes the exact durable record.
   const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
   const mcpSettings = dbHandle.ok ? new McpSettingsService({ db: dbHandle.db }) : null;
+  // Parallel MCP reads (VC-454): developer-only, read once from the
+  // environment of an unpackaged build and nowhere else — no setting, no UI.
+  // A value that does not parse is logged and treated as absent, which is
+  // one call at a time.
+  const mcpParallelDev = readMcpParallelDevConfig(process.env, { packaged: !isDev });
+  if (mcpParallelDev.kind === "invalid") console.warn(`[volli] ${mcpParallelDev.reason}`);
+  const mcpParallelReads: ReadonlySet<string> =
+    mcpParallelDev.kind === "on" ? mcpParallelDev.config.reads : new Set();
+  // One per process: every Session attached to a server shares its bound, so
+  // a batch in one Session and a call in another queue behind the same limit.
+  const mcpServerBudget = new McpServerBudget({
+    limitsFor: (serverId) =>
+      mcpParallelDev.kind === "on" ? mcpParallelDev.config.limits.get(serverId) : undefined,
+  });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1129,7 +1150,15 @@ app.whenReady().then(async () => {
               mcpTools,
             });
           },
-          resolveMcp: (projectId) => mcpSettings?.selectedTools(projectId) ?? [],
+          // A root Session freezes today's selection, marked eligible for
+          // parallel reads only where the developer allowlist names the exact
+          // tool (VC-454). Always stamped, so an empty allowlist also strips
+          // any mark a stored catalog row might carry.
+          resolveMcp: (projectId) =>
+            withParallelReadEligibility(
+              mcpSettings?.selectedTools(projectId) ?? [],
+              mcpParallelReads,
+            ),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
@@ -1284,6 +1313,9 @@ app.whenReady().then(async () => {
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
           catalogs: piModelAccess.catalogs,
+          // Frozen parallel-read marks take effect only while the developer
+          // opt-in is set (VC-454); unset, every Session is sequential again.
+          parallelMcpReads: mcpParallelDev.kind === "on",
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
@@ -1369,7 +1401,17 @@ app.whenReady().then(async () => {
                       scope.mcpTools,
                     ),
                   });
-                  return { call: host.port.call, dispose: () => host.close() };
+                  // Behind the one per-server budget (VC-454): over-budget
+                  // calls queue, and closing the attachment withdraws this
+                  // Session's queued and in-flight calls and nobody else's.
+                  const bound = mcpServerBudget.bind(host.port);
+                  return {
+                    call: bound.call,
+                    dispose: () => {
+                      bound.close();
+                      return host.close();
+                    },
+                  };
                 },
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in

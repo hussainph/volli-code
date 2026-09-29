@@ -1357,6 +1357,23 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([unusedExecutionEnvFactory]);
   });
 
+  it("passes the developer parallel-read switch through only when main sets it (VC-454)", async () => {
+    const seen: unknown[] = [];
+    for (const parallelMcpReads of [undefined, true] as const) {
+      createPiNativeAdapter({
+        sessionDataDir: "/data/pi-sessions",
+        resolveRuntimeContext: async () => context,
+        ...(parallelMcpReads === undefined ? {} : { parallelMcpReads }),
+        createRuntime: (options) => {
+          seen.push("parallelMcpReads" in options ? options.parallelMcpReads : "absent");
+          return new FakeRuntime();
+        },
+      });
+    }
+
+    expect(seen).toEqual(["absent", true]);
+  });
+
   it("leaves the runtime factory's own default execution environment untouched when none is injected", async () => {
     const seen: unknown[] = [];
     createPiNativeAdapter({

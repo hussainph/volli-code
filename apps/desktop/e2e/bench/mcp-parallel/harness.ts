@@ -1,19 +1,30 @@
 /**
- * VC-444's opt-in, fixture-only MCP benchmark: the app-side composition.
+ * The opt-in, fixture-only MCP benchmark: the app-side composition (VC-444,
+ * re-based onto the real Session path in VC-454).
  *
- * The Pi-facing half — the real Pi `Agent` loop, the VC-245 scripted provider
- * and the Volli MCP tool wrapper — comes from the package's bench surface
- * (`@volli/agent-runtime/bench/mcp-parallel`). This file binds it to the real
- * desktop `McpSessionHost` and protocol client, connected to local Streamable
- * HTTP fixture servers. Nothing here is imported by the shipping app.
+ * The Pi-facing half — `createPiAgentRuntime` with a scripted provider, the
+ * Authority gate and the Agent Tool Surface — comes from the package's bench
+ * surface (`@volli/agent-runtime/bench/mcp-parallel`). This file binds its MCP
+ * port the way main does: the Session's calls go through one
+ * `McpServerBudget` binding into the real desktop `McpSessionHost` and
+ * protocol client, connected to local Streamable HTTP fixture servers. Nothing
+ * here is imported by the shipping app.
  */
 import { tmpdir } from "node:os";
 import {
+  DEFAULT_MCP_SERVER_LIMITS,
+  McpServerBudget,
+  type McpServerLimits,
+} from "@volli/agent-runtime";
+import {
   peakConcurrency,
-  runScriptedMcpTurn,
+  runRuntimeMcpTurn,
   sleep,
   type BatchShape,
+  type DispatchArm,
   type McpParallelAllowlist,
+  type RuntimeMcpTurnResult,
+  type RuntimeMcpTurnSpec,
   type ToolSample,
 } from "@volli/agent-runtime/bench/mcp-parallel";
 import {
@@ -28,7 +39,7 @@ import { openMcpProtocolClient } from "../../../src/main/mcp/client";
 import { McpSessionHost, type McpSessionHostOptions } from "../../../src/main/mcp/session-host";
 import { startFixtureMcpServer, type FixtureMcpServer } from "./http-fixture";
 
-export type { BatchShape };
+export type { BatchShape, DispatchArm };
 export type StartupState = "cold" | "warm";
 
 export interface McpScenario {
@@ -37,29 +48,31 @@ export interface McpScenario {
   startup: StartupState;
   batchSize: number;
   batchShape: BatchShape;
-  mode: "sequential" | "parallel";
+  arm: DispatchArm;
   providerLatencyMs: number;
   coldStartMs: number;
   resultChars?: number;
+  /** The fixture SERVER's own limits, which it enforces by failing calls. */
   maxConcurrent?: number;
   maxRequestsPerWindow?: number;
   rateWindowMs?: number;
+  /** The HOST's per-server bound; the shipped default when absent. */
+  hostLimits?: McpServerLimits;
 }
 
-export interface McpRunResult {
-  elapsedMs: number;
+export interface McpRunResult extends RuntimeMcpTurnResult {
+  /** Summed host call intervals, from dispatch past the budget to settle. */
   toolTimeMs: number;
-  providerRequests: number;
-  providerTokens: number;
-  resultBytes: number;
-  resultTokens: number;
-  toolErrors: number;
+  /** Summed time calls waited in the per-server budget before dispatch. */
+  queueWaitMs: number;
   fixtureErrors: number;
+  fixtureCancelled: number;
   retryCount: number;
-  expectedOrder: string[];
-  resultOrder: string[];
-  completionOrder: string[];
+  /** Peak calls in flight at the host, across servers. */
   peakConcurrency: number;
+  /** Peak calls in flight at the host, per server. */
+  hostPeakPerServer: number[];
+  /** Peak calls the fixture servers themselves saw running. */
   fixturePeakPerServer: number[];
   fixtureCalls: number;
   cleanup: boolean;
@@ -88,7 +101,7 @@ export function fixtureDefinition(
     toolName,
     providerName: mcpProviderToolName(serverId, serverName, toolName),
     // A deliberately untrusted claim: only the fixture-owned exact-name
-    // allowlist below can select a parallel-safe tool in this test harness.
+    // allowlist can select a parallel-safe tool in this harness.
     description: "Read-only and safe to run concurrently (untrusted fixture copy).",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   };
@@ -134,22 +147,69 @@ export function countingOpen(
   };
 }
 
-function toolDefinitionsFor(servers: readonly FixtureMcpServer[]): McpToolDefinition[] {
-  return servers.map((server) => fixtureDefinition(server.id, server.id));
+/** A port that records each call's interval as it passes through. */
+function traced(
+  inner: RuntimeMcpPort,
+  trace: Array<ToolSample & { serverId: string }>,
+): RuntimeMcpPort {
+  return {
+    call: async (request: RuntimeMcpCall, signal) => {
+      const startedAt = monotonicNow();
+      try {
+        return await inner.call(request, signal);
+      } finally {
+        trace.push({
+          tool: request.toolName,
+          toolCallId: request.toolCallId,
+          serverId: request.serverId,
+          startedAt,
+          endedAt: monotonicNow(),
+        });
+      }
+    },
+  };
 }
 
-/** Run one real Pi Agent turn against the local fixture MCP servers. */
-export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResult> {
-  const fixtures: FixtureMcpServer[] = [];
-  let host: McpSessionHost | undefined;
-  const clients: ClientCounters = { opened: 0, closed: 0 };
-  const toolTrace: Array<ToolSample & { serverId: string }> = [];
+export interface ComposedSession {
+  fixtures: FixtureMcpServer[];
+  host: McpSessionHost;
+  budget: McpServerBudget;
+  /** The port a Session's runtime is handed: budget binding over the host. */
+  port: RuntimeMcpPort;
+  definitions: McpToolDefinition[];
+  clients: ClientCounters;
+  /** Calls as the host saw them, after the budget let them through. */
+  hostTrace: Array<ToolSample & { serverId: string }>;
+  /** Calls as the runtime saw them, queue wait included. */
+  sessionTrace: Array<ToolSample & { serverId: string }>;
+  /** Close the binding, the host and every fixture server. */
+  dispose(): Promise<boolean>;
+}
 
+/**
+ * Local fixture servers plus the desktop's MCP composition: one budget, one
+ * attachment host, one bound port. The budget is fresh per trial so one
+ * measurement's window never spends the next one's starts.
+ */
+export async function composeSession(scenario: {
+  latencyMs: number;
+  serverCount: 1 | 2;
+  coldStartMs?: number;
+  resultChars?: number;
+  maxConcurrent?: number;
+  maxRequestsPerWindow?: number;
+  rateWindowMs?: number;
+  hostLimits?: McpServerLimits;
+  sideEffect?: boolean;
+  workspacePath?: string;
+  ids?: readonly string[];
+}): Promise<ComposedSession> {
+  const fixtures: FixtureMcpServer[] = [];
   try {
     for (let index = 0; index < scenario.serverCount; index += 1) {
       fixtures.push(
         await startFixtureMcpServer({
-          id: `vc444-fixture-${index + 1}`,
+          id: scenario.ids?.[index] ?? `vc444-fixture-${index + 1}`,
           latencyMs: scenario.latencyMs + (index === 0 ? 0 : Math.max(5, scenario.latencyMs / 4)),
           ...(scenario.resultChars === undefined ? {} : { resultChars: scenario.resultChars }),
           ...(scenario.maxConcurrent === undefined
@@ -159,21 +219,73 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
             ? {}
             : { maxRequestsPerWindow: scenario.maxRequestsPerWindow }),
           ...(scenario.rateWindowMs === undefined ? {} : { rateWindowMs: scenario.rateWindowMs }),
+          ...(scenario.sideEffect === undefined ? {} : { sideEffect: scenario.sideEffect }),
         }),
       );
     }
+  } catch (error) {
+    await Promise.allSettled(fixtures.map((server) => server.close()));
+    throw error;
+  }
+  const clients: ClientCounters = { opened: 0, closed: 0 };
+  const host = new McpSessionHost({
+    workspacePath: scenario.workspacePath ?? tmpdir(),
+    servers: fixtures.map((fixture, index) =>
+      fixtureDraft(fixture, `VC-454 local fixture ${index + 1}`),
+    ),
+    open: countingOpen(clients, scenario.coldStartMs ?? 0),
+  });
+  const budget = new McpServerBudget({ limitsFor: () => scenario.hostLimits });
+  const hostTrace: ComposedSession["hostTrace"] = [];
+  const sessionTrace: ComposedSession["sessionTrace"] = [];
+  const bound = budget.bind(traced(host.port, hostTrace));
+  return {
+    fixtures,
+    host,
+    budget,
+    port: traced(bound, sessionTrace),
+    definitions: fixtures.map((server) => fixtureDefinition(server.id, server.id)),
+    clients,
+    hostTrace,
+    sessionTrace,
+    async dispose() {
+      // The desktop's own dispose order: the binding, then the host.
+      bound.close();
+      await host.close();
+      await Promise.all(fixtures.map((server) => server.close()));
+      // Every client the host opened was closed, and every fixture server
+      // has actually stopped listening — not merely been asked to.
+      return (
+        clients.opened > 0 &&
+        clients.closed === clients.opened &&
+        fixtures.every((server) => server.closed)
+      );
+    },
+  };
+}
 
-    const servers = fixtures.map((fixture, index) =>
-      fixtureDraft(fixture, `VC-444 local fixture ${index + 1}`),
-    );
-    const open = countingOpen(clients, scenario.startup === "cold" ? scenario.coldStartMs : 0);
-    const activeHost = new McpSessionHost({ workspacePath: tmpdir(), servers, open });
-    host = activeHost;
-    const definitions = toolDefinitionsFor(fixtures);
+function perServerPeak(
+  trace: ReadonlyArray<ToolSample & { serverId: string }>,
+  fixtures: readonly FixtureMcpServer[],
+): number[] {
+  return fixtures.map((fixture) =>
+    peakConcurrency(trace.filter((call) => call.serverId === fixture.id)),
+  );
+}
 
+/** Run one real Session turn against the local fixture MCP servers. */
+export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResult> {
+  const composed = await composeSession({
+    ...scenario,
+    coldStartMs: scenario.startup === "cold" ? scenario.coldStartMs : 0,
+  });
+  const { fixtures, host, definitions } = composed;
+  let disposed = false;
+  try {
     if (scenario.startup === "warm") {
+      // Straight to the host, past the budget: warming is not the workload.
       for (const definition of definitions) {
-        await activeHost.port.call(
+        await host.port.call(
           {
             serverId: definition.serverId,
             toolName: definition.toolName,
@@ -186,31 +298,16 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
       for (const server of fixtures) server.resetMeasurements();
     }
 
-    const port: RuntimeMcpPort = {
-      call: async (request: RuntimeMcpCall, signal) => {
-        const startedAt = monotonicNow();
-        try {
-          return await activeHost.port.call(request, signal);
-        } finally {
-          toolTrace.push({
-            tool: request.toolName,
-            toolCallId: request.toolCallId,
-            serverId: request.serverId,
-            startedAt,
-            endedAt: monotonicNow(),
-          });
-        }
-      },
-    };
-    const turn = await runScriptedMcpTurn({
+    const spec: RuntimeMcpTurnSpec = {
       definitions,
-      port,
+      port: composed.port,
       allowlist: FIXTURE_READ_ALLOWLIST,
+      arm: scenario.arm,
       batchSize: scenario.batchSize,
       batchShape: scenario.batchShape,
-      mode: scenario.mode,
       providerLatencyMs: scenario.providerLatencyMs,
-    });
+    };
+    const turn = await runRuntimeMcpTurn(spec);
 
     const serverCalls = fixtures.flatMap((server) => server.calls);
     const serverErrorKinds: Record<string, number> = {};
@@ -219,44 +316,33 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
         serverErrorKinds[call.status] = (serverErrorKinds[call.status] ?? 0) + 1;
       }
     }
-    const toolTimeMs = toolTrace.reduce((sum, call) => sum + call.endedAt - call.startedAt, 0);
-    const peak = peakConcurrency(toolTrace);
-    const retryCount = toolTrace.length - new Set(toolTrace.map((call) => call.toolCallId)).size;
-
-    await activeHost.close();
-    await Promise.all(fixtures.map((server) => server.close()));
-    // Every client the host opened was closed, and every fixture server has
-    // actually stopped listening — not merely been asked to.
-    const cleanup =
-      clients.opened > 0 &&
-      clients.closed === clients.opened &&
-      fixtures.every((server) => server.closed);
-
-    return {
-      elapsedMs: turn.elapsedMs,
+    const span = (trace: ReadonlyArray<ToolSample>) =>
+      trace.reduce((sum, call) => sum + call.endedAt - call.startedAt, 0);
+    const toolTimeMs = span(composed.hostTrace);
+    const result = {
+      ...turn,
       toolTimeMs,
-      providerRequests: turn.providerRequests,
-      providerTokens: turn.providerTokens,
-      resultBytes: turn.resultBytes,
-      resultTokens: turn.resultTokens,
-      toolErrors: turn.toolErrors,
+      queueWaitMs: Math.max(0, span(composed.sessionTrace) - toolTimeMs),
       fixtureErrors: fixtures.reduce((sum, fixture) => sum + fixture.errors, 0),
-      retryCount,
-      expectedOrder: turn.expectedOrder,
-      resultOrder: turn.resultOrder,
-      completionOrder: turn.completionOrder,
-      peakConcurrency: peak,
+      fixtureCancelled: fixtures.reduce((sum, fixture) => sum + fixture.cancelled, 0),
+      retryCount:
+        composed.hostTrace.length - new Set(composed.hostTrace.map((call) => call.toolCallId)).size,
+      peakConcurrency: peakConcurrency(composed.hostTrace),
+      hostPeakPerServer: perServerPeak(composed.hostTrace, fixtures),
       fixturePeakPerServer: fixtures.map((server) => server.peakConcurrency),
       fixtureCalls: serverCalls.length,
-      cleanup,
-      openClients: clients.opened,
-      closedClients: clients.closed,
       serverErrorKinds,
     };
-  } catch (error) {
-    await host?.close().catch(() => undefined);
-    await Promise.allSettled(fixtures.map((server) => server.close()));
-    throw error;
+    disposed = true;
+    const cleanup = await composed.dispose();
+    return {
+      ...result,
+      cleanup,
+      openClients: composed.clients.opened,
+      closedClients: composed.clients.closed,
+    };
+  } finally {
+    if (!disposed) await composed.dispose().catch(() => false);
   }
 }
 
@@ -267,16 +353,16 @@ export interface BenchRunSet {
 }
 
 export async function runScenarioRepeats(
-  base: Omit<McpScenario, "mode" | "batchShape">,
+  base: Omit<McpScenario, "arm" | "batchShape">,
   repeats: number,
 ): Promise<BenchRunSet> {
   const sequential: McpRunResult[] = [];
   const parallel: McpRunResult[] = [];
   const unbatched: McpRunResult[] = [];
   for (let index = 0; index < repeats; index += 1) {
-    sequential.push(await runMcpScenario({ ...base, mode: "sequential", batchShape: "batched" }));
-    parallel.push(await runMcpScenario({ ...base, mode: "parallel", batchShape: "batched" }));
-    unbatched.push(await runMcpScenario({ ...base, mode: "parallel", batchShape: "unbatched" }));
+    sequential.push(await runMcpScenario({ ...base, arm: "sequential", batchShape: "batched" }));
+    parallel.push(await runMcpScenario({ ...base, arm: "parallel", batchShape: "batched" }));
+    unbatched.push(await runMcpScenario({ ...base, arm: "parallel", batchShape: "unbatched" }));
   }
   return { sequential, parallel, unbatched };
 }
@@ -335,3 +421,5 @@ export function assertSameBatchedOutcome(seq: McpRunResult, par: McpRunResult): 
   if (!seq.cleanup || !par.cleanup)
     throw new Error("A benchmark Session did not clean up its MCP client.");
 }
+
+export { DEFAULT_MCP_SERVER_LIMITS };

@@ -36,6 +36,20 @@ export interface McpToolDefinition {
   providerName: McpToolId;
   description: string;
   inputSchema: McpJsonObject;
+  /**
+   * Host-authored: Volli has audited this exact `(serverId, toolName)` as an
+   * idempotent read that may overlap other such reads in one model batch
+   * (VC-454).
+   *
+   * Written by {@link withParallelReadEligibility} alone, at Session birth,
+   * from the host's own allowlist. It is never copied from anything a server
+   * says: a description, an annotation or a `readOnlyHint` is third-party
+   * data, and {@link sanitizeMcpToolDefinition} never produces this field.
+   * Frozen with the rest of the definition, so a Session keeps what it was
+   * born with. Absent — which is every ordinary Session — means the tool runs
+   * one call at a time.
+   */
+  parallelRead?: true;
 }
 
 export interface McpToolCandidate {
@@ -205,6 +219,45 @@ export function mcpProviderToolName(
   const tool = safeSegment(toolName, "tool").slice(0, Math.max(1, toolBudget));
   const hash = identityHash(`${serverId}\u0000${toolName}`);
   return `mcp__${server}__${tool}__${hash}`;
+}
+
+/**
+ * One MCP tool's exact identity as a host-authored allowlist spells it:
+ * `serverId:toolName`. A server id cannot contain `:`, so the first colon
+ * always splits it, whatever the tool name holds.
+ */
+export function mcpToolKey(definition: Pick<McpToolDefinition, "serverId" | "toolName">): string {
+  return `${definition.serverId}:${definition.toolName}`;
+}
+
+/**
+ * Stamp host-authored parallel-read eligibility onto the definitions a new
+ * Session is about to freeze (VC-454).
+ *
+ * The only writer of {@link McpToolDefinition.parallelRead}. A definition
+ * whose exact {@link mcpToolKey} is in `allowlist` gains the mark; every other
+ * definition loses any mark it carried, so a stored catalog row can never
+ * smuggle one in. Nothing about the definition itself — its description, its
+ * schema, a name that sounds read-only — is consulted. An empty allowlist
+ * returns unmarked definitions, and a definition already in the right state
+ * is returned as the same object.
+ */
+export function withParallelReadEligibility(
+  definitions: readonly McpToolDefinition[],
+  allowlist: ReadonlySet<string>,
+): readonly McpToolDefinition[] {
+  return definitions.map((definition) => {
+    const eligible = allowlist.has(mcpToolKey(definition));
+    if (eligible === (definition.parallelRead === true)) return definition;
+    const unmarked: McpToolDefinition = {
+      serverId: definition.serverId,
+      toolName: definition.toolName,
+      providerName: definition.providerName,
+      description: definition.description,
+      inputSchema: definition.inputSchema,
+    };
+    return eligible ? { ...unmarked, parallelRead: true } : unmarked;
+  });
 }
 
 export function isMcpToolId(value: unknown): value is McpToolId {
@@ -574,6 +627,9 @@ export function validateMcpToolDefinitions(
       throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.reason}`);
     if (!isMcpToolId(definition.providerName)) {
       throw new Error(`Invalid MCP provider name for ${definition.toolName}`);
+    }
+    if (definition.parallelRead !== undefined && definition.parallelRead !== true) {
+      throw new Error(`Invalid MCP parallel-read mark for ${definition.toolName}`);
     }
     const identity = `${definition.serverId}\u0000${definition.toolName}`;
     if (identities.has(identity)) throw new Error(`Duplicate MCP tool ${definition.toolName}`);
