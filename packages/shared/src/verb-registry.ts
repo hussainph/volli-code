@@ -1358,15 +1358,20 @@ export const VERB_REGISTRY = [
     },
     tool: {
       name: "session_start",
-      // Written for the model, and mostly about restraint: a tool that starts
-      // another agent is a tool that will be used to start another agent
-      // unless the description says when not to. The last line is the one a
+      // Written for the model. It leads with WHEN and what the caller gains
+      // (VC-459) — an owner, a worktree, a reviewable branch — and names its
+      // lighter neighbour, `session_delegate`, as the answer for work that
+      // must come back into this conversation, so the two are chosen between
+      // rather than confused. Restraint follows: a tool that starts another
+      // agent needs to say when not to. The last line is the one a
       // caller cannot learn from the schema — this door binds the caller's
       // identity itself, so there is no project or actor field to supply and
       // nothing to be gained by describing oneself.
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
-        "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "Use it for work that deserves its own owner — its own worktree, branch, review and merge — that outlives this conversation, or that the person should follow on the board. From a Board Session this is the default for substantial implementation: create the Ticket first with `volli ticket create` when none exists. For a bounded question or check whose answer you need back in this conversation, use session_delegate instead.",
+        "The new Session knows only its Ticket and your kickoff, so make the kickoff a complete brief: goal, scope, constraints, and what done means. Start independent Tickets together rather than one after another.",
+        "The new Session runs on its own and does not report back into this one.",
         "When the person names a saved Automation, preserve that workflow rather than copying or rewriting its Instructions into a kickoff. If this Session holds `automation_run`, use that tool instead so the saved definition and Run history stay connected. If it does not, explain the missing tool and ask for a Board Session or a manual Run; do not bypass the missing tool with an improvised kickoff.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "Its receipt includes a Session cursor; pass that cursor to session_await so a fast completion between these calls is replayed rather than missed.",
@@ -2183,7 +2188,11 @@ export const VERB_REGISTRY = [
     },
     tool: {
       name: "session_delegate",
-      // Written for the model, and mostly about the three facts the schema
+      // Written for the model. The first two sentences are WHEN (VC-459): the
+      // benefit — context isolation, parallelism, a cheaper tier — and then the
+      // cases that stay inline, because a description that only grants
+      // permission reads as a caveat list and gets used when someone asks.
+      // Everything after is how, and mostly the three facts the schema
       // cannot carry: that a notice arrives later as a message (so the model
       // should go on working rather than wait or poll), that the answer is
       // read through `volli session answer` (a tool result, not its user's
@@ -2191,9 +2200,12 @@ export const VERB_REGISTRY = [
       // editing one file is the model's own coordination problem to avoid).
       // The last line is the same one every control-tier tool ends on.
       description: [
+        "A subagent works in its own context, not yours, and only its answer comes back here. Use it for bounded work when the raw output would crowd this conversation and you will not need it again — a broad codebase search, log or test triage, a diff review, web research — for independent checks to run in parallel, or for a second-opinion review; a cheaper `tier` often fits.",
+        "Stay inline instead for a specific file read, a known-symbol lookup, a small edit, or work that needs what you have already worked out.",
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once.",
-        "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
+        "Keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once: launch independent tasks in the same turn rather than one after another.",
+        "The subagent starts with none of your context, so brief it as if it knows nothing: the goal, the paths and decisions it needs, its constraints, and what the answer should contain. It cannot ask a person, so an unclear requirement comes back as an open question, not a guess.",
+        "It shares this Session's working directory and holds every coding tool, so give each file one owner and keep it clear of edits you are making.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
       ].join(" "),
