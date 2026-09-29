@@ -203,6 +203,19 @@ export function aggregateArm(arm, launches) {
       launches.map((launch) => launch.windows.hydration?.main.wallMs ?? Number.NaN),
     ),
     memory: aggregateMemory(launches),
+    // Process topology: descendants of main by parent pid, before and after
+    // binding. Unchanged counts are the evidence that a bound context is work
+    // inside main, not a process.
+    descendants: {
+      pre: acrossLaunches(
+        launches.map((launch) => launch.memory.pre.descendants?.length ?? Number.NaN),
+      ),
+      post: acrossLaunches(
+        launches.map((launch) => launch.memory.post.descendants?.length ?? Number.NaN),
+      ),
+      appMetricsPre: acrossLaunches(launches.map((launch) => launch.memory.pre.metrics.length)),
+      appMetricsPost: acrossLaunches(launches.map((launch) => launch.memory.post.metrics.length)),
+    },
     // The second forced full GC of each pair: a stop-the-world mark-compact of
     // what is live, before hydration and after it. Absent from runs taken
     // before the probe timed it.

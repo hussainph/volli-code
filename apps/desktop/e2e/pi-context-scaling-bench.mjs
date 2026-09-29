@@ -302,10 +302,36 @@ async function footprintBytes(pid) {
   return match ? Math.round(Number(match[1]) * FOOTPRINT_UNITS[match[2]]) : null;
 }
 
+/**
+ * Every live descendant of Electron main, identified by PARENT pid rather than
+ * by name (VC-366's first caveat: vitest workers were once counted as agent
+ * processes by matching command lines). Taken before and after hydration, so a
+ * bound Pi context that spawned anything would show up here.
+ */
+async function descendantsOf(rootPid) {
+  const table = await sh("ps", ["-A", "-o", "pid=,ppid=,comm="]);
+  const rows = (table ?? "")
+    .split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+    .filter(Boolean)
+    .map(([, pid, ppid, command]) => ({ pid: Number(pid), ppid: Number(ppid), command }));
+  const found = [];
+  const frontier = [rootPid];
+  while (frontier.length > 0) {
+    const parent = frontier.pop();
+    for (const row of rows.filter((candidate) => candidate.ppid === parent)) {
+      found.push({ ...row, command: row.command.split("/").at(-1) });
+      frontier.push(row.pid);
+    }
+  }
+  return found;
+}
+
 async function withFootprints(snapshot) {
   const renderers = snapshot.metrics.filter((metric) => metric.type === "Tab");
   return {
     ...snapshot,
+    descendants: await descendantsOf(snapshot.pid),
     footprint: {
       mainBytes: await footprintBytes(snapshot.pid),
       rendererBytes: await Promise.all(renderers.map((metric) => footprintBytes(metric.pid))),

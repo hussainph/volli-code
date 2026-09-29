@@ -39,6 +39,19 @@ export function markdownTables(aggregate) {
       `| ${label(arm)} | ${history(arm)} | ${arm.launches} | ${fixed(m.mainHeapUsedMiB.pre?.median)} → ${spread(m.mainHeapUsedMiB.delta, 2)} | ${perContext} | ${spread(m.mainHeapTotalMiB.delta)} | ${fixed(m.mainFootprintMiB.pre?.median)} → ${spread(m.mainFootprintMiB.delta)} | ${fixed(m.mainWorkingSetMiB.pre?.median)} → ${spread(m.mainWorkingSetMiB.delta)} | ${spread(m.mainRssMiB.delta)} | ${spread(m.rendererFootprintMiB.delta)} | ${spread(m.rendererWorkingSetMiB.delta)} |`,
     );
   }
+  lines.push(
+    "",
+    "### Process topology (count; median [min–max] across launches)",
+    "",
+    "| bound | entries | descendants of main by parent pid, pre → post | `app.getAppMetrics()` processes, pre → post |",
+    "|---:|---:|---|---|",
+  );
+  for (const arm of arms) {
+    const d = arm.descendants;
+    lines.push(
+      `| ${label(arm)} | ${history(arm)} | ${spread(d.pre, 0)} → ${spread(d.post, 0)} | ${spread(d.appMetricsPre, 0)} → ${spread(d.appMetricsPost, 0)} |`,
+    );
+  }
   if (
     arms.some((arm) => arm.fullGcPauseMs?.post !== null && arm.fullGcPauseMs?.post !== undefined)
   ) {
