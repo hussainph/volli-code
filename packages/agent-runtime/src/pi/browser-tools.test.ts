@@ -765,7 +765,7 @@ describe("browser_find (VC-364)", () => {
     expect(head).toContain("http://localhost:5173/");
     expect(text).toContain("generation 4");
     expect(text).toContain('"delete"');
-    expect(text).toContain("found 3 matches, showing the first 2");
+    expect(text).toContain("found 3 matches, showing 2");
 
     port.find = async () => found({ matches: 2, shown: 2 });
     expect(resultText(await tool.execute("call-f1b", { tabId: "tab-1", query: "d" }))).toContain(
@@ -794,6 +794,8 @@ describe("browser_find (VC-364)", () => {
     const none = resultText(await tool.execute("call-f2", { tabId: "tab-1", query: "zebra" }));
     expect(none).toContain("found no element");
     expect(none).toContain("generation 4");
+    // A search that showed nothing replaced nothing, and says so.
+    expect(none).toContain("latest snapshot still stand");
     expect(none).not.toContain("---");
 
     port.find = async () => found({ findText: "", matches: 0, shown: 0, truncated: true });

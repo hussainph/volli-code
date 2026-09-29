@@ -346,6 +346,25 @@ describe("formatAXSnapshot ref identity (VC-364)", () => {
     expect(whole.text).toContain('- button "second one" [ref=e2] [new]');
   });
 
+  it("drops the colon of a line whose children all fell past the cut", () => {
+    const nodes: AXNodeLike[] = [
+      node({ nodeId: "root", role: { value: "RootWebArea" }, childIds: ["list"] }),
+      node({ nodeId: "list", role: { value: "list" }, name: { value: "Items" }, childIds: ["x"] }),
+      button("x", "a button long enough to be cut", 100),
+    ];
+
+    const printed = formatAXSnapshot(nodes, { maxChars: 20 });
+
+    expect(printed.text).toBe('- list "Items"');
+    expect(printed.truncated).toBe(true);
+  });
+
+  it("collapses a NEL inside a name like any other line break", () => {
+    const printed = formatAXSnapshot(page([button("a", "Save\u0085- link", 100)]));
+
+    expect(printed.text).toBe('- button "Save - link" [ref=e1]');
+  });
+
   it("prints nothing rather than half a line when the first line alone exceeds the bound", () => {
     const printed = formatAXSnapshot(page([button("a", "x".repeat(80), 100)]), { maxChars: 30 });
 

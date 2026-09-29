@@ -476,8 +476,9 @@ export class BrowserTabController {
 
   /** What the next print may draw on: this generation's ledger, if it has one. */
   #ledger(): RefLedger {
-    const readBefore = this.#snapshotGeneration === this.#generation;
-    return { known: this.#known, nextRef: this.#nextRef, markNew: readBefore };
+    // Only an earlier read that SHOWED something makes an element new to the
+    // reader; the ledger is cleared with the generation, so it is exactly that.
+    return { known: this.#known, nextRef: this.#nextRef, markNew: this.#known.size > 0 };
   }
 
   /**
@@ -490,13 +491,15 @@ export class BrowserTabController {
     this.#snapshotGeneration = this.#generation;
     this.#nextRef = printed.nextRef;
     this.#present = new Set(nodes.flatMap((node) => node.backendDOMNodeId ?? []));
-    if (this.#known.size + printed.refs.size > MAX_KNOWN_REFS) {
-      this.#known = new Map();
-      this.#knownRefs = new Map();
-    }
     for (const [ref, backendNodeId] of printed.refs) {
       this.#known.set(backendNodeId, ref);
       this.#knownRefs.set(ref, backendNodeId);
+    }
+    if (this.#known.size > MAX_KNOWN_REFS) {
+      // Past the bound, keep what this read showed. `#nextRef` is untouched,
+      // so a forgotten number is never handed to a different element.
+      this.#known = new Map([...printed.refs].map(([ref, backendNodeId]) => [backendNodeId, ref]));
+      this.#knownRefs = new Map(printed.refs);
     }
   }
 
@@ -514,8 +517,9 @@ export class BrowserTabController {
   /**
    * Search a fresh read of the tree for a literal, case-insensitive query and
    * print only what answers it (VC-364). It is a read like a snapshot: its
-   * refs come from the same ledger, and they REPLACE the actionable set, so
-   * after a find the model acts on what the find showed or reads again.
+   * refs come from the same ledger, and — whenever it printed anything — they
+   * REPLACE the actionable set, so after a find the model acts on what the
+   * find showed or reads again.
    * Nothing here is a selector, a pattern or page script — the query is
    * compared against names Chromium already computed.
    */
@@ -533,7 +537,10 @@ export class BrowserTabController {
       maxChars: Math.min(FIND_MAX_CHARS, this.#limits.maxSnapshotChars),
       ledger: this.#ledger(),
     });
-    this.#adopt(found, nodes);
+    // A find that printed nothing showed the reader nothing, so it replaces
+    // nothing: the latest read that showed something stays the one refs are
+    // judged by, exactly as if this search had not happened.
+    if (found.text !== "") this.#adopt(found, nodes);
     return {
       text: found.text,
       generation: this.#generation,

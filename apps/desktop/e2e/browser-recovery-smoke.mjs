@@ -331,6 +331,8 @@ try {
           "The long fixture did not outrun the snapshot bound",
         );
         const again = await snapshot();
+        // Serialized into Electron with the rest of this callback.
+        // eslint-disable-next-line unicorn/consistent-function-scoping
         const firstRef = (text) => text.match(/link "Article number 0[^"]*" \[ref=(e\d+)\]/)?.[1];
         must(
           firstRef(opened.snapshotText) !== undefined &&

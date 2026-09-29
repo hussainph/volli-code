@@ -720,6 +720,11 @@ describe("BrowserTabController", () => {
   });
 });
 
+/** 800 distinct buttons, backend ids from `from`: short enough to print whole. */
+function batch(from: number): [string, string, number][] {
+  return Array.from({ length: 800 }, (_, index) => ["button", `B${from + index}`, from + index]);
+}
+
 describe("BrowserTabController.find (VC-364)", () => {
   it("finds past the snapshot's bound, and its refs are the ones that act", async () => {
     const page = wire({
@@ -775,6 +780,50 @@ describe("BrowserTabController.find (VC-364)", () => {
       message: expect.stringContaining("did not show it"),
     });
     expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
+  });
+
+  it("leaves the latest snapshot's refs standing when a find shows nothing", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    expect(await controller.find("checkout")).toMatchObject({ text: "", matches: 0 });
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+    ).resolves.toEqual({ target: { ref: "e1", name: "Save" } });
+  });
+
+  it("marks nothing new after an earlier read that showed nothing", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": { nodes: [] } };
+    const controller = new BrowserTabController(wire(answers).transport);
+    await controller.snapshot();
+    answers["Accessibility.getFullAXTree"] = BUTTON_TREE;
+
+    expect((await controller.snapshot()).text).toBe('- button "Save" [ref=e1]');
+  });
+
+  it("past its bound, the ledger keeps only the latest read and never reuses a number", async () => {
+    const answers: Record<string, unknown> = {};
+    const controller = new BrowserTabController(wire(answers).transport);
+    // Thirteen reads of 800 distinct buttons each overflow the 10,000 bound.
+    for (let read = 0; read < 13; read += 1) {
+      answers["Accessibility.getFullAXTree"] = tree(batch(read * 800));
+      expect((await controller.snapshot()).truncated).toBe(false);
+    }
+    // The early batches were forgotten, so a node from one comes back under a
+    // fresh number past every number already shown — never an old one — while
+    // the latest read's elements keep theirs.
+    answers["Accessibility.getFullAXTree"] = tree([
+      ["button", "B9600", 9_600],
+      ["button", "B0", 0],
+    ]);
+
+    expect((await controller.snapshot()).text).toBe(
+      ['- button "B9600" [ref=e9601]', '- button "B0" [ref=e10401] [new]'].join("\n"),
+    );
   });
 
   it("tells no matches apart from an empty tree", async () => {

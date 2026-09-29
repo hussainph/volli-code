@@ -59,9 +59,9 @@ export interface RefLedger {
   /** The number the next element no read has shown will get. */
   nextRef: number;
   /**
-   * Whether this generation was read before. Only then can an element be new
-   * to the reader: on a first read everything is, and marking all of it says
-   * nothing.
+   * Whether an earlier read of this generation showed the reader any element.
+   * Only then can one be new to them: on a first read everything is, and
+   * marking all of it says nothing.
    */
   markNew: boolean;
 }
@@ -174,7 +174,11 @@ function nameOf(node: AXNodeLike): string {
   if (typeof value !== "string") return "";
   // A page's name is one line by decree: the printed shape is Volli's, and a
   // newline inside an accessible name must not mint a line the page wrote.
-  return value.slice(0, SNAPSHOT_MAX_NODE_NAME_CHARS).replace(/\s+/g, " ").trim();
+  // U+0085 (NEL) is a line break some readers honour that `\s` does not match.
+  return value
+    .slice(0, SNAPSHOT_MAX_NODE_NAME_CHARS)
+    .replace(/[\s\u0085]+/g, " ")
+    .trim();
 }
 
 function headingLevel(node: AXNodeLike): number | null {
@@ -293,6 +297,15 @@ interface PlannedLine {
   match: boolean;
 }
 
+/**
+ * A drafted line as printed. The colon is grammar, not content: it exists
+ * exactly when lines print beneath this one — so a line whose children all
+ * fell past the cut loses it.
+ */
+function lineText(line: { text: string; colon: boolean }): string {
+  return line.colon ? `${line.text}:` : line.text;
+}
+
 const NO_LEDGER: RefLedger = { known: new Map(), nextRef: 1, markNew: false };
 
 /**
@@ -308,7 +321,9 @@ function render(
   truncatedByWalk: boolean,
 ): BrowserSnapshotFormat & { keptLines: number } {
   interface Drafted {
+    /** The line without its colon, which is decided only once the cut is known. */
     text: string;
+    colon: boolean;
     ref: string | null;
     backendDOMNodeId: number | null;
     name: string;
@@ -320,7 +335,14 @@ function render(
     const indent = "  ".repeat(line.depth);
     const entry = line.entry;
     if (entry === null) {
-      return { text: `${indent}...`, ref: null, backendDOMNodeId: null, name: "", nextAfter: next };
+      return {
+        text: `${indent}...`,
+        colon: false,
+        ref: null,
+        backendDOMNodeId: null,
+        name: "",
+        nextAfter: next,
+      };
     }
     let text =
       entry.role === null
@@ -343,11 +365,9 @@ function render(
       }
     }
     if (line.match) text += " [match]";
-    // The colon is grammar, not content: it exists exactly when lines print
-    // beneath this one.
-    if (line.colon) text += ":";
     return {
       text,
+      colon: line.colon,
       ref,
       backendDOMNodeId: entry.backendDOMNodeId,
       name: entry.name,
@@ -361,7 +381,7 @@ function render(
   let kept = drafted.length;
   let length = -1;
   for (let index = 0; index < drafted.length; index += 1) {
-    length += drafted[index]!.text.length + 1;
+    length += lineText(drafted[index]!).length + 1;
     if (length > maxChars) {
       kept = index;
       break;
@@ -381,8 +401,12 @@ function render(
     refs.set(line.ref, line.backendDOMNodeId);
     if (line.name !== "" && !names.has(line.ref)) names.set(line.ref, line.name);
   }
+  // A kept line with a colon has its first child on the very next line; when
+  // that line is the first one cut, nothing prints beneath it any more.
+  const last = shown.at(-1);
+  if (last !== undefined && kept < drafted.length) shown[kept - 1] = { ...last, colon: false };
   return {
-    text: shown.map((line) => line.text).join("\n"),
+    text: shown.map(lineText).join("\n"),
     refs,
     names,
     nextRef: kept === 0 ? ledger.nextRef : shown[kept - 1]!.nextAfter,
