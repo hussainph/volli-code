@@ -1,0 +1,27 @@
+$ node apps/desktop/e2e/bench/pi-context-scaling/profile-attach.mjs --entries 1500  # at f249e023, 2026-09-29T17:43:02Z, load { 4.57 6.80 7.98 }
+sidecar: 1502 entries, 4.40 MB
+re-attach ms: 26, 26, 26, 24, 25, 32
+
+self time over 5 re-attaches (135 ms sampled):
+     41 ms  parseJsonlTransaction  session/jsonl/io.js:51
+     29 ms  write  node:string_decoder:76
+     22 ms  splitCompleteLines  session/jsonl/storage.js:7
+     13 ms  (garbage collector)  :0
+      5 ms  (idle)  :0
+      2 ms  attachSession  src/pi/runtime.ts:823
+      2 ms  (program)  :0
+      2 ms  applyValidated  harness/session/in-memory-storage-state.js:54
+      2 ms  scanBranch  harness/session/in-memory-storage-state.js:206
+      1 ms  validateCommittedWrites  harness/session/commit.js:33
+      1 ms  openV4  session/jsonl/storage.js:50
+      1 ms  isSessionUsage  src/pi/runtime.ts:609
+      1 ms  applyValueSetOrListAppend  harness/session/in-memory-storage-state.js:150
+      1 ms  hasEntryId  harness/session/in-memory-storage-state.js:50
+      1 ms  isActivityDescriptor  src/pi/runtime.ts:666
+      1 ms  hasEntryOrUsageId  harness/session/in-memory-storage-state.js:49
+      1 ms  isRecoverableObservation  src/pi/runtime.ts:553
+      1 ms  isRuntimeValue  src/pi/runtime.ts:693
+      1 ms  usageOf  src/pi/transcript.ts:298
+      1 ms  decode  node:internal/encoding:482
+
+network attempts refused: 0
