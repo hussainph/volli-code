@@ -1,7 +1,30 @@
+// @vitest-environment jsdom
+/**
+ * What the rail's Sessions block OFFERS: the create control in its heading,
+ * and the acts a row carries in its own menu and keys (VC-30).
+ *
+ * The first half renders statically, so every store reads its INITIAL state —
+ * an empty roster, which is what those cases are about. The second half mounts,
+ * because a menu and a keypress need a document.
+ */
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionRecord,
+} from "@volli/shared";
 
+import { useSessionsStore } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useUiStore } from "@renderer/stores/ui";
 import { TicketSessionsPanel } from "./ticket-sessions-panel";
+
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
 
 const noop = (): void => {};
 
@@ -66,5 +89,217 @@ describe("TicketSessionsPanel", () => {
     expect(html).toContain('data-testid="ticket-sessions-loading"');
     expect(html).not.toContain("No active sessions");
     expect(html.match(/aria-label="New chat"/g)?.length).toBe(1);
+  });
+});
+
+/* ------------------------------------------------------------ the row's acts */
+
+const chat: ChatSessionRecord = {
+  sessionId: "chat-1",
+  title: "Trace the dropped decorations",
+  projectId: "p1",
+  ticketId: "t1",
+  createdAt: 2,
+  adapterId: "pi",
+  live: true,
+  activity: "waiting",
+  waitingOn: "question",
+  outcome: null,
+  lastActivityAt: 2,
+  bornTicketless: false,
+  role: "ticket",
+  parentSessionId: null,
+  model: null,
+};
+
+const terminal: SessionRecord = {
+  id: "terminal-0",
+  projectId: "p1",
+  ticketId: "t1",
+  harnessId: "claude-code",
+  activeHarnessId: null,
+  harnessSessionId: null,
+  launchKind: "agent",
+  placement: "tab",
+  title: "Closed shell",
+  cwd: "/repo",
+  createdAt: 1,
+  endedAt: 3,
+  exitCode: 0,
+  lastActivityAt: 3,
+  bornTicketless: false,
+};
+
+const rows: SessionListingRow[] = [
+  {
+    kind: "chat",
+    record: chat,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+    read: { unreadSince: 5 },
+  },
+  {
+    kind: "terminal",
+    record: terminal,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  },
+];
+
+let root: Root | null = null;
+let container: HTMLElement | null = null;
+let setRead: ReturnType<typeof vi.fn>;
+/** Which chat Sessions the panel was asked to activate, in order. */
+let activated: string[];
+
+function rowElement(rowId: string): HTMLElement {
+  const node = container?.querySelector<HTMLElement>(`[data-peek-row="${rowId}"]`);
+  if (node === null || node === undefined) throw new Error(`no row ${rowId}`);
+  return node;
+}
+
+/** Radix opens a context menu on the trigger's own `contextmenu` event. */
+async function openMenu(rowId: string): Promise<void> {
+  const trigger = rowElement(rowId).querySelector<HTMLElement>(
+    '[data-slot="context-menu-trigger"]',
+  );
+  await act(async () => {
+    trigger?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 8, clientY: 8 }),
+    );
+  });
+}
+
+function menuItems(): string[] {
+  return [...document.querySelectorAll('[data-slot="context-menu-item"]')].map(
+    (item) => item.textContent ?? "",
+  );
+}
+
+describe("a rail row's acts", () => {
+  beforeEach(async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    activated = [];
+    setRead = vi.fn(async () => ({ ok: true as const, read: { unreadSince: null } }));
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: {
+        sessions: {
+          listForTicket: vi.fn(async () => ({ ok: true as const, sessions: rows })),
+          setRead,
+          peekContent: vi.fn(async () => ({ ok: true as const, content: null })),
+        },
+      },
+    });
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
+    useUiStore.setState({ railFolds: { sessionsRecord: true, worktree: false, usage: false } });
+    useTicketSessionRecordsStore.setState({
+      byTicket: { t1: rows },
+      listingState: { t1: "loaded" },
+      listingError: {},
+    });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <TicketSessionsPanel
+          projectId="p1"
+          ticketId="t1"
+          creating={false}
+          onNewSession={noop}
+          onNewChat={noop}
+          onActivateSession={noop}
+          onActivateChat={(sessionId) => activated.push(sessionId)}
+        />,
+      );
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    root = null;
+    container?.remove();
+    container = null;
+    useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("offers the read item beside Rename on a chat row", async () => {
+    await openMenu("chat:chat-1");
+
+    // The row is unread, so the menu offers the direction that clears it — and
+    // Rename is still there, untouched by the peek (D6).
+    expect(menuItems()).toEqual(["Rename", "Mark as read"]);
+  });
+
+  it("keeps Resume on a resumable record row, and offers it no read item", async () => {
+    await openMenu("session:terminal-0");
+
+    // A terminal companion has no turns to leave unseen (plan §3.5).
+    expect(menuItems()).toEqual(["Resume", "Rename"]);
+  });
+
+  it("still renames a row in place, with the peek's handlers on the list around it", async () => {
+    // The peek listens on the block, never on the row, so the row keeps every
+    // gesture it had: double-clicking the title opens the rename field.
+    // The innermost span: the title's own node is the one carrying the
+    // double-click handler, and its wrapper reads the same textContent because a
+    // person-started row draws no provenance mark beside it.
+    const title = [...rowElement("chat:chat-1").querySelectorAll<HTMLElement>("span")].find(
+      (span) => span.textContent === chat.title && span.children.length === 0,
+    );
+    await act(async () => {
+      title?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+
+    const field = container?.querySelector<HTMLInputElement>("input");
+    expect(field?.getAttribute("aria-label")).toBe(`Rename ${chat.title}`);
+  });
+
+  it("marks the Session read from the menu", async () => {
+    await openMenu("chat:chat-1");
+    const mark = [
+      ...document.querySelectorAll<HTMLElement>('[data-slot="context-menu-item"]'),
+    ].find((item) => item.textContent === "Mark as read");
+    await act(async () => mark?.click());
+
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: false });
+  });
+
+  it("opens the Session from the card, through the row's own activation, and reads it", async () => {
+    // The card's `Open session` is not a second route into a Session: it calls
+    // the row's own activation (`railRowActivation`), and opening reads it (D6).
+    vi.useFakeTimers();
+    try {
+      const target = rowElement("chat:chat-1").querySelector<HTMLElement>("button");
+      // Focus is the cheap door into the same dwell the pointer takes
+      // (`PEEK_FOCUS_DWELL_MS`), and it needs no layout to resolve a row.
+      await act(async () => target?.focus());
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+
+      const open = document.querySelector<HTMLElement>('[aria-label="Open session"]');
+      expect(open).not.toBeNull();
+      await act(async () => open?.click());
+
+      expect(activated).toEqual(["chat-1"]);
+      expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("toggles read with U on the focused row", async () => {
+    const target = rowElement("chat:chat-1").querySelector<HTMLElement>("button");
+    await act(async () => {
+      target?.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+    });
+
+    // The row is unread, so U reads it (D6) — one deliberate key, and the only
+    // read the peek controller ever asks for.
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: false });
   });
 });

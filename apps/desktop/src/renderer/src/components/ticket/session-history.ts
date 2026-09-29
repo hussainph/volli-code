@@ -1,6 +1,10 @@
 import { canResumeTerminalRecord, sessionSourceLabel } from "@volli/session-presentation";
 import {
+  applyHeldOrder,
   isListableSession,
+  isSessionUnread,
+  type SessionOrderMember,
+  type SessionOrderPhase,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -436,6 +440,14 @@ export const SESSION_ROSTER_FILTER_THRESHOLD = 4;
  * make it harder to date. `toSorted` is stable by specification, so "newest
  * first within a rank" is a property of this function rather than of the engine
  * running it.
+ *
+ * WHICH SURFACE USES WHICH (VC-30). This is a re-sort on every build, so a row
+ * moves under the pointer that is reaching for it. The in-ticket rail therefore
+ * draws {@link orderSessionRailRowsByHold} instead — the HELD order both
+ * sidebars share (D7), which lifts on the same events and then keeps still
+ * while a person is pointing at it. This rule stays because Home's roster is
+ * not a hover surface: it is read top-down in a glance, has no peek and no
+ * hold, and attention-first is exactly what it wants.
  */
 export function orderSessionRailRowsByAttention(rows: readonly SessionRailRow[]): SessionRailRow[] {
   return rows.toSorted(
@@ -443,6 +455,76 @@ export function orderSessionRailRowsByAttention(rows: readonly SessionRailRow[])
       sessionAttentionRank(sessionRailRowDotState(left)) -
       sessionAttentionRank(sessionRailRowDotState(right)),
   );
+}
+
+/**
+ * The row id the peek and the held order address a rail row by — the same
+ * `chat:` / `session:` ids the sidebar's listing mints
+ * (`sidebar/active-session-listing.ts`, read back by
+ * `session-peek/peek-subject.ts`).
+ *
+ * One vocabulary across both sidebars is what lets one committed order and one
+ * peek controller serve them: a row id that meant something different here
+ * would make the rail's members unaddressable by the shared rules.
+ */
+export function sessionRailRowId(row: SessionRailRow): string {
+  return row.kind === "chat" ? `chat:${row.row.record.sessionId}` : `session:${row.row.record.id}`;
+}
+
+/** The bare Session id a rail row stands for. */
+export function sessionRailRowSessionId(row: SessionRailRow): string {
+  return row.kind === "chat" ? row.row.record.sessionId : row.row.record.id;
+}
+
+/**
+ * What a rail row is doing, in the held order's three-word vocabulary (D7):
+ * asking for a person, working, or neither.
+ *
+ * Derived from {@link sessionRailRowDotState} rather than from a second read of
+ * the record, so the order lifts a row on exactly the state its own mark is
+ * drawing.
+ */
+export function sessionRailRowPhase(row: SessionRailRow): SessionOrderPhase {
+  const state = sessionRailRowDotState(row);
+  if (state === "waiting") return "waiting";
+  if (state === "working" || state === "setup" || state === "starting") return "working";
+  return "resting";
+}
+
+/** The rail's membership for `stores/session-order.ts`, in its current order. */
+export function sessionRailOrderMembers(rows: readonly SessionRailRow[]): SessionOrderMember[] {
+  return rows.map((row) => ({ id: sessionRailRowId(row), phase: sessionRailRowPhase(row) }));
+}
+
+/**
+ * The live rows in the order the rail's own key last committed to (D7,
+ * amendment A2) — a row the order does not name keeps its place at the end,
+ * which is `applyHeldOrder`'s rule and not a second one.
+ */
+export function orderSessionRailRowsByHold(
+  rows: readonly SessionRailRow[],
+  order: readonly string[],
+): SessionRailRow[] {
+  const identified = rows.map((row) => ({ id: sessionRailRowId(row), row }));
+  return applyHeldOrder(order, identified).map((entry) => entry.row);
+}
+
+/**
+ * Which of a ticket's Sessions have unread work, by Session id (VC-30).
+ *
+ * Read off the LISTING rows, for the reason {@link ticketSessionProvenance}
+ * above is: unread rides on the row wrapper (`SessionListingRow.read`, sparse —
+ * absent is read), and the rail splits its listing into two record arrays
+ * before it builds view rows, so the wrapper is gone by the time a row is
+ * drawn. A ticket nobody has left work in contributes an empty set.
+ */
+export function ticketSessionUnreadIds(rows: readonly SessionListingRow[]): ReadonlySet<string> {
+  const unread = new Set<string>();
+  for (const row of rows) {
+    if (!isSessionUnread(row.read)) continue;
+    unread.add(row.kind === "terminal" ? row.record.id : row.record.sessionId);
+  }
+  return unread;
 }
 
 /**
