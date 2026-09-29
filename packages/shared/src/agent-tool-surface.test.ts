@@ -95,6 +95,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_start",
       "shell_output",
       "shell_kill",
+      "browser_find",
       "session.start",
       "ticket.await",
       "automation.run",
@@ -147,6 +148,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_start",
       "shell_output",
       "shell_kill",
+      "browser_find",
       "ticket.await",
       "session.delegate",
       "session.await",
@@ -195,6 +197,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_start",
       "shell_output",
       "shell_kill",
+      "browser_find",
     ]);
   });
 

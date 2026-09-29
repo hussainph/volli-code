@@ -773,6 +773,7 @@ const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
   screenshot: "Screenshot",
   console: "Read console",
   tabs: "Listed tabs",
+  find: "Searched for",
 };
 
 /** Actions whose object is an element the page named, quoted as the page's words. */
@@ -832,6 +833,18 @@ function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): Act
     return {
       verb,
       object: facet.target,
+      openPath: null,
+      meta: page,
+      metaTone: "muted",
+      detail: null,
+    };
+  }
+  if (facet.action === "find") {
+    // The object is the model's own query, quoted even when it looks like a
+    // ref: it is words searched for, never a handle.
+    return {
+      verb,
+      object: facet.target === null ? null : `“${facet.target}”`,
       openPath: null,
       meta: page,
       metaTone: "muted",

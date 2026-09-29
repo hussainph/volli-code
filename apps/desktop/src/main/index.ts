@@ -1112,6 +1112,11 @@ app.whenReady().then(async () => {
                   "shell_start",
                   "shell_output",
                   "shell_kill",
+                  // The Browser search (VC-364), appended after the shell
+                  // tools for the same Cache Prefix reason. A surface frozen
+                  // before it keeps its list and is handed a port without
+                  // `find`.
+                  "browser_find",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
