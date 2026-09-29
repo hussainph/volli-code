@@ -11,9 +11,20 @@
  * `data-peek-row` (its id) and `data-peek-surface` (which sidebar). A Session
  * row puts them on its `<li>`; a ticket folder puts them on its disclosure
  * BUTTON, because the folder's `<li>` also holds the nested list of its
- * children and a pointer over a child must resolve to the child. The scroll
- * container may mark itself `data-peek-container`; without one the list the
- * handlers are spread on is the clamp (`peek-geometry.ts` takes real bounds).
+ * children and a pointer over a child must resolve to the child.
+ *
+ * HOW THE SCROLLER IS FOUND. The hook looks for it rather than being handed it.
+ * A surface that spread `scrollProps` on a wrapper that does not scroll got
+ * neither dismissal nor clamp: React's `onScroll` is not a bubbling delegate,
+ * and the wrapper's rect is not the box the rows move inside. So
+ * {@link peekScrollerOf} walks up from the rows container to the nearest
+ * ancestor that actually scrolls (`overflow-y: auto | scroll`), an explicit
+ * `[data-peek-container]` overrides the walk, that element's rect is the clamp,
+ * and a scroll of it dismisses through a NATIVE capture listener (scroll events
+ * do not bubble, and a capture listener on the scroller also hears its inner
+ * scrollers). `scrollProps` remains on the binding and remains harmless: a
+ * surface that still spreads it asks for the same dismissal twice, which is
+ * idempotent, and a surface that drops it loses nothing.
  *
  * TWO THINGS A PEEK MUST NEVER DO, both of them recorded on the ticket:
  *
@@ -43,10 +54,13 @@ import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
 
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+
 import { clamp, PEEK_CARD_WIDTH, positionPeek, type PeekPosition } from "./peek-geometry";
 import {
   initialPeekState,
   peekReducer,
+  sameTarget,
   PEEK_DWELL_MS,
   PEEK_FOCUS_DWELL_MS,
   PEEK_GRACE_MS,
@@ -165,15 +179,38 @@ function rowIdOf(node: EventTarget | null): string | undefined {
   return node.closest<HTMLElement>("[data-peek-row]")?.dataset.peekRow;
 }
 
-function sameTarget(a: PeekTarget | null, b: PeekTarget | null): boolean {
-  if (a === null || b === null) return a === b;
-  return a.rowId === b.rowId && a.surface === b.surface;
+/**
+ * Whether focus landed in something a person TYPES into rather than on the row.
+ *
+ * The rail's rows carry an inline rename `<input>` inside the same
+ * `<li data-peek-row>`, so a rename arming a peek would put a card over the
+ * field being edited. Focus inside a control like that is not focus on the row.
+ */
+function isEditableTarget(node: EventTarget | null): boolean {
+  if (!(node instanceof HTMLElement)) return false;
+  if (node.isContentEditable) return true;
+  const tag = node.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
-/** The scroll container a row is clamped to, or the list it was found in. */
-function containerRectOf(row: HTMLElement, list: HTMLElement | null): DOMRect {
-  const container = row.closest<HTMLElement>("[data-peek-container]") ?? list;
-  return (container ?? row).getBoundingClientRect();
+/** Whether an element scrolls its own overflow vertically. */
+function scrollsVertically(element: HTMLElement): boolean {
+  const overflowY = window.getComputedStyle(element).overflowY;
+  return overflowY === "auto" || overflowY === "scroll";
+}
+
+/**
+ * The element the rows actually scroll inside: an explicit `[data-peek-container]`,
+ * else the nearest scrolling ancestor of the rows container (the container
+ * itself counts), else `null` for a list that does not scroll at all.
+ */
+function peekScrollerOf(list: HTMLElement | null, row: HTMLElement): HTMLElement | null {
+  const explicit = row.closest<HTMLElement>("[data-peek-container]");
+  if (explicit !== null) return explicit;
+  for (let node: HTMLElement | null = list ?? row; node !== null; node = node.parentElement) {
+    if (scrollsVertically(node)) return node;
+  }
+  return null;
 }
 
 /**
@@ -305,6 +342,50 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
   const sessionId = subjectRow?.sessionId ?? null;
   const content = usePeekContent(sessionId, ports.readContent, subjectRow?.at ?? 0);
 
+  /**
+   * A peek's subject can leave the listing under it: the Session ends and moves
+   * band, its ticket's folder empties, the rail switches ticket. The card then
+   * renders nothing while `shown` stays set — and `shown !== null` is the hold
+   * (D7), so an unresolvable subject froze the order of BOTH sidebars with no
+   * pointer anywhere and no way back. A peek about nothing closes itself.
+   */
+  const subjectResolved =
+    shown === null ||
+    (subject !== null &&
+      (subject.kind === "session"
+        ? rowOf(subject.rowId) !== undefined
+        : ticketOf(subject.ticketId) !== undefined));
+
+  React.useEffect(() => {
+    if (subjectResolved) return;
+    // A drilled card whose Session is gone must leave the folder peekable again.
+    setFolderView(FOLDER_PEEK_START);
+    dispatch({ type: "subject-gone" });
+  }, [dispatch, subjectResolved]);
+
+  /**
+   * §3.3 — a PIN adopts the Session, and the form is the resident projection's.
+   *
+   * The pulled `content.question` is one fold, taken once; it is the unpinned
+   * preview line and nothing more. Once pinned, the question the card offers is
+   * the live one the chat plane would show (`interactions.active`), so a question
+   * answered in its own tab or cancelled by the runtime leaves the card at the
+   * same instant it leaves the chat rather than presenting a form for a decision
+   * nobody is waiting on. `ports.answer` still refuses the race it cannot see
+   * coming, and the card keeps the words for it.
+   */
+  const adoptChatSession = useChatSessionsStore((store) => store.adoptChatSession);
+  const pinnedSessionId = state.pinned === null ? null : sessionId;
+  React.useEffect(() => {
+    if (pinnedSessionId === null) return;
+    adoptChatSession(pinnedSessionId);
+  }, [adoptChatSession, pinnedSessionId]);
+  const residentQuestion = useChatSessionsStore((store) =>
+    pinnedSessionId === null
+      ? null
+      : (store.sessions[pinnedSessionId]?.projection?.interactions.active[0] ?? null),
+  );
+
   /* ----------------------------------------------------- dismissal & scroll */
 
   const dismiss = React.useCallback(
@@ -313,6 +394,30 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     },
     [dispatch],
   );
+
+  /** The scroller the shown row lives in — the clamp, and what a scroll dismisses. */
+  const scrollerOf = React.useCallback((): HTMLElement | null => {
+    if (shown === null) return null;
+    const row = peekRowElement(shown);
+    return row === null ? null : peekScrollerOf(listRef.current, row);
+  }, [shown]);
+
+  /**
+   * A scroll of the real scroller dismisses (D1).
+   *
+   * Native and capturing, for two reasons React's `onScroll` cannot satisfy:
+   * scroll events do not bubble, so a handler spread on a wrapper never hears
+   * the element below it, and capture on the scroller also hears a scroller
+   * nested inside it.
+   */
+  React.useEffect(() => {
+    if (shown === null) return;
+    const scroller = scrollerOf();
+    if (scroller === null) return;
+    const onScroll = () => dismiss("list-scroll");
+    scroller.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll, { capture: true });
+  }, [dismiss, scrollerOf, shown]);
 
   React.useEffect(() => {
     if (shown === null) return;
@@ -420,8 +525,14 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
       // the peek's business.
       if (rowId !== undefined && rowKeys.current?.(event, { rowId, surface }) === true) return;
 
-      if (event.key === "ArrowDown" || event.key === "j") return step(event, 1);
-      if (event.key === "ArrowUp" || event.key === "k") return step(event, -1);
+      // J/K step whatever the Shift key is doing, exactly as the left band's own
+      // `session-band-keys.ts` reads them: a capital is the same request.
+      if (event.key === "ArrowDown" || event.key === "j" || event.key === "J") {
+        return step(event, 1);
+      }
+      if (event.key === "ArrowUp" || event.key === "k" || event.key === "K") {
+        return step(event, -1);
+      }
       if (rowId === undefined) return;
       const target: PeekTarget = { rowId, surface };
       const row = rowOf(rowId);
@@ -509,17 +620,21 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     }
     const row = peekRowElement(shown);
     if (row === null) return;
+    // The clamp is the box the rows move inside, so a row scrolled half out of
+    // the list does not take its card past the list's edge. A list that does not
+    // scroll clamps to itself, and a row with neither clamps to the row.
+    const container = scrollerOf() ?? listRef.current ?? row;
     setPosition(
       positionPeek({
         row: row.getBoundingClientRect(),
-        container: containerRectOf(row, listRef.current),
+        container: container.getBoundingClientRect(),
         viewport: { width: window.innerWidth, height: window.innerHeight },
         surface: shown.surface,
         cardHeight,
         cardWidth: PEEK_CARD_WIDTH,
       }),
     );
-  }, [cardHeight, shown]);
+  }, [cardHeight, scrollerOf, shown]);
 
   React.useLayoutEffect(measure, [measure]);
 
@@ -631,6 +746,8 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
           position={position}
           cardWidth={PEEK_CARD_WIDTH}
           pinned={state.pinned !== null}
+          // The live question once pinned (§3.3); the pull's own is the preview.
+          activeQuestion={residentQuestion}
           back={
             folderTicket === undefined
               ? undefined
@@ -678,6 +795,9 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
       onKeyDown: onListKeyDown(surface),
       onFocusCapture: (event: React.FocusEvent<HTMLElement>) => {
         listRef.current = event.currentTarget;
+        // A field inside a row is not the row: an inline rename must not open a
+        // card over the name being typed.
+        if (isEditableTarget(event.target)) return;
         const rowId = rowIdOf(event.target);
         if (rowId === undefined || !canPeekRow(rowId)) return;
         clearGrace();

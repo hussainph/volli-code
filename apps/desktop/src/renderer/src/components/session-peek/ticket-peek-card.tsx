@@ -73,6 +73,11 @@ export function TicketPeekCard({
       ref={ref}
       role="note"
       aria-label={`Peek at ${id}, ${count}`}
+      // Focusable on request, never in the tab order: `Space` on an open folder
+      // peek moves INTO this card (the hook calls `focus()` on it), and an
+      // element with no tabIndex refuses that silently. Hover still takes
+      // nothing — -1 answers only a deliberate `focus()`.
+      tabIndex={-1}
       data-peek-card=""
       data-peek-subject="ticket"
       style={peekFrameStyle(position, cardWidth)}
@@ -117,7 +122,13 @@ export function TicketPeekCard({
           <ArrowSquareOutIcon />
         </Button>
       </header>
-      {/* 4px + a row's 8px puts every mark on the 12px inset; 6px + 6px is the 12px rhythm. */}
+      {/*
+        4px + a row's 8px puts every mark on the card's measured 12px inset, and
+        6px + a row's 6px is that same 12px at the list's top and bottom edge.
+        Both halves are off the spacing ladder by measurement (recorded in
+        `docs/DESIGN.md`): the row's 6px is the two-line row's own inset, the same
+        fact `ui/list-row.tsx` records for `density="two-line"`.
+      */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 py-1.5">
         <ul className="flex flex-col" aria-label={`${id} sessions`}>
           {sessions.map((session) => (

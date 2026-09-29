@@ -308,7 +308,7 @@ describe("a question", () => {
   });
 
   it("mounts the SHIPPED InteractionCard once pinned, not a form of its own", () => {
-    render({ pinned: true, content: content({ question: QUESTION }) });
+    render({ pinned: true, content: content({ question: QUESTION }), activeQuestion: QUESTION });
     // The shipped card's own controls, by their labels (interaction-ui.tsx).
     expect(container.textContent).toContain("Send answer");
     expect(container.textContent).toContain("Recompute on scroll end");
@@ -322,7 +322,12 @@ describe("a question", () => {
     // The override is asserted directly: the card was handed THIS mock, so the
     // refusal it reports is the one this port answered with.
     const onAnswer = vi.fn<SessionPeekCardProps["onAnswer"]>(() => Promise.resolve(false));
-    render({ pinned: true, content: content({ question: QUESTION }), onAnswer });
+    render({
+      pinned: true,
+      content: content({ question: QUESTION }),
+      activeQuestion: QUESTION,
+      onAnswer,
+    });
     press(button("Recompute on scroll end"));
 
     // jsdom fires no submit from a button press, so the card's own form is asked
@@ -334,6 +339,35 @@ describe("a question", () => {
     expect(onAnswer).toHaveBeenCalledWith("question:q1", expect.anything());
     const answer = container.querySelector("[data-peek-refused]");
     expect(answer?.textContent).toBe("That question was already answered.");
+  });
+});
+
+describe("the question a pinned card answers (§3.3)", () => {
+  it("is the RESIDENT projection's, not the fold the pull happened to catch", () => {
+    // The pull still carries the question it read; the Session's live
+    // interactions no longer do, because it was answered in its own tab.
+    render({ pinned: true, content: content({ question: QUESTION }), activeQuestion: null });
+
+    // No form for a decision nobody is waiting on, and no preview line either:
+    // what a pinned card with nothing to answer offers is a message.
+    expect(container.textContent).not.toContain("Send answer");
+    expect(container.querySelector("[data-peek-question]")).toBeNull();
+    expect(container.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("drives the form from the live question when the fold never saw one", () => {
+    // The other order of the same race: the question opened after the pull.
+    render({ pinned: true, content: content(), activeQuestion: QUESTION });
+    expect(container.textContent).toContain("Send answer");
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("previews the pulled question while UNPINNED, whatever the projection holds", () => {
+    render({ content: content({ question: QUESTION }), activeQuestion: null });
+    expect(container.querySelector("[data-peek-question]")?.textContent).toBe(
+      "Which fix should land first?",
+    );
+    expect(button("Answer")).toBeDefined();
   });
 });
 
@@ -455,6 +489,16 @@ describe("the ways out", () => {
     const spies = render({ pinned: true });
     press(button("Close reply"));
     expect(spies.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("can be focused on request but never sits in the tab order", () => {
+    // `Space` into a card, `Escape` out of a field and the drill's way back all
+    // call `focus()` on this element: without a tabIndex every one is a no-op.
+    render();
+    const card = container.querySelector<HTMLElement>("[data-peek-card]")!;
+    expect(card.getAttribute("tabindex")).toBe("-1");
+    act(() => card.focus());
+    expect(document.activeElement).toBe(card);
   });
 
   it("is a note when read and a dialog when pinned", () => {

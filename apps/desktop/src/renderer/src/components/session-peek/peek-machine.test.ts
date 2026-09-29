@@ -20,6 +20,7 @@ import {
   PEEK_GRACE_MS,
   PEEK_SUPPRESSION_MS,
   PEEK_WARM_DWELL_MS,
+  sameTarget,
   type PeekEvent,
   type PeekState,
   type PeekTarget,
@@ -252,6 +253,40 @@ describe("the pin", () => {
     // Unpinned there is no dialog to fall back to, so the label stands.
     const unpinnedField = run([...hoverOpen(ROW), { type: "focus-field" }]);
     expect(peekReducer(unpinnedField, { type: "blur-field" }).focus).toBe("field");
+  });
+});
+
+describe("a subject that left the listing", () => {
+  it("closes the card, pin included, so the hold cannot outlive the row", () => {
+    const pinned = run([...hoverOpen(ROW), { type: "pin", target: ROW }, { type: "card-enter" }]);
+    const gone = peekReducer(pinned, { type: "subject-gone" });
+    expect(gone.shown).toBeNull();
+    expect(gone.pinned).toBeNull();
+    expect(gone.overCard).toBe(false);
+    expect(gone.focus).toBe("none");
+  });
+
+  it("suppresses nothing — nobody chose this, so the next row still peeks", () => {
+    const open = run([...hoverOpen(ROW, 1000)]);
+    const gone = peekReducer(open, { type: "subject-gone" });
+    expect(gone.suppressedUntil).toBe(0);
+    expect(run(hoverOpen(OTHER_ROW, 1100), gone).shown).toEqual(OTHER_ROW);
+  });
+
+  it("is a no-op when there is no card and no pin to lose", () => {
+    expect(peekReducer(initialPeekState, { type: "subject-gone" })).toBe(initialPeekState);
+  });
+});
+
+describe("row identity", () => {
+  it("is the row AND its surface, and the view shares the rules' own answer", () => {
+    expect(sameTarget(ROW, { ...ROW })).toBe(true);
+    // The same Session in the other sidebar is a different target.
+    expect(sameTarget(ROW, RAIL_ROW)).toBe(false);
+    expect(sameTarget(ROW, OTHER_ROW)).toBe(false);
+    expect(sameTarget(null, null)).toBe(true);
+    expect(sameTarget(ROW, null)).toBe(false);
+    expect(sameTarget(null, ROW)).toBe(false);
   });
 });
 

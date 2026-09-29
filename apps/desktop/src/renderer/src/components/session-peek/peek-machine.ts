@@ -90,6 +90,14 @@ export type PeekEvent =
   | { readonly type: "focus-field" }
   | { readonly type: "blur-field" }
   | { readonly type: "escape"; readonly now: number }
+  /**
+   * The row the peek stands for is no longer in the listing — it ended, its
+   * ticket moved, the folder emptied. Not a dismissal: nobody chose it, so the
+   * next row's peek must not be suppressed, and a PIN cannot outlive the row it
+   * names (a pin that did would hold `shown` forever and freeze both sidebars'
+   * order with it — D7's hold is `shown !== null`).
+   */
+  | { readonly type: "subject-gone" }
   | {
       readonly type: "dismiss";
       readonly reason: PeekDismissReason;
@@ -123,7 +131,14 @@ export const initialPeekState: PeekState = {
   suppressedUntil: 0,
 };
 
-function sameTarget(a: PeekTarget | null, b: PeekTarget | null): boolean {
+/**
+ * Whether two targets name the same row of the same surface.
+ *
+ * Exported because the view asks the same question the rules do — "is the row
+ * under the pointer the one already shown?" — and two spellings of row identity
+ * is how the two halves drift apart.
+ */
+export function sameTarget(a: PeekTarget | null, b: PeekTarget | null): boolean {
   if (a === null || b === null) return a === b;
   return a.rowId === b.rowId && a.surface === b.surface;
 }
@@ -212,6 +227,12 @@ export function peekReducer(state: PeekState, event: PeekEvent): PeekState {
       }
       if (state.shown !== null) return dismissed(state, event.now + PEEK_SUPPRESSION_MS);
       return state;
+    }
+
+    case "subject-gone": {
+      if (state.shown === null && state.pinned === null) return state;
+      // `suppressedUntil` is deliberately untouched: this was not a decision.
+      return { ...state, shown: null, pinned: null, overCard: false, focus: "none" };
     }
 
     case "dismiss": {

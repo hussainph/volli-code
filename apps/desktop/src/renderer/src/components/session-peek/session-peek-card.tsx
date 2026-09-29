@@ -45,6 +45,7 @@ import {
   type SessionPeekContent,
 } from "@volli/shared";
 import type { InteractionSubmission } from "@volli/session-presentation";
+import type { RendererSessionInteraction } from "@volli/shared";
 
 import { InteractionCard } from "@renderer/components/chat/interaction-ui";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
@@ -74,12 +75,26 @@ export function peekFrameStyle(position: PeekPosition, width: number): React.CSS
 
 export const PEEK_FRAME =
   "flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-ui shadow-overlay outline-none";
+/**
+ * Every strip's inset is the card's measured 12px — `RAIL_PANEL_INSET`'s narrow
+ * rung on a popover, off the spacing ladder by measurement and recorded in
+ * `docs/DESIGN.md`: 8 halves the edge, 16 costs a line of the summary fold.
+ */
 export const CARD_HEADER = "flex shrink-0 items-start gap-2 border-b border-border p-3";
-/** The header's text column: 2px down, so a 20px first line centres on the 24px mark. */
+/**
+ * The header's text column: 2px down, so a 20px first line centres on the 24px
+ * mark, and a 2px join that binds the title to its own meta line. Both measured
+ * (recorded in `docs/DESIGN.md`) — the ladder's 4px step separates them.
+ */
 export const CARD_HEADER_TEXT = "flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5";
+/** The body wears the same measured 12px, as its inset and as its block rhythm. */
 export const CARD_BODY =
   "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain py-3";
-/** A ghost button's icon, pulled 6px left onto the lead column's centre. */
+/**
+ * A ghost button's icon, pulled 6px left onto the lead column's centre: the
+ * control's own inset subtracted, which is a measurement of `Button` and not a
+ * rung of the spacing ladder (recorded in `docs/DESIGN.md`).
+ */
 export const GHOST_ON_LEAD = "-ml-1.5";
 
 /** A block: its icon in the lead column on the first line of text, the text at 44px. */
@@ -108,6 +123,9 @@ export function CardBlock({
  * text's 44px edge.
  */
 export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBack?: () => void }) {
+  // Measured onto the card's lead column, not chosen: the button's own 8px inset
+  // pulled back 2px centres its 12px glyph on the 24px column, and the 14px join
+  // is what lands the label on the same 44px text edge every block uses.
   const crumb = "-ml-0.5 gap-3.5 px-2";
   return (
     <div
@@ -171,11 +189,12 @@ function Identity({
         >
           {row.title}
         </p>
-        <span className="flex items-center gap-1.5 whitespace-nowrap text-ui text-muted-foreground tabular-nums">
+        <span className="flex items-center gap-1 whitespace-nowrap text-ui text-muted-foreground tabular-nums">
           {row.unread ? (
             <>
-              <span data-peek-unread="" className="inline-flex items-center gap-1.5 text-info">
-                <span aria-hidden className="size-1.5 rounded-full bg-info" />
+              <span data-peek-unread="" className="inline-flex items-center gap-1 text-info">
+                {/* The row's own unread dot, at the row's own size. */}
+                <span aria-hidden className="size-2 rounded-full bg-info" />
                 Unread
               </span>
               {age === "" ? null : <span aria-hidden>·</span>}
@@ -293,6 +312,14 @@ export interface SessionPeekCardProps {
   position: PeekPosition;
   cardWidth: number;
   pinned: boolean;
+  /**
+   * The Session's LIVE question, from the resident projection's
+   * `interactions.active` (§3.3). It, and not the pulled fold, is what the pinned
+   * form is driven by: a question answered in its own tab leaves this card the
+   * instant it leaves the chat. Absent — or `null` — while nothing is asked, and
+   * ignored entirely while unpinned, where `content.question` is the preview.
+   */
+  activeQuestion?: RendererSessionInteraction | null;
   /** The `← VLT-14` strip for a card reached by drilling a folder. */
   back?: { ticketLabel: string; onBack(): void };
   /** `false` for a terminal companion and for a folder drill: nobody to answer. */
@@ -320,6 +347,7 @@ export function SessionPeekCard({
   position,
   cardWidth,
   pinned,
+  activeQuestion,
   back,
   canReply,
   onPin,
@@ -339,7 +367,13 @@ export function SessionPeekCard({
   // A terminal companion has no transcript fold and no interactions (§3.5), so
   // its card is identity, ticket, state and `Open session` — nothing else.
   const transcript = row.kind === "chat";
-  const question = transcript ? (content?.question ?? null) : null;
+  // Unpinned: the pull's fold, which is a preview line. Pinned: the resident
+  // projection's active question, which is the one that can still be answered.
+  const question = !transcript
+    ? null
+    : pinned
+      ? (activeQuestion ?? null)
+      : (content?.question ?? null);
   const age = row.at === null ? "" : relativeTime(row.at, now);
   const unreadable = content?.unreadable ?? 0;
 
@@ -376,7 +410,11 @@ export function SessionPeekCard({
       aria-label={
         pinned ? `${question === null ? "Message" : "Answer"} ${row.title}` : `Peek at ${row.title}`
       }
-      tabIndex={pinned ? -1 : undefined}
+      // Programmatically focusable always, in the tab order never: `Space` into a
+      // card, `Escape` out of its field and the drill's way back all call
+      // `focus()` on this element, and a node with no tabIndex silently refuses.
+      // -1 takes focus only when asked, so hovering still steals none.
+      tabIndex={-1}
       data-peek-card=""
       data-peek-subject="session"
       style={peekFrameStyle(position, cardWidth)}

@@ -123,6 +123,16 @@ describe("the ticket it stands for", () => {
     expect(container.textContent).toContain("Doing");
   });
 
+  it("can be focused on request but never sits in the tab order", () => {
+    // `Space` on an open folder peek moves INTO this card, which the hook does by
+    // calling `focus()` on it — a no-op on an element with no tabIndex.
+    render();
+    const card = container.querySelector<HTMLElement>("[data-peek-card]")!;
+    expect(card.getAttribute("tabindex")).toBe("-1");
+    act(() => card.focus());
+    expect(document.activeElement).toBe(card);
+  });
+
   it("counts a single Session in the singular", () => {
     render({ sessions: [SESSIONS[0]!] });
     expect(container.querySelector("[data-peek-card]")?.getAttribute("aria-label")).toBe(
