@@ -158,17 +158,36 @@ describe("the held order", () => {
     ]);
   });
 
-  it("floated, questions stay first: an answered one steps under the question still asked", () => {
+  describe("floated", () => {
     const asked = play(WORLD_START, { kind: "ask", id: "chat-a3" });
-    const order = heldTarget(held, membersOf(asked), "float");
-    expect(order.slice(0, 2)).toEqual(["chat:chat-a3", "chat:chat-a1"]);
+    const floated = heldTarget(held, membersOf(asked), "float");
+    const afterAsk = commitOf([...floated], membersOf(asked));
     const answered = play(asked, { kind: "answer", id: "chat-a3" });
-    const committed = commitOf([...order], membersOf(asked));
-    expect(heldTarget(committed, membersOf(answered), "float")).toEqual([
-      "chat:chat-a1",
-      "chat:chat-a3",
-      ...order.slice(2),
-    ]);
+    const afterAnswer = commitOf([...floated], membersOf(answered));
+
+    it("puts a new question above everything, the one already open included", () => {
+      expect(floated.slice(0, 2)).toEqual(["chat:chat-a3", "chat:chat-a1"]);
+    });
+
+    it("pins an answered question where it floated, over one still asked", () => {
+      expect(heldTarget(afterAsk, membersOf(answered), "float")).toEqual(floated);
+    });
+
+    it("lands a new turn under the lowest open question, not above it", () => {
+      const started = play(answered, { kind: "turn-start", id: "chat-a5" });
+      expect(heldTarget(afterAnswer, membersOf(started), "float").slice(0, 3)).toEqual([
+        "chat:chat-a3",
+        "chat:chat-a1",
+        "chat:chat-a5",
+      ]);
+    });
+
+    it("lands a new turn at the very top once no question is open", () => {
+      const clear = play(answered, { kind: "answer", id: "chat-a1" });
+      const cleared = commitOf([...floated], membersOf(clear));
+      const started = play(clear, { kind: "turn-start", id: "chat-a5" });
+      expect(heldTarget(cleared, membersOf(started), "float")[0]).toBe("chat:chat-a5");
+    });
   });
 
   it("while frozen, draws exactly what it committed, a retired row included, and adds at the bottom", () => {

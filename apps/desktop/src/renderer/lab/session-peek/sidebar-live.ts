@@ -25,15 +25,21 @@
  * THE HELD ORDER (the owner's rule, 2026-09-29): the shipped band sorts by
  * recency on every build, so a working Session climbs on each tool call and a
  * click target moves several times a minute. Held, the band keeps each row
- * where it is. A row moves only when a new TURN STARTS (idle → working, which
- * a person usually caused) or when it first appears; both go to the top.
- * Everything else — tool calls, a finished turn, a question, an answer, a read
- * — leaves it in place, with one exception (decided 2026-09-30): a new
- * QUESTION floats to the top, above everything, because a Session waiting on
- * the person is the one row they must not have to hunt for. "hold" stays as
- * the rule's literal reading, to compare. And while a person is pointing into
- * the sidebar or has a peek open, nothing moves at all: moves wait, and land
- * when they leave.
+ * where it is. Decided (2026-09-29/30), a row moves for exactly two reasons:
+ *
+ *   • a new QUESTION: it floats to the very top, because a Session waiting on
+ *     the person is the one row they must not have to hunt for;
+ *   • a new TURN (idle → working, which a person usually caused) or a first
+ *     appearance: it goes to the top too, but lands under the questions still
+ *     open, so a busy Session cannot push one out of first place.
+ *
+ * Everything else — tool calls, a finished turn, an ANSWER, a read — leaves a
+ * row where it is. An answered question is pinned where it floated: it does
+ * not step down under another one still asked, because the person just acted
+ * on it. "hold" keeps the rule's literal reading (questions move nothing), to
+ * compare. While a person is pointing into the sidebar or has a peek open,
+ * nothing moves at all: moves wait, and land when they leave. Moves land
+ * without animation (decided 2026-09-30).
  */
 import type { ChatSessionRecord, ChatWaitingReason } from "@volli/shared";
 
@@ -337,12 +343,17 @@ export function commitOf(order: readonly string[], rows: readonly ActiveSessionR
  * since. `rows` is this build's Active membership in the shipped order.
  *
  *   1. With nothing committed, the shipped order: the held band starts where
- *      the shipped one would.
- *   2. Rows still present keep their committed places.
- *   3. A row that is new to the band, or that went idle → working since the
- *      commit, goes to the top (newest first among several).
- *   4. With `float`, a waiting row sits above the rest, and one that has just
- *      started asking tops that block. With `hold`, questions move nothing.
+ *      the shipped one would (questions first).
+ *   2. Rows still present keep their committed places — an answered question
+ *      included: an answer moves nothing.
+ *   3. With `float`, a row that has just started asking goes to the very top.
+ *   4. A row that is new to the band, or that went idle → working since the
+ *      commit, goes to the top — with `float`, just under the lowest question
+ *      still open, so it cannot push one down. Several land in the shipped
+ *      order, newest first.
+ *
+ * `float` is positional, not a sort: it never regroups the band, so a row a
+ * person just answered stays where it floated to.
  */
 export function heldTarget(
   held: HeldOrder | null,
@@ -350,21 +361,26 @@ export function heldTarget(
   questions: QuestionRule,
 ): readonly string[] {
   if (held === null) return rows.map((row) => row.id);
-  const present = new Set(rows.map((row) => row.id));
+  const phase = new Map(rows.map((row) => [row.id, phaseOf(row)]));
+  const asked =
+    questions === "float"
+      ? rows
+          .filter((row) => phase.get(row.id) === "waiting" && held.phases[row.id] !== "waiting")
+          .map((row) => row.id)
+      : [];
+  const askedSet = new Set(asked);
   const lifted = rows
     .filter((row) => {
+      if (askedSet.has(row.id)) return false;
       const before = held.phases[row.id];
-      return before === undefined || (before === "idle" && phaseOf(row) === "working");
+      return before === undefined || (before === "idle" && phase.get(row.id) === "working");
     })
     .map((row) => row.id);
-  const liftedSet = new Set(lifted);
-  const base = [...lifted, ...held.order.filter((id) => present.has(id) && !liftedSet.has(id))];
-  if (questions === "hold") return base;
-  const phase = new Map(rows.map((row) => [row.id, phaseOf(row)]));
-  const fresh = base.filter((id) => phase.get(id) === "waiting" && held.phases[id] !== "waiting");
-  const freshSet = new Set(fresh);
-  const waiting = base.filter((id) => phase.get(id) === "waiting" && !freshSet.has(id));
-  return [...fresh, ...waiting, ...base.filter((id) => phase.get(id) !== "waiting")];
+  const moved = new Set([...asked, ...lifted]);
+  const kept = [...asked, ...held.order.filter((id) => phase.has(id) && !moved.has(id))];
+  if (questions === "hold") return [...lifted, ...kept];
+  const under = kept.findLastIndex((id) => phase.get(id) === "waiting") + 1;
+  return [...kept.slice(0, under), ...lifted, ...kept.slice(under)];
 }
 
 /**

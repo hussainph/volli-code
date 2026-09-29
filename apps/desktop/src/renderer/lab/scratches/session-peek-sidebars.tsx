@@ -43,9 +43,11 @@
  *     only opening the Session, replying to it, viewing its conversation or
  *     marking it (right-click, U) clears the dot.
  *   • A HELD ORDER. Active no longer re-sorts on every tool call. A row moves
- *     only when a new turn starts (or it first appears), and a new QUESTION
- *     FLOATS to the top, above everything. Nothing moves while the pointer is
- *     in a sidebar or a peek is open; the moves land when it leaves.
+ *     only when a new QUESTION floats to the very top, or a new turn starts
+ *     (or it first appears) and lands at the top under any question still
+ *     open. An answered question stays pinned where it floated. Nothing moves
+ *     while the pointer is in a sidebar or a peek is open; the moves land
+ *     when it leaves, without animation.
  */
 import * as React from "react";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -245,7 +247,7 @@ function Bullets({ heading, items }: { heading: string; items: readonly string[]
 const PROPOSED: readonly string[] = [
   "Unread is its own mark: a blue dot and a heavier title. A turn that ends while its Session is not in front leaves it unread; opening it, replying to it, or viewing its conversation reads it. A peek never does — the card says “Unread” instead, so a glance cannot clear what you have not read. Right-click (or U) toggles it.",
   "Unread Sessions stay in Active past the 30-minute window, however old — Previous means seen or nothing to see, never merely old. Marking a Previous Session unread brings it back.",
-  "A held Active order: tool calls, finished turns, answers and reads move nothing. A row moves only when a new turn starts or it first appears — to the top — and a new question floats above everything, so what needs you is always first. While the pointer is in a sidebar or a peek is open, even that waits, and lands when you leave.",
+  "A held Active order: tool calls, finished turns, answers and reads move nothing. A new question floats to the very top; a new turn (or a row's first appearance) goes to the top too, but under any question still open. An answered question stays where it floated. While the pointer is in a sidebar or a peek is open, even that waits, and lands when you leave — in one step, without animation.",
   "One mark per row, everywhere: the vendor's logo with v2's state badge, in Active, Previous, inside folders and in the rail.",
   "One two-line row in both sidebars: Active is drawn as the rail's row, the mark centred on the row. The second line says where and when (VLT-14 · 2m ago) and never how — the mark already says it.",
   "A folder peeks its TICKET: status, title, and each Session with one line on what it did. Three Sessions called “Chat” become three different sentences. Pressing one drills into its own peek; ← goes back.",
@@ -264,7 +266,6 @@ const KEYS: readonly string[] = [
 ];
 
 const OPEN: readonly string[] = [
-  "Whether a held row's move, when it lands, should animate from where it was — the eye loses a row that teleports",
   "The rest of VC-108's surfaces: tab strips, the board card's unread count, the project rail's aggregate, and the durable read receipt behind all of them",
   "Ticket peek on the BOARD's cards — the same card, so the brief's “other surfaces” is one component",
   "Whether the rail's fold eyebrow (“Sessions ›”) should peek its record while folded",

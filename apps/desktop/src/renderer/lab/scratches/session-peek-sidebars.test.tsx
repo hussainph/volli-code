@@ -312,6 +312,24 @@ describe("the held order", () => {
     expect(activeOrder()[0]).toBe("chat:chat-a5");
   });
 
+  it("pins a question answered from its peek where it floated, over one still asked", async () => {
+    await playSteps(8);
+    expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a2", "chat:chat-a1", "chat:chat-a5"]);
+    await hover(row("chat:chat-a2"));
+    await click(control("Answer", card()!));
+    await act(async () => card()!.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
+    await click(control("Send", card()!));
+    await advance(500);
+    // The card held the order while it was up; Escape walks the pinned card's ladder down.
+    expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a2", "chat:chat-a1", "chat:chat-a5"]);
+    for (let step = 0; step < 3 && card() !== null; step += 1) await press(card()!, "Escape");
+    expect(card()).toBeNull();
+    expect(row("chat:chat-a2").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "OpenAI · Working",
+    );
+    expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a2", "chat:chat-a1", "chat:chat-a5"]);
+  });
+
   it("moves nothing while the pointer is in a sidebar, and lands the move when it leaves", async () => {
     const nav = host.querySelector('[data-testid="peek-nav"]')!;
     await pointInto(nav);
