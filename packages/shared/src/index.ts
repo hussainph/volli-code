@@ -34,6 +34,7 @@ export * from "./authority-policy";
 export * from "./web-address-policy";
 export * from "./web-target-policy";
 export * from "./session-activity";
+export * from "./browser-trace";
 export * from "./session-host-notice";
 export * from "./session-todo";
 export * from "./ticket-branch";

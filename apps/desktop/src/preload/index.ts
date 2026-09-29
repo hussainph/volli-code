@@ -58,6 +58,8 @@ import type {
   BootstrapResult,
   BrowserPictureInput,
   BrowserPictureResult,
+  BrowserTracesInput,
+  BrowserTracesResult,
   BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
@@ -479,6 +481,8 @@ const api = {
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
       invoke("volli:browser-picture", input),
+    traces: (input: BrowserTracesInput): Promise<BrowserTracesResult> =>
+      invoke("volli:browser-traces", input),
     takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
       invoke("volli:browser-take-over", input),
     handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>

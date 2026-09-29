@@ -816,35 +816,37 @@ function browseFacts(context: ActivityContext): ActivityFacts {
   return facts;
 }
 
+/**
+ * What one browser action says on its own: the verb, and the object when the
+ * action has one the row names — an element (quoted as the page's words), a
+ * key, or a direction. The transcript row and a Browser Trace frame (VC-453)
+ * both read it, so the row and the replay of the same call cannot name it
+ * differently; the row adds the page as its meta, the replay draws the page
+ * beside the caption.
+ */
+export function browseCaption(
+  action: ActivityBrowseAction,
+  target: string | null,
+): { verb: string; object: string | null } {
+  const verb = BROWSE_VERBS[action];
+  if (ELEMENT_ACTIONS.has(action)) return { verb, object: quotedTarget(target) };
+  if (PAGE_INPUT_ACTIONS.has(action)) return { verb, object: target };
+  // A find's object is the model's own query, quoted even when it looks like
+  // a ref: it is words searched for, never a handle.
+  if (action === "find") return { verb, object: target === null ? null : `“${target}”` };
+  return { verb, object: null };
+}
+
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
   const verb = BROWSE_VERBS[facet.action];
-  if (ELEMENT_ACTIONS.has(facet.action)) {
+  if (
+    ELEMENT_ACTIONS.has(facet.action) ||
+    PAGE_INPUT_ACTIONS.has(facet.action) ||
+    facet.action === "find"
+  ) {
     return {
-      verb,
-      object: quotedTarget(facet.target),
-      openPath: null,
-      meta: page,
-      metaTone: "muted",
-      detail: null,
-    };
-  }
-  if (PAGE_INPUT_ACTIONS.has(facet.action)) {
-    return {
-      verb,
-      object: facet.target,
-      openPath: null,
-      meta: page,
-      metaTone: "muted",
-      detail: null,
-    };
-  }
-  if (facet.action === "find") {
-    // The object is the model's own query, quoted even when it looks like a
-    // ref: it is words searched for, never a handle.
-    return {
-      verb,
-      object: facet.target === null ? null : `“${facet.target}”`,
+      ...browseCaption(facet.action, facet.target),
       openPath: null,
       meta: page,
       metaTone: "muted",

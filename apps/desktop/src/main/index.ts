@@ -344,6 +344,8 @@ import {
 } from "./browser/cursor-overlay";
 import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
 import { BrowserPictureStore } from "./browser/picture-store";
+import { browserTraceDisk, browserTracesRoot } from "./browser/trace-disk";
+import { BrowserTraceStore } from "./browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
@@ -2226,6 +2228,14 @@ app.whenReady().then(async () => {
   // `session-runtime/boot-recovery.ts`), and that invariant is held by position
   // — moving the sweep past several hundred lines of handler registration would
   // have made it depend on none of them ever growing a read.
+  // The pictures a transcript card shows (VC-238): live captures bounded in
+  // memory, model-requested screenshots also on disk under userData — never
+  // the Blob store, whose Session links become the next turn's input.
+  const browserPictures = new BrowserPictureStore({
+    createId: randomUUID,
+    now: Date.now,
+    persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+  });
   const browserTabs = new BrowserTabHost({
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
@@ -2251,13 +2261,14 @@ app.whenReady().then(async () => {
       }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
-    // The pictures a transcript card shows (VC-238): live captures bounded in
-    // memory, model-requested screenshots also on disk under userData — never
-    // the Blob store, whose Session links become the next turn's input.
-    pictures: new BrowserPictureStore({
+    pictures: browserPictures,
+    // A Session's steps in its own tabs, kept for the person to replay after
+    // the live set has moved on (VC-453) — its own directory, never a Blob.
+    traces: new BrowserTraceStore({
       createId: randomUUID,
       now: Date.now,
-      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+      frameOf: (pictureId) => browserPictures.copyOf(pictureId),
+      persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to

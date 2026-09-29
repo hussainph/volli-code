@@ -14,6 +14,7 @@
 import type { ExternalAppId } from "../external-app-ids";
 
 import type {
+  BrowserTrace,
   Appearance,
   ArchivedTicket,
   AutoReapPolicy,
@@ -1843,6 +1844,18 @@ export interface BrowserPictureInput {
  */
 export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
 
+/** Whose Browser Traces a replay asks for (VC-453). */
+export interface BrowserTracesInput {
+  sessionId: string;
+}
+
+/**
+ * A Session's kept Browser Traces, oldest first — the portable record from
+ * `@volli/shared`, frames named by picture id and read through
+ * `volli:browser-picture`. Empty is an answer: nothing recorded, or swept.
+ */
+export type BrowserTracesResult = Result<{ traces: BrowserTrace[] }>;
+
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
@@ -1898,6 +1911,7 @@ export interface VolliBrowserIpcContract {
     result: BrowserTabResult;
   };
   "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
+  "volli:browser-traces": { args: [input: BrowserTracesInput]; result: BrowserTracesResult };
   /**
    * The person's three hold controls (VC-239). Explicit, never inferred from
    * input: main cannot tell a person's click in the native view from a

@@ -66,6 +66,7 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-toggle-devtools",
       "volli:browser-set-presentation",
       "volli:browser-picture",
+      "volli:browser-traces",
       "volli:browser-take-over",
       "volli:browser-hand-back",
       "volli:browser-ask-to-leave",
@@ -80,6 +81,14 @@ describe("BROWSER_IPC descriptor table", () => {
     expect(guard([{ tabId: "opaque-1", presentation: "visible" }])).toBe(false);
     expect(guard([{ tabId: "opaque-1" }])).toBe(false);
     expect(guard([{ tabId: 1, presentation: "tab" }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one Session id for a trace read, and nothing looser (VC-453)", () => {
+    const { guard } = BROWSER_IPC["volli:browser-traces"];
+    expect(guard([{ sessionId: "session-1" }])).toBe(true);
+    expect(guard([{ sessionId: 1 }])).toBe(false);
+    expect(guard([{}])).toBe(false);
     expect(guard([])).toBe(false);
   });
 

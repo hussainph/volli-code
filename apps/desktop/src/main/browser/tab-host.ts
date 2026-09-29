@@ -12,6 +12,7 @@ import {
   pickSessionColor,
   shortSessionId,
   type BrowserTabHolder,
+  type BrowserTrace,
   type RuntimeBrowserConsoleMessage,
 } from "@volli/shared";
 
@@ -25,6 +26,7 @@ import type {
 } from "../../ipc/contract";
 import { BrowserAgentCoordinator } from "./agent-coordinator";
 import type { BrowserPictureStore } from "./picture-store";
+import type { BrowserTraceStepInput, BrowserTraceStore } from "./trace-store";
 
 /**
  * One Session's claim on a tab (VC-239), keyed by attachment as well as
@@ -111,6 +113,11 @@ export interface BrowserTabHostDependencies {
   publishClosed: (tabId: string) => void;
   /** Where captured pixels wait for the card that shows them (VC-238). */
   pictures: BrowserPictureStore;
+  /**
+   * Where a Session's steps in its own tabs are recorded for replay (VC-453).
+   * Absent means nothing is recorded — most tests, and a build with no disk.
+   */
+  traces?: BrowserTraceStore;
   /** The clock the interaction window is measured against; production passes none. */
   now?: () => number;
   /**
@@ -1548,9 +1555,44 @@ export class BrowserTabHost {
     });
   }
 
-  /** The renderer's one read of a picture: a data URL, or null for an id this host never minted. */
+  /**
+   * The renderer's one read of a picture: a data URL, or null for an id this
+   * host never minted. A capture the live set has let go of still answers
+   * when a Browser Trace kept its frame (VC-453) — the card's picture and the
+   * replay's frame are one id, so a reopened chat shows both.
+   */
   pictureOf(pictureId: string): string | null {
-    return this.deps.pictures.dataUrl(pictureId);
+    return (
+      this.deps.pictures.dataUrl(pictureId) ?? this.deps.traces?.frameDataUrl(pictureId) ?? null
+    );
+  }
+
+  /**
+   * Records one settled call against a tab into the acting Session's trace for
+   * the tab (VC-453) — or nothing, when the tab is not a Session's. A tab the
+   * person created is never recorded, even while a Session holds it: their
+   * pages carry their sign-ins, and the live card is all the evidence those
+   * get. A tab that has already closed cannot be judged, so it is not
+   * recorded either.
+   *
+   * Background enrichment of a call that has already answered: a trace that
+   * cannot be written owes the tool call nothing, and no person is waiting on
+   * it, so a failure is logged and the call's own result stands.
+   */
+  recordTraceStep(step: BrowserTraceStepInput): void {
+    const traces = this.deps.traces;
+    const entry = this.tabs.get(step.tabId);
+    if (traces === undefined || entry === undefined || entry.state.createdBy !== "session") return;
+    try {
+      traces.record(step);
+    } catch (error) {
+      console.warn(`[volli] Browser Trace step for tab ${step.tabId} was not recorded:`, error);
+    }
+  }
+
+  /** A Session's kept Browser Traces, oldest first; empty when nothing was recorded. */
+  tracesOf(sessionId: string): BrowserTrace[] {
+    return this.deps.traces?.tracesOf(sessionId) ?? [];
   }
 
   /**

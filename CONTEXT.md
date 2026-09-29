@@ -378,6 +378,21 @@ one; a hidden tab keeps its cursor's last position and pays no delay. It
 yields with the plane and never appears in a screenshot or a frozen frame.
 _Avoid_: pointer overlay, ghost cursor, agent mouse
 
+**Browser Trace**:
+The replayable record of what one Session did in one Browser Tab it owns
+(VC-453): every browser call it made against that tab — navigate, act,
+snapshot, find, screenshot, console — in the order they settled (answered,
+refused or failed), with its target, page, time and, for a call that changed
+the page or took a screenshot, the frame the host kept. Only the host writes it, and only for a tab a
+Session created: a person's tab is never recorded, even while a Session
+holds it. Page text in it (a title, an element's name) is cleaned on the way
+in, and nothing typed into a page is kept. It is the person's evidence and
+never the model's input — its own bounded directory under userData, never a
+Blob, read by no tool. The **Browser replay** steps through a Session's
+traces from a browse row's card or the Activity Island, before or after a
+relaunch. The type is `@volli/shared`'s, so any client can replay it.
+_Avoid_: recording, video, screencast (there is none), session log
+
 **Session colour**:
 An identity colour, never a state colour (VC-239): which Session, not how it
 is doing. Eight hues fanned around the accent at one lightness in
