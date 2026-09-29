@@ -1,29 +1,26 @@
 /**
- * VC-444's off-by-default MCP parallel-dispatch pilot. Run with
+ * The off-by-default MCP parallel-dispatch bench, through the real Session
+ * path (VC-444's pilot, re-based in VC-454). Run with
  * `pnpm -C apps/desktop bench:mcp-parallel` (`MCP_PARALLEL_BENCH_REPEATS=1`
- * for a smoke). It is outside the desktop app's default test projects.
+ * for a smoke, `=20` or more to report a p95). It is outside the desktop
+ * app's default test projects.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixtureMcpTool, runMixedSideEffectTurn } from "@volli/agent-runtime/bench/mcp-parallel";
+import { runRuntimeMcpTurn } from "@volli/agent-runtime/bench/mcp-parallel";
 import type { RuntimeMcpCall, RuntimeMcpPort } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { openMcpProtocolClient } from "../../../src/main/mcp/client";
-import { McpSessionHost } from "../../../src/main/mcp/session-host";
 import {
-  countingOpen,
+  composeSession,
+  DEFAULT_MCP_SERVER_LIMITS,
   fixtureDefinition,
-  fixtureDraft,
-  FIXTURE_READ_ALLOWLIST,
   runMcpScenario,
-  type ClientCounters,
 } from "./harness";
-import { startFixtureMcpServer } from "./http-fixture";
 import { buildMcpBenchReport, DEFAULT_REPEATS } from "./report";
 
-describe("VC-444 fixture-only MCP parallel pilot", () => {
+describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
   it("prints p50/tail results across network, startup, server-count and batch-size regimes", async () => {
     const repeats = Number(process.env.MCP_PARALLEL_BENCH_REPEATS ?? DEFAULT_REPEATS);
     const report = await buildMcpBenchReport(repeats);
@@ -32,48 +29,53 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
     expect(report.rows).toHaveLength(40);
     expect(report.text).toContain("20ms/1/cold/n1");
     expect(report.text).toContain("80ms/2/warm/n16");
+    const cap = DEFAULT_MCP_SERVER_LIMITS.maxConcurrent;
     for (const row of report.rows) {
       const batchSize = Number(row.label.match(/n(\d+)$/)?.[1]);
       for (let index = 0; index < repeats; index += 1) {
-        expect(row.sequential[index]?.fixtureCalls).toBe(batchSize);
-        expect(row.parallel[index]?.fixtureCalls).toBe(batchSize);
-        expect(row.unbatched[index]?.fixtureCalls).toBe(batchSize);
-        expect(row.sequential[index]?.providerRequests).toBe(2);
-        expect(row.parallel[index]?.providerRequests).toBe(2);
-        expect(row.unbatched[index]?.providerRequests).toBe(batchSize + 1);
-        expect(row.sequential[index]?.cleanup).toBe(true);
-        expect(row.parallel[index]?.cleanup).toBe(true);
-        expect(row.unbatched[index]?.cleanup).toBe(true);
-        expect(row.sequential[index]?.resultOrder).toEqual(row.sequential[index]?.expectedOrder);
-        expect(row.parallel[index]?.resultOrder).toEqual(row.parallel[index]?.expectedOrder);
-        expect(row.unbatched[index]?.resultOrder).toEqual(row.unbatched[index]?.expectedOrder);
-        expect(row.unbatched[index]?.resultBytes).toBe(row.parallel[index]?.resultBytes);
-        expect(row.unbatched[index]?.resultTokens).toBe(row.parallel[index]?.resultTokens);
-        expect(row.sequential[index]?.fixtureErrors).toBe(0);
-        expect(row.parallel[index]?.fixtureErrors).toBe(0);
-        expect(row.sequential[index]?.peakConcurrency).toBe(1);
-        expect(row.parallel[index]?.peakConcurrency).toBeLessThanOrEqual(
-          Number(row.label.match(/n(\d+)$/)?.[1]),
-        );
-        if (!row.label.endsWith("n1"))
-          expect(row.parallel[index]?.peakConcurrency).toBeGreaterThan(1);
-        expect(row.unbatched[index]?.peakConcurrency).toBeLessThanOrEqual(1);
+        const [seq, par, unb] = [
+          row.sequential[index]!,
+          row.parallel[index]!,
+          row.unbatched[index]!,
+        ];
+        for (const run of [seq, par, unb]) {
+          expect(run.fixtureCalls).toBe(batchSize);
+          expect(run.cleanup).toBe(true);
+          expect(run.resultOrder).toEqual(run.expectedOrder);
+          expect(run.fixtureErrors).toBe(0);
+          expect(run.retryCount).toBe(0);
+          expect(run.fixtureCancelled).toBe(0);
+          expect(run.turnState).toBe("completed");
+          // Every call passed the Authority gate before it ran, and none
+          // parked on a person.
+          expect(run.gatedCalls).toBe(batchSize);
+          expect(run.approvalWaitMs).toBe(0);
+          for (const peak of run.hostPeakPerServer) expect(peak).toBeLessThanOrEqual(cap);
+        }
+        expect(seq.providerRequests).toBe(2);
+        expect(par.providerRequests).toBe(2);
+        expect(unb.providerRequests).toBe(batchSize + 1);
+        expect(unb.resultBytes).toBe(par.resultBytes);
+        expect(unb.resultTokens).toBe(par.resultTokens);
+        expect(seq.toolExecution).toBe("sequential");
+        expect(par.toolExecution).toBe("parallel");
+        expect(seq.peakConcurrency).toBe(1);
+        expect(unb.peakConcurrency).toBeLessThanOrEqual(1);
+        if (batchSize > 1) expect(par.peakConcurrency).toBeGreaterThan(1);
       }
     }
 
+    // The shipped bound, not the batch, sets the fan-out ceiling per server.
     const highFanout = report.rows.find((row) => row.label === "80ms/1/warm/n16");
-    expect(highFanout?.parallel[0]?.peakConcurrency).toBe(16);
-    expect(highFanout?.sequential[0]?.peakConcurrency).toBe(1);
-    expect(highFanout?.sequential[0]?.providerRequests).toBe(2);
-    expect(highFanout?.parallel[0]?.providerRequests).toBe(2);
-    expect(highFanout?.unbatched[0]?.providerRequests).toBe(17);
+    expect(highFanout?.parallel[0]?.peakConcurrency).toBe(cap);
+    expect(highFanout?.parallel[0]?.queueWaitMs).toBeGreaterThan(0);
     const crossServer = report.rows.find((row) => row.label === "80ms/2/warm/n8");
     expect(crossServer?.parallel[0]?.completionOrder).not.toEqual(
       crossServer?.parallel[0]?.resultOrder,
     );
-  }, 600_000);
+  }, 3_600_000);
 
-  it("records per-server connection and rate limits without blind retries", async () => {
+  it("completes the VC-444 capacity stress batch with no limit errors under the host bound", async () => {
     const stress = {
       latencyMs: 20,
       serverCount: 2,
@@ -86,65 +88,108 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
       maxRequestsPerWindow: 6,
       rateWindowMs: 100,
     } as const;
-    const limited = await runMcpScenario({ ...stress, mode: "parallel" });
-    const serial = await runMcpScenario({ ...stress, mode: "sequential" });
+    // The host-authored bound for these two servers matches what they publish.
+    const bounded = await runMcpScenario({
+      ...stress,
+      arm: "parallel",
+      hostLimits: { maxConcurrent: 2, maxStarts: 6, windowMs: 100 },
+    });
+    // The control: the same batch with only the shipped default for them.
+    const unconfigured = await runMcpScenario({ ...stress, arm: "parallel" });
+    const serial = await runMcpScenario({ ...stress, arm: "sequential" });
     console.log(
-      `VC-444 limit stress (two servers, n=16, per-server maxConcurrent=2, 6 calls/100ms): ` +
-        `parallel ${limited.fixtureErrors} fixture errors (${JSON.stringify(limited.serverErrorKinds)}), ` +
-        `${limited.retryCount} retries, per-server peaks ${limited.fixturePeakPerServer.join(",")}; ` +
-        `sequential ${serial.fixtureErrors} fixture errors (${JSON.stringify(serial.serverErrorKinds)}).`,
+      `VC-454 limit stress (two servers, n=16, per-server maxConcurrent=2, 6 calls/100ms): ` +
+        `host-bounded parallel ${bounded.fixtureErrors} fixture errors, host peaks ${bounded.hostPeakPerServer.join(",")}, ` +
+        `fixture peaks ${bounded.fixturePeakPerServer.join(",")}, wall ${bounded.elapsedMs.toFixed(1)}ms, ` +
+        `queue wait ${bounded.queueWaitMs.toFixed(1)}ms, ${bounded.retryCount} retries; ` +
+        `default-bound parallel ${unconfigured.fixtureErrors} fixture errors (${JSON.stringify(unconfigured.serverErrorKinds)}), ` +
+        `wall ${unconfigured.elapsedMs.toFixed(1)}ms; ` +
+        `sequential ${serial.fixtureErrors} fixture errors, wall ${serial.elapsedMs.toFixed(1)}ms.`,
     );
 
-    expect(limited.fixtureErrors).toBeGreaterThan(0);
-    expect(limited.serverErrorKinds["connection-limited"]).toBeGreaterThan(0);
-    expect(limited.serverErrorKinds["rate-limited"]).toBeGreaterThan(0);
-    expect(limited.fixturePeakPerServer).toEqual([2, 2]);
+    expect(bounded.fixtureErrors).toBe(0);
+    expect(bounded.serverErrorKinds).toEqual({});
+    expect(bounded.toolErrors).toBe(0);
+    expect(bounded.hostPeakPerServer).toEqual([2, 2]);
+    expect(bounded.fixturePeakPerServer.every((peak) => peak <= 2)).toBe(true);
     // Counted at the servers, below the host: a retry anywhere in the stack
     // would show up here as more than one server call per model tool call.
-    expect(limited.fixtureCalls).toBe(16);
-    expect(limited.retryCount).toBe(0);
-    expect(limited.cleanup).toBe(true);
-    // The same batch run one call at a time never trips the in-flight cap.
-    expect(serial.serverErrorKinds["connection-limited"]).toBeUndefined();
+    expect(bounded.fixtureCalls).toBe(16);
+    expect(bounded.retryCount).toBe(0);
+    expect(bounded.resultOrder).toEqual(bounded.expectedOrder);
+    expect(bounded.cleanup).toBe(true);
+    // A server the host has no limits for gets the default, which is looser
+    // than this one publishes: the bound is only as good as what it is told.
+    expect(unconfigured.fixtureErrors).toBeGreaterThan(0);
+    expect(unconfigured.fixtureCalls).toBe(16);
+    expect(unconfigured.retryCount).toBe(0);
+    expect(serial.fixtureErrors).toBe(0);
     expect(serial.fixturePeakPerServer).toEqual([1, 1]);
-    expect(serial.fixtureCalls).toBe(16);
     expect(serial.cleanup).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
-  it("propagates cancellation through the Volli MCP wrapper and attachment host", async () => {
-    const fixture = await startFixtureMcpServer({ id: "vc444-cancel", latencyMs: 500 });
-    const clients: ClientCounters = { opened: 0, closed: 0 };
-    const host = new McpSessionHost({
-      workspacePath: tmpdir(),
-      servers: [fixtureDraft(fixture, "local cancellation fixture")],
-      open: countingOpen(clients),
+  it("withdraws in-flight and queued calls across two servers when a Session's turn is interrupted", async () => {
+    // One slot per server, a 500 ms read, a four-call batch: two calls reach
+    // the servers and two wait in the budget when the person presses stop.
+    const composed = await composeSession({
+      arm: "parallel",
+      latencyMs: 500,
+      serverCount: 2,
+      hostLimits: { maxConcurrent: 1, maxStarts: Number.POSITIVE_INFINITY, windowMs: 1_000 },
     });
-    const mcpDefinition = fixtureDefinition(fixture.id, "local cancellation fixture");
-    const tool = fixtureMcpTool(mcpDefinition, host.port, FIXTURE_READ_ALLOWLIST);
-    const controller = new AbortController();
-    let abortToSettleMs = 0;
-
-    try {
-      const call = tool.execute("cancel-id", {}, controller.signal);
-      await vi.waitFor(() => expect(fixture.activeCalls).toBe(1), { timeout: 2_000 });
-      const abortAt = performance.now();
-      controller.abort(new Error("fixture cancellation"));
-      await expect(call).rejects.toBeDefined();
-      abortToSettleMs = performance.now() - abortAt;
-      await vi.waitFor(() => expect(fixture.cancelled).toBe(1), { timeout: 2_000 });
-      expect(fixture.activeCalls).toBe(0);
-    } finally {
-      await host.close();
-      await fixture.close();
-    }
-
-    expect(clients).toEqual({ opened: 1, closed: 1 });
-    expect(fixture.closed).toBe(true);
-    console.log(
-      `VC-444 cancellation: server abort observed, active calls drained to 0, ` +
-        `client closed ${clients.closed}/${clients.opened}; caller settled in ${abortToSettleMs.toFixed(1)}ms.`,
+    const [first, second] = composed.fixtures;
+    const bothRunning = vi.waitFor(
+      () => {
+        expect(first!.activeCalls).toBe(1);
+        expect(second!.activeCalls).toBe(1);
+      },
+      { timeout: 5_000, interval: 5 },
     );
-  }, 10_000);
+    let cleanup = false;
+    try {
+      const turn = await runRuntimeMcpTurn({
+        // Round-robin over the two servers' reads: a, b, a, b.
+        definitions: composed.definitions,
+        port: composed.port,
+        parallelMcpReads: composed.parallelMcpReads,
+        batchSize: 4,
+        batchShape: "batched",
+        providerLatencyMs: 0,
+        interruptWhen: bothRunning.then(() => {
+          expect(composed.budget.load(first!.id)).toMatchObject({ active: 1, queued: 1 });
+          expect(composed.budget.load(second!.id)).toMatchObject({ active: 1, queued: 1 });
+        }),
+      });
+      await vi.waitFor(() => expect(first!.cancelled + second!.cancelled).toBe(2), {
+        timeout: 5_000,
+      });
+
+      expect(turn.turnState).toBe("interrupted");
+      expect(turn.interruptSettleMs).toBeGreaterThanOrEqual(0);
+      expect(first!.activeCalls).toBe(0);
+      expect(second!.activeCalls).toBe(0);
+      // The queued half never reached a server.
+      expect(first!.calls.length + second!.calls.length).toBe(2);
+      for (const fixture of [first!, second!]) {
+        expect(composed.budget.load(fixture.id)).toMatchObject({
+          active: 0,
+          queued: 0,
+          admitted: 1,
+        });
+      }
+      console.log(
+        `VC-454 batch cancellation (two servers, 2 in flight + 2 queued): turn settled ` +
+          `${turn.interruptSettleMs?.toFixed(1)}ms after stop; ` +
+          `servers saw ${first!.cancelled + second!.cancelled} cancellations and ` +
+          `${first!.calls.length + second!.calls.length} calls; active drained to 0.`,
+      );
+    } finally {
+      cleanup = await composed.dispose();
+    }
+    expect(cleanup).toBe(true);
+    expect(composed.clients.opened).toBe(2);
+    expect(composed.clients.closed).toBe(2);
+  }, 30_000);
 
   it.each([
     {
@@ -153,84 +198,85 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
       toolName: "fixture_mutate",
       // The server's claimed read-only description is not authority. Exact
       // allowlist membership (absent here) keeps this tool sequential.
-      mcpExecutionMode: "sequential",
+      mcpMarked: false,
       sideEffects: 1,
     },
     {
       label: "an allowlisted MCP read",
       serverId: "vc444-fixture-1",
       toolName: "fixture_read",
-      // Eligible to overlap on its own, but the local edit in the same emitted
-      // batch is not allowlisted, so Pi runs the whole batch serially.
-      mcpExecutionMode: undefined,
+      // Eligible to overlap on its own, but the built-in write in the same
+      // emitted batch is not, so Pi runs the whole batch serially.
+      mcpMarked: true,
       sideEffects: 0,
     },
   ] as const)(
-    "serializes local-file edits mixed with $label despite parallel Agent mode",
-    async ({ serverId, toolName, mcpExecutionMode, sideEffects }) => {
-      const workspace = mkdtempSync(join(tmpdir(), "vc444-mcp-negative-control-"));
+    "serializes built-in file writes mixed with $label in a parallel Session",
+    async ({ serverId, toolName, mcpMarked, sideEffects }) => {
+      const workspace = mkdtempSync(join(tmpdir(), "vc454-mcp-negative-control-"));
       const filePath = join(workspace, "fixture.txt");
-      const fixture = await startFixtureMcpServer({
-        id: serverId,
+      writeFileSync(filePath, "initial");
+      const composed = await composeSession({
+        arm: "parallel",
         latencyMs: 15,
+        serverCount: 1,
+        ids: [serverId],
         sideEffect: true,
-      });
-      const host = new McpSessionHost({
         workspacePath: workspace,
-        servers: [fixtureDraft(fixture, "local side-effect fixture")],
-        open: openMcpProtocolClient,
       });
-      const mcpDefinition = fixtureDefinition(fixture.id, "local side-effect fixture", toolName);
-      const events: string[] = [];
-      const intervals: Array<{ startedAt: number; endedAt: number }> = [];
-      let live = 0;
-      let peak = 0;
-      const enter = (): void => {
-        live += 1;
-        peak = Math.max(peak, live);
-      };
-      const exit = (startedAt: number): void => {
-        live -= 1;
-        intervals.push({ startedAt, endedAt: performance.now() });
-      };
+      // Born the way main births a root Session under the fixture allowlist:
+      // only the allowlisted read is marked, whatever the mutation claims.
+      const [definition] = composed.born([fixtureDefinition(serverId, serverId, toolName)]);
+      expect(definition!.parallelRead === true).toBe(mcpMarked);
+      const seenByMcp: string[] = [];
       const port: RuntimeMcpPort = {
         call: async (request: RuntimeMcpCall, signal) => {
-          const startedAt = performance.now();
-          enter();
+          seenByMcp.push(`start:${readFileSync(filePath, "utf8")}`);
           try {
-            const result = await host.port.call(request, signal);
-            events.push(`mcp:${request.toolName}`);
-            return result;
+            return await composed.port.call(request, signal);
           } finally {
-            exit(startedAt);
+            seenByMcp.push(`end:${readFileSync(filePath, "utf8")}`);
           }
         },
       };
 
       try {
-        const run = await runMixedSideEffectTurn({
-          mcpDefinition,
+        const turn = await runRuntimeMcpTurn({
+          definitions: [definition!],
           port,
-          allowlist: FIXTURE_READ_ALLOWLIST,
-          filePath,
-          probe: { enter, exit, record: (event) => events.push(event) },
+          parallelMcpReads: composed.parallelMcpReads,
+          batchSize: 3,
+          batchShape: "batched",
+          providerLatencyMs: 0,
+          codingTools: ["write"],
+          workspacePath: workspace,
+          batch: [
+            { name: "write", args: { path: filePath, content: "first" } },
+            { name: definition!.providerName, args: {} },
+            { name: "write", args: { path: filePath, content: "last" } },
+          ],
         });
-        // The local edit declares no mode of its own, like Volli's built-in
-        // file tools; the dispatch policy is what marks it sequential.
-        expect(run.localEditExecutionMode).toBe("sequential");
-        expect(run.mcpExecutionMode).toBe(mcpExecutionMode);
-        expect(peak).toBe(1);
-        expect(events).toEqual(["file:first", `mcp:${toolName}`, "file:last"]);
+        // One call at a time, in source order: each finished before the next
+        // started, and the MCP call saw exactly the first write.
+        expect(turn.activityLog).toEqual([
+          "started:tc-1-0",
+          "completed:tc-1-0",
+          "started:tc-1-1",
+          "completed:tc-1-1",
+          "started:tc-1-2",
+          "completed:tc-1-2",
+        ]);
+        expect(seenByMcp).toEqual(["start:first", "end:first"]);
         expect(readFileSync(filePath, "utf8")).toBe("last");
-        expect(fixture.sideEffectCount).toBe(sideEffects);
-        expect(run.resultOrder).toEqual(["tc-1-0", "tc-1-1", "tc-1-2"]);
-        expect(intervals).toHaveLength(3);
+        expect(composed.fixtures[0]!.sideEffectCount).toBe(sideEffects);
+        expect(composed.fixtures[0]!.peakConcurrency).toBe(1);
+        expect(turn.resultOrder).toEqual(["tc-1-0", "tc-1-1", "tc-1-2"]);
+        expect(turn.toolErrors).toBe(0);
       } finally {
-        await host.close();
-        await fixture.close();
+        await composed.dispose();
         rmSync(workspace, { recursive: true, force: true });
       }
     },
-    10_000,
+    20_000,
   );
 });

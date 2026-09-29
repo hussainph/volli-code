@@ -1292,7 +1292,17 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
     if (!isMcpToolId(providerName)) {
       throw new Error(`${context}[${index}].providerName is invalid`);
     }
-    return { ...sanitized.definition, providerName };
+    // Host-authored parallel-read eligibility (VC-454): read back exactly as
+    // written, and only as `true`. Anything else is a damaged record, not a
+    // tool that quietly runs one call at a time.
+    if (row.parallelRead !== undefined && row.parallelRead !== true) {
+      throw new Error(`${context}[${index}].parallelRead must be true when present`);
+    }
+    return {
+      ...sanitized.definition,
+      providerName,
+      ...(row.parallelRead === true ? { parallelRead: true as const } : {}),
+    };
   });
   return validateMcpToolDefinitions(definitions);
 }
