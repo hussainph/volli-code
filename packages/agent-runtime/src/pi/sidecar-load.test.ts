@@ -45,10 +45,12 @@ import {
 } from "@earendil-works/pi-agent-core";
 import {
   createSessionRepoForkBehaviorConformance,
+  createSessionRepoForkDestinationReservationConformance,
   createSessionRepoForkSourceSnapshotConformance,
   createSessionRepoLifecycleConformance,
   createSessionRepoMessageConformance,
   createSessionRepoOwnershipConformance,
+  createSessionRepoStreamingForkConformance,
 } from "@earendil-works/pi-agent-core/harness/session/testing";
 import {
   JsonlSessionRepo,
@@ -73,6 +75,20 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
+
+/** `target`, with the named members replaced and every other method still bound to it. */
+function withOverrides<T extends object>(
+  target: T,
+  overrides: Partial<Record<keyof T, unknown>>,
+): T {
+  return new Proxy(target, {
+    get(inner, property, receiver) {
+      if (Object.hasOwn(overrides, property)) return overrides[property as keyof T];
+      const member = Reflect.get(inner, property, receiver) as unknown;
+      return typeof member === "function" ? member.bind(inner) : member;
+    },
+  });
+}
 
 function repoFor(env = new NodeExecutionEnv({ cwd: root })): JsonlSessionRepo {
   return new JsonlSessionRepo({ fileSystem: env, sessionsRoot: root });
@@ -236,6 +252,7 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
     const path = writer.metadata.path;
     await writer.close(context);
     const bytesBefore = readFileSync(path);
+    const inodeBefore = statSync(path).ino;
     expect(bytesBefore.length).toBeGreaterThan(6_000_000);
     // The fixture really does exercise what the batching has to get right.
     const lines = bytesBefore.toString("utf8").split("\n");
@@ -247,8 +264,10 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
     const readerRepo = repoFor();
     const reopened = await readerRepo.open(await onlyMetadata(readerRepo), context);
     expect(await snapshot(reopened)).toEqual(written);
-    // Not torn, so the file is left exactly as it was.
+    // Not torn, so the file is left exactly as it was — not even rewritten
+    // with the same bytes, which would publish a new inode by rename.
     expect(readFileSync(path).equals(bytesBefore)).toBe(true);
+    expect(statSync(path).ino).toBe(inodeBefore);
 
     // The sequence continues where the writer stopped.
     const lastSeq = Math.max(
@@ -277,21 +296,14 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
     // macrotask in once the replay has started.
     const env = new NodeExecutionEnv({ cwd: root });
     let replayStartedAt: number | undefined;
-    const inMemory = new Proxy(env, {
-      get(target, property, receiver) {
-        if (property === "readBinaryFile" || property === "readTextFile") {
-          return async (requested: string) => {
-            expect(requested).toBe(path);
-            replayStartedAt = performance.now();
-            return {
-              ok: true,
-              value: property === "readBinaryFile" ? bytes : bytes.toString("utf8"),
-            };
-          };
-        }
-        const member = Reflect.get(target, property, receiver) as unknown;
-        return typeof member === "function" ? member.bind(target) : member;
-      },
+    const served = (content: Uint8Array | string) => async (requested: string) => {
+      expect(requested).toBe(path);
+      replayStartedAt = performance.now();
+      return { ok: true, value: content };
+    };
+    const inMemory = withOverrides(env, {
+      readBinaryFile: served(bytes),
+      readTextFile: served(bytes.toString("utf8")),
     });
     const repo = repoFor(inMemory);
     const metadata = await onlyMetadata(repo);
@@ -394,30 +406,28 @@ describe("Pi SessionRepo conformance against the patched JSONL repo (VC-462)", (
   // which a JSONL repo files every Session under; give each one the same.
   const factory = async (): Promise<SessionRepo<JsonlSessionMetadata>> => {
     const repo = repoFor();
-    const withCwd = new Proxy(repo, {
-      get(target, property, receiver) {
-        if (property === "create") {
-          return (options: SessionCreateOptions, callContext: typeof context) =>
-            target.create({ ...options, cwd }, callContext);
-        }
-        const member = Reflect.get(target, property, receiver) as unknown;
-        return typeof member === "function" ? member.bind(target) : member;
-      },
+    const withCwd = withOverrides(repo, {
+      create: (options: SessionCreateOptions, callContext: typeof context) =>
+        repo.create({ ...options, cwd }, callContext),
     });
     // Only `list`'s options type differs (JSONL takes an optional filter).
     return withCwd as unknown as SessionRepo<JsonlSessionMetadata>;
   };
-  // Every group but destination reservation, whose "create reserves first"
-  // case fails identically against unpatched 0.87.1 (the race it stages does
-  // not touch `openV4`); the lifecycle group is the one that re-opens.
   const cases = [
     ...createSessionRepoLifecycleConformance(factory),
     ...createSessionRepoOwnershipConformance(factory),
     ...createSessionRepoMessageConformance(factory),
     ...createSessionRepoForkBehaviorConformance(factory),
+    ...createSessionRepoStreamingForkConformance(factory),
+    ...createSessionRepoForkDestinationReservationConformance(factory),
     ...createSessionRepoForkSourceSnapshotConformance(factory),
   ];
+  // Fails identically against unpatched 0.87.1: the create/fork race it
+  // stages over one destination id never reaches `openV4`.
+  const knownUpstreamFailure =
+    "fork coordination: publishes create when it reserves a shared destination id first";
   for (const conformanceCase of cases) {
-    it(`${conformanceCase.group}: ${conformanceCase.name}`, () => conformanceCase.run());
+    const name = `${conformanceCase.group}: ${conformanceCase.name}`;
+    (name === knownUpstreamFailure ? it.skip : it)(name, () => conformanceCase.run());
   }
 });

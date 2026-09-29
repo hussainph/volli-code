@@ -66,10 +66,10 @@ index d430a3f966cc9624cc2e78638fd207a83a75b312..fbfc5f5cce15cc93de1dbfbca940e775
      const messagesToSummarize = [];
      for (let i = 0; i < historyEnd; i++) {
 diff --git a/dist/harness/session/jsonl/storage.js b/dist/harness/session/jsonl/storage.js
-index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb83026f31f 100644
+index 1309f66a8fbdd1400ed557e1128028fe677c9575..5d46f64167973da8345574aea596e5f45d396bcc 100644
 --- a/dist/harness/session/jsonl/storage.js
 +++ b/dist/harness/session/jsonl/storage.js
-@@ -4,13 +4,41 @@ import { InMemoryStorageState } from "../in-memory-storage-state.js";
+@@ -4,13 +4,44 @@ import { InMemoryStorageState } from "../in-memory-storage-state.js";
  import { fileValue, parseJsonlTransaction, publishFileAtomically, publishJsonl, readJsonlHeader, serializeJsonlTransaction, } from "./io.js";
  import { LegacyV3Source } from "./legacy-v3.js";
  import { JSONL_STORAGE_VERSION } from "./types.js";
@@ -85,21 +85,24 @@ index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb8
 +const REPLAY_DECODE_BATCH_BYTES = 256 * 1024;
 +/** Longest stretch of replay work between two yields to the event loop. */
 +const REPLAY_SLICE_MS = 8;
-+/** Let queued tasks (timers, I/O, IPC) run between replay slices. */
++/**
++ * Let queued tasks (timers, I/O, IPC) run between replay slices. `setImmediate` where the
++ * runtime has it (Node, Electron main); `setTimeout(0)` keeps the storage runnable elsewhere.
++ */
 +function yieldToEventLoop() {
 +    return new Promise((resolve) => (typeof setImmediate === "function" ? setImmediate(resolve) : setTimeout(resolve, 0)));
 +}
 +/**
-+ * Yield every complete line of a UTF-8 JSONL file, in order, in time-bounded slices.
++ * Visit every complete line of a UTF-8 JSONL file, in order, in time-bounded slices.
 + *
 + * Equivalent to decoding the whole file and splitting it on "\n", without holding
 + * the event loop for the whole file: a newline byte never occurs inside a UTF-8
 + * sequence, so decoding newline-terminated batches separately yields the same text,
 + * and `ignoreBOM` keeps a leading U+FEFF exactly as a whole-file decode does. The
-+ * caller's own per-line work counts toward the slice, because the generator resumes
-+ * only after the caller asks for the next line.
++ * visitor runs synchronously and its work counts toward the slice; a throw from it
++ * stops the walk and rejects.
 + */
-+async function* completeLinesInSlices(bytes, completeLength) {
++async function forEachCompleteLineInSlices(bytes, completeLength, visit) {
 +    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 +    let sliceStart = performance.now();
 +    for (let start = 0; start < completeLength;) {
@@ -108,7 +111,7 @@ index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb8
 +        lines.pop();
 +        start = end;
 +        for (const line of lines) {
-+            yield line;
++            visit(line);
 +            if (performance.now() - sliceStart >= REPLAY_SLICE_MS) {
 +                await yieldToEventLoop();
 +                sliceStart = performance.now();
@@ -118,7 +121,7 @@ index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb8
  }
  /** JSONL storage backed by an injected filesystem capability. */
  export class JsonlStorage {
-@@ -48,19 +76,28 @@ export class JsonlStorage {
+@@ -48,21 +79,30 @@ export class JsonlStorage {
              : JsonlStorage.openV4(options, parsed.header, context);
      }
      static async openV4(options, header, context) {
@@ -137,12 +140,12 @@ index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb8
 +        // Kept only to rewrite a torn file without its tail.
 +        const lines = torn ? [] : undefined;
 +        let lineNumber = 0;
-+        for await (const line of completeLinesInSlices(bytes, completeLength)) {
++        await forEachCompleteLineInSlices(bytes, completeLength, (line) => {
 +            lineNumber++;
 +            lines?.push(line);
 +            // Line 1 is the header, already parsed by `open`.
 +            if (lineNumber === 1)
-+                continue;
++                return;
              try {
                  storage.replayCommitted(parseJsonlTransaction(line));
              }
@@ -150,5 +153,15 @@ index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb8
 -                throw new Error(`Invalid JSONL storage ${options.path}: line ${index + 1}`, { cause: error });
 +                throw new Error(`Invalid JSONL storage ${options.path}: line ${lineNumber}`, { cause: error });
              }
-         }
+-        }
++        });
          if (header.nextSeq !== undefined)
+             storage.storageState.advanceNextSeq(header.nextSeq);
+         if (torn) {
+@@ -197,4 +237,4 @@ export class JsonlStorage {
+         return this.closePromise;
+     }
+ }
+-//# sourceMappingURL=storage.js.map
+\ No newline at end of file
++// sourceMappingURL removed by a local patch: storage.js.map describes the unpatched file.

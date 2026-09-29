@@ -75,9 +75,11 @@ and stored in `patches/` at the repo root. It carries two independent changes.
   patch reads the bytes (`readBinaryFile`, already on Pi's `FileSystem`),
   decodes newline-terminated batches of at most 256 KiB, and parses and replays
   line by line, yielding (`setImmediate`, else `setTimeout(0)`) whenever a slice
-  has run 8 ms. Recovered state, torn-tail repair and the `line N` error are
-  unchanged; `src/pi/sidecar-load.test.ts` pins that against a large sidecar
-  and runs Pi's `SessionRepo` conformance on the patched repo. The write-up
+  has run 8 ms. It also drops `storage.js`'s `sourceMappingURL`, since the
+  shipped map describes the unpatched file. Recovered state, torn-tail repair
+  and the `line N` error are unchanged; `src/pi/sidecar-load.test.ts` pins
+  that against a large sidecar and runs Pi's `SessionRepo` conformance on the
+  patched repo. The write-up
   that could go upstream as-is is in
   `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`. Upstream ships no
   equivalent as of 0.87.1; drop the hunk once it does.

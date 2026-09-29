@@ -14,16 +14,22 @@ concurrency and scheduling are unchanged.
 > the IPC echo max from **187 → 17 ms** (medians of 6 interleaved launches
 > each). On the idle-paired figures the ticket asks to be judged by, Δ
 > tick-gap p95 fell from +171 to +12 ms and Δ IPC echo p95 from +158 to
-> +13 ms. The 16 MB arm fell from 72 to 18 ms. Bind wall time did not regress:
-> it improved, 312 → 270 ms at 47 MB. Heap per context is unchanged at
-> 44.1–44.2 MiB. The full matrix's steady windows are still flat
-> ([below](#full-matrix-steady-windows-stay-flat)).
+> +13 ms. The 16 MB arm fell from 72 to 18 ms. Bind wall time did not
+> regress (median 312 → 270 ms at 47 MB, with overlapping ranges). Heap per
+> context is unchanged at 44.1–44.2 MiB. The full matrix's steady windows are still flat
+> ([below](#full-matrix-steady-windows-stay-flat)). The final form of the
+> hunk, re-measured after review on a slower host, held the result: 388 → 37 ms
+> at 47 MB ([confirmation](#confirmation-on-the-final-code)).
 
 ## The change
 
 The whole change is one hunk in pi-agent-core 0.87.1's
 `dist/harness/session/jsonl/storage.js`. It is added to the existing
-`patches/@earendil-works__pi-agent-core@0.87.1.patch`. No Volli source
+`patches/@earendil-works__pi-agent-core@0.87.1.patch`; pnpm takes one patch
+file per package version, so the file now carries the older compaction seam
+and this change side by side. The hunk also drops that file's
+`sourceMappingURL` comment, because the shipped `storage.js.map` describes
+the unpatched file and would point stack traces at the wrong lines. No Volli source
 changed, Pi is not vendored and its version is not bumped. The write-up below
 is meant to go upstream as it stands.
 
@@ -48,10 +54,10 @@ open is a single task whose length grows with file size.
    `TextDecoder("utf-8", { ignoreBOM: true })`.
 4. Parse and replay line by line.
 5. Once a slice has run for 8 ms, yield one macrotask (`setImmediate`, else
-   `setTimeout(0)`).
+   `setTimeout(0)`; the fallback exists only because Pi is not Node-only).
 
-The generator resumes only when the replay asks for the next line, so the
-per-line replay counts toward the slice.
+The per-line replay runs synchronously inside the walk, so it counts toward
+the slice. Nothing is awaited per line, only once per slice.
 
 **Why the state is identical.**
 
@@ -80,9 +86,10 @@ A single multi-megabyte transaction still costs its own parse time, exactly as
 before. The legacy v3 path (`openLegacyV3`) is untouched; it already streams
 through the line reader.
 
-**Cost.** None measured. Re-bind wall time went down, because the patch no
-longer builds one whole-file string and one whole-file `split` array. Heap
-after load is unchanged.
+**Cost.** None measured. Re-bind wall time did not regress; its medians were
+lower, probably because the patch no longer builds one whole-file string and
+one whole-file `split` array. The ranges overlap, though, and the "before"
+launches ran under more load. Heap after load is unchanged.
 
 The patched `openV4`, as TypeScript for `src/harness/session/jsonl/storage.ts`:
 
@@ -93,18 +100,26 @@ const REPLAY_DECODE_BATCH_BYTES = 256 * 1024;
 /** Longest stretch of replay work between two yields to the event loop. */
 const REPLAY_SLICE_MS = 8;
 
-/** Let queued tasks (timers, I/O, IPC) run between replay slices. */
+/**
+ * Let queued tasks (timers, I/O, IPC) run between replay slices. `setImmediate` where the
+ * runtime has it (Node, Electron main); `setTimeout(0)` keeps the storage runnable elsewhere.
+ */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) =>
     typeof setImmediate === "function" ? setImmediate(resolve) : setTimeout(resolve, 0),
   );
 }
 
-/** Yield every complete line of a UTF-8 JSONL file, in order, in time-bounded slices. */
-async function* completeLinesInSlices(
+/**
+ * Visit every complete line of a UTF-8 JSONL file, in order, in time-bounded slices.
+ * The visitor runs synchronously and its work counts toward the slice; a throw from it
+ * stops the walk and rejects.
+ */
+async function forEachCompleteLineInSlices(
   bytes: Uint8Array,
   completeLength: number,
-): AsyncGenerator<string> {
+  visit: (line: string) => void,
+): Promise<void> {
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   let sliceStart = performance.now();
   for (let start = 0; start < completeLength; ) {
@@ -114,7 +129,7 @@ async function* completeLinesInSlices(
     lines.pop();
     start = end;
     for (const line of lines) {
-      yield line;
+      visit(line);
       if (performance.now() - sliceStart >= REPLAY_SLICE_MS) {
         await yieldToEventLoop();
         sliceStart = performance.now();
@@ -136,17 +151,17 @@ private static async openV4(options: JsonlStorageOptions, header: JsonlStorageHe
   // Kept only to rewrite a torn file without its tail.
   const lines: string[] | undefined = torn ? [] : undefined;
   let lineNumber = 0;
-  for await (const line of completeLinesInSlices(bytes, completeLength)) {
+  await forEachCompleteLineInSlices(bytes, completeLength, (line) => {
     lineNumber++;
     lines?.push(line);
     // Line 1 is the header, already parsed by `open`.
-    if (lineNumber === 1) continue;
+    if (lineNumber === 1) return;
     try {
       storage.replayCommitted(parseJsonlTransaction(line));
     } catch (error) {
       throw new Error(`Invalid JSONL storage ${options.path}: line ${lineNumber}`, { cause: error });
     }
-  }
+  });
   if (header.nextSeq !== undefined) storage.storageState.advanceNextSeq(header.nextSeq);
   if (torn) {
     await publishFileAtomically(options.fileSystem, options.path, context, (append) => append(`${lines!.join("\n")}\n`));
@@ -215,13 +230,30 @@ the compaction path. They stay covered by the unchanged `runtime.test.ts`,
   - The two `main.cjs` bundles differ only in the storage hunk, in the
     `//#region` paths that carry the patch hash, and in the build id.
   - The renderer bundles are byte-identical.
+  - **Telling them apart in the raw files.** `environment.build.gitSha` in
+    each `raw.json.gz` is the checkout's `HEAD` when the bench ran
+    (`d63315f6`, a later commit of this branch that adds only tests and
+    docs), not the commit a bundle was built from. The bundle is identified
+    by `environment.build.mainBundleBuiltAt`: `18:21:23Z` is *before* and
+    `18:29:05Z` is *after*. Their build ids were `428e4dcbf5fc@…` and
+    `428e4dcbf5fc+dirty@…`, the latter because the patch was not yet
+    committed.
+  - These runs measured the first form of the hunk, which walked lines
+    through an async generator. Review replaced that with the synchronous
+    per-batch loop shown above; it slices and decodes the same way, minus
+    one promise per line. The
+    [confirmation run](#confirmation-on-the-final-code) re-measures the final
+    code.
 - **Fixture.** One frozen bench fixture was prepared once: one 4,501-entry
   sidecar of 16.2 MB and one 13,501-entry sidecar of 47.3 MB, the same targets
   as VC-445's large run.
-- **Runs.** The bench was run 12 times with `--bound 1 --histories 4500,13500
-  --repetitions 1`, alternating builds in ABBA order: before/after,
-  after/before, and so on, for six pairs. The two runs of a pair share a seed,
-  so their arm order is the same.
+- **Runs.** The ticket names one `--bound 1 --histories 4500,13500
+  --repetitions 6` run per build. Six repetitions are kept, but the run is
+  split: the bench was run 12 times with `--repetitions 1`, alternating
+  builds in ABBA order (before/after, after/before, and so on) for six pairs.
+  A before-then-after pair of long runs would have let the shared host's
+  load drift pick a winner. The two runs of a pair share a seed, so their arm
+  order is the same.
   - Each run is one discarded warm-up launch plus control, 16 MB and 47 MB.
   - 36 measured launches in all; 0 failed their binding or tripwire checks.
 - **Machine.** The same M1 MacBook Pro (8 cores, 16 GiB, AC power) as VC-445,
@@ -281,14 +313,58 @@ the same launch's idle window subtracted.
   the 6 s idle window. That is why the table leads with the absolute
   hydration max and the p95 deltas.
 - **No regression.**
-  - Bind wall time improved: 312 → 270 ms at 47 MB, 149 → 102 ms at 16 MB.
+  - Bind wall time did not regress. Its medians went 312 → 270 ms at 47 MB
+    and 149 → 102 ms at 16 MB, but the ranges overlap and the "before"
+    launches saw more load, so read that as "no regression" rather than as a
+    speed-up.
   - Post-GC heap growth per bound context is unchanged: 44.1 → 44.2 MiB at
     47 MB and 15.9 → 15.7 MiB at 16 MB.
   - Steady-window deltas stay within ±2.5 ms in both builds.
 
+### Confirmation on the final code
+
+Review replaced the async-generator walk with the synchronous per-batch loop
+shown above, so both bundles were rebuilt from the branch after it merged
+`main`. *Before* got the unpatched Pi and *after* the final hunk; the
+renderer is shared. They were re-measured against the same fixture.
+
+- **First attempt: unreadable.** Four ABBA pairs ran while the host's
+  1-minute load climbed to 444. The *before* stalls reached 9.2 s, and the
+  two builds did not see comparable load (median 30 before, 131 after). No
+  conclusion is drawn from it. Its raw samples are kept under
+  [`confirm-high-load/`](pi-sidecar-rebind-yield-vc462/confirm-high-load/)
+  for the record.
+- **Second attempt: three ABBA pairs** once the load was back to 9–16 for
+  both builds. The host was still slower than during the main A/B: the
+  *before* build's own 47 MB stall doubled, to 274–420 ms.
+
+| Arm | Build | 1-min load | Hydration ELD max | Hydration IPC echo max | Δ tick-gap p95 | Bind wall ms | Heap Δ MiB |
+|---|---|---|---|---|---|---|---|
+| 47 MB | before | 11.1 [11.0–11.6] | **388.5** [273.7–420.0] | 382.6 [268.4–416.1] | +14.2 [4.3–16.2] | 663 [500–672] | 44.1 |
+| 47 MB | after | 13.5 [10.0–13.9] | **37.1** [35.6–48.5] | 31.4 [29.6–44.5] | +20.2 [9.9–33.9] | 510 [499–528] | 44.2 |
+| 16 MB | before | 9.6 [9.2–12.6] | 97.8 [82.0–163.4] | 99.6 [82.1–166.8] | +90.1 [68.9–154.1] | 258 [192–297] | 15.8 |
+| 16 MB | after | 12.6 [11.7–15.6] | 30.1 [24.4–98.4] | 24.9 [18.5–96.9] | +11.8 [11.0–86.2] | 278 [206–324] | 15.7 |
+
+**Reading it.**
+
+- **The final code holds the result.** On a host that had doubled the
+  unpatched stall, the 47 MB re-bind's loop-delay max was 36–49 ms after
+  against 274–420 ms before. That is still under the 50 ms target and still
+  a 7–10× drop.
+- **The 47 MB before Δ tick-gap p95 is low** (4–16 ms). That is the effect
+  already noted above: the stall is one tick sample inside a long window. The
+  absolute max is the reliable figure.
+- **One 16 MB "after" launch reached 98 ms**, in pair 1. Its IPC echo p95
+  delta stayed at +12.8 ms, so the stall was a single event. Its pair's
+  *before* launch reached 163 ms. Nothing in the loader produces a stall
+  longer than one line plus a slice, so this reads as host noise. It is
+  reported, not excluded.
+- **Bind wall time and heap** again show no regression.
+
 ### Full matrix: steady windows stay flat
 
-The full VC-445 matrix ran once on the *after* build:
+The full VC-445 matrix ran once on the *after* build, which carried the
+first form of the hunk:
 `pnpm bench:pi-context-scaling --repetitions 6`, 17 arms × 6 plus a warm-up,
 103 launches, 0 failed. The 1-minute load across launches was p50 8.4, p95
 17.0 and max 22.9, and memory-pressure levels 1 and 2 were both seen. Its
@@ -339,12 +415,21 @@ back to back, unpatched and patched, at load about 6:
 | | Re-attach ms (6 runs) | Loop-delay max per re-attach, ms |
 |---|---|---|
 | unpatched | 202, 211, 231, 203, 187, 192 | 150, 152, 174, 153, 140, 145 |
-| patched | 194, 171, 159, 310, 168, 167 | 33, 34, 26, 36, 33, 31 |
+| patched (first form) | 194, 171, 159, 310, 168, 167 | 33, 34, 26, 36, 33, 31 |
+
+The final hunk was run the same way later, on the slower host that the
+confirmation run also saw (load about 15). Unpatched re-attaches took
+326–549 ms and held the loop for 252–388 ms. Patched ones took 201–370 ms and
+held it for 26–52 ms.
 
 The full outputs, with the self-time tables, are committed as
 [`profile-attach-13500-before.txt`](pi-sidecar-rebind-yield-vc462/profile-attach-13500-before.txt)
 and
-[`profile-attach-13500-after.txt`](pi-sidecar-rebind-yield-vc462/profile-attach-13500-after.txt).
+[`profile-attach-13500-after.txt`](pi-sidecar-rebind-yield-vc462/profile-attach-13500-after.txt),
+and for the final hunk
+[`profile-attach-13500-before-final.txt`](pi-sidecar-rebind-yield-vc462/profile-attach-13500-before-final.txt)
+and
+[`profile-attach-13500-after-final.txt`](pi-sidecar-rebind-yield-vc462/profile-attach-13500-after-final.txt).
 
 **What the remaining ~30 ms is.** A gap timeline showed it. The replay's
 own slices appear as gaps of about 14–17 ms: one 8 ms slice, the 1 ms
@@ -363,10 +448,28 @@ and it would be a Volli-side change rather than a Pi one.
 - **Shared host.** The A/B was interleaved precisely so that load could not
   pick the winner. All the same, the absolute milliseconds are directional.
   The build-to-build contrast (a 7–8× drop, with no overlap) is the result.
-- **One huge line** is still one task. The fixture's largest line is about
-  600 KB, which parses in well under a slice. A real Session carrying a
+- **One huge line** is still one task. The bench fixture's largest line is
+  about 125 KB and the test fixture's about 600 KB, and both parse well
+  inside a slice. A real Session carrying a
   multi-megabyte tool result in one transaction would still pay that one
   line's parse time, exactly as before.
+- **Volli's own recovery fold** still runs as one task after the load, and
+  the load's last slice runs straight into it. Together they make up the
+  largest gap that remains (see the plain-Node profile), and the fold grows
+  with entry count. It is small next to the target and was left alone.
+- **Shutdown during a re-bind.** Review found that a re-bind finishing after
+  `SessionRuntime.close()` registers a binding that nothing releases. The race
+  is older than this change, and this change did not lengthen re-bind wall
+  time, but long Sessions widen the window. It is filed as VC-467.
+- **Committed data.** `docs/performance-benchmark.md` keeps benchmark JSON
+  out of git. As with VC-445, these are one-off research artifacts under
+  `docs/research/perf/`, and the ticket's own acceptance is a before/after
+  comparison someone should be able to re-read. So the raw A/B samples
+  (about 80 KB per run) and the matrix's `aggregate.json` and `tables.md` are
+  committed. The matrix's roughly 2 MB `raw.json.gz` is not.
+- **Labels.** The matrix `aggregate.json` says `"ticket": "VC-445"`. That is
+  the bench's fixed name, not a mix-up: it is the same bench, re-run on the
+  patched build.
 - **Upstream.** When Pi ships an equivalent, or changes `openV4`, drop this
   hunk and re-run `sidecar-load.test.ts`. The test is written against Pi's
   public API and should hold unchanged.

@@ -17,52 +17,45 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
+import { summarize } from "../performance/run.mjs";
+import {
+  acrossLaunches,
+  armKey,
+  launchFailed,
+  launchLoad,
+  memoryFigures,
+  okSamples,
+} from "./aggregate.mjs";
+
 const directory = resolve(process.argv[2] ?? "");
 const showRows = process.argv.includes("--rows");
 
-function finite(values) {
-  return values.filter(Number.isFinite).toSorted((a, b) => a - b);
-}
-
-/** Nearest-rank percentile. */
-function percentile(values, fraction) {
-  const sorted = finite(values);
-  if (sorted.length === 0) return Number.NaN;
-  return sorted[Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)];
-}
-
-function median(values) {
-  const sorted = finite(values);
-  const n = sorted.length;
-  if (n === 0) return Number.NaN;
-  return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
-}
-
-const maximum = (values) => (values.length === 0 ? Number.NaN : Math.max(...values));
+/** Nearest-rank p95 and max, as the bench's own tables compute them. */
+const p95 = (values) => summarize(values)?.p95 ?? Number.NaN;
+const max = (values) => summarize(values)?.max ?? Number.NaN;
 const gaps = (window) => window.main.tickGaps.map(([, gap]) => gap);
-const echo = (window) =>
-  window.renderer.echo.filter((sample) => sample[2] === 1).map((sample) => sample[1]);
+const echo = (window) => okSamples(window.renderer.echo).map((sample) => sample[1]);
 
 function launchRow(build, pair, launch) {
   const { idle, hydration, steady } = launch.windows;
   return {
     build,
     pair,
-    arm: launch.arm.bound === 0 ? "control" : `${launch.arm.bound}x${launch.arm.historyEntries}`,
-    load: Math.max(launch.host.before.loadavg[0], launch.host.after.loadavg[0]),
-    idleEldMax: idle.main.eventLoopDelay.maxMs,
+    arm: armKey(launch.arm),
+    historyEntries: launch.arm.historyEntries,
+    load: launchLoad(launch),
     hydrationEldMax: hydration.main.eventLoopDelay.maxMs,
-    hydrationGapMax: maximum(gaps(hydration)),
-    hydrationEchoMax: maximum(echo(hydration)),
+    hydrationGapMax: max(gaps(hydration)),
+    hydrationEchoMax: max(echo(hydration)),
     deltaEldMax: hydration.main.eventLoopDelay.maxMs - idle.main.eventLoopDelay.maxMs,
-    deltaGapP95: percentile(gaps(hydration), 0.95) - percentile(gaps(idle), 0.95),
-    deltaEchoP95: percentile(echo(hydration), 0.95) - percentile(echo(idle), 0.95),
-    steadyDeltaGapP95: percentile(gaps(steady), 0.95) - percentile(gaps(idle), 0.95),
-    steadyDeltaEchoP95: percentile(echo(steady), 0.95) - percentile(echo(idle), 0.95),
+    deltaGapP95: p95(gaps(hydration)) - p95(gaps(idle)),
+    deltaEchoP95: p95(echo(hydration)) - p95(echo(idle)),
+    steadyDeltaGapP95: p95(gaps(steady)) - p95(gaps(idle)),
+    steadyDeltaEchoP95: p95(echo(steady)) - p95(echo(idle)),
     bindMs: hydration.perSession?.[0]?.ms ?? Number.NaN,
     heapDeltaMiB:
-      (launch.memory.post.processMemory.heapUsed - launch.memory.pre.processMemory.heapUsed) /
-      2 ** 20,
+      memoryFigures(launch.memory.post).mainHeapUsedMiB -
+      memoryFigures(launch.memory.pre).mainHeapUsedMiB,
   };
 }
 
@@ -73,14 +66,18 @@ for (const name of readdirSync(directory).toSorted()) {
   if (match === null || !existsSync(file)) continue;
   const raw = JSON.parse(gunzipSync(readFileSync(file)).toString());
   for (const launch of raw.launches) {
-    if (launch.warmup || launch.failures.length > 0) continue;
+    if (launch.warmup || launchFailed(launch)) continue;
     rows.push(launchRow(match[1], Number(match[2]), launch));
   }
 }
 
 const format = (value) => (Number.isFinite(value) ? value.toFixed(1) : "—");
-const spread = (values) =>
-  `${format(median(values))} [${format(Math.min(...values))}–${format(Math.max(...values))}]`;
+function spread(values) {
+  const across = acrossLaunches(values);
+  return across === null
+    ? "—"
+    : `${format(across.median)} [${format(across.min)}–${format(across.max)}]`;
+}
 const columns = [
   ["load", "1-min load"],
   ["hydrationEldMax", "hydration ELD max"],
@@ -100,7 +97,9 @@ console.log(
 );
 console.log(`| arm | build | n | ${columns.map(([, label]) => label).join(" | ")} |`);
 console.log(`|---|---|---:|${columns.map(() => "---").join("|")}|`);
-const arms = [...new Set(rows.map((row) => row.arm))].toSorted().toReversed();
+// Largest sidecar first, the control last.
+const byHistory = (a, b) => b.historyEntries - a.historyEntries;
+const arms = [...new Set(rows.toSorted(byHistory).map((row) => row.arm))];
 for (const arm of arms) {
   for (const build of ["before", "after"]) {
     const selected = rows.filter((row) => row.arm === arm && row.build === build);
@@ -114,7 +113,7 @@ if (showRows) {
   console.log(`\n| arm | pair | build | ${columns.map(([, label]) => label).join(" | ")} |`);
   console.log(`|---|---:|---|${columns.map(() => "---:").join("|")}|`);
   const ordered = rows.toSorted(
-    (a, b) => a.arm.localeCompare(b.arm) || a.pair - b.pair || a.build.localeCompare(b.build),
+    (a, b) => byHistory(a, b) || a.pair - b.pair || a.build.localeCompare(b.build),
   );
   for (const row of ordered) {
     const cells = columns.map(([key]) => format(row[key]));
