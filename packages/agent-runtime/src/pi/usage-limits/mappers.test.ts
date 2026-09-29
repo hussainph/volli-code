@@ -1014,18 +1014,48 @@ describe("zaiUsageFromEndpoint", () => {
     expect(limits.windows.map((window) => window.id)).toEqual(["session"]);
   });
 
-  it("keeps the further-along of two readings of the same span", () => {
+  it("keeps the further-along of two readings of the same span, in either order", () => {
+    const span = (currentValue: number) => ({
+      type: "TOKENS_LIMIT",
+      unit: 3,
+      number: 5,
+      usage: 100,
+      currentValue,
+    });
+    // The console has served a token limit beside a per-tier one over the same
+    // five hours, and two rows under one id is not a row anyone can read. The
+    // one that stops a turn first wins whichever way round they arrive — a
+    // rule that held only in listed order would be a coin toss on the wire.
+    for (const limits of [
+      zaiUsageFromEndpoint({ limits: [span(20), span(80)] }, NOW),
+      zaiUsageFromEndpoint({ limits: [span(80), span(20)] }, NOW),
+    ]) {
+      expect(limits.windows).toHaveLength(1);
+      expect(limits.windows[0]?.usedPercent).toBe(80);
+    }
+  });
+
+  it("skips a window whose length is stated as a count it cannot use", () => {
+    // Zero five-hour spans, or a count that is not a number at all: both name
+    // a window of no length, and a length is what the countdown reads.
+    for (const number of [0, -5, "soon", undefined]) {
+      const limits = zaiUsageFromEndpoint(
+        { limits: [{ type: "TOKENS_LIMIT", unit: 3, number, usage: 100, currentValue: 40 }] },
+        NOW,
+      );
+      expect(limits.windows).toEqual([]);
+    }
+  });
+
+  it("falls back to the stated percentage when the counts measure nothing", () => {
+    // A limit with neither a spend nor a remainder beside it: the counts are
+    // there but they answer no question, so the coarse percentage is all there
+    // is rather than a share divided out of half a reading.
     const limits = zaiUsageFromEndpoint(
-      {
-        limits: [
-          { type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, currentValue: 20 },
-          { type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, currentValue: 80 },
-        ],
-      },
+      { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 800, percentage: 41 }] },
       NOW,
     );
-    expect(limits.windows).toHaveLength(1);
-    expect(limits.windows[0]?.usedPercent).toBe(80);
+    expect(limits.windows[0]?.usedPercent).toBe(41);
   });
 
   it("reports a failed probe when the body names no usable token window", () => {
