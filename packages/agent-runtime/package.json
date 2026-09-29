@@ -8,6 +8,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./bench/mcp-parallel": {
+      "types": "./bench/mcp-parallel/driver.ts",
+      "import": "./bench/mcp-parallel/driver.ts"
     }
   },
   "scripts": {
@@ -19,6 +23,8 @@
     "bench:runtime": "vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
     "bench:runtime:published": "BENCH_ARM=published vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
     "bench:runtime:profile": "node bench/parallel-tools/run-profile.mjs",
+    "bench:turn-to-completion": "node bench/turn-to-completion/run.mjs",
+    "bench:reduction": "vp test run --config vite.bench.config.ts bench/read-only-reduction/read-only-reduction.bench.test.ts",
     "bench:live": "vp test run --config vite.bench-live.config.ts",
     "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },

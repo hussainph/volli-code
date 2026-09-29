@@ -350,6 +350,10 @@ export default defineConfig(({ mode }) => ({
         // together to see it. The spoken name is here too, because it is the
         // whole reading for anyone who cannot use the drawing.
         "src/components/usage-limits/icon-reading.ts",
+        // What a pin on that glyph holds, and what pressing one does to it
+        // (VC-452). A missed branch is a pin that silently holds a window from
+        // another account, or a third one the glyph has no side to draw.
+        "src/components/usage-limits/usage-pin.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",

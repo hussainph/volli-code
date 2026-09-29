@@ -3,6 +3,7 @@ import type { ModelAccessProvider, UsageLimits, UsageWindow, UsageWindowKind } f
 
 import { usageLimitAccounts } from "./accounts";
 import { usageIconLabel, usageIconReading, usageIconWindows } from "./icon-reading";
+import type { UsagePin } from "./usage-pin";
 
 const NOW = Date.parse("2026-03-01T12:00:00Z");
 const HOUR = 3_600_000;
@@ -48,8 +49,24 @@ const limits = (...windows: UsageWindow[]): UsageLimits => ({ checkedAt: NOW, wi
 
 /** The fixtures go through the real sorter, so the glyph and the rows agree. */
 function read(...providers: readonly ModelAccessProvider[]) {
-  return usageIconReading({ kind: "read", accounts: usageLimitAccounts(providers), now: NOW });
+  return readPinned(null, ...providers);
 }
+
+function readPinned(pin: UsagePin | null, ...providers: readonly ModelAccessProvider[]) {
+  return usageIconReading({ kind: "read", accounts: usageLimitAccounts(providers), now: NOW }, pin);
+}
+
+/** OpenCode Go's shape: three spans at once, the only account with more than two. */
+const openCodeGo = (session: number, weekly: number, monthly: number): ModelAccessProvider =>
+  provider(
+    "opencode-go",
+    "OpenCode Go",
+    limits(
+      win("session", "session", "Session", session),
+      win("weekly", "weekly", "Weekly", weekly, 4 * DAY, WEEK_MINS),
+      win("monthly", "monthly", "Monthly", monthly, 12 * DAY, 44_640),
+    ),
+  );
 
 /** Claude Code's shape: a five-hour window and a weekly one. */
 const anthropic = (session: number, weekly: number): ModelAccessProvider =>
@@ -77,7 +94,13 @@ const xai = (weekly: number): ModelAccessProvider =>
 describe("usageIconReading", () => {
   it("has nothing to draw before anything has been read", () => {
     const reading = usageIconReading({ kind: "unread" });
-    expect(reading).toEqual({ kind: "unread", lead: null, reported: null, others: [] });
+    expect(reading).toEqual({
+      kind: "unread",
+      lead: null,
+      reported: null,
+      pinned: [],
+      others: [],
+    });
     // The glyph tells these two apart by a dash, so the reading has to as well.
     expect(usageIconReading({ kind: "failed" }).kind).toBe("failed");
   });
@@ -171,7 +194,13 @@ describe("usageIconReading", () => {
 
   it("is empty when the read succeeded and nothing is metered", () => {
     const reading = usageIconReading({ kind: "read", accounts: [], now: NOW });
-    expect(reading).toEqual({ kind: "read", lead: null, reported: null, others: [] });
+    expect(reading).toEqual({
+      kind: "read",
+      lead: null,
+      reported: null,
+      pinned: [],
+      others: [],
+    });
   });
 });
 
@@ -188,16 +217,7 @@ describe("usageIconWindows", () => {
   });
 
   it("keeps the reported window when an account reports three", () => {
-    const three = (session: number, weekly: number, monthly: number): ModelAccessProvider =>
-      provider(
-        "opencode-go",
-        "OpenCode Go",
-        limits(
-          win("session", "session", "Session", session),
-          win("weekly", "weekly", "Weekly", weekly, 4 * DAY, WEEK_MINS),
-          win("monthly", "monthly", "Monthly", monthly, 12 * DAY, 44_640),
-        ),
-      );
+    const three = openCodeGo;
 
     // The monthly binds: it must be one of the two, and the other slot goes to
     // the next window by family order rather than by which number is worse.
@@ -243,6 +263,114 @@ describe("usageIconWindows", () => {
   it("has nothing to print with no lead", () => {
     expect(usageIconWindows(usageIconReading({ kind: "unread" }))).toEqual([]);
   });
+
+  it("prints both pinned windows of three, even when a third binds", () => {
+    // The monthly binds and would take a slot unpinned; two pins fill both.
+    const pin = { providerId: "opencode-go", windowIds: ["weekly", "session"] };
+    expect(
+      usageIconWindows(readPinned(pin, openCodeGo(22, 47, 58))).map((window) => window.id),
+    ).toEqual(["session", "weekly"]);
+  });
+
+  it("prints one pinned window alone, with nothing added beside it", () => {
+    const pin = { providerId: "opencode-go", windowIds: ["monthly"] };
+    // Session binds here, and would have taken the other slot unpinned.
+    expect(
+      usageIconWindows(readPinned(pin, openCodeGo(95, 10, 5))).map((window) => window.id),
+    ).toEqual(["monthly"]);
+    // Two windows of a two-window account are no different: a pin is exactly
+    // what is drawn.
+    expect(
+      usageIconWindows(
+        readPinned({ providerId: "anthropic", windowIds: ["seven_day"] }, anthropic(37, 4)),
+      ).map((window) => window.id),
+    ).toEqual(["seven_day"]);
+  });
+
+  it("never draws more pinned windows than the glyph has sides", () => {
+    const pin = { providerId: "opencode-go", windowIds: ["session", "weekly", "monthly"] };
+    expect(
+      usageIconWindows(readPinned(pin, openCodeGo(22, 47, 58))).map((window) => window.id),
+    ).toEqual(["weekly", "monthly"]);
+  });
+});
+
+describe("usageIconReading with a pin", () => {
+  it("reports the pinned account even when another is nearer to running out", () => {
+    const pin = { providerId: "anthropic", windowIds: ["five_hour"] };
+    const reading = readPinned(pin, anthropic(37, 4), copilot(97));
+
+    expect(reading.lead?.label).toBe("Anthropic");
+    expect(reading.reported?.id).toBe("five_hour");
+    expect(reading.pinned.map((window) => window.id)).toEqual(["five_hour"]);
+    // The account the sort would have chosen is still counted, not lost.
+    expect(reading.others.map((other) => other.label)).toEqual(["GitHub Copilot"]);
+    // A lens, not a fact: the account's own binding window is untouched.
+    expect(reading.lead?.binding?.id).toBe("five_hour");
+  });
+
+  it("reports the pinned window rather than the account's binding one", () => {
+    // The session is 90% used and binds; pinning the weekly makes the weekly
+    // the one the name leads with.
+    const reading = readPinned(
+      { providerId: "anthropic", windowIds: ["seven_day"] },
+      anthropic(90, 4),
+    );
+    expect(reading.lead?.binding?.id).toBe("five_hour");
+    expect(reading.reported?.id).toBe("seven_day");
+  });
+
+  it("reports whichever of two pinned windows has least left", () => {
+    const reading = readPinned(
+      { providerId: "opencode-go", windowIds: ["weekly", "session"] },
+      openCodeGo(22, 47, 58),
+    );
+    // Family order, whatever order they were pinned in.
+    expect(reading.pinned.map((window) => window.id)).toEqual(["session", "weekly"]);
+    expect(reading.reported?.id).toBe("weekly");
+
+    // And the session when it is the one lower.
+    const sessionLower = readPinned(
+      { providerId: "opencode-go", windowIds: ["weekly", "session"] },
+      openCodeGo(90, 10, 5),
+    );
+    expect(sessionLower.reported?.id).toBe("session");
+  });
+
+  it("falls back to the sort when the pinned account is not metered", () => {
+    const reading = readPinned(
+      { providerId: "openai-codex", windowIds: ["primary"] },
+      anthropic(37, 4),
+      copilot(97),
+    );
+    expect(reading.lead?.label).toBe("GitHub Copilot");
+    expect(reading.pinned).toEqual([]);
+  });
+
+  it("falls back to the sort when the pinned window is no longer reported", () => {
+    const reading = readPinned(
+      { providerId: "anthropic", windowIds: ["opus_weekly"] },
+      anthropic(37, 4),
+      copilot(97),
+    );
+    expect(reading.lead?.label).toBe("GitHub Copilot");
+    expect(reading.pinned).toEqual([]);
+  });
+
+  it("honours the half of a pin that still resolves", () => {
+    const reading = readPinned(
+      { providerId: "anthropic", windowIds: ["opus_weekly", "seven_day"] },
+      anthropic(37, 4),
+      copilot(97),
+    );
+    expect(reading.lead?.label).toBe("Anthropic");
+    expect(reading.pinned.map((window) => window.id)).toEqual(["seven_day"]);
+  });
+
+  it("means nothing before anything has been read", () => {
+    const pin = { providerId: "anthropic", windowIds: ["five_hour"] };
+    expect(usageIconReading({ kind: "unread" }, pin).pinned).toEqual([]);
+  });
 });
 
 describe("usageIconLabel", () => {
@@ -269,6 +397,18 @@ describe("usageIconLabel", () => {
     expect(usageIconLabel(read(anthropic(61, 4), xai(1)))).toBe(
       "Usage limits, 39% left on Anthropic Session, ahead of pace, 1 more metered",
     );
+  });
+
+  it("says when the glyph is pinned, since then it may not be the nearest", () => {
+    expect(
+      usageIconLabel(
+        readPinned(
+          { providerId: "anthropic", windowIds: ["five_hour"] },
+          anthropic(37, 4),
+          copilot(97),
+        ),
+      ),
+    ).toBe("Usage limits, 63% left on Anthropic Session, pinned, 1 more metered");
   });
 
   it("says none metered when the lead has no window to report", () => {

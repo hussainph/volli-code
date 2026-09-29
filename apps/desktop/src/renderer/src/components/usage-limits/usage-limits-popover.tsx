@@ -32,9 +32,16 @@
  * show. A control in window chrome that comes and goes is one a person cannot
  * learn the position of, and its absence would say "nothing to report" in
  * exactly the same way as "not signed in to anything metered".
+ *
+ * PINNING LIVES HERE, ON THE ROWS (VC-452). Each window row carries a pin that
+ * puts that window on the glyph — up to both of its bars, from one account —
+ * and a collapsed row wears a pin while it holds one, so a closed list still
+ * says why the glyph is not showing the account on top. The pin is persisted
+ * in the ui store; what it means is `usage-pin.ts`.
  */
 
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import * as React from "react";
 import { remainingPercent, usageTone, type UsageTone, type UsageWindow } from "@volli/shared";
@@ -43,7 +50,7 @@ import {
   usageLimitAccounts,
   type UsageLimitAccount,
 } from "@renderer/components/usage-limits/accounts";
-import { AccountUsage } from "@renderer/components/usage-limits/account-usage";
+import { AccountUsage, type UsageWindowPin } from "@renderer/components/usage-limits/account-usage";
 import {
   usageIconLabel,
   usageIconReading,
@@ -53,6 +60,7 @@ import {
   UsageLimitsIcon,
   USAGE_ICON_BUTTON_PX,
 } from "@renderer/components/usage-limits/usage-limits-icon";
+import { isUsageWindowPinned, type UsagePin } from "@renderer/components/usage-limits/usage-pin";
 import {
   Accordion,
   AccordionContent,
@@ -65,6 +73,7 @@ import { Spinner } from "@renderer/components/ui/spinner";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
 
 /**
  * What the surface currently knows. `null` is "has not asked yet".
@@ -184,7 +193,11 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
   // The trigger draws what has been read; `icon-reading.ts` is the only thing
   // that decides what that means, so the glyph and the rows below cannot reach
   // different verdicts about one snapshot.
-  const glyph = React.useMemo(() => usageIconReading(reading ?? { kind: "unread" }), [reading]);
+  const pin = useUiStore((state) => state.usagePin);
+  const glyph = React.useMemo(
+    () => usageIconReading(reading ?? { kind: "unread" }, pin),
+    [reading, pin],
+  );
   const label = usageIconLabel(glyph);
 
   return (
@@ -225,13 +238,21 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
             <ArrowClockwiseIcon />
           </Button>
         </div>
-        <ReadingView reading={reading} now={now} />
+        <ReadingView reading={reading} now={now} pin={pin} />
       </PopoverContent>
     </Popover>
   );
 }
 
-function ReadingView({ reading, now }: { reading: Reading | null; now: number | undefined }) {
+function ReadingView({
+  reading,
+  now,
+  pin,
+}: {
+  reading: Reading | null;
+  now: number | undefined;
+  pin: UsagePin | null;
+}) {
   if (reading === null) {
     return (
       <div className="flex items-center justify-center py-6">
@@ -256,17 +277,49 @@ function ReadingView({ reading, now }: { reading: Reading | null; now: number | 
       className="p-1"
     >
       {reading.accounts.map((account) => (
-        <AccountItem key={account.providerId} account={account} now={now} />
+        <AccountItem key={account.providerId} account={account} now={now} pin={pin} />
       ))}
     </Accordion>
   );
 }
 
-function AccountItem({ account, now }: { account: UsageLimitAccount; now: number | undefined }) {
+function AccountItem({
+  account,
+  now,
+  pin,
+}: {
+  account: UsageLimitAccount;
+  now: number | undefined;
+  pin: UsagePin | null;
+}) {
+  const toggleUsagePin = useUiStore((state) => state.toggleUsagePin);
+  const { providerId } = account;
+  const windowPin = React.useMemo<UsageWindowPin>(
+    () => ({
+      isPinned: (windowId) => isUsageWindowPinned(pin, providerId, windowId),
+      toggle: (windowId) => toggleUsagePin(providerId, windowId),
+    }),
+    [pin, providerId, toggleUsagePin],
+  );
+  const holdsPin = pin?.providerId === providerId;
   return (
     <AccordionItem value={account.providerId}>
       <AccordionTrigger className="group">
-        <span className="min-w-0 truncate text-ui font-medium">{account.label}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-ui font-medium">{account.label}</span>
+          {/* A mark, not a control: the pins that change it are the rows
+              inside, and a second button in a trigger would be a button in a
+              button. It is here so a closed list still says which account
+              the glyph is showing, when that is not the one on top. */}
+          {holdsPin ? (
+            <PushPinIcon
+              aria-label="Pinned to the window bar"
+              role="img"
+              weight="fill"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+          ) : null}
+        </span>
         <span className="flex shrink-0 items-center gap-1">
           {/* Keyed on the snapshot the reading came from, for the reason
               `account-usage.tsx` keys its rows: the tone reads the pace
@@ -282,7 +335,12 @@ function AccountItem({ account, now }: { account: UsageLimitAccount; now: number
         </span>
       </AccordionTrigger>
       <AccordionContent>
-        <AccountUsage limits={account.limits} now={now} testId={`usage-${account.providerId}`} />
+        <AccountUsage
+          limits={account.limits}
+          now={now}
+          testId={`usage-${account.providerId}`}
+          pin={windowPin}
+        />
       </AccordionContent>
     </AccordionItem>
   );
