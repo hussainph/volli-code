@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "test:performance-harness": "vp test run --config vite.bench.config.ts",
+    "bench:mcp-parallel": "vp test run --config vite.mcp-parallel-bench.config.ts",
     "start": "node scripts/start-electron.mjs",
     "ensure:electron": "node -e \"console.log(require('electron'))\"",
     "test:coverage": "vp test run --coverage",
