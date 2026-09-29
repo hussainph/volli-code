@@ -125,6 +125,11 @@ import {
 } from "@renderer/components/home/home-rail-model";
 import type { SessionEnvironmentFaultKind } from "@renderer/components/session-environment-alert-model";
 import {
+  sanitizeUsagePin,
+  toggleUsagePin,
+  type UsagePin,
+} from "@renderer/components/usage-limits/usage-pin";
+import {
   DEFAULT_TICKET_RAIL_MODE,
   type TicketRailMode,
   resolvePersistedRailMode,
@@ -419,6 +424,13 @@ interface UiState {
    * and only that kind — a different fault still speaks.
    */
   dismissedEnvironmentFaults: SessionEnvironmentFaultKind[];
+  /**
+   * The windows the window-bar usage glyph is pinned to, or null for its own
+   * rule (VC-452). Persisted app-wide: a pin is set once for the stretch of
+   * work it serves, and one that let go at every relaunch would be a pin that
+   * had to be set again each morning. See `usage-pin.ts`.
+   */
+  usagePin: UsagePin | null;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   /**
@@ -493,6 +505,8 @@ interface UiState {
    * repaired speaks again if it ever comes back.
    */
   retainEnvironmentFaultDismissals(active: readonly SessionEnvironmentFaultKind[]): void;
+  /** Press the pin on one window row: pin it, unpin it, or move the pin to it. */
+  toggleUsagePin(providerId: string, windowId: string): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -532,6 +546,7 @@ type PersistedUiState = Pick<
   | "wordWrap"
   | "defaultExternalAppId"
   | "dismissedEnvironmentFaults"
+  | "usagePin"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -570,6 +585,7 @@ export function createUiStore(storage?: StateStorage) {
         wordWrap: DEFAULT_WORD_WRAP,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         dismissedEnvironmentFaults: [],
+        usagePin: null,
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
@@ -634,6 +650,8 @@ export function createUiStore(storage?: StateStorage) {
           const kept = current.filter((kind) => active.includes(kind));
           if (kept.length !== current.length) set({ dismissedEnvironmentFaults: kept });
         },
+        toggleUsagePin: (providerId, windowId) =>
+          set((state) => ({ usagePin: toggleUsagePin(state.usagePin, providerId, windowId) })),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -668,6 +686,7 @@ export function createUiStore(storage?: StateStorage) {
           wordWrap: state.wordWrap,
           defaultExternalAppId: state.defaultExternalAppId,
           dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
+          usagePin: state.usagePin,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -718,6 +737,9 @@ export function createUiStore(storage?: StateStorage) {
             dismissedEnvironmentFaults: sanitizeEnvironmentFaults(
               stored.dismissedEnvironmentFaults,
             ),
+            // A malformed pin is no pin: the glyph goes back to reporting the
+            // account nearest to running out rather than drawing from a guess.
+            usagePin: sanitizeUsagePin(stored.usagePin),
           };
         },
       },

@@ -60,9 +60,10 @@
  * snapshots at one fixed `now`; `unread` and `failed` are drawn, not simulated.
  *
  * THE POPOVER IS NOT REDESIGNED HERE. It stays the full breakdown, the way the
- * phone shows three separate icons once unfolded. The Pinning view remains a
- * proposal for a pin at the end of each window row, not part of the chosen
- * glyph or a claim that the app now offers pinning.
+ * phone shows three separate icons once unfolded. The Pinning view was the
+ * proposal for a pin at the end of each window row; the app's version shipped
+ * in VC-452 (`usage-pin.ts`), and holds up to two windows of one account — one
+ * per bar of the chosen glyph — where this view still holds one.
  */
 
 import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
