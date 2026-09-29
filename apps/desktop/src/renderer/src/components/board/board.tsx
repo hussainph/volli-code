@@ -233,14 +233,26 @@ function ticketSlotElement(ticketId: string): HTMLElement | null {
  * column list scrolls during a drag and the panel changes size when ⌥ goes
  * down, so a rect measured a frame ago is a rect for the wrong thing — and a
  * stale rect is the classic source of a drop landing one column over from where
- * it was aimed. Both facts come out of ONE read, so the hovered column and the
- * highlighted row can never disagree about where the pointer is.
+ * it was aimed. Both facts come out of ONE element, so the hovered column and
+ * the highlighted row can never disagree about where the pointer is.
+ *
+ * `elementsFromPoint` — the whole hit-test stack, topmost first — rather than
+ * `elementFromPoint`, and the first entry that sits in a column wins. Clickable
+ * chrome floats over the board by design: the armed-run countdown owns
+ * bottom-centre and must keep its Cancel live, and sonner's toasts own
+ * bottom-right. Either one under the hand used to answer "no column", so ⌥
+ * opened nothing and a drag aimed low at a column ran its default (VC-451).
+ * Looking THROUGH chrome is right only mid-drag, which is the only time this
+ * runs; the chrome itself stays clickable at rest. A pure DOM read in a
+ * pointer handler — it adds no store read and no render path to the board.
  */
 function pointerLanding(
   x: number,
   y: number,
 ): { status: TicketStatus | null; target: DragPickerLanding | null } {
-  const element = document.elementFromPoint(x, y);
+  const element = document
+    .elementsFromPoint(x, y)
+    .find((hit) => hit.closest("[data-board-column]") !== null);
   const column = element?.closest<HTMLElement>("[data-board-column]");
   const status = (column?.dataset["boardColumn"] as TicketStatus | undefined) ?? null;
   const row = element?.closest<HTMLElement>(`[${OFFERED_ROW_ATTRIBUTE}]`);
