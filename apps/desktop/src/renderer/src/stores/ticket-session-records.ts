@@ -23,7 +23,13 @@
  * while one for the same ticket is in flight.
  */
 import { create } from "zustand";
-import { errorMessage, type HarnessId, type SessionListingRow } from "@volli/shared";
+import {
+  errorMessage,
+  sessionReadStateOf,
+  type HarnessId,
+  type SessionListingRow,
+  type SessionReadState,
+} from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
@@ -31,6 +37,14 @@ import type { SessionActivityNotice } from "../../../ipc/contract";
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
   return row.kind === "terminal" ? row.record.id : row.record.sessionId;
+}
+
+/** One row's read state, with the resting answer for a row that carries none. */
+export function sessionRowReadState(
+  rows: readonly SessionListingRow[] | undefined,
+  sessionId: string,
+): SessionReadState {
+  return sessionReadStateOf(rows?.find((row) => rowSessionId(row) === sessionId)?.read);
 }
 
 /** Whether one ticket's baseline roster is still on its way, usable, or unavailable. */
@@ -110,6 +124,17 @@ export interface TicketSessionRecordsState {
    * `ChatSessionRecord` has no field for.
    */
   setActiveHarness(ticketId: string, sessionId: string, harnessId: HarnessId): void;
+  /**
+   * Marks one of this ticket's Sessions read or unread (VC-30) — the rail's own
+   * door to the same receipt the sidebar writes.
+   *
+   * Optimistic, like `renameLocally` above and for the same reason: nothing
+   * else moves these rows until main publishes, so the dot has to answer the
+   * keypress locally. A refused write puts the old state back and toasts
+   * (AGENTS.md: surface every failed mutation), and the authoritative row
+   * arrives on `volli:session-activity` for every window.
+   */
+  setSessionRead(ticketId: string, sessionId: string, unread: boolean): Promise<void>;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -210,28 +235,24 @@ export function createTicketSessionRecordsStore() {
             // kind is rebuilt as itself — the id it answers to differs (`id` vs
             // `sessionId`) and so does everything else on the record.
             [ticketId]: rows.map((row) => {
-              // `usage` and `provenance` are carried across untouched on every
-              // rebuilt row. One is a measurement of what the Session spent and
-              // the other is who started it; renaming a Session or re-reading
-              // its harness changes neither. Dropping `provenance` here would
-              // take a Run's bolt off the row the moment somebody retitled it.
+              // The row is copied WHOLE and only its record replaced, so every
+              // field beside it rides across untouched: `usage` is what the
+              // Session spent, `provenance` is who started it, `read` (VC-30)
+              // is whether anybody has seen its last turn — renaming a Session
+              // or re-reading its harness changes none of the three. Copying
+              // rather than re-listing the fields is also what keeps `read`'s
+              // ABSENCE intact: its resting state is the missing key, and a
+              // hand-written `read: row.read` would put `undefined` on a row
+              // main published without one.
               if (row.kind === "chat") {
                 return row.record.sessionId === sessionId
-                  ? {
-                      kind: "chat" as const,
+                  ? Object.assign({}, row, {
                       record: Object.assign({}, row.record, { title }),
-                      usage: row.usage,
-                      provenance: row.provenance,
-                    }
+                    })
                   : row;
               }
               return row.record.id === sessionId
-                ? {
-                    kind: "terminal" as const,
-                    record: Object.assign({}, row.record, { title }),
-                    usage: row.usage,
-                    provenance: row.provenance,
-                  }
+                ? Object.assign({}, row, { record: Object.assign({}, row.record, { title }) })
                 : row;
             }),
           },
@@ -251,17 +272,50 @@ export function createTicketSessionRecordsStore() {
             // the rename above gives.
             [ticketId]: rows.map((row) =>
               row.kind === "terminal" && row.record.id === sessionId
-                ? {
-                    kind: "terminal" as const,
+                ? Object.assign({}, row, {
                     record: Object.assign({}, row.record, { activeHarnessId: harnessId }),
-                    usage: row.usage,
-                    provenance: row.provenance,
-                  }
+                  })
                 : row,
             ),
           },
         };
       });
+    },
+
+    async setSessionRead(ticketId, sessionId, unread) {
+      const previous = sessionRowReadState(get().byTicket[ticketId], sessionId);
+      // The optimistic stamp is local only: main owns the receipt's clock, and
+      // the recorded one replaces this on the push.
+      const write = (read: SessionReadState): void => {
+        set((state) => {
+          const rows = state.byTicket[ticketId];
+          if (rows === undefined) return state;
+          return {
+            byTicket: {
+              ...state.byTicket,
+              [ticketId]: rows.map((row) => {
+                if (rowSessionId(row) !== sessionId) return row;
+                const marked = read.unreadSince === null ? {} : { read };
+                // Object.assign, not a spread in a map callback (the lint rule
+                // `renameLocally` above records), and the key is DELETED rather
+                // than set to undefined when a Session is read: absence is the
+                // resting state everywhere else in this row's life.
+                const { read: _dropped, ...rest } = row;
+                return Object.assign({}, rest, marked) as SessionListingRow;
+              }),
+            },
+          };
+        });
+      };
+      write(unread ? { unreadSince: Date.now() } : { unreadSince: null });
+      try {
+        const result = await window.api.sessions.setRead({ sessionId, unread });
+        if (result.ok) return;
+        toastError(`Couldn't mark the session: ${result.error}`);
+      } catch (error) {
+        toastError(`Couldn't mark the session: ${errorMessage(error)}`);
+      }
+      write(previous);
     },
   }));
 }

@@ -92,6 +92,8 @@ import type {
   RequirableSessionEnvTool,
   SessionEnvTool,
   SessionListingRow,
+  SessionPeekContent,
+  SessionReadState,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
   SessionUsageGrouping,
@@ -827,6 +829,23 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * Marks a Session read or unread (VC-30).
+   *
+   * Persists the receipt and then re-publishes that Session's listing row on
+   * `volli:session-activity` — the same broadcast the push channel uses — so a
+   * mark made in one sidebar reaches the other sidebar, the ticket rail, and
+   * every other window.
+   */
+  "volli:session-read-set": { args: [input: SessionReadSetInput]; result: SessionReadSetResult };
+  /**
+   * One fold of a Session's tail plus the question it is asking, for a peek
+   * card (VC-30). Read-only: it adopts nothing and subscribes to nothing.
+   */
+  "volli:session-peek-content": {
+    args: [input: SessionPeekContentInput];
+    result: SessionPeekContentResult;
+  };
   /**
    * Stops a Session's work as the person (VC-269): records `session.stop`
    * with the `user` actor, interrupts the open turn and releases the live
@@ -3153,6 +3172,39 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
+
+/**
+ * A person's own read decision (VC-30): `U`, the context menu, opening a
+ * Session, or answering it from a peek card.
+ *
+ * `unread: true` stamps it as of main's clock rather than the caller's — the
+ * receipt is main's record and a renderer clock never writes into it.
+ */
+export interface SessionReadSetInput {
+  sessionId: string;
+  unread: boolean;
+}
+
+/**
+ * What the receipt says after the write. The caller already moved its row
+ * optimistically; this is what it reverts to if the write failed, and the
+ * authoritative row follows on `volli:session-activity` for every other window.
+ */
+export type SessionReadSetResult = Result<{ read: SessionReadState }>;
+
+/** One peek's fold (VC-30): `limit` defaults to `SESSION_PEEK_ENTRIES`. */
+export interface SessionPeekContentInput {
+  sessionId: string;
+  limit?: number;
+}
+
+/**
+ * What a peek card draws, or `null` for a Session the ledger no longer has.
+ *
+ * A pull with no subscription behind it: hovering a row must not adopt a
+ * Session or open a stream (see `main/session-control/peek-content.ts`).
+ */
+export type SessionPeekContentResult = Result<{ content: SessionPeekContent | null }>;
 
 /**
  * What a person's stop did (`session-stop`). `ok` means the stop fact is

@@ -2229,6 +2229,38 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
+ *
+ * A read receipt is not work, so it is deliberately NOT a Session ledger fact.
+ * Marking a Session read would otherwise append to `session_events`, churn the
+ * projection checkpoints beside it, and move `lastActivityAt` — a Session would
+ * climb its own listing because somebody LOOKED at it. So the receipt is a
+ * per-Session row of its own, on the shape `session_provenances` already
+ * established for a fact about a Session that the ledger does not own.
+ *
+ * One nullable column carries the whole state: a stamp is "unread since then"
+ * and `NULL` is read. A Session with no row at all is read too, which is what
+ * makes the resting case cost nothing — a machine where nobody has ever left an
+ * agent running unattended stores nothing here.
+ *
+ * The partial index holds only the unread rows, for `session_attachments`'
+ * reason one migration up: the unread set is a handful while the table grows
+ * with every Session, so the index is the size of the answer.
+ *
+ * Losing this table costs one wrong dot and nothing else, which is why it has
+ * no backfill: there is no durable evidence of what somebody had already read.
+ */
+const MIGRATION_052_SESSION_READ_RECEIPTS = `
+CREATE TABLE IF NOT EXISTS session_read_receipts (
+  session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  unread_since INTEGER
+);
+CREATE INDEX IF NOT EXISTS session_read_receipts_unread
+  ON session_read_receipts(unread_since)
+  WHERE unread_since IS NOT NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2494,6 +2526,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session_attachments — an indexed closure mark, so asking who is attached costs no fold",
     sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
     apply: applyMigration051AttachmentClosure,
+  },
+  {
+    version: 52,
+    name: "session_read_receipts — unread is its own axis, durable across relaunch (VC-30 × VC-108)",
+    sql: MIGRATION_052_SESSION_READ_RECEIPTS,
   },
 ];
 

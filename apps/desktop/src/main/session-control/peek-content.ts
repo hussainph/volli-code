@@ -1,0 +1,95 @@
+/**
+ * What a peek card is allowed to show, folded once per glance (VC-30).
+ *
+ * ── WHY THIS IS A PULL AND NOT A SUBSCRIPTION ─────────────────────────────
+ * A peek is a READ. Hovering a row must not adopt the Session, must not open a
+ * stream, and must not cost anything that has to be torn down afterwards —
+ * somebody sweeping the pointer down a sidebar would otherwise attach and
+ * detach a dozen executors. So the card asks for one fold and draws it, and
+ * only an explicit intent (pinning it to answer a question) adopts the Session
+ * through the door that already exists.
+ *
+ * ── WHY IT IS THE CLI's FOLD ──────────────────────────────────────────────
+ * `readSessionTranscriptTail` is the same read `volli session peek` has shipped
+ * since VC-79: the last few messages, whitespace-collapsed and cut, with the
+ * counts a caller needs to tell a loop from a hang. Re-implementing a tail fold
+ * here would be a second opinion about the same transcript, and the first time
+ * the two disagreed the card would be quietly wrong about what an agent said.
+ * This module is the JOIN, not a fold: the engine's tail plus the projection's
+ * open question, shaped for the renderer.
+ *
+ * ── WHAT THE RENDERER MAY SEE ─────────────────────────────────────────────
+ * The question crosses as a {@link RendererSessionInteraction} through
+ * `scrubSessionInteraction`, which blanks the runtime's `native` correlation —
+ * the renderer answers by `SessionInteraction.id` and cannot see or forge the
+ * harness's own handle. Nothing else about the attachment crosses.
+ *
+ * Unreadable tail messages are COUNTED rather than faked, all the way through:
+ * a missing artifact is a broken store, and a card that drew a blank line for
+ * it would report silence where there were words.
+ */
+import { readSessionTranscriptTail } from "@volli/session-engine";
+import type { SessionTranscriptArtifact } from "@volli/session-engine";
+import { scrubSessionInteraction, SESSION_PEEK_ENTRIES } from "@volli/shared";
+import type {
+  ListSessionEventsQuery,
+  SessionEvent,
+  SessionPeekContent,
+  SessionPeekEntry,
+  SessionProjection,
+  TranscriptReference,
+} from "@volli/shared";
+
+export interface SessionPeekContentPorts {
+  listEvents: (query: ListSessionEventsQuery) => Promise<readonly SessionEvent[]>;
+  /**
+   * Reads one durable transcript artifact. Absent means this composition holds
+   * no artifact store, and the peek answers with its counts and no entries —
+   * never with `unreadable`, which claims a store looked and failed. The tail
+   * fold owns that distinction; this only passes the port through.
+   */
+  readArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
+  getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
+}
+
+/**
+ * One fold of a Session for one peek: its tail, its open question, and the
+ * counts beside them. `null` means no such Session — a row the listing still
+ * holds for a Session the ledger no longer has.
+ *
+ * `limit` defaults to {@link SESSION_PEEK_ENTRIES}, which is far smaller than
+ * the CLI's own default for the reason that constant records: this is a glance,
+ * and the conversation is one press away.
+ */
+export async function readSessionPeekContent(
+  ports: SessionPeekContentPorts,
+  input: { sessionId: string; limit?: number },
+): Promise<SessionPeekContent | null> {
+  const projection = await ports.getSession({ sessionId: input.sessionId });
+  if (projection === null) return null;
+  const tail = await readSessionTranscriptTail(
+    {
+      listEvents: ports.listEvents,
+      ...(ports.readArtifact === undefined ? {} : { readArtifact: ports.readArtifact }),
+    },
+    { sessionId: input.sessionId, limit: input.limit ?? SESSION_PEEK_ENTRIES },
+  );
+  // `interactions.active[0]` is the app's one answer to "which question is this
+  // Session asking" — `sessionNotificationItem` picks the same one, so the card
+  // and the alert that sent somebody to it are talking about the same question.
+  const question = projection.interactions.active[0];
+  return {
+    sessionId: input.sessionId,
+    entries: tail.entries.map((entry): SessionPeekEntry => ({
+      at: entry.at,
+      role: entry.role,
+      text: entry.text,
+      tools: entry.tools,
+    })),
+    question: question === undefined ? null : scrubSessionInteraction(question),
+    turns: tail.turns,
+    turnDepth: tail.turnDepth,
+    unreadable: tail.unreadable,
+    lastActivityAt: projection.lastActivityAt,
+  };
+}

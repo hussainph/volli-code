@@ -143,11 +143,14 @@ import {
   chatSessionRecord,
   createDesktopSessionEngine,
   createScheduledResumeHost,
+  createSessionReadWatch,
   createSessionWatchdog,
   createSuspendClock,
+  sessionListingNotice,
   watchSessionActivity,
   type ScheduledResumeHost,
 } from "./session-control";
+import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
@@ -920,6 +923,64 @@ app.whenReady().then(async () => {
     watchedDb !== null
       ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
       : null;
+  // Unread, decided here because main is the only process that sees every turn
+  // boundary AND honestly knows which window is focused and what it is showing
+  // (VC-30). Both edges live in one watch: a turn that ended with nobody
+  // looking becomes unread, and a Session that comes into view becomes read.
+  //
+  // `publishSessionRow` is what makes the second edge visible. Marking read
+  // moves no ledger fact, so the activity watch below has nothing to notice —
+  // the row has to be re-published by hand, through the same broadcast and the
+  // same builder, or one window's dot would outlive the other's.
+  const publishSessionRow = (sessionId: string): void => {
+    if (watchedDb === null || sessionEngine === null) return;
+    void sessionListingNotice(
+      {
+        db: watchedDb,
+        getSession: (query) => sessionEngine.getSession(query),
+        liveAttachmentIds: () =>
+          new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
+      },
+      sessionId,
+    )
+      .then((notice) => {
+        if (notice !== null) broadcastSessionActivity(notice);
+      })
+      .catch((error: unknown) => {
+        console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
+      });
+  };
+  const sessionReadWatch =
+    watchedDb !== null
+      ? createSessionReadWatch({
+          // The same registry the alert suppression asks, so a turn can never
+          // be both loud and unread.
+          focusedSessionIds: () => notifications.focusedSessionIds(),
+          markUnread: (sessionId, at) => {
+            markSessionUnread(watchedDb, sessionId, at);
+            // No publish here: the activity watch is already mid-fold for this
+            // Session and reads the receipt below, so the row it is about to
+            // publish carries the mark this write just made.
+          },
+          markRead: (sessionId) => {
+            // A Session that is already read must not cost a broadcast: this
+            // fires for everything in front of a focused window, which on an
+            // ordinary switch is a Session nobody has left work in.
+            if (readSessionUnread(watchedDb, sessionId).unreadSince === null) return;
+            writeSessionUnread(watchedDb, sessionId, null);
+            publishSessionRow(sessionId);
+          },
+        })
+      : null;
+  // A1: a Session that BECOMES in front of a focused window is read — the
+  // renderer's active target changed to it, or its window took focus while
+  // already showing it. Without this, returning to a window that has a finished
+  // chat on screen keeps its dot until the person navigates away and back.
+  if (sessionReadWatch !== null) {
+    notifications.onFocusedSessionsChanged((sessionIds) =>
+      sessionReadWatch.observeFocused(sessionIds),
+    );
+  }
   const sessionActivityWatch =
     watchedDb !== null && sessionWakeBus !== null
       ? watchSessionActivity(sessionWakeBus.engine, {
@@ -928,16 +989,25 @@ app.whenReady().then(async () => {
           // survives its Session's first turn (VC-131): the renderer upserts
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          // Read AFTER `observe` below has run for this fold, so the row a turn
+          // boundary publishes already carries the mark that boundary earned
+          // (VC-30).
+          readOf: (sessionId) => readSessionUnread(watchedDb, sessionId),
           listOpenNativeBindings: () => listOpenNativeBindings(),
           observe: (projection) => {
             runAttention?.observe(projection);
             // A schedule made (or settled) anywhere reaches the timer here.
             scheduledResumeHost?.observe(projection);
+            // Did a turn just end with nobody looking? (VC-30)
+            sessionReadWatch?.observe(projection);
           },
           // The baseline for the rule above: a Session minted in this process
           // began with no need, which is what makes its first fold an edge
           // rather than a first sighting (VC-133).
-          observeBirth: (sessionId) => runAttention?.observeBirth(sessionId),
+          observeBirth: (sessionId) => {
+            runAttention?.observeBirth(sessionId);
+            sessionReadWatch?.observeBirth(sessionId);
+          },
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;
@@ -2522,6 +2592,9 @@ app.whenReady().then(async () => {
     blobsRoot: blobsRoot(app.getPath("userData")),
     // The renderer door of auto-titling (VC-81); absent with the runtime.
     autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
+    // The peek card's fold reads the same transcript artifacts `volli session
+    // peek` does, from the same store (VC-30).
+    readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
     // The person's stop (VC-269) acts through the same runtime the agent
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,

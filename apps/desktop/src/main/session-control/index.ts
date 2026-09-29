@@ -59,9 +59,13 @@ export {
 export type { TerminalAttachmentDetail } from "./terminal-attachment";
 export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
 export { sessionListingRow, sessionListingRows } from "./listing-row";
-export { sessionListingRowsForRoster } from "./listing-roster";
+export { sessionListingNotice, sessionListingRowsForRoster } from "./listing-roster";
 export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
+export { createSessionReadWatch } from "./session-read-watch";
+export type { SessionReadWatch, SessionReadWatchPorts } from "./session-read-watch";
+export { readSessionPeekContent } from "./peek-content";
+export type { SessionPeekContentPorts } from "./peek-content";
 export { createSessionWatchdog } from "./session-watchdog";
 export type { SessionWatchdog, SessionWatchdogPorts } from "./session-watchdog";
 export { createSuspendClock } from "./suspend-clock";

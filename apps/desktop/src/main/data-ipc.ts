@@ -83,6 +83,10 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
   SessionStopInput,
@@ -159,7 +163,14 @@ import {
  * models rather than here, so this handler stays dumb transport and the
  * performance harness can measure the same function the handler calls.
  */
-import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
+import {
+  createDesktopSessionEngine,
+  readSessionPeekContent,
+  sessionListingNotice,
+  sessionListingRowsForRoster,
+  type SessionPeekContentPorts,
+} from "./session-control";
+import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { prepared } from "./db/prepared";
 import {
   getTicket,
@@ -185,7 +196,7 @@ import {
   updateTicketFieldsCommand,
 } from "./ticket-commands";
 import { detectProjectBaseBranchAsync } from "./project-base-branch";
-import { broadcastDataChanged } from "./broadcast";
+import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
@@ -464,6 +475,14 @@ export function registerDataIpcHandlers(
      * with the reason — nothing is running for it to end.
      */
     sessionRuntime?: StopSessionByIdPorts["runtime"];
+    /**
+     * Reads one durable transcript artifact, for the peek card's fold (VC-30).
+     * The same port `session peek` on the CLI socket is given, from the same
+     * store. Absent (tests, degraded boot) means a peek answers with its counts
+     * and no entries — honest about having no artifact store, rather than
+     * claiming a store looked and failed.
+     */
+    readTranscriptArtifact?: SessionPeekContentPorts["readArtifact"];
     /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
@@ -1253,6 +1272,61 @@ export function registerDataIpcHandlers(
         ok: true,
         sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
       };
+    },
+
+    /**
+     * A person's own read decision (VC-30).
+     *
+     * Two acts, in this order and for two different audiences. The receipt is
+     * persisted first, because it is the durable answer and everything else is
+     * a projection of it. Then the Session's listing row is re-published on
+     * `volli:session-activity` — the same broadcast the push channel uses,
+     * carrying a row built by the same `sessionListingRow` — because this write
+     * moves no ledger fact, so the activity watch has nothing to notice and the
+     * OTHER sidebar, the ticket rail and the second window would otherwise keep
+     * drawing the dot until something unrelated refreshed them.
+     *
+     * The caller already moved its own row optimistically; the answer is what it
+     * reverts to if this failed.
+     */
+    "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
+      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      if (existing === null) return { ok: false, error: "Unknown session" };
+      // Main's clock, never the renderer's: the receipt is main's record, and a
+      // stamp from a window with a skewed clock would date the dot wrongly for
+      // every other window.
+      writeSessionUnread(db, input.sessionId, input.unread ? Date.now() : null);
+      const notice = await sessionListingNotice(
+        { db, getSession: (query) => sessionEngine.getSession(query), liveAttachmentIds },
+        input.sessionId,
+      );
+      if (notice !== null) broadcastSessionActivity(notice);
+      return { ok: true, read: readSessionUnread(db, input.sessionId) };
+    },
+
+    /**
+     * One peek's content (VC-30): the Session's transcript tail plus the
+     * question it is asking, folded once per glance.
+     *
+     * Straight through to `peek-content.ts`, which composes the engine fold the
+     * CLI's `session peek` already uses. Nothing here adopts the Session or
+     * opens a stream — hovering a row must cost one read and leave nothing to
+     * tear down.
+     */
+    "volli:session-peek-content": async (
+      input: SessionPeekContentInput,
+    ): Promise<SessionPeekContentResult> => {
+      const content = await readSessionPeekContent(
+        {
+          listEvents: (query) => sessionEngine.listEvents(query),
+          ...(options.readTranscriptArtifact === undefined
+            ? {}
+            : { readArtifact: options.readTranscriptArtifact }),
+          getSession: (query) => sessionEngine.getSession(query),
+        },
+        input,
+      );
+      return { ok: true, content };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
