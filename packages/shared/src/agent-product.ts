@@ -122,6 +122,24 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-364",
+    build: "VC-457",
+    added: [
+      "watch, a named tool in the Board and Ticket bundles that arms notices on Sessions and tickets and returns at once. A watched Session reports its next turn ending (with what it said last), its done or blocked signal, and its stop; a watched ticket reports moves, comments and signals made by anyone but the watcher, until action unwatch ends it. Changes that land together arrive as one notice, read mid-turn or opening a new turn.",
+    ],
+    changed: [
+      "A subagent's completion notice now carries its final message, quoted as the subagent's own prose inside an untrusted-prose envelope; a very long answer is cut, and volli session answer prints all of it. The notice is read mid-turn if the parent is working and opens a turn if it is idle.",
+      "session_start, automation_run and session_send watch the Session they open or steer: a notice arrives when its next turn ends, when it signals done or blocked, or if it is stopped. Their receipts no longer carry a Session cursor.",
+      "A stopped Session that a person sends a message to continues its conversation: the new attachment carries the earlier one's context forward instead of starting blank. A subagent resumed that way notifies its parent again when it finishes.",
+    ],
+    fixed: [
+      "A subagent is no longer stopped after 20 minutes. Delegated work has no time limit; it ends when the subagent answers or someone stops it, and a notice about a stop names who made it.",
+    ],
+    removed: [
+      "session_await and ticket_await left every Role bundle: waiting inside a tool call left the person's chat unusable until it resolved. Sessions created before this build keep the tools, and calling one now arms the equivalent watch and returns at once.",
+    ],
+  },
+  {
     baseline: "VC-324",
     build: "VC-364",
     added: [

@@ -1090,6 +1090,127 @@ describe("SessionRuntime native adapter contract", () => {
     expect((await runtime.snapshot({ sessionId })).projection.liveExecutor).toBeNull();
   });
 
+  it("carries the newest closed attachment into a context_replay attach, and records a first one as fresh (VC-457)", async () => {
+    const { runtime, adapter } = composition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const sessionId = created.sessionId;
+    // A reattach door asks for a replay without reading history first; with
+    // nothing to carry, what the attachment IS is fresh.
+    await runtime.command({
+      commandId: "command-attach-1",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(adapter.specs[0]).toMatchObject({ continuity: "fresh", native: null });
+    expect(adapter.specs[0]).not.toHaveProperty("carryFrom");
+    const first = (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(first.continuity).toBe("fresh");
+
+    await runtime.command({
+      commandId: "command-release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: first.id },
+    });
+    await runtime.command({
+      commandId: "command-attach-2",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(adapter.specs[1]).toMatchObject({
+      continuity: "context_replay",
+      native: null,
+      carryFrom: {
+        attachmentId: first.id,
+        directory: "/projects/fake",
+        native: { id: "native-session-1", detail: { provider: "fake" } },
+      },
+    });
+    const second = (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(second.id).not.toBe(first.id);
+    expect(second.continuity).toBe("context_replay");
+  });
+
+  it("skips another executor's and a failed attachment, and reports an unreadable one (VC-457)", async () => {
+    const { runtime, engine, adapter } = composition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const sessionId = created.sessionId;
+    let occurredAt = 900;
+    const closedAttachment = async (id: string, adapterId: string, native: unknown) => {
+      await engine.observe({
+        id,
+        sessionId,
+        occurredAt: occurredAt++,
+        provenance: { source: { kind: "adapter", id: adapterId, detail: null }, venue },
+        kind: "attachment.opened",
+        attachment: {
+          id,
+          sessionId,
+          adapterId,
+          venue,
+          continuity: "fresh",
+          native: native as never,
+          authority: null,
+        },
+      });
+      await engine.observe({
+        id: `${id}:closed`,
+        sessionId,
+        occurredAt: occurredAt++,
+        provenance: { source: { kind: "adapter", id: adapterId, detail: null }, venue },
+        kind: "attachment.closed",
+        attachmentId: id,
+        outcome: "completed",
+      });
+    };
+    await closedAttachment("unreadable", "fake", { id: "n", detail: { kind: "other" } });
+    // A failed attach, newer than it, records no native binding and is passed over.
+    adapter.attachFailure = new Error("no");
+    await runtime.command({
+      commandId: "command-attach-failed",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    adapter.attachFailure = null;
+    await closedAttachment("terminal", "terminal", { id: "t", detail: null });
+
+    await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    const spec = adapter.specs.at(-1)!;
+    // A conversation that existed and cannot be read is told to the adapter,
+    // which raises it; the attachment itself is fresh.
+    expect(spec.continuity).toBe("fresh");
+    expect(spec.carryFrom).toEqual({
+      attachmentId: "unreadable",
+      unreadable: expect.stringContaining("native binding"),
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.continuity).toBe(
+      "fresh",
+    );
+  });
+
   it("drops a released binding's tail instead of recording it against the closed attachment", async () => {
     // The artifact write is the one await between accepting a settled message
     // and recording it, so parking there holds a fan-out open and lets the

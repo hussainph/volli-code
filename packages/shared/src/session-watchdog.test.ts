@@ -195,13 +195,20 @@ function tool(
 }
 
 describe("sessionWedge with a tool in flight", () => {
-  it("never trips on a tool that waits on another Session or a person by design", () => {
-    for (const name of ["ticket_await", "session_await", "ask_user"]) {
-      expect(SESSION_WATCHDOG_WAITING_TOOLS.has(name)).toBe(true);
-      expect(sessionWedge(projection(), 24 * HOUR, T, 0, { inFlightTools: [tool(name)] })).toEqual({
-        wedged: false,
-        reason: "tool-running",
-      });
+  it("never trips on a tool that waits on a person by design", () => {
+    expect([...SESSION_WATCHDOG_WAITING_TOOLS]).toEqual(["ask_user"]);
+    expect(
+      sessionWedge(projection(), 24 * HOUR, T, 0, { inFlightTools: [tool("ask_user")] }),
+    ).toEqual({
+      wedged: false,
+      reason: "tool-running",
+    });
+  });
+
+  it("gives the retired awaits no shelter: they return at once now (VC-457)", () => {
+    for (const name of ["ticket_await", "session_await"]) {
+      expect(SESSION_WATCHDOG_WAITING_TOOLS.has(name)).toBe(false);
+      expect(inFlightToolAllowanceMs(tool(name), T)).toBe(SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS);
     }
   });
 
@@ -252,7 +259,7 @@ describe("sessionWedge with a tool in flight", () => {
   });
 
   it("lets the tightest allowance decide, so a wait cannot shelter a hung sibling", () => {
-    const tools = [tool("ticket_await"), tool("bash", 5 * MIN), tool("web_fetch")];
+    const tools = [tool("ask_user"), tool("bash", 5 * MIN), tool("web_fetch")];
     const limit = T; // bash's 5m + margin is under the floor, so the floor decides.
     expect(sessionWedge(projection(), limit, T, 0, { inFlightTools: tools })).toEqual({
       wedged: true,
@@ -412,11 +419,10 @@ describe("nextInFlightTools", () => {
 });
 
 describe("declaredToolTimeoutMs", () => {
-  it("reads bash's timeout and the awaits' timeoutSeconds, in seconds, and nothing else", () => {
+  it("reads bash's timeout, in seconds, and nothing else", () => {
     expect(declaredToolTimeoutMs("bash", { command: "sleep 5", timeout: 90 })).toBe(90_000);
-    expect(declaredToolTimeoutMs("ticket_await", { timeoutSeconds: 600 })).toBe(600_000);
-    expect(declaredToolTimeoutMs("session_await", { timeoutSeconds: 30 })).toBe(30_000);
-    expect(declaredToolTimeoutMs("session_await", { timeout: 30 })).toBeNull();
+    // The retired awaits' ignored `timeoutSeconds` is no longer a limit (VC-457).
+    expect(declaredToolTimeoutMs("ticket_await", { timeoutSeconds: 600 })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { command: "sleep 5" })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { timeout: 0 })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { timeout: "90" })).toBeNull();
@@ -436,11 +442,6 @@ describe("declaredToolTimeoutMs", () => {
     expect(inFlightToolAllowanceMs(tool("web_fetch"), T)).toBe(
       SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS,
     );
-    expect(inFlightToolAllowanceMs(tool("session_await"), T)).toBe(Number.POSITIVE_INFINITY);
-    // A timed await is bounded by its own limit: one still parked well past it
-    // is the runtime failing to end it.
-    expect(inFlightToolAllowanceMs(tool("ticket_await", HOUR), T)).toBe(
-      HOUR + SESSION_WATCHDOG_TOOL_TIMEOUT_MARGIN_MS,
-    );
+    expect(inFlightToolAllowanceMs(tool("ask_user"), T)).toBe(Number.POSITIVE_INFINITY);
   });
 });
