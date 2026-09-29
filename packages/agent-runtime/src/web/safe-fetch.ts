@@ -376,8 +376,8 @@ const CONTROL_BYTES = Uint8Array.from({ length: 256 }, (_, byte) =>
  * The whole body is judged, not its head: it is already bounded, and a file
  * that opens with a page of text and carries binary after it — a script with a
  * payload appended, an archive behind a text preamble — is binary. A NUL byte
- * anywhere settles it; so does any 1 KiB stretch that is more than a tenth
- * control bytes, because some formats go a long way before their first zero
+ * anywhere settles it; so does any 1 KiB stretch — at any offset — that is
+ * more than a tenth control bytes, because some formats go a long way before their first zero
  * and a ratio over the whole file would let a small binary segment hide in a
  * large text one.
  *
@@ -387,11 +387,17 @@ const CONTROL_BYTES = Uint8Array.from({ length: 256 }, (_, byte) =>
  */
 function sniffKind(body: Buffer): ServedKind | undefined {
   if (body.includes(0)) return undefined;
-  for (let at = 0; at < body.length; at += SNIFF_WINDOW) {
-    const window = body.subarray(at, at + SNIFF_WINDOW);
-    let control = 0;
-    for (const byte of window) if (CONTROL_BYTES[byte] === 1) control += 1;
-    if (control * 10 > window.length) return undefined;
+  // A sliding window, one byte at a stride, so a binary segment is judged
+  // wherever it sits: windows laid end to end would let one straddle a
+  // boundary and show each window only half of it. The count is kept
+  // rolling — add the byte entering, drop the one leaving — so this stays one
+  // pass over a body that may be megabytes long.
+  const size = Math.min(SNIFF_WINDOW, body.length);
+  let control = 0;
+  for (let at = 0; at < body.length; at += 1) {
+    control += CONTROL_BYTES[body[at] as number] as number;
+    if (at >= size) control -= CONTROL_BYTES[body[at - size] as number] as number;
+    if (at >= size - 1 && control * 10 > size) return undefined;
   }
   const head = body.subarray(0, SNIFF_WINDOW);
   const start = head.toString("latin1").trimStart().toLowerCase();

@@ -696,6 +696,28 @@ describe("safe web fetch", () => {
     ).resolves.toMatchObject({ contentType: "text", text: body });
   });
 
+  it("reads text whose control bytes stay under a tenth of every window", async () => {
+    // 102 of 1,024 is the most any window may hold; form feeds and escapes
+    // are text and never counted.
+    const body = Buffer.concat([
+      Buffer.alloc(1_500, 0x61),
+      Buffer.alloc(102, 0x02),
+      Buffer.alloc(1_500, 0x61),
+      Buffer.from("\f\u001b[0m".repeat(100)),
+    ]);
+    const { fetcher } = await fetcherFor((_request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(body);
+    });
+
+    await expect(
+      fetcher.fetch({
+        url: "http://cdn.example.com/log.txt",
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ contentType: "text" });
+  });
+
   it("reads a source file a CDN labelled application/octet-stream, by its bytes", async () => {
     // What jsDelivr and object stores send for any extension they do not map,
     // which for code research is most source files. Refusing the label refused
@@ -726,6 +748,21 @@ describe("safe web fetch", () => {
         Buffer.alloc(2_048, 0x01),
         Buffer.from("more text\n"),
       ]),
+    ],
+    [
+      // 150 control bytes across the 1,024-byte mark, 75 on each side: windows
+      // laid end to end would each see 75 and call both halves text.
+      "a control-byte run straddling a kilobyte boundary",
+      Buffer.concat([
+        Buffer.alloc(1_024 - 75, 0x61),
+        Buffer.alloc(150, 0x01),
+        Buffer.alloc(2_048, 0x61),
+      ]),
+    ],
+    [
+      // One past the bound: 103 control bytes in a 1 KiB window is over a tenth.
+      "103 control bytes at an odd offset",
+      Buffer.concat([Buffer.alloc(1_500, 0x61), Buffer.alloc(103, 0x02), Buffer.alloc(900, 0x61)]),
     ],
     ["a zip archive", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x08, 0x00])],
     // No NUL anywhere, so only the control-byte count catches it.
