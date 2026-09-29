@@ -52,7 +52,11 @@ export function useFilm(): number {
     for (const animation of document.getAnimations()) {
       let start = firstSeen.get(animation);
       if (start === undefined || start > t) {
-        start = t;
+        // Inside `[data-film-settled]` a shot opens on something that was
+        // already on screen before its first frame: its entrance is long over.
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        const settled = target instanceof Element && target.closest("[data-film-settled]") !== null;
+        start = settled ? t - 60_000 : t;
         firstSeen.set(animation, start);
       }
       animation.pause();
@@ -61,6 +65,32 @@ export function useFilm(): number {
     document.documentElement.dataset.filmTime = String(t);
   });
   return t;
+}
+
+/**
+ * Pins `Date.now()` to the scene clock while the calling shot is mounted, for
+ * real components that keep their own wall-clock loop (the armed countdown's
+ * `useFrameClock`). Without it the loop keeps reading real time while the
+ * capture waits on a frame, and a window seeded "1.8 s left" reads 0 s.
+ * `epoch` is what Date.now() returns at scene time 0.
+ */
+let filmNow: number | null = null;
+const realDateNow = Date.now.bind(Date);
+const pinnedDateNow = () => filmNow ?? realDateNow();
+export function useFilmWallClock(t: number, epoch: number): void {
+  filmNow = epoch + t;
+  // Installed during render, before any child's first render reads the clock
+  // (a `useState(() => Date.now())` would otherwise start on real time).
+  Date.now = pinnedDateNow;
+  React.useLayoutEffect(() => {
+    // Again on (re)mount: StrictMode's mount → unmount → mount runs the
+    // cleanup below between the two, and effects declared after this one in
+    // the same shot must still read the pinned clock.
+    Date.now = pinnedDateNow;
+    return () => {
+      Date.now = realDateNow;
+    };
+  }, []);
 }
 
 /**

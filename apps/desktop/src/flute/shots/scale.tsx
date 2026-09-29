@@ -14,63 +14,14 @@
  */
 import * as React from "react";
 import { Surface } from "@webprodigies/flute";
-import { TICKET_STATUS_LABELS, type Label, type Project, type Ticket, type TicketStatus } from "@volli/shared";
+import { TICKET_STATUS_LABELS, type TicketStatus } from "@volli/shared";
 
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { Badge } from "@renderer/components/ui/badge";
 
+import { ATLAS, ATLAS_LABELS, atlasTicket } from "../kit/atlas";
 import { ease, progress } from "../kit/clock";
 import { FORMAT_SIZE, FrameLayer, Supers, useFilm, Vignette, type Cue, type Format } from "../kit/film";
-
-const NOW = 1_790_000_000_000;
-
-const ATLAS: Project = {
-  id: "prj-atlas",
-  name: "Atlas",
-  path: "/code/atlas",
-  ticketPrefix: "ATL",
-  baseBranch: "main",
-  setupCommand: null,
-  themeOverride: null,
-  colorIndex: 4,
-  sortOrder: 0,
-  createdAt: NOW - 400 * 86_400_000,
-  updatedAt: NOW,
-};
-
-const LABELS: Label[] = ["api", "web", "infra", "billing", "mobile", "search"].map((name) => ({
-  id: `lbl-atl-${name}`,
-  projectId: ATLAS.id,
-  name,
-  color: null,
-}));
-
-const TITLES: [string, string[]][] = [
-  ["Retry failed webhook deliveries with exponential backoff", ["api"]],
-  ["Cache route tiles per zoom level at the edge", ["infra", "web"]],
-  ["Prorate seat changes mid-cycle on annual plans", ["billing"]],
-  ["Offline queue for check-ins on flaky connections", ["mobile"]],
-  ["Rank exact SKU matches above fuzzy title hits", ["search"]],
-  ["Paginate the audit log export past 50k rows", ["api", "web"]],
-  ["Warm the search index on deploy, not first query", ["search", "infra"]],
-  ["Dunning emails respect the account's locale", ["billing"]],
-  ["Map pins cluster above 200 markers", ["web"]],
-  ["Rotate signing keys without dropping sessions", ["infra", "api"]],
-  ["Pull-to-refresh keeps the scroll position", ["mobile"]],
-  ["Invoice PDFs render right-to-left scripts", ["billing", "web"]],
-  ["Rate-limit headers on every public endpoint", ["api"]],
-  ["Typo tolerance for two-letter queries", ["search"]],
-  ["Blue-green deploys for the worker fleet", ["infra"]],
-  ["Dark mode for the onboarding checklist", ["web", "mobile"]],
-  ["Idempotency keys on payment capture", ["billing", "api"]],
-  ["Debounce autosave while a field is focused", ["web"]],
-  ["Background sync respects low-power mode", ["mobile"]],
-  ["Shard the events table by tenant", ["infra"]],
-  ["Synonyms per workspace in search settings", ["search", "web"]],
-  ["Refund partial line items from the admin", ["billing"]],
-  ["Stream CSV imports instead of buffering", ["api", "infra"]],
-  ["Haptics on successful scan", ["mobile"]],
-];
 
 export const SCALE_COLUMNS: { status: TicketStatus; count: number; first: number }[] = [
   { status: "backlog", count: 3418, first: 9960 },
@@ -93,31 +44,6 @@ export const SCALE = {
 export const SCALE_WIDTH = SCALE_COLUMNS.length * SCALE.columnWidth + (SCALE_COLUMNS.length - 1) * SCALE.gap;
 const columnLeft = (index: number) => index * (SCALE.columnWidth + SCALE.gap) - SCALE_WIDTH / 2;
 
-function ticketFor(column: number, row: number): Ticket {
-  const { status, first } = SCALE_COLUMNS[column];
-  const [title, labels] = TITLES[(column * 7 + row * 5) % TITLES.length];
-  const number = first - row * 3 - (row % 4);
-  return {
-    id: `atl-${number}`,
-    projectId: ATLAS.id,
-    ticketNumber: number,
-    title,
-    body: "",
-    status,
-    priority: (["high", "medium", "low", "medium"] as const)[(row + column) % 4]!,
-    labels,
-    usesWorktree: true,
-    preferredHarnessId: null,
-    order: row,
-    worktreePath: null,
-    branch: null,
-    baseBranch: null,
-    prUrl: null,
-    createdAt: NOW - (row + 3) * 86_400_000,
-    updatedAt: NOW,
-  };
-}
-
 function Ghost() {
   return (
     <div
@@ -136,10 +62,10 @@ function Column({ index, stageWidth, stageHeight }: { index: number; stageWidth:
   const cards = React.useMemo(
     () =>
       Array.from({ length: SCALE.realRows }, (_, row) => {
-        const ticket = ticketFor(index, row);
+        const ticket = atlasTicket(index * 7 + row * 5, SCALE_COLUMNS[index].first - row * 3 - (row % 4), SCALE_COLUMNS[index].status, row);
         return (
           <div key={ticket.id} className="flex-none [&>*]:h-full" style={{ height: SCALE.slot }}>
-            <TicketCardContent ticket={ticket} ticketPrefix={ATLAS.ticketPrefix} projectLabels={LABELS} />
+            <TicketCardContent ticket={ticket} ticketPrefix={ATLAS.ticketPrefix} projectLabels={ATLAS_LABELS} />
           </div>
         );
       }),

@@ -8,7 +8,7 @@
  * claims more than its title does. The project path is deliberately not under
  * /Users: nothing in frame may name a home directory.
  */
-import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import { DEFAULT_HARNESS_ID, type Label, type Project, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { RELEASE_TICKETS } from "./release-tickets";
 
@@ -69,7 +69,7 @@ export function releaseTicket(
     priority: PRIORITIES[number % PRIORITIES.length]!,
     labels: labelsFor(source?.title ?? ""),
     usesWorktree: true,
-    preferredHarnessId: null,
+    preferredHarnessId: DEFAULT_HARNESS_ID,
     order: number,
     worktreePath: null,
     // No branch: a card with a branch asks the bridge for its retention state,
