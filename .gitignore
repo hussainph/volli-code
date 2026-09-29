@@ -50,3 +50,7 @@ packages/agent-runtime/.runtime-profile/
 # frame timings: unreviewable in a diff, and stale the moment the machine or its
 # thermal state changes. The command that regenerates it is in the report.
 /docs/performance-baselines/**/*.json
+
+# The release film's renders (VC-464): masters, cuts, frame dumps and contact
+# sheets. Video never lands in the repository; `scripts/film/` regenerates it.
+/apps/desktop/.film-out/

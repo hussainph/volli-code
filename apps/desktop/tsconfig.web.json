@@ -24,6 +24,8 @@
     "src/renderer/src/**/*",
     "src/renderer/cursor/**/*",
     "src/renderer/lab/**/*",
+    // The release film's Flute scenes (VC-464): lab-only, like the lab itself.
+    "src/flute/**/*",
     "e2e/bench/**/*.ts",
     "e2e/bench/**/*.tsx",
     "src/preload/*.d.ts"
