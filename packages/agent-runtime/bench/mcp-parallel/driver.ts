@@ -113,7 +113,9 @@ export interface ScriptedMcpTurnResult {
 }
 
 /** Run one real Pi Agent turn whose MCP tools call `spec.port`. */
-export async function runScriptedMcpTurn(spec: ScriptedMcpTurnSpec): Promise<ScriptedMcpTurnResult> {
+export async function runScriptedMcpTurn(
+  spec: ScriptedMcpTurnSpec,
+): Promise<ScriptedMcpTurnResult> {
   const tools = spec.definitions.map((definition) =>
     fixtureMcpTool(definition, spec.port, spec.allowlist),
   );

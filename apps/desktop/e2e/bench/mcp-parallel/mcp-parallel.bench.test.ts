@@ -191,7 +191,11 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
     async ({ serverId, toolName, mcpExecutionMode, sideEffects }) => {
       const workspace = mkdtempSync(join(process.cwd(), ".vc444-mcp-negative-control-"));
       const filePath = join(workspace, "fixture.txt");
-      const fixture = await startFixtureMcpServer({ id: serverId, latencyMs: 15, sideEffect: true });
+      const fixture = await startFixtureMcpServer({
+        id: serverId,
+        latencyMs: 15,
+        sideEffect: true,
+      });
       const host = new McpSessionHost({
         workspacePath: process.cwd(),
         servers: [draft(fixture.id, "local side-effect fixture", fixture.url)],
