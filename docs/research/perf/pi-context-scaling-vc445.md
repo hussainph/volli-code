@@ -17,7 +17,7 @@ turns, providers or tools (VC-441). It does not re-benchmark the budget reader
 > loop cost is a single synchronous stall when a context is re-bound. It grows
 > with sidecar size: about 30 ms p95 at 5 MB, and 175–295 ms at 47 MB (the
 > size of the largest sidecar on the owner's profile). That is a narrow Option-2
-> "yield" target, filed as a separate ticket. Nothing in this ticket changes
+> "yield" target, filed as VC-462. Nothing in this ticket changes
 > topology, hibernation, concurrency or scheduling.
 
 ## Run facts
@@ -287,8 +287,8 @@ large runs. Pooled samples are shown as `p50 / p95 / max (n)`, in ms.
   - That is the same class of fix as VC-369 (1,607 → 12 ms by yielding), at a
     smaller magnitude.
 
-**Implementation ticket filed:** the Pi sidecar re-bind should not hold main's
-loop in proportion to sidecar size. Chunk or yield the JSONL load, or otherwise
+**Implementation ticket filed, VC-462:** the Pi sidecar re-bind should not
+hold main's loop in proportion to sidecar size. Chunk or yield the JSONL load, or otherwise
 avoid parsing the whole file in one task, with this bench's large-sidecar arm
 as the before/after. It is scoped as an Option-2 yield only: no topology,
 hibernation, concurrency or scheduling change.
