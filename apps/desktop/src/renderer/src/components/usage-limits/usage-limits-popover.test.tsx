@@ -8,7 +8,11 @@ import {
   type ModelAccessSnapshot,
 } from "@volli/shared";
 
-import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
+import {
+  ModelAccessProvider,
+  useModelAccessClient,
+  type ModelAccessClient,
+} from "@renderer/lib/model-access-client";
 
 import { UsageLimitsPopover } from "./usage-limits-popover";
 
@@ -87,12 +91,30 @@ function client(inspect: ModelAccessClient["inspect"]): ModelAccessClient {
   };
 }
 
+/** Presses a credential change, so the provider drops what it holds. */
+function SaveDefaultButton(): React.ReactElement {
+  const value = useModelAccessClient();
+  return (
+    <button
+      aria-label="Save a default"
+      onClick={() => {
+        void value?.setDefault("global", {
+          providerId: "xai",
+          modelId: "grok",
+          reasoningLevel: "off",
+        });
+      }}
+    />
+  );
+}
+
 async function renderPopover(inspect: ModelAccessClient["inspect"]): Promise<void> {
   root = createRoot(container!);
   await act(async () => {
     root?.render(
       <StrictMode>
         <ModelAccessProvider client={client(inspect)}>
+          <SaveDefaultButton />
           <UsageLimitsPopover now={NOW} />
         </ModelAccessProvider>
       </StrictMode>,
@@ -121,28 +143,42 @@ describe("UsageLimitsPopover", () => {
     expect(inspect).toHaveBeenCalledTimes(2);
   });
 
-  it("drops a closed surface's late answer instead of overwriting the next open", async () => {
+  it("drops a superseded open's late answer instead of overwriting the next open", async () => {
     let settleFirst: ((snapshot: ModelAccessSnapshot) => void) | undefined;
+    let settleSecond: ((snapshot: ModelAccessSnapshot) => void) | undefined;
     const first = new Promise<ModelAccessSnapshot>((resolve) => {
       settleFirst = resolve;
+    });
+    const second = new Promise<ModelAccessSnapshot>((resolve) => {
+      settleSecond = resolve;
     });
     const inspect = vi
       .fn<ModelAccessClient["inspect"]>()
       .mockReturnValueOnce(first)
-      .mockResolvedValueOnce(SNAPSHOT);
+      .mockReturnValueOnce(second);
     await renderPopover(inspect);
 
     await act(async () => button("Usage limits").click());
     await act(async () => button("Usage limits").click());
+    // A credential change while the first read is still out drops what the
+    // provider holds — so the next open waits on a read of its own rather
+    // than the one the closed surface left behind.
+    await act(async () => button("Save a default").click());
     await act(async () => button("Usage limits").click());
     expect(inspect).toHaveBeenCalledTimes(2);
-    expect(document.body.textContent).toContain("xAI");
 
+    // The superseded open lands late with an answer the next open did not
+    // ask for; it must not reach the surface the next open owns.
     await act(async () => {
       settleFirst?.({ observedAt: NOW, models: [], providers: [] });
       await first;
     });
-    expect(document.body.textContent).toContain("xAI");
     expect(document.body.textContent).not.toContain("No subscriptions with usage limits.");
+
+    await act(async () => {
+      settleSecond?.(SNAPSHOT);
+      await second;
+    });
+    expect(document.body.textContent).toContain("xAI");
   });
 });

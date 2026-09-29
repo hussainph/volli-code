@@ -12,6 +12,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { BODY_CLAMP_PX, planClamp } from "@renderer/components/ticket/clamp-policy";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
+import type { DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
@@ -40,6 +41,9 @@ import { useBoardStore } from "@renderer/stores/board";
  * autosave pauses (so the stale draft can't clobber the external edit), a
  * non-destructive banner appears, and Reload adopts the external value.
  */
+/** The ticket-body arm of {@link DocumentIdentity} — what keys this editor's model. */
+type TicketBodyIdentity = Extract<DocumentIdentity, { kind: "ticket-body" }>;
+
 export function TicketBodyEditor({
   ticket,
   fileRefs,
@@ -88,6 +92,36 @@ export function TicketBodyEditor({
   // The value last written through / adopted — also the baseline the current
   // draft is derived from: a draft is "pending" iff draftRef !== lastSavedRef.
   const lastSavedRef = React.useRef(ticket.body);
+  /**
+   * Which DOCUMENT the pending draft was typed into (VC-385).
+   *
+   * The save path reads THIS, never the `ticket` prop, and the difference is
+   * the whole guarantee: a draft belongs to the ticket that was on screen when
+   * it was typed, and being handed the next ticket does not transfer it. Until
+   * now the guarantee came from `home-surface.tsx` keying the entire ticket
+   * workspace on `ticket.id` — the switch destroyed this editor and the
+   * unmount flush ran from a closure that still named the old ticket. That is
+   * correct and it rebuilds the whole workspace to get there; holding the rule
+   * here makes it true without the remount.
+   *
+   * It holds the full {@link DocumentIdentity}, not just the ticket id, because
+   * a draft has two owners and they can move independently. The bytes belong to
+   * a ticket, which a ticket id answers for; the Monaco model they were typed
+   * into belongs to a `{kind, projectId, ticketId}` document. A switch that
+   * crosses PROJECTS moves both, and a ref holding only the ticket id would
+   * send the right bytes to the right ticket while clearing the dirty flag on
+   * `{new project, old ticket}` — a key no document answers to — leaving the
+   * real document marked dirty for the life of the window.
+   */
+  const bodyIdentity = React.useCallback(
+    (forTicket: Pick<Ticket, "id" | "projectId">): TicketBodyIdentity => ({
+      kind: "ticket-body",
+      projectId: forTicket.projectId,
+      ticketId: forTicket.id,
+    }),
+    [],
+  );
+  const authoredForRef = React.useRef<TicketBodyIdentity>(bodyIdentity(ticket));
   const conflictRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     conflictRef.current = conflict;
@@ -100,6 +134,13 @@ export function TicketBodyEditor({
   // is paused below) and raise the banner rather than stomping either side.
   React.useEffect(() => {
     const external = ticket.body;
+    // A DIFFERENT ticket's body is not an external edit to this one — it is the
+    // next document arriving, which the switch effect below owns. THIS early
+    // return is what makes that safe, not the order the two effects run in:
+    // this one is declared first and therefore runs first, while
+    // `authoredForRef` still names the outgoing document. Delete the guard and
+    // the next ticket's text is read as an agent rewriting the current one.
+    if (authoredForRef.current.ticketId !== ticket.id) return;
     if (external === lastSavedRef.current) return; // no change / echo of our own write
     const pending = draftRef.current !== lastSavedRef.current;
     if (!pending) {
@@ -108,7 +149,7 @@ export function TicketBodyEditor({
       return;
     }
     setConflict(external);
-  }, [ticket.body]);
+  }, [ticket.body, ticket.id]);
 
   /**
    * Clear registry dirty via `peek`, not the editor ref. React runs child
@@ -116,20 +157,19 @@ export function TicketBodyEditor({
    * before this host's debounced flush runs `save`, so an imperative
    * `editorRef.markSaved` would no-op and leave the ticket-body entry parked dirty.
    */
-  const markBodySaved = React.useCallback(() => {
+  const markBodySaved = React.useCallback((identity: TicketBodyIdentity) => {
     void loadMonacoRuntime()
       .then((runtime) => {
-        runtime.registry
-          .peek({ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id })
-          ?.markSaved(null);
+        runtime.registry.peek(identity)?.markSaved(null);
       })
       .catch(() => {
         // Monaco never loaded — nothing in the registry to clear.
       });
-  }, [ticket.projectId, ticket.id]);
+  }, []);
 
   const save = React.useCallback(() => {
     const next = draftRef.current;
+    const identity = authoredForRef.current;
     // `writing: false` — `updateTicket` is fire-and-forget through the store, so
     // there is no in-flight write for this surface to coalesce against; the
     // conflict pause and the clean-document skip are the live rules here.
@@ -143,11 +183,27 @@ export function TicketBodyEditor({
     lastSavedRef.current = next;
     // Keep the registry baseline in step with the store write so a later peek
     // does not see a permanently dirty ticket-body document.
-    markBodySaved();
-    void updateTicket({ ticketId: ticket.id, body: next });
-  }, [updateTicket, ticket.id, markBodySaved]);
+    markBodySaved(identity);
+    void updateTicket({ ticketId: identity.ticketId, body: next });
+  }, [updateTicket, markBodySaved]);
 
   const debouncer = useDebouncedCallback(save, AUTOSAVE_IDLE_MS);
+
+  // The switch (VC-385). Settle the outgoing ticket before adopting the
+  // incoming one: flush its pending draft — `save` reads `authoredForRef`,
+  // which still names it — and only then rebase every ref and every piece of
+  // state onto the new ticket. A conflict belongs to the ticket that had it,
+  // so it is dropped here rather than carried across.
+  React.useEffect(() => {
+    if (authoredForRef.current.ticketId === ticket.id) return;
+    debouncer.flush();
+    authoredForRef.current = bodyIdentity(ticket);
+    draftRef.current = ticket.body;
+    lastSavedRef.current = ticket.body;
+    conflictRef.current = null;
+    setConflict(null);
+    setDocValue(ticket.body);
+  }, [ticket, ticket.id, ticket.body, debouncer, bodyIdentity]);
 
   function handleChange(next: string) {
     draftRef.current = next; // immediate, so a flush right after has the latest

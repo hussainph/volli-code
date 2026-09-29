@@ -212,10 +212,14 @@ function harness(
     getSession: unusedRead,
     getBaseSession: unusedRead,
     listSessions: async () => projections,
+    listAttachedSessions: async () => projections,
     countSessions: unusedRead,
     listSessionStarts: unusedRead,
     listLatestTicketSignals: unusedRead,
     listEvents: unusedRead,
+    latestEventSequence: unusedRead,
+    getProjectionCheckpoint: unusedRead,
+    saveProjectionCheckpoint: unusedRead,
     reportUsage: unusedRead,
   };
   const bus = createSessionWakeBus(engine, { db });

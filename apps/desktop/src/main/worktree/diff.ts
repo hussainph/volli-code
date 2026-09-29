@@ -19,9 +19,9 @@
 import { DiffFileStat, DiffStat } from "@volli/shared";
 import type { WorktreeDiffMode } from "../../ipc/contract";
 
-import { resolveComparisonRef } from "./comparison-ref";
+import { resolveComparisonRefAsync } from "./comparison-ref";
 import { stderrOf } from "./git";
-import { err, ok, type RunGit, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface DiffStatInput {
   worktreePath: string;
@@ -99,12 +99,17 @@ export function total(files: readonly DiffFileStat[], key: "insertions" | "delet
  * Computes a {@link DiffStat} for the worktree in the requested mode. Any git
  * failure returns an `err` carrying the real stderr (never a silent empty diff);
  * `merge-base` with no known base fails fast before spawning git.
+ *
+ * Async for the reason `status.ts` is (VC-369): this backs the `worktree.diff`
+ * IPC verb and the `volli worktree diff` CLI door, both of which run on the
+ * Electron main process, where `execFileSync` froze every window for the length
+ * of the spawn.
  */
-export function diffStat(
-  git: RunGit,
+export async function diffStat(
+  git: RunGitAsync,
   input: DiffStatInput,
   mode: WorktreeDiffMode,
-): WorktreeResult<DiffStat> {
+): Promise<WorktreeResult<DiffStat>> {
   if (mode === "merge-base" && !input.baseBranch) {
     return err("No base branch is known for this worktree, so its PR diff cannot be computed.");
   }
@@ -113,16 +118,16 @@ export function diffStat(
     // last-known remote state the PR will actually diff against (comparison-ref.ts).
     const base =
       mode === "merge-base"
-        ? resolveComparisonRef(git, input.worktreePath, input.baseBranch)
+        ? await resolveComparisonRefAsync(git, input.worktreePath, input.baseBranch)
         : null;
     const numstatArgs =
       mode === "working-tree"
         ? ["diff", "--numstat", "HEAD"]
         : ["diff", "--numstat", `${base}...HEAD`];
-    const tracked = parseNumstat(git(numstatArgs, input.worktreePath));
+    const tracked = parseNumstat(await git(numstatArgs, input.worktreePath));
     const untracked =
       mode === "working-tree"
-        ? parseUntracked(git(["status", "--porcelain"], input.worktreePath))
+        ? parseUntracked(await git(["status", "--porcelain"], input.worktreePath))
         : [];
     const files = [...tracked, ...untracked];
     return ok({

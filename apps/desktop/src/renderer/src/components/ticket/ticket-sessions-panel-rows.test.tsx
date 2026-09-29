@@ -52,6 +52,7 @@ const fixture = vi.hoisted(() => {
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
   };
   // `live: false` is what puts a chat Session in History (session-history.ts).
   const ended: ChatSessionRecord = {
@@ -150,14 +151,40 @@ const fixture = vi.hoisted(() => {
   return { record, ended, interrupted, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
 });
 
-vi.mock("@renderer/stores/ticket-session-records", async () => {
+// Partial: the STORE is a fixture, but `ticketSessionListingStateOf` is kept
+// real (VC-383). It is a pure reader, and these rows depend on the arm it
+// states — a ticket whose rows were seeded directly, with no recorded listing
+// state, is a LANDED answer and must draw its rows rather than a skeleton.
+// Re-declaring it here would let the fixture and the store disagree about that.
+vi.mock("@renderer/stores/ticket-session-records", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/stores/ticket-session-records")>();
   const { create } = await import("zustand");
   return {
+    ...actual,
     useTicketSessionRecordsStore: create(() => ({
       byTicket: { "ticket-6": fixture.rows },
+      listingState: {},
+      listingError: {},
       refresh: () => Promise.resolve(),
       renameLocally: () => {},
       setActiveHarness: () => {},
+    })),
+  };
+});
+
+// The record is folded by default (VC-406), and most of these rows live IN
+// the record, so the UI store starts with the fold OPEN here — for the reason
+// the module doc gives: a static render reads a store's initial state, and
+// Radix mounts the fold's body only while it is open. The folded state and the
+// toggle are exercised in `ticket-sessions-panel-push.test.tsx`, under jsdom.
+vi.mock("@renderer/stores/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/stores/ui")>();
+  const { create } = await import("zustand");
+  return {
+    ...actual,
+    useUiStore: create(() => ({
+      ...actual.useUiStore.getInitialState(),
+      railFolds: { sessionsRecord: true, worktree: false, usage: false },
     })),
   };
 });
@@ -239,16 +266,21 @@ describe("TicketSessionsPanel rows", () => {
     });
   });
 
-  it("draws History as a sibling section, never the old rail's drawer", () => {
-    // The Calm Stack has no drawer, no collapsible and no full-bleed seam
-    // anywhere in the rail (per the retired ticket-right-sidebar lab scratch). History is
-    // the same block as Sessions, one heading lower.
+  it("folds the record under the live rows, in one section — never the old rail's drawer", () => {
+    // ONE section (VC-406): no "History" heading, no count badge on the face.
+    // The eyebrow's label is the fold, and the record sits under the live rows
+    // when it is open. Nothing bleeds past the section's inset — the drawer's
+    // full-bleed seam is the thing this must never grow back.
     const html = panel();
 
-    expect(html).toContain("History");
+    expect(html).not.toContain(">History<");
     expect(html).toContain(fixture.ended.title);
-    expect(html).not.toContain("collapsible");
+    expect(html).toContain('data-testid="ticket-sessions-fold"');
+    expect(html).toContain('aria-label="Hide past sessions"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).not.toContain("count-pill");
     expect(html).not.toContain("border-t border-sidebar-border");
+    expect(html.match(/<section/g)).toHaveLength(1);
   });
 
   // It used to be inert — a row you could read and not open, with the saved
@@ -290,15 +322,16 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain('data-state="interrupted"');
   });
 
-  it("insets History with the column instead of a hardcoded edge", () => {
+  it("insets the record with the column instead of a hardcoded edge", () => {
     // The drawer's own `px-4` ignored the rail's narrow step, so at ≤270px
-    // History alone stayed at 16px and stepped the column's edge. Both sections
-    // now carry the one inset token, so the rail's edge is a straight line.
+    // History alone stayed at 16px and stepped the column's edge. The record
+    // is inside the one section now, so it inherits the one inset token and
+    // the rail's edge is a straight line.
     const html = panel();
     const marker = html.indexOf('data-testid="session-history"');
     const openingTag = html.slice(html.lastIndexOf("<section", marker), marker);
 
     expect(openingTag).toContain("group-data-[narrow=true]/rail:px-3");
-    expect(html.match(/group-data-\[narrow=true\]\/rail:px-3/g)?.length).toBe(2);
+    expect(html.match(/group-data-\[narrow=true\]\/rail:px-3/g)?.length).toBe(1);
   });
 });

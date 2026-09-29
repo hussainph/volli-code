@@ -1110,6 +1110,82 @@ describe("createVerbTool", () => {
     expect((properties.cursor as { type?: string }).type).toBe("string");
   });
 
+  it("compiles mcp.install's string array into a real array schema (VC-380)", () => {
+    const tool = createVerbTool({
+      verb: "mcp.install",
+      port: async () => ({ text: "" }),
+    });
+
+    expect(tool.name).toBe("mcp_install");
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    // `args` is the ecosystem's own shape — every MCP client spells a local
+    // server's arguments `string[]` — so it must reach the provider as an array
+    // of strings, not as a string the model has to pack itself.
+    expect(properties.args).toMatchObject({ type: "array", items: { type: "string" } });
+    expect((properties.id as { type?: string }).type).toBe("string");
+    expect((tool.parameters as { required?: string[] }).required).toEqual(["id", "name"]);
+  });
+
+  it("keeps historical MCP names byte-identical, while new Sessions avoid the single-underscore mcp_ wire prefix", async () => {
+    const calls: string[] = [];
+    const port = async (request: { verb: string }) => {
+      calls.push(request.verb);
+      return {
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      };
+    };
+    const operations = [
+      "list",
+      "preview",
+      "install",
+      "refresh",
+      "enable",
+      "disable",
+      "tools",
+      "remove",
+    ] as const;
+    for (const operation of operations) {
+      const binding = { verb: `mcp.${operation}` as const, port };
+      const oldTool = createVerbTool(binding);
+      const newTool = createVerbTool(binding, undefined, "server");
+      expect(oldTool.name).toBe(`mcp_${operation}`);
+      expect(newTool.name).toBe(`server_${operation}`);
+      expect(newTool.description).not.toMatch(/\bmcp_(?!_)/);
+      expect(JSON.stringify(newTool.parameters)).not.toMatch(/\bmcp_(?!_)/);
+      expect(oldTool.description).toBe(
+        newTool.description.replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+      expect(JSON.stringify(oldTool.parameters)).toBe(
+        JSON.stringify(newTool.parameters).replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+    }
+    const old = createVerbTool({ verb: "mcp.list", port });
+    const current = createVerbTool({ verb: "mcp.list", port }, undefined, "server");
+    const signal = new AbortController().signal;
+    expect((await old.execute("call-1", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect((await current.execute("call-2", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call server_install, then server_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect(calls).toEqual(["mcp.list", "mcp.list"]);
+    expect(createVerbTool({ verb: "session.start", port }, undefined, "server").name).toBe(
+      "session_start",
+    );
+  });
+
   it("refuses to build a tool for a verb this build does not project", () => {
     // Unreachable from a resolved surface, which is why it is a throw rather
     // than a fallback: the alternative is a nameless tool reaching a provider,

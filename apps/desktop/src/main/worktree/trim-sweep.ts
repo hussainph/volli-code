@@ -40,7 +40,7 @@ import type { WorktreeTrimScanEntry, WorktreeTrimSweepReport } from "../../ipc/c
 import { listProjects } from "../db/projects-repo";
 import { listWorktreeRefs } from "../db/tickets-repo";
 import { isOwnedWorktreeLeaf, ownedContainers } from "./containers";
-import { parseWorktreeList, runGitCapturingAsync } from "./git";
+import { parseWorktreeList } from "./git";
 import { homeDir } from "./home";
 import { canonicalize } from "./paths";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
@@ -70,8 +70,12 @@ interface OwnedWorktree {
  * checkout, bare entries, and anything outside our containers are skipped — the
  * same containment gate the launch sweep applies before it deletes anything.
  */
-function ownedWorktrees(deps: TrimSweepDeps): OwnedWorktree[] {
+async function ownedWorktrees(deps: TrimSweepDeps): Promise<OwnedWorktree[]> {
   const db = deps.worktree.db;
+  // The listing per project is on the async runner too (VC-383): the counting
+  // and trimming beside it already were, and one sync child per project on a
+  // Settings click was the last of this sweep still holding the main thread.
+  const gitAsync = deps.worktree.gitAsync;
   const containers = new Map(
     ownedContainers(db, homeDir(deps.worktree)).map((container) => [
       container.projectId,
@@ -91,7 +95,7 @@ function ownedWorktrees(deps: TrimSweepDeps): OwnedWorktree[] {
     if (container === undefined) continue;
     let listing: string;
     try {
-      listing = deps.worktree.git(["worktree", "list", "--porcelain"], project.path);
+      listing = await gitAsync(["worktree", "list", "--porcelain"], project.path);
     } catch {
       // A project whose git cannot be read contributes nothing; the rest still run.
       continue;
@@ -133,9 +137,9 @@ export async function scanTrimTargets(
   deps: TrimSweepDeps,
 ): Promise<{ worktrees: WorktreeTrimScanEntry[] }> {
   const keepPatterns = getTrimSettings(deps.worktree.db).keepPatterns;
-  const gitAsync = deps.worktree.gitAsync ?? runGitCapturingAsync;
+  const gitAsync = deps.worktree.gitAsync;
   const worktrees: WorktreeTrimScanEntry[] = [];
-  for (const worktree of ownedWorktrees(deps)) {
+  for (const worktree of await ownedWorktrees(deps)) {
     const counted = await countIgnoredArtifacts(gitAsync, worktree.path, keepPatterns);
     worktrees.push({
       path: worktree.path,
@@ -163,7 +167,7 @@ export async function trimAllWorktrees(
 ): Promise<WorktreeTrimSweepReport> {
   const dryRun = opts.dryRun === true;
   const keepPatterns = getTrimSettings(deps.worktree.db).keepPatterns;
-  const gitAsync = deps.worktree.gitAsync ?? runGitCapturingAsync;
+  const gitAsync = deps.worktree.gitAsync;
   const report: WorktreeTrimSweepReport = {
     worktrees: [],
     skipped: [],
@@ -172,7 +176,7 @@ export async function trimAllWorktrees(
     dryRun,
   };
 
-  for (const worktree of ownedWorktrees(deps)) {
+  for (const worktree of await ownedWorktrees(deps)) {
     const reason = await activeReason(deps, worktree);
     if (reason !== null) {
       report.skipped.push({ path: worktree.path, reason });

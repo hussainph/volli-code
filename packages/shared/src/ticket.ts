@@ -193,6 +193,21 @@ export interface Ticket {
 }
 
 /**
+ * A {@link Ticket} as a BOARD ROSTER carries it: everything a board card and
+ * the ticket rail draw from, minus {@link Ticket.body} (VC-387).
+ *
+ * Domain vocabulary rather than transport, so a client that is not the desktop
+ * renderer can name the shape a roster read answers with without inheriting
+ * the desktop's Electron channel catalog (docs/BOUNDARIES.md).
+ *
+ * The body is ~90% of a board's bytes and no board surface renders it, so the
+ * steady-state refresh reads this shape and the open ticket reads its own body
+ * separately. A summary is never a Ticket: a consumer that needs the canonical
+ * Markdown must read the body, never assume `""`.
+ */
+export type TicketSummary = Omit<Ticket, "body">;
+
+/**
  * An archived ticket: a {@link Ticket} that has left the board into its
  * project's Archive (CONCEPT #16/#92). It is NOT a board card — archived
  * tickets are read on demand for the Archive view, never hydrated into the

@@ -206,6 +206,30 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("forwards payload-free router timing to the benchmark observer", async () => {
+    const fixture = runtimeFixture();
+    const samples: unknown[] = [];
+    let now = 0;
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      performanceObserver: {
+        now: () => ++now,
+        record: (sample) => samples.push(sample),
+      },
+    });
+
+    await invoke(sender(), {
+      procedure: "session.projection",
+      input: { sessionId: "session-private" },
+    });
+
+    expect(samples).toEqual([
+      { procedure: "session.projection", durationMs: 1, outcome: "success" },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-private");
+    await registration.close();
+  });
+
   // Electron IPC is the only transport production has, so a router procedure the
   // allow-list omits is dead there — and reads to the renderer as a caller bug
   // (`BAD_REQUEST`) rather than as a missing route.

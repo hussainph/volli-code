@@ -16,6 +16,7 @@ export function SessionPeekDialog({
   open,
   title,
   state,
+  metadata,
   description,
   openLabel = "Open as tab",
   onOpen,
@@ -27,6 +28,7 @@ export function SessionPeekDialog({
   open: boolean;
   title: string;
   state?: string;
+  metadata?: React.ReactNode;
   description?: React.ReactNode;
   openLabel?: string;
   onOpen?(): void;
@@ -66,6 +68,7 @@ export function SessionPeekDialog({
                 {state}
               </span>
             )}
+            {metadata}
             {onOpen === undefined ? null : (
               <Button type="button" variant="ghost" size="sm" onClick={onOpen}>
                 <ArrowSquareOutIcon />

@@ -179,7 +179,7 @@ function hasTextSelection(): boolean {
  */
 const ROW_CLASS =
   "group/row flex w-full min-w-0 items-center gap-1 rounded-md py-1 text-left text-ui text-muted-foreground outline-none transition-colors";
-const ROW_INTERACTIVE = "cursor-pointer hover:bg-muted/30 hover:text-foreground";
+const ROW_INTERACTIVE = "cursor-default hover:bg-muted/30 hover:text-foreground";
 /** Only for rows that are themselves a control — a tool row's ring is on its caret. */
 const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -249,7 +249,7 @@ function RowDisclosure({
         event.stopPropagation();
         onToggle();
       }}
-      className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted/30 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted/30 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
     >
       <Caret open={open} pinned />
     </button>

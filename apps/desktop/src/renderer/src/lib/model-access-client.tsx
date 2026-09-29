@@ -67,16 +67,106 @@ export interface ModelAccessContextValue extends ModelAccessClient {
 
 const ModelAccessContext = React.createContext<ModelAccessContextValue | null>(null);
 
+/**
+ * The answer this call starts, shared with every ask that arrives while it is
+ * still out — and dropped by the first settlement, success or failure, so a
+ * later caller reads afresh.
+ *
+ * The two cheap preference reads use this: their next reader may be a mount
+ * after a write the renderer never made (the e2e harness seeds a default
+ * through the RPC; main repairs visibility as a refresh applies its lists),
+ * and nothing about one in-flight read makes a fresh SQLite read expensive.
+ */
+function coalesceRead<T>(
+  slot: { current: Promise<T> | null },
+  start: () => Promise<T>,
+): Promise<T> {
+  const inFlight = slot.current;
+  if (inFlight !== null) return inFlight;
+  const read = start();
+  slot.current = read;
+  const forget = (): void => {
+    if (slot.current === read) slot.current = null;
+  };
+  void read.then(forget, forget);
+  return read;
+}
+
+/**
+ * The answer already held for one question, or a fresh one this call starts
+ * and holds until an invalidation drops it.
+ *
+ * The expensive question uses this: the provider sweep costs ~40 probes and
+ * as many credential reads, and every mount that asks before the next
+ * credential change joins the held promise instead of paying for it again —
+ * two composers opening in the same frame ask once, not twice, and a remount
+ * asks not at all. A rejection is forgotten rather than held, so a failed
+ * read is a read the next mount may retry.
+ */
+function holdRead<T>(slot: { current: Promise<T> | null }, start: () => Promise<T>): Promise<T> {
+  const held = slot.current;
+  if (held !== null) return held;
+  const read = start();
+  slot.current = read;
+  void read.catch(() => {
+    if (slot.current === read) slot.current = null;
+  });
+  return read;
+}
+
 export function ModelAccessProvider({
   client,
   children,
 }: React.PropsWithChildren<{ client: ModelAccessClient }>) {
   const [revision, setRevision] = React.useState(0);
-  const value = React.useMemo<ModelAccessContextValue>(
-    () => ({
-      inspect: (input) => client.inspect(input),
-      defaults: () => client.defaults(),
-      hiddenModels: () => client.hiddenModels(),
+  // What this revision already knows. The chat plane, the rail's run control
+  // and every composer ask the same questions, and their hosts remount on
+  // every ticket switch and chat tab switch — without the held sweep each of
+  // those mounts pays for the whole provider inspection again. The `client`
+  // is stable for the life of the provider (`DesktopModelAccessProvider`
+  // memoizes it once), so these refs never name another store's answers.
+  const inspectRead = React.useRef<Promise<ModelAccessSnapshot> | null>(null);
+  const defaultsRead = React.useRef<Promise<ModelAccessDefaults> | null>(null);
+  const hiddenRead = React.useRef<Promise<readonly HiddenModelRef[]> | null>(null);
+  // Minted by every invalidation. A Refresh that lands after one was overtaken
+  // — a sign-out landed while it ran — must not put its older answer back, and
+  // this is how it can tell.
+  const generation = React.useRef(0);
+
+  const value = React.useMemo<ModelAccessContextValue>(() => {
+    /** Drop everything held and wake every surface that reads it. */
+    const invalidate = (): void => {
+      generation.current += 1;
+      inspectRead.current = null;
+      defaultsRead.current = null;
+      hiddenRead.current = null;
+      setRevision((current) => current + 1);
+    };
+    return {
+      inspect: (input) => {
+        if (input.refresh !== true) {
+          return holdRead(inspectRead, () => client.inspect({ refresh: false }));
+        }
+        // A person pressed Refresh: go to the providers regardless of what is
+        // held, and let the answer replace it. The revision bump is what
+        // reaches the open composers — today's explicit Refresh never did —
+        // and this snapshot is what their re-read finds, so the bump costs
+        // them nothing rather than starting a fourth sweep. The refresh
+        // report is left off what is published: it answers "what did pressing
+        // Refresh do", and a surface that merely re-reads because of the bump
+        // must not replay it as if it had refreshed again.
+        const forGeneration = generation.current;
+        return client.inspect({ refresh: true }).then((snapshot) => {
+          if (generation.current === forGeneration) {
+            const { refresh: _report, ...catalog } = snapshot;
+            invalidate();
+            inspectRead.current = Promise.resolve(catalog);
+          }
+          return snapshot;
+        });
+      },
+      defaults: () => coalesceRead(defaultsRead, () => client.defaults()),
+      hiddenModels: () => coalesceRead(hiddenRead, () => client.hiddenModels()),
       compactionPolicy: () => client.compactionPolicy(),
       // A completed sign-in changes what every open composer may offer, so the
       // shared revision — what their catalogs re-read on — bumps here too, not
@@ -84,22 +174,22 @@ export function ModelAccessProvider({
       beginSignIn: (providerId, type, onUpdate) =>
         client.beginSignIn(providerId, type, (update) => {
           if (update.kind === "settled" && update.outcome.kind === "signed-in") {
-            setRevision((current) => current + 1);
+            invalidate();
           }
           onUpdate(update);
         }),
       signOut: async (providerId) => {
         await client.signOut(providerId);
-        setRevision((current) => current + 1);
+        invalidate();
       },
       setDefault: async (purpose, selection) => {
         const saved = await client.setDefault(purpose, selection);
-        setRevision((current) => current + 1);
+        invalidate();
         return saved;
       },
       setHiddenModels: async (hidden) => {
         const saved = await client.setHiddenModels(hidden);
-        setRevision((current) => current + 1);
+        invalidate();
         return saved;
       },
       // No revision bump: the shared one exists so open composers re-read what
@@ -112,9 +202,8 @@ export function ModelAccessProvider({
       pickerView: () => client.pickerView(),
       setPickerView: (view) => client.setPickerView(view),
       revision,
-    }),
-    [client, revision],
-  );
+    };
+  }, [client, revision]);
   return <ModelAccessContext.Provider value={value}>{children}</ModelAccessContext.Provider>;
 }
 

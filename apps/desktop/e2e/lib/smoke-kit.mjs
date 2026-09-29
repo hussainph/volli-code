@@ -366,13 +366,17 @@ export async function writeFakeLoginShell(binDir, loginPath) {
  * `main/index.ts`), so in packaged mode the DB lands at `<userData>/volli.db`
  * — a smoke that reads `dbPath` directly cannot run in this mode unchanged.
  *
- * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>}} opts
+ * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>, beforeLaunch?:()=>void}} opts
  */
-export function launch({ dbPath, userDataDir, extraEnv = {} }) {
+export function launch({ dbPath, userDataDir, extraEnv = {}, beforeLaunch }) {
   const packagedBinary = process.env.VOLLI_SMOKE_APP_BINARY;
   const environment = launchEnvFor(dbPath, extraEnv);
+  const executablePath = smokeExecutableFor(packagedBinary ?? ELECTRON, userDataDir, {
+    environment,
+  });
+  beforeLaunch?.();
   return _electron.launch({
-    executablePath: smokeExecutableFor(packagedBinary ?? ELECTRON, userDataDir, { environment }),
+    executablePath,
     args: packagedBinary
       ? [`--user-data-dir=${userDataDir}`]
       : [APP_DIR, `--user-data-dir=${userDataDir}`],

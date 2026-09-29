@@ -43,11 +43,12 @@ export interface WorktreeDeps {
   db: Database.Database;
   git: RunGit;
   /**
-   * The non-blocking runner for the Change Set reads. Omitted callers fall back
-   * to the real `runGitCapturingAsync` — never to `git`, which would silently
-   * put those reads back on the main thread.
+   * The non-blocking runner every async worktree path uses. It is REQUIRED:
+   * defaulting a missing test or production bundle to a real runner would let a
+   * caller silently stop exercising its injected seam, which is exactly how a
+   * later edit could put VC-383's reads back on Electron main.
    */
-  gitAsync?: RunGitAsync;
+  gitAsync: RunGitAsync;
   /**
    * The mtime reader behind `listBranches`' fetch-age answer. Omitted callers
    * fall back to the real `statMtimeMs`; it lives here rather than as a trailing

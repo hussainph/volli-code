@@ -8,12 +8,13 @@ import {
   it,
   vi,
 } from "vite-plus/test";
-import { getBuiltinTheme } from "restty";
 import {
   DEFAULT_CANVAS,
   DEFAULT_THEME,
   deriveCanvasTokens,
   generateThemeTokens,
+  hexToOklch,
+  rgbToHex,
   type ResolvedAppearance,
   type ThemeDefinition,
 } from "@volli/shared";
@@ -28,7 +29,6 @@ import {
   FALLBACK_TOKENS,
   getCurrentAppearance,
   onTerminalAppearanceChanged,
-  previewTerminalTheme,
   refreshTerminalTokenTheme,
 } from "./appearance";
 
@@ -126,9 +126,14 @@ function contrast(a: Rgb, b: Rgb): number {
 /** The twelve chromatic slots — the greys (0, 7, 8, 15) are a ramp, not colors. */
 const CHROMATIC = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14];
 
+/** A palette entry's OKLCH hue, in degrees. */
+function hueOf({ r, g, b }: Rgb): number {
+  return hexToOklch(rgbToHex({ r: r / 255, g: g / 255, b: b / 255 })).h;
+}
+
 /**
  * The background and full ANSI set the config-less terminal is painting with
- * right now. Both are optional on restty's theme type and neither is ever
+ * right now. Both are optional on `GhosttyTheme` and neither is ever
  * absent here, so a missing one is a bug in the module rather than a case to
  * branch on — it fails loudly instead of quietly skipping the assertions.
  */
@@ -189,7 +194,7 @@ describe("the token-derived terminal fallback", () => {
 
     expect(colors.background).toEqual({ r: 0x15, g: 0x10, b: 0x0e });
     expect(ember["--background"]).toBe("#15100e");
-    expect(colors.cursor).toEqual({ r: 0xe8, g: 0x65, b: 0x2a });
+    expect(colors.cursor).toEqual(parseHexColor(ember["--primary"]));
   });
 
   it("repaints when the app theme changes", () => {
@@ -203,11 +208,9 @@ describe("the token-derived terminal fallback", () => {
       g: 0x11,
       b: 0x17,
     });
-    expect(getCurrentAppearance().theme.colors.cursor).toEqual({
-      r: 0x65,
-      g: 0x89,
-      b: 0xff,
-    });
+    expect(getCurrentAppearance().theme.colors.cursor).toEqual(
+      parseHexColor(midnight["--primary"]),
+    );
   });
 
   it("notifies live terminals so they re-theme in place", () => {
@@ -219,44 +222,6 @@ describe("the token-derived terminal fallback", () => {
     applyThemeTokens(generateThemeTokens(MIDNIGHT), fakeRoot);
 
     expect(notified).toBe(1);
-    unsubscribe();
-  });
-
-  it("swaps the palette for a preview and puts it back, notifying both ways", () => {
-    const preview = getBuiltinTheme("Nord");
-    expect(preview).not.toBeNull();
-    const before = getCurrentAppearance().theme;
-    let notified = 0;
-    const unsubscribe = onTerminalAppearanceChanged(() => {
-      notified += 1;
-    });
-
-    previewTerminalTheme(preview);
-    expect(getCurrentAppearance().theme).toBe(preview);
-    // Everything that is not the palette survives the swap.
-    expect(getCurrentAppearance().fontSize).toBe(DEFAULT_TERMINAL_FONT_SIZE);
-
-    previewTerminalTheme(null);
-    expect(getCurrentAppearance().theme).toEqual(before);
-    expect(notified).toBe(2);
-    unsubscribe();
-  });
-
-  // Preview is driven by hover/keyboard motion through a theme list, which
-  // re-asserts the same theme constantly; re-notifying would repaint every live
-  // terminal for a no-op.
-  it("ignores a repeated preview of the theme already showing", () => {
-    const preview = getBuiltinTheme("Nord");
-    let notified = 0;
-    const unsubscribe = onTerminalAppearanceChanged(() => {
-      notified += 1;
-    });
-
-    previewTerminalTheme(preview);
-    previewTerminalTheme(preview);
-
-    expect(notified).toBe(1);
-    previewTerminalTheme(null);
     unsubscribe();
   });
 
@@ -295,8 +260,29 @@ describe("the token-derived terminal fallback", () => {
 
     applyLightTokens();
 
-    expect(getCurrentAppearance().theme.colors.palette[0]).toEqual({ r: 0x24, g: 0x29, b: 0x2f });
+    expect(getCurrentAppearance().theme.colors.palette[0]).toEqual({ r: 0x27, g: 0x27, b: 0x27 });
     expect(getCurrentAppearance().theme.name).toBe("Volli Light");
+  });
+
+  /**
+   * The light set is SOLVED from the dark one (VC-413), not adopted from a
+   * third-party theme, and hue is what carries across the solve: a mode flip
+   * must not change *which* colour a program asked for, only how it is rendered
+   * against the paper it lands on. This is the assertion that fails if anyone
+   * ever pastes a borrowed light palette back in — a foreign set agrees with the
+   * dark one's hues nowhere.
+   */
+  it("keeps every chromatic hue when the ground flips", () => {
+    const dark = CHROMATIC.map((index) => hueOf(currentPalette().entry(index)));
+    applyLightTokens();
+    const light = CHROMATIC.map((index) => hueOf(currentPalette().entry(index)));
+
+    CHROMATIC.forEach((index, at) => {
+      // Normal red is the one slot the app overwrites with --destructive, whose
+      // hue is the canvas's, not this palette's.
+      if (index === 1) return;
+      expect(Math.abs((light[at] ?? 0) - (dark[at] ?? 0)), `palette[${index}] hue`).toBeLessThan(2);
+    });
   });
 
   /**
@@ -351,7 +337,7 @@ describe("the token-derived terminal fallback", () => {
     expect(colors.background).toEqual({ r: 0xfd, g: 0xde, b: 0xd2 });
     // …and the palette follows that background rather than the stamped class,
     // so the two can never disagree.
-    expect(colors.palette[0]).toEqual({ r: 0x24, g: 0x29, b: 0x2f });
+    expect(colors.palette[0]).toEqual({ r: 0x27, g: 0x27, b: 0x27 });
   });
 
   // The stylesheet may not have applied when the module first reads tokens, so
@@ -453,6 +439,14 @@ describe("initTerminalAppearance", () => {
     await appearance.initTerminalAppearance();
 
     expect(pushes).toHaveLength(1);
+    // Read BEFORE the push as well as after: the assertion is that the edit
+    // changed something, which a single read after it cannot tell from a value
+    // that was always 9. It also exercises the token theme's cache across the
+    // two reads — a live config edit drops the resolved appearance, and the
+    // palette the app's own tokens produced must survive that rather than be
+    // rebuilt on every file save.
+    expect(appearance.getCurrentAppearance().fontSize).toBe(21);
+
     pushes[0]?.(payloadWithFontSize(9));
 
     expect(appearance.getCurrentAppearance().fontSize).toBe(9);

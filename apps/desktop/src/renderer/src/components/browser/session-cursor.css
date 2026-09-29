@@ -248,7 +248,6 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  cursor: pointer;
   transition: background-color 120ms var(--ease-out);
 }
 

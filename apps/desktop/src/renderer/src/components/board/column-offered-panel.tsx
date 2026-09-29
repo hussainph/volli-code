@@ -113,6 +113,9 @@ export function ColumnOfferedPanel({
         expanded={expanded}
         dashed
       />
+      <div className="border-t border-border px-2 py-1 text-label text-muted-foreground">
+        {expanded ? "Drop on a choice · Esc cancels" : "Press a digit · Hold ⌥ for drop targets"}
+      </div>
     </div>
   );
 }

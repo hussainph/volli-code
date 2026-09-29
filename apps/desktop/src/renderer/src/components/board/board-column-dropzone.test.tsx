@@ -68,7 +68,7 @@ function ticket(id: string, ticketNumber: number): Ticket {
 const TICKETS = [ticket("t1", 1), ticket("t2", 2), ticket("t3", 3)];
 const NO_LABELS: readonly Label[] = [];
 
-async function mount(tickets: Ticket[]) {
+async function mount(tickets: Ticket[], aimed = false) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -98,6 +98,7 @@ async function mount(tickets: Ticket[]) {
                 composerInitiallyOpen={false}
                 onComposerClose={() => {}}
                 animateEnter={false}
+                aimed={aimed}
               />
             </DndContext>
           </BoardSessionActivityProvider>
@@ -122,6 +123,17 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
+  // A column watches its own scroller to keep its mounted window sized
+  // (VC-316). jsdom ships no `ResizeObserver`, and this file is about the
+  // NESTING rather than about any measurement, so an inert one is enough.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 
 afterEach(async () => {
@@ -135,6 +147,23 @@ afterEach(async () => {
 });
 
 describe("a column's dropzone", () => {
+  it("keeps an unarmed column bolt visible without hover", async () => {
+    await mount(TICKETS);
+    const bolt = container?.querySelector('[data-column-arming="doing"]');
+    expect(bolt?.getAttribute("aria-label")).toBe("Arm Doing");
+    expect(bolt?.className).not.toContain("opacity-0");
+    expect(bolt?.className).not.toContain("group-hover");
+    expect(bolt?.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+  });
+
+  it("shows a paint-only landing target without changing the measured dropzone", async () => {
+    await mount(TICKETS, true);
+    const column = container?.querySelector('[data-board-column="doing"]');
+    expect(column?.getAttribute("data-drop-aimed")).toBe("true");
+    expect(column?.className).toContain("ring-inset");
+    expect(column?.className).not.toContain("scale");
+  });
+
   it("is not the element that scrolls", async () => {
     await mount(TICKETS);
 

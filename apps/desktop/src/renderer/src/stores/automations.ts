@@ -89,14 +89,23 @@ interface AutomationsState {
    */
   skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
-   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
+   * {@link automationHistoryKey} → ONE Automation's Runs in ONE project,
+   * newest first (VC-297) — what the editor's history draws.
    *
    * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
-   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
-   * project-wide history would make a Ticket's rail depend on a page nobody
-   * visited. Main answers each question with its own indexed read.
+   * the editor opens on one record and reads one record, and main answers each
+   * question with its own indexed read. Deriving it by filtering
+   * {@link AutomationsState.runsByProject} would make one Automation's history
+   * depend on having fetched every Run in the project — which is the read a
+   * client that is not this process should not have to make.
+   *
+   * Keyed by the PAIR, never by the Automation alone: a global Automation is
+   * listable in every project, and the Runs it made in one are not the Runs it
+   * made in another.
    */
-  runsByTicket: Record<string, readonly AutomationRun[]>;
+  runsByAutomation: Record<string, readonly AutomationRun[]>;
+  /** The same key → that Automation's Skipped occurrences, newest due first. */
+  skipsByAutomation: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
    * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
@@ -117,6 +126,31 @@ interface AutomationsState {
    * {@link AutomationsState.ensureLoaded} reads this.
    */
   enablementRead: boolean;
+  /**
+   * The planning version each of the four caches the Ticket rail decides from
+   * was last successfully read at (VC-373).
+   *
+   * Keyed by `list:<projectId>`, `arming:<projectId>`, `order:<projectId>` and
+   * the project-less `enablement`, so one map serves all four. A version a read
+   * FAILED to land at is deliberately absent: a failed re-read leaves the old
+   * value sitting in its slice looking read, and this is what lets the rail
+   * tell that apart from an answer that is current.
+   */
+  railReadAt: Readonly<Record<string, number>>;
+  /**
+   * Re-reads whichever of the four rail caches is not at `planningVersion`,
+   * and resolves whether all four now are.
+   *
+   * The rail used to re-read all four on every arrival — a ticket switch inside
+   * one project, a rail page flip — because a component cannot tell a fresh
+   * cache from a stale one. This can: the version each slice landed at is
+   * recorded, so only a slice the planning clock has moved past is spent on,
+   * and an arrival at a version everything already carries costs nothing.
+   *
+   * Resolves false when any read failed (each toasts its own failure), which
+   * leaves that slice's version untouched — the next arrival genuinely retries.
+   */
+  refreshRail(projectId: string, planningVersion: number): Promise<boolean>;
   editor: AutomationEditorTarget | null;
   /**
    * Re-fetches one project's list and replaces the cache. Toasts on failure.
@@ -132,8 +166,12 @@ interface AutomationsState {
   refreshRuns(projectId: string): Promise<void>;
   /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
   refreshSkips(projectId: string): Promise<void>;
-  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
-  refreshTicketRuns(ticketId: string): Promise<void>;
+  /**
+   * Re-fetches ONE Automation's Runs and Skipped occurrences in one project
+   * (VC-297). Both doors at once, because the editor draws one interleaved
+   * list and two sequential round trips would show it half-built.
+   */
+  refreshAutomationHistory(projectId: string, automationId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Resolves whether it landed. */
   refreshEnablement(): Promise<boolean>;
   /** Re-fetches one project's armed columns. Resolves whether the read landed. */
@@ -218,10 +256,43 @@ export function createAutomationsStore() {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
-    runsByTicket: {},
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     enablementRead: false,
+    railReadAt: {},
     editor: null,
+
+    async refreshRail(projectId, planningVersion) {
+      const state = get();
+      const stale = {
+        list: state.railReadAt[railReadKey("list", projectId)] !== planningVersion,
+        arming: state.railReadAt[railReadKey("arming", projectId)] !== planningVersion,
+        order: state.railReadAt[railReadKey("order", projectId)] !== planningVersion,
+        enablement: state.railReadAt[railReadKey("enablement", projectId)] !== planningVersion,
+      };
+      // Nothing the planning clock has moved past: the whole arrival is the
+      // cache, and the answer is that it is current.
+      if (!stale.list && !stale.arming && !stale.order && !stale.enablement) return true;
+      const [list, arming, order, enablement] = await Promise.all([
+        stale.list ? state.refresh(projectId) : true,
+        stale.arming ? state.refreshArming(projectId) : true,
+        stale.order ? state.refreshOrder(projectId) : true,
+        stale.enablement ? state.refreshEnablement() : true,
+      ]);
+      // Only the reads that LANDED are marked at this version. A failed one
+      // keeps its older mark (or none), so its slice is retried rather than
+      // being trusted because a neighbour landed.
+      set((current) => {
+        const railReadAt = { ...current.railReadAt };
+        if (list) railReadAt[railReadKey("list", projectId)] = planningVersion;
+        if (arming) railReadAt[railReadKey("arming", projectId)] = planningVersion;
+        if (order) railReadAt[railReadKey("order", projectId)] = planningVersion;
+        if (enablement) railReadAt[railReadKey("enablement", projectId)] = planningVersion;
+        return { railReadAt };
+      });
+      return list && arming && order && enablement;
+    },
 
     async refresh(projectId) {
       try {
@@ -327,6 +398,32 @@ export function createAutomationsStore() {
       }
     },
 
+    async refreshAutomationHistory(projectId, automationId) {
+      const key = automationHistoryKey(projectId, automationId);
+      try {
+        const [runs, skips] = await Promise.all([
+          window.api.automations.runsForAutomation({ projectId, automationId }),
+          window.api.automations.skipsForAutomation({ projectId, automationId }),
+        ]);
+        if (!runs.ok) {
+          toastError(`Couldn't load run history: ${runs.error}`);
+          return;
+        }
+        if (!skips.ok) {
+          toastError(`Couldn't load skipped occurrences: ${skips.error}`);
+          return;
+        }
+        // One write for both halves: the editor interleaves them by time, and a
+        // render between two writes would draw a list that was never true.
+        set((state) => ({
+          runsByAutomation: { ...state.runsByAutomation, [key]: runs.runs },
+          skipsByAutomation: { ...state.skipsByAutomation, [key]: skips.skips },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
     async refreshSkips(projectId) {
       try {
         const result = await window.api.automations.skipsForProject({ projectId });
@@ -339,19 +436,6 @@ export function createAutomationsStore() {
         }));
       } catch (error) {
         toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
-      }
-    },
-
-    async refreshTicketRuns(ticketId) {
-      try {
-        const result = await window.api.automations.runsForTicket({ ticketId });
-        if (!result.ok) {
-          toastError(`Couldn't load this ticket's runs: ${result.error}`);
-          return;
-        }
-        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
-      } catch (error) {
-        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
       }
     },
 
@@ -543,13 +627,36 @@ const NO_ARMINGS: readonly ColumnArming[] = [];
 const NO_ORDERS: readonly ColumnAutomationOrder[] = [];
 const NO_RANK: readonly string[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
+const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
 
-/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
-export function selectTicketRuns(
+/**
+ * The cache key for one Automation's history IN one project (VC-297).
+ *
+ * Both ids, because a global Automation is one record listable everywhere
+ * while each Run it produced happened in ONE project. Keying by the Automation
+ * alone would let a project show a neighbour project's Runs — the same fault
+ * VC-297 fixed one scope up.
+ */
+export function automationHistoryKey(projectId: string, automationId: string): string {
+  return `${projectId}:${automationId}`;
+}
+
+/** One Automation's Runs in one project — frozen empty before its first read. */
+export function selectAutomationRuns(
   state: AutomationsState,
-  ticketId: string,
+  projectId: string,
+  automationId: string,
 ): readonly AutomationRun[] {
-  return state.runsByTicket[ticketId] ?? NO_RUNS;
+  return state.runsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_RUNS;
+}
+
+/** That Automation's Skipped occurrences — frozen empty before its first read. */
+export function selectAutomationSkips(
+  state: AutomationsState,
+  projectId: string,
+  automationId: string,
+): readonly AutomationSkippedOccurrence[] {
+  return state.skipsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_SKIPS;
 }
 
 /** One project's listable Automations — a frozen empty array before its first read. */
@@ -631,6 +738,39 @@ export function selectArmedAutomation(
     selectAutomations(state, projectId),
     selectArmings(state, projectId),
     status,
+  );
+}
+
+/** One of the four caches the Ticket rail decides from (VC-373). */
+type RailSlice = "list" | "arming" | "order" | "enablement";
+
+/**
+ * The key one rail slice's landed-version mark lives under. The three project
+ * slices are keyed by project; enablement is machine-local, so it is the same
+ * mark for every project and is stored under its own bare name.
+ */
+function railReadKey(slice: RailSlice, projectId: string): string {
+  return slice === "enablement" ? "enablement" : `${slice}:${projectId}`;
+}
+
+/**
+ * Whether every cache the Ticket rail decides from has landed AT
+ * `planningVersion` — the question an arrival asks before spending a read.
+ *
+ * False for a cold cache, for a cache last read before the planning clock's
+ * current tick, and for one whose re-read failed; true only when all four
+ * slices answer for the version the app is on.
+ */
+export function selectRailFresh(
+  state: AutomationsState,
+  projectId: string,
+  planningVersion: number,
+): boolean {
+  return (
+    state.railReadAt[railReadKey("list", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("arming", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("order", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("enablement", projectId)] === planningVersion
   );
 }
 

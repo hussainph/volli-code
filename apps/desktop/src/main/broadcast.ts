@@ -8,6 +8,7 @@
  */
 import { BrowserWindow } from "electron";
 import type { PendingArmedRun } from "@volli/shared";
+import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
 import type {
   DataChangedEvent,
   HarnessEventNotice,
@@ -22,24 +23,57 @@ import type {
 } from "../ipc/contract";
 
 /**
- * Fans the invalidation out to every open window. `change` carries the best
- * scope the caller knows: a `ticketId` (plus `projectId`/`kind` when it has
- * them) for a change it can pin to one ticket, or `{}` (the default —
- * untargeted) when it genuinely can't, which the renderer reads as "anything may
- * have changed". The `entity` discriminant is stamped here so call sites only
- * ever pass scope.
+ * The app's one coalescing window, whose sink is every live window. The rule
+ * and its state live in `data-change-coalescer.ts`; what is process-global here
+ * is only the instance that fans out to `BrowserWindow`, so a second consumer
+ * with its own cadence can be given its own.
  */
-export function broadcastDataChanged(change: Omit<DataChangedEvent, "entity"> = {}): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send(
-      "volli:data-changed" satisfies VolliIpcEvent,
-      {
-        entity: "tickets",
-        ...change,
-      } satisfies DataChangedEvent,
-    );
-  }
+const dataChanges = createDataChangeCoalescer({
+  send(change) {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.webContents.isDestroyed()) continue;
+      window.webContents.send(
+        "volli:data-changed" satisfies VolliIpcEvent,
+        {
+          entity: "tickets",
+          ...change,
+        } satisfies DataChangedEvent,
+      );
+    }
+  },
+});
+
+/**
+ * Deliver whatever this test's handlers queued, so a NEGATIVE assertion means
+ * something. Without it `expect(sends).toEqual([])` passes inside any
+ * synchronous test body whether or not the handler queued anything at all.
+ */
+export function flushDataChangedForTest(): void {
+  dataChanges.flush();
+}
+
+/**
+ * Throw away whatever is queued, delivering nothing. The isolation half of the
+ * pair, run from `test-setup.ts` after every test in the main project: a
+ * pending scope left behind would otherwise be delivered into the NEXT test's
+ * window mock, carrying ids that test never created.
+ */
+export function resetDataChangedForTest(): void {
+  dataChanges.dispose();
+}
+
+/**
+ * Queue an invalidation for every open window. `change` carries the best scope
+ * the caller knows: a `ticketId` (plus `projectId`/`kind` when it has them) for
+ * a change it can pin to one ticket, or `{}` (the default — untargeted) when it
+ * genuinely cannot. The `entity` discriminant is stamped by the fan-out above,
+ * so call sites only ever pass scope.
+ *
+ * Invalidations coalesce for one frame window — see `data-change-coalescer.ts`
+ * for why one merged notice is not a weaker guarantee than fifteen.
+ */
+export function broadcastDataChanged(change: DataChangeScope = {}): void {
+  dataChanges.queue(change);
 }
 
 /**

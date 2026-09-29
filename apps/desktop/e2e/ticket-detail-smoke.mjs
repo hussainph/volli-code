@@ -33,7 +33,7 @@
  *      invents NO harness name (since the Calm Stack neither the roster nor
  *      History prints one — check 6 carries the positive half).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
- *      terminal canvas DOM node mounted (marked node survives) and the shell
+ *      terminal DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it);
  *      the ACTIVE band row's hover `title` carries the truthful source
  *      ("Shell", never the default Claude harness) — the one surface that
@@ -54,10 +54,10 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session stands in History — a sibling SECTION of Sessions with
- *      no disclosure, since the Calm Stack retired the drawer — carrying its
- *      ended-ago metadata. Back returns to the board even though the in-memory
- *      nav history starts fresh.
+ *      renamed session stands in the roster's folded RECORD — under the
+ *      Sessions eyebrow, whose label is the fold (VC-406) — carrying its
+ *      ended-ago metadata once unfolded. Back returns to the board even though
+ *      the in-memory nav history starts fresh.
  *  12. File-tab save guard — a repository file opened as a ticket file tab is an
  *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
  *      VISIBLE on its tab and DEFENDED on close: typing shows the dirty dot, the
@@ -81,10 +81,11 @@
  * exact-body assertions checks 3 and 11 make. It needs no session, so it stands
  * on its own.
  *
- * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
- * behaviour is asserted through SIDE EFFECTS (keystrokes → a file the shell
- * writes, then polled). Every assertion polls (expect-style waits); there are no
- * bare sleeps standing in for a condition.
+ * Shell behaviour is asserted through SIDE EFFECTS (keystrokes → a file the
+ * shell writes, then polled) rather than through what the terminal draws: a
+ * file the shell wrote is evidence the bytes reached the PTY, which rendered
+ * text is not. Every assertion polls (expect-style waits); there are no bare
+ * sleeps standing in for a condition.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -339,29 +340,29 @@ async function escapeToBoard(page) {
   await waitUntil("board after Escape", () => boardOpen(page));
 }
 
-// ---- terminal (canvas — side-effect assertions only) -----------------------
+// ---- terminal (side-effect assertions only) --------------------------------
 
-/** Focus the single VISIBLE terminal canvas by clicking its centre. */
+/** Focus the single VISIBLE terminal by clicking its centre. */
 async function focusTerminal(page) {
   const box = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll("canvas"));
-    const visible = canvases.find(
+    const terminals = Array.from(document.querySelectorAll(".xterm"));
+    const visible = terminals.find(
       (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
     );
     if (!visible) return null;
     const r = visible.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
-  if (!box) throw new Error("no visible terminal canvas to focus");
+  if (!box) throw new Error("no visible terminal to focus");
   await page.mouse.click(box.x, box.y);
   await sleep(200);
 }
 
-/** Wait for a live terminal canvas with a real (non-zero) size, then let restty boot the shell + paint the prompt. */
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+/** Wait for a live terminal with a real (non-zero) size, then let the shell boot and paint its prompt. */
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
+      const c = Array.from(document.querySelectorAll(".xterm")).find(
         (el) => el.offsetParent !== null,
       );
       return c && c.clientWidth > 0 && c.clientHeight > 0;
@@ -828,7 +829,7 @@ async function main() {
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
         // A cold shell on a slow CI runner can still be sourcing rc files when
         // the first line is typed and silently drop it; a second identical line
@@ -866,7 +867,12 @@ async function main() {
         });
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
-        const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
+        // Every roster row carries its age BESIDE its state now (VC-406:
+        // `ticket-sessions-panel.tsx`), so the chip reads "Working · just now"
+        // rather than the bare word. Matching the pair keeps this a stronger
+        // assertion than the old anchored word: it pins the state vocabulary
+        // AND the age that now has to ride with it.
+        const railChip = (await aside.getByText(/^(Working|Idle|Exited) · .+$/).count()) >= 1;
         // The Calm Stack roster is one flat line per Session — glyph, title,
         // status — so the harness name is no longer printed anywhere under this
         // `aside`: not on a roster row, and not in History either, where
@@ -907,20 +913,20 @@ async function main() {
     // ===================================================================
     await attempt(
       6,
-      "the ACTIVE band opens the exact live tab; its terminal canvas node + shell stay resident across ticket → board → session",
+      "the ACTIVE band opens the exact live tab; its terminal node + shell stay resident across ticket → board → session",
       async () => {
         await fs.rm(PROBE_NAV, { force: true });
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await sessionTab.click();
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
-        // Tag the live terminal canvas so we can prove the SAME node survives.
+        // Tag the live terminal so we can prove the SAME node survives.
         const marked = await page.evaluate(() => {
-          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+          const terminal = Array.from(document.querySelectorAll(".xterm")).find(
             (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
           );
-          if (!canvas) return false;
-          canvas.dataset.e2eKeepalive = "kept-1";
+          if (!terminal) return false;
+          terminal.dataset.e2eKeepalive = "kept-1";
           return true;
         });
 
@@ -993,12 +999,12 @@ async function main() {
           const tab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
           return (await tab.count()) === 1 && (await tab.getAttribute("aria-selected")) === "true";
         });
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
-        // The tagged canvas is still in the DOM (never unmounted/remounted).
-        const nodeSurvived = await waitUntil("marked canvas survives nav", async () =>
+        // The tagged terminal node is still in the DOM (never unmounted/remounted).
+        const nodeSurvived = await waitUntil("marked terminal survives nav", async () =>
           page.evaluate(() =>
-            Array.from(document.querySelectorAll("canvas")).some(
+            Array.from(document.querySelectorAll(".xterm")).some(
               (c) => c.dataset.e2eKeepalive === "kept-1",
             ),
           ),
@@ -1122,11 +1128,11 @@ async function main() {
     );
 
     // ===================================================================
-    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
+    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident terminal
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and exits from the band",
+      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live terminal, and exits from the band",
       async () => {
         // The enter control lives ON the pane now (session-split-layout.tsx's
         // PaneFocusControl), not on the chrome band — it acts on one terminal, so
@@ -1165,14 +1171,14 @@ async function main() {
         });
 
         const marked = await page.evaluate(() => {
-          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+          const terminal = Array.from(document.querySelectorAll(".xterm")).find(
             (candidate) =>
               candidate.offsetParent !== null &&
               candidate.clientWidth > 0 &&
               candidate.clientHeight > 0,
           );
-          if (!canvas) return false;
-          canvas.dataset.e2eFocus = "focus-1";
+          if (!terminal) return false;
+          terminal.dataset.e2eFocus = "focus-1";
           return true;
         });
         await page.getByRole("button", { name: "Enter terminal focus" }).click();
@@ -1181,7 +1187,7 @@ async function main() {
             const sidebar = document.querySelector('[data-sidebar="sidebar"]');
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
             const chrome = document.querySelector(".app-region-drag");
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const markedTerminal = document.querySelector('.xterm[data-e2e-focus="focus-1"]');
             const state = {
               sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
               insetLeft: inset?.getBoundingClientRect().left ?? -1,
@@ -1193,10 +1199,10 @@ async function main() {
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              terminalVisible:
+                markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
-            return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
+            return state.sidebarHidden && state.insetLeft === 0 && state.terminalVisible
               ? state
               : false;
           }),
@@ -1207,7 +1213,7 @@ async function main() {
           focused.chromeHeight === 36 &&
           focused.tablists === 0 &&
           focused.asides === 0 &&
-          focused.canvasVisible;
+          focused.terminalVisible;
 
         // Exit is the BAND's persistent control, and it is deliberately not the
         // same button as the one that entered: in zen mode the band is the only
@@ -1221,7 +1227,7 @@ async function main() {
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const markedTerminal = document.querySelector('.xterm[data-e2e-focus="focus-1"]');
             const state = {
               insetLeft: inset?.getBoundingClientRect().left ?? 0,
               tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
@@ -1231,10 +1237,10 @@ async function main() {
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              terminalVisible:
+                markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
-            return state.insetLeft > 0 && state.canvasVisible ? state : false;
+            return state.insetLeft > 0 && state.terminalVisible ? state : false;
           }),
         );
         const restoredGeometry =
@@ -1242,7 +1248,7 @@ async function main() {
           // Two: the ticket's tab strip and the rail's own page tablist.
           restored.tablists === 2 &&
           restored.asides === 1 &&
-          restored.canvasVisible;
+          restored.terminalVisible;
 
         // ⌥⌘Return is the same toggle on the keyboard, and it has to work in
         // both directions — the exit direction fires while a live PTY holds
@@ -1462,36 +1468,44 @@ async function main() {
           return kept && deletedGone;
         });
 
-        // The prior session folds out of the working set and into History,
-        // which is a SIBLING SECTION of Sessions — one shape, one inset, no
-        // seam. It used to be a `RailDrawer`, and this check used to prove the
-        // drawer was collapsed and then click it open; that primitive was the
-        // old rail's, it existed so History and a Details drawer could stack as
-        // siblings, and Details is gone. So the disclosure is gone with it and
-        // the row is simply THERE — which is a stronger claim than the one this
-        // check made before, not a weaker one: previously the row was allowed to
-        // be absent until something clicked.
+        // The prior session folds out of the working set and into the
+        // roster's RECORD (VC-406): one Sessions section, whose eyebrow label
+        // is the fold — `SESSIONS ›` with the record away, folded by default
+        // and remembered app-wide. There is no "History" heading and no count
+        // on the face; the trigger's name carries the count. This is not the
+        // old rail's `RailDrawer` (a full-bleed rule, the whole block behind
+        // it): nothing bleeds past the section's inset, the live rows stay on
+        // screen, only the record folds, and the trigger does not move.
         //
-        // A history row is the SAME one-line row as the roster's
+        // A record row is the SAME one-line row as the roster's
         // (`ticket-sessions-panel.tsx` renders both), so it prints no harness
         // name either — `session-history.ts` keeps the label only to match on
-        // when you search. What is left is what a history row exists to carry:
+        // when you search. What is left is what a record row exists to carry:
         // identity and pastness. Source truthfulness is check 6's, at the
         // sidebar band that still prints it.
-        const historyHeading = aside.getByRole("heading", { name: /History/ });
-        const historyIsSection =
-          (await historyHeading.count()) === 1 &&
-          (await aside.getByRole("button", { name: /^History/ }).count()) === 0;
+        const noHistoryHeading =
+          (await aside.getByRole("heading", { name: /History/ }).count()) === 0;
+        const fold = aside.getByTestId("ticket-sessions-fold");
+        const foldOffered = await waitUntil(
+          "the roster offers its record fold",
+          async () => (await fold.count()) === 1,
+        ).catch(() => false);
+        const foldName = foldOffered ? await fold.getAttribute("aria-label") : null;
+        const foldNamesCount = /^Show \d+ past sessions?$/.test(foldName ?? "");
+        if (foldOffered && (await fold.getAttribute("aria-expanded")) === "false") {
+          await fold.click();
+        }
+        const historyIsSection = noHistoryHeading && !!foldOffered && foldNamesCount;
         // Both halves are captured so a failure names WHICH one broke: this
         // check used to time out reporting a bare `false`, which said nothing
         // about whether the row was missing or merely untimestamped.
         let sessionDiag = { row: false, endedAgo: false, railText: "" };
         const sessionOk = await waitUntil(
-          "prior renamed session stands in history without a disclosure",
+          "prior renamed session stands in the unfolded record",
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-            // History rows trail with when the session ended, not a redundant
-            // "Exited" chip — the section heading already says these are past.
+            // Record rows trail with when the session ended, not a redundant
+            // "Exited" chip — the fold already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
             sessionDiag = {
               row,
@@ -1526,7 +1540,7 @@ async function main() {
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} (row=${sessionDiag.row} endedAgo=${sessionDiag.endedAgo} rail=${JSON.stringify(sessionDiag.railText)}) restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} recordFold=${historyIsSection} (heading=${noHistoryHeading} offered=${!!foldOffered} name=${JSON.stringify(foldName)}) session=${!!sessionOk} (row=${sessionDiag.row} endedAgo=${sessionDiag.endedAgo} rail=${JSON.stringify(sessionDiag.railText)}) restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

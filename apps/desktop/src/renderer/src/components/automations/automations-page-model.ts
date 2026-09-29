@@ -58,15 +58,14 @@ export const MANUAL_TRIGGER_LABEL = "Only when I run it";
  * What a switched-off Automation says where it is OFFERED in a menu row — the
  * column bolt's list (VC-128) and the ticket rail's own (VC-129).
  *
- * The Automations page states the same fact in a whole sentence under the name
- * ("Won't start on its own"), because a page row has a line to spend on it. A
- * menu row does not: the note rides beside the name in a 224px popover, so the
- * two words that fit are the two that get printed. What must not vary is the
+ * The switch is labelled "Automatic triggers": off pauses unattended starts,
+ * not deliberate runs. "Manual only" states what is still possible instead of
+ * implying that a disabled record is somehow still running. What must not vary is the
  * PRESENTATION rule they both follow — an Automation that is off is still
  * listed, still offered and still runnable by hand (VC-112), so it is never
  * dimmed, never hidden, and never silently missing from a menu.
  */
-export const SWITCHED_OFF_NOTE = "Switched off";
+export const SWITCHED_OFF_NOTE = "Manual only";
 
 /**
  * The Trigger, in one line: what starts this Automation BESIDES a person.
@@ -170,6 +169,51 @@ export function runAutomationLabel(
   run: Pick<AutomationRun, "automationId" | "automationName">,
 ): string {
   return run.automationName ?? UNBOUND_RUN_LABEL;
+}
+
+/**
+ * How this Run STARTED — the trigger-facing half of a history row (VC-297).
+ *
+ * VC-297 asks for the originating record and its trigger on every row. The
+ * record is {@link runAutomationLabel} above; the trigger cannot be, because a
+ * Run stores no Trigger. Reading today's record for it would be the mistake
+ * {@link runModelLabel} already refuses next door — a Trigger can be edited
+ * after the Run happened and the record can be deleted outright, so today's
+ * Trigger is not the one that fired.
+ *
+ * What the Run does carry is its ATTENDANCE, and that is this fact: VC-112
+ * rules that nothing declares itself attended, so the answer is decided by
+ * whichever door accepted the invocation — see `AUTOMATION_RUN_ATTENDANCE`.
+ * A person clicking something is attended; the schedule timer and the agent's
+ * own Run verb are not.
+ *
+ * Which is why the unattended word is "Automatic" and never names a schedule:
+ * `unattended` covers the agent's Run verb too, and a Run another Session
+ * started never had a schedule to name. An old row carrying nothing reads as
+ * attended (`parseAutomationRunAttendance`), so there is no third word here.
+ */
+export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
+  return run.attendance === "unattended" ? "Automatic" : "By hand";
+}
+
+/**
+ * What an EMPTY history says — or `null` while it does not yet know (VC-297).
+ *
+ * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * that has never been read cannot make it. Each scope is its own read now, so
+ * a cold cache is the ordinary state every time the reader picks another
+ * record — and answering that with a sentence would state a fact the very next
+ * frame may contradict. The Ticket rail already draws this line for its own
+ * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
+ *
+ * `loaded` therefore means READ, not non-empty. An empty answer that landed is
+ * a real answer and gets its sentence; silence gets silence.
+ */
+export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+  if (!loaded) return null;
+  return automationId === null
+    ? "Nothing has run in this project yet."
+    : "Nothing has run this Automation yet.";
 }
 
 /**

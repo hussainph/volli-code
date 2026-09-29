@@ -42,9 +42,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -56,6 +59,7 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
+import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
 
 type PhosphorIcon = typeof ChatCircleIcon;
@@ -271,6 +275,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
           <textarea
             autoFocus
             value={draft}
+            aria-keyshortcuts="Meta+Enter Control+Enter Escape"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -324,7 +329,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-2">
+    <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -336,12 +341,15 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         }}
         placeholder="Add a comment…"
         aria-label="Add a comment"
-        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50 [field-sizing:content]"
+        aria-keyshortcuts="Meta+Enter Control+Enter"
+        className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
       />
-      <div className="flex justify-end">
+      <div className="prompt-toolbar flex items-center justify-end gap-2 px-2 py-2">
         <Button
           size="sm"
+          className="prompt-primary"
           disabled={draft.trim() === "" || submitting}
+          aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
           <PaperPlaneTiltIcon />
@@ -364,42 +372,42 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
  * typeset blocks), and hosts the composer. Every comment mutation refetches
  * both so the feed stays authoritative; optimistic appends keep it responsive
  * in between.
+ *
+ * The landed read lives in `stores/ticket-activity.ts`, not in component state:
+ * the feed unmounts on every Doc → file/chat → Doc flip, and a remount paints
+ * from the cache when the planning version it was read at still holds (VC-373).
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
-  const [events, setEvents] = React.useState<TicketEvent[]>([]);
-  const [comments, setComments] = React.useState<TicketComment[]>([]);
-  const [loaded, setLoaded] = React.useState(false);
+  const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
+  const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
+  const listingError = useTicketActivityStore((state) => state.listingError[ticketId] ?? null);
+  const ensureActivity = useTicketActivityStore((state) => state.ensure);
+  const refreshActivity = useTicketActivityStore((state) => state.refresh);
 
-  // Shared stale-guard for both reads below: a fast ticket switch (or a newer
-  // refresh) supersedes an in-flight fetch, so its late resolve drops itself
-  // rather than painting the wrong ticket's activity.
+  // Comment-only re-reads still share this local guard. The full baseline now
+  // lives in the store, where its state and per-ticket in-flight dedupe belong;
+  // an edit's small comments read must merely avoid applying after a newer full
+  // refresh has replaced it.
   const activityFetch = useLatestAsync();
 
-  const refetch = React.useCallback(async () => {
-    const token = activityFetch.claim();
-    try {
-      const [ev, cm] = await Promise.all([
-        window.api.tickets.events({ ticketId }),
-        window.api.comments.list({ ticketId }),
-      ]);
-      if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
-      if (!ev.ok) {
-        toastError(`Couldn't load activity: ${ev.error}`);
-        return;
-      }
-      if (!cm.ok) {
-        toastError(`Couldn't load activity: ${cm.error}`);
-        return;
-      }
-      setEvents(ev.events);
-      setComments(cm.comments);
-      setLoaded(true);
-    } catch (error) {
-      if (activityFetch.isCurrent(token))
-        toastError(`Couldn't load activity: ${errorMessage(error)}`);
-    }
-  }, [ticketId, activityFetch]);
+  const refetch = React.useCallback(
+    (force = false) => {
+      // A full read is newer than a comments-only edit read. The store rejects
+      // stale full baselines by revision; this invalidates the component-local
+      // partial read on the same boundary.
+      activityFetch.claim();
+      return refreshActivity(
+        ticketId,
+        // Read at request time, not at render time: a planning refresh can
+        // arrive between the callback being built and the user posting a
+        // comment, and the cache must be stamped under the version it reads.
+        useBoardStore.getState().lastPlanningChange.version,
+        force,
+      );
+    },
+    [activityFetch, refreshActivity, ticketId],
+  );
 
   // Comment edits and deletes record no ticket_event (per the comments-repo
   // contract), so they only need the comments re-read — not the whole event log
@@ -414,32 +422,43 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         toastError(`Couldn't load activity: ${cm.error}`);
         return;
       }
-      setComments(cm.comments);
+      const current = useTicketActivityStore.getState().byTicket[ticketId];
+      useTicketActivityStore.getState().apply(ticketId, {
+        events: current?.events ?? [],
+        comments: cm.comments,
+        version: useBoardStore.getState().lastPlanningChange.version,
+      });
     } catch (error) {
       if (activityFetch.isCurrent(token))
         toastError(`Couldn't load activity: ${errorMessage(error)}`);
     }
   }, [ticketId, activityFetch]);
 
-  // Initial load, and reload when the open ticket switches (refetch's identity
-  // tracks ticketId).
+  // Initial load, and reload when the open ticket switches. `ensure` owns the
+  // complete state question: a cache entry current for this planning version is
+  // warm; an unread or failed entry starts one shared baseline read instead.
   React.useEffect(() => {
-    void refetch();
-  }, [refetch]);
+    void ensureActivity(ticketId, useBoardStore.getState().lastPlanningChange.version);
+  }, [ensureActivity, ticketId]);
 
   // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
   // refreshes the planning stores and publishes the change's scope. Refetch only
   // when it's untargeted or targets THIS ticket — a change for another ticket
-  // can't affect this feed. The seen-version ref skips the mount duplicate the
-  // effect above already covered.
+  // can't affect this feed — and advance the cached entry's version for one it
+  // provably does not, so returning to the Doc tab later still paints from
+  // cache. The seen-version ref skips the mount duplicate the effect above
+  // already covered.
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const seenPlanningVersion = React.useRef(planningChange.version);
   React.useEffect(() => {
     if (planningChange.version === seenPlanningVersion.current) return;
     seenPlanningVersion.current = planningChange.version;
-    if (!planningChangeAffects(planningChange, ticketId)) return;
+    if (!planningChangeAffects(planningChange, ticketId)) {
+      useTicketActivityStore.getState().noteVersion(ticketId, planningChange.version);
+      return;
+    }
     void refetch();
-  }, [planningChange, ticketId, refetch]);
+  }, [planningChange, refetch, ticketId]);
 
   // Post a comment: append an optimistic row immediately, then either refetch
   // the authoritative feed (success — the temp row is replaced) or roll the
@@ -447,36 +466,82 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   async function postComment(body: string): Promise<boolean> {
     const tempId = `temp-${crypto.randomUUID()}`;
     const now = Date.now();
-    setComments((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        ticketId,
-        sessionId: null,
-        actor: USER_ACTOR,
-        body,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]);
+    const before = useTicketActivityStore.getState().byTicket[ticketId];
+    // The temp row is cached too, so a tab flip mid-post cannot lose it: the
+    // optimistic list is what the feed would have painted locally.
+    useTicketActivityStore.getState().apply(ticketId, {
+      events: before?.events ?? [],
+      comments: [
+        ...(before?.comments ?? []),
+        {
+          id: tempId,
+          ticketId,
+          sessionId: null,
+          actor: USER_ACTOR,
+          body,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      version: useBoardStore.getState().lastPlanningChange.version,
+    });
     const result = await writeThrough("post comment", () =>
       window.api.comments.create({ ticketId, body }),
     );
     if (!result) {
-      setComments((prev) => prev.filter((comment) => comment.id !== tempId));
+      const rolledBack = useTicketActivityStore.getState().byTicket[ticketId];
+      useTicketActivityStore.getState().apply(ticketId, {
+        events: rolledBack?.events ?? [],
+        comments: (rolledBack?.comments ?? []).filter((comment) => comment.id !== tempId),
+        version: useBoardStore.getState().lastPlanningChange.version,
+      });
       return false;
     }
-    await refetch();
+    // The optimistic row proves the write was requested, not that main's
+    // listing contains it. Force a new baseline rather than sharing one that
+    // may have started before the write landed.
+    await refetch(true);
     return true;
   }
 
+  const events = entry?.events ?? [];
+  const comments = entry?.comments ?? [];
+  // VC-383's distinction is data from the store, never an inference from a
+  // missing list: the same empty arrays mean either a successful empty read or
+  // a failed one, and only the former earns the empty sentence.
+  const pending = listingState === undefined || listingState === "loading";
+  const failed = listingState === "failed";
   const feed = buildActivityFeed(events, comments);
 
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
       <SectionHeading as="h3">Activity</SectionHeading>
 
-      {loaded && feed.length === 0 ? (
+      {pending ? (
+        // The cache has no landed baseline for this ticket yet (VC-383). This
+        // used to be an empty list — not the empty sentence, not a placeholder,
+        // nothing between the heading and the composer — so the feed read as
+        // absent rather than as on its way. Two bunch rows' worth of the feed's
+        // own line: a glyph's slot and a sentence, at `text-ui`.
+        <ul
+          className="flex flex-col gap-2"
+          {...loadingRegionProps("activity")}
+          data-testid="ticket-activity-loading"
+        >
+          {["w-3/5", "w-2/5"].map((width) => (
+            <li key={width} aria-hidden className="flex items-center gap-2 px-1">
+              <Skeleton className="size-3.5 shrink-0 rounded-sm" />
+              <Skeleton className={cn("h-3.5", width)} />
+            </li>
+          ))}
+        </ul>
+      ) : failed ? (
+        // The toast owns the detail. This line only replaces the skeleton with
+        // the concise truth that the activity baseline did not arrive.
+        <p className={EMPTY_INLINE} title={listingError ?? undefined}>
+          Couldn&apos;t load activity.
+        </p>
+      ) : feed.length === 0 ? (
         <p className={EMPTY_INLINE}>No activity yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">

@@ -5,9 +5,15 @@ import {
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
-import { roleImpliedByTicket } from "@volli/shared";
+import {
+  CHECKPOINT_REFRESH_EVENTS,
+  SESSION_LISTING_CACHE_LIMIT,
+  SESSION_LISTING_FOLD_CHUNK,
+} from "./session-engine";
+import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
+  ListSessionsQuery,
   Session,
   SessionAttachment,
   SessionCommand,
@@ -17,6 +23,8 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionObservation,
+  SessionProjectionCheckpoint,
+  SessionProjectionEvent,
   SessionUsage,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -134,6 +142,52 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(
       created?.payload.kind === "session.created" ? created.payload.session : null,
     ).toMatchObject({ role: "subagent", parentSessionId: "parent-session" });
+  });
+
+  it("honors a client-requested Session id, and keeps the ledger derivation absent one (VC-358)", async () => {
+    const { plane } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+
+    // Without a request, the ledger's own `ids.next("session")` derivation is
+    // untouched — the default this ticket must not move.
+    expect((await plane.createSession(createRequest("command-default-id"))).session.id).toBe(
+      "session-1",
+    );
+
+    const promoted = await plane.createSession({
+      ...createRequest("command-requested-id"),
+      requestedSessionId: requested,
+    });
+    expect(promoted.session.id).toBe(requested);
+    // The id travels on the immutable identity fact, not only the live row.
+    const created = (await plane.listEvents({ sessionId: requested })).find(
+      ({ payload }) => payload.kind === "session.created",
+    );
+    expect(created?.payload.kind === "session.created" && created.payload.session.id).toBe(
+      requested,
+    );
+  });
+
+  it("replays a requested-id create idempotently, and refuses a different requested id (VC-358)", async () => {
+    const { plane } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+    const first = await plane.createSession({
+      ...createRequest("command-promote"),
+      requestedSessionId: requested,
+    });
+
+    const replay = await plane.createSession({
+      ...createRequest("command-promote"),
+      requestedSessionId: requested,
+    });
+    expect(replay).toEqual(first);
+
+    await expect(
+      plane.createSession({
+        ...createRequest("command-promote"),
+        requestedSessionId: "11111111-2222-4333-8444-555555555555",
+      }),
+    ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
 
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
@@ -915,6 +969,312 @@ describe("SessionEngine creation and explicit commands", () => {
         reason: "Wedged for 3h",
         by: { kind: "session", sessionId: "supervisor-1" },
       },
+    });
+  });
+
+  it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
+    const stored = createInMemorySessionLedger();
+    const cursors: Array<number | undefined> = [];
+    const auditReads: string[] = [];
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                // The fold path must use the provenance-free read (VC-355), so
+                // the cursors are observed there and any use of the audit read
+                // by a projection is recorded as a regression.
+                if (property === "listEvents") {
+                  return (query: Parameters<SessionLedgerTransaction["listEvents"]>[0]) => {
+                    auditReads.push(query.sessionId);
+                    return transaction.listEvents(query);
+                  };
+                }
+                if (property !== "listProjectionEvents") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
+                  cursors.push(query.afterSequence);
+                  return transaction.listProjectionEvents(query);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-checkpoint-list"));
+
+    cursors.length = 0;
+    const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(cursors).toEqual([undefined]);
+    expect(first).toHaveLength(1);
+    await expect(
+      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
+
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+    await plane.saveProjectionCheckpoint(checkpoint);
+    await plane.submit({
+      commandId: "command-checkpoint-tail",
+      sessionId: created.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Tail" },
+      provenance: userProvenance,
+    });
+
+    cursors.length = 0;
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      signal: { signal: "done", reason: "Tail" },
+    });
+    expect(cursors).toEqual([checkpoint.throughSequence]);
+
+    cursors.length = 0;
+    auditReads.length = 0;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(1);
+    expect(cursors).toEqual([checkpoint.throughSequence]);
+    // A listing folds every Session it returns, so paying one provenance
+    // decode per event here is the cost the split exists to remove.
+    expect(auditReads).toEqual([]);
+    expect(
+      (await plane.getProjectionCheckpoint({ sessionId: created.session.id }))?.throughSequence,
+    ).toBe(checkpoint.throughSequence);
+  });
+
+  it("validates in-memory projection checkpoints at their write boundary", async () => {
+    const { plane } = composition();
+    await expect(plane.latestEventSequence({ sessionId: "missing-session" })).resolves.toBe(0);
+    const created = await plane.createSession(createRequest("command-checkpoint-validation"));
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+    const missingProjection = { ...checkpoint, projection: undefined };
+    const missingSession = {
+      ...checkpoint,
+      sessionId: "missing-session",
+      projection: {
+        ...checkpoint.projection,
+        session: { ...checkpoint.projection.session, id: "missing-session" },
+      },
+    };
+    const invalid = [
+      { ...checkpoint, version: 2 },
+      { ...checkpoint, sessionId: "another-session" },
+      missingProjection,
+      { ...checkpoint, throughSequence: 0.5 },
+      { ...checkpoint, throughSequence: -1 },
+      { ...checkpoint, pendingExecutorStarts: null },
+      missingSession,
+    ] as unknown as SessionProjectionCheckpoint[];
+
+    for (const candidate of invalid) {
+      await expect(plane.saveProjectionCheckpoint(candidate)).rejects.toThrow(
+        "Session projection checkpoint is invalid",
+      );
+    }
+    await expect(
+      plane.saveProjectionCheckpoint({
+        ...checkpoint,
+        throughSequence: checkpoint.throughSequence + 1,
+      }),
+    ).rejects.toThrow("Session projection checkpoint is ahead of durable history");
+
+    await plane.saveProjectionCheckpoint(checkpoint);
+    const older = createSessionProjectionCheckpoint(created.session, []);
+    await plane.saveProjectionCheckpoint(older);
+    await expect(
+      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toMatchObject({ throughSequence: checkpoint.throughSequence });
+  });
+
+  it("resumes a checkpoint with the live row while retaining projected title", async () => {
+    const stored = createInMemorySessionLedger();
+    let ticketDeleted = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getSession") return Reflect.get(target, property, receiver);
+                return (sessionId: string) => {
+                  const session = transaction.getSession(sessionId);
+                  return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-checkpoint-live-row"));
+    await plane.submit({
+      commandId: "command-checkpoint-live-title",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Projected checkpoint title" },
+      provenance: userProvenance,
+    });
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    await plane.saveProjectionCheckpoint(
+      createSessionProjectionCheckpoint(created.session, events),
+    );
+
+    ticketDeleted = true;
+
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: {
+        ticketId: null,
+        title: "Projected checkpoint title",
+      },
+      bornTicketless: false,
+    });
+  });
+
+  it("reports a checkpoint it could not use instead of silently refolding forever", async () => {
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint row could not be decoded");
+    let failReads = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (sessionId: string) => {
+                  if (failReads) throw failure;
+                  return transaction.getProjectionCheckpoint(sessionId);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const created = await plane.createSession(createRequest("command-checkpoint-report"));
+
+    failReads = true;
+    // The read still answers from the immutable log: a cache failure is never
+    // allowed to fail a read, which is exactly why it has to be reported.
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: { id: created.session.id },
+    });
+    expect(reported).toEqual([failure]);
+  });
+
+  it("keeps a read working when the host's own failure reporter throws", async () => {
+    const stored = createInMemorySessionLedger();
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return () => {
+                  throw new Error("unreadable checkpoint");
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: () => {
+        throw new Error("diagnostics sink is broken");
+      },
+    });
+    const created = await plane.createSession(createRequest("command-checkpoint-sink"));
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: { id: created.session.id },
+    });
+  });
+
+  it("keeps recording facts when refreshing the derived checkpoint fails", async () => {
+    // `observe` refreshes the checkpoint once the durable cache has drifted a
+    // whole window behind the log (VC-356). That write is a cache write, so it
+    // must behave like one: a Session that can never refresh is slower on its
+    // next fold and otherwise completely unaffected. The facts still land, in
+    // order, and the host hears about the failure rather than losing it.
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint table is read-only");
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "saveProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return () => {
+                  throw failure;
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const { session } = await plane.createSession(createRequest("command-refresh-failure"));
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-refresh-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+
+    // Past one refresh window, so at least one refresh is certainly attempted.
+    const facts = CHECKPOINT_REFRESH_EVENTS + 4;
+    for (let index = 0; index < facts; index += 1) {
+      await plane.observe({
+        id: `observation-refresh-${index}`,
+        sessionId: session.id,
+        occurredAt: 300 + index,
+        provenance: adapterProvenance,
+        attachmentId: opened.id,
+        kind: "attachment.native_referenced",
+        native: { id: `native-${index}`, detail: null },
+      });
+    }
+
+    expect(reported.length).toBeGreaterThan(0);
+    expect(reported.every((error) => error === failure)).toBe(true);
+
+    // The log is untouched by the cache's failure: every fact is present, in
+    // one unbroken ascending sequence.
+    const events = await plane.listEvents({ sessionId: session.id });
+    const referenced = events.filter(
+      (event) => event.payload.kind === "attachment.native_referenced",
+    );
+    expect(referenced).toHaveLength(facts);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((_event, index) => index + 1));
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      liveExecutor: { id: opened.id, native: { id: `native-${facts - 1}` } },
     });
   });
 
@@ -3029,6 +3389,10 @@ describe("InMemorySessionLedger", () => {
       expect(transaction.listSessions({ projectId: "project-1", scope: "project" })).toEqual([
         projectSession,
       ]);
+      // @ts-expect-error -- `Session` is readonly (VC-393); this reaches past
+      // the type on purpose, to prove the ledger answered with a copy rather
+      // than the row it holds. The returned row is not frozen, only the
+      // listing cache's own projections are, so the assignment succeeds.
       all[0]!.title = "Mutated query result";
       expect(transaction.listSessions({ projectId: "project-1", scope: "all" })[0]?.title).toBe(
         "Later id",
@@ -3337,5 +3701,670 @@ describe("the in-memory ledger's usage port", () => {
     await expect(
       plane.reportUsage({ scope: { kind: "session", sessionId: "session-that-never-existed" } }),
     ).resolves.toMatchObject({ total: { requestCount: 0 }, meteredSessionCount: 0 });
+  });
+});
+
+/**
+ * A project's whole roster, folded on the process that also serves every other
+ * Session operation (VC-388).
+ *
+ * The cost per Session is already bounded by the checkpoint tail. What these
+ * cover is the cost of doing it N times in a row with nothing in between: a
+ * listing that holds the ledger for its whole length starves every write
+ * behind it, and one that never returns to the event loop blocks the host for
+ * the same span whether or not a skeleton is drawn over it.
+ */
+/** The first {@link SESSION_LISTING_CACHE_LIMIT} rows of a roster: exactly a full cache. */
+const rosterAtCacheLimit = (rows: readonly Session[]): readonly Session[] =>
+  rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
+
+describe("listSessions over a project roster (VC-388)", () => {
+  async function roster(count: number) {
+    const { plane } = composition();
+    const sessions = [];
+    for (let index = 0; index < count; index += 1) {
+      sessions.push((await plane.createSession(createRequest(`command-roster-${index}`))).session);
+    }
+    return { plane, sessions };
+  }
+
+  it("lets a write commit while a listing is still in flight", async () => {
+    const { plane, sessions } = await roster(40);
+    const settled: string[] = [];
+
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" }).then((rows) => {
+      settled.push("listing");
+      return rows;
+    });
+    const write = plane
+      .submit({
+        commandId: "command-roster-write",
+        sessionId: sessions[0].id,
+        intent: { kind: "session.retitle", title: "Wrote mid-listing" },
+        provenance: userProvenance,
+      })
+      .then((result) => {
+        settled.push("write");
+        return result;
+      });
+
+    const [rows] = await Promise.all([listing, write]);
+    // The whole point: the roster's fold is not one indivisible hold on the
+    // ledger, so a Session that wants to record a fact is not made to wait for
+    // 39 other Sessions to be projected first.
+    expect(settled).toEqual(["write", "listing"]);
+    expect(rows).toHaveLength(40);
+  });
+
+  it("returns to the host's event loop before the roster is folded", async () => {
+    const { plane } = await roster(40);
+
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" });
+    // Registered AFTER the listing began, so it can only run if the listing
+    // gives the loop a turn back. A promise chain would not: awaiting a
+    // resolved promise drains as a microtask, and the whole microtask queue
+    // runs to exhaustion before any timer does.
+    let hostRanMidListing = false;
+    setTimeout(() => {
+      hostRanMidListing = true;
+    }, 0);
+
+    await expect(listing).resolves.toHaveLength(40);
+    expect(hostRanMidListing).toBe(true);
+  });
+
+  it("yields through the host's own primitive when one is injected", async () => {
+    // The engine owns no host API, so its default yield is the portable
+    // `setTimeout(0)`; a host with a better spelling hands it in here. This
+    // proves the port is the seam the listing goes through, and that it is
+    // taken once between chunks rather than once per Session.
+    let yields = 0;
+    const yieldToHost = () =>
+      new Promise<void>((resolve) => {
+        yields += 1;
+        setTimeout(resolve, 0);
+      });
+    let now = 100;
+    const plane = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => now++ },
+      ids: ids(),
+      yieldToHost,
+    });
+    const count = SESSION_LISTING_FOLD_CHUNK * 2 + 1;
+    for (let index = 0; index < count; index += 1) {
+      await plane.createSession(createRequest(`command-yield-${index}`));
+    }
+
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(count);
+    // Three chunks, and the yield is between them, not before the first.
+    expect(yields).toBe(2);
+  });
+
+  /**
+   * A ledger that reports which Sessions each read actually folded.
+   *
+   * `listProjectionEvents` is the fold's own read, so a Session that appears
+   * here was projected from its log and one that does not was answered from
+   * somewhere cheaper.
+   */
+  function foldWatchingComposition(
+    /**
+     * Which of the stored rows a listing sees, so a test can shrink and grow
+     * one roster instead of building two.
+     */
+    visibleRows: (rows: readonly Session[]) => readonly Session[] = (rows) => rows,
+  ) {
+    const stored = createInMemorySessionLedger();
+    const folded: string[] = [];
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property === "listSessions") {
+                  return (query: ListSessionsQuery) => visibleRows(transaction.listSessions(query));
+                }
+                if (property !== "listProjectionEvents") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
+                  folded.push(query.sessionId);
+                  return transaction.listProjectionEvents(query);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    let now = 100;
+    const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+    return { plane, folded };
+  }
+
+  it("re-folds only the Sessions whose log moved since the last listing", async () => {
+    const { plane, folded } = foldWatchingComposition();
+    const quiet = (await plane.createSession(createRequest("command-cache-quiet"))).session;
+    const busy = (await plane.createSession(createRequest("command-cache-busy"))).session;
+    const alsoQuiet = (await plane.createSession(createRequest("command-cache-also-quiet")))
+      .session;
+
+    folded.length = 0;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(3);
+    // Nothing is cached yet, so the first visit pays for all three.
+    expect(folded.toSorted()).toEqual([alsoQuiet.id, busy.id, quiet.id].toSorted());
+
+    await plane.submit({
+      commandId: "command-cache-retitle",
+      sessionId: busy.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+
+    folded.length = 0;
+    const second = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(folded).toEqual([busy.id]);
+    // And the answer is the same one a full fold would have given.
+    expect(second.find(({ session }) => session.id === busy.id)?.session.title).toBe("Moved on");
+    expect(second.find(({ session }) => session.id === quiet.id)?.session.title).toBe(
+      "Durable Session",
+    );
+  });
+
+  /**
+   * The case that decides whether a cursor is a sufficient cache key. It is
+   * not.
+   *
+   * `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a Ticket moves a
+   * field of an otherwise insert-only row and appends NOTHING to any Session's
+   * log. A listing cache keyed on the log head alone would keep answering with
+   * the Ticket that was deleted, and no later event would ever dislodge it.
+   */
+  it("re-folds a Session whose row moved even though its log did not", async () => {
+    const stored = createInMemorySessionLedger();
+    let ticketDeleted = false;
+    // Copy-on-write, as the store's own decoder is: the rows the ledger holds
+    // must not be edited in place by a reader pretending a Ticket went away.
+    const afterTicketDelete = (rows: readonly Session[]): readonly Session[] => {
+      if (!ticketDeleted) return rows;
+      const moved: Session[] = [];
+      for (const session of rows) moved.push({ ...session, ticketId: null });
+      return moved;
+    };
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "listSessions") return Reflect.get(target, property, receiver);
+                return (query: ListSessionsQuery) =>
+                  afterTicketDelete(transaction.listSessions(query));
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-cache-ticket-delete"));
+
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: "ticket-1" } }]);
+
+    ticketDeleted = true;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: null } }]);
+  });
+
+  /**
+   * The cache's bound, which is the half of a cache that has to be proved
+   * rather than observed: a memo that never evicts also answers every
+   * assertion about hits and misses, and only grows.
+   *
+   * The roster is grown by ONE past {@link SESSION_LISTING_CACHE_LIMIT} rather
+   * than by many, because the interesting boundary is exactly there: a roster
+   * at the limit must survive a repeat listing whole, and the first row over
+   * it must cost exactly one entry — the least recently listed one — and not
+   * the whole cache.
+   *
+   * Budgeted like the other roster-sized tests: it creates one Session more
+   * than the cache holds and folds that roster four times, which is under a
+   * second here and several under coverage instrumentation on a shared CI
+   * runner. The default five seconds timed out on main.
+   */
+  it(
+    "evicts the least recently listed Session once the cache is full",
+    { timeout: 30_000 },
+    async () => {
+      // One roster, listed through a moving window: at the cache's size, then
+      // one over it, then one row at a time to ask which entry survived.
+      let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
+      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-evict-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "all" } as const;
+
+      folded.length = 0;
+      const full = await plane.listSessions(query);
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+
+      // A roster that exactly fills the cache is served entirely from it: the
+      // limit holds this many, not this many minus one.
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      expect(folded).toEqual([]);
+
+      // One Session more than the cache can hold. Only the newcomer is folded,
+      // and storing it pushes out the head of the insertion order — which is
+      // the first row of the listing, since a hit re-inserts in listing order.
+      visible = (rows) => rows;
+      folded.length = 0;
+      const overflowing = await plane.listSessions(query);
+      expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+      expect(folded).toEqual([overflowing.at(-1)?.session.id]);
+
+      // Which entry went, asked one row at a time so a miss cannot cascade into
+      // the next row and blur the answer. The middle of the roster is still
+      // memoized...
+      const middle = full[SESSION_LISTING_CACHE_LIMIT >> 1].session;
+      visible = (rows) => rows.filter((row) => row.id === middle.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([]);
+
+      // ...and the row listed longest ago is not: it has to be folded again,
+      // which is the eviction, observed.
+      const listedLongestAgo = full[0].session;
+      visible = (rows) => rows.filter((row) => row.id === listedLongestAgo.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([listedLongestAgo.id]);
+    },
+  );
+});
+
+/**
+ * The concurrency budget's read (VC-403).
+ *
+ * `listSessions` folds a project's whole roster to answer how many Sessions are
+ * working — thousands of folds, on a machine with history, for a number bounded
+ * by how many things are actually attached. This is the narrowed read that
+ * replaces it, and what these hold is that narrowing it did not change what it
+ * MEANS: the Sessions it returns are exactly the attached ones, folded the
+ * ordinary way, in the ordinary order.
+ */
+describe("listAttachedSessions (VC-403)", () => {
+  /** Opens an attachment on a fresh Session, and optionally closes it again. */
+  async function attached(
+    plane: ReturnType<typeof createSessionEngine>,
+    name: string,
+    close: boolean,
+  ) {
+    const { session } = await plane.createSession(createRequest(`command-${name}`));
+    await plane.observe({
+      id: `${name}-opened`,
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: attachment(session.id, `attachment-${name}`),
+    });
+    if (close) {
+      await plane.observe({
+        id: `${name}-closed`,
+        sessionId: session.id,
+        occurredAt: 2,
+        provenance: adapterProvenance,
+        kind: "attachment.closed",
+        attachmentId: `attachment-${name}`,
+        outcome: "completed",
+      });
+    }
+    return session;
+  }
+
+  it("returns only the Sessions still holding an open attachment", async () => {
+    const { plane } = composition();
+    const open = await attached(plane, "open", false);
+    await attached(plane, "closed", true);
+    // Created and never attached: the bulk of a real machine, and the whole set
+    // the narrowing exists to skip folding.
+    await plane.createSession(createRequest("command-never-attached"));
+
+    const rows = await plane.listAttachedSessions();
+
+    expect(rows.map(({ session }) => session.id)).toEqual([open.id]);
+    // Ordinary projections, not a reduced shape: the caller counts these with
+    // exactly the code that counts a listing.
+    expect(rows[0]?.attachments.map(({ status }) => status)).toEqual(["open"]);
+  });
+
+  it("is empty when nothing is attached, rather than falling back to the roster", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-quiet"));
+
+    await expect(plane.listAttachedSessions()).resolves.toEqual([]);
+  });
+
+  it("breaks a tie on id, descending, exactly as the SQL ordering does", async () => {
+    // A clock that does not move, so both Sessions share a creation stamp and
+    // the tie-break is the only thing left to order them. The SQLite ledger
+    // orders `created_at DESC, id COLLATE BINARY DESC`; this double has to
+    // agree, or a roster read through the two stores would differ by store.
+    const plane = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => 100 },
+      ids: ids(),
+    });
+    const first = await attached(plane, "tie-first", false);
+    const second = await attached(plane, "tie-second", false);
+
+    const rows = await plane.listAttachedSessions();
+
+    expect(first.createdAt).toBe(second.createdAt);
+    expect(rows.map(({ session }) => session.id)).toEqual(
+      [first.id, second.id].toSorted((left, right) => (left < right ? 1 : -1)),
+    );
+  });
+
+  it("returns to the host's event loop between chunks, as the listing does", async () => {
+    const { plane } = composition();
+    // More than one fold chunk, so the yield between chunks is exercised: this
+    // runs on the one main thread, behind the UI's IPC.
+    const opened = [];
+    for (let index = 0; index < SESSION_LISTING_FOLD_CHUNK + 4; index += 1) {
+      opened.push(await attached(plane, `chunked-${index}`, false));
+    }
+    let hostRan = false;
+
+    const listing = plane.listAttachedSessions();
+    setTimeout(() => (hostRan = true), 0);
+    const rows = await listing;
+
+    expect(rows).toHaveLength(opened.length);
+    expect(hostRan).toBe(true);
+  });
+});
+
+/**
+ * A ledger that answers every read of the same event with the SAME object.
+ *
+ * Both ledgers in this repository happen to hand out fresh objects — the
+ * in-memory one clones, the SQLite one decodes each row — but {@link
+ * SessionLedger} never promises it, and a conforming implementation that
+ * cached its decoded reads would look like this. It is the shape that catches
+ * a projection which freezes objects it does not own (VC-393).
+ */
+function interningComposition() {
+  const stored = createInMemorySessionLedger();
+  const interned = new Map<string, SessionProjectionEvent>();
+  const intern = (events: readonly SessionProjectionEvent[]): readonly SessionProjectionEvent[] =>
+    events.map((event) => {
+      const key = `${event.sessionId}:${event.sequence}`;
+      const first = interned.get(key);
+      if (first) return first;
+      interned.set(key, event);
+      return event;
+    });
+  const ledger: SessionLedger = {
+    transaction: (work) =>
+      stored.transaction((transaction) =>
+        work(
+          new Proxy(transaction, {
+            get(target, property, receiver) {
+              if (property !== "listProjectionEvents") {
+                return Reflect.get(target, property, receiver);
+              }
+              return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) =>
+                intern(transaction.listProjectionEvents(query));
+            },
+          }),
+        ),
+      ),
+  };
+  let now = 100;
+  const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+  return { plane, interned };
+}
+
+/**
+ * The cache's other half: the SAME object is handed to every caller of a
+ * listing while its entry survives (VC-388), so a caller that mutated a
+ * returned row would corrupt every later read rather than its own copy
+ * (VC-393). Nothing in the engine or its known callers does this today, but
+ * the cache must not depend on that staying true.
+ *
+ * `SessionProjection` is `readonly` throughout, so each mutation below is a
+ * compile error first; the assertions are about the runtime backstop that
+ * still has to hold for code which gets past the type (`any`, a structured
+ * clone across an RPC seam, plain JavaScript).
+ */
+describe("listSessions cached projections are frozen (VC-393)", () => {
+  it("throws when a caller mutates a top-level field of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-top"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    expect(() => {
+      // @ts-expect-error -- the assignment a mutating caller would write.
+      row.turnActive = true;
+    }).toThrow(TypeError);
+  });
+
+  it("throws when a caller mutates a nested object or array of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-nested"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    expect(() => {
+      // @ts-expect-error -- a nested array.
+      row.commands.push(row.commands[0]);
+    }).toThrow(TypeError);
+    // The nested OBJECT is frozen too, not merely the array it holds: a
+    // container that recursed into its children but skipped itself would pass
+    // the push above and fail here.
+    expect(Object.isFrozen(row.attention)).toBe(true);
+    expect(() => {
+      // @ts-expect-error -- a field of that nested object.
+      row.attention.primary = null;
+    }).toThrow(TypeError);
+    expect(() => {
+      // @ts-expect-error -- and the array one level deeper again.
+      row.attention.active.push(row.attention.active[0]);
+    }).toThrow(TypeError);
+  });
+
+  /**
+   * The depth the freeze actually claims. Every assertion above stops at a
+   * container; this one reaches an object INSIDE one, which is where a
+   * shallow freeze of the row and its immediate children would still let a
+   * caller rewrite the cache.
+   */
+  it("throws when a caller mutates an object inside an array of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-element"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    // The create wrote a real command, so this element is populated data
+    // rather than an empty-array technicality.
+    expect(row.commands).toHaveLength(1);
+    expect(() => {
+      // @ts-expect-error -- an element of a nested array.
+      row.commands[0].id = "rewritten";
+    }).toThrow(TypeError);
+    // Deeper than the `readonly` modifiers reach: a command's INTENT has
+    // mutable fields, so from here down the runtime freeze is the only guard
+    // left, and it has to hold all the way to the leaves.
+    expect(Object.isFrozen(row.commands[0].intent)).toBe(true);
+    expect(() => {
+      row.commands[0].intent.kind = "session.archive";
+    }).toThrow(TypeError);
+    expect(row.commands[0].id).toBe("command-freeze-element");
+    expect(row.commands[0].intent.kind).toBe("session.create");
+  });
+
+  it("keeps serving the original values after a rejected mutation attempt", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-stable"));
+
+    const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    try {
+      // @ts-expect-error -- the mutation a caller past the type would write.
+      first[0].session.title = "Mutated by a caller";
+    } catch {
+      // Expected: the assignment above throws in strict mode. Even if a
+      // caller swallowed that, the cache below proves nothing leaked.
+    }
+
+    const second = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // Cache hit (nothing else happened to the Session): the SAME object is
+    // handed back, and it still reads the pre-mutation value.
+    expect(second[0]).toBe(first[0]);
+    expect(second[0].session.title).toBe("Durable Session");
+  });
+
+  /**
+   * The miss path, which is a second entry into the cache rather than the
+   * first: a freeze applied only to the row that populated an empty cache
+   * would leave every REPLACEMENT row aliased and mutable.
+   */
+  it("freezes the replacement row a refold produces after the log moves", async () => {
+    const { plane } = composition();
+    const created = await plane.createSession(createRequest("command-freeze-refold"));
+
+    const [before] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    await plane.submit({
+      commandId: "command-freeze-refold-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+
+    const [after] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // A genuine refold, not the cached row handed back again.
+    expect(after).not.toBe(before);
+    expect(after.session.title).toBe("Moved on");
+    expect(Object.isFrozen(after)).toBe(true);
+    expect(() => {
+      // @ts-expect-error -- same guarantee as the first fold's row.
+      after.turnActive = true;
+    }).toThrow(TypeError);
+  });
+
+  /**
+   * The other direction: what the cache must NOT freeze.
+   *
+   * A fold does not own its whole graph — `foldSessionProjection` seeds its
+   * containers from the base checkpoint's elements and pushes the objects it
+   * read out of the event payloads. Freezing the folded object in place would
+   * therefore reach back into whatever the ledger handed over. The cache holds
+   * a copy so that it cannot.
+   */
+  it("freezes nothing the ledger owns, so a ledger that caches its reads is safe", async () => {
+    const { plane, interned } = interningComposition();
+    await plane.createSession(createRequest("command-freeze-contagion"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(Object.isFrozen(row)).toBe(true);
+
+    const recorded = [...interned.values()].find(
+      (event) => event.payload.kind === "command.recorded",
+    );
+    expect(recorded?.payload.kind).toBe("command.recorded");
+    const ledgerCommand =
+      recorded?.payload.kind === "command.recorded" ? recorded.payload.command : undefined;
+
+    // The row reports the same command, by value...
+    expect(row.commands[0]).toEqual(ledgerCommand);
+    // ...but does not hold the ledger's object, and left it untouched.
+    expect(row.commands[0]).not.toBe(ledgerCommand);
+    expect(Object.isFrozen(ledgerCommand)).toBe(false);
+    for (const event of interned.values()) {
+      expect(Object.isFrozen(event)).toBe(false);
+      expect(Object.isFrozen(event.payload)).toBe(false);
+    }
+  });
+
+  /**
+   * The behaviour change the cache made to {@link
+   * SessionEnginePorts.onProjectionCheckpointFailure}, held where the port
+   * documents it: a hit never reaches `projectStoredSession`, so a broken
+   * checkpoint is reported once per entry rather than once per listing.
+   */
+  it("reports a checkpoint failure once per fold, not once per listing", async () => {
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint row could not be decoded");
+    let failReads = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (sessionId: string) => {
+                  if (failReads) throw failure;
+                  return transaction.getProjectionCheckpoint(sessionId);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    let now = 100;
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => now++ },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const created = await plane.createSession(createRequest("command-freeze-checkpoint"));
+    const query = { projectId: "project-1", scope: "all" } as const;
+
+    failReads = true;
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    // The miss folded, so the unusable checkpoint was seen and reported.
+    expect(reported).toEqual([failure]);
+
+    // A hit answers from the entry and never folds, so the broken checkpoint
+    // is not read again and nothing is reported a second time. This is the
+    // whole behaviour change: once per entry, not once per listing.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported).toEqual([failure]);
+
+    // Moving the log invalidates the entry. The write path folds on its own
+    // account, so it reports once here before any listing has run again.
+    await plane.submit({
+      commandId: "command-freeze-checkpoint-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+    const beforeRefold = reported.length;
+
+    // And the next listing has to fold again, so the condition becomes
+    // visible again. It is quieter, not silenced.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported.length).toBe(beforeRefold + 1);
+    expect(reported.at(-1)).toBe(failure);
+
+    // ...and then goes quiet again while the new entry stands.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported.length).toBe(beforeRefold + 1);
   });
 });

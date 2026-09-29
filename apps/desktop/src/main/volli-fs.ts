@@ -27,8 +27,6 @@ import {
   statSync,
   watch as fsWatch,
 } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { shell } from "electron";
 import type { WebContents } from "electron";
@@ -99,8 +97,7 @@ import { loadPromptTemplates, writePromptTemplate } from "./prompt-templates";
 import { worktreesHome } from "./worktree-runtime";
 import { isInside } from "./worktree/paths";
 import { loadSkills } from "./skills";
-
-const execFileAsync = promisify(execFile);
+import { createGitCapturingAsyncRunner } from "./worktree/git";
 
 /** Text-read cap (decision #7): utf8 files past this are truncated + flagged. */
 const TEXT_CAP_BYTES = 1024 * 1024;
@@ -423,13 +420,40 @@ async function resolveNewPath(
 
 // ---- file index --------------------------------------------------------------
 
-/** `git ls-files --cached --others --exclude-standard`, gitignore-respecting; `null` when git isn't usable (not a repo, no git). */
+/**
+ * How long the file index's `ls-files` may run. Its own deadline rather than
+ * the shared 8 s one (VC-389), because this read is not shaped like the others
+ * in that pool: `--others` walks and stats the ENTIRE working tree, and the cap
+ * below is written against "a 500k-file monorepo". On a repository that size,
+ * or on a cold page cache, 8 s is a plausible honest duration rather than
+ * evidence of a wedged child — and the fallback is a walk that does NOT read
+ * `.gitignore`, so an early kill does not degrade gracefully: it puts
+ * `node_modules` in the picker. Generous on purpose, and still a bound, which
+ * is the thing this read never had at all before.
+ */
+const FILE_INDEX_GIT_TIMEOUT_MS = 60_000;
+
+/**
+ * The file index's git runner. Through the shared runner factory, so the read
+ * still takes one of the main process's bounded git slots (VC-389) — only its
+ * deadline differs.
+ */
+const runGitForFileIndex = createGitCapturingAsyncRunner({
+  timeoutMs: FILE_INDEX_GIT_TIMEOUT_MS,
+});
+
+/**
+ * `git ls-files --cached --others --exclude-standard`, gitignore-respecting;
+ * `null` when git isn't usable (not a repo, no git) or the read outran
+ * {@link FILE_INDEX_GIT_TIMEOUT_MS}. The read had no deadline at all before, so
+ * an ls-files wedged behind a hook or a network filesystem could hang the file
+ * index forever; now it eventually fails and the walk answers instead.
+ */
 async function gitListFiles(projectPath: string): Promise<string[] | null> {
   try {
-    const { stdout } = await execFileAsync(
-      "git",
+    const stdout = await runGitForFileIndex(
       ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { cwd: projectPath, maxBuffer: 64 * 1024 * 1024 },
+      projectPath,
     );
     return stdout.split("\0").filter((entry) => entry.length > 0);
   } catch {

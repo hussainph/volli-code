@@ -340,8 +340,8 @@ interface SplitDividerProps {
  * is not a micro-optimisation.
  *
  * Every write runs the whole chain: the store re-renders the split, each pane
- * gets a new `flex` basis, restty's ResizeObserver fires, and each live pane
- * sends a PTY resize over IPC — for both sides of the split, and again for
+ * gets a new `flex` basis, every engine refits and reports a new grid, and each
+ * live pane sends a PTY resize over IPC — for both sides of the split, and again for
  * every pane of a nested one. A trackpad samples past 120Hz, so an uncoalesced
  * drag charged all of that several times per displayed frame, to terminals that
  * reflow their scrollback on every column change. The pointer cannot be in two

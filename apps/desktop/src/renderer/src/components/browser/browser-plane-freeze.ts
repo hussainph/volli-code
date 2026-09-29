@@ -37,6 +37,33 @@ const FLOATING_OVERLAY_SELECTOR =
  */
 const EXPLICIT_OVERLAY_SELECTOR = "[data-native-plane-overlay]";
 
+/** The anchor a Browser Tab's `WebContentsView` is positioned over. */
+const PLANE_ANCHOR_SELECTOR = "[data-browser-plane]";
+
+/**
+ * Whether a native plane is on screen RIGHT NOW — the question the shell asks
+ * before it decides to move the whole content surface on a transform.
+ *
+ * A live `WebContentsView` is the window's own child, not a DOM node: it cannot
+ * inherit a renderer transform, so a surface that slides while a plane is up
+ * detaches page pixels from the Browser chrome around them for the whole
+ * journey. The freeze path above can stand pixels in for a plane, but only
+ * after an asynchronous capture settles, so the shell takes its instant
+ * endpoint instead of hiding that dependency inside an animation.
+ *
+ * It lives here rather than in the shell because `[data-browser-plane]` is
+ * `browser-pane.tsx`'s marker and this module already owns every rule about
+ * when that plane may hold the top of the window. `offsetParent` catches an
+ * unmounted or `display:none` pane; the size test catches a pane that is in the
+ * tree with nothing to show, which is what a collapsed split leaves behind.
+ */
+export function hasVisibleNativePlane(doc: Document): boolean {
+  for (const plane of doc.querySelectorAll<HTMLElement>(PLANE_ANCHOR_SELECTOR)) {
+    if (plane.offsetParent !== null && plane.clientWidth > 0 && plane.clientHeight > 0) return true;
+  }
+  return false;
+}
+
 /** Whether renderer chrome currently needs to paint above every native child view. */
 export function hasNativePlaneOverlay(doc: Document, appRoot?: Element | null): boolean {
   if (doc.querySelector(EXPLICIT_OVERLAY_SELECTOR) !== null) return true;

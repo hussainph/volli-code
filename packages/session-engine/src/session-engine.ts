@@ -1,6 +1,7 @@
 import {
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
   observationPayload,
-  projectSession,
   reportSessionUsage,
   sameCommandReceipt,
   sameSessionCommand,
@@ -35,6 +36,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  SessionProjectionCheckpoint,
   SessionUsageReport,
   SessionUsageReportQuery,
   LatestSessionSignal,
@@ -50,6 +52,15 @@ export interface CreateSessionRequest {
   /** The delegating Session for a `subagent`, null otherwise — ledger data, never a host table's. */
   parentSessionId: string | null;
   title: string | null;
+  /**
+   * The Session id a client already minted (VC-358), honored when present so a
+   * provisional chat can be promoted under the id it carried all along. Absent
+   * — every existing caller — keeps the ledger's own `ids.next("session")`
+   * derivation, untouched. The requested id is not stored beside the Session:
+   * it simply IS the Session id, so replay can compare a later request against
+   * the durable row and refuse a command that arrives naming another id.
+   */
+  requestedSessionId?: string | null;
   /** Trusted host-supplied audit provenance; renderers never call this module directly. */
   provenance: SessionEventProvenance;
 }
@@ -115,8 +126,30 @@ export interface SessionEngine {
    * asking `getSession` for it makes that caller fold the same log twice.
    */
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
+  /**
+   * Every Session in scope, projected.
+   *
+   * Each row is folded atomically, but the listing as a whole is not one
+   * snapshot across Sessions: rows are members as of one instant, and their
+   * histories are folded at or after it (VC-388). The implementation states
+   * why that is sound; callers only need to know not to read a cross-Session
+   * invariant out of two rows of one listing.
+   */
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
+  /**
+   * Every Session holding an open attachment, across every project, folded.
+   *
+   * The concurrency budget's read (VC-403). `listSessions` folds a project's
+   * whole roster to answer how many Sessions are working, which on a machine
+   * with a long history is thousands of folds for a number bounded by how many
+   * things are actually attached. This folds the narrowed set the ledger
+   * selects — see {@link SessionLedgerTransaction.listAttachedSessions} for why
+   * the Sessions it drops provably cannot be working — and returns ordinary
+   * projections, so the caller counts them with exactly the code that counts a
+   * listing rather than a parallel rule that can drift from it.
+   */
+  listAttachedSessions(): Promise<readonly SessionProjection[]>;
   /**
    * When Sessions were started, across every project — the practice chart's
    * whole input. Stamps rather than Sessions, so a 26-week window costs one
@@ -127,6 +160,23 @@ export interface SessionEngine {
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
+  /**
+   * Metadata-only event head, without payload/provenance decoding.
+   *
+   * `0` means "this Session has no committed events", and that is a total
+   * answer rather than an ambiguous one: sequences are 1-based, and a Session
+   * that does not exist has no committed events either, so both cases are the
+   * same true statement about history. It is deliberately NOT an error channel
+   * — a caller that additionally needs the Session to exist has already asked
+   * for it, and the one caller for which `0` is impossible
+   * (`SessionRuntime`'s post-commit result) raises its own error rather than
+   * pushing that concern into every reader of this head.
+   */
+  latestEventSequence(query: GetSessionQuery): Promise<number>;
+  /** A derived projection cache row; null means the immutable log must be folded. */
+  getProjectionCheckpoint(query: GetSessionQuery): Promise<SessionProjectionCheckpoint | null>;
+  /** Persists only a rebuildable read model, never a Session fact. */
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void>;
   /**
    * What a scope consumed, over a window, optionally broken down.
    *
@@ -143,6 +193,38 @@ export interface SessionEnginePorts {
   ledger: SessionLedger;
   clock: SessionLedgerClock;
   ids: SessionLedgerIds;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be used.
+   *
+   * A checkpoint is a rebuildable cache, so a failure here is always recovered
+   * by refolding the immutable log — but a cache that fails on EVERY read is
+   * indistinguishable from one that is merely absent, and the symptom is only
+   * that reads are quietly slow forever. Reporting the miss is what makes that
+   * condition observable. Seam failures are isolated, exactly as the runtime's
+   * {@link SessionRuntimePorts.onSubscriberFailure} is.
+   *
+   * A listing's fold cache (VC-388) changes how often this fires without
+   * changing whether it does: a cache hit answers straight from {@link
+   * ListingFold} and never calls {@link projectStoredSession}, so a checkpoint
+   * failure for a Session that stays cached is reported once — on the fold
+   * that populated the entry — rather than once per listing, until the entry
+   * is evicted or the Session's log moves again.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void;
+  /**
+   * Hands the host back a turn of its event loop, part-way through a read that
+   * spans many Sessions (VC-388).
+   *
+   * It must resolve on a MACROTASK. An implementation built from resolved
+   * promises, `queueMicrotask` or `await` alone satisfies the type and does
+   * nothing this exists for: the microtask queue drains to exhaustion before
+   * the loop advances, so a listing built that way still blocks timers, IPC
+   * and input for its whole length. The default is a zero-delay timer, which
+   * is the one spelling available in every host this package runs in; a Node
+   * host should inject `setImmediate`, which lands in the check phase rather
+   * than behind the timer list.
+   */
+  yieldToHost?: () => Promise<void>;
 }
 
 export class SessionEngineConflictError extends Error {
@@ -161,6 +243,62 @@ export class SessionEngineNotFoundError extends Error {
 
 /** The storage-agnostic Session Engine; its host supplies one transactional ledger writer. */
 export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
+  // Isolated here rather than at each call site: a diagnostics seam that could
+  // itself throw would turn a recovered cache miss into a failed read.
+  const reportCheckpointFailure = (error: unknown): void => {
+    try {
+      ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
+    }
+  };
+  const yieldToHost = ports.yieldToHost ?? defaultYieldToHost;
+  /** Insertion-ordered, so the first key is the least recently listed Session. */
+  const listingFolds = new Map<string, ListingFold>();
+
+  /**
+   * One listing row, from the cache when the Session has not moved.
+   *
+   * The head read and the fold happen in the SAME transaction as each other,
+   * so the cursor stored here is exactly the log the projection was built
+   * from — read in two transactions, an append between them would be recorded
+   * as already folded and stay invisible until the next one.
+   *
+   * A log rewritten out of band, beneath the ledger's insert-only contract,
+   * is not seen here; it is not seen by the durable checkpoint rows either,
+   * and a host that does that must build a new engine.
+   *
+   * What comes back is deep-frozen and shared (VC-393). `getSession` folds a
+   * fresh graph per call and freezes nothing, and the difference is the
+   * sharing rather than the contract: `SessionProjection` is `readonly`
+   * throughout, so no caller of either verb may mutate what it gets, and the
+   * freeze is the runtime backstop on the one path where a mutation would
+   * reach past the mutating caller into everybody else's next read.
+   */
+  const listingProjection = (
+    transaction: SessionLedgerTransaction,
+    session: Session,
+  ): SessionProjection => {
+    // Metadata only: no payload decoded, no provenance joined, no checkpoint
+    // JSON parsed. That is what makes asking cheaper than answering.
+    const head = transaction.latestEventSequence(session.id);
+    const cached = listingFolds.get(session.id);
+    if (cached && cached.throughSequence === head && sameSession(cached.session, session)) {
+      listingFolds.delete(session.id);
+      listingFolds.set(session.id, cached);
+      return cached.projection;
+    }
+    const projection = frozenProjectionCopy(
+      projectStoredSession(transaction, session, reportCheckpointFailure),
+    );
+    listingFolds.delete(session.id);
+    listingFolds.set(session.id, { session, throughSequence: head, projection });
+    for (const oldest of listingFolds.keys()) {
+      if (listingFolds.size <= SESSION_LISTING_CACHE_LIMIT) break;
+      listingFolds.delete(oldest);
+    }
+    return projection;
+  };
   return {
     async createSession(request) {
       return ports.ledger.transaction((transaction) => {
@@ -169,7 +307,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (existing) return replayCreate(transaction, request);
 
         const session: Session = {
-          id: ports.ids.next("session"),
+          id: request.requestedSessionId ?? ports.ids.next("session"),
           projectId: request.projectId,
           ticketId: request.ticketId,
           role: request.role,
@@ -255,7 +393,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: request.sessionId,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(request.sessionId) + 1,
           occurredAt,
           recordedAt: ports.clock.now(),
           provenance: request.provenance,
@@ -270,7 +408,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
-        const events = transaction.listEvents({ sessionId: session.id });
+        // No whole-log read here (VC-356). Recording one fact used to list every
+        // event of the Session first, which made a turn's durable cost a
+        // function of how long the Session had been alive rather than of what
+        // the turn reported — quadratic across a Session, on the path a person
+        // waits on. The three things that read wanted are each answerable
+        // without it: the projection resumes from its checkpoint, the next
+        // sequence is an index lookup, and the one question neither can answer
+        // asks for the audit read where it is actually needed.
+        //
         // SQLite persists omitted optional envelope ids as NULL. Canonicalize
         // before either receipt or fact handling so every durable event uses
         // the same replay identity.
@@ -286,7 +432,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 `Receipt ${observation.receipt.id} was already recorded differently`,
               );
             }
-            const event = receiptEventFor(events, existingReceipt.id);
+            // The replay path, and the only read here that still walks the
+            // log: no index answers "which event carries this receipt", and a
+            // re-delivered receipt is rare. Kept exact rather than narrowed to
+            // this observation's own id, because a receipt re-delivered under a
+            // new envelope id must still resolve to the event that recorded it.
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              existingReceipt.id,
+            );
             if (!event || event.sessionId !== session.id) {
               throw new SessionEngineConflictError(
                 `Receipt ${existingReceipt.id} has no Session event`,
@@ -307,9 +461,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const projection = projectSession(session, events);
-          assertReceiptObservation(transaction, session, projection, observation);
-          const sequence = nextSequence(events);
+          const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+          assertReceiptObservation(transaction, session, stored.checkpoint.projection, observation);
+          const sequence = transaction.latestEventSequence(session.id) + 1;
           const event = receiptRecordedEvent(
             observation.id,
             session.id,
@@ -321,6 +475,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           );
           transaction.appendReceipt(event.payload.receipt);
           transaction.appendEvent(event);
+          refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
           return event;
         }
 
@@ -355,13 +510,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const projection = projectSession(session, events);
-        assertObservableFact(projection, observation);
-        assertPendingStartReservation(projection, observation);
+        const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+        assertObservableFact(stored.checkpoint.projection, observation);
+        assertPendingStartReservation(stored.checkpoint.projection, observation);
         const event: SessionEvent = {
           id: observation.id,
           sessionId: session.id,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(session.id) + 1,
           occurredAt: observation.occurredAt,
           recordedAt: ports.clock.now(),
           provenance: observation.provenance,
@@ -370,6 +525,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           payload,
         };
         transaction.appendEvent(event);
+        refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
         return event;
       });
     },
@@ -386,8 +542,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const existing = transaction.getCommand(commandRequest.id);
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
-        const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events);
+        // Accepting a Command is the other half of a turn's durable cost, and
+        // it reached for the same whole-log read `observe` did (VC-356). The
+        // replay branch above already returned, so nothing here needs the log
+        // itself — only the folded state and the next sequence.
+        const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -397,7 +556,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const commandEvent = commandRecordedEvent(
           ports.ids.next("event"),
           session.id,
-          nextSequence(events),
+          transaction.latestEventSequence(session.id) + 1,
           command.createdAt,
           request.provenance,
           command,
@@ -547,7 +706,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return { event, receipt: priorReceipt, receiptEvent };
         }
 
-        const sequence = nextSequence(events);
+        const sequence = transaction.latestEventSequence(session.id) + 1;
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: session.id,
@@ -580,9 +739,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session
-          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
-          : null;
+        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
       });
     },
 
@@ -590,18 +747,85 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.getSession(query.sessionId));
     },
 
+    /**
+     * Every Session in scope, folded — in chunks, releasing the ledger and the
+     * host's event loop between them (VC-388).
+     *
+     * ── WHAT THIS DELIBERATELY GIVES UP ───────────────────────────────────
+     * A listing is NO LONGER a single point-in-time snapshot across Sessions.
+     * It is membership and every base row as of ONE instant, and each
+     * Session's EVENTS folded at or after that instant. Two rows in one
+     * listing may therefore reflect logs read microseconds apart.
+     *
+     * That is a real weakening of what a single transaction promised, so it
+     * is stated rather than left to be discovered. What makes it sound:
+     *
+     *  - Sessions are independent aggregates. No Session's projection reads
+     *    another's log, so there is no cross-Session invariant for the skew
+     *    to break. A caller that ever needs two Sessions to agree about one
+     *    fact needs a different read, and needed one before this too.
+     *  - Each Session's own fold is still atomic: it happens inside one
+     *    transaction, so no projection is ever half-applied.
+     *  - Base rows are carried from the membership transaction, not re-read
+     *    per chunk. The one field that moves under the insert-only contract
+     *    (`ticketId`, cleared by a Ticket delete) is therefore uniform across
+     *    the listing — MORE consistent than re-reading would be, not less.
+     *  - A row cannot disappear mid-listing except by project delete, which
+     *    takes the entire project with it.
+     *
+     * What it buys: the main process and every writer get a turn in between,
+     * instead of waiting out a fold whose length is the project's roster.
+     */
     async listSessions(query) {
-      return ports.ledger.transaction((transaction) =>
-        transaction
-          .listSessions(query)
-          .map((session) =>
-            projectSession(session, transaction.listEvents({ sessionId: session.id })),
-          ),
-      );
+      // Membership is decided once, in its own transaction, and the rows it
+      // returns are carried to the folds below rather than re-read there.
+      const rows = await ports.ledger.transaction((transaction) => transaction.listSessions(query));
+      const projections: SessionProjection[] = [];
+      for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
+        // Between chunks, never after the last one: a turn nobody needs is
+        // still a turn the caller waits for.
+        if (from > 0) await yieldToHost();
+        const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
+        projections.push(
+          ...(await ports.ledger.transaction((transaction) =>
+            chunk.map((session) => listingProjection(transaction, session)),
+          )),
+        );
+      }
+      return projections;
     },
 
     async countSessions(query) {
       return ports.ledger.transaction((transaction) => transaction.countSessions(query));
+    },
+
+    async listAttachedSessions() {
+      // Membership decided once, then folded in the same chunks and with the
+      // same host yields `listSessions` uses, through the same per-Session fold
+      // cache: a budget read and a listing read of the same Session are one
+      // fold, not two. Which also means what comes back is the same deep-frozen
+      // shared projection a listing gets (VC-393) — the budget only counts, so
+      // sharing is free here, and going around `listingProjection` to avoid the
+      // freeze would cost the shared fold it exists to protect.
+      //
+      // The skew `listSessions` documents applies here for the same reasons and
+      // matters less: this answers "how many are working", and a count taken
+      // across microseconds of skew is already what a budget computed at Session
+      // start means.
+      const rows = await ports.ledger.transaction((transaction) =>
+        transaction.listAttachedSessions(),
+      );
+      const projections: SessionProjection[] = [];
+      for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
+        if (from > 0) await yieldToHost();
+        const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
+        projections.push(
+          ...(await ports.ledger.transaction((transaction) =>
+            chunk.map((session) => listingProjection(transaction, session)),
+          )),
+        );
+      }
+      return projections;
     },
 
     async listSessionStarts(query) {
@@ -616,6 +840,24 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.listEvents(query));
     },
 
+    async latestEventSequence(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.latestEventSequence(query.sessionId),
+      );
+    },
+
+    async getProjectionCheckpoint(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.getProjectionCheckpoint(query.sessionId),
+      );
+    },
+
+    async saveProjectionCheckpoint(checkpoint) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.saveProjectionCheckpoint(checkpoint),
+      );
+    },
+
     async reportUsage(query) {
       return ports.ledger.transaction((transaction) =>
         // The floor is read in the SAME transaction as the rows. Two reads
@@ -628,6 +870,249 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       );
     },
   };
+}
+
+/**
+ * How far the persisted checkpoint may fall behind the log before a write path
+ * refreshes it.
+ *
+ * A checkpoint that is only ever written when an attachment closes does not
+ * bound anything for the Session that is currently running: the tail grows for
+ * the whole attachment, which is exactly the span a long chat spends appending
+ * facts. Refreshing it costs one derived row; NOT refreshing it costs a fold
+ * over that row's worth of events on every durable fact, forever. So the
+ * cadence is a bound on both: at most this many events are ever re-folded, and
+ * at most one cache row is written per this many appends.
+ */
+export const CHECKPOINT_REFRESH_EVENTS = 64;
+
+/**
+ * How many Sessions one listing transaction folds before the ledger is handed
+ * back and the host gets a turn (VC-388).
+ *
+ * This is the unit of two separate costs, which is why one number sets both:
+ * the span the ledger is held against other writers, and the span the host
+ * process cannot run a timer or answer IPC. Each Session inside the chunk is
+ * bounded to a {@link CHECKPOINT_REFRESH_EVENTS}-event tail by its checkpoint,
+ * so the worst case per chunk is this many folds of that tail — not a function
+ * of how many Sessions the project has.
+ *
+ * Eight is measured, not guessed, and the measurement is in
+ * `docs/research/perf/session-listing-vc388.md`. Two results shaped it. Total
+ * time is nearly FLAT across chunk sizes — a 60-Session roster costs about the
+ * same whether it is folded in one transaction or sixty — so a fine chunk buys
+ * its shorter block almost for free. But the yield primitive is not free: a
+ * host that falls back to `setTimeout` pays that clamp once per chunk, which
+ * takes a per-Session chunk from 14ms to 84ms. Eight is the size whose longest
+ * block stays inside a frame on BOTH primitives (3.6ms with `setImmediate`,
+ * 9.8ms without), so a host with a coarse timer degrades instead of falling
+ * off a cliff.
+ */
+export const SESSION_LISTING_FOLD_CHUNK = 8;
+
+/**
+ * A macrotask turn on the one primitive every host this package runs in has.
+ *
+ * `setTimeout(0)` is clamped to a millisecond by Node and to four by browsers
+ * after nesting, and that clamp is the single largest term in a chunked
+ * listing's wall time — it is paid once per chunk and has nothing to do with
+ * the work. The better spellings are host-specific (`setImmediate` on Node,
+ * `MessageChannel` in a browser), and this package owns no host API, so it
+ * does not feature-detect them: a host that has one injects it through
+ * {@link SessionEnginePorts.yieldToHost}, which is what the desktop
+ * composition root does. The default is the portable floor, not the fast path.
+ */
+const defaultYieldToHost = (): Promise<void> =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+/**
+ * How many Sessions keep a folded listing row in memory (VC-388).
+ *
+ * The cache's whole job is to let a repeat listing skip the Sessions that did
+ * not move, so a limit below a project's roster would be worse than no cache
+ * at all: each listing would evict its own earliest entries before reaching
+ * its last row, and every visit would pay a full fold AND the bookkeeping.
+ * The number is therefore sized to clear plausible ROSTERS rather than to a
+ * memory budget — and it has to clear several at once, because the listing
+ * callers are not all one project's UI (`pty/manager.ts` lists every project's
+ * Sessions to compute a concurrency budget).
+ *
+ * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
+ * deliberately extreme one — 450 events carrying 150 commands and their
+ * receipts — so this ceiling is about 1.4 MB in the shape a real roster has
+ * and about 20 MB in a shape that would need 256 such Sessions to reach. See
+ * `docs/research/perf/session-listing-vc388.md`.
+ */
+export const SESSION_LISTING_CACHE_LIMIT = 256;
+
+/**
+ * One Session's folded listing row, and everything needed to prove it current.
+ *
+ * The cursor alone is not a key. A Session's projection is a function of its
+ * event log AND of the immutable row the fold starts from, and one field of
+ * that row does move underneath the ledger's insert-only contract:
+ * `ticketId` is cleared when a Ticket is deleted. Keying on the sequence only
+ * would serve a listing that still named a Ticket that no longer exists, with
+ * no event having been appended to say otherwise. So the row is kept beside
+ * the cursor and compared, which also costs nothing to be right about if some
+ * future store lets another field move.
+ */
+interface ListingFold {
+  session: Session;
+  /** Log head at the moment of the fold, from the metadata-only read. */
+  throughSequence: number;
+  /**
+   * The cache's own deep-frozen copy, shared by every caller that lists this
+   * Session while the entry survives. See {@link frozenProjectionCopy} for why
+   * it is a copy and not the folded object itself.
+   */
+  projection: SessionProjection;
+}
+
+/**
+ * The cache's OWN deep-frozen copy of a freshly folded projection (VC-393).
+ *
+ * Two things make this a copy rather than a freeze in place.
+ *
+ * The first is why anything is needed at all: `listingProjection` hands the
+ * SAME object to every caller that lists this Session while its entry
+ * survives, which is the cache's entire value — a fold's cost is paid once,
+ * not once per listing. That sharing turns a mutating caller into a corruption
+ * of every later read rather than a bug local to itself, and neither a
+ * sequence change nor the `sameSession` comparison would dislodge the damage.
+ *
+ * The second is why freezing the folded object itself would be wrong. A fold
+ * does not own its whole graph: `foldSessionProjection` copies CONTAINERS and
+ * re-uses their ELEMENTS, seeding `commands`, `receipts`, `attachments`,
+ * `attention` and `interactions` from the base checkpoint's own objects and
+ * then pushing the very objects it read out of the event payloads
+ * (`commands.push(event.payload.command)`). Freezing that graph in place would
+ * reach back through the projection and freeze objects the ledger handed us —
+ * an event payload, a decoded checkpoint element — and the sibling checkpoint
+ * shares them too (`pendingExecutorStarts` holds the same `SessionCommand`
+ * objects as `projection.commands`). It happens to be harmless today only
+ * because every ledger in the tree answers reads with fresh objects: the
+ * in-memory one clones, the SQLite one decodes each row. {@link SessionLedger}
+ * does not promise that, and a conforming implementation that cached decoded
+ * rows would find them frozen by a mere listing. A copy owes the ledger
+ * nothing, so the promise is not needed.
+ *
+ * The copy costs one extra walk of a graph the fold has just built, paid once
+ * per fold and never on the cache-hit path, which is where listings spend
+ * their time. Priced by `listing-cache-cost.bench.test.ts` against the entry
+ * weights in `docs/research/perf/session-listing-vc388.md`, per row:
+ *
+ * |                  | ordinary (5.6 KB) | extreme (79.8 KB) |
+ * |------------------|-------------------|-------------------|
+ * | freeze in place  | 13 µs             | 108 µs            |
+ * | copy and freeze  | 23 µs             | 176 µs            |
+ * | copy on read     | 30 µs             | 451 µs            |
+ *
+ * So owning the graph rather than freezing somebody else's costs about ten
+ * microseconds on the row shape a real roster has — roughly 0.2 ms added to a
+ * cold listing of sixty Sessions, and nothing at all to a warm one. Copying on
+ * READ is both dearer per walk and paid on EVERY listing of every Session,
+ * including the warm ones, which is precisely the cost the cache exists to
+ * remove. The chunk bound is undisturbed either way: eight ordinary rows carry
+ * about 0.2 ms of copying, well inside the 3.6 ms block the chunk size was
+ * chosen for.
+ *
+ * A plain recursive copy is sufficient because a `SessionProjection` is
+ * JSON-shaped: plain objects and arrays of strings, numbers, booleans and
+ * nulls, with no `Date`, `Map`, `Set` or class instance anywhere in the tree
+ * — `assertSessionEvent` rejects any payload that is not JSON-compatible on
+ * the way in, and a checkpoint of the same projection is persisted as JSON on
+ * the way out. That also means it cannot contain a reference cycle, so the
+ * recursion needs no guard and always terminates. A future field holding one
+ * of those types would survive neither this copy nor the checkpoint it is
+ * written to, and would have to be caught at the fold rather than here.
+ */
+function frozenProjectionCopy<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((item: unknown) => frozenProjectionCopy(item))) as T;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) copy[key] = frozenProjectionCopy(child);
+  return Object.freeze(copy) as T;
+}
+
+interface StoredSessionProjection {
+  checkpoint: SessionProjectionCheckpoint;
+  /**
+   * Cursor of the checkpoint as PERSISTED, or null when none was usable.
+   * `checkpoint` has already been advanced past this, so only this value can
+   * say how stale the durable cache is.
+   */
+  persistedThrough: number | null;
+}
+
+function storedSessionProjection(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): StoredSessionProjection {
+  try {
+    const checkpoint = transaction.getProjectionCheckpoint(session.id);
+    if (checkpoint) {
+      // The fold read, not the audit read: a listing over every Session would
+      // otherwise JSON-decode one provenance per event to produce state that
+      // never looks at it (VC-355).
+      const tail = transaction.listProjectionEvents({
+        sessionId: session.id,
+        afterSequence: checkpoint.throughSequence,
+      });
+      return {
+        checkpoint: advanceSessionProjection(checkpoint, tail, session),
+        persistedThrough: checkpoint.throughSequence,
+      };
+    }
+  } catch (error) {
+    // A projection checkpoint is a rebuildable cache. Any unsupported,
+    // malformed, or stale value falls through to the immutable event log —
+    // reported, so a cache that never succeeds is visible as more than slowness.
+    onCheckpointFailure(error);
+  }
+
+  return {
+    checkpoint: createSessionProjectionCheckpoint(
+      session,
+      transaction.listProjectionEvents({ sessionId: session.id }),
+    ),
+    persistedThrough: null,
+  };
+}
+
+function projectStoredSession(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): SessionProjection {
+  return storedSessionProjection(transaction, session, onCheckpointFailure).checkpoint.projection;
+}
+
+/**
+ * Folds one just-appended fact into the derived cache when it has drifted far
+ * enough to be worth a write. Never throws: the checkpoint is rebuildable, so
+ * a failed refresh is slower, not wrong.
+ */
+function refreshProjectionCheckpoint(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  stored: StoredSessionProjection,
+  appended: SessionEvent,
+  onCheckpointFailure: (error: unknown) => void,
+): void {
+  if (appended.sequence - (stored.persistedThrough ?? 0) < CHECKPOINT_REFRESH_EVENTS) return;
+  try {
+    transaction.saveProjectionCheckpoint(
+      advanceSessionProjection(stored.checkpoint, [appended], session),
+    );
+  } catch (error) {
+    onCheckpointFailure(error);
+  }
 }
 
 /**
@@ -653,6 +1138,14 @@ function replayCreate(
   if (!stored || !sameCreateSessionRequest(stored, request)) {
     throw new SessionEngineConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
+    );
+  }
+  // VC-358: the requested id, when the replaying request carries one, must be
+  // the id the command was first accepted under — a promote that replays with
+  // a different client-minted id is a different intent, not the same one.
+  if (request.requestedSessionId && stored.sessionId !== request.requestedSessionId) {
+    throw new SessionEngineConflictError(
+      `Command ${stored.id} was accepted for Session ${stored.sessionId}, not ${request.requestedSessionId}`,
     );
   }
   const receipt = transaction.listReceipts(stored.id).find(isCreateReceipt);
@@ -996,10 +1489,6 @@ function resolveCommandRoute(
     case "session.stop":
       return { route: null, rejection: null };
   }
-}
-
-function nextSequence(events: readonly SessionEvent[]): number {
-  return (events.at(-1)?.sequence ?? 0) + 1;
 }
 
 function assertObservableFact(

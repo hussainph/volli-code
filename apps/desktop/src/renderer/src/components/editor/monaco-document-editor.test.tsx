@@ -65,4 +65,20 @@ describe("MonacoDocumentEditor host box", () => {
     expect(html).not.toContain("max-height");
     expect(html).not.toContain("style=");
   });
+
+  it("wears the loading stamp from the first frame, before any effect has run", () => {
+    // The placeholder `globals.css` draws while Monaco's runtime chunk loads
+    // keys on this attribute (VC-383). The mount effect re-stamps it after
+    // paint; the markup carries it so the first frame is not a bare box.
+    const html = renderToStaticMarkup(
+      <MonacoDocumentEditor
+        identity={identity}
+        viewId="ticket-body:t1"
+        value="body"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(html).toContain('data-monaco-status="loading"');
+  });
 });

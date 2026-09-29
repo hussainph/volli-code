@@ -5,6 +5,7 @@ import {
   createSessionRouter,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
+  type RpcProcedurePerformanceObserver,
   type SessionAttachInput,
   type SessionCreateInput,
   type SessionCreateResult,
@@ -126,6 +127,8 @@ export interface RegisterSessionRpcIpcOptions {
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics?: RpcDiagnosticLog;
+  /** Optional payload-free timing tap for benchmark runs. */
+  performanceObserver?: RpcProcedurePerformanceObserver;
 }
 
 interface ActiveSubscription {
@@ -183,6 +186,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           attachSession: options.attachSession,
           diagnostics,
           transport: "electron-ipc",
+          performanceObserver: options.performanceObserver,
         });
         return { ok: true, data: await callProcedure(caller, request) };
       } catch (error) {
@@ -209,6 +213,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         inspectModelAccess: options.inspectModelAccess,
         diagnostics,
         transport: "electron-ipc",
+        performanceObserver: options.performanceObserver,
       },
       { signal: abort.signal },
     );

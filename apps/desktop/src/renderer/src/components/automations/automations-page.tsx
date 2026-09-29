@@ -55,9 +55,11 @@ import {
 import {
   automationHistory,
   groupByOwnership,
+  historyEmptyCopy,
   listingRunTarget,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -65,6 +67,7 @@ import {
   triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorPanel } from "./automation-editor";
+import { clearEditorDraft, loadEditorDraft } from "./editor-draft";
 import { AutomationLanes } from "./automation-lanes";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import {
@@ -94,7 +97,12 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
-import { useAutomationsStore } from "@renderer/stores/automations";
+import {
+  automationHistoryKey,
+  selectAutomationRuns,
+  selectAutomationSkips,
+  useAutomationsStore,
+} from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
@@ -151,7 +159,7 @@ function ViewChoice({
       onClick={() => onChange(value)}
       className={cn(
         "flex h-7 items-center gap-2 rounded-md px-2 text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        "focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "bg-accent text-foreground shadow-raised"
           : "text-muted-foreground hover:text-foreground",
@@ -171,6 +179,12 @@ function AutomationsSurface({
   ticketPrefix: string;
 }) {
   const automations = useAutomationsStore((state) => state.byProject[projectId] ?? NO_AUTOMATIONS);
+  // Whether the LIST has landed, not whether it is empty: before the first
+  // read both look the same, and the difference decides which history to ask
+  // main for.
+  const automationsLoaded = useAutomationsStore(
+    (state) => state.byProject[projectId] !== undefined,
+  );
   const runs = useAutomationsStore((state) => state.runsByProject[projectId] ?? NO_RUNS);
   const skips = useAutomationsStore((state) => state.skipsByProject[projectId] ?? NO_SKIPS);
   const editor = useAutomationsStore((state) => state.editor);
@@ -186,35 +200,36 @@ function AutomationsSurface({
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
   const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
   const refreshSkips = useAutomationsStore((state) => state.refreshSkips);
+  const refreshAutomationHistory = useAutomationsStore((state) => state.refreshAutomationHistory);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const [view, setView] = React.useState<AutomationPageView>("details");
+  const [initialDraft] = React.useState(() => loadEditorDraft(projectId) !== null);
+  const resumeOnArrival = React.useRef(initialDraft);
+  // The project's own activity, asked for by name. Local rather than in the
+  // store's editor, because it is a VIEW of this page and not a record being
+  // edited: leaving it puts the reader back on the record they had.
+  const [showingActivity, setShowingActivity] = React.useState(false);
   const [choosingTicket, setChoosingTicket] = React.useState<Automation | null>(null);
   const [confirmingDelete, setConfirmingDelete] = React.useState<Automation | null>(null);
 
   const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
   React.useEffect(() => {
     void refresh(projectId);
-    void refreshRuns(projectId);
-    void refreshSkips(projectId);
     void refreshArming(projectId);
     void refreshOrder(projectId);
     void refreshEnablement();
-  }, [
-    projectId,
-    planningVersion,
-    refresh,
-    refreshRuns,
-    refreshSkips,
-    refreshArming,
-    refreshOrder,
-    refreshEnablement,
-  ]);
+  }, [projectId, planningVersion, refresh, refreshArming, refreshOrder, refreshEnablement]);
 
   React.useEffect(() => closeEditor, [closeEditor]);
 
   // The rail always has one selected record once the list lands. A create is a
   // deliberate null record and is never replaced by this defaulting effect.
   React.useEffect(() => {
+    if (resumeOnArrival.current) {
+      resumeOnArrival.current = false;
+      openEditor(projectId);
+      return;
+    }
     if (automations.length === 0) return;
     if (editor?.projectId === projectId && editor.automation === null) return;
     const selectedId = editor?.projectId === projectId ? editor.automation?.id : undefined;
@@ -225,7 +240,7 @@ function AutomationsSurface({
       return;
     }
     editAutomation(projectId, automations[0]!);
-  }, [automations, editAutomation, editor, projectId]);
+  }, [automations, editAutomation, editor, openEditor, projectId]);
 
   const target = editor?.projectId === projectId ? editor : null;
   const selectedAutomation =
@@ -233,6 +248,42 @@ function AutomationsSurface({
       ? null
       : (automations.find((automation) => automation.id === target.automation?.id) ??
         target.automation);
+  const selectedId = selectedAutomation?.id ?? null;
+
+  // The editor's OWN history, read for the record on screen rather than sieved
+  // out of the project's (VC-297).
+  const selectedRuns = useAutomationsStore((state) =>
+    selectedId === null ? NO_RUNS : selectAutomationRuns(state, projectId, selectedId),
+  );
+  const selectedSkips = useAutomationsStore((state) =>
+    selectedId === null ? NO_SKIPS : selectAutomationSkips(state, projectId, selectedId),
+  );
+  // READ, not non-empty. One write lands both halves, so one key answers.
+  const selectedHistoryLoaded = useAutomationsStore((state) =>
+    selectedId === null
+      ? false
+      : state.runsByAutomation[automationHistoryKey(projectId, selectedId)] !== undefined,
+  );
+  React.useEffect(() => {
+    if (selectedId === null) return;
+    void refreshAutomationHistory(projectId, selectedId);
+  }, [projectId, selectedId, planningVersion, refreshAutomationHistory]);
+
+  // The project's whole history is fetched only where it is actually drawn:
+  // the activity view, or the empty state of a project that has no records.
+  // An editor no longer pays for a read it does not use.
+  const showsProjectHistory = showingActivity || (automationsLoaded && automations.length === 0);
+  // Two separate reads here, unlike the scoped pair, so both must have landed
+  // before the list may say it found nothing.
+  const projectHistoryLoaded = useAutomationsStore(
+    (state) =>
+      state.runsByProject[projectId] !== undefined && state.skipsByProject[projectId] !== undefined,
+  );
+  React.useEffect(() => {
+    if (!showsProjectHistory) return;
+    void refreshRuns(projectId);
+    void refreshSkips(projectId);
+  }, [showsProjectHistory, projectId, planningVersion, refreshRuns, refreshSkips]);
   const { project: projectAutomations, global: globalAutomations } = React.useMemo(
     () => groupByOwnership(automations),
     [automations],
@@ -240,12 +291,19 @@ function AutomationsSurface({
 
   function selectAutomation(automation: Automation): void {
     setView("details");
+    setShowingActivity(false);
     editAutomation(projectId, automation);
   }
 
   function createAutomation(): void {
     setView("details");
+    setShowingActivity(false);
     openEditor(projectId);
+  }
+
+  function showProjectActivity(): void {
+    setView("details");
+    setShowingActivity(true);
   }
 
   function runAutomation(automation: Automation): void {
@@ -274,10 +332,10 @@ function AutomationsSurface({
     ) : (
       <>
         <label className="flex items-center gap-2 text-ui text-muted-foreground">
-          Enabled
+          Automatic triggers
           <Switch
             checked={enabledIds.includes(selectedAutomation.id)}
-            aria-label={`Enabled on this machine: ${selectedAutomation.name}`}
+            aria-label={`Automatic triggers on this machine: ${selectedAutomation.name}`}
             onCheckedChange={(enabled) => void setEnabled(selectedAutomation.id, enabled)}
           />
         </label>
@@ -343,7 +401,9 @@ function AutomationsSurface({
         </div>
         <Button size="sm" onClick={createAutomation}>
           <PlusIcon />
-          New Automation
+          {target?.automation !== null && loadEditorDraft(projectId) !== null
+            ? "Resume draft"
+            : "New Automation"}
         </Button>
       </header>
 
@@ -352,10 +412,12 @@ function AutomationsSurface({
           project={projectAutomations}
           global={globalAutomations}
           enabledIds={enabledIds}
-          selectedId={selectedAutomation?.id ?? null}
-          creating={target?.automation === null}
+          selectedId={showingActivity ? null : selectedId}
+          creating={!showingActivity && target?.automation === null}
+          activitySelected={showingActivity && view === "details"}
           onSelect={selectAutomation}
           onCreate={createAutomation}
+          onShowActivity={showProjectActivity}
         />
         {view === "lanes" ? (
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-6">
@@ -365,19 +427,34 @@ function AutomationsSurface({
               <AutomationLanes projectId={projectId} />
             )}
           </div>
+        ) : showingActivity ? (
+          <ProjectActivity
+            projectId={projectId}
+            ticketPrefix={ticketPrefix}
+            runs={runs}
+            skips={skips}
+            loaded={projectHistoryLoaded}
+          />
         ) : target !== null ? (
           <AutomationEditorPanel
-            key={`${target.automation?.id ?? "new"}:${target.automation?.updatedAt ?? 0}`}
+            key={`${selectedAutomation?.id ?? "new"}:${selectedAutomation?.updatedAt ?? 0}`}
             projectId={projectId}
             automation={selectedAutomation}
             actions={editorActions}
+            onDiscardedNewDraft={() => {
+              const first = automations[0];
+              if (first === undefined) closeEditor();
+              else editAutomation(projectId, first);
+            }}
             history={
               selectedAutomation === null ? undefined : (
                 <RunHistory
                   projectId={projectId}
                   ticketPrefix={ticketPrefix}
-                  runs={runs}
-                  skips={skips}
+                  runs={selectedRuns}
+                  skips={selectedSkips}
+                  automationId={selectedAutomation.id}
+                  loaded={selectedHistoryLoaded}
                 />
               )
             }
@@ -391,6 +468,8 @@ function AutomationsSurface({
                 ticketPrefix={ticketPrefix}
                 runs={runs}
                 skips={skips}
+                automationId={null}
+                loaded={projectHistoryLoaded}
               />
             }
           />
@@ -423,7 +502,18 @@ function AutomationsSurface({
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                if (confirmingDelete !== null) void remove(projectId, confirmingDelete);
+                if (confirmingDelete !== null) {
+                  const deletedId = confirmingDelete.id;
+                  void remove(projectId, confirmingDelete).then(() => {
+                    const records = useAutomationsStore.getState().byProject[projectId];
+                    if (
+                      records !== undefined &&
+                      !records.some((record) => record.id === deletedId)
+                    ) {
+                      clearEditorDraft(projectId, undefined, deletedId);
+                    }
+                  });
+                }
                 setConfirmingDelete(null);
               }}
             >
@@ -442,16 +532,21 @@ function AutomationRail({
   enabledIds,
   selectedId,
   creating,
+  activitySelected,
   onSelect,
   onCreate,
+  onShowActivity,
 }: {
   project: readonly Automation[];
   global: readonly Automation[];
   enabledIds: readonly string[];
   selectedId: string | null;
   creating: boolean;
+  /** The project's own activity is on screen, so no record is the subject. */
+  activitySelected: boolean;
   onSelect(automation: Automation): void;
   onCreate(): void;
+  onShowActivity(): void;
 }) {
   const groups = [
     { label: "This project", automations: project },
@@ -472,7 +567,7 @@ function AutomationRail({
               type="button"
               aria-label={`New automation in ${group.label}`}
               onClick={onCreate}
-              className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
+              className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               <PlusIcon weight="bold" className="size-3" />
             </button>
@@ -489,7 +584,7 @@ function AutomationRail({
                 onClick={() => onSelect(automation)}
                 className={cn(
                   "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
-                  "focus-visible:ring-2 focus-visible:ring-ring/45",
+                  "focus-visible:ring-2 focus-visible:ring-ring",
                   automation.id === selectedId
                     ? "bg-accent text-foreground"
                     : "text-muted-foreground hover:bg-accent/50",
@@ -500,7 +595,9 @@ function AutomationRail({
                     {automation.name}
                   </span>
                   <span
-                    aria-label={enabledIds.includes(automation.id) ? "Enabled" : "Switched off"}
+                    aria-label={
+                      enabledIds.includes(automation.id) ? "Automatic triggers" : "Manual only"
+                    }
                     className={cn(
                       "size-2 shrink-0 rounded-full",
                       enabledIds.includes(automation.id) ? "bg-primary" : "border border-border",
@@ -515,7 +612,66 @@ function AutomationRail({
           )}
         </section>
       ))}
+      {/* The way back to the whole project's work (VC-297).
+
+          The rail always leaves one record selected once the list lands, so
+          without this row the interleaved list would only ever be reachable by
+          a project that has no Automations at all — and the Runs of a DELETED
+          Automation, which main keeps on purpose, would be kept where nobody
+          could read them. */}
+      <button
+        type="button"
+        data-automation-rail-activity=""
+        aria-current={activitySelected ? "page" : undefined}
+        onClick={onShowActivity}
+        className={cn(
+          "mt-auto flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left outline-none",
+          "focus-visible:ring-2 focus-visible:ring-ring",
+          activitySelected
+            ? "bg-accent text-foreground"
+            : "text-muted-foreground hover:bg-accent/50",
+        )}
+      >
+        <ClockCounterClockwiseIcon className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-ui font-medium">Project activity</span>
+      </button>
     </aside>
+  );
+}
+
+/**
+ * Every Automation's work in this project, interleaved (VC-297).
+ *
+ * The wide scope, on its own surface and reachable while records exist. It is
+ * the only place a Run whose Automation was deleted — or one that never had
+ * an Automation (VC-129) — can still be read, because no editor can claim it.
+ */
+function ProjectActivity({
+  projectId,
+  ticketPrefix,
+  runs,
+  skips,
+  loaded,
+}: {
+  projectId: string;
+  ticketPrefix: string;
+  runs: readonly AutomationRun[];
+  skips: readonly AutomationSkippedOccurrence[];
+  loaded: boolean;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="mx-auto w-full max-w-content px-6 py-6">
+        <RunHistory
+          projectId={projectId}
+          ticketPrefix={ticketPrefix}
+          runs={runs}
+          skips={skips}
+          automationId={null}
+          loaded={loaded}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -658,24 +814,50 @@ function RunOnTicketDialog({
  * the Run history", and a skip and a silence must never look the same. A
  * schedule that fired on Monday and did not on Tuesday tells one story, and
  * two lists would make the reader assemble it.
+ *
+ * ONE component, TWO scopes, and the scope is on screen (VC-297). Inside the
+ * editor it is the selected record's own history and says "Runs"; on the
+ * project's own surface it is every record's and says "Project activity".
+ * Same rows, same code, because they are one story at two scopes — what must
+ * never happen is the narrow heading over the wide list, which is a page
+ * telling a reader that a neighbour's work was this record's.
+ *
+ * The NARROWING is not done here. Each scope is its own read from main
+ * (`runsForAutomation` beside `runsForProject`), so this component draws the
+ * list it was handed and `automationId` only says which question was asked.
+ * A client that filtered a project-wide list here would have to fetch a whole
+ * project's history to draw one record's — the read a phone or a browser
+ * should never be made to do.
  */
 function RunHistory({
   projectId,
   ticketPrefix,
   runs,
   skips,
+  automationId,
+  loaded,
 }: {
   projectId: string;
   ticketPrefix: string;
+  /** Already scoped by main to whatever {@link automationId} names. */
   runs: readonly AutomationRun[];
   skips: readonly AutomationSkippedOccurrence[];
+  /** The record these rows were read for, or `null` for the whole project. */
+  automationId: string | null;
+  /** Whether this scope's read has LANDED — not whether it found anything. */
+  loaded: boolean;
 }) {
   const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
+  const emptyCopy = historyEmptyCopy(automationId, loaded);
   return (
-    <section className="flex flex-col gap-1">
-      <SectionHeading className="h-6 leading-6">Runs</SectionHeading>
+    <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
+      <SectionHeading className="h-6 leading-6">
+        {automationId === null ? "Project activity" : "Runs"}
+      </SectionHeading>
       {entries.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">Nothing has run in this project yet.</p>
+        emptyCopy === null ? null : (
+          <p className="py-2 text-ui text-muted-foreground">{emptyCopy}</p>
+        )
       ) : (
         entries.map((entry) =>
           entry.kind === "run" ? (
@@ -699,8 +881,16 @@ function RunHistory({
  * control that starts it now.
  *
  * It wears a different mark from a Run and says what went wrong in its own
- * line, so it can never be mistaken for work that happened. "Run now" starts
- * ONE Run at the Target the schedule would have used — the Project — whatever
+ * line, so it can never be mistaken for work that happened.
+ *
+ * No "how it started" word here, unlike a Run row (VC-297): a Skipped
+ * occurrence IS a schedule's missed due time, so it could never have been
+ * started by hand, and a mark every row of this kind must carry is a mark that
+ * tells the reader nothing. What the row owes is why it was missed, which
+ * `skipReasonLabel` says in words.
+ *
+ * "Run now" starts ONE Run at the Target the schedule would have used — the
+ * Project — whatever
  * number of occurrences this row stands for: a missed occurrence is never
  * replayed (VC-112), and this is the by-hand recovery that ruling promises
  * instead.
@@ -775,6 +965,7 @@ function RunRow({
 
   return (
     <ListRow
+      data-run-history-run={run.id}
       // The door back to the Session the Run opened, always. A Run whose
       // Ticket is gone kept its Session and its place in this history, so it
       // opens in Home — the project's own home for a Session no Ticket owns —
@@ -802,6 +993,14 @@ function RunRow({
           {/* The RESOLVED model this Session was born with, printed from the
               Run's own row — never re-labelled through today's catalogue. */}
           <span className="truncate text-muted-foreground">{runModelLabel(run)}</span>
+          <span aria-hidden className="text-muted-foreground">
+            ·
+          </span>
+          {/* How it started (VC-297), from the Run's own attendance rather than
+              from the record's Trigger today. `shrink-0` because this is the
+              half of the row VC-297 asked to keep visible: the model may
+              truncate before it does. */}
+          <span className="shrink-0 text-muted-foreground">{runStartLabel(run)}</span>
         </span>
       }
       trailing={

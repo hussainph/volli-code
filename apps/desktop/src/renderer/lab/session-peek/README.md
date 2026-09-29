@@ -1,6 +1,6 @@
 # Session peek / VC-406 integration boundary
 
-Compatibility inspection: VC-406 at `c927e21b`, with a clean worktree. The **sidebar hover behavior is lab-only**, not a replacement for the incoming rail or a merged-branch integration test. The conversation overlay now shares production chat components as described below.
+Initial compatibility inspection: VC-406 at `c927e21b`. The PR now integrates main at `218c48e7`, including its roster and model/effort changes. The **sidebar hover behavior remains lab-only**, not a replacement for the production rail or a live sidebar integration. The conversation overlay shares production chat components as described below.
 
 ## Shared today
 
@@ -19,7 +19,7 @@ The simulated transcript is a display string assembled from prompt labels, selec
 ## Shared conversation overlay
 
 - `components/chat/session-peek-dialog.tsx` owns the modal shell, title, promotion action, Escape isolation and return-focus behavior. Both this prototype and the existing production `SubagentPeekDialog` use it.
-- The production subagent overlay adopts the child and mounts the real `ChatPlane`, with its existing Session-keyed draft, message/queue/steer, pending interactions, attachments and model controls. It inherits the parent's project/ticket scope and file/tab callbacks, and closing it leaves the resident child client alive. Its composer dock is capped and scrollable so a question or long draft cannot cover the modal header in a short window; the ordinary tab layout is unchanged.
+- The production subagent overlay retains the shared `AgentModelLine` model/effort display in its header, adopts the child and mounts the real `ChatPlane`, with its existing Session-keyed draft, message/queue/steer, pending interactions, attachments and model controls. It inherits the parent's project/ticket scope and file/tab callbacks, and closing it leaves the resident child client alive. Its composer dock is capped and scrollable so a question or long draft cannot cover the modal header in a short window; the ordinary tab layout is unchanged.
 - `conversation.tsx` is the **lab-only adapter**: source-message fixtures rendered through `ChatTurn`, plus the real controlled `SessionComposer`. It never adopts a Session or sends IPC. Successful simulated messages append only to that fixture's local conversation; failure keeps the text for retry. Drafts and in-flight sends survive closing/reopening and remain keyed to the recipient. Ordinary messages do not resolve a pending question, and the card's answer draft remains separate.
 - The lab's Send outcome control applies to both answer sends and conversation messages. Its fixed model/disabled attachment supply intentionally does not pretend to simulate production model selection, queueing or attachments.
 
@@ -30,6 +30,6 @@ The simulated transcript is a display string assembled from prompt labels, selec
 - Use VC-406's `sessionActivityIsLive`, `sessionAttentionRank`, and `sessionActivityDotState` at the real-data boundary. Do not infer liveness from an open tab or attachment. The four fixture states are not a production state union.
 - The provider-plus-state composite glyph remains a visual experiment. The existing production `StatusDot` owns activity tone/motion; integrating this composite must reconcile it with that shared primitive rather than introducing a second production status map.
 - Attach hover/focus behavior to the existing row without stealing focus, consuming its context-menu/drag gestures, or replacing its activation. Resolve positioning against the actual scroll containers, not the fixture page's global selectors.
-- Summary freshness, pending-interaction identity, delivery/cancellation and whether Undo is supported remain runtime contracts. The conversation overlay currently reads source-message fixtures; it is not a live Session renderer.
+- Summary freshness, pending-interaction identity, delivery/cancellation and whether Undo is supported remain runtime contracts. The lab conversation adapter reads source-message fixtures; unlike the production subagent overlay, it is not a live Session renderer.
 
 No VC-406 files, production roster components, or UI primitives were modified. Production edits are limited to the shared chat overlay, its subagent host, and the ChatPlane mount/preview containment; there are no new IPC or runtime contracts.

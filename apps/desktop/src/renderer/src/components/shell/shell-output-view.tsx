@@ -2,12 +2,10 @@
  * A background shell's tail, read-only (VC-270): what `openShell` opens.
  *
  * A plain `<pre>`, deliberately not a `TerminalEngine`. `terminal/registry.ts`
- * keys engines by Session id and each one is a restty canvas counted against
- * a GPU-pressure budget, so an engine per shell would both collide with the
- * Session's real terminal and eat that budget — and VC-107 is replacing the
- * backend anyway. A read-only tail needs no terminal emulator: monospace,
- * the host's retained bytes, and a scroll that follows the bottom until the
- * person scrolls up.
+ * keys engines by Session id, so an engine per shell would collide with the
+ * Session's own terminal over that key. A read-only tail needs no terminal
+ * emulator anyway: monospace, the host's retained bytes, and a scroll that
+ * follows the bottom until the person scrolls up.
  *
  * The output is READ, not pushed. Main's push carries a shell's chrome only;
  * this view asks for the tail on mount and, while the shell runs, on a

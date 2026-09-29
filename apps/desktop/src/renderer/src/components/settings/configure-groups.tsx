@@ -14,7 +14,6 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
-import { PuzzlePieceIcon } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import type { Project } from "@volli/shared";
 
@@ -23,7 +22,6 @@ import type { PrefGroup } from "@renderer/components/settings/kit";
 import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
-import { PluginsPane } from "./configure/plugins-pane";
 import { SessionsPane } from "./configure/sessions-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
@@ -74,19 +72,30 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         },
         {
           key: "mcp",
-          fill: true,
+          // NOT a `fill` pane (VC-397). `fill` is for a pane where the table IS
+          // the page; this one has an editor and an audit list after its table,
+          // and a filling section whose content outgrew the leftover height
+          // painted straight through both of them.
           label: "MCP Servers",
           icon: PlugsConnectedIcon,
-          keywords: ["mcp", "server", "servers", "tool", "tools", "context protocol", "status"],
-          content: <McpPane />,
-        },
-        {
-          key: "plugins",
-          fill: true,
-          label: "Plugins",
-          icon: PuzzlePieceIcon,
-          keywords: ["plugin", "installed plugins", "bundle", "marketplace", "contents", "browse"],
-          content: <PluginsPane />,
+          keywords: [
+            "mcp",
+            "server",
+            "servers",
+            "tool",
+            "tools",
+            "context protocol",
+            "status",
+            "stdio",
+            "streamable http",
+            // The editor section's two titles. Rail search matches a
+            // lowercased SUBSTRING of a stored term, so "server" alone does
+            // not answer someone typing the whole label — and
+            // `settings-search-smoke.mjs` walks every visible one.
+            "add server",
+            "edit server",
+          ],
+          content: <McpPane project={project} />,
         },
         {
           // Agent, not Project: this is what this repo's agents are ALLOWED to

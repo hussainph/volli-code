@@ -166,13 +166,21 @@ export function createSessionWakeBus(
     observe: (observation) => afterCommit(() => engine.observe(observation)),
     submit: (request) => afterCommit(() => engine.submit(request)),
     completeModelSelection: (request) => afterCommit(() => engine.completeModelSelection(request)),
+    // Enumerated, not spread, for the reason given in `activity-watch.ts`: a
+    // future Engine WRITE adopted silently by a spread would commit without
+    // ever waking a waiter, and the compile error a new method causes here is
+    // the prompt to decide which of the two it is.
     getSession: (query) => engine.getSession(query),
     getBaseSession: (query) => engine.getBaseSession(query),
     listSessions: (query) => engine.listSessions(query),
     countSessions: (query) => engine.countSessions(query),
+    listAttachedSessions: () => engine.listAttachedSessions(),
     listSessionStarts: (query) => engine.listSessionStarts(query),
     listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
     listEvents: (query) => engine.listEvents(query),
+    latestEventSequence: (query) => engine.latestEventSequence(query),
+    getProjectionCheckpoint: (query) => engine.getProjectionCheckpoint(query),
+    saveProjectionCheckpoint: (checkpoint) => engine.saveProjectionCheckpoint(checkpoint),
     reportUsage: (query) => engine.reportUsage(query),
   };
 

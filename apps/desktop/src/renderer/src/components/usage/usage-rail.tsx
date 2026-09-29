@@ -14,20 +14,19 @@
  * happened, on a surface whose whole argument is that spend should be cheap to
  * watch.
  *
- * WHICH ROWS a breakdown has, and whose money each one carries, is decided in
- * `usage-rail-model.ts` — pure, beside this file, so a test can reach it.
+ * WHICH ROWS a breakdown has, whose money each one carries and what a model is
+ * CALLED are all decided in `usage-rail-model.ts` — pure, beside this file, so a
+ * test can reach them. The catalogue those names are resolved against is read
+ * here, like every other read: `usage-model-catalogue.ts`.
  */
 import * as React from "react";
 
 import { type SessionUsageReport, type SessionUsageScope } from "@volli/shared";
 
-import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
+import { HomeUsageFooter } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
-import {
-  groupRows,
-  modelLabel,
-  ticketSessionRows,
-} from "@renderer/components/usage/usage-rail-model";
+import { useUsageModelCatalogue } from "@renderer/components/usage/usage-model-catalogue";
+import { modelRows, ticketSessionRows } from "@renderer/components/usage/usage-rail-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -59,18 +58,12 @@ function useSettleSignal(): string {
 /**
  * One rollup, kept fresh across settles AND across remounts.
  *
- * ALWAYS `refresh`, never `ensure`. A rail is unmounted whenever the reader
- * changes page, collapses it or switches Session — and work goes on settling
- * while it is gone. `ensure` returns immediately for any cached answer and
- * nothing in production invalidates the cache, so a rail that came back would
- * show whatever the figure was when it left, indefinitely, with no signal that
- * it was stale. That is worse than a slow number: it is a wrong one that looks
- * settled.
- *
- * Refreshing costs nothing visible, because `refresh` keeps the cached entry on
- * screen and only announces `loading` when there is nothing to show yet. So a
- * remount paints the old figure immediately and replaces it when the read
- * lands — no flicker, and no lie.
+ * `refresh` carries the settle signal, which is what makes a remount cheap
+ * (VC-373): a ready entry read under the signal still on screen is the answer
+ * — usage only moves when a turn settles, and a settle moves the signal — so
+ * a rail coming back repaints the same figure without a second indexed read.
+ * A signal that HAS moved re-reads, exactly as before, and `refresh` keeps
+ * the cached entry on screen while it does so: no flicker, and no lie.
  *
  * `null` IS A QUERY. Home's card reports the Session in front, and there is
  * routinely no Session in front — the Board tab, a file tab, a terminal. A
@@ -85,7 +78,7 @@ function useUsageReport(query: UsageQuery | null): SessionUsageReport | null {
 
   React.useEffect(() => {
     if (query === null) return;
-    void useUsageStore.getState().refresh(query);
+    void useUsageStore.getState().refresh(query, settleSignal);
     // `key` stands for the whole query — it is derived from every field of it,
     // so depending on the object as well would re-read on each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,8 +93,14 @@ function useCostVisible(): boolean {
 }
 
 /**
- * Home's usage card: the project rollup, the Session in front, and the window
- * control they are read through.
+ * Home's usage footer: the project rollup, the Session in front, and the window
+ * control they are read through — pinned under the Now page (VC-406).
+ *
+ * Named for where it sits, because where it sits is the decision: it is not a
+ * block in the page's stack and must not be mounted as one. The approved Home
+ * Now is ONE roster; cost is read rather than worked in, so it is a row under
+ * the scroller with its body folded above it — the same ruling, the same fold
+ * preference and the same geometry as the Ticket rail's.
  *
  * ONE COMPONENT FOR BOTH SCOPES since VC-203. They used to be two exports
  * mounted a section apart, which is why they could drift into two different
@@ -115,7 +114,7 @@ function useCostVisible(): boolean {
  * time, because a project's all-time total only grows and stops being a number
  * anyone can act on.
  */
-export function HomeUsageRailCard({
+export function HomeUsageRailFooter({
   projectId,
   sessionId,
 }: {
@@ -124,6 +123,8 @@ export function HomeUsageRailCard({
   sessionId: string | null;
 }) {
   const costVisible = useCostVisible();
+  const usageOpen = useUiStore((state) => state.railFolds.usage);
+  const catalogue = useUsageModelCatalogue();
   const [window, setWindow] = React.useState<UsageWindow>("30d");
   const scope = React.useMemo<SessionUsageScope>(
     () => ({ kind: "project", projectId }),
@@ -171,9 +172,9 @@ export function HomeUsageRailCard({
 
   if (!costVisible || report === null) return null;
   return (
-    <HomeUsageBlock
+    <HomeUsageFooter
       summary={report.total}
-      models={groupRows(report, modelLabel)}
+      models={modelRows(report, catalogue)}
       // The larger of the two, because the listing can lag a Session that has
       // just been created while its first turn is already metered. Never the
       // metered count alone — that would hide exactly the gap the two numbers
@@ -187,13 +188,25 @@ export function HomeUsageRailCard({
       session={sessionReport?.total ?? null}
       window={window}
       onWindowChange={setWindow}
+      open={usageOpen}
+      onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />
   );
 }
 
-/** What a Ticket cost, and which of its Sessions spent it. */
-export function TicketUsageRailBlock({ ticketId }: { ticketId: string }) {
+/**
+ * What a Ticket cost, and which of its Sessions spent it — the Now page's
+ * pinned footer (VC-406).
+ *
+ * Named for where it sits, because where it sits is the decision: it is not a
+ * block in the page's stack and must not be mounted as one. See
+ * `ticket-usage-block.tsx` for why cost is the one thing on Now that is read
+ * rather than worked in, and therefore the one thing that is pinned.
+ */
+export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const costVisible = useCostVisible();
+  const usageOpen = useUiStore((state) => state.railFolds.usage);
+  const catalogue = useUsageModelCatalogue();
   const scope = React.useMemo<SessionUsageScope>(() => ({ kind: "ticket", ticketId }), [ticketId]);
   const bySession = useUsageReport({ scope, groupBy: "session" });
   const byModel = useUsageReport({ scope, groupBy: "model" });
@@ -203,13 +216,18 @@ export function TicketUsageRailBlock({ ticketId }: { ticketId: string }) {
   const roster = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
 
   if (!costVisible || bySession === null) return null;
-  const topModel = byModel?.groups[0];
+  // The dearest model as the ranking's own first row, so the one fact this
+  // footer says about models cannot be named differently from the way Home's
+  // list names it.
+  const topModel = byModel === null ? null : (modelRows(byModel, catalogue)[0] ?? null);
   const sessions = ticketSessionRows(bySession, roster);
   return (
     <TicketUsageBlock
       summary={bySession.total}
       sessions={sessions}
-      topModelLabel={topModel === undefined ? null : modelLabel(topModel.key)}
+      topModel={topModel}
+      open={usageOpen}
+      onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />
   );
 }

@@ -1,0 +1,479 @@
+/* Page styles for the public 0.2 homepage.
+ *
+ * Loaded after global.css, which already owns the shared furniture: the skip
+ * link, the alpha pill, the header, the hero block, the CTAs, the feature
+ * glyphs and the footer. Nothing here restyles those — this file adds only the
+ * sections this homepage introduces, plus the few modifiers it needs.
+ *
+ * The storyboard (.storyboard, .story-*) has its own stylesheet and is not
+ * touched here.
+ *
+ * Grammar, from the public-surface audit §6.1–6.3: near-black canvas, ember
+ * accent, Mona Sans at restrained weights, hairlines instead of gradients,
+ * generous measure, one primary CTA. §6.2's complaint is rhythm, not surface,
+ * so the extra sections alternate between open space and a hairline rule
+ * rather than adding new backgrounds. Motion is limited to one-time reveals and
+ * illustration movement, with reduced-motion fallbacks.
+ */
+
+/* The headline's one entrance: each clause rises once behind its own mask on
+   load, 110ms apart, and rests exactly where static text would sit. The mask
+   keeps a little room below the baseline so descenders are not clipped. */
+.hero-clause {
+  display: inline-block;
+  overflow: hidden;
+  margin-bottom: -0.14em;
+  padding-bottom: 0.14em;
+  vertical-align: bottom;
+}
+
+.hero-clause > span {
+  display: inline-block;
+  animation: hero-rise 720ms var(--ease-out) both;
+}
+
+.hero-clause:nth-child(2) > span {
+  animation-delay: 110ms;
+}
+
+.hero-clause:nth-child(3) > span {
+  animation-delay: 220ms;
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0.3;
+    transform: translateY(108%);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Section shell — one measure for every 0.2 section, matching the header and
+   footer (1312px, 64px gutters). The gutter is a custom property because the
+   hairline rules below are drawn inset to it. */
+.release,
+.workspace,
+.trust,
+.closing {
+  --section-gutter: 64px;
+
+  width: 100%;
+  max-width: 1312px;
+  margin: 0 auto;
+  padding: 104px var(--section-gutter);
+}
+
+/* The alternating beat: the demo shell, the release band and trust open
+   straight onto the page; workspace and closing are opened by a hairline. The
+   rule is inset to the gutter so it starts and ends where the text does, like
+   footer's. */
+.workspace,
+.closing {
+  position: relative;
+}
+
+.workspace::before,
+.closing::before {
+  position: absolute;
+  top: 0;
+  right: var(--section-gutter);
+  left: var(--section-gutter);
+  height: 1px;
+  background: #202020;
+  content: "";
+}
+
+/* #top and #automations are in-page targets under a sticky-feeling header row;
+   without this they land flush against the viewport edge. */
+main[id],
+section[id] {
+  scroll-margin-top: 24px;
+}
+
+/* Shared section header. The h2 measure is short on purpose: these are
+   statements, and a statement that runs the full 1312px stops being one. */
+.section-head {
+  margin: 0 0 48px;
+}
+
+.section-head h2 {
+  max-width: 22ch;
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(30px, 2.8vw, 40px);
+  font-weight: 420;
+  letter-spacing: -0.045em;
+  line-height: 1.13;
+  text-wrap: balance;
+}
+
+.section-head p {
+  max-width: 58ch;
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: clamp(16px, 1.2vw, 17px);
+  font-weight: 360;
+  letter-spacing: -0.012em;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* The one place on the page that carries a version number (§3.3): an eyebrow
+   above an ordinary section head, so the release is a section among five and
+   not a second hero. Filled rather than outlined, unlike .alpha-pill: two
+   outlined capsules on one page read as a repeated control. */
+.release-version {
+  position: relative;
+  display: inline-flex;
+  margin: 0 0 20px;
+  padding: 5px 12px;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  background: rgb(232 101 42 / 10%);
+  color: #ff9a68;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The beam: one ember arc sweeps the pill's edge once when the band scrolls
+   into view, then leaves. The ring is a 1px conic gradient cut out with a
+   mask; the angle is a registered property so it can be animated. Browsers
+   without @property simply never show it. */
+@property --beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.release-version::after {
+  --beam-angle: 0deg;
+
+  position: absolute;
+  inset: -1px;
+  padding: 1px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0 58%,
+    #ffb08a 84%,
+    transparent 100%
+  );
+  content: "";
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.section-head.is-live .release-version::after {
+  animation: beam-sweep 1500ms var(--ease-in-out) 150ms both;
+}
+
+@keyframes beam-sweep {
+  from {
+    --beam-angle: 0deg;
+
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 1;
+  }
+
+  to {
+    --beam-angle: 360deg;
+
+    opacity: 0;
+  }
+}
+
+.release-version svg {
+  flex-shrink: 0;
+}
+/* What the workspace is made of: six items, glyph-led, as a still grid rather
+   than the accordion on the live page. */
+.workspace-grid {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 40px;
+  list-style: none;
+}
+
+/* .feature-glyph is drawn for the accordion panel, where it is pushed right by
+   an auto margin. Here it leads the item, so drop the auto margin and keep the
+   168x58 box global.css measured it at. */
+.workspace-item .feature-glyph {
+  margin: 0 0 12px;
+}
+
+/* The review glyph marks its changed line with the ember class, which
+   global.css styles for fills; a stroked path needs the stroke set too. */
+.workspace-item .glyph-ticket-line.is-ember {
+  stroke: var(--ember);
+  stroke-width: 1.4;
+}
+
+.workspace-index {
+  display: block;
+  margin-bottom: 8px;
+  color: #555559;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.workspace-item h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 460;
+  letter-spacing: -0.03em;
+  line-height: 1.3;
+}
+
+.workspace-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14.5px;
+  font-weight: 380;
+  line-height: 1.6;
+}
+
+/* The three ways a run starts, as three lines under the storyboard. A list,
+   not cards: boxed, they read as three more features. */
+.ways-list {
+  display: grid;
+  max-width: 880px;
+  margin: 56px 0 0;
+  padding: 0;
+  gap: 14px;
+  list-style: none;
+}
+
+.ways-list li {
+  display: grid;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.ways-list b {
+  padding-top: 2px;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ways-list span {
+  color: var(--muted);
+  font-size: 14.5px;
+  font-weight: 380;
+  line-height: 1.6;
+}
+
+.ways-list strong {
+  color: var(--text);
+  font-weight: 520;
+}
+
+/* Local-first, provider and licence facts in one place (§3.5). */
+.trust-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 32px 40px;
+}
+
+.trust-item h3 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 480;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.trust-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 380;
+  line-height: 1.62;
+}
+
+.trust-item a {
+  color: #ff966c;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 150 108 / 38%);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 180ms ease;
+}
+
+.trust-item a:hover {
+  text-decoration-color: #ff966c;
+}
+
+/* Closing routes. Centered, so the page ends on the same axis it opened on. */
+.closing {
+  text-align: center;
+}
+
+.closing h2 {
+  max-width: 22ch;
+  margin: 0 auto;
+  color: var(--text);
+  font-size: clamp(30px, 2.8vw, 40px);
+  font-weight: 420;
+  letter-spacing: -0.045em;
+  line-height: 1.13;
+  text-wrap: balance;
+}
+
+/* :not() keeps this off .closing-note, which is a sibling paragraph with its
+   own, quieter treatment. */
+.closing p:not(.closing-note) {
+  max-width: 52ch;
+  margin: 16px auto 0;
+  color: var(--muted);
+  font-size: clamp(16px, 1.2vw, 17px);
+  font-weight: 360;
+  letter-spacing: -0.012em;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.closing-cta {
+  justify-content: center;
+}
+
+/* Same wrapping link row as .hero-alpha-note, so the page's two quiet link
+   rows are one pattern. */
+.closing-note {
+  display: flex;
+  margin: 22px 0 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px 18px;
+  color: var(--quiet);
+  font-size: 12.5px;
+  font-weight: 380;
+  line-height: 1.5;
+}
+
+.closing-note a {
+  color: #c98a63;
+  text-decoration: underline;
+  text-decoration-color: rgb(201 138 99 / 30%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  white-space: nowrap;
+  transition:
+    color 180ms ease,
+    text-decoration-color 180ms ease;
+}
+
+.closing-note a:hover {
+  color: #ff966c;
+  text-decoration-color: #ff966c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* global.css shortens transitions here but leaves animations alone; the
+     two this file adds are decoration, so they stop, and each rests in its
+     final state. */
+  .hero-clause > span,
+  .section-head.is-live .release-version::after {
+    animation: none;
+  }
+
+  .hero-clause > span {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 1050px) {
+  .release,
+  .workspace,
+  .trust,
+  .closing {
+    --section-gutter: 40px;
+  }
+
+  /* Six items in three columns leave the descriptions too narrow to read once
+     the measure drops below the site's 1050px shelf. */
+  .workspace-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .release,
+  .workspace,
+  .trust,
+  .closing {
+    padding-top: 88px;
+    padding-bottom: 88px;
+  }
+
+  .section-head {
+    margin-bottom: 40px;
+  }
+
+  .trust-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ways-list {
+    margin-top: 44px;
+  }
+}
+
+@media (max-width: 620px) {
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-grid {
+    gap: 34px;
+  }
+}
+
+@media (max-width: 560px) {
+  .release,
+  .workspace,
+  .trust,
+  .closing {
+    --section-gutter: 24px;
+
+    padding-top: 72px;
+    padding-bottom: 72px;
+  }
+
+  .section-head {
+    margin-bottom: 32px;
+  }
+
+  .ways-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .closing-note {
+    font-size: 12px;
+  }
+}

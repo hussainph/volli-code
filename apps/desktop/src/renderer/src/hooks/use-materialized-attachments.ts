@@ -37,8 +37,14 @@ export function attachmentsRevision(attachments: readonly { blobHash: string }[]
 
 export function useMaterializedAttachments(
   owner: MaterializedAttachmentsOwner,
-  /** Anything that changes when the owner's attachments do — see {@link attachmentsRevision}. */
-  revision: string | number = 0,
+  /**
+   * Anything that changes when the owner's attachments do — see
+   * {@link attachmentsRevision}. `null` means the strip itself has not landed
+   * yet: the read is held rather than issued against an empty list, which for
+   * a ticket that HAS attachments would otherwise be a second read a moment
+   * later when the real revision arrives (VC-373).
+   */
+  revision: string | number | null = 0,
 ): readonly NamedBlobLink[] {
   const [links, setLinks] = React.useState<readonly NamedBlobLink[]>(NONE);
   const { ticketId, sessionId } = owner;
@@ -48,6 +54,10 @@ export function useMaterializedAttachments(
       setLinks(NONE);
       return;
     }
+    // The owner's strip is unknown, so the question is not answerable yet.
+    // Nothing is painted and nothing is read; the effect re-runs when the
+    // real revision lands.
+    if (revision === null) return;
     let cancelled = false;
     void window.api.attachments
       .materialized({ ticketId, sessionId })

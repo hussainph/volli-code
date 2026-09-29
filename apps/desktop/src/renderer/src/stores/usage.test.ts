@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createUsageStore, usageKey, USAGE_WINDOW_MS, useUsageStore } from "./usage";
 
+/** The settle signal a caller is reading under — opaque to the store. */
+const SIGNAL = "ready,idle";
+
 function report(over: Partial<SessionUsageReport> = {}): SessionUsageReport {
   return {
     total: {
@@ -66,15 +69,16 @@ describe("usageKey", () => {
 });
 
 describe("refresh", () => {
-  it("holds the report main answered with", async () => {
+  it("holds the report main answered with, tagged with the signal it was read under", async () => {
     stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
 
     expect(store.getState().byQuery[usageKey({ kind: "all" }, undefined, undefined)]).toEqual({
       status: "ready",
       report: report(),
+      signal: SIGNAL,
     });
   });
 
@@ -86,7 +90,7 @@ describe("refresh", () => {
     stubReport({ ok: false, error: "projection unavailable" });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
 
     expect(store.getState().byQuery[usageKey({ kind: "all" }, undefined, undefined)]).toEqual({
       status: "error",
@@ -99,7 +103,7 @@ describe("refresh", () => {
     Object.assign(globalThis, { window: { api: { sessions: { usageReport: read } } } });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
 
     expect(store.getState().byQuery[usageKey({ kind: "all" }, undefined, undefined)]).toEqual({
       status: "error",
@@ -112,13 +116,18 @@ describe("refresh", () => {
     const store = createUsageStore();
     const key = usageKey({ kind: "all" }, undefined, undefined);
 
-    const first = store.getState().refresh({ scope: { kind: "all" } });
+    const first = store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
     expect(store.getState().byQuery[key]).toEqual({ status: "loading" });
     await first;
 
-    // The second read leaves the figure already on screen in place.
-    const second = store.getState().refresh({ scope: { kind: "all" } });
-    expect(store.getState().byQuery[key]).toEqual({ status: "ready", report: report() });
+    // A settled turn moves the signal, so the second read happens while the
+    // figure already on screen holds its place.
+    const second = store.getState().refresh({ scope: { kind: "all" } }, "ready,working");
+    expect(store.getState().byQuery[key]).toEqual({
+      status: "ready",
+      report: report(),
+      signal: SIGNAL,
+    });
     await second;
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -128,9 +137,9 @@ describe("refresh", () => {
     const store = createUsageStore();
 
     await Promise.all([
-      store.getState().refresh({ scope: { kind: "all" } }),
-      store.getState().refresh({ scope: { kind: "all" } }),
-      store.getState().refresh({ scope: { kind: "all" } }),
+      store.getState().refresh({ scope: { kind: "all" } }, SIGNAL),
+      store.getState().refresh({ scope: { kind: "all" } }, SIGNAL),
+      store.getState().refresh({ scope: { kind: "all" } }, SIGNAL),
     ]);
 
     expect(read).toHaveBeenCalledTimes(1);
@@ -142,7 +151,7 @@ describe("refresh", () => {
     const read = stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" }, windowMs: 1000 });
+    await store.getState().refresh({ scope: { kind: "all" }, windowMs: 1000 }, SIGNAL);
     expect(read).toHaveBeenCalledWith({
       scope: { kind: "all" },
       sinceMs: Date.parse("2026-08-01T00:00:00Z") - 1000,
@@ -150,9 +159,10 @@ describe("refresh", () => {
     });
 
     // A rolling window moves with the clock; a bound captured at mount would
-    // quietly age as the app stayed open.
+    // quietly age as the app stayed open. (A moved signal, so the second read
+    // is not skipped as current.)
     vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));
-    await store.getState().refresh({ scope: { kind: "all" }, windowMs: 1000 });
+    await store.getState().refresh({ scope: { kind: "all" }, windowMs: 1000 }, "ready,working");
     expect(read).toHaveBeenLastCalledWith({
       scope: { kind: "all" },
       sinceMs: Date.parse("2026-08-02T00:00:00Z") - 1000,
@@ -164,7 +174,7 @@ describe("refresh", () => {
     const read = stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" }, windowMs: undefined });
+    await store.getState().refresh({ scope: { kind: "all" }, windowMs: undefined }, SIGNAL);
 
     expect(read).toHaveBeenCalledWith({
       scope: { kind: "all" },
@@ -177,7 +187,9 @@ describe("refresh", () => {
     const read = stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "ticket", ticketId: "t1" }, groupBy: "model" });
+    await store
+      .getState()
+      .refresh({ scope: { kind: "ticket", ticketId: "t1" }, groupBy: "model" }, SIGNAL);
 
     expect(read).toHaveBeenCalledWith({
       scope: { kind: "ticket", ticketId: "t1" },
@@ -188,23 +200,34 @@ describe("refresh", () => {
 });
 
 /**
- * The cache exists to stop a figure blinking out, not to answer instead of
- * reading. A remount that reused a cached answer would show a stale total
- * indefinitely — the rails unmount on every page change, and nothing invalidates
- * behind them — so `refresh` is the only verb and it always reads.
+ * What the settle signal buys (VC-373): a cached answer still under the signal
+ * it was read at IS the answer — usage only moves on a settle, and a settle
+ * moves the signal — so a rail flip that nothing settled behind repaints
+ * without an indexed read. A signal that moved re-reads while keeping the old
+ * figure on screen, and a failure is never cached.
  */
-describe("the cache never answers instead of reading", () => {
-  it("re-reads the same question every time it is asked", async () => {
+describe("the settle signal", () => {
+  it("answers from cache when the signal has not moved", async () => {
     const read = stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" } });
-    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads the question as soon as the signal moves", async () => {
+    const read = stubReport({ ok: true, report: report() });
+    const store = createUsageStore();
+
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
+    await store.getState().refresh({ scope: { kind: "all" } }, "ready,working,idle");
 
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the previous answer on screen while the next read is in flight", async () => {
+  it("keeps the previous answer on screen while a moved-signal read is in flight", async () => {
     const first = report({ meteredSessionCount: 1 });
     const second = report({ meteredSessionCount: 2 });
     // A deferred so the second read can be held open while the store is
@@ -221,22 +244,30 @@ describe("the cache never answers instead of reading", () => {
     const store = createUsageStore();
     const key = usageKey({ kind: "all" }, undefined, undefined);
 
-    await store.getState().refresh({ scope: { kind: "all" } });
-    const second_read = store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
+    const second_read = store.getState().refresh({ scope: { kind: "all" } }, "ready,working,idle");
 
     // Not "loading": the old figure holds the space until the new one lands.
-    expect(store.getState().byQuery[key]).toEqual({ status: "ready", report: first });
+    expect(store.getState().byQuery[key]).toEqual({
+      status: "ready",
+      report: first,
+      signal: SIGNAL,
+    });
     release!({ ok: true, report: second });
     await second_read;
-    expect(store.getState().byQuery[key]).toEqual({ status: "ready", report: second });
+    expect(store.getState().byQuery[key]).toEqual({
+      status: "ready",
+      report: second,
+      signal: "ready,working,idle",
+    });
   });
 
   it("retries a question that failed, rather than caching the failure", async () => {
     const read = stubReport({ ok: false, error: "nope" });
     const store = createUsageStore();
 
-    await store.getState().refresh({ scope: { kind: "all" } });
-    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
+    await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
 
     expect(read).toHaveBeenCalledTimes(2);
   });

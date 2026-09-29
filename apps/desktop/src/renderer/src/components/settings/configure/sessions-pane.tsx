@@ -57,6 +57,11 @@ export function SessionsPane({ project }: { project: Project }) {
   const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>(NO_PROVIDERS);
   const [modelCatalogStatus, setModelCatalogStatus] = React.useState<ModelCatalogStatus>("loading");
   const [catalogAttempt, setCatalogAttempt] = React.useState(0);
+  // The attempt already spent. Only the effect run that sees a new number is
+  // a retry, and a retry forces a refresh; the run the refresh's own shared-
+  // revision bump causes must read the refreshed catalog instead of forcing
+  // another refresh, or every Try again would refresh forever.
+  const spentAttempt = React.useRef(0);
 
   const model = project.sessionModel ?? null;
 
@@ -70,8 +75,10 @@ export function SessionsPane({ project }: { project: Project }) {
         current = false;
       };
     }
+    const refresh = catalogAttempt > spentAttempt.current;
+    spentAttempt.current = catalogAttempt;
     setModelCatalogStatus("loading");
-    void inspect({ refresh: catalogAttempt > 0 })
+    void inspect({ refresh })
       .then((snapshot) => {
         if (!current) return;
         // Pi names every provider it knows. This picker names only models this

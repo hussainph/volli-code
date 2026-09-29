@@ -366,7 +366,7 @@ function FileMentionCode({
       type="button"
       className={cn(
         FILE_MENTION_CLASS,
-        "cursor-pointer rounded-sm transition-colors hover:text-primary hover:decoration-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "rounded-sm transition-colors hover:text-primary hover:decoration-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
       onClick={() => onOpenFile(path)}

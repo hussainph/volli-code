@@ -52,6 +52,7 @@ import {
   type CompactionWorkReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type ModelAccessSnapshot,
   type ObservabilitySink,
   type PromptResource,
   type ProviderReasoningDroppedObservation,
@@ -84,7 +85,8 @@ import {
   type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
-import { projectedContextTokens } from "./token-counting";
+import { createContextTokenProjector } from "./token-counting";
+import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -97,6 +99,7 @@ import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import {
   inspectPiModelAccess,
+  type InspectPiModelAccessInput,
   type PiModelAccessSource,
   type UsageLimitsSource,
 } from "./model-access";
@@ -367,19 +370,65 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           },
         }),
   };
+  const inspectionSource = (): PiModelAccessSource => ({
+    models: host.models,
+    credentials: host.credentials,
+    catalogReady: host.catalogReady,
+    catalogs: host.catalogs,
+    usageLimits: host.usageLimits,
+  });
+  /**
+   * The UNBOUNDED inspection already in flight, per kind of answer, shared by
+   * every caller that asks while it runs.
+   *
+   * A Session start, an automation's model list and several renderer mounts can
+   * all land in the same tick, and each would otherwise run the whole provider
+   * sweep beside the others — the same saving {@link UsageProbeSchedule.coalesce}
+   * makes for one usage read. A refresh never rides an ordinary inspection: a
+   * person pressed Refresh, and the answer must be the providers' now, not one
+   * already going.
+   *
+   * Only a caller that passed NO signal shares, and a caller that passed one
+   * neither joins a shared sweep nor becomes one. A signal here is a deadline
+   * its owner chose — the CLI's `model list` bounds its read, the auto-titler
+   * bounds its background call — and the callers have no deadline in common:
+   * sharing would either reject everyone the moment the first one gave up, or
+   * leave the others' cancellation with nothing to cancel. The hot path this
+   * exists for is the signal-less one (every renderer mount and Session start
+   * asks without a bound), and cancellation keeps reaching the probes exactly
+   * as it did before, because a bounded caller still runs an inspection of its
+   * own.
+   *
+   * Nothing holds a settled answer. The slot empties with the promise, so the
+   * next inspection asks the providers afresh — which is what an external
+   * credential change (no TTL can notice one) and the surface's own Refresh
+   * both require.
+   */
+  const inspections = new Map<"ordinary" | "refresh", Promise<ModelAccessSnapshot>>();
+  const inspectModelAccess = (
+    input: InspectPiModelAccessInput = {},
+  ): Promise<ModelAccessSnapshot> => {
+    if (input.signal !== undefined) {
+      return inspectPiModelAccess(inspectionSource(), host.now, input);
+    }
+    const kind = input.refresh === true ? "refresh" : "ordinary";
+    const inFlight = inspections.get(kind);
+    if (inFlight !== undefined) return inFlight;
+    const run = inspectPiModelAccess(inspectionSource(), host.now, input).then(
+      (snapshot) => {
+        inspections.delete(kind);
+        return snapshot;
+      },
+      (failure: unknown) => {
+        inspections.delete(kind);
+        throw failure;
+      },
+    );
+    inspections.set(kind, run);
+    return run;
+  };
   return {
-    inspectModelAccess: (input) =>
-      inspectPiModelAccess(
-        {
-          models: host.models,
-          credentials: host.credentials,
-          catalogReady: host.catalogReady,
-          catalogs: host.catalogs,
-          usageLimits: host.usageLimits,
-        },
-        host.now,
-        input,
-      ),
+    inspectModelAccess,
     startSession: async (spec) => {
       await host.catalogReady;
       return attachSession(host, spec);
@@ -429,6 +478,14 @@ async function runUtilityCompletion(
       // default-level request. Every other level passes through verbatim.
       ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      // OpenCode Go requires one opaque routing identity on every physical
+      // provider request. A utility completion has no attachment or sidecar
+      // whose id can supply it, and it makes exactly one request, so mint one
+      // identity for this standalone conversation. Keep unrelated providers'
+      // options byte-for-byte unchanged.
+      ...(model.provider === OPENCODE_GO_PROVIDER
+        ? { headers: { [OPENCODE_SESSION_HEADER]: randomUUID() } }
+        : {}),
     },
   );
   // Read BEFORE either refusal below. The provider billed for the prompt it
@@ -1184,6 +1241,10 @@ async function attachSession(
   if (model === undefined) {
     return rejectUnavailableModel(spec, observe);
   }
+  // Compaction preflight and provider output-ceiling checks see the same
+  // settled prefix in succession. Keep their pure estimates attachment-local
+  // so neither re-tokenizes immutable messages and tool metadata.
+  const contextTokenProjector = createContextTokenProjector();
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
@@ -1871,12 +1932,11 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = projectedContextTokens(
-        context.messages,
-        requestModel,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The whole normalized transcript, prefix included: since Pi 0.86 the
+      // system prompt and tool declarations ARE messages (the leading system
+      // one), and the projector prices them there rather than off fields the
+      // context no longer has.
+      const occupied = contextTokenProjector(context.messages, requestModel);
       return Math.max(
         floor,
         Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
@@ -1901,17 +1961,31 @@ async function attachSession(
       });
     };
 
+    // The prompt and the declarations, as the one leading system message Pi's
+    // transcript now carries them in (0.86). Built here rather than left to
+    // the `Agent`, which seeds one only when the array it is handed does not
+    // already start with a system message: a sidecar whose first replayable
+    // entry is a tool-change system message Pi emitted ahead of the first
+    // prompt would otherwise be taken for a transcript that already has its
+    // prompt, and the composed one would never be sent. The same object is put
+    // back at the head of every array this runtime rebuilds from the sidecar
+    // (compaction, model switch), so the prefix is the same bytes on every
+    // request of the attachment and the projector's memo hits on it.
+    const head = systemHead(
+      composeSystemPrompt({
+        role: spec.identity.role,
+        tools: spec.tools,
+        promptResources: spec.promptResources,
+      }),
+      tools,
+    );
+
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt({
-          role: spec.identity.role,
-          tools: spec.tools,
-          promptResources: spec.promptResources,
-        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
-        messages: recoveredMessages,
+        messages: withSystemHead(head, recoveredMessages),
       },
       onPayload: (payload) => {
         if (nativeCompactionState === undefined) return undefined;
@@ -2220,6 +2294,10 @@ async function attachSession(
           systemPrompt: agent.state.systemPrompt,
           tools: agent.state.tools,
           onNativeRequest: observeNativeRequest,
+          // VC-349 follow-up: the summarizer is a provider request like any
+          // other, so it carries the same stable Go routing identity the live
+          // turn sends. Without this, /compact on an opencode chat 400s.
+          sessionId: sidecarMetadata.id,
           // The resources this Session had activated ride INSIDE the durable
           // entry, ahead of the kept turns, rather than being inserted into
           // the live array once the entry is written. What the model is sent
@@ -2232,10 +2310,18 @@ async function attachSession(
           ...(instructions === undefined ? {} : { customInstructions: instructions }),
         });
         // Pi found nothing to compact — an empty history, or one already ending
-        // in a summary. Nothing happened, so nothing is reported: the caller
-        // that needed this to work is the one that has something to say about
-        // it. The live marker still has to leave, because it has no durable
-        // outcome that can dismiss it.
+        // in a summary. No compaction happened, so no compaction is recorded:
+        // there is no summary, no elided context and no spend to file, and a
+        // `CompactionObservation` saying otherwise would be a fact about work
+        // that did not occur. The live marker still has to leave, because it
+        // has no durable outcome that can dismiss it.
+        //
+        // Reporting it is the caller's job, and only one caller has anybody to
+        // report to (VC-141): the attachment's `compact` below turns this arm
+        // into a `nothing-to-compact` refusal, which reaches the person who
+        // typed `/compact` as a receipt, a durable `command.receipt.recorded`
+        // Session Event, and one neutral toast. Threshold and overflow stay
+        // silent here exactly as before — nobody is waiting on those.
         if (outcome.kind === "skipped") {
           await finishProgress();
           return outcome;
@@ -2255,8 +2341,9 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
-          // turns without their reasoning, all read off the entry just written.
-          agent.state.messages = outcome.messages;
+          // turns without their reasoning, all read off the entry just written
+          // — behind the head, which the entry never holds.
+          agent.state.messages = withSystemHead(head, outcome.messages);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -2330,11 +2417,13 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
-        const occupied = projectedContextTokens(
+        // The live array already leads with the system message that carries
+        // the prompt and tools; handing the projector the prompt as well would
+        // count it twice. (Tools would not — the estimator prices each
+        // declaration once over the transcript — but there is nothing to add.)
+        const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,
-          agent.state.systemPrompt,
-          agent.state.tools,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
         const path = await conversationBranch();
@@ -2699,17 +2788,18 @@ async function attachSession(
         await rewritingTheContext(() =>
           compactBeforeTurn([
             queuedUserMessage(
-              agent.state.messages.length === 0
+              conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
           ]),
         );
-        const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec, framedText)
-            : framedText;
+        // Asked of the conversation, not of the array: the array is never empty
+        // now that the system head lives in it (see `transcript-context.ts`).
+        const delivered = conversationIsEmpty(agent.state.messages)
+          ? composeFirstUserMessage(spec, framedText)
+          : framedText;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,
@@ -2845,7 +2935,7 @@ async function attachSession(
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = contextMessages(path);
+          agent.state.messages = withSystemHead(head, contextMessages(path));
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });

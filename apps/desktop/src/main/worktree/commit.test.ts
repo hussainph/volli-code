@@ -20,13 +20,13 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-/** A sync git runner answering the quick probes (sequencer git-dir + status). */
+/** An async git runner answering the quick probes (sequencer git-dir + status). */
 function probeGit(gitDir: string, status: string) {
   return scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
     if (args[0] === "status") return status;
     return "";
-  }).git;
+  }).gitAsync;
 }
 
 describe("commitRemaining", () => {

@@ -13,9 +13,10 @@
  * differently would be the same control drawn twice and would read as two
  * different settings. The automations lab (`lab/automation/runtime-picker.tsx`)
  * sketched effort INSIDE the model popover, and the shipped chat composer has
- * since settled the other way for a reason that applies here too — effort is
- * the per-task decision and belongs where it can be read without opening
- * anything (`components/chat/composer-effort-ui.tsx`).
+ * since settled on responsive disclosure for a reason that applies here too:
+ * effort is the per-task decision and stays readable as its own pill while
+ * there is room, then folds into the model control below 24rem rather than
+ * wrapping a second configuration row (`components/chat/composer-effort-ui.tsx`).
  *
  * SEEDED, NOT REMEMBERED. Every open reads the Ticket purpose's configured
  * default (VC-53's Model Access defaults). A choice made here is this ticket's,
@@ -161,6 +162,15 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
           (model) =>
             model.providerId === selection.providerId && model.modelId === selection.modelId,
         )?.reasoningLevels ?? []);
+  const changeEffort = (reasoningLevel: string): void => {
+    if (selection === null) return;
+    const picked = composerModelSelection({ ...selection, reasoningLevel });
+    if (picked !== null) setSelection(picked);
+  };
+  const compactEffort =
+    selection !== null && stops.length > 1
+      ? { levels: stops, value: selection.reasoningLevel, onChange: changeEffort }
+      : undefined;
 
   return (
     <>
@@ -175,6 +185,7 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
         // disables ITSELF on an empty catalog, which is the only state where
         // there is nothing to pick.
         disabled={false}
+        compactEffort={compactEffort}
         onChange={(next) => {
           // A level the wire grammar does not spell cannot be recorded, so a
           // pill that produced one changes nothing rather than half of it.
@@ -188,10 +199,8 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
         <EffortPill
           levels={stops}
           value={selection.reasoningLevel}
-          onChange={(level) => {
-            const picked = composerModelSelection({ ...selection, reasoningLevel: level });
-            if (picked !== null) setSelection(picked);
-          }}
+          onChange={changeEffort}
+          className="composer-separate-effort"
         />
       ) : null}
     </>

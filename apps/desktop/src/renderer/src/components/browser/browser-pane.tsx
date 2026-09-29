@@ -167,12 +167,23 @@ export function BrowserPane({
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
     if (anchor === null) return;
-    const controller = new BrowserPlaneController(tab.tabId, api, (message) => {
-      setError(message);
-      toastError(message);
-    });
+    const controller = new BrowserPlaneController(
+      tab.tabId,
+      api,
+      (message) => {
+        setError(message);
+        toastError(message);
+      },
+      {
+        request: (callback) => window.requestAnimationFrame(callback),
+        cancel: (handle) => window.cancelAnimationFrame(handle),
+      },
+    );
     controllerRef.current = controller;
-    const measure = () => controller.reportBounds(anchor.getBoundingClientRect());
+    // The controller invokes this lazy read only for the latest observation in
+    // a frame, avoiding a synchronous layout read for notifications it drops.
+    const readBounds = () => anchor.getBoundingClientRect();
+    const measure = () => controller.reportBounds(readBounds);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(anchor);

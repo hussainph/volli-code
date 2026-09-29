@@ -300,7 +300,7 @@ describe("ToolRow copy control", () => {
 
     expect(html).toContain("pnpm run typecheck &amp;&amp;\npnpm run test");
     expect(html).toContain('class="min-w-0 truncate font-mono text-ui text-foreground"');
-    expect(html).toContain("cursor-pointer hover:bg-muted/30 hover:text-foreground");
+    expect(html).toContain("cursor-default hover:bg-muted/30 hover:text-foreground");
     expect(html).toContain('aria-label="Show details"');
     expect(html).toContain('title="Show details"');
     expect(html).toContain("size-5");

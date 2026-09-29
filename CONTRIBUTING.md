@@ -38,6 +38,12 @@ Run coverage when you add a branch or a renderer/store action:
 pnpm run test:coverage
 ```
 
+The desktop performance harness is intentionally outside the unit and coverage lane because its fixture test writes a real-scale migrated database. See [Desktop performance benchmark](docs/performance-benchmark.md) for the measurement command, and run its focused checks with:
+
+```bash
+pnpm test:performance-harness
+```
+
 ## Architecture pointers
 
 Read [CONTEXT.md](CONTEXT.md) for product terms and [docs/DESIGN.md](docs/DESIGN.md) for the visual language. [AGENTS.md](AGENTS.md) describes package boundaries, local development commands, and project conventions.

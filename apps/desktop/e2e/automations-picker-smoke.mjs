@@ -5,7 +5,7 @@
  *
  * What it proves, in dependency order:
  *   1. A drag over a column that offers something shows that column's Offered
- *      list, and the "⌥ to choose" hint near bottom-centre.
+ *      list, and the "⌥ Choose automation" hint near bottom-centre.
  *   2. Holding ⌥ mid-drag GROWS that column into landing targets: every offered
  *      row plus a Move only target, each carrying the digit that picks it.
  *   3. The armed Automation is pinned to digit `1`, so `1` reproduces a plain
@@ -376,7 +376,7 @@ try {
     const targets = await page.locator("[data-offered-row]").count();
     await drag.cancel();
     return {
-      ok: collapsed === "collapsed" && (hint ?? "").includes("to choose") && targets === 0,
+      ok: collapsed === "collapsed" && (hint ?? "").includes("Choose automation") && targets === 0,
       detail: `panel=${collapsed} hint=${JSON.stringify((hint ?? "").trim())} targets=${targets}`,
     };
   });
@@ -587,7 +587,7 @@ try {
       }, seeded.ticketId);
       return {
         ok:
-          (hint ?? "").includes("to choose") &&
+          (hint ?? "").includes("Choose automation") &&
           rows.length === 2 &&
           rows[0].row === "0" &&
           rows[0].text.includes("Standards sweep") &&

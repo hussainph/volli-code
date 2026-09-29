@@ -52,6 +52,7 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     progress: 0.5,
     state: "working",
     promoted: false,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -563,6 +564,65 @@ describe("row verbs", () => {
     expect(actions.openShell).toHaveBeenCalledWith("s1");
   });
 
+  // VC-416. The card row is one of the two surfaces that could not say which
+  // model and effort the parent picked for its helper.
+  it("says what each subagent is running, under its name", async () => {
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      agents: [
+        agent(),
+        agent({
+          id: "a2",
+          label: "Grep the tests",
+          model: { providerId: "openai", modelId: "o5-mini", reasoningLevel: "xhigh" },
+        }),
+      ],
+    });
+    click(cluster("agents"));
+
+    // The model id and the composer's own word for the level — never `xhigh`,
+    // which is Pi's wire spelling and nobody's label.
+    expect(rowIn("agents", "a1").textContent).toContain("sonnet-4.5");
+    expect(rowIn("agents", "a1").textContent).toContain("High");
+    expect(rowIn("agents", "a2").textContent).toContain("o5-mini");
+    expect(rowIn("agents", "a2").textContent).toContain("Extra high");
+    expect(rowIn("agents", "a2").textContent).not.toContain("xhigh");
+  });
+
+  // Nothing at all, rather than a placeholder: the gap is the one beat between
+  // a delegated row appearing and its Session's start settling, and `— · —`
+  // would report an absence as a reading.
+  it("draws no policy line for a subagent that has not recorded one", async () => {
+    await render({ ...EMPTY_ACTIVITY_ISLAND, agents: [agent({ model: null })] });
+    click(cluster("agents"));
+
+    expect(rowIn("agents", "a1").querySelector("[data-agent-model]")).toBeNull();
+    // The row still says what it is doing; only the policy is missing.
+    expect(rowIn("agents", "a1").textContent).toContain("Audit icon weights");
+  });
+
+  it("wraps long plan titles and breaks long words instead of truncating", async () => {
+    const title =
+      "Review every checklist item before implementation supercalifragilisticexpialidocious";
+    const plan: IslandPlan = {
+      id: "long-title-plan",
+      steps: [{ id: "long-step", title, state: "in_progress" }],
+      done: 0,
+    };
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan });
+    click(cluster("plan"));
+
+    const row = rowIn("plan", "long-step");
+    const titleNode = [...row.querySelectorAll<HTMLSpanElement>("span")].find(
+      (span) => span.textContent === title,
+    );
+    expect(titleNode?.textContent).toBe(title);
+    expect(titleNode?.classList.contains("truncate")).toBe(false);
+    expect(titleNode?.classList.contains("whitespace-normal")).toBe(true);
+    expect(titleNode?.classList.contains("break-words")).toBe(true);
+    expect(row.textContent).toContain("now");
+  });
+
   it("draws a step per id, so two steps may share a title", async () => {
     const repeated: IslandPlan = {
       id: "p2",
@@ -737,5 +797,77 @@ describe("the now channel", () => {
     });
     expect(clusters()).toEqual([]);
     expect(container?.querySelector("[data-island-ticker]")?.textContent).toBe("1 tab");
+  });
+});
+
+describe("responsive card width", () => {
+  // jsdom has no layout and no ResizeObserver; both are stubbed so the
+  // measurement path runs exactly as it does in the app — the island reads
+  // its own centering wrapper (full column width) less the column gutter
+  // (zero in jsdom, where nothing is styled), and the card takes 75% of that.
+  let clientWidthSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  function stubMeasurement(columnWidth: number): void {
+    // `observe` stays silent on purpose: the hook measures once on mount
+    // itself, and a stub that fired every observer would also fire
+    // floating-ui's own ResizeObserver (Radix popper positioning), whose
+    // callback destructures entries the stub cannot invent.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    clientWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(columnWidth);
+  }
+
+  // The file's own afterEach unstubs the ResizeObserver; the prototype spy is
+  // restored here so no other suite inherits a measured column.
+  afterEach(() => {
+    clientWidthSpy?.mockRestore();
+    clientWidthSpy = null;
+  });
+
+  it("sizes a pinned card to 75% of the measured column", async () => {
+    stubMeasurement(800);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")?.style.width).toBe("600px");
+    // jsdom serializes the rem against its 16px root; the authored value is
+    // `calc(100vw - 2rem)`.
+    expect(card("tabs")?.style.maxWidth).toBe("calc(100vw - 32px)");
+  });
+
+  it("floors a narrow column at the proven row width instead of crushing it", async () => {
+    // 75% of 300 would be 225 — narrower than the rows the old fixed width
+    // already proved usable — so the card holds 288 and truncates instead.
+    stubMeasurement(300);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")?.style.width).toBe("288px");
+  });
+
+  it("gives the agents card the higher floor its three row actions need", async () => {
+    stubMeasurement(300);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, agents: [agent()] });
+    click(cluster("agents"));
+
+    expect(card("agents")?.style.width).toBe("320px");
+  });
+
+  it("keeps the fallback widths where there is nothing to measure with", async () => {
+    // No ResizeObserver stub: jsdom proper. The card still opens at its
+    // fixed fallback width rather than collapsing to nothing.
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")).not.toBeNull();
+    expect(card("tabs")?.style.width).toBe("");
   });
 });

@@ -66,6 +66,15 @@ describe("chat markdown overrides", () => {
     expect(render(`![dot](${src})`)).toContain(`src="${src}"`);
   });
 
+  it("keeps images in the live Markdown pipeline", () => {
+    const src = "data:image/png;base64,iVBORw0KGgo=";
+    const html = renderToStaticMarkup(
+      <MessageResponse isAnimating>{`![dot](${src})`}</MessageResponse>,
+    );
+
+    expect(html).toContain(`src="${src}"`);
+  });
+
   it("explains an image it will not load instead of drawing a broken one", () => {
     const html = render("![shipped pane](/Users/me/shipped.png)");
     expect(html).not.toContain("<img");

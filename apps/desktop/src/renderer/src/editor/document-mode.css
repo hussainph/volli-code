@@ -221,7 +221,6 @@
  */
 .volli-document-mode .volli-md-checkbox {
   font-size: 0;
-  cursor: pointer;
 }
 .volli-document-mode .volli-md-checkbox::before {
   content: "";
@@ -330,7 +329,6 @@
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--foreground);
-  cursor: pointer;
 }
 .volli-document-mode .volli-md-file-chip:hover {
   background: var(--muted);

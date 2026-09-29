@@ -26,12 +26,20 @@ export default defineConfig({
       "@renderer": fileURLToPath(new URL("../../../src/renderer/src", import.meta.url)),
     },
   },
+  // React's dual-build entry is a `require` behind `process.env.NODE_ENV`, and
+  // without this the bench shipped BOTH builds and ran the development one:
+  // the profiling instrumentation, the prop-diff formatter, the warning paths.
+  // That is not what the app ships, so every number measured through it priced
+  // the wrong renderer — and the dev-only prop-diff formatter also crashed the
+  // page on slow renders. Stating it here is not belt-and-braces; it is the
+  // difference between measuring the product and measuring a debug build.
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   build: {
     outDir: fileURLToPath(new URL("./dist", import.meta.url)),
     emptyOutDir: true,
     // The measurement is about the renderer's own cost, so the bundle is built
     // the way the app ships: minified, production React, no dev warnings in the
-    // frame budget.
+    // frame budget. `chat-window-bench.mjs` asserts that after every build.
     minify: true,
     sourcemap: false,
   },

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BrowserPlaneController, type BrowserPlaneGateway } from "./browser-plane";
+import {
+  BrowserPlaneController,
+  type BrowserPlaneFrameScheduler,
+  type BrowserPlaneGateway,
+} from "./browser-plane";
 
 function gateway(calls: string[]): BrowserPlaneGateway {
   return {
@@ -22,31 +26,127 @@ function gateway(calls: string[]): BrowserPlaneGateway {
   };
 }
 
+function stableBounds(): { x: number; y: number; width: number; height: number } {
+  return { x: 20, y: 82, width: 800, height: 500 };
+}
+
+function frameScheduler(): { scheduler: BrowserPlaneFrameScheduler; flush: () => void } {
+  let nextHandle = 0;
+  const callbacks = new Map<number, () => void>();
+  return {
+    scheduler: {
+      request(callback) {
+        nextHandle += 1;
+        callbacks.set(nextHandle, callback);
+        return nextHandle;
+      },
+      cancel(handle) {
+        callbacks.delete(handle);
+      },
+    },
+    flush() {
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      for (const callback of pending) callback();
+    },
+  };
+}
+
 describe("BrowserPlaneController", () => {
   it("reports the rounded content rectangle before showing the native view", () => {
     const calls: string[] = [];
-    const plane = new BrowserPlaneController("tab-7", gateway(calls), () => undefined);
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      gateway(calls),
+      () => undefined,
+      frames.scheduler,
+    );
 
-    plane.reportBounds({ x: 20.4, y: 81.6, width: 799.8, height: 500.2 });
+    plane.reportBounds(() => ({ x: 20.4, y: 81.6, width: 799.8, height: 500.2 }));
     plane.setVisible(true);
 
     expect(calls).toEqual(['bounds:tab-7:{"x":20,"y":82,"width":800,"height":500}', "show:tab-7"]);
   });
 
-  it("does not resend an unchanged ResizeObserver rectangle", () => {
+  it("coalesces a frame's observations into one lazy read of the latest rectangle", () => {
     const calls: string[] = [];
-    const plane = new BrowserPlaneController("tab-7", gateway(calls), () => undefined);
-    const rect = { x: 20, y: 82, width: 800, height: 500 };
+    const reads: string[] = [];
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      gateway(calls),
+      () => undefined,
+      frames.scheduler,
+    );
 
-    plane.reportBounds(rect);
-    plane.reportBounds(rect);
+    plane.reportBounds(() => {
+      reads.push("superseded");
+      return { x: 10, y: 82, width: 810, height: 500 };
+    });
+    plane.reportBounds(() => {
+      reads.push("latest");
+      return { x: 20, y: 82, width: 800, height: 500 };
+    });
 
+    expect(reads).toEqual([]);
+    expect(calls).toEqual([]);
+    frames.flush();
+    expect(reads).toEqual(["latest"]);
     expect(calls).toEqual(['bounds:tab-7:{"x":20,"y":82,"width":800,"height":500}']);
+  });
+
+  it("does not cache bounds that main may have changed through another placement path", () => {
+    const calls: string[] = [];
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      gateway(calls),
+      () => undefined,
+      frames.scheduler,
+    );
+    plane.reportBounds(stableBounds);
+    frames.flush();
+    plane.reportBounds(stableBounds);
+    frames.flush();
+
+    expect(calls).toEqual([
+      'bounds:tab-7:{"x":20,"y":82,"width":800,"height":500}',
+      'bounds:tab-7:{"x":20,"y":82,"width":800,"height":500}',
+    ]);
+  });
+
+  it("drops a pending measurement when its React surface unmounts", () => {
+    const calls: string[] = [];
+    const reads: string[] = [];
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      gateway(calls),
+      () => undefined,
+      frames.scheduler,
+    );
+    plane.reportBounds(() => {
+      reads.push("read");
+      return { x: 20, y: 82, width: 800, height: 500 };
+    });
+
+    plane.dispose();
+    frames.flush();
+
+    expect(reads).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
   it("hides a visible native view when its React surface unmounts", () => {
     const calls: string[] = [];
-    const plane = new BrowserPlaneController("tab-7", gateway(calls), () => undefined);
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      gateway(calls),
+      () => undefined,
+      frames.scheduler,
+    );
     plane.setVisible(true);
 
     plane.dispose();
@@ -58,7 +158,13 @@ describe("BrowserPlaneController", () => {
     const api = gateway([]);
     api.hide = async () => ({ ok: false, error: "host unavailable" });
     const errors: string[] = [];
-    const plane = new BrowserPlaneController("tab-7", api, (message) => errors.push(message));
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      api,
+      (message) => errors.push(message),
+      frames.scheduler,
+    );
     plane.setVisible(true);
 
     plane.dispose();
@@ -75,7 +181,13 @@ describe("BrowserPlaneController", () => {
         rejectShow = reject;
       });
     const errors: string[] = [];
-    const plane = new BrowserPlaneController("tab-7", api, (message) => errors.push(message));
+    const frames = frameScheduler();
+    const plane = new BrowserPlaneController(
+      "tab-7",
+      api,
+      (message) => errors.push(message),
+      frames.scheduler,
+    );
     plane.setVisible(true);
     plane.dispose();
 

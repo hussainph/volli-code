@@ -117,6 +117,7 @@ import {
 } from "@volli/session-presentation";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 
+import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
@@ -304,6 +305,91 @@ function useActions(): ActivityIslandActions {
 
 /* ----------------------------------------------------------- cluster shell */
 
+/**
+ * Card widths (VC-384). The cards hang off a 32px pill but read against the
+ * composer below, so they TRACK it: 75% of the composer's live width,
+ * re-measured on every resize through `useIslandColumnWidth`. Before this the
+ * cards were fixed `w-72`/`w-80`, which truncated plan steps and subagent
+ * titles past reading — and the first cut at this ticket only swapped one
+ * fixed width for a wider one, which never moved when the window did.
+ *
+ * Two bounds keep the proportion honest. The floor is the old fixed width —
+ * the proven-usable row for that card's action count (two actions default,
+ * three on the agents card) — so a narrow column degrades to the shipped
+ * rows rather than to crushed ones. The ceiling is the viewport: a stale
+ * measurement must never push a card past the window.
+ *
+ * The live width is an INLINE STYLE, for two reasons that are both Law 2.
+ * First, a width the Tailwind scan could drop is exactly the silent lie the
+ * law was written about. Second, the card is portalled to `document.body`,
+ * where no CSS variable set on the chat plane could ever reach it — and one
+ * set on `:root` would be shared across splits, every pane's cards wearing
+ * one pane's width. React props cross portals; inheritance does not. The
+ * fixed widths below are only the first-paint fallback before the measurement
+ * lands (and the whole width where there is no ResizeObserver, e.g. jsdom).
+ */
+const ISLAND_CARD_WIDTH = "w-[min(32rem,calc(100vw-2rem))]";
+const ISLAND_AGENTS_CARD_WIDTH = "w-[min(34rem,calc(100vw-2rem))]";
+/** The share of the composer's width a card takes. */
+const ISLAND_CARD_SHARE = 0.75;
+/** Floors are the old fixed widths, in px. */
+const ISLAND_CARD_MIN_PX = 288;
+const ISLAND_AGENTS_CARD_MIN_PX = 320;
+const ISLAND_VIEWPORT_MARGIN_PX = 32;
+
+/** 75% of the measured composer, floored; null until there is a measurement. */
+export function islandCardWidth(columnWidthPx: number | null, minPx: number): number | null {
+  if (columnWidthPx === null || !(columnWidthPx > 0)) return null;
+  return Math.max(minPx, Math.round(columnWidthPx * ISLAND_CARD_SHARE));
+}
+
+/** `parseFloat` that treats unparseable input (jsdom's empty strings) as zero. */
+function parseCssPx(value: string): number {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** Horizontal padding of an element, in px. */
+function horizontalPadding(element: Element | null): number {
+  if (!element) return 0;
+  const style = window.getComputedStyle(element);
+  return parseCssPx(style.paddingLeft) + parseCssPx(style.paddingRight);
+}
+
+/**
+ * The composer's width as the island sees it: the full column width the
+ * island's own centering wrapper fills, less the column gutter it is padded
+ * with. The gutter is read off the wrapper's PARENT — the `ContentColumn`
+ * both this island and the composer below it sit in — rather than named from
+ * the token, so a gutter change (or a root font-size change moving every rem)
+ * moves the measurement with it instead of silently dating it.
+ */
+function measuredColumnWidth(node: HTMLElement): number {
+  return Math.max(0, node.clientWidth - horizontalPadding(node.parentElement));
+}
+
+/** Live width of the column the island (and the composer below it) fills. Null until measured. */
+function useIslandColumnWidth<T extends HTMLElement>(
+  ref: React.RefObject<T | null>,
+): number | null {
+  const [width, setWidth] = React.useState<number | null>(null);
+  React.useLayoutEffect(() => {
+    const node = ref.current;
+    // No ResizeObserver, no measurement (jsdom): the cards keep their
+    // fallback widths, and every test below proves they still work.
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      const next = measuredColumnWidth(node);
+      setWidth((prev) => (prev === next ? prev : next));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
+
 /** One cluster's hover shell: nothing, a one-line tooltip, or a rich card. */
 function ClusterShell({
   cluster,
@@ -311,6 +397,8 @@ function ClusterShell({
   line,
   detail,
   cardClassName,
+  columnWidth,
+  cardMinWidth = ISLAND_CARD_MIN_PX,
   children,
 }: React.PropsWithChildren<{
   cluster: IslandCluster;
@@ -319,6 +407,10 @@ function ClusterShell({
   detail: React.ReactNode;
   /** Card width — the agents card earns more room for three row actions. */
   cardClassName?: string;
+  /** Live column width from the island root; null until measured. */
+  columnWidth: number | null;
+  /** Floor for the measured width — the agents card's rows carry three actions. */
+  cardMinWidth?: number;
 }>) {
   const id = React.useId();
   const coordination = React.useContext(HoverContext);
@@ -372,6 +464,12 @@ function ClusterShell({
     }),
     [pinned, feel.reveal, feel.armDestructive, coordination, id],
   );
+
+  // The live width (see the note on the width constants): exact px from the
+  // island's own column measurement, viewport-capped so a stale value can
+  // never push the card past the window. Null until the first measurement
+  // lands — the fallback class below covers that paint.
+  const measuredWidth = islandCardWidth(columnWidth, cardMinWidth);
 
   if (feel.hover === "tooltip") {
     return (
@@ -441,7 +539,15 @@ function ClusterShell({
           sideOffset={10}
           collisionPadding={8}
           data-island-card={cluster}
-          className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? "w-72")}
+          className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? ISLAND_CARD_WIDTH)}
+          style={
+            measuredWidth === null
+              ? undefined
+              : {
+                  width: measuredWidth,
+                  maxWidth: `calc(100vw - ${ISLAND_VIEWPORT_MARGIN_PX}px)`,
+                }
+          }
           // Radix would focus the first tabbable — the header's pin button.
           // Nothing is focused on open unless a keyboard pin asked for the
           // first row (see `focusFirstRow`).
@@ -787,6 +893,21 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             leading={<AgentDot agent={agent} reduce={reduce} />}
             primary={agent.label}
             primaryTrailing={<RowState>{agentStateWord(agent)}</RowState>}
+            // THE POLICY TAKES ITS OWN LINE (VC-416), where the tab row's
+            // owner rides the name's. The two additions are not the same
+            // weight: an owner is one short title, and this is a model id plus
+            // an effort word plus a glyph. The name's line is also the one with
+            // no width to spare — at this card's {@link
+            // ISLAND_AGENTS_CARD_MIN_PX} floor the row spends its 320px on
+            // padding, a 16px dot, a state word and three action buttons before
+            // the title gets any, and the title is the only part of the row a
+            // person scans. So the policy goes where `ListRow` keeps a quieter
+            // line for exactly this, and the title keeps the line it had.
+            //
+            // A row with no recorded policy draws no second line at all (the
+            // component answers null), so the height is spent only by rows that
+            // have something to say with it.
+            secondary={<AgentModelLine agent={agent} />}
             onActivate={() => actions.peekAgent(agent.id)}
             actions={
               <RowActions>
@@ -878,7 +999,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               primary={
                 <span
                   className={cn(
-                    "min-w-0 truncate text-ui",
+                    "min-w-0 flex-1 whitespace-normal break-words text-ui",
                     state === "done" && "text-muted-foreground line-through",
                     // Struck through like a done step, but dimmed further and
                     // never emphasised: the strike says "not on the list any
@@ -955,14 +1076,21 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
 interface ClusterProps {
   feel: ActivityIslandFeel;
   reduce: boolean;
+  columnWidth: number | null;
 }
 
-function TabsCluster({ tabs, feel, reduce }: ClusterProps & { tabs: readonly IslandTab[] }) {
+function TabsCluster({
+  tabs,
+  feel,
+  reduce,
+  columnWidth,
+}: ClusterProps & { tabs: readonly IslandTab[] }) {
   return (
     <ClusterShell
       cluster="tabs"
       feel={feel}
       line={tabsLine(tabs)}
+      columnWidth={columnWidth}
       detail={<TabsCard tabs={tabs} reduce={reduce} />}
     >
       {/* Tabs compress to namespace glyph + count — the colored chips belong
@@ -1045,13 +1173,16 @@ function AgentsCluster({
   agents,
   feel,
   reduce,
+  columnWidth,
 }: ClusterProps & { agents: readonly IslandAgent[] }) {
   return (
     <ClusterShell
       cluster="agents"
       feel={feel}
       line={agentsLine(agents)}
-      cardClassName="w-80"
+      cardClassName={ISLAND_AGENTS_CARD_WIDTH}
+      columnWidth={columnWidth}
+      cardMinWidth={ISLAND_AGENTS_CARD_MIN_PX}
       detail={<AgentsCard agents={agents} reduce={reduce} />}
     >
       {/* Chips only. Identity IS this cluster — the people idiom needs no
@@ -1077,12 +1208,13 @@ function AgentsCluster({
   );
 }
 
-function PlanCluster({ plan, feel, reduce }: ClusterProps & { plan: IslandPlan }) {
+function PlanCluster({ plan, feel, reduce, columnWidth }: ClusterProps & { plan: IslandPlan }) {
   return (
     <ClusterShell
       cluster="plan"
       feel={feel}
       line={planLine(plan)}
+      columnWidth={columnWidth}
       detail={<PlanCard plan={plan} reduce={reduce} />}
     >
       <motion.span layout {...clusterPresence(reduce)} className="flex items-center gap-1">
@@ -1099,6 +1231,7 @@ function ShellsCluster({
   shells,
   feel,
   reduce,
+  columnWidth,
 }: ClusterProps & { shells: readonly IslandShell[] }) {
   const running = shellsRunning(shells) > 0;
   return (
@@ -1106,6 +1239,7 @@ function ShellsCluster({
       cluster="shells"
       feel={feel}
       line={shellsLine(shells)}
+      columnWidth={columnWidth}
       detail={<ShellsCard shells={shells} reduce={reduce} />}
     >
       {/* State lives IN the glyph — fill + primary while running, outline +
@@ -1197,7 +1331,15 @@ export function ActivityIsland({
 
   const coordination = useHoverCoordination();
 
-  const clusterProps = { feel, reduce };
+  // The column this island (and the composer below it) fills — the cards
+  // key their width to it, so they stay 75% of the composer at any window,
+  // split or sidebar width. Measured here, on the wrapper that always spans
+  // the column, rather than on the pill, which is only as wide as its
+  // clusters.
+  const centerRef = React.useRef<HTMLDivElement>(null);
+  const columnWidth = useIslandColumnWidth(centerRef);
+
+  const clusterProps = { feel, reduce, columnWidth };
   const clusterNode = (cluster: IslandCluster): React.ReactNode => {
     switch (cluster) {
       case "tabs":
@@ -1226,7 +1368,7 @@ export function ActivityIsland({
               over the composer for as long as the chat had nothing to model,
               and "no island when nothing to model" has to mean no band of
               nothing either. The spacing rides the pill instead. */}
-          <div className="flex justify-center">
+          <div className="flex justify-center" ref={centerRef}>
             <AnimatePresence initial={false}>
               {populated ? (
                 <motion.div

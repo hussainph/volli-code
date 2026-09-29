@@ -24,11 +24,13 @@ import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session
 import {
   DEFAULT_MODEL_REQUIRED,
   defaultModelRequiredForTier,
+  isAgentModelTier,
   modelPurposeForRole,
 } from "@volli/shared";
 import type {
   ModelAccessSnapshot,
   ModelSelection,
+  McpToolDefinition,
   ModelTier,
   PromptResource,
   ReasoningLevel,
@@ -159,14 +161,23 @@ export interface SessionToolSurfacePorts {
     role: SessionRole,
     grants: readonly string[],
     within?: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
   ): readonly SessionToolId[];
+  /** Selected sanitized definitions for a newly born root Session. */
+  resolveMcp?(projectId: string): readonly McpToolDefinition[];
+  /** Exact definitions a parent froze, used verbatim by a new child. */
+  recordedMcp?(sessionId: string): Promise<readonly McpToolDefinition[]>;
   /**
    * The surface one existing Session was frozen with, or `null` when it has
    * none recorded (a legacy Session that has not attached since VC-164). Read
    * for a parent, to bound its child.
    */
   recorded(sessionId: string): Promise<readonly SessionToolId[] | null>;
-  record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
+  record(
+    sessionId: string,
+    tools: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
+  ): Promise<void>;
 }
 
 /**
@@ -206,6 +217,31 @@ export interface SessionStartInput {
    */
   parentSessionId?: string;
   title: string | null;
+  /**
+   * The Session id a client already minted (VC-358), honored when present so a
+   * provisional chat can be promoted under the id it carried all along. There
+   * is no swap to manage because there is no second id: the ledger takes this
+   * one as the Session's.
+   *
+   * Rides the `session.create` CLIENT COMMAND only — never the model record,
+   * never an attach — and is deliberately absent from the durable intent the
+   * engine writes: the id IS the Session's id, so recording that it was
+   * proposed would be a second copy of one fact. The command id stays derived
+   * from {@link operationId}, so a replayed promotion restates the same id
+   * under the same key, which is what lets the engine's dedup collapse it (its
+   * replay guard refuses a replay naming a different id than the create was
+   * accepted under).
+   *
+   * Absent — every existing caller, whose doors name no such field — keeps the
+   * ledger's own id derivation, untouched.
+   *
+   * THIS FACADE DOES NOT VALIDATE. Format is the RPC door's contract
+   * (`z.uuidv4()` there, per `docs/BOUNDARIES.md` rule 1), and uniqueness is
+   * the ledger's (`assertGloballyUnusedId`). A caller reaching this facade by
+   * another door — the agent socket, an Automation — therefore carries the
+   * same obligation the RPC door discharges for the renderer.
+   */
+  requestedSessionId?: string;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */
   skills?: readonly string[];
   /**
@@ -275,6 +311,83 @@ export type SessionModelOverride = {
     }
 );
 
+/**
+ * The model policy a Session durably recorded: what it runs, and the rung that
+ * model came from.
+ *
+ * `tier` is `null` when an exact id was named rather than a rung, and
+ * `selection` is `null` only on a Session born before the policy existed —
+ * every mint records one. The pair travels together because a child reads both
+ * to inherit ({@link anchoredOnParent}), and reading one without the other is
+ * what made the tier look like decoration rather than a policy a child can
+ * stand on.
+ */
+export interface SessionModelAnchor {
+  readonly selection: ModelSelection | null;
+  readonly tier: ModelTier | null;
+}
+
+/**
+ * What a Subagent Session runs on when its delegation NAMED nothing (VC-431):
+ * its parent's own anchor, never a rung of the Role's own.
+ *
+ * The rung this replaced was `utility` — the slot for work nobody asked for,
+ * such as chat names and summaries — so a profile that filled it with a cheap
+ * background model ran every un-named delegation there. A delegation is work
+ * the parent asked for, and "whatever the parent is anchored to" is the only
+ * default that needs no explanation.
+ *
+ * In order:
+ *
+ * 1. The caller's own `model` or `tier` wins outright. A delegation that names
+ *    one is answering this question itself.
+ * 2. The parent's `tier`, passed on AS A TIER. The child therefore reads the
+ *    user's current Settings row the way its parent did, which is the ruling
+ *    this carries out: a rung is a standing preference for a kind of work, not
+ *    a snapshot of one model. A child can outlive a Settings change and run a
+ *    different model than its parent is running; that is the rung doing its
+ *    job, not drift.
+ * 3. The parent's exact model AND its level — what a parent pinned by id, or
+ *    one that simply resolved its Role's default, recorded. Here the child
+ *    runs precisely what the parent runs.
+ * 4. Nothing. A parent that recorded no anchor at all leaves the Role's rung
+ *    standing, which since VC-431 is the ladder root rather than `utility`.
+ *
+ * `utility` is never inherited AS A TIER: no door may name that row
+ * (`AGENT_MODEL_TIERS`), so a parent carrying it from an older build hands
+ * down the model it is actually running instead. Nothing here can put a child
+ * on the Utility row.
+ *
+ * Pure, and it answers ONLY the model/tier alternative. What the caller said
+ * besides that rides on top of whichever anchor was found: `reasoning` alone
+ * means "what my parent runs, at this level", and `whenUnavailable` still says
+ * where a refusal lands. Those are carried across rather than spread, because
+ * the alternative is precisely what this function is choosing between and
+ * {@link SessionModelOverride} states that in its own union.
+ */
+export function anchoredOnParent(
+  override: SessionModelOverride | undefined,
+  parent: SessionModelAnchor,
+): SessionModelOverride | undefined {
+  if (override?.model !== undefined || override?.tier !== undefined) return override;
+  const carried =
+    override?.whenUnavailable === undefined ? {} : { whenUnavailable: override.whenUnavailable };
+  const level = override?.reasoningLevel;
+  if (parent.tier !== null && isAgentModelTier(parent.tier)) {
+    return {
+      ...carried,
+      ...(level === undefined ? {} : { reasoningLevel: level }),
+      tier: parent.tier,
+    };
+  }
+  if (parent.selection === null) return override;
+  return {
+    ...carried,
+    model: { providerId: parent.selection.providerId, modelId: parent.selection.modelId },
+    reasoningLevel: level ?? parent.selection.reasoningLevel,
+  };
+}
+
 /** The durable identity a create-only call resolves — nothing about an executor. */
 export interface SessionCreateResult {
   sessionId: string;
@@ -320,10 +433,12 @@ export interface SessionAttachInput {
  * Which Role's default a resolution wants.
  *
  * The Role is this module's own vocabulary. Since VC-9 it is the whole
- * {@link SessionRole}: a Subagent Session reads the `utility` rung, because a
- * bounded delegation is the cost-efficient background work that rung was named
- * for. The map from a Role to the tier it reads is shared
- * (`modelPurposeForRole`), stated once for every process.
+ * {@link SessionRole}. The map from a Role to the tier it reads is shared
+ * (`modelPurposeForRole`), stated once for every process — and since VC-431 a
+ * Subagent Session's row is the ladder root rather than `utility`, the rung no
+ * Session may run on: a Subagent Session normally runs on its parent's own
+ * anchor ({@link anchoredOnParent}), and this row is what stands when the
+ * parent recorded none.
  *
  * The PORT, though, speaks tiers rather than Roles: since VC-259 an override
  * can name any rung, and the Role's tier is just the rung nobody named. So the
@@ -355,8 +470,16 @@ export interface SessionsOptions {
    */
   readDefaultModel(tier: ModelTier, projectId: string | null): Promise<ModelSelection | null>;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
-  /** This Session's durable model policy, or `null` when it has never recorded one. */
-  readModelSelection(sessionId: string): Promise<ModelSelection | null>;
+  /**
+   * This Session's durable model policy — the anchor it recorded at birth.
+   *
+   * Both halves, because both are read here: `selection` is the legacy
+   * backfill's question ("has this Session ever recorded one?"), and `tier` is
+   * what a child inherits when its parent resolved through a rung (VC-431).
+   * One port rather than two, so the two readers cannot disagree about what a
+   * Session's policy IS.
+   */
+  readModelAnchor(sessionId: string): Promise<SessionModelAnchor>;
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
   /** Durable per-Session grants and ancestry, resolved and recorded at birth (VC-183, VC-9). */
@@ -505,7 +628,19 @@ export function createSessions(options: SessionsOptions): Sessions {
         "Only a Subagent Session has a parent Session.",
       );
     }
-    const model = await resolveModelSelection(options, input.modelOverride, role, input.projectId);
+    // What a subagent inherits from its parent is decided HERE, beside the
+    // tool surface and MCP inheritance below (VC-9, VC-431), because this is
+    // the one creation path under both `create` and `start`. A second start
+    // path that minted a subagent would otherwise get its parent's ports and
+    // silently miss its parent's model.
+    const override =
+      input.parentSessionId === undefined
+        ? input.modelOverride
+        : anchoredOnParent(
+            input.modelOverride,
+            await options.readModelAnchor(input.parentSessionId),
+          );
+    const model = await resolveModelSelection(options, override, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
     const explicit =
@@ -541,10 +676,15 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
+    const mcpTools =
+      input.parentSessionId === undefined
+        ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
+        : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
-      ...(within === null ? [] : [within]),
+      within === null ? undefined : within,
+      mcpTools,
     );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),
@@ -555,6 +695,12 @@ export function createSessions(options: SessionsOptions): Sessions {
         role,
         parentSessionId: input.parentSessionId ?? null,
         title: input.title,
+        // The client-minted id rides only this intent (VC-358); a legacy
+        // caller that names none omits the key entirely, so its durable
+        // create intent is byte-identical to what it always wrote.
+        ...(input.requestedSessionId === undefined
+          ? {}
+          : { requestedSessionId: input.requestedSessionId }),
       },
     });
     // The Session now exists durably, so planner history says so — whatever
@@ -567,9 +713,12 @@ export function createSessions(options: SessionsOptions): Sessions {
       });
     }
     // The tier the override named rides beside the resolved model (VC-259):
-    // provenance for the pin, so the Session header and `session list` can
-    // say "Fast · <model>" — never the policy, which is `model` alone.
-    const tier = input.modelOverride?.tier;
+    // provenance for the pin, so the Session header and `session list` can say
+    // "Fast · <model>". It is the RESOLVED override's tier, not the caller's,
+    // so a subagent that inherited a rung records the rung it inherited — both
+    // for the header and because that is what its own children read next
+    // (VC-431).
+    const tier = override?.tier;
     await recordModelSelection(options.runtime, {
       commandId: `${input.operationId}:model`,
       sessionId: created.sessionId,
@@ -584,7 +733,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(created.sessionId, toolSurface);
+    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
     return { sessionId: created.sessionId, model };
   }
 
@@ -609,7 +758,7 @@ export function createSessions(options: SessionsOptions): Sessions {
       // at attach. Only a Session born before the model policy existed can
       // reach the branch in real data — every mint above records at birth — so
       // this is the legacy migration duty, stated without a Role read.
-      if ((await options.readModelSelection(input.sessionId)) === null) {
+      if ((await options.readModelAnchor(input.sessionId)).selection === null) {
         // The Board default, and deliberately so: this door knows a Session
         // id and no Role, and the Board default is the one every Role
         // inherits from anyway. It is still written as this Session's own

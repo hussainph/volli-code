@@ -65,6 +65,7 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     progress: 0,
     state: "working",
     promoted: false,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -172,6 +173,29 @@ describe("SubagentPeekDialog", () => {
       button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
     );
     expect(onOpenAsTab).toHaveBeenCalledWith(CHILD);
+  });
+
+  // VC-416 remains visible in the shared header, not only in the composer.
+  it("says what the child is running, beside what it is doing", async () => {
+    const store = chatStore();
+    await render({
+      ...props(
+        agent({ model: { providerId: "openai", modelId: "o5-mini", reasoningLevel: "xhigh" } }),
+      ),
+      store,
+    });
+
+    const policy = dialog()?.querySelector("[data-agent-model]");
+    expect(policy?.textContent).toContain("o5-mini");
+    expect(policy?.textContent).toContain("Extra high");
+  });
+
+  it("draws no policy in the header for a child that has not recorded one", async () => {
+    const store = chatStore();
+    await render({ ...props(agent({ model: null })), store });
+
+    expect(dialog()?.querySelector("[data-agent-model]")).toBeNull();
+    expect(dialog()?.querySelector("[data-session-peek-state]")?.textContent).toBe("working");
   });
 
   it("preserves the child's draft across close and reopen", async () => {

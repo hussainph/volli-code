@@ -1,0 +1,1253 @@
+{
+  "benchmark": "vc354-react-zustand-sidebar",
+  "label": "after-final",
+  "recordedAt": "2026-09-13T15:13:25.309Z",
+  "buildSha": "09acc82e67c810d48e791d80b1605e86daa224d9",
+  "dirty": true,
+  "measuredSourceSha256": "86684b82d952df8e2700ffe105876f5da4ffdeda34e9a7f6fcc373a74862b6c7",
+  "fixture": "real",
+  "samples": 24,
+  "concurrentVolliSessions": null,
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "osRelease": "25.5.0",
+    "osVersion": "Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:00 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8103",
+    "cpu": "Apple M1",
+    "logicalCpus": 8,
+    "memoryGb": 16,
+    "node": "v24.18.0"
+  },
+  "arms": [
+    {
+      "arm": "idle",
+      "busyCores": 0,
+      "fixture": {
+        "sessions": 1198,
+        "terminals": 392,
+        "chats": 806,
+        "tickets": 392,
+        "worktrees": 50,
+        "liveTerminals": 8,
+        "liveChats": 8
+      },
+      "domNodes": 3714,
+      "sessionRows": {
+        "active": 16,
+        "previous": 1182
+      },
+      "scenarios": {
+        "projectChatBurst": {
+          "writes": 144,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 9.4,
+            "p95": 28.4,
+            "max": 37.2
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 45.9,
+            "max": 50
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 43.2,
+              "medianActualMs": 1,
+              "p95ActualMs": 4.4,
+              "maxActualMs": 6.3,
+              "medianBaseMs": 1
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 79.7,
+              "medianActualMs": 2.2,
+              "p95ActualMs": 6.4,
+              "maxActualMs": 7.7,
+              "medianBaseMs": 37.8
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 299.4,
+              "medianActualMs": 6.8,
+              "p95ActualMs": 25,
+              "maxActualMs": 31.3,
+              "medianBaseMs": 42.7
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "residentChatSlice": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34.4,
+            "max": 34.5
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownOpenChatTabs": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 6.1,
+            "p95": 23.8,
+            "max": 26.9
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 52.1,
+            "max": 58
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 48,
+              "totalActualMs": 21.6,
+              "medianActualMs": 0.4,
+              "p95ActualMs": 2.6,
+              "maxActualMs": 2.9,
+              "medianBaseMs": 0.5
+            },
+            "ActiveSessions.previous": {
+              "commits": 48,
+              "totalActualMs": 120.9,
+              "medianActualMs": 1.9,
+              "p95ActualMs": 6.4,
+              "maxActualMs": 10.2,
+              "medianBaseMs": 37.4
+            },
+            "ActiveSessions": {
+              "commits": 48,
+              "totalActualMs": 305.5,
+              "medianActualMs": 3.7,
+              "p95ActualMs": 21.5,
+              "maxActualMs": 24.1,
+              "medianBaseMs": 39.9
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectOpenChatTabs": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 33.5,
+            "max": 33.5
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownTerminalOutput": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 9.7,
+            "p95": 26,
+            "max": 27.1
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 34,
+            "max": 39.5
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 38.2,
+              "medianActualMs": 1.2,
+              "p95ActualMs": 3.6,
+              "maxActualMs": 4.9,
+              "medianBaseMs": 1.1
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 74.1,
+              "medianActualMs": 2.4,
+              "p95ActualMs": 6.1,
+              "maxActualMs": 8.5,
+              "medianBaseMs": 38
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 238,
+              "medianActualMs": 6.6,
+              "p95ActualMs": 23.5,
+              "maxActualMs": 24.2,
+              "medianBaseMs": 42.4
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectTerminalOutput": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34,
+            "max": 34.2
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownParkState": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 26,
+            "p95": 41.8,
+            "max": 42.8
+          },
+          "paintWallMs": {
+            "median": 43.5,
+            "p95": 56.7,
+            "max": 65
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 64.3,
+              "medianActualMs": 2.8,
+              "p95ActualMs": 6.3,
+              "maxActualMs": 6.7,
+              "medianBaseMs": 2.8
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 123.3,
+              "medianActualMs": 5.6,
+              "p95ActualMs": 11.1,
+              "maxActualMs": 11.9,
+              "medianBaseMs": 41
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 456.3,
+              "medianActualMs": 22.7,
+              "p95ActualMs": 38.7,
+              "maxActualMs": 39.1,
+              "medianBaseMs": 58.8
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectParkState": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.4,
+            "max": 33.5
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownHarness": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 7.5,
+            "p95": 27,
+            "max": 27
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34.3,
+            "max": 36.1
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 37.3,
+              "medianActualMs": 0.7,
+              "p95ActualMs": 4.4,
+              "maxActualMs": 4.8,
+              "medianBaseMs": 0.6
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 67.7,
+              "medianActualMs": 1.8,
+              "p95ActualMs": 6,
+              "maxActualMs": 6.7,
+              "medianBaseMs": 37.4
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 241.2,
+              "medianActualMs": 5.2,
+              "p95ActualMs": 24.1,
+              "maxActualMs": 24.5,
+              "medianBaseMs": 41.2
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectHarness": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.7,
+            "max": 33.8
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownContainer": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 8.8,
+            "p95": 24.6,
+            "max": 25.9
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.8,
+            "max": 34.1
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 28.4,
+              "medianActualMs": 0.7,
+              "p95ActualMs": 2.7,
+              "maxActualMs": 3.1,
+              "medianBaseMs": 0.6
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 64.7,
+              "medianActualMs": 1.8,
+              "p95ActualMs": 5.6,
+              "maxActualMs": 5.9,
+              "medianBaseMs": 37.4
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 230.9,
+              "medianActualMs": 5.6,
+              "p95ActualMs": 21.8,
+              "maxActualMs": 23.2,
+              "medianBaseMs": 41.7
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectContainer": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.2,
+            "p95": 0.3,
+            "max": 0.3
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.8,
+            "max": 34.4
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        }
+      },
+      "persistence": {
+        "uiTransient": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 329,
+          "actionWallMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        },
+        "workspaceTransient": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 59623,
+          "actionWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 2.9
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0.1,
+            "p95": 0.1,
+            "max": 0.8
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        },
+        "chatDraftKeystroke": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 55366,
+          "actionWallMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.9
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.5
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        }
+      },
+      "derivation": {
+        "fullListingBuild": {
+          "median": 0.5,
+          "p95": 1.5,
+          "max": 9
+        },
+        "terminalRecordIndex": {
+          "median": 0,
+          "p95": 0.1,
+          "max": 1.7
+        },
+        "ticketIndex": {
+          "median": 0,
+          "p95": 0.1,
+          "max": 0.2
+        }
+      },
+      "ranked": [
+        {
+          "scenario": "ownParkState",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 456.3,
+          "p95ActualMs": 38.7,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownOpenChatTabs",
+          "writes": 24,
+          "renders": 48,
+          "totalActualMs": 305.5,
+          "p95ActualMs": 21.5,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "projectChatBurst",
+          "writes": 144,
+          "renders": 24,
+          "totalActualMs": 299.4,
+          "p95ActualMs": 25,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownHarness",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 241.2,
+          "p95ActualMs": 24.1,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownTerminalOutput",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 238,
+          "p95ActualMs": 23.5,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownContainer",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 230.9,
+          "p95ActualMs": 21.8,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "residentChatSlice",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectOpenChatTabs",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectTerminalOutput",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectParkState",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectHarness",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectContainer",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        }
+      ],
+      "problems": []
+    },
+    {
+      "arm": "busy",
+      "busyCores": 1,
+      "fixture": {
+        "sessions": 1198,
+        "terminals": 392,
+        "chats": 806,
+        "tickets": 392,
+        "worktrees": 50,
+        "liveTerminals": 8,
+        "liveChats": 8
+      },
+      "domNodes": 3714,
+      "sessionRows": {
+        "active": 16,
+        "previous": 1182
+      },
+      "scenarios": {
+        "projectChatBurst": {
+          "writes": 144,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 10.1,
+            "p95": 30.6,
+            "max": 45.5
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 41.2,
+            "max": 51.1
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 46.2,
+              "medianActualMs": 0.7,
+              "p95ActualMs": 6.7,
+              "maxActualMs": 9.3,
+              "medianBaseMs": 0.6
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 79.5,
+              "medianActualMs": 2.3,
+              "p95ActualMs": 6,
+              "maxActualMs": 8.7,
+              "medianBaseMs": 46.8
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 302.8,
+              "medianActualMs": 7.2,
+              "p95ActualMs": 27.2,
+              "maxActualMs": 39.9,
+              "medianBaseMs": 52.4
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "residentChatSlice": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34.1,
+            "max": 34.8
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownOpenChatTabs": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 4.6,
+            "p95": 26.3,
+            "max": 27.5
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 53.5,
+            "max": 54.9
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 48,
+              "totalActualMs": 21.5,
+              "medianActualMs": 0.4,
+              "p95ActualMs": 2.6,
+              "maxActualMs": 2.9,
+              "medianBaseMs": 0.5
+            },
+            "ActiveSessions.previous": {
+              "commits": 48,
+              "totalActualMs": 116.1,
+              "medianActualMs": 1.7,
+              "p95ActualMs": 5.8,
+              "maxActualMs": 9.8,
+              "medianBaseMs": 46.2
+            },
+            "ActiveSessions": {
+              "commits": 48,
+              "totalActualMs": 306.2,
+              "medianActualMs": 3.9,
+              "p95ActualMs": 23.7,
+              "maxActualMs": 23.9,
+              "medianBaseMs": 49
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectOpenChatTabs": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34.2,
+            "max": 34.6
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownTerminalOutput": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 6.8,
+            "p95": 31.2,
+            "max": 35.3
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 49.7,
+            "max": 51.1
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 34.6,
+              "medianActualMs": 0.6,
+              "p95ActualMs": 4,
+              "maxActualMs": 4.9,
+              "medianBaseMs": 0.7
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 74.6,
+              "medianActualMs": 1.7,
+              "p95ActualMs": 7.7,
+              "maxActualMs": 8.8,
+              "medianBaseMs": 46.2
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 237.3,
+              "medianActualMs": 4.4,
+              "p95ActualMs": 25,
+              "maxActualMs": 31,
+              "medianBaseMs": 49.8
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectTerminalOutput": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.8,
+            "max": 34.2
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownParkState": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 25.5,
+            "p95": 37.8,
+            "max": 47
+          },
+          "paintWallMs": {
+            "median": 33.9,
+            "p95": 51.1,
+            "max": 63.7
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 51.7,
+              "medianActualMs": 2.9,
+              "p95ActualMs": 4.1,
+              "maxActualMs": 4.8,
+              "medianBaseMs": 2.7
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 94.3,
+              "medianActualMs": 5.2,
+              "p95ActualMs": 7.8,
+              "maxActualMs": 8.4,
+              "medianBaseMs": 49.5
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 401.3,
+              "medianActualMs": 23.1,
+              "p95ActualMs": 32.6,
+              "maxActualMs": 33.1,
+              "medianBaseMs": 67.6
+            }
+          },
+          "longTasks": {
+            "count": 1,
+            "totalMs": 51,
+            "maxMs": 51
+          }
+        },
+        "otherProjectParkState": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.2,
+            "p95": 34.3,
+            "max": 34.4
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownHarness": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 7.5,
+            "p95": 26.6,
+            "max": 27.7
+          },
+          "paintWallMs": {
+            "median": 33.4,
+            "p95": 38.4,
+            "max": 44.9
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 29.8,
+              "medianActualMs": 0.6,
+              "p95ActualMs": 3.2,
+              "maxActualMs": 3.2,
+              "medianBaseMs": 0.6
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 65.5,
+              "medianActualMs": 1.9,
+              "p95ActualMs": 5.7,
+              "maxActualMs": 5.9,
+              "medianBaseMs": 46.2
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 241.7,
+              "medianActualMs": 5.1,
+              "p95ActualMs": 24,
+              "maxActualMs": 25,
+              "medianBaseMs": 50
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectHarness": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.1,
+            "max": 0.2
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 33.8,
+            "max": 33.8
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "ownContainer": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 6.6,
+            "p95": 27.7,
+            "max": 28.4
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 43.5,
+            "max": 51.1
+          },
+          "profilers": {
+            "ActiveSessions.active": {
+              "commits": 24,
+              "totalActualMs": 29.5,
+              "medianActualMs": 0.6,
+              "p95ActualMs": 3.3,
+              "maxActualMs": 3.3,
+              "medianBaseMs": 0.5
+            },
+            "ActiveSessions.previous": {
+              "commits": 24,
+              "totalActualMs": 60.7,
+              "medianActualMs": 1.6,
+              "p95ActualMs": 6,
+              "maxActualMs": 6.4,
+              "medianBaseMs": 46.1
+            },
+            "ActiveSessions": {
+              "commits": 24,
+              "totalActualMs": 226.4,
+              "medianActualMs": 4,
+              "p95ActualMs": 25.1,
+              "maxActualMs": 25.1,
+              "medianBaseMs": 49.2
+            }
+          },
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        },
+        "otherProjectContainer": {
+          "writes": 24,
+          "samples": 24,
+          "commitWallMs": {
+            "median": 0.1,
+            "p95": 0.3,
+            "max": 0.4
+          },
+          "paintWallMs": {
+            "median": 33.3,
+            "p95": 34.1,
+            "max": 34.3
+          },
+          "profilers": {},
+          "longTasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          }
+        }
+      },
+      "persistence": {
+        "uiTransient": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 329,
+          "actionWallMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        },
+        "workspaceTransient": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 59623,
+          "actionWallMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 8.2
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0.1,
+            "p95": 0.2,
+            "max": 1.9
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        },
+        "chatDraftKeystroke": {
+          "samples": 480,
+          "writes": 480,
+          "payloadBytes": 55366,
+          "actionWallMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.4
+          },
+          "partializeMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.1
+          },
+          "jsonSerializeMs": {
+            "median": 0,
+            "p95": 0.1,
+            "max": 0.5
+          },
+          "appStateScheduleMs": {
+            "median": 0,
+            "p95": 0,
+            "max": 0.1
+          }
+        }
+      },
+      "derivation": {
+        "fullListingBuild": {
+          "median": 0.5,
+          "p95": 1,
+          "max": 5.1
+        },
+        "terminalRecordIndex": {
+          "median": 0,
+          "p95": 0.1,
+          "max": 0.1
+        },
+        "ticketIndex": {
+          "median": 0,
+          "p95": 0.1,
+          "max": 0.2
+        }
+      },
+      "ranked": [
+        {
+          "scenario": "ownParkState",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 401.3,
+          "p95ActualMs": 32.6,
+          "longTasks": 1,
+          "maxLongTaskMs": 51
+        },
+        {
+          "scenario": "ownOpenChatTabs",
+          "writes": 24,
+          "renders": 48,
+          "totalActualMs": 306.2,
+          "p95ActualMs": 23.7,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "projectChatBurst",
+          "writes": 144,
+          "renders": 24,
+          "totalActualMs": 302.8,
+          "p95ActualMs": 27.2,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownHarness",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 241.7,
+          "p95ActualMs": 24,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownTerminalOutput",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 237.3,
+          "p95ActualMs": 25,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "ownContainer",
+          "writes": 24,
+          "renders": 24,
+          "totalActualMs": 226.4,
+          "p95ActualMs": 25.1,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "residentChatSlice",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectOpenChatTabs",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectTerminalOutput",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectParkState",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectHarness",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        },
+        {
+          "scenario": "otherProjectContainer",
+          "writes": 24,
+          "renders": 0,
+          "totalActualMs": 0,
+          "p95ActualMs": 0,
+          "longTasks": 0,
+          "maxLongTaskMs": 0
+        }
+      ],
+      "problems": []
+    }
+  ]
+}

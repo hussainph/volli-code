@@ -18,6 +18,7 @@
  */
 
 import type { TicketEventKind } from "./ticket-events";
+import { uniqueTokenList } from "./token-list";
 
 /** What one wake may be waited on: a verdict signal, a comment, or a board move. */
 export const TICKET_AWAIT_KINDS = ["signal", "comment", "status"] as const;
@@ -78,9 +79,5 @@ export function ticketAwaitKindsFor(request: TicketAwaitFor): readonly TicketAwa
  * against the project the attachment is bound to.
  */
 export function parseTicketAwaitTargets(raw: string): readonly string[] {
-  const targets = raw
-    .split(/[\s,]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-  return [...new Set(targets)];
+  return uniqueTokenList(raw);
 }

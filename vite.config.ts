@@ -15,6 +15,12 @@ const toolingIgnorePatterns = [
   // Curated prose — mechanical reflow of the decision-log tables is noise.
   "docs",
   "CLAUDE.md",
+  // LGPL compliance material that ships inside the packaged app (VC-409).
+  // LGPL-LIBVIPS.md is GENERATED, and its `--check` gate compares byte for
+  // byte: a formatter that re-indents its lists and pads its table columns
+  // makes the generated file permanently "stale" and the gate unpassable.
+  // The same reasoning as `docs` above, with a build gate behind it.
+  "apps/desktop/licensing",
   // Vendored third-party agent skills (npx skills add) — reformatting would
   // drift them from their skills-lock.json content hashes.
   ".agents",

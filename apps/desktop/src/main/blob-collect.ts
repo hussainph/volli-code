@@ -7,7 +7,7 @@
  * under the other. That leaves a real class of garbage this module collects:
  *
  *  - an attachment removed from a Ticket or a chat,
- *  - a new-Ticket composer draft that was abandoned before the Ticket existed,
+ *  - a new-Ticket or provisional-chat Draft abandoned before its owner existed,
  *    which is the common case now that attaching imports eagerly,
  *  - links that vanished with a cascade when their Ticket or Session was
  *    deleted.
@@ -16,10 +16,10 @@
  * housekeeping, and doing it inline would make an ordinary detach do file I/O
  * on the user's turn.
  *
- * ONE deliberate exception (VC-137): a Blob a STORED new-Ticket draft still
- * names is not garbage — it is a persisted attachment waiting for its Ticket,
- * and collecting it would turn a restored draft's thumbnail into a hole. The
- * caller passes those hashes as `retain`; clearing or creating the draft is
+ * ONE deliberate exception (VC-137/VC-358): a Blob a STORED Draft still names
+ * is not garbage — it is a persisted attachment waiting for its Ticket or
+ * Session, and collecting it would turn a restored thumbnail into a hole. The
+ * caller passes those hashes as `retain`; clearing or promoting the Draft is
  * what releases them back to the next boot's sweep.
  */
 import type Database from "better-sqlite3";

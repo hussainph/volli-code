@@ -115,6 +115,7 @@ describe("chatSessionRecord", () => {
       bornTicketless: true,
       role: "project",
       parentSessionId: null,
+      model: null,
     });
   });
 
@@ -134,6 +135,7 @@ describe("chatSessionRecord", () => {
       bornTicketless: true,
       role: "project",
       parentSessionId: null,
+      model: null,
     });
   });
 
@@ -236,6 +238,49 @@ describe("chatSessionRecord outcome", () => {
         }),
       ),
     ).toMatchObject({ activity: "stopped", outcome: "interrupted" });
+  });
+});
+
+// VC-416. A Subagent Session has no listing row of its own and no resident
+// chat client until someone peeks it, so the row a parent's Activity Island
+// draws is the only place its model and effort can come from.
+describe("chatSessionRecord model", () => {
+  const selection = {
+    providerId: "anthropic",
+    modelId: "haiku-4.5",
+    reasoningLevel: "low",
+  } as const;
+
+  it("carries the projection's model selection verbatim", () => {
+    expect(
+      chatSessionRecord(projectionWith([structuredAttachment()], { modelSelection: selection })),
+    ).toMatchObject({ model: selection });
+  });
+
+  it("is null before a policy has been recorded", () => {
+    expect(chatSessionRecord(projectionWith([structuredAttachment()]))).toMatchObject({
+      model: null,
+    });
+  });
+
+  // The policy is durable across attachment and relaunch, so a Session that is
+  // no longer attached still reports what it is pinned to — a row that dropped
+  // the model the moment work stopped would blank the answer exactly when a
+  // person went looking for why the helper behaved as it did.
+  it("keeps the model on a Session with nothing attached, and under a stop", () => {
+    expect(chatSessionRecord(projectionWith([], { modelSelection: selection }))).toMatchObject({
+      adapterId: null,
+      live: false,
+      model: selection,
+    });
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], {
+          modelSelection: selection,
+          stopped: { at: 9, reason: null, by: { kind: "user" } },
+        }),
+      ),
+    ).toMatchObject({ activity: "stopped", model: selection });
   });
 });
 

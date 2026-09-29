@@ -11,6 +11,11 @@ import {
 } from "@volli/shared";
 
 import { AutomationEditorPanel } from "./automation-editor";
+import { startAutomationAuthoring } from "./automation-authoring";
+
+vi.mock("./automation-authoring", () => ({ startAutomationAuthoring: vi.fn(async () => null) }));
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 let root: Root | null = null;
@@ -53,6 +58,16 @@ async function mountEditor(record: Automation | null = null): Promise<void> {
         })),
         index: vi.fn(async () => ({ ok: true, files: [] })),
       },
+      automations: {
+        create: vi.fn(async ({ name }: { name: string }) => ({
+          ok: true,
+          automation: automation({ id: "automation-2", name }),
+        })),
+        update: vi.fn(async () => ({ ok: true, automation: automation() })),
+      },
+      appState: {
+        set: vi.fn(async () => ({ ok: true, receipt: {} })),
+      },
     },
   });
   useAutomationsStore.setState({ editor: { projectId: "p1", automation: record } });
@@ -61,11 +76,13 @@ async function mountEditor(record: Automation | null = null): Promise<void> {
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <AutomationEditorPanel
-        projectId="p1"
-        automation={record}
-        history={<div data-slot="run-history">Recent runs</div>}
-      />,
+      <TooltipProvider>
+        <AutomationEditorPanel
+          projectId="p1"
+          automation={record}
+          history={<div data-slot="run-history">Recent runs</div>}
+        />
+      </TooltipProvider>,
     );
   });
 }
@@ -118,6 +135,10 @@ afterEach(async () => {
   container?.remove();
   container = null;
   useAutomationsStore.setState({ editor: null });
+  // The draft cache is module-level and shared across tests; a leftover slot
+  // would seed the next mount's fields and turn these tests order-dependent.
+  clearEditorDraft("p1");
+  clearEditorDraft("p1", undefined, "automation-1");
   vi.unstubAllGlobals();
 });
 
@@ -291,5 +312,257 @@ describe("the Instructions picker", () => {
     expect(overlay?.classList.contains("absolute")).toBe(true);
     // Floating suggestions do not take a flow slot before the Run history.
     expect(document.querySelector('[data-slot="run-history"]')?.textContent).toBe("Recent runs");
+  });
+});
+
+function typeName(value: string): Promise<void> {
+  const box = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  return act(async () => {
+    setter?.call(box, value);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function seededDraft(): Parameters<typeof saveEditorDraft>[1] {
+  return {
+    name: "Nightly sweep",
+    instructions: "/review the board",
+    ownership: "project",
+    triggerChoice: "schedule",
+    columns: [],
+    schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+    runtime: null,
+  };
+}
+
+describe("automation editor drafts (VC-329)", () => {
+  it("hands the current idea and skill catalogue to a drafting chat without saving a record", async () => {
+    await mountEditor();
+    expect(buttonContaining("Draft in chat").disabled).toBe(true);
+    await typeName("Review idea");
+    await typeInstructions("Use the user's review approach and report findings");
+    await act(async () => buttonContaining("Draft in chat").click());
+    expect(startAutomationAuthoring).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({
+        name: "Review idea",
+        instructions: "Use the user's review approach and report findings",
+        skillSlugs: [LONG_SKILL.name],
+      }),
+    );
+    expect(window.api.automations.create).not.toHaveBeenCalled();
+    expect(loadEditorDraft("p1")?.name).toBe("Review idea");
+  });
+
+  it("writes every field change into the draft cache", async () => {
+    await mountEditor();
+    await typeName("Nightly sweep");
+    await typeInstructions("/review the board");
+
+    expect(loadEditorDraft("p1")).toMatchObject({
+      name: "Nightly sweep",
+      instructions: "/review the board",
+    });
+  });
+
+  it("keeps an ownership-only choice as a draft", async () => {
+    await mountEditor();
+    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    ownership.focus();
+    await act(async () => {
+      ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const globalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes("All projects"),
+    );
+    expect(globalOption).toBeDefined();
+    await act(async () => {
+      globalOption?.focus();
+    });
+    await act(async () => {
+      globalOption?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+
+    expect(loadEditorDraft("p1")?.ownership).toBe("global");
+  });
+
+  it("restores a stored draft on mount, visibly, with a discard", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    const name = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+    const instructions = document.querySelector(
+      '[aria-label="Instructions"]',
+    ) as HTMLTextAreaElement;
+    expect(name.value).toBe("Nightly sweep");
+    expect(instructions.value).toBe("/review the board");
+    expect(buttonContaining("On a schedule").getAttribute("aria-checked")).toBe("true");
+    expect((document.querySelector('[aria-label="Time"]') as HTMLButtonElement).textContent).toBe(
+      "21:00",
+    );
+    // Visible, not silent: the restored state says so, and offers the discard.
+    const banner = document.querySelector('[data-slot="draft-resumed"]');
+    expect(banner?.textContent).toContain("Draft restored");
+    await act(async () => {
+      buttonContaining("Discard draft").click();
+    });
+    expect(loadEditorDraft("p1")).toBeNull();
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe("");
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+  });
+
+  // VC-405. The state used to be a bordered bar at the top of the form, so the
+  // first keystroke pushed Instructions down and the typist read the jump as a
+  // glitch. It belongs in the title row, whose height the name and the buttons
+  // already set, with its discard beside it.
+  it("states the draft in the title row rather than above the form", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    const indicator = document.querySelector('[data-slot="draft-resumed"]');
+    expect(indicator).not.toBeNull();
+    // Resolved, not optional-chained: `indicator?.closest(...)` yields undefined
+    // when the indicator escapes the header, and `expect(undefined).not.toBeNull()`
+    // passes — so every assertion below would report on a header that is not there.
+    const header = indicator!.closest("header");
+    expect(header).not.toBeNull();
+    expect(header!.querySelector('[aria-label="Name"]')).not.toBeNull();
+    expect(header!.contains(buttonContaining("Discard draft"))).toBe(true);
+    expect(header!.contains(buttonContaining("Create automation"))).toBe(true);
+
+    // The scrolling form holds only the form: nothing above Instructions moves
+    // when the draft state comes and goes. Asserted by KIND rather than by
+    // walking firstElementChild twice — the walk passed on any first node whose
+    // subtree mentioned Instructions, and broke on any wrapper added above it.
+    const form = document.querySelector("main");
+    expect(form).not.toBeNull();
+    expect(form!.querySelector('[data-slot^="draft-"]')).toBeNull();
+    expect(form!.querySelector("h2")?.textContent).toBe("Instructions");
+  });
+
+  // VC-405's actual complaint is the JUMP, not the placement. The title row is
+  // only steady if the slot is already holding its width open before the first
+  // keystroke: the name input is the row's one elastic member, so a slot that
+  // arrived on `dirty` would take its width straight out of the field under the
+  // cursor. jsdom has no layout engine, so the width cannot be measured here.
+  // What can be pinned is the thing that makes the width stable — the very same
+  // node, carrying the same label, is in the row before and after the keystroke.
+  it("holds the draft slot open before the first keystroke so the row cannot reflow", async () => {
+    await mountEditor();
+
+    const idle = document.querySelector('[data-slot="draft-idle"]');
+    expect(idle).not.toBeNull();
+    expect(idle!.closest("header")).not.toBeNull();
+    // It reserves the exact label it will show, so the width does not change.
+    expect(idle!.textContent).toContain("Draft saved");
+    // Invisible and inert while there is no draft: opacity keeps the width,
+    // where `hidden` or a conditional would surrender it.
+    expect(idle!.className).toContain("opacity-0");
+    expect(idle!.getAttribute("aria-hidden")).toBe("true");
+    expect(buttonContaining("Discard draft").disabled).toBe(true);
+
+    await typeName("Nightly sweep");
+
+    const saved = document.querySelector('[data-slot="draft-saved"]');
+    expect(saved).not.toBeNull();
+    // THE ANTI-JUMP ASSERTION: the same DOM node, not a replacement. Nothing was
+    // inserted into the row, so nothing could have been pushed aside.
+    expect(saved).toBe(idle);
+    expect(saved!.className).not.toContain("opacity-0");
+    expect(saved!.getAttribute("aria-hidden")).toBe("false");
+    expect(buttonContaining("Discard draft").disabled).toBe(false);
+  });
+
+  // VC-405. `role="status"` used to wrap the discard button along with the
+  // sentence, which puts a control inside a live region and re-reads it on every
+  // status change; `chat/activity-island-ui.tsx` records the same lesson.
+  it("announces the draft through a live region that carries text and no control", async () => {
+    await mountEditor();
+
+    const header = document.querySelector("header");
+    expect(header).not.toBeNull();
+    const region = header!.querySelector('[role="status"]');
+    expect(region).not.toBeNull();
+    expect(region!.querySelector("button")).toBeNull();
+    // Mounted while clean and silent. A live region that arrives with its text
+    // already in it announces nothing; this one is watched before it speaks.
+    expect(region!.textContent).toBe("");
+
+    await typeName("Nightly sweep");
+    expect(region!.textContent).toBe("Draft saved");
+  });
+
+  it("names a restored draft apart from one it just saved", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    expect(document.querySelector('[data-slot="draft-saved"]')).toBeNull();
+    const restored = document.querySelector('[data-slot="draft-resumed"]');
+    expect(restored).not.toBeNull();
+    expect(restored!.textContent).toContain("Draft restored");
+    expect(document.querySelector('header [role="status"]')?.textContent).toBe("Draft restored");
+
+    // Discarding returns the row to its clean, inert, width-holding state rather
+    // than removing the slot from the row.
+    await act(async () => buttonContaining("Discard draft").click());
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+    const idle = document.querySelector('[data-slot="draft-idle"]');
+    expect(idle).not.toBeNull();
+    expect(idle!.closest("header")).not.toBeNull();
+    expect(buttonContaining("Discard draft").disabled).toBe(true);
+    expect(document.querySelector('header [role="status"]')?.textContent).toBe("");
+  });
+
+  it("clears the draft once the create succeeds", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+    expect(loadEditorDraft("p1")).not.toBeNull();
+
+    await act(async () => {
+      buttonContaining("Create automation").click();
+    });
+
+    expect(loadEditorDraft("p1")).toBeNull();
+  });
+
+  it("restores unsaved edits over a refreshed record and discards back to the record", async () => {
+    saveEditorDraft(
+      "p1",
+      { ...seededDraft(), name: "Unsaved", triggerChoice: "none", runtime: null },
+      undefined,
+      "automation-1",
+    );
+    await mountEditor(automation({ name: "Saved", runtime: { kind: "tier", tier: "fast" } }));
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Unsaved",
+    );
+    expect(document.querySelector('[aria-label="Runtime model"]')?.textContent).toContain(
+      "Project default",
+    );
+    await act(async () => buttonContaining("Discard draft").click());
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe("Saved");
+    expect(loadEditorDraft("p1", undefined, "automation-1")).toBeNull();
+  });
+
+  it("caches existing edits without writing the saved Automation", async () => {
+    await mountEditor(automation());
+    await typeInstructions("Unsaved review instructions");
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.instructions).toBe(
+      "Unsaved review instructions",
+    );
+    expect(loadEditorDraft("p1")).toBeNull();
+    expect(window.api.automations.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps the new-automation draft separate from an existing record", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor(automation({ name: "Existing" }));
+
+    const name = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+    expect(name.value).toBe("Existing");
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+    // A saved record uses its own slot; the new-automation draft is untouched.
+    expect(loadEditorDraft("p1")).toEqual(seededDraft());
   });
 });

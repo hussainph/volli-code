@@ -45,7 +45,7 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
-import { sessionSourceLabel } from "@volli/session-presentation";
+import { sessionSourceHarness, sessionSourceLabel } from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
   isListableSession,
@@ -54,6 +54,7 @@ import {
   sessionProvenanceOf,
   type ChatSessionRecord,
   type ChatWaitingReason,
+  type HarnessId,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
@@ -153,11 +154,22 @@ export interface SessionAttention {
   reason: string | null;
 }
 
+/**
+ * One row of the Active band.
+ *
+ * MOSTLY a Session, but not always. Since VC-358 the band also carries
+ * provisional chat Drafts — renderer-owned, not yet durable, and never built
+ * by this module: `active-sessions.tsx` projects them into this shape and
+ * concatenates them ahead of the listing. A Draft is a row a person can see,
+ * name and click, so it has to be one of these; the fields below say what each
+ * one means when nothing is running yet.
+ */
 export interface ActiveSessionRow {
   id: string;
   /**
    * The ticket this row belongs to, or `null` for a ticketless Session — a
-   * Board Session, or one whose ticket has left the board.
+   * Board Session, or one whose ticket has left the board. A Draft carries the
+   * Ticket it was opened against, which is also the scope it will promote under.
    */
   ticket: Ticket | null;
   title: string;
@@ -167,9 +179,28 @@ export interface ActiveSessionRow {
    * only when there is no ticket whose status could stand there instead
    * (`session-band-row.tsx`). Still built for every row either way: which one
    * of those two it is, is the view's call and not the listing's.
+   *
+   * A Draft says `Draft`, because nothing is running and saying the name of an
+   * executor that has not been chosen yet would be the one dishonest answer.
    */
   source: string;
-  /** Never `null`: every row here speaks for a Session, and a Session is always in some state. */
+  /**
+   * WHICH CLI this row is running (`sessionSourceHarness`), or `null` when it
+   * runs none — a chat, a bare shell, a Draft. The row draws it as a glyph
+   * (`session-band-row.tsx`), which is why the ID travels rather than the
+   * label: a band holding Claude Code beside Codex is told apart by a mark, and
+   * the harness's words already ride in the hover `title` via {@link source}.
+   *
+   * A pure read of the durable record's launch metadata — the same fact
+   * {@link source} is built from, reached through the same rule so the glyph
+   * and the words can never name two different harnesses.
+   */
+  harnessId: HarnessId | null;
+  /**
+   * Never `null`: every row is in some state. For a Session that is what its
+   * executor reports. A Draft is always `idle` — it has no executor to be busy,
+   * and `idle` is the truthful reading of a chat nobody has spoken to.
+   */
   activity: SessionActivityState;
   /**
    * Whether the row's activity is the harness's own report or the PTY
@@ -253,9 +284,42 @@ export function isProjectSessionRowSelected(
 }
 
 /**
+ * The ids from one flat, per-session store map that
+ * {@link buildActiveSessionListing} can actually read for one project — every
+ * tab root and every pane under the containers it walks, and nothing else.
+ *
+ * `lastOutputAt`, `parkState`, and `harness` all have that shape and all replace
+ * their top-level object when one Session moves. Keeping the key walk here
+ * means their React subscriptions can narrow by the same exact rule as the
+ * builder instead of each component maintaining an almost-the-same project
+ * membership test.
+ */
+export function listingSessionIds(input: {
+  containers: Readonly<Record<string, SessionContainer>>;
+  /** The project's ticket ids — the container keys its ticket Sessions live under. */
+  ticketIds: Iterable<string>;
+  /** The project's own id, which is the container key its Board Sessions live under. */
+  projectOwnerId: string;
+}): string[] {
+  const sessionIds = new Set<string>();
+  const takeContainer = (ownerId: string): void => {
+    const container = input.containers[ownerId];
+    if (container === undefined) return;
+    for (const tab of container.tabs) {
+      // Both, and not just the panes: an exited tab is dated by its ROOT id
+      // (`fileExitedTab`), which in a split tab is no longer any live pane.
+      sessionIds.add(tab.sessionId);
+      for (const pane of sessionPanes(tab.layout)) sessionIds.add(pane.sessionId);
+    }
+  };
+  for (const ticketId of input.ticketIds) takeContainer(ticketId);
+  takeContainer(input.projectOwnerId);
+  return [...sessionIds];
+}
+
+/**
  * The `lastOutputAt` entries {@link buildActiveSessionListing} can actually
- * read for one project — every tab root and every pane under the containers it
- * walks, and nothing else.
+ * read for one project.
  *
  * The store keeps ONE flat output-stamp map for every live session in the app
  * and replaces it wholesale on each bump (a busy session bumps about once a
@@ -273,28 +337,14 @@ export function isProjectSessionRowSelected(
 export function listingOutputStamps(input: {
   lastOutputAt: Readonly<Record<string, number>>;
   containers: Readonly<Record<string, SessionContainer>>;
-  /** The project's ticket ids — the container keys its ticket Sessions live under. */
   ticketIds: Iterable<string>;
-  /** The project's own id, which is the container key its Board Sessions live under. */
   projectOwnerId: string;
 }): Record<string, number> {
   const stamps: Record<string, number> = {};
-  const take = (sessionId: string): void => {
-    const at = input.lastOutputAt[sessionId];
-    if (at !== undefined) stamps[sessionId] = at;
-  };
-  const takeContainer = (ownerId: string): void => {
-    const container = input.containers[ownerId];
-    if (container === undefined) return;
-    for (const tab of container.tabs) {
-      // Both, and not just the panes: an exited tab is dated by its ROOT id
-      // (`fileExitedTab`), which in a split tab is no longer any live pane.
-      take(tab.sessionId);
-      for (const pane of sessionPanes(tab.layout)) take(pane.sessionId);
-    }
-  };
-  for (const ticketId of input.ticketIds) takeContainer(ticketId);
-  takeContainer(input.projectOwnerId);
+  for (const sessionId of listingSessionIds(input)) {
+    const value = input.lastOutputAt[sessionId];
+    if (value !== undefined) stamps[sessionId] = value;
+  }
   return stamps;
 }
 
@@ -309,6 +359,8 @@ export interface PreviousSessionRow {
   ticket: Ticket | null;
   title: string;
   kind: SessionRowKind;
+  /** See {@link ActiveSessionRow.harnessId} — both bands draw the same glyph from it. */
+  harnessId: HarnessId | null;
   /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
   endedOrQuietAt: number;
   /**
@@ -576,6 +628,16 @@ function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
 }
 
+/**
+ * The harness behind a pane, for the rows that draw one. A pane with no durable
+ * record yet says `null` for the same reason {@link sessionSource} says
+ * "Terminal": nothing has told us what it launched, and a glyph guessed from
+ * the default harness would be the row asserting a CLI nobody chose.
+ */
+function sessionHarness(record: SessionRecord | undefined): HarnessId | null {
+  return record === undefined ? null : sessionSourceHarness({ kind: "terminal", record });
+}
+
 type ActivityInput = Pick<
   BuildActiveSessionListingInput,
   "lastOutputAt" | "parkState" | "harness" | "now"
@@ -672,6 +734,7 @@ function sessionRow(
     ticket,
     title: tab.title,
     source: sessionSource(recordsById.get(subject.paneId)),
+    harnessId: sessionHarness(recordsById.get(subject.paneId)),
     activity: subject.activity,
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
@@ -712,6 +775,9 @@ function chatRow(
     ticket,
     title: record.title,
     source: sessionSourceLabel({ kind: "chat", record }),
+    // A structured Session runs the Agent Runtime, not a CLI: it has no harness
+    // glyph to draw, and its row keeps the marks it already had (VC-402).
+    harnessId: null,
     activity: delegationBusy && record.activity === "idle" ? "working" : record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
@@ -960,6 +1026,9 @@ export function buildActiveSessionListing(
         ticket,
         title: row.title,
         kind: "terminal",
+        // Taken off the Active row for the reason `provenance` below is: one
+        // Session seen at two ages must not be able to name two harnesses.
+        harnessId: row.harnessId,
         endedOrQuietAt: recency,
         activity: null,
         // Taken off the Active row rather than looked up again: the two bands
@@ -988,6 +1057,9 @@ export function buildActiveSessionListing(
         ticket,
         title: tab.title,
         kind: "terminal",
+        // The tab's own root record, which is the one `createdAt` below reads
+        // too: an exited tab has no subject pane left to ask.
+        harnessId: sessionHarness(recordsById.get(tab.sessionId)),
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
         activity: null,
         provenance: provenanceOf(tab.sessionId),
@@ -1132,6 +1204,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "terminal",
+        harnessId: sessionSourceHarness({ kind: "terminal", record }),
         endedOrQuietAt: record.endedAt,
         activity: null,
         provenance: provenanceOf(record.id),
@@ -1188,6 +1261,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "chat",
+        harnessId: row.harnessId,
         endedOrQuietAt: activityAt,
         // Carried verbatim off the Active row's record: interrupted survives
         // the quiet window (VC-324).

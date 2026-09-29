@@ -21,12 +21,38 @@ import { runAutomationAction, type RunAutomationAction } from "./run-automation-
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
+
+/**
+ * What became of a hand-run, for a surface that gates its own control on it
+ * (VC-406: the rail's inspect popover, whose Run must not be pressable twice
+ * for one launch and must offer Retry when a launch did not land).
+ *
+ * It is a REPORT, not a second announcement: every arm below has already done
+ * what a person needs — adopted the Session and toasted its door, toasted the
+ * refusal, or opened Model Access. A caller that ignores the value behaves
+ * exactly as it did before this existed, which is why every other Run door
+ * still does.
+ *
+ * The two retryable arms are distinguished from the third on purpose:
+ * `needs-model-access` is configuration a person must fix elsewhere before any
+ * Run can land, so pressing Run again would fail the same way — it is not an
+ * offer to retry (AGENTS.md: authentication, permissions, configuration and
+ * quota failures require explicit user recovery).
+ */
+export type AutomationRunOutcome =
+  /** Main accepted the Run; its Session is adopted and its door is on screen. */
+  | "started"
+  /** No default model: Model Access is open, and Run is not the recovery. */
+  | "needs-model-access"
+  /** A typed refusal, already toasted. Pressing again is a fresh attempt. */
+  | "refused"
+  /** The transport itself failed, already toasted. Retry repeats the intent. */
+  | "failed";
 
 /** The transport fields shared by every Ticket-targeted Run request. */
 interface RunRequest {
@@ -172,28 +198,36 @@ export async function runAutomationForProject(input: {
  * launch answer wins when main resolved a bound Automation under a newer name
  * (VC-231). A missing default model still opens Model Access: that is recovery
  * for the Run the person requested, not a successful landing.
+ *
+ * It ANSWERS with {@link AutomationRunOutcome} as well as acting on the result,
+ * for the one caller that gates a control on the launch rather than firing and
+ * forgetting. Nothing about the arms themselves changed.
  */
-export async function runAutomationOnTicket(input: TicketRunRequest): Promise<void> {
+export async function runAutomationOnTicket(
+  input: TicketRunRequest,
+): Promise<AutomationRunOutcome> {
   const action = await startRun({
     target: input.target,
     ticketId: input.ticketId,
     modelOverride: input.modelOverride,
   });
-  if (action === null) return;
+  if (action === null) return "failed";
   switch (action.kind) {
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
-      return;
+      return "needs-model-access";
     case "toast":
       toastError(action.message);
-      return;
+      return "refused";
     case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
-      // Keep the Ticket's rail current while the person remains on the surface
-      // that started the Run. Opening the toast action must not be required for
-      // the fresh history row to exist.
-      void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
+      // No listing refetch here (VC-373). A Run's Session is minted through
+      // the Session Engine, so main has already announced its row on
+      // `volli:session-activity` — the rail's roster cache folds it in within a
+      // frame or two, wherever the person happens to be looking. This surface
+      // opening the Session does not change that, and a read here would only
+      // race the push to say the same thing.
       toast.success(
         `${action.automationName ?? input.automationName} started on ${input.ticketDisplayId}`,
         {
@@ -208,7 +242,7 @@ export async function runAutomationOnTicket(input: TicketRunRequest): Promise<vo
           },
         },
       );
-      return;
+      return "started";
     }
   }
 }
@@ -244,6 +278,8 @@ export function openRunSession(input: {
   useWorkspaceStore.getState().openTicketWorkspace(input.projectId, input.ticketId, {
     tabId: chatTabId(input.sessionId),
   });
-  // So the rail's row appears without waiting on an unrelated refresh.
-  void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
+  // The rail's row for this Session is already on its way — the Run created
+  // it through the Session Engine, and `volli:session-activity` carries the
+  // row (VC-373). Opening the Ticket mounts the rail against the shared cache,
+  // so nothing here needs to re-read the listing.
 }

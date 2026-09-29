@@ -1,7 +1,7 @@
 import { errorMessage } from "@volli/shared";
 import * as React from "react";
 
-import { findSessionPane, useSessionsStore } from "@renderer/stores/sessions";
+import { findSessionPane, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
@@ -37,6 +37,14 @@ export function TerminalView({
   onActivate,
 }: TerminalViewProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const accessibleId = React.useId();
+  const accessibleName = useSessionsStore((state) => {
+    const tab = state.byOwner[ownerId]?.tabs.find((candidate) => candidate.sessionId === tabId);
+    if (tab === undefined) return "Terminal";
+    const paneNumber =
+      sessionPanes(tab.layout).findIndex((pane) => pane.sessionId === sessionId) + 1;
+    return `${tab.title} — pane ${paneNumber}`;
+  });
 
   // Read liveness fresh on every event — main forgets the session on PTY exit,
   // so forwarding for an exited tab would only toast "Unknown terminal session"
@@ -124,10 +132,22 @@ export function TerminalView({
   return (
     <div
       ref={containerRef}
+      id={accessibleId}
+      role="region"
+      aria-label={accessibleName}
+      title="Control+Shift+M toggles Tab focus navigation"
       data-terminal-renderer={sessionId}
       // Six pixels keeps the first glyph/cursor off Volli's chrome edge while
       // preserving nearly the full terminal grid.
-      className={cn("h-full min-h-0 w-full min-w-0 overflow-hidden p-1", !visible && "hidden")}
+      className={cn(
+        "h-full min-h-0 w-full min-w-0 overflow-hidden p-1 focus-within:ring-1 focus-within:ring-primary focus-within:ring-inset",
+        !visible && "hidden",
+      )}
+      onFocusCapture={(event) => {
+        // Keyboard entry must select this split's PTY too. Do not redirect
+        // focus when AT is navigating xterm's accessible output rows.
+        if (event.target instanceof HTMLTextAreaElement) onActivate();
+      }}
       onMouseDown={() => {
         onActivate();
         getEngine(sessionId)?.focus();

@@ -190,6 +190,50 @@ export function fitsSessionImageBudget(usedBytes: number, candidateBytes: number
 }
 
 /**
+ * The inlinable image bytes in a set of staged files, by the one rule that
+ * decides what inlining costs ({@link isInlinableImageMime}).
+ *
+ * Shared because two processes count the same strip at two moments: the
+ * renderer measures a provisional chat's staged Blobs BEFORE it asks for a
+ * Session (VC-358), and main measures the same Blobs again at the link
+ * boundary it is the authority for. Counting them with one function is what
+ * keeps those two answers from disagreeing.
+ */
+export function inlineImageBytesIn(
+  files: Iterable<{ readonly mime: string; readonly sizeBytes: number }>,
+): number {
+  let total = 0;
+  for (const file of files) {
+    if (isInlinableImageMime(file.mime)) total += file.sizeBytes;
+  }
+  return total;
+}
+
+/** `12.3`, the one rendering of a byte count every budget refusal states. */
+function budgetMegabytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+/**
+ * Why a whole staged strip cannot join a Session's conversation, or `null`
+ * when it fits.
+ *
+ * The batch counterpart of the per-file refusal raised at import: by the time a
+ * strip is adopted nobody is holding one file, so naming one would be a lie
+ * about which image to remove. Lives here rather than in main because the
+ * renderer asks it first — before a provisional chat mints anything durable —
+ * and a person must not be told two different things by the two askers.
+ */
+export function sessionImageBudgetRefusal(usedBytes: number, incomingBytes: number): string | null {
+  if (fitsSessionImageBudget(usedBytes, incomingBytes)) return null;
+  return (
+    `These images come to ${budgetMegabytes(usedBytes + incomingBytes)} MB, past the ` +
+    `${budgetMegabytes(MAX_SESSION_INLINE_IMAGE_BYTES)} MB a single chat can carry. ` +
+    `Remove one and send again.`
+  );
+}
+
+/**
  * What a Blob link looks like to the renderer: the link, plus the few Blob
  * columns a chip or a preview needs. Everything else the UI wants is derived
  * from these by pure helpers both sides already share — {@link isImageMime}
@@ -294,6 +338,65 @@ export function resolveAttachment(repoRelPath: string | null, mime: string): Att
 /** The `app_state` row holding the new-Ticket composer's draft. SHARED BETWEEN PROCESSES: the renderer writes it (`board/new-ticket/draft.ts`) and main reads it at boot to keep the draft's unowned Blobs alive — see {@link draftAttachmentHashes}. */
 export const NEW_TICKET_DRAFT_APP_STATE_KEY = "volli:new-ticket-draft";
 
+/** The persisted chat Draft envelope, shared so boot can retain its ownerless Blobs. */
+export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
+
+/**
+ * The renderer state envelope in `app_state`, parsed, or `undefined`.
+ *
+ * Both retained-Blob readers below are main reading a row the RENDERER owns,
+ * at boot, before anything can be repaired. Malformed state must therefore
+ * retain nothing rather than throw: the worst case is bytes left on disk until
+ * the draft is fixed or cleared, never a boot that will not finish.
+ */
+function parsedAppState(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return asRecord(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A value as a record, or `undefined` — arrays and null are not records. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** One step down an envelope. */
+function childRecord(
+  parent: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  return parent === undefined ? undefined : asRecord(parent[key]);
+}
+
+/**
+ * The Blob hashes in one attachment strip that `keep` admits.
+ *
+ * `keep` is the only thing the two readers disagree about: a new-Ticket draft
+ * retains every hash it names, while a chat Draft retains only the ownerless
+ * ones — an entry with a `linkId` already has a `blob_links` row keeping it
+ * alive, so counting it here would say the same thing twice.
+ */
+function blobHashesIn(
+  attachments: unknown,
+  keep: (attachment: Record<string, unknown>) => boolean,
+): string[] {
+  if (!Array.isArray(attachments)) return [];
+  const hashes: string[] = [];
+  for (const entry of attachments) {
+    const attachment = asRecord(entry);
+    if (attachment === undefined) continue;
+    const hash = attachment["blobHash"];
+    if (keep(attachment) && typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
+  }
+  return hashes;
+}
+
 /**
  * The Blob hashes a stored new-Ticket draft still names, for boot-time
  * collection to retain (VC-137).
@@ -311,23 +414,72 @@ export const NEW_TICKET_DRAFT_APP_STATE_KEY = "volli:new-ticket-draft";
  * cleared), never crash a boot.
  */
 export function draftAttachmentHashes(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return [];
-  }
-  if (typeof parsed !== "object" || parsed === null) return [];
-  const draft = (parsed as Record<string, unknown>)["draft"];
-  if (typeof draft !== "object" || draft === null) return [];
-  const attachments = (draft as Record<string, unknown>)["attachments"];
-  if (!Array.isArray(attachments)) return [];
+  const draft = childRecord(parsedAppState(value), "draft");
+  return blobHashesIn(draft?.["attachments"], () => true);
+}
+
+/**
+ * How far a provisional chat Draft has got towards being a Session (VC-358).
+ *
+ * `draft` — nothing durable exists. `session-created` — the Session row landed
+ * but its Draft-owned Blob links have not all transferred, so a retry resumes
+ * there rather than minting again.
+ *
+ * The vocabulary lives here, not in the renderer store that owns the state,
+ * for one reason: TWO processes read the same persisted envelope, and they
+ * must recognise exactly the same set. The renderer drops a Draft whose phase
+ * it does not know; if main kept that Draft's ownerless Blobs anyway, those
+ * bytes would be retained by a reader for an owner the other reader has
+ * already discarded — a leak with no path left to release it.
+ */
+export type ProvisionalChatDraftPhase = "draft" | "session-created";
+
+/** Whether a persisted value names a phase both readers of the envelope know. */
+export function isProvisionalChatDraftPhase(value: unknown): value is ProvisionalChatDraftPhase {
+  return value === "draft" || value === "session-created";
+}
+
+/**
+ * A staged file with no `blob_links` row yet.
+ *
+ * The one thing the two retained-Blob readers disagree about: an entry that
+ * already has a `linkId` is kept alive by its row, so retaining it here would
+ * say the same thing twice.
+ */
+function isOwnerlessAttachment(attachment: Record<string, unknown>): boolean {
+  return attachment["linkId"] === null;
+}
+
+/**
+ * Blob hashes retained by persisted provisional chat Drafts (VC-358).
+ *
+ * A provisional chat Draft can name files in its live composer strip and in
+ * held first messages. Entries whose `linkId` is null are ownerless until
+ * promotion creates the Session and links them, so boot-time collection must
+ * read both locations before it sweeps. Durable Drafts and already-linked
+ * entries need no exception: their `blob_links` rows retain them normally.
+ * Like {@link draftAttachmentHashes}, this treats malformed renderer state as
+ * empty rather than letting a damaged preference row block startup.
+ *
+ * Retains only what the renderer itself would keep — see
+ * {@link isProvisionalChatDraftPhase} for why the two readers must not differ.
+ */
+export function chatDraftAttachmentHashes(value: unknown): string[] {
+  const drafts = childRecord(childRecord(parsedAppState(value), "state"), "drafts");
+  if (drafts === undefined) return [];
   const hashes: string[] = [];
-  for (const entry of attachments) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const hash = (entry as Record<string, unknown>)["blobHash"];
-    if (typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
+  for (const entry of Object.values(drafts)) {
+    const draft = asRecord(entry);
+    if (draft === undefined) continue;
+    const phase = childRecord(draft, "provisional")?.["phase"];
+    if (!isProvisionalChatDraftPhase(phase)) continue;
+    hashes.push(...blobHashesIn(draft["attachments"], isOwnerlessAttachment));
+    if (!Array.isArray(draft["held"])) continue;
+    for (const held of draft["held"]) {
+      const message = asRecord(held);
+      if (message !== undefined)
+        hashes.push(...blobHashesIn(message["attachments"], isOwnerlessAttachment));
+    }
   }
   return hashes;
 }

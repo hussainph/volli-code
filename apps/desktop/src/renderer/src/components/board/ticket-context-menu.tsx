@@ -165,7 +165,9 @@ export function TicketContextMenu({
   // Resumability (interrupt/resume, issue #78) needs the ticket's durable
   // session records — the same shared cache the rail and the exited-pane
   // overlay read (stores/ticket-session-records.ts), fetched lazily on menu
-  // open rather than eagerly for every card on the board.
+  // open rather than eagerly for every card on the board. `ensure` is the
+  // BASELINE door (VC-373): a ticket this window has already listed paints
+  // from cache, and the push channel has carried every change since.
   const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_ROWS);
   const resumableSession = latestResumableSession(rows, launchAdapter);
 
@@ -186,7 +188,7 @@ export function TicketContextMenu({
   return (
     <ContextMenu
       onOpenChange={(open) => {
-        if (open) void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+        if (open) void useTicketSessionRecordsStore.getState().ensure(ticket.id);
       }}
     >
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>

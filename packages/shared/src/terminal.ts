@@ -113,7 +113,7 @@ export interface TerminalParkStateEvent {
   keepAwake: boolean;
 }
 
-/** main → renderer: everything the renderer needs to map the user's Ghostty config onto restty. */
+/** main → renderer: everything the renderer needs to map the user's Ghostty config onto its terminal engine. */
 export interface GhosttyAppearancePayload {
   prefs: GhosttyTerminalPrefs;
   /** Merged config text in effective last-wins order (renderer overlays its inline color keys); null when no config file exists. */

@@ -194,6 +194,17 @@ const doors = {
     ok: true,
     skips: [],
   })),
+  // The editor's own scoped history (VC-297): one record's Runs and skips.
+  runsForAutomation: vi.fn(async (): Promise<{ ok: true; runs: AutomationRun[] }> => ({
+    ok: true,
+    runs: [],
+  })),
+  skipsForAutomation: vi.fn(
+    async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
+      ok: true,
+      skips: [],
+    }),
+  ),
   columnOrders: vi.fn(async () => ({ ok: true, orders: [] })),
   setColumnOrder: vi.fn(async () => ({ ok: true, orders: [], receipt: {} })),
   setEnabled: vi.fn(async () => ({ ok: true, enabledAutomationIds: [], receipt: {} })),
@@ -230,9 +241,9 @@ const MODEL_ACCESS = {
 
 /**
  * The rest of `window.api` a started Run touches on its way to a landing —
- * adopting the fresh Session, refreshing the rail, the composer's supply for
- * the Run once form. Stubbed rather than avoided: a door whose glue threw on
- * the way back would not be a door that reached the seam.
+ * adopting the fresh Session, refreshing the rail. Stubbed rather than
+ * avoided: a door whose glue threw on the way back would not be a door that
+ * reached the seam.
  */
 function installApi(automations: Partial<typeof doors> = {}): void {
   Object.defineProperty(window, "api", {
@@ -277,6 +288,15 @@ function control(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+/** Radix opens a popover on click and a dropdown on pointerdown. */
+async function press(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    element.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0 }));
+    element.click();
+  });
+}
+
 function itemContaining(slot: string, label: string): HTMLElement {
   const found = [...document.querySelectorAll(`[data-slot="${slot}"]`)].find((candidate) =>
     candidate.textContent?.includes(label),
@@ -300,19 +320,6 @@ function buttonContaining(label: string): HTMLElement {
   );
   if (found === undefined) throw new Error(`no button containing ${label}`);
   return found;
-}
-
-/** Type into a controlled textarea the way React's own event system sees it. */
-async function typeInstructions(value: string): Promise<void> {
-  const box = document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement;
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    "value",
-  )?.set;
-  await act(async () => {
-    setter?.call(box, value);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
 }
 
 /**
@@ -357,10 +364,12 @@ beforeEach(() => {
     armingByProject: {},
     orderByProject: {},
     runsByProject: {},
-    runsByTicket: {},
     skipsByProject: {},
     enabledIds: [],
     enablementRead: false,
+    // A landed rail version from an earlier mount would let this case answer
+    // from a cache the `beforeEach` above just cleared (VC-373).
+    railReadAt: {},
     editor: null,
   });
 });
@@ -378,13 +387,15 @@ afterEach(async () => {
 });
 
 describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
-  it("the Ticket rail's split button toasts in place with the Session door", async () => {
+  it("the Ticket rail's Armed row toasts in place with the Session door", async () => {
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    await act(async () => {
-      control("Run Review sweep on this ticket").click();
-    });
+    // The row INSPECTS (VC-406 revision 05); the Run inside the inspection is
+    // the explicit act that reaches the seam.
+    await press(control("Inspect Review sweep"));
+    expect(run).not.toHaveBeenCalled();
+    await press(control("Run Review sweep"));
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
@@ -407,52 +418,20 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     // The same door with the other answer it can give (VC-112). It is its own
     // case because the override travels on the request: a door that dropped it
     // would reach the seam asking for a different Run than the one pressed.
+    // The offer is a list now (VC-406), and the override lives beside the Run
+    // it will be spent on, inside the row's own inspection.
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    await act(async () => {
-      control("Other automations").dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-      );
-    });
-    await act(async () => {
-      itemContaining("dropdown-menu-sub-trigger", "Run on model").click();
-    });
-    await act(async () => {
-      itemContaining("dropdown-menu-item", "claude-opus").click();
-    });
+    await press(control("Inspect Review sweep"));
+    await press(control("Run on model"));
+    await press(itemContaining("dropdown-menu-radio-item", "claude-opus"));
+    await press(control("Run Review sweep"));
 
     expect(run).toHaveBeenCalledWith(
       askedFor({
         target: { kind: "automation", automationId: "a1" },
         ticketId: "t1",
         modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
-      }),
-    );
-  });
-
-  it("the rail's Run once, whose Instructions no record supplies", async () => {
-    await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
-
-    await act(async () => {
-      control("Other automations").dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-      );
-    });
-    await act(async () => {
-      itemContaining("dropdown-menu-item", "Run once").click();
-    });
-    await typeInstructions("/review the diff once");
-    await act(async () => {
-      buttonContaining("Run").click();
-    });
-
-    // The Unbound Run's own words are the payload — this is the door where the
-    // Instructions exist nowhere else, so losing them here loses them entirely.
-    expect(run).toHaveBeenCalledWith(
-      askedFor({
-        target: { kind: "unbound", instructions: "/review the diff once" },
-        ticketId: "t1",
-        modelOverride: null,
       }),
     );
   });
@@ -567,7 +546,9 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         ok: true,
         automations: [{ ...NIGHTLY, name: "Renamed nightly sweep" }],
       })),
-      skipsForProject: vi.fn(
+      // The skip belongs to the record on screen, so it arrives through that
+      // record's OWN history read (VC-297) rather than the project's.
+      skipsForAutomation: vi.fn(
         async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
           ok: true,
           skips: [

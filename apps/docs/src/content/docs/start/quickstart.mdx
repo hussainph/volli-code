@@ -22,7 +22,7 @@ folder name. A folder called `harbor` gets tickets such as `HB-1` and `HB-2`.
 The project opens on **Home**, a tabbed workspace. Its permanent **Board** tab
 organizes tasks. Board chats and files open as tabs beside it.
 
-![Home for a project named voltaic. Its permanent Board tab organizes tasks in five columns, and the Chat control starts a Board chat.](../../../assets/screenshots/board.png)
+![The Home Board for voltaic with its five columns and 24 tickets fit on screen; the navigation sidebar is hidden, while the Chat control remains in the top bar.](../../../assets/screenshots/board.png)
 
 ## Turn an idea into tasks
 
@@ -58,7 +58,7 @@ The first tab is its **Ticket Body**. Write what must change, what must not
 change, and how you will judge the result. This brief is the starting context
 for every chat on the ticket.
 
-![A ticket workspace for VLT-14. Its Ticket Body holds the task brief, and the workspace shows the worktree, review state, and Chat control.](../../../assets/screenshots/ticket-workspace.png)
+![The ticket workspace for VLT-14 with its body, expanded navigation sidebar, worktree and ticket properties, and the Automations rail showing Run once beside the Chat control.](../../../assets/screenshots/ticket-workspace.png)
 
 ## Run a task
 
@@ -105,6 +105,17 @@ that the work is correct or run your tests for you.
 Commit, push, and open a pull request from the ticket's repository summary.
 Then move the ticket and clean up its worktree when you are done.
 
+## Optional: Reuse a workflow
+
+After you have run a task normally, you can save a repeated start from
+**Automations**. An Automation keeps its Instructions, Trigger, and Runtime.
+Run it by hand first; later, enable it on this Mac and arm a column or add a
+schedule when you want it to start automatically. See the [Automations
+guide](/guides/automations/) for the full workflow.
+
+This step is optional. Moving a ticket to **Doing** and selecting **Chat**
+remain the simplest way to start your first task.
+
 ## Optional: Use a terminal
 
 To drive a CLI yourself, open the caret beside **Chat** and choose **Terminal**.
@@ -123,6 +134,11 @@ your own TUI. Volli never opens one as a fallback.
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
     description="A task's brief, chats, files, and changes."
+  />
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Save a repeatable start after your first task."
   />
   <LinkCard
     title="Chats and worktrees"

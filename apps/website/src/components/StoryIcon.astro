@@ -1,0 +1,41 @@
+---
+/**
+ * The two marks the Run history draws: Phosphor's Lightning (the Automation
+ * and every Run row, the same glyph the app's nav row carries) and
+ * ClockCounterClockwise (a Skipped occurrence — a different drawing on
+ * purpose, so a skip can never be mistaken for work that happened).
+ * Traced at regular weight to match the app's outline baseline.
+ */
+interface Props {
+  kind: "bolt" | "clock-back";
+  class?: string;
+}
+
+const { kind, class: className } = Astro.props;
+---
+
+{
+  kind === "bolt" ? (
+    <svg class:list={["story-icon", className]} viewBox="0 0 256 256" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="16"
+        d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
+      />
+    </svg>
+  ) : (
+    <svg class:list={["story-icon", className]} viewBox="0 0 256 256" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="16"
+        d="M128 80v48h48M67.6 90.6L32 128l35.6 37.4M32 128a96 96 0 1 0 28.1-67.9"
+      />
+    </svg>
+  )
+}

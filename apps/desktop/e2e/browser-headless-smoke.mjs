@@ -6,9 +6,10 @@
  * A Session-owned tab is born headless — in no strip, attached to no window —
  * and the only place a person sees it is the chat that owns it: the island
  * above its composer. This smoke opens one the way the Browser port does
- * (through the host, behind the `VOLLI_SMOKE_BROWSER_HOST` door, because a $0
- * smoke cannot take a model turn), then drives every presentation from the
- * person's side:
+ * (through the host, behind the `VOLLI_SMOKE_BROWSER_HOST` door). The owning
+ * chat is promoted with one real Send — its turn fails on the placeholder key
+ * below, which is fine: this smoke never needs an answer, only the durable
+ * id — then drives every presentation from the person's side:
  *
  *   1. the island's tabs cluster counts it, it is in NO strip, and no native
  *      view is attached;
@@ -72,6 +73,19 @@ async function startFixtureServer() {
 // Page-wide, on purpose: under a split each pane draws its own strip, and the
 // question every check asks is about the surface as a whole.
 const browserStripTabs = (page) => page.getByTestId("home-browser-tab");
+/**
+ * The focused pane's chat tab, found by structure rather than by name.
+ *
+ * A chat tab is born with the fallback label "Chat" and is renamed from its
+ * Session's first message moments later, so its name is not a handle to hold
+ * across a few checks — it is a tab, and the tab is what the strip draws. The
+ * browser tabs in the same pane carry their own test id; everything else in
+ * that strip is the chat.
+ */
+const chatStripTab = (page) =>
+  page
+    .locator('[data-slot="split-view-pane"][data-focused="true"] [role="tab"]')
+    .filter({ hasNot: page.getByTestId("home-browser-tab") });
 const island = (page) => page.locator("[data-activity-island]");
 const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
 const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
@@ -151,8 +165,9 @@ async function main() {
       VOLLI_SMOKE_BROWSER_HOST: "1",
       // A chat Session needs a default model, and a default must be AVAILABLE,
       // which for an API-key provider means a key in the environment. This
-      // one is not a key: no turn is ever taken, so nothing is ever sent with
-      // it. It exists so `session.create` has a model to record.
+      // one is not a key: the owning chat below is promoted with one real
+      // Send, whose turn fails on it — no answer is ever needed, only the
+      // durable Session the first Send mints, so nothing billable ever runs.
       ANTHROPIC_API_KEY: "volli-smoke-placeholder-never-sent",
     },
   });
@@ -199,15 +214,22 @@ async function main() {
     },
   );
 
-  // A second pane with a chat in it: a chat Session exists before any executor
-  // attaches, so this costs no model turn — and its id is what the agent tab is
-  // owned by. The split is what lets the chat and the person's tab share the
-  // screen, which is the multi-attach proof below.
+  // A second pane with a chat in it. Since VC-358 a New chat is a
+  // provisional Draft, not a Session — so Send one message to promote it:
+  // promotion mints the durable row (and its id, which is what the agent tab
+  // is owned by) before the turn runs, and the turn itself fails on the
+  // placeholder key, which nothing below depends on. The split is what lets
+  // the chat and the person's tab share the screen, which is the
+  // multi-attach proof below.
   await page.keyboard.press("Shift+Meta+\\");
   await waitUntil("the empty pane", async () =>
     (await focusedEmptyRow(page, "New chat").count()) === 1 ? true : null,
   );
   await focusedEmptyRow(page, "New chat").click();
+  const composer = page.getByPlaceholder("Ask, plan, or implement…").first();
+  await composer.click();
+  await composer.fill("own the agent tab");
+  await page.keyboard.press("Enter");
   const sessionId = await waitUntil("the chat Session id", async () => {
     const result = await page.evaluate(
       (projectId) => window.api.sessions.list({ projectId }),
@@ -216,15 +238,13 @@ async function main() {
     const chat = result.ok ? result.sessions.find((row) => row.kind === "chat") : undefined;
     return chat?.record.sessionId ?? null;
   });
-  const chatTabLabel = await waitUntil("the chat tab", async () => {
-    const label = await page
-      .locator(
-        '[data-slot="split-view-pane"][data-focused="true"] [role="tab"][aria-selected="true"]',
-      )
-      .getAttribute("aria-label")
-      .catch(() => null);
-    return label === null || label === "" ? null : label;
-  });
+  // The chat tab is up once the focused pane's strip holds one. Its name is
+  // deliberately not captured: the Session is named from its first message
+  // moments from now, so a label read here can still be the fallback "Chat"
+  // by the time the tab is clicked below.
+  await waitUntil("the chat tab", async () =>
+    (await chatStripTab(page).count()) > 0 ? true : null,
+  );
 
   let agentTabId = null;
   await must(
@@ -335,7 +355,7 @@ async function main() {
         ),
       );
       // The promoted tab took the chat's pane; bring the chat back to reach its island.
-      await page.locator(`[role="tab"][aria-label="${chatTabLabel}"]`).first().click();
+      await chatStripTab(page).first().click();
       await waitUntil("the island again", async () =>
         (await island(page).count()) === 1 ? true : null,
       );

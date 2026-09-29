@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
-import type { RunGit } from "./types";
+import type { RunGit, RunGitAsync } from "./types";
 
 /** Filenames/dirs whose presence in the private gitdir signals in-progress sequencer state. */
 export const SEQUENCER_ENTRIES = [
@@ -43,6 +43,30 @@ export function detectSequencerState(git: RunGit, cwd: string): SequencerState {
   } catch {
     return "unknown";
   }
+  return stateFromGitDir(gitDir, cwd);
+}
+
+/**
+ * Async counterpart for the reads that must not block Electron main (VC-369):
+ * the rail's status read runs this on every mount and every watch event, and
+ * `execFileSync` there froze every window for the whole spawn. Only execution
+ * changes — the same gitdir resolution and the same three answers.
+ */
+export async function detectSequencerStateAsync(
+  git: RunGitAsync,
+  cwd: string,
+): Promise<SequencerState> {
+  let gitDir: string;
+  try {
+    gitDir = (await git(["rev-parse", "--git-dir"], cwd)).trim();
+  } catch {
+    return "unknown";
+  }
+  return stateFromGitDir(gitDir, cwd);
+}
+
+/** The marker scan both runners share once the private gitdir is known. */
+function stateFromGitDir(gitDir: string, cwd: string): SequencerState {
   const absoluteGitDir = isAbsolute(gitDir) ? gitDir : resolve(cwd, gitDir);
   for (const entry of SEQUENCER_ENTRIES) {
     if (existsSync(resolve(absoluteGitDir, entry))) return "active";

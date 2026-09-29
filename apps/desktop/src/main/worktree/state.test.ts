@@ -49,12 +49,17 @@ function branchGit(answers: {
 const deps = (git: ReturnType<typeof scriptedGit>["git"], statMtimeMs?: StatMtimeMs) => ({
   db: ctx.db,
   git,
+  // `listBranches` runs on the async runner (VC-369) so the base-branch picker
+  // cannot stall Electron main. The scripted handler stays synchronous; this
+  // wraps it exactly as `scriptedGit`'s own `gitAsync` does, so the recorded
+  // `calls` are still the same list.
+  gitAsync: async (args: readonly string[], cwd: string) => git(args, cwd),
   statMtimeMs,
   blobsRoot: "unused",
 });
 
 describe("listBranches", () => {
-  it("reports local branches, the checkout's branch, remote-tracking refs and the fetch time", () => {
+  it("reports local branches, the checkout's branch, remote-tracking refs and the fetch time", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git, calls } = branchGit({
       heads: "main\nfeature/x\nvolli/VC-1-x\n",
@@ -63,7 +68,7 @@ describe("listBranches", () => {
       gitPath: ".git/FETCH_HEAD\n",
     });
 
-    const result = listBranches(
+    const result = await listBranches(
       deps(git, () => 1_700_000_000_000),
       "proj-1",
     );
@@ -86,12 +91,12 @@ describe("listBranches", () => {
     ]);
   });
 
-  it("resolves FETCH_HEAD against the project path", () => {
+  it("resolves FETCH_HEAD against the project path", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({ heads: "main\n", gitPath: ".git/worktrees/x/FETCH_HEAD\n" });
     const seen: string[] = [];
 
-    listBranches(
+    await listBranches(
       deps(git, (path) => {
         seen.push(path);
         return 42;
@@ -102,12 +107,12 @@ describe("listBranches", () => {
     expect(seen).toEqual(["/repo/.git/worktrees/x/FETCH_HEAD"]);
   });
 
-  it("still lists branches for a detached, remote-less, never-fetched repo", () => {
+  it("still lists branches for a detached, remote-less, never-fetched repo", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({ heads: "main\n" });
 
     expect(
-      listBranches(
+      await listBranches(
         deps(git, () => null),
         "proj-1",
       ),
@@ -120,7 +125,7 @@ describe("listBranches", () => {
   // The bug this fallback exists for: `git clone` writes no FETCH_HEAD, so a
   // repo whose remote refs are minutes old reported "never fetched" — the one
   // lie the field is there to prevent, told about the freshest repo there is.
-  it("dates a fresh clone's remote refs from packed-refs when FETCH_HEAD does not exist", () => {
+  it("dates a fresh clone's remote refs from packed-refs when FETCH_HEAD does not exist", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({
       heads: "main\n",
@@ -130,7 +135,7 @@ describe("listBranches", () => {
     });
     const seen: string[] = [];
 
-    const result = listBranches(
+    const result = await listBranches(
       deps(git, (path) => {
         seen.push(path);
         return path.endsWith("packed-refs") ? 1_700_000_000_000 : null;
@@ -150,7 +155,7 @@ describe("listBranches", () => {
     expect(seen).toEqual(["/repo/.git/FETCH_HEAD", "/repo/.git/packed-refs"]);
   });
 
-  it("does not fall back to packed-refs for a repo with no remote-tracking refs", () => {
+  it("does not fall back to packed-refs for a repo with no remote-tracking refs", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({
       heads: "main\n",
@@ -159,7 +164,7 @@ describe("listBranches", () => {
     });
     const seen: string[] = [];
 
-    const result = listBranches(
+    const result = await listBranches(
       deps(git, (path) => {
         seen.push(path);
         return 1_700_000_000_000;
@@ -173,7 +178,7 @@ describe("listBranches", () => {
     expect(seen).toEqual(["/repo/.git/FETCH_HEAD"]);
   });
 
-  it("reports null fetchedAt when neither FETCH_HEAD nor packed-refs exists", () => {
+  it("reports null fetchedAt when neither FETCH_HEAD nor packed-refs exists", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({
       heads: "main\n",
@@ -182,7 +187,7 @@ describe("listBranches", () => {
       packedRefsPath: ".git/packed-refs\n",
     });
 
-    const result = listBranches(
+    const result = await listBranches(
       deps(git, () => null),
       "proj-1",
     );
@@ -193,12 +198,12 @@ describe("listBranches", () => {
     });
   });
 
-  it("reports null fetchedAt when git cannot resolve the git dir at all", () => {
+  it("reports null fetchedAt when git cannot resolve the git dir at all", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = branchGit({ heads: "main\n", remotes: "origin/main\n" });
 
     expect(
-      listBranches(
+      await listBranches(
         deps(git, () => 1),
         "proj-1",
       ),
@@ -208,20 +213,20 @@ describe("listBranches", () => {
     });
   });
 
-  it("fails when the local branch read fails", () => {
+  it("fails when the local branch read fails", async () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
 
-    expect(listBranches(deps(git), "proj-1")).toEqual({
+    expect(await listBranches(deps(git), "proj-1")).toEqual({
       ok: false,
       error: "not a git repository",
     });
   });
 
-  it("errors for an unknown project", () => {
+  it("errors for an unknown project", async () => {
     const { git } = scriptedGit(() => "");
-    expect(listBranches(deps(git), "nope")).toEqual({ ok: false, error: "Unknown project" });
+    expect(await listBranches(deps(git), "nope")).toEqual({ ok: false, error: "Unknown project" });
   });
 });

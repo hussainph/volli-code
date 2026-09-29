@@ -255,6 +255,32 @@ export function updateProjectAuthorityPolicy(
   return getProjectById(db, id);
 }
 
+/**
+ * Points this project at a different folder on disk (VC-430) and returns the
+ * authoritative row.
+ *
+ * The ONE write that moves `projects.path` after creation, and it moves
+ * nothing else: the id stays, which is what keeps every ticket, label, event,
+ * Session and setting attached to the same project through a rename. Callers
+ * come through `relinkProject` (`src/main/project-relink.ts`), which is where
+ * the folder is judged before this is reached — this function trusts its
+ * argument exactly as its `base_branch`/`setup_command` siblings above do.
+ */
+export function updateProjectPath(
+  db: Database.Database,
+  id: string,
+  path: string,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET path = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(path, now, id);
+  return getProjectById(db, id);
+}
+
 /** Updates the pinned automation base branch and returns the authoritative row. */
 export function updateProjectBaseBranch(
   db: Database.Database,

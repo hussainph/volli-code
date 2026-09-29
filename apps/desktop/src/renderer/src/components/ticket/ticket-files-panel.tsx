@@ -25,7 +25,8 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
-import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { AttachmentMenu } from "@renderer/components/files/attachment-menu";
+import { FilesNavigatorHeader } from "@renderer/components/files/navigator-header";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
@@ -33,18 +34,27 @@ import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
 import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
 import type { NavigatorEntryKind } from "@renderer/components/files/navigator-mutations";
-import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
 
 import {
   NewFileRailAction,
-  RailFaultBanner,
-  RailNavigatorHeader,
+  RAIL_PANEL_MARGIN,
+  RailHeadingReadStatus,
   RailPanelSkeleton,
+  RailReadFaultBody,
   RailRowActions,
   railNavigatorMatch,
 } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  railReadCanClaimEmpty,
+  railReadFeedback,
+  type RailReadState,
+} from "@renderer/components/ticket/rail-read-feedback";
+import {
+  navigatorScopeKey,
+  useRememberedNavigatorView,
+} from "@renderer/components/files/navigator-scope-state";
 import {
   buildTicketFilesNavigator,
   splitFilesPath,
@@ -185,10 +195,17 @@ function FileRow({
   const renaming = mutable && controls.edit.kind === "rename" && controls.edit.relPath === relPath;
   const row = (
     <ListRow
-      density="two-line"
+      // 36px, ONE line (VC-406, revision 05). The second line every row used to
+      // carry was its parent path, and in a flat CURRENT-FOLDER listing that is
+      // the folder the header already names — twenty rows repeating "src/"
+      // under twenty filenames, for sixteen extra pixels each. A referenced row
+      // is the exception that proves it: its path is NOT the current folder, so
+      // it keeps its location beside the name where it still says something.
+      density="row"
       data-testid="ticket-files-row"
       data-path={relPath}
       data-kind={kind}
+      title={kind === "reference" ? `Referenced · ${relPath}` : relPath}
       // While the field is open the row is inert, for `ticket-sessions-panel`'s
       // reason: an input inside the activating button would both nest an
       // interactive control and preview the file on every click into the field.
@@ -215,9 +232,15 @@ function FileRow({
           `${primary}${kind === "directory" ? "/" : ""}`
         )
       }
-      // A reference says so here rather than under a caption, which is what
-      // lets both kinds share one list.
-      secondary={kind === "reference" ? `Referenced · ${parentPath}` : parentPath}
+      // A reference says where it lives on the name's own line — it is the one
+      // row whose path is not the folder on screen.
+      primaryTrailing={
+        kind === "reference" && parentPath !== "" ? (
+          <span className="min-w-0 shrink truncate font-mono text-label text-muted-foreground/70">
+            {parentPath}
+          </span>
+        ) : undefined
+      }
       // The chevron is information (this row goes somewhere) and rides inside
       // the target; the copy/open pair are their own click targets and cannot.
       trailing={
@@ -278,7 +301,10 @@ function DraftRow({
   const Icon = entry === "directory" ? FolderPlusIcon : FilePlusIcon;
   return (
     <ListRow
-      density="two-line"
+      // The rows around it are one line, so this one is too: a draft that stood
+      // 16px taller than the list it is joining reads as a different object.
+      // The glyph and the field's own label say which kind is being made.
+      density="row"
       data-testid="ticket-files-draft-row"
       data-kind={entry}
       onActivate={null}
@@ -293,7 +319,6 @@ function DraftRow({
           onCancel={controls.cancelEdit}
         />
       }
-      secondary={entry === "directory" ? "New folder" : "New file"}
     />
   );
 }
@@ -305,6 +330,8 @@ export function TicketFilesList({
   referenced,
   worktree,
   controls,
+  canClaimEmpty = true,
+  emptyLabel = "Nothing here yet",
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
@@ -313,6 +340,14 @@ export function TicketFilesList({
   ticketId?: string;
   referenced: readonly TicketFileRefRow[];
   worktree: readonly TicketWorktreeEntry[];
+  /**
+   * Whether a read has LANDED (`rail-read-feedback.ts`). "Nothing here yet" is
+   * a claim about what a read returned, so a list with no completed read draws
+   * no rows and no sentence — its panel is already saying why.
+   */
+  canClaimEmpty?: boolean;
+  /** What an empty-but-read listing says — a filter that matched nothing differs. */
+  emptyLabel?: string;
   /**
    * The create/rename/duplicate/delete controller (VC-191). Optional: the
    * fixture gallery and the unit tests mount this list without an IPC bridge,
@@ -330,9 +365,10 @@ export function TicketFilesList({
   // An empty folder is exactly where New File… gets used, so the draft row wins
   // over the empty hint rather than being hidden behind it.
   if (draft === null && referenced.length === 0 && worktree.length === 0) {
+    if (!canClaimEmpty) return null;
     return (
       <p data-testid="ticket-files-empty" className={EMPTY_INLINE}>
-        Nothing here yet
+        {emptyLabel}
       </p>
     );
   }
@@ -383,28 +419,23 @@ export function TicketFilesList({
 }
 
 /**
- * Ticket Files panel: body refs + attachments + worktree directory listing.
- * Single-click previews; double-click pins (decision #56).
+ * Ticket Files panel: body refs + the attachments menu + worktree directory
+ * listing. Single-click previews; double-click pins (decision #56).
  *
- * Attachments load from the Ticket itself (VC-50). The prop survives for the
- * fixture gallery and the tests, which mount this panel without an IPC bridge —
- * when it is passed, it wins and nothing is fetched.
+ * Attachments load from the Ticket itself (VC-50) and are read through the
+ * header's paperclip menu (`files/attachment-menu.tsx`), not from a strip that
+ * is always on screen. The prop survives for the fixture gallery and the tests,
+ * which mount this panel without an IPC bridge — when it is passed, it wins,
+ * nothing is fetched, and the menu is READ-ONLY, because the list belongs to
+ * whoever supplied it.
  *
- * `handle` is the third case (VC-106): the Ticket detail view owns the strip so
- * that a file dropped on the BODY and a file dropped on this rail land in one
- * list. It differs from `attachments` in kind, not degree — that prop is a
+ * `handle` is the third case (VC-106): the Ticket detail view owns the live list
+ * so that a file dropped on the BODY and a file dropped on this rail land in
+ * one place. It differs from `attachments` in kind, not degree — that prop is a
  * read-only view someone else renders, this one is the live state itself, so
  * Attach and Remove stay live under it.
  */
-export function TicketFilesPanel({
-  ticket,
-  attachments: providedAttachments,
-  handle,
-  onPreviewFile,
-  onPinFile,
-  onOpenCreatedFile,
-  onRenameFile,
-}: {
+export interface TicketFilesPanelProps {
   ticket: Ticket;
   attachments?: readonly NamedBlobLink[];
   handle?: AttachmentsHandle;
@@ -414,14 +445,44 @@ export function TicketFilesPanel({
   onOpenCreatedFile(relPath: string): void;
   /** A file this navigator just renamed: the host moves any open tab across. */
   onRenameFile(from: string, to: string): void;
-}) {
+}
+
+export function TicketFilesPanel(props: TicketFilesPanelProps) {
+  // THE SCOPE IS THE IDENTITY, and it is spent as a `key` so the swap is
+  // SYNCHRONOUS. This panel is mounted once and handed a different ticket, so
+  // an effect that cleared the listing ran after the frame that had already
+  // drawn the previous worktree's rows, its read state and its attachments
+  // under the new ticket's branch. A new key is a new component instance: fresh
+  // state in the same commit, and the old instance's teardown — the read's
+  // request counter — runs there too, so a listing still in flight can never
+  // land on the ticket that replaced it.
+  return (
+    <TicketFilesScope
+      key={navigatorScopeKey("files", {
+        projectId: props.ticket.projectId,
+        ticketId: props.ticket.id,
+      })}
+      {...props}
+    />
+  );
+}
+
+function TicketFilesScope({
+  ticket,
+  attachments: providedAttachments,
+  handle,
+  onPreviewFile,
+  onPinFile,
+  onOpenCreatedFile,
+  onRenameFile,
+}: TicketFilesPanelProps) {
   // A repository file attached here resolves to an `@` reference, and the body
   // is where such a reference belongs — the HOST now writes it there (VC-106):
   // the detail view passes `refRoot` and an `onRefInsert` that splices into the
   // Body editor (or appends through the store when the Body tab is closed),
   // exactly as the New-ticket composer's paperclip does.
   //
-  // Hooks cannot be conditional, so the panel always has a strip of its own and
+  // Hooks cannot be conditional, so the panel always has a list of its own and
   // simply defers to the host's when there is one. The unused instance holds no
   // links and issues no IPC, so it costs a state cell and nothing else.
   const own = useAttachments({
@@ -458,46 +519,79 @@ export function TicketFilesPanel({
       label: entry.label,
       originalName: entry.originalName,
     }));
-  const [cwd, setCwd] = React.useState("");
+  // Where this ticket's navigator was left, which survived the tab switch that
+  // unmounted the page (`files/navigator-scope-state.ts`). Plain data: nothing
+  // about the memory keeps a read or a watch alive behind an unmounted panel.
+  const scopeKey = navigatorScopeKey("files", {
+    projectId: ticket.projectId,
+    ticketId: ticket.id,
+  });
+  const [view, setView] = useRememberedNavigatorView(scopeKey);
+  const { cwd, filtering, query } = view;
+  // The listing callbacks read the view through a ref rather than closing over
+  // it: a keystroke in the filter must not rebuild `loadDir` and re-list the
+  // directory.
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
+  const rememberCwd = React.useCallback(
+    (next: string) => setView({ ...viewRef.current, cwd: next }),
+    [setView],
+  );
+
   const [entries, setEntries] = React.useState<TicketWorktreeEntry[]>([]);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loaded, setLoaded] = React.useState(ticket.worktreePath === null);
-  const [filtering, setFiltering] = React.useState(false);
-  const [query, setQuery] = React.useState("");
+  const [detail, setDetail] = React.useState<string | null>(null);
+  const worktreePath = ticket.worktreePath;
+  // The three bits `rail-read-feedback.ts` decides from. `hasData` is "a read
+  // has LANDED", never "the array is non-empty": a refused first read and an
+  // empty folder must not draw the same.
+  const [read, setRead] = React.useState<RailReadState>({
+    hasData: worktreePath === null,
+    pending: worktreePath !== null,
+    failed: false,
+  });
+  // Only the newest read may name the current folder or replace its rows. The
+  // unmount cleanup bumps it too, so a late answer cannot land on a gone panel.
+  const requestId = React.useRef(0);
 
   const loadDir = React.useCallback(
     async (nextCwd: string) => {
-      if (ticket.worktreePath === null) {
+      if (worktreePath === null) {
         setEntries([]);
-        setError(null);
-        setLoaded(true);
+        setDetail(null);
+        setRead({ hasData: true, pending: false, failed: false });
         return;
       }
-      const abs = nextCwd === "" ? ticket.worktreePath : `${ticket.worktreePath}/${nextCwd}`;
+      const request = ++requestId.current;
+      setRead((prev) => ({ ...prev, pending: true }));
+      const abs = nextCwd === "" ? worktreePath : `${worktreePath}/${nextCwd}`;
       try {
         const result = await window.api.fs.listDirectory(abs);
+        if (request !== requestId.current) return;
         if (!result.ok) {
-          setError(result.error);
-          toastError(`Couldn't list worktree files: ${result.error}`);
-          setLoaded(true);
+          setDetail(result.error);
+          // The rows on screen were true as of the last read and stay drawn;
+          // the heading is where the caveat goes.
+          setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
           return;
         }
-        setError(null);
+        setDetail(null);
         setEntries(toWorktreeEntries(nextCwd, result.entries));
-        setCwd(nextCwd);
-        setLoaded(true);
+        setRead({ hasData: true, pending: false, failed: false });
+        rememberCwd(nextCwd);
       } catch (err) {
-        const message = errorMessage(err);
-        setError(message);
-        toastError(`Couldn't list worktree files: ${message}`);
-        setLoaded(true);
+        if (request !== requestId.current) return;
+        setDetail(errorMessage(err));
+        setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
       }
     },
-    [ticket.worktreePath],
+    [worktreePath, rememberCwd],
   );
 
   React.useEffect(() => {
-    void loadDir("");
+    void loadDir(viewRef.current.cwd);
+    return () => {
+      requestId.current += 1;
+    };
   }, [loadDir]);
 
   // The creation track, scoped to THIS ticket (VC-191) — so every verb resolves
@@ -520,21 +614,30 @@ export function TicketFilesPanel({
     attachments,
     worktreeEntries: entries,
   });
+  const feedback = railReadFeedback(read, "Files");
+  // Nothing to LIST, which is a fact about the checkout and not about the
+  // Ticket. Attachments hang off the Ticket, so the page around this keeps its
+  // paperclip menu, its Attach control and its drop target: a PDF attached
+  // before a worktree exists used to have no surface here at all, because this
+  // was an early return over the whole panel.
+  const listEmptyWithoutWorktree = worktreePath === null && nav.referenced.length === 0;
 
-  if (!loaded && ticket.worktreePath !== null) {
-    return <RailPanelSkeleton label="files" testId="ticket-files-loading" />;
-  }
-
-  if (ticket.worktreePath === null && nav.referenced.length === 0) {
-    return (
-      <div data-testid="ticket-files-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-ui text-muted-foreground/70">
-          Reference files in the Ticket Body with @path
-        </p>
-      </div>
+  // The paperclip, and what it may do. A host that SUPPLIED the list owns it:
+  // this panel is then a view of someone else's attachments and may neither add
+  // to them nor remove from them — and with nothing supplied there is no menu
+  // at all, because a control that can neither list nor add has no object. With
+  // no `attachments` prop the live list is ours (our own hook, or the host's
+  // `handle`), so both verbs are offered whatever the listing below is doing.
+  const attachmentMenu =
+    providedAttachments === undefined ? (
+      <AttachmentMenu
+        attachments={loadedAttachments}
+        onAttachFiles={(picked) => void attachFiles(picked)}
+        onRemove={(attachment) => void removeAttachment(attachment)}
+      />
+    ) : providedAttachments.length === 0 ? undefined : (
+      <AttachmentMenu attachments={providedAttachments} />
     );
-  }
 
   const worktree = nav.worktree.filter((entry) => railNavigatorMatch(query, entry.relPath));
   const referenced = nav.referenced.filter((row) => railNavigatorMatch(query, row.relPath));
@@ -548,74 +651,91 @@ export function TicketFilesPanel({
     <div
       data-testid="ticket-files-panel"
       // The rail is a drop target in its own right: this is the Ticket's file
-      // surface, so a file dragged onto the list attaches rather than bouncing.
-      {...fileAttachHandlers((picked) => void attachFiles(picked))}
+      // surface, so a file dragged onto the list attaches rather than bouncing —
+      // unless the host SUPPLIED the list, which makes this panel a read-only
+      // view of someone else's attachments. `undefined` returns handlers that
+      // decline every drop and paste, so the read-only menu and the surface
+      // under it refuse the same gestures.
+      {...fileAttachHandlers(
+        providedAttachments === undefined ? (picked) => void attachFiles(picked) : undefined,
+      )}
       className="flex min-h-0 flex-1 flex-col"
     >
-      {/* The scratch's mono sub-line names the branch, which is what the
-          worktree root IS. Once you walk into a folder the shared header names
-          the folder instead, and it becomes the way back out. */}
-      <RailNavigatorHeader
-        title="Ticket files"
+      {/* One line: where the listing is, then everything that acts on it —
+          New File on the folder, the Ticket's paperclip, the filter. The
+          paperclip is in the header rather than in the list so that walking
+          into a folder or opening the filter cannot take it away: attachments
+          belong to the Ticket, not to the directory on screen. */}
+      <FilesNavigatorHeader
+        status={
+          <RailHeadingReadStatus
+            word
+            feedback={feedback}
+            onRetry={() => void loadDir(cwd)}
+            testId="ticket-files-read-status"
+          />
+        }
+        // New File acts on the FOLDER, which is what makes it a page action.
+        // Absent without a worktree, where a create would land in the main
+        // checkout instead.
+        actions={
+          controls === undefined ? undefined : (
+            <NewFileRailAction onNewFile={() => controls.startDraft("file")} />
+          )
+        }
+        attachmentMenu={attachmentMenu}
         root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
         cwd={cwd}
         upTestId="ticket-files-up"
         filtering={filtering}
         query={query}
         onToggleFilter={() =>
-          setFiltering((open) => {
-            if (open) setQuery("");
-            return !open;
-          })
+          setView({ ...view, filtering: !filtering, query: filtering ? "" : query })
         }
-        onQueryChange={setQuery}
+        onQueryChange={(next) => setView({ ...view, query: next })}
         onNavigateUp={navigateUp}
-        // Attach lives beside Filter rather than in the list: it acts on the
-        // Ticket, not on whatever row is under the cursor. Hidden when a host
-        // supplied the attachments, because then this panel is a view of
-        // someone else's list and must not mutate it. New File is its neighbour
-        // for the same reason, one object down: it acts on the FOLDER.
-        actions={
-          <>
-            {controls === undefined ? null : (
-              <NewFileRailAction onNewFile={() => controls.startDraft("file")} />
-            )}
-            {providedAttachments === undefined ? (
-              <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
-            ) : null}
-          </>
-        }
-      >
-        <AttachmentStrip
-          attachments={loadedAttachments}
-          {...(providedAttachments === undefined
-            ? { onRemove: (attachment) => void removeAttachment(attachment) }
-            : {})}
-        />
-      </RailNavigatorHeader>
-      {/* A listing can fail for ONE folder (permissions, a directory the agent
-          deleted mid-browse) while the rest of the tree is fine, so the fault
-          shows ABOVE the navigator rather than instead of it — the last good
-          listing stays on screen, and the header's Up control stays reachable.
-          Same banner the two watches use: one fault, one shape. */}
-      {error !== null ? (
-        <RailFaultBanner
-          testId="ticket-files-error"
-          label="Folder unreadable"
-          error={error}
-          onRetry={() => void loadDir(cwd)}
-        />
-      ) : null}
-      <TicketFilesList
-        projectId={ticket.projectId}
-        ticketId={ticket.id}
-        referenced={referenced}
-        worktree={worktree}
-        controls={controls}
-        onPreviewFile={onPreviewFile}
-        onPinFile={onPinFile}
-        onOpenDirectory={(relPath) => void loadDir(relPath)}
       />
+      {/* A first read that never landed IS the body; a refresh that failed is a
+          caveat in the heading above, over the rows it could not replace. */}
+      {feedback?.place === "body" && feedback.kind === "reading" ? (
+        <RailPanelSkeleton label="files" testId="ticket-files-loading" />
+      ) : (
+        <>
+          <RailReadFaultBody
+            feedback={feedback}
+            detail={detail}
+            onRetry={() => void loadDir(cwd)}
+            testId="ticket-files-error"
+            className={cn("mb-2 shrink-0", RAIL_PANEL_MARGIN)}
+          />
+          {/* The LIST's own empty state, under the header rather than instead
+              of it: where files would come from once there is a checkout. */}
+          {listEmptyWithoutWorktree ? (
+            <div
+              data-testid="ticket-files-no-worktree"
+              className={cn("min-h-0 flex-1", EMPTY_PAGE)}
+            >
+              <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
+              <p className="text-ui text-muted-foreground/70">
+                Reference files in the Ticket Body with @path
+              </p>
+            </div>
+          ) : (
+            <TicketFilesList
+              projectId={ticket.projectId}
+              ticketId={ticket.id}
+              referenced={referenced}
+              worktree={worktree}
+              controls={controls}
+              canClaimEmpty={railReadCanClaimEmpty(read)}
+              emptyLabel={query.trim() === "" ? "Nothing here yet" : "No matches"}
+              onPreviewFile={onPreviewFile}
+              onPinFile={onPinFile}
+              onOpenDirectory={(relPath) => void loadDir(relPath)}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

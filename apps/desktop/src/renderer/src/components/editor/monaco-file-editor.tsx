@@ -752,8 +752,14 @@ export function MonacoFileEditor({
           FURNITURE through — `editor/source-mode.css` for the ground, gutter,
           selection and find widget; `editor/document-mode.css` for the live
           preview's type and widgets. Mutually exclusive: a host wears one. */}
+      {/* `loading` from the FIRST frame, not from the mount effect that
+          re-stamps it: the effect runs after paint, and the placeholder
+          `globals.css` keys on the attribute would otherwise miss a frame.
+          React never rewrites a prop that did not change, so the effect's
+          later `ready`/`failed` stamps stand (VC-383). */}
       <div
         ref={hostRef}
+        data-monaco-status="loading"
         className={cn(SURFACE_CLASS[surface], "min-h-0 w-full flex-1 overflow-hidden")}
       />
     </div>

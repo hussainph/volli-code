@@ -10,6 +10,7 @@ import {
   sessionRpcClient,
   type SessionRpcBridge,
   type SessionRpcClient,
+  type SessionRpcPerformanceSample,
 } from "./session-rpc-ipc-link";
 
 function assertPresentationClient(client: SessionRpcClient): void {
@@ -119,6 +120,126 @@ describe("query and mutation", () => {
     });
   });
 
+  it("reports payload-free round-trip timings to an optional benchmark observer", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 10;
+    const client = createSessionRpcClient(bridge, {
+      now: () => (now += 2),
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+
+    expect(samples).toEqual([
+      {
+        kind: "round-trip",
+        procedure: "session.projection",
+        durationMs: 2,
+        requestBytes: 68,
+        responseBytes: 56,
+        outcome: "ok",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-1");
+  });
+
+  it("keeps observer failures and unserializable metric values off the RPC path", async () => {
+    const bridge = fakeBridge();
+    const input = { sessionId: "session-1" } as { sessionId: string; self?: unknown };
+    input.self = input;
+    const client = createSessionRpcClient(bridge, {
+      record: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    const answer = client.session.projection.query(input);
+    await flush();
+    const response = { ok: true as const, data: { projection: {}, throughSequence: 4 } };
+    Object.defineProperty(response, "toJSON", { value: () => undefined });
+    bridge.reply(response);
+
+    await expect(answer).resolves.toEqual(response.data);
+  });
+
+  it("times a transport failure too, without carrying the payload into the sample", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 10;
+    const client = createSessionRpcClient(bridge, {
+      now: () => (now += 3),
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    // A bridge that never answers is the case a latency number is most wanted
+    // for, so the failed call is measured rather than dropped. There is no
+    // response, so its byte count is zero rather than a guess.
+    bridge.rejectRequest(new Error("bridge is gone"));
+
+    await expect(answer).rejects.toThrow("bridge is gone");
+    expect(samples).toEqual([
+      {
+        kind: "round-trip",
+        procedure: "session.projection",
+        durationMs: 3,
+        requestBytes: 68,
+        responseBytes: 0,
+        outcome: "transport-error",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-1");
+  });
+
+  it("skips a round-trip sample when a clock read fails around a transport failure", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let reads = 0;
+    const client = createSessionRpcClient(bridge, {
+      now: () => {
+        reads += 1;
+        if (reads === 2) throw new Error("clock failed");
+        return reads;
+      },
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.rejectRequest(new Error("bridge is gone"));
+
+    await expect(answer).rejects.toThrow("bridge is gone");
+    expect(samples).toEqual([]);
+  });
+
+  it("skips a round-trip sample when either performance clock read fails", async () => {
+    for (const failedRead of [1, 2]) {
+      const bridge = fakeBridge();
+      const samples: SessionRpcPerformanceSample[] = [];
+      let reads = 0;
+      const client = createSessionRpcClient(bridge, {
+        now: () => {
+          reads += 1;
+          if (reads === failedRead) throw new Error("clock failed");
+          return reads;
+        },
+        record: (sample) => samples.push(sample),
+      });
+
+      const answer = client.session.snapshot.query({ sessionId: "session-1" });
+      await flush();
+      bridge.reply({ ok: true, data: { projection: {}, frames: [], throughSequence: 4 } });
+
+      await expect(answer).resolves.toEqual({ projection: {}, frames: [], throughSequence: 4 });
+      expect(samples).toEqual([]);
+    }
+  });
+
   it("routes a mutation the same way", async () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
@@ -142,7 +263,11 @@ describe("query and mutation", () => {
   // to guess which one it is showing.
   it("keeps the router's error code readable off the rejection", async () => {
     const bridge = fakeBridge();
-    const client = createSessionRpcClient(bridge);
+    const samples: SessionRpcPerformanceSample[] = [];
+    const client = createSessionRpcClient(bridge, {
+      now: () => 1,
+      record: (sample) => samples.push(sample),
+    });
 
     const answer = client.modelAccess.defaults.query();
     await flush();
@@ -152,6 +277,13 @@ describe("query and mutation", () => {
       message: "Unknown model",
       data: { code: "NOT_FOUND", httpStatus: 404, path: "modelAccess.defaults" },
     });
+    expect(samples).toEqual([
+      expect.objectContaining({
+        kind: "round-trip",
+        procedure: "modelAccess.defaults",
+        outcome: "rpc-error",
+      }),
+    ]);
   });
 
   // A boot whose database failed registers no handler at all, so the invoke
@@ -262,6 +394,38 @@ describe("subscription", () => {
     expect(record.data).toEqual([
       { id: "3", data: { sequence: 3 } },
       { id: "4", data: { sequence: 4 } },
+    ]);
+  });
+
+  it("measures pre-ack buffering and live renderer handler cost", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 0;
+    const client = createSessionRpcClient(bridge, {
+      now: () => ++now,
+      record: (sample) => samples.push(sample),
+    });
+
+    client.session.subscribe.subscribe({ sessionId: "session-1" }, { onData: () => undefined });
+    await flush();
+    bridge.emit({ kind: "data", subscriptionId: "sub-1", eventId: "3", data: { sequence: 3 } });
+    bridge.reply({ ok: true, subscriptionId: "sub-1" });
+    await flush();
+    bridge.emit({ kind: "data", subscriptionId: "sub-1", eventId: "4", data: { sequence: 4 } });
+
+    expect(samples.filter((sample) => sample.kind === "push")).toEqual([
+      expect.objectContaining({
+        disposition: "buffered-before-ack",
+        awaitingAck: 1,
+        bufferedFrames: 1,
+        durationMs: 1,
+      }),
+      expect.objectContaining({
+        disposition: "delivered",
+        awaitingAck: 0,
+        bufferedFrames: 0,
+        durationMs: 1,
+      }),
     ]);
   });
 
@@ -543,15 +707,72 @@ describe("subscription", () => {
 });
 
 describe("sessionRpcClient", () => {
+  it("ignores a malformed init-script benchmark observer", async () => {
+    const bridge = fakeBridge();
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      __VOLLI_SESSION_RPC_PERFORMANCE__: { record: null },
+    });
+    vi.resetModules();
+    const { sessionRpcClient: isolatedSessionRpcClient } = await import("./session-rpc-ipc-link");
+
+    const answer = isolatedSessionRpcClient().session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+
+    await expect(answer).resolves.toEqual({ projection: {}, throughSequence: 4 });
+  });
+
+  it("accepts an init-script observer that brings no clock of its own", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      // `now` is optional: a harness that only wants byte counts and procedure
+      // names should not have to supply a clock, and then the ambient one is
+      // used rather than the sample being dropped.
+      __VOLLI_SESSION_RPC_PERFORMANCE__: {
+        record: (sample: SessionRpcPerformanceSample) => samples.push(sample),
+      },
+    });
+    vi.resetModules();
+    const { sessionRpcClient: isolatedSessionRpcClient } = await import("./session-rpc-ipc-link");
+
+    const answer = isolatedSessionRpcClient().session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+
+    expect(samples).toEqual([
+      expect.objectContaining({ kind: "round-trip", procedure: "session.projection" }),
+    ]);
+    expect(samples[0]?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
   // A StrictMode double render must not stack a second event listener onto the
   // bridge: every frame would then arrive twice.
-  it("builds the app's client once, on first use", () => {
+  it("builds the app's client once and attaches an init-script benchmark observer", async () => {
     const bridge = fakeBridge();
-    vi.stubGlobal("window", { api: { sessionRpc: bridge } });
+    const samples: SessionRpcPerformanceSample[] = [];
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      __VOLLI_SESSION_RPC_PERFORMANCE__: {
+        now: () => 1,
+        record: (sample: SessionRpcPerformanceSample) => samples.push(sample),
+      },
+    });
 
     expect(bridge.listenerCount()).toBe(0);
     const first = sessionRpcClient();
     expect(sessionRpcClient()).toBe(first);
     expect(bridge.listenerCount()).toBe(1);
+
+    const answer = first.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+    expect(samples).toEqual([
+      expect.objectContaining({ kind: "round-trip", procedure: "session.projection" }),
+    ]);
   });
 });

@@ -25,6 +25,9 @@ const DIST = resolve(flag("dist", join(__dirname, "dist")));
 const SESSIONS = Number(flag("sessions", "10"));
 const TURNS = Number(flag("turns", "2000"));
 const LABEL = flag("label", "run");
+const STREAM_SAMPLES = Number(flag("stream-samples", "8"));
+const STREAM_STEPS = Number(flag("stream-steps", "120"));
+const STREAM_TOKEN_RATE = Number(flag("stream-token-rate", "30"));
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -111,7 +114,15 @@ app.whenReady().then(async () => {
     };
   };
 
-  const report = { label: LABEL, sessions: SESSIONS, turns: TURNS, steps: [], checks: {}, errors };
+  const report = {
+    label: LABEL,
+    sessions: SESSIONS,
+    turns: TURNS,
+    steps: [],
+    checks: {},
+    streamingSamples: [],
+    errors,
+  };
   try {
     await contents.loadURL(`http://127.0.0.1:${port}/index.html`);
     await run("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
@@ -137,6 +148,19 @@ app.whenReady().then(async () => {
     await run(`window.chatBench.show(1)`);
     report.steps.push(await sample("1 plane, after scrolling"));
 
+    // VC-353's simultaneous stream+scroll interaction. Repeated inside one
+    // production renderer so p50/p95 and variance describe the interaction,
+    // not Electron process startup.
+    for (let index = 0; index < STREAM_SAMPLES; index += 1) {
+      const streamingSample = await run(
+        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE})`,
+      );
+      report.streamingSamples.push({
+        ...streamingSample,
+        rendererRssMb: rendererRssMb(contents.getOSProcessId()),
+      });
+    }
+
     await run(`window.chatBench.show(${SESSIONS})`);
     report.steps.push(await sample(`${SESSIONS} planes`));
 
@@ -144,6 +168,14 @@ app.whenReady().then(async () => {
     report.steps.push(await sample("back to 1 plane"));
   } catch (error) {
     report.failure = String(error && error.stack ? error.stack : error);
+  }
+
+  // Console text alone names the error and not its origin. The harness fails a
+  // run on any renderer error, so carry the stacks out with the report.
+  try {
+    report.errorDetails = await run("window.chatBench.uncaught()");
+  } catch {
+    report.errorDetails = [];
   }
 
   process.stdout.write(`\n__BENCH__${JSON.stringify(report)}__BENCH__\n`);

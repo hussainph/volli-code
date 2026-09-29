@@ -13,6 +13,7 @@ import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -418,6 +419,14 @@ export const MonacoDocumentEditor = React.forwardRef<
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
+        // The ticket description is the surface the switch benchmark waits on
+        // — the harness's readiness predicate looks for Monaco's own textarea,
+        // so creating and laying out this editor is inside the measured window
+        // (VC-385). Only the ticket body stamps it: a file or diff editor
+        // opening elsewhere is not what the switch is waiting for.
+        if (liveRef.current.identity.kind === "ticket-body") {
+          markPerfPhase(PERF_PHASE.ticketDescriptionReady);
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -507,5 +516,18 @@ export const MonacoDocumentEditor = React.forwardRef<
   // `fitToContent` lays the editor into) to read as the clamped box. React only
   // ever writes the keys it sees here, so the imperative `height` that
   // `fitToContent` sets is left alone across re-renders.
-  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} style={style} />;
+  //
+  // `data-monaco-status="loading"` from the FIRST frame, not only from the
+  // mount effect that re-stamps it: the effect runs after paint, and the
+  // placeholder `globals.css` keys on the attribute would otherwise miss a
+  // frame. React never rewrites a prop that did not change, so the effect's
+  // later `ready`/`failed` stamps stand (VC-383).
+  return (
+    <div
+      ref={hostRef}
+      data-monaco-status="loading"
+      className={cn(DOCUMENT_MODE_CLASS, className)}
+      style={style}
+    />
+  );
 });

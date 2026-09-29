@@ -698,3 +698,43 @@ describe("TabStrip overflow", () => {
     expect(container?.querySelector('[data-testid="tab-hint"]')?.className).toContain("@min-[");
   });
 });
+
+/**
+ * VC-381. A tab is a control, not a line of text: the shell was a plain div
+ * with the label in a span, so hovering it drew the browser's text caret and a
+ * press-drag painted a selection. Every other interactive row in the app had
+ * said `cursor-default select-none` for years (`ui/menu-classes.ts`);
+ * `ui/tab-strip.tsx` was the one that never did, and every strip in the app is
+ * drawn by it.
+ */
+describe("TabStrip row cursor", () => {
+  it("draws a tab as a row, not a line of text", () => {
+    renderTabs(1, 0);
+
+    const [tab] = tabsInStrip();
+    expect(tab?.className).toContain("cursor-default");
+    expect(tab?.className).toContain("select-none");
+  });
+
+  it("hands selection back to the rename field inside that row", () => {
+    // A `select-none` ancestor reaches the field too, and the field selects
+    // its own value on open — so the row's rule cannot be the last word.
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab
+            label="Tab 0"
+            active
+            tabStop
+            closable={false}
+            onActivate={() => {}}
+            renaming={{ value: "Tab 0", onCommit: () => {}, onCancel: () => {} }}
+          />
+        </TabStrip>,
+      );
+    });
+
+    const field = container?.querySelector<HTMLInputElement>('[data-slot="tab"] input');
+    expect(field?.className).toContain("select-text");
+  });
+});

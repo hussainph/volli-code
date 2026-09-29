@@ -3,9 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   AUTHORITY_RULE_IDS,
   BUDGET_CAUSE_IDS,
+  CONFIRM_CAUSE_IDS,
   BUILTIN_RULE_PACK_HASH,
   hashRulePack,
   isBudgetCause,
+  isConfirmCause,
   isOverridableAuthorityRule,
   NON_CODING_TOOL_IDS,
   OVERRIDABLE_AUTHORITY_RULES,
@@ -87,6 +89,21 @@ describe("isBudgetCause", () => {
     expect(isBudgetCause("budget.delegation-children")).toBe(true);
     expect(isBudgetCause("call.unreadable")).toBe(false);
     expect(isBudgetCause("command.persistence")).toBe(false);
+  });
+});
+
+describe("isConfirmCause", () => {
+  it("recognises the confirmation namespace, apart from rules and budgets", () => {
+    expect(CONFIRM_CAUSE_IDS).toEqual(["confirm.mcp-install", "confirm.mcp-remove"]);
+    for (const cause of CONFIRM_CAUSE_IDS) {
+      expect(isConfirmCause(cause), cause).toBe(true);
+      // A confirmation is not a budget: nothing was spent, and no allowance is
+      // extended by answering yes.
+      expect(isBudgetCause(cause), cause).toBe(false);
+    }
+    expect(isConfirmCause("budget.delegation-children")).toBe(false);
+    expect(isConfirmCause("call.unreadable")).toBe(false);
+    expect(isConfirmCause("command.persistence")).toBe(false);
   });
 });
 

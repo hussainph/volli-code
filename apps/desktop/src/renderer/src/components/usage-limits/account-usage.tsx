@@ -4,9 +4,13 @@
  * The rows themselves, with no opinion about what surrounds them: they were
  * under a provider row in Model Access, and they are now inside the chrome
  * band's popover (VC-350), because a person wanting to know what is left is
- * almost never already in Settings. Nothing here knows which of those it is
- * in — that is why moving the surface cost this file its name and not a line
- * of its drawing.
+ * almost never already in Settings. The move cost the block its negative top
+ * margin (VC-352): that tuck existed because the settings host's `PrefRow`
+ * carried `py-4` and the block needed 8 of those 16px back to land the pocket
+ * the two rows read with. The accordion trigger already carries that pocket in
+ * its own `py-2`, and the accordion clips its content at its top edge to
+ * animate height — so a tuck above that edge draws as a sliced first line.
+ * The gap is the host's padding now, and the block owns no vertical tuck.
  *
  * The drawing is notation: a **remaining** bar (the part a long Session can
  * still spend), a hairline at where even spending would have left the bar's
@@ -68,7 +72,7 @@ export function AccountUsage({
 }) {
   if (limits.unavailable !== undefined) {
     return (
-      <p data-testid={testId} className="-mt-2 mb-4 text-ui text-muted-foreground last:mb-0">
+      <p data-testid={testId} className="mb-4 text-ui text-muted-foreground last:mb-0">
         {limits.unavailable.reason === "unsupported"
           ? "No subscription usage windows on this account."
           : "Usage limits couldn't be read. Refresh to try again."}
@@ -95,10 +99,12 @@ function UsageWindows({
   // Taken once, before anything draws, and held for this snapshot's life.
   const [at] = React.useState(() => now ?? Date.now());
   return (
-    // Every step is on the spacing ladder (docs/DESIGN.md): 2 up, 4 below.
-    // The negative top margin tucks the block under whatever row named the
-    // account, which is what makes the two read as one unit in either host.
-    <div data-testid={testId} className="-mt-2 mb-4 flex flex-col gap-2 last:mb-0">
+    // Every step is on the spacing ladder (docs/DESIGN.md). No negative top
+    // margin: it would render above the accordion content's top edge, which
+    // clips for the open/close animation, and slice the first line's
+    // ascenders (VC-352). The trigger's own `py-2` is the pocket that binds
+    // this block to the row that named the account.
+    <div data-testid={testId} className="mb-4 flex flex-col gap-2 last:mb-0">
       {limits.windows.map((window) => (
         <UsageWindowRow key={window.id} window={window} now={at} />
       ))}

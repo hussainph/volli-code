@@ -55,6 +55,8 @@
 import { CAPABILITY_TOOL_IDS, CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
 import type { CodingToolId, NonCodingToolId, SessionToolId } from "./authority";
 import type { SessionRole } from "./agent-runtime";
+import { errorMessage } from "./errors";
+import { isMcpToolId, validateMcpToolDefinitions, type McpToolDefinition } from "./mcp";
 import { VERB_TOOL_KEYS, isVerbToolKey } from "./verb-registry";
 import type { VerbToolKey } from "./verb-registry";
 
@@ -136,6 +138,31 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "automation.run",
     "session.delegate",
     "session.await",
+    // The MCP management family (VC-380), in the `project` bundle ALONE.
+    //
+    // The decision is about blast radius, not about danger. Installing an MCP
+    // server changes what every Session created in this project afterwards is
+    // handed — a project-wide, durable act whose effect outlives the Session
+    // that performed it. That is a Board Session's business by definition. A
+    // Ticket Session is scoped to executing one Ticket; letting it rewrite the
+    // project's tool supply would be the same category error as letting it
+    // start work on another Ticket, which `session.start` already refuses.
+    //
+    // A Ticket Session that genuinely needs one receives it as a durable grant
+    // (VC-183's mechanism, the `grants` parameter below), which is a decision a
+    // person records rather than a default this map hands out.
+    //
+    // `subagent` is not a judgment call at all: its bundle is empty, and
+    // {@link ROLE_CAPABILITY_POLICY} withholds `ask_user`, so a child could not
+    // put the install warning in front of anybody even if it held the verb.
+    "mcp.list",
+    "mcp.preview",
+    "mcp.install",
+    "mcp.refresh",
+    "mcp.enable",
+    "mcp.disable",
+    "mcp.tools",
+    "mcp.remove",
   ]) as readonly VerbToolKey[],
   // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
   // needs "go look at this and tell me" as much as an orchestrator does, and
@@ -211,7 +238,11 @@ export function isSessionToolId(value: unknown): value is SessionToolId {
   // through a restatement of either: `CAPABILITY_TOOL_IDS` is the whole
   // capability vocabulary and `isVerbToolKey` the whole registry one, so a tool
   // added to either is admitted here without this line being touched.
-  return (CAPABILITY_TOOL_IDS as readonly string[]).includes(value) || isVerbToolKey(value);
+  return (
+    (CAPABILITY_TOOL_IDS as readonly string[]).includes(value) ||
+    isVerbToolKey(value) ||
+    isMcpToolId(value)
+  );
 }
 
 /** What a venue can actually answer, as membership rather than as ports. */
@@ -240,6 +271,8 @@ export interface AgentToolSurfaceInput {
    * closed rather than one that learns to.
    */
   grants?: readonly string[];
+  /** Selected, sanitized project MCP definitions, in settings order. */
+  mcpTools?: readonly McpToolDefinition[];
   /**
    * The surface this Session may not exceed: its parent's own frozen record,
    * for a Subagent Session (VC-9).
@@ -311,6 +344,12 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
     granted.add(grant);
   }
   const verbs = new Set<VerbToolKey>([...roleVerbBundle(input.role), ...granted]);
+  let mcpTools: readonly McpToolDefinition[];
+  try {
+    mcpTools = validateMcpToolDefinitions(input.mcpTools ?? []);
+  } catch (error) {
+    throw new AgentToolSurfaceError(errorMessage(error));
+  }
   const withheld = ROLE_CAPABILITY_POLICY[input.role].withheld;
   const within = input.within;
   const offered = (tool: SessionToolId): boolean =>
@@ -325,6 +364,9 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
       (tool) => input.capabilities.interaction.includes(tool) && offered(tool),
     ),
     ...VERB_TOOL_KEYS.filter((key) => verbs.has(key)),
+    // Dynamic MCP definitions are settings-backed and always trail the static
+    // product vocabulary, preserving every previously frozen position.
+    ...mcpTools.map((tool) => tool.providerName).filter(offered),
   ];
 }
 

@@ -308,6 +308,68 @@ describe("mapPiActivity", () => {
     });
   });
 
+  // The redaction fast path (VC-356) answers "could this string hold a secret?"
+  // with one marker scan before it runs the four replacement scans. A marker
+  // that misses is silent: the string is returned untouched and a credential
+  // lands in durable activity payloads with nothing to notice it. So every
+  // pattern arm gets a case here, and each one is written as a value the
+  // recursive key-based redaction CANNOT catch — an unremarkable key holding
+  // the secret in its text — because a case that both paths redact would still
+  // pass with the marker broken.
+  it.each([
+    ["stripe-style secret key", "deploy log: sk-live_ABCDEF0123456789 was used", "sk-live_ABC"],
+    ["publishable key", "client bootstrapped with pk_test_9876543210abcdef", "pk_test_987"],
+    [
+      "github personal token",
+      "remote set to https://ghp_aBcDeF0123456789xyz@github.com",
+      "ghp_aBcDeF",
+    ],
+    ["github oauth token", "exchanged for gho_ZyXwVu9876543210abc just now", "gho_ZyXwVu"],
+    ["slack bot token", "posted using xoxb-1234-5678-abcdefghij", "xoxb-1234"],
+    ["bearer credential", "retrying with Bearer eyJhbGciOi.J9.abc-def", "eyJhbGciOi"],
+    ["authorization header", "Authorization: Bearer sourdough.crumb.value", "sourdough.crumb"],
+    ["named assignment", "exported API_KEY=zzz-not-for-the-ledger today", "zzz-not-for"],
+  ])("redacts a %s carried in ordinary tool output", (_label, text, secretFragment) => {
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-marker",
+        toolName: "execute",
+        args: { command: "deploy", stdout: text },
+      } satisfies Extract<AgentEvent, { type: "tool_execution_start" }>,
+      activityContext({ observedAt: 560 }),
+    );
+
+    const serialized = JSON.stringify(activity.input);
+    expect(serialized).not.toContain(secretFragment);
+    expect(serialized).toContain("[redacted]");
+  });
+
+  it("returns marker-free output byte for byte, including near-miss words the patterns do not match", () => {
+    // The fast path's whole value is that ordinary output skips four scans. Its
+    // whole risk is returning something it should have changed. These strings
+    // sit deliberately close to the patterns — the words appear, the syntax
+    // that makes them a secret does not — so they pin both halves at once.
+    const untouched = [
+      "the token budget for this turn was exceeded",
+      "password rotation is documented in SECURITY.md",
+      "skip the pkg-config step; xoxo from the build bot",
+      "authorization is granted per Session, not per Ticket",
+      "api key management lives behind Model Access",
+    ];
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-clean",
+        toolName: "execute",
+        args: { lines: untouched },
+      } satisfies Extract<AgentEvent, { type: "tool_execution_start" }>,
+      activityContext({ observedAt: 561 }),
+    );
+
+    expect(activity.input).toEqual({ lines: untouched });
+  });
+
   it("enforces one aggregate value budget, including structural overhead, keys, and identifiers", () => {
     const activity = mapPiActivity(
       {
@@ -1212,25 +1274,34 @@ describe("mapPiActivity browser tools (VC-238)", () => {
     });
   });
 
-  it("leaves another tool's image blocks alone: only a browser result has a picture standing in", () => {
+  it("keeps MCP image and audio bytes out of the ordinary durable activity payload", () => {
     const pixels = "A".repeat(1_000);
+    const audio = "B".repeat(1_000);
     const completed = mapPiActivity(
       {
         type: "tool_execution_end",
         toolCallId: "mcp-1",
         toolName: "mcp__figma__render",
         result: {
-          content: [{ type: "image", data: pixels, mimeType: "image/png" }],
+          content: [
+            { type: "image", data: pixels, mimeType: "image/png" },
+            { type: "audio", data: audio, mimeType: "audio/wav" },
+          ],
         },
         isError: false,
       },
       activityContext({ input: {}, startedAt: 10, observedAt: 20 }),
     );
 
-    // The picture path is the browser's; substituting `[image]` everywhere
-    // would quietly change what an unrelated tool's payload carries, with
-    // nothing standing in for the bytes it dropped.
-    expect(JSON.stringify(completed.output)).toContain("AAAAAAAAAA");
+    expect(completed).toMatchObject({ activityId: "mcp-1", state: "completed" });
+    expect(JSON.stringify(completed.output)).not.toContain("AAAAAAAAAA");
+    expect(JSON.stringify(completed.output)).not.toContain("BBBBBBBBBB");
+    expect(completed.output).toMatchObject({
+      content: [
+        { type: "image", data: "[image]", mimeType: "image/png" },
+        { type: "audio", data: "[audio]", mimeType: "audio/wav" },
+      ],
+    });
     expect(completed.descriptor.kind).toBe("other");
   });
 });

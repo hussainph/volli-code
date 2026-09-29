@@ -6,11 +6,13 @@ import {
   archiveTicket,
   deleteTicket,
   getTicket,
+  getTicketBody,
   getTicketBrief,
   getTicketRow,
   insertTicket,
   listAllTickets,
   listArchivedTicketsByProject,
+  listTicketRosterByProject,
   listTicketsByProject,
   nextTicketNumberForProject,
   updateTicketFields,
@@ -214,6 +216,26 @@ describe("unknown-status rows are dropped at the hydrate boundary (#29)", () => 
     warnSpy.mockRestore();
   });
 
+  it("listTicketRosterByProject drops the corrupt row, like every other read path", () => {
+    const { projectId } = setup();
+    const good = testTicket(projectId, { title: "Good" });
+    const bad = testTicket(projectId, { title: "Bad" });
+    insertTicket(ctx.db, good);
+    insertTicket(ctx.db, bad);
+    forceUnknownStatus(ctx.db, bad.id, "bogus");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const roster = listTicketRosterByProject(ctx.db, projectId);
+
+    // The roster spells its columns out instead of `SELECT *`, so it is the one
+    // read that could have quietly skipped the shared status guard.
+    expect(roster.map((t) => t.id)).toEqual([good.id]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`dropping ticket ${bad.id} with unknown status "bogus"`),
+    );
+    warnSpy.mockRestore();
+  });
+
   it("listAllTickets drops the corrupt row across every project", () => {
     const { projectId } = setup();
     const good = testTicket(projectId, { title: "Good" });
@@ -324,5 +346,71 @@ describe("nextTicketNumberForProject — monotonic counter (migration 005)", () 
   it("throws for an unknown project id", () => {
     ctx = openTestDb();
     expect(() => nextTicketNumberForProject(ctx.db, "no-such-project")).toThrow(/Unknown project/);
+  });
+});
+
+describe("the VC-387 steady-state roster reads", () => {
+  it("returns the same board listTicketsByProject does, minus the body", () => {
+    const { projectId } = setup();
+    const first = testTicket(projectId, { title: "First", body: "# One" });
+    const second = testTicket(projectId, { title: "Second", body: "# Two" });
+    insertTicket(ctx.db, first);
+    insertTicket(ctx.db, second);
+
+    const full = listTicketsByProject(ctx.db, projectId);
+    const roster = listTicketRosterByProject(ctx.db, projectId);
+
+    // Order and membership must match exactly: a refresh has to produce the
+    // same board the boot payload did, or a card would move for no reason.
+    expect(roster).toEqual(full.map(({ body: _body, ...rest }) => rest));
+    expect(roster.every((row) => !("body" in row))).toBe(true);
+  });
+
+  it("excludes archived tickets, exactly as the live board read does", () => {
+    const { projectId } = setup();
+    const live = testTicket(projectId, { title: "Live" });
+    const gone = testTicket(projectId, { title: "Gone" });
+    insertTicket(ctx.db, live);
+    insertTicket(ctx.db, gone);
+    archiveTicket(ctx.db, gone.id, 100);
+
+    expect(listTicketRosterByProject(ctx.db, projectId).map((t) => t.id)).toEqual([live.id]);
+  });
+
+  it("answers another project's roster with nothing rather than this one's", () => {
+    const { projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { title: "Mine" }));
+
+    expect(listTicketRosterByProject(ctx.db, "some-other-project")).toEqual([]);
+  });
+
+  it("reads one ticket's body, including for a ticket that has left the board", () => {
+    const { projectId } = setup();
+    const live = testTicket(projectId, { title: "Live", body: "# Live body" });
+    const archived = testTicket(projectId, { title: "Archived", body: "# Archived body" });
+    insertTicket(ctx.db, live);
+    insertTicket(ctx.db, archived);
+    archiveTicket(ctx.db, archived.id, 100);
+
+    expect(getTicketBody(ctx.db, live.id)).toBe("# Live body");
+    // Archived on purpose: the Archive view opens these, and a body is a body
+    // whichever side of the board its ticket sits on.
+    expect(getTicketBody(ctx.db, archived.id)).toBe("# Archived body");
+  });
+
+  it("answers an unknown ticket with undefined, which the handler turns into a refusal", () => {
+    setup();
+    expect(getTicketBody(ctx.db, "no-such-ticket")).toBeUndefined();
+  });
+
+  it("reads the body of a ticket whose status column is corrupt", () => {
+    const { projectId } = setup();
+    const bad = testTicket(projectId, { title: "Bad", body: "# Still a body" });
+    insertTicket(ctx.db, bad);
+    forceUnknownStatus(ctx.db, bad.id, "bogus");
+
+    // The roster drops this row; its body read must not, or a ticket the board
+    // cannot draw would also be one nobody could recover the text from.
+    expect(getTicketBody(ctx.db, bad.id)).toBe("# Still a body");
   });
 });

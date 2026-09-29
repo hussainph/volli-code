@@ -70,7 +70,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
 
 const ARMING: ColumnArming = { projectId: "p1", status: "doing", automationId: "a1", armedAt: 5 };
 
-const doors = { list: vi.fn(), armings: vi.fn(), enablement: vi.fn() };
+const doors = { list: vi.fn(), armings: vi.fn(), enablement: vi.fn(), columnOrders: vi.fn() };
 
 /** One available model with one level, so the override rows have something to name. */
 const MODEL_ACCESS = {
@@ -158,8 +158,12 @@ async function openSubmenu(label: string): Promise<void> {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
+  doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
   vi.mocked(runAutomationOnTicket).mockReset();
-  vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
+  // The door ANSWERS what became of the launch now (VC-406); this menu is one
+  // of the callers that fires and forgets, and a landed Run is the honest
+  // default for it to ignore.
+  vi.mocked(runAutomationOnTicket).mockResolvedValue("started");
   doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
   doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
@@ -170,6 +174,9 @@ beforeEach(() => {
     armingByProject: {},
     enabledIds: [],
     enablementRead: false,
+    // A landed rail version from an earlier mount would let this case answer
+    // from a cache the `beforeEach` above just cleared (VC-373).
+    railReadAt: {},
   });
 });
 
@@ -217,7 +224,38 @@ describe("the board card's Automations submenu", () => {
     );
   });
 
-  it("offers no Run once, because a card has nowhere to type one", async () => {
+  it("offers other columns' automations too, grouped and labelled (VC-329 item 5)", async () => {
+    doors.list.mockResolvedValue({
+      ok: true,
+      automations: [
+        automation(),
+        automation({ id: "a2", name: "Triage", trigger: { kind: "columns", columns: ["todo"] } }),
+      ],
+    });
+
+    await open();
+
+    // The ticket sits in Doing; the Todo automation is still listed, under its
+    // own column heading, alongside this ticket's own column's heading.
+    expect(text()).toContain("Doing · this ticket");
+    expect(text()).toContain("Todo");
+
+    await act(async () => {
+      menuItem("Triage").click();
+    });
+
+    // Running the other column's automation is the same hand-run as ever: it
+    // targets THIS ticket and moves nothing.
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "automation", automationId: "a2" },
+      automationName: "Triage",
+      ticketId: "t1",
+      ticketDisplayId: "VC-12",
+      modelOverride: null,
+    });
+  });
+
+  it("offers no Run once — no surface does any more (VC-406)", async () => {
     await open();
 
     expect(text()).not.toContain("Run once");

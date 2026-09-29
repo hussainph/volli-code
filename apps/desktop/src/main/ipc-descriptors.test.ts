@@ -512,6 +512,54 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:project-relink", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-relink"];
+
+    it("accepts an id and an absolute replacement folder", () => {
+      expect(guard([{ id: "p1", path: "/Users/me/code/volli" }])).toBe(true);
+    });
+
+    // The handler resolves the path against main's own cwd, so a relative one
+    // would silently re-home the project somewhere nobody named.
+    it("rejects a path that is not absolute", () => {
+      expect(guard([{ id: "p1", path: "code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1", path: "" }])).toBe(false);
+    });
+
+    it("rejects a missing id or path", () => {
+      expect(guard([{ path: "/Users/me/code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ id: "p1", path: "/a" }, "extra"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project folder");
+    });
+  });
+
+  describe("volli:project-folder-check", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-folder-check"];
+
+    it("accepts a project id", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project id");
+    });
+  });
+
   describe("volli:project-remove", () => {
     const { guard, invalidError } = DATA_IPC["volli:project-remove"];
 
@@ -842,6 +890,8 @@ describe("DATA_IPC descriptor table", () => {
       ["volli:ticket-unarchive", "Invalid ticket"],
       ["volli:ticket-delete", "Invalid ticket"],
       ["volli:ticket-events", "Invalid ticket"],
+      // The per-open-ticket body read the steady-state roster traded away (VC-387).
+      ["volli:ticket-body", "Invalid ticket"],
     ] as const;
 
     for (const [channel, expectedError] of cases) {
@@ -890,6 +940,32 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project id");
+    });
+  });
+
+  describe("volli:data-project-roster", () => {
+    const { guard, invalidError } = DATA_IPC["volli:data-project-roster"];
+
+    it("accepts a valid { projectId } payload", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard(["p1"])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ projectId: "p1" }, {}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project");
     });
   });
 
@@ -1212,15 +1288,25 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ ticketId: "t1", blobs: [] }])).toBe(true);
     });
 
+    it("accepts a session owner — the same adoption a promoted Draft makes (VC-358)", () => {
+      expect(guard([{ sessionId: "s1", blobs: [{ blobHash: "a", label: "Staged" }] }])).toBe(true);
+      expect(guard([{ sessionId: "s1", blobs: [{ blobHash: "a" }] }])).toBe(true);
+      expect(guard([{ sessionId: "s1", blobs: [] }])).toBe(true);
+    });
+
     it("rejects a malformed draft entry", () => {
       expect(guard([{ ticketId: "t1", blobs: [{ blobHash: 1 }] }])).toBe(false);
       expect(guard([{ ticketId: "t1", blobs: [{ blobHash: "a", label: 1 }] }])).toBe(false);
       expect(guard([{ ticketId: "t1", blobs: [null] }])).toBe(false);
     });
 
-    it("rejects a missing ticket, a non-array list and a wrong arity", () => {
+    it("rejects two owners at once — a blob link hangs off exactly one", () => {
+      expect(guard([{ ticketId: "t1", sessionId: "s1", blobs: [] }])).toBe(false);
+    });
+
+    it("rejects a missing owner, a non-array list and a wrong arity", () => {
       expect(guard([{ blobs: [] }])).toBe(false);
-      expect(guard([{ ticketId: "t1", blobs: "nope" }])).toBe(false);
+      expect(guard([{ sessionId: "s1", blobs: "nope" }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });
@@ -1955,19 +2041,84 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("MCP settings channels", () => {
+    const project = { projectId: "project-1" };
+    const server = {
+      id: "server-1",
+      name: "Fixture",
+      enabled: true,
+      transport: { type: "stdio", command: "node", args: [] },
+    };
+
+    it("accepts each typed project-scoped operation", () => {
+      expect(DATA_IPC["volli:mcp-list"].guard([project])).toBe(true);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server }])).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: ["echo"] }]),
+      ).toBe(true);
+      expect(DATA_IPC["volli:mcp-refresh"].guard([{ ...project, serverId: "server-1" }])).toBe(
+        true,
+      );
+      expect(
+        DATA_IPC["volli:mcp-set-enabled"].guard([
+          { ...project, serverId: "server-1", enabled: false },
+        ]),
+      ).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-set-tools"].guard([
+          { ...project, serverId: "server-1", enabledTools: ["echo"] },
+        ]),
+      ).toBe(true);
+      expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: "server-1" }])).toBe(true);
+    });
+
+    it("rejects malformed operation-specific fields", () => {
+      expect(DATA_IPC["volli:mcp-list"].guard([])).toBe(false);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server: null }])).toBe(false);
+      expect(DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [1] }])).toBe(
+        false,
+      );
+      expect(DATA_IPC["volli:mcp-refresh"].guard([{ ...project, serverId: 1 }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-set-enabled"].guard([
+          { ...project, serverId: "server-1", enabled: "yes" },
+        ]),
+      ).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-set-tools"].guard([
+          { ...project, serverId: "server-1", enabledTools: [1] },
+        ]),
+      ).toBe(false);
+      expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: 1 }])).toBe(false);
+    });
+  });
+
   describe("DATA_CHANNELS derivation", () => {
     it("is exactly the descriptor table's key set — membership cannot be forgotten", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 67 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(67);
+    it("covers all 78 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(78);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      // The relink pair (VC-430): looking at a registered folder, and pointing
+      // the project at the one it moved to. Renderer channels with no agent verb
+      // behind them, and none may ever be added — re-homing a project decides
+      // where every Session it starts will run.
+      expect(DATA_CHANNELS).toContain("volli:project-folder-check");
+      expect(DATA_CHANNELS).toContain("volli:project-relink");
+      // The steady-state refresh pair (VC-387): one project's board without
+      // bodies, and one ticket's body for the ticket that is open.
+      expect(DATA_CHANNELS).toContain("volli:data-project-roster");
+      expect(DATA_CHANNELS).toContain("volli:ticket-body");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
       // agent verb behind it, because the agent must not author the policy that
       // governs it.
       expect(DATA_CHANNELS).toContain("volli:project-authority-policy");
+      expect(DATA_CHANNELS).toContain("volli:mcp-list");
+      expect(DATA_CHANNELS).toContain("volli:mcp-save");
+      expect(DATA_CHANNELS).toContain("volli:mcp-remove");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -3572,10 +3723,10 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel and
-      // VC-228's retained-command Retry doors. Derived above; the count catches
-      // an accidentally omitted guard.
-      expect(AUTOMATION_CHANNELS).toHaveLength(18);
+      // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel,
+      // VC-228's retained-command Retry doors, and VC-297's two scoped history
+      // reads. Derived above; the count catches an accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(20);
     });
   });
 });

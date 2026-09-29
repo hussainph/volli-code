@@ -49,13 +49,18 @@ function lines(output: string): string[] {
 }
 
 /**
- * A project's branch refs. Synchronous — every read is a cheap local ref or
- * stat, and none of them touch the network.
+ * A project's branch refs. Every read is a cheap local ref or stat and none of
+ * them touch the network — but "cheap" is not "free" on the main process: this
+ * runs four git children, and under the load that motivated VC-369 a spawn
+ * alone costs tens of milliseconds. The base-branch picker opens on a click, so
+ * a stalled main process here is a visibly wedged menu. Async for the same
+ * reason as `status.ts`, on the same injected runner.
  */
-export function listBranches(
+export async function listBranches(
   deps: WorktreeDeps,
   projectId: string,
-): WorktreeResult<WorktreeBranchListing> {
+): Promise<WorktreeResult<WorktreeBranchListing>> {
+  const git = deps.gitAsync;
   const stat = deps.statMtimeMs ?? statMtimeMs;
   const project = getProjectById(deps.db, projectId);
   if (!project) return err("Unknown project");
@@ -66,7 +71,7 @@ export function listBranches(
     // always one you touched recently, and the picker shows the head of this
     // list before you type anything.
     branches = lines(
-      deps.git(
+      await git(
         ["for-each-ref", "refs/heads", "--sort=-committerdate", "--format=%(refname:short)"],
         project.path,
       ),
@@ -78,7 +83,7 @@ export function listBranches(
   let current: string | null = null;
   try {
     // Empty on a detached HEAD, which `lines` turns into no entry at all.
-    current = lines(deps.git(["branch", "--show-current"], project.path))[0] ?? null;
+    current = lines(await git(["branch", "--show-current"], project.path))[0] ?? null;
   } catch {
     // A repo we cannot read HEAD from still has usable branch names.
   }
@@ -86,7 +91,7 @@ export function listBranches(
   let remotes: string[] = [];
   try {
     remotes = lines(
-      deps.git(
+      await git(
         ["for-each-ref", "refs/remotes", "--sort=-committerdate", "--format=%(refname:short)"],
         project.path,
       ),
@@ -100,9 +105,9 @@ export function listBranches(
   // `--git-path` resolves a file inside the git dir for us, so both reads below
   // are right for a repo whose git dir is elsewhere (a worktree, a `.git` file,
   // a custom GIT_DIR).
-  const mtimeOfGitFile = (name: string): number | null => {
+  const mtimeOfGitFile = async (name: string): Promise<number | null> => {
     try {
-      const gitPath = lines(deps.git(["rev-parse", "--git-path", name], project.path))[0];
+      const gitPath = lines(await git(["rev-parse", "--git-path", name], project.path))[0];
       return gitPath === undefined ? null : stat(resolve(project.path, gitPath));
     } catch {
       // Not a repo we can interrogate; the caller reads `null` as unknown.
@@ -113,7 +118,8 @@ export function listBranches(
   // Never fetched AND no remote refs at all: `null` is the honest answer, and
   // the clone fallback would be answering about refs that do not exist.
   const fetchedAt =
-    mtimeOfGitFile("FETCH_HEAD") ?? (remotes.length > 0 ? mtimeOfGitFile("packed-refs") : null);
+    (await mtimeOfGitFile("FETCH_HEAD")) ??
+    (remotes.length > 0 ? await mtimeOfGitFile("packed-refs") : null);
 
   return ok({ branches, current, remotes, fetchedAt });
 }

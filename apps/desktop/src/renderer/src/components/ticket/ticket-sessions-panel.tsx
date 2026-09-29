@@ -23,19 +23,28 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow } from "@renderer/components/ui/list-row";
+import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   RAIL_PANEL_INSET,
-  RailSectionHeadingRow,
+  RailFold,
+  RailFoldBody,
+  RailFoldHeadingRow,
+  RailHeadingReadStatus,
+  RailReadFaultBody,
 } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  railReadCanClaimEmpty,
+  railReadFeedback,
+} from "@renderer/components/ticket/rail-read-feedback";
+import { SESSION_ROSTER_FILTER_THRESHOLD as SESSION_FILTER_THRESHOLD } from "@renderer/components/ticket/session-history";
 import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
@@ -46,6 +55,8 @@ import {
   mergeSessionRailRows,
   nextSessionRailAgeChangeAt,
   nextTicketSessionStatusChangeAt,
+  orderSessionRailRowsByAttention,
+  sessionRailRowActivityAt,
   sessionRailRowStampAt,
   ticketOutputStamps,
   ticketSessionProvenance,
@@ -57,13 +68,11 @@ import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import {
-  launchAdapter,
-  sessionPanes,
-  ticketScope,
-  useSessionsStore,
-} from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+  ticketSessionListingStateOf,
+  useTicketSessionRecordsStore,
+} from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -76,8 +85,20 @@ function sessionStatusLabel(status: TicketSessionStatus): string {
   return status === "setup" ? "Setup" : SESSION_ACTIVITY_LABEL[status];
 }
 
-/** Sessions and History are the same block twice — one shape, one inset, no seam. */
-const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
+/** The earlier of two boundary instants, either of which may be "never". */
+function soonest(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
+}
+
+/**
+ * The one block: the live rows, and the record folded under them. One shape,
+ * one inset, no seam. No top padding of its own: the Now page stacks its
+ * blocks with one `gap`, so a block that is absent leaves no gap behind it
+ * (VC-406).
+ */
+const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
 
 /**
  * The inline empty, inside the dashed frame this rail uses for a section that
@@ -90,10 +111,16 @@ const SESSION_SECTION_EMPTY = cn(
 );
 
 /**
- * Every row's right edge: one tone dot, one short phrase, at label size. A live
- * row says what it is doing and a past one says when it stopped, in the same
- * two-part shape either way — which is what lets the column be read down rather
- * than row by row. Pill chrome read too loud in the 300px rail.
+ * Every row's QUIET SECOND LINE: one tone dot, the state, and when (VC-406).
+ *
+ * It was the row's right EDGE, competing with the title for one line's width —
+ * so at the rail's 300px a real Session title read `Investigate the session
+ * li…` beside `Waiting for you`, and the two facts the row exists to carry
+ * each cost the other. The title has the whole line now; the state has its own
+ * underneath at `text-label` (11/16), inside `ListRow`'s 52px `two-line`
+ * density. A live row says what it is doing and a past one says when it
+ * stopped, in the same two-part shape either way — which is what lets the
+ * column be read down rather than row by row.
  *
  * The dot takes the STATE, not a colour. This panel used to hold its own
  * status→tone map and the tab strip held a second one that disagreed with it
@@ -103,9 +130,9 @@ const SESSION_SECTION_EMPTY = cn(
  */
 function RowStatus({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
   return (
-    <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
+    <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
       <StatusDot state={state} />
-      {children}
+      <span className="min-w-0 truncate">{children}</span>
     </span>
   );
 }
@@ -133,8 +160,8 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
 function SessionRow({
   kind,
   title,
+  status,
   provenance,
-  trailing,
   editing,
   drag,
   onActivate,
@@ -146,6 +173,8 @@ function SessionRow({
   kind: "chat" | "terminal";
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
+  /** The quiet line under the title: the state, and when. */
+  status: React.ReactNode;
   /**
    * Who started this Session (VC-131). The rail is a listing like any other, so
    * it draws the same mark the sidebar's bands do, from the same component —
@@ -154,8 +183,6 @@ function SessionRow({
    * fix when the mark changes.
    */
   provenance: SessionProvenance;
-  /** Right-edge metadata: live status for current rows, relative end time for history rows. */
-  trailing: React.ReactNode;
   editing: boolean;
   /**
    * What this row would open if it were dropped on a pane (VC-202 §4), or
@@ -174,6 +201,11 @@ function SessionRow({
   const Glyph = kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   const row = (
     <ListRow
+      // Two lines, 52px: the title owns one and the state owns the other. While
+      // a row is being renamed it drops to the one-line density — the field
+      // fills the name's line, and a quiet status under an input being typed
+      // into is a second thing moving in a row that is already changing.
+      density={editing ? "row" : "two-line"}
       // While editing the row is inert: an input inside the activating button
       // would both nest an interactive control and open the Session on every
       // click into the field.
@@ -210,13 +242,16 @@ function SessionRow({
                 that column depending on title length would stop being scannable
                 down the list. */}
             <SessionProvenanceMark provenance={provenance} rowTitle={title} />
-            <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+            <span
+              className="min-w-0 flex-1 truncate text-ui font-medium"
+              onDoubleClick={onStartRename}
+            >
               {title}
             </span>
           </span>
         )
       }
-      trailing={trailing}
+      secondary={editing ? undefined : status}
     />
   );
 
@@ -239,11 +274,32 @@ function SessionRow({
   );
 }
 
+/**
+ * Two rows' worth of the roster's own geometry, while the baseline read is in
+ * flight: the list's gap, a `ListRow`'s inset and height, a title at the left
+ * and the status phrase at the right. No words — the rows that replace this
+ * carry the words.
+ */
+function SessionListSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-1"
+      {...loadingRegionProps("sessions")}
+      data-testid="ticket-sessions-loading"
+    >
+      {(["w-3/5", "w-2/5"] as const).map((width) => (
+        <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
+      ))}
+    </div>
+  );
+}
+
 function SessionList({
   rows,
   variant,
   provenance,
   now,
+  lastOutputAt,
   projectId,
   ticketId,
   editingId,
@@ -256,16 +312,21 @@ function SessionList({
   onResumeSession,
 }: {
   rows: readonly SessionRailRow[];
-  /** Current rows trail with live status; history rows trail with when they ended. */
+  /**
+   * Which age a row's quiet line dates itself from: a current row says when the
+   * Session last did anything, a record row says when it stopped.
+   */
   variant: "current" | "history";
   /** Sparse, keyed by Session id — a miss is the resting case (VC-131). */
   provenance: Readonly<Record<string, SessionProvenance>>;
-  /**
-   * The clock the History variant's relative stamps are read against. A current
-   * row prints no stamp, so for that variant this is unread — the panel hands
-   * the age clock to both rather than branching on which one is on screen.
-   */
+  /** The clock both variants' relative stamps are read against. */
   now: number;
+  /**
+   * Last-output stamps, narrowed to this ticket's own terminal records
+   * (`ticketOutputStamps`). A LIVE terminal has no ending to date itself from,
+   * so its age is the last line it printed.
+   */
+  lastOutputAt: Readonly<Record<string, number>>;
   /** Half of a drag payload's scope; the ticket below is the other half. */
   projectId: string;
   ticketId: string;
@@ -292,14 +353,16 @@ function SessionList({
               provenance={sessionProvenanceOf(provenance, sessionId)}
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
-              // `SessionActivityState`), so the two kinds trail with one column
-              // rather than repeating source metadata. Most History rows say
-              // only when they last said anything; a stopped chat retains
-              // that deliberate state alongside its stamp.
-              trailing={
+              // `SessionActivityState`), so the two kinds say their state in
+              // one vocabulary rather than repeating source metadata. Every
+              // row carries its age beside that state now (VC-406) — a live
+              // row dating itself from when the Session last did anything,
+              // a record row from when it stopped.
+              status={
                 variant === "current" ? (
                   <RowStatus state={record.activity}>
-                    {sessionStatusLabel(record.activity)}
+                    {sessionStatusLabel(record.activity)} ·{" "}
+                    {relativeTime(sessionRailRowActivityAt(entry, lastOutputAt), now)}
                   </RowStatus>
                 ) : record.activity === "stopped" || record.activity === "interrupted" ? (
                   // VC-324: `interrupted` is durable, so a History row keeps
@@ -344,9 +407,12 @@ function SessionList({
             kind="terminal"
             title={title}
             provenance={sessionProvenanceOf(provenance, record.id)}
-            trailing={
+            status={
               variant === "current" ? (
-                <RowStatus state={status}>{sessionStatusLabel(status)}</RowStatus>
+                <RowStatus state={status}>
+                  {sessionStatusLabel(status)} ·{" "}
+                  {relativeTime(sessionRailRowActivityAt(entry, lastOutputAt), now)}
+                </RowStatus>
               ) : (
                 <RowStatus state="exited">
                   {relativeTime(sessionRailRowStampAt(entry), now)}
@@ -403,26 +469,46 @@ function SessionList({
 }
 
 /**
- * The Now page's session content: a "Sessions" working set (one flat row per
- * live session from the unified store) and, under it, a "History" set of the
- * ended/closed durable records — searchable past 4 entries.
+ * The Now page's roster: ONE "Sessions" section — the working set (one flat
+ * row per live session from the unified store) with the record of the
+ * ended/closed durable Sessions FOLDED under it, searchable past 4 entries
+ * (VC-406).
  *
- * The two are SIBLING SECTIONS of one shape, not a list plus a drawer. History
- * used to be a `RailDrawer`: a full-bleed `border-t` across the whole column, an
- * uppercase trigger with a rotating caret, and a collapse animation. That
- * primitive existed so History and a Details drawer could stack as siblings;
- * Details folded into the repository card and the properties fold, and one
- * caller was left dragging the old icon-mode rail's chrome — a seam the Calm
- * Stack draws nowhere (the retired ticket-right-sidebar scratch had no drawer,
- * no collapsible and no full-bleed rule in the rail at all). Both sections now
- * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
- * the rail's edge is one straight line at every width.
+ * The record used to be a sibling section, "History", with its own eyebrow and
+ * a count badge. Two sections for one roster read at two ages put the block a
+ * reader consults most — the live rows — and the block they consult least
+ * twenty rows apart, and the page's other blocks had to choose which of the
+ * two to sit beside. Here the eyebrow's own LABEL is the fold
+ * (`RailFoldHeadingRow`): `SESSIONS ›` with the record away, `SESSIONS ⌄` with
+ * it under the live rows, and `+ Chat ▾` still the row's one control at the
+ * right. The count of what is folded is in the trigger's accessible name and
+ * nowhere on the face — the caret alone says there is more, and an eyebrow
+ * holds a label and at most one control (docs/DESIGN.md).
  *
- * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
- * this owns no scroller of its own and History is simply the last thing in the
- * stack. The durable list (`api.sessions.listForTicket`) is re-read whenever the
- * live set changes so new sessions appear and closed ones fold into History.
- * Rows rename inline (double-click) or via the right-click menu.
+ * THIS IS NOT THE RETIRED DRAWER. History was once a `RailDrawer`: a
+ * full-bleed `border-t` across the whole column, an uppercase trigger with a
+ * rotating caret, a collapse animation, and the WHOLE block behind it. Nothing
+ * here bleeds past the section's inset, the closed state still shows the rows
+ * that matter, only the record folds, and the trigger never moves — the
+ * record opens under it, so a second press lands where the first did. The
+ * motion is the rail's one fold (`rail-panel-parts.tsx`), not this file's.
+ *
+ * The fold is a GLOBAL preference (`railFolds.sessionsRecord`), not
+ * per-ticket: it is how a person reads the rail, and a reader who wants the
+ * record open wants it open on the next Ticket too. A roster with no record
+ * offers no fold at all — a caret opening onto nothing is a lie about the
+ * block.
+ *
+ * One component still owns both halves: they are two views of ONE read of the
+ * durable roster and one pair of clocks. The `children` slot that briefly let
+ * the page thread a block between them (VC-406's first pass) is gone — there
+ * is nothing between them any more.
+ *
+ * It sits IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
+ * this owns no scroller of its own. The durable list
+ * (`api.sessions.listForTicket`) is re-read whenever the live set changes so
+ * new sessions appear and closed ones fold into the record. Rows rename inline
+ * (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   projectId,
@@ -445,6 +531,7 @@ export function TicketSessionsPanel({
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
 }) {
+  const open = useUiStore((state) => state.railFolds.sessionsRecord);
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const parkState = useSessionsStore((state) => state.parkState);
   // The sidebar's session bands read this exact map for their own attention
@@ -464,7 +551,32 @@ export function TicketSessionsPanel({
   // and SessionsLayer's exit handler refreshes it directly so a just-ended
   // session's `endedAt`/resumability lands here without this panel needing to
   // be the one to notice the exit.
-  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_ROWS);
+  //
+  // VC-383 records the baseline's answer as data in the shared store: an
+  // unread/loading roster holds its rows' box, only `loaded` earns the empty
+  // sentence, and `failed` replaces either lie with the brief failure line.
+  // A component must not infer that lifecycle from whether its row array exists.
+  const listing = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
+  const listingState = useTicketSessionRecordsStore((state) =>
+    ticketSessionListingStateOf(state, ticketId),
+  );
+  const listingError = useTicketSessionRecordsStore(
+    (state) => state.listingError?.[ticketId] ?? null,
+  );
+  // Rows survive a failed refresh in the store, so "has this ever landed" is a
+  // question about the CACHE rather than about the state word: a refresh that
+  // failed leaves last-good rows drawn, with the caveat on the heading.
+  const readState = {
+    hasData: listing !== undefined,
+    pending: listingState === "loading",
+    failed: listingState === "failed",
+  };
+  const feedback = railReadFeedback(readState, "Sessions");
+  // "Nothing here" is a claim about what a read RETURNED, so only a landed read
+  // may make it — the conflation this gate exists to remove drew the failure
+  // line and the empty sentence together.
+  const canClaimEmpty = railReadCanClaimEmpty(readState);
+  const rows = listing ?? NO_ROWS;
   const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
   // Narrowed to the stamps THIS ticket's rows can name — see `ticketOutputStamps`.
@@ -482,28 +594,37 @@ export function TicketSessionsPanel({
   // ten-second window would wake it every ten seconds forever.
   const [ageNow, setAgeNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [historyQuery, setHistoryQuery] = React.useState("");
+  // ONE query over the whole roster (VC-406). It used to live inside the fold
+  // and reach only the record, so a reader who typed a title that belonged to a
+  // live Session was told the roster held no match for it.
+  const [rosterQuery, setRosterQuery] = React.useState("");
+  const searching = rosterQuery.trim() !== "";
 
   const tabs = liveTabs ?? [];
-  // Signature of every currently-open PANE (not just tab roots) — refetch the
-  // durable list on any change (create, split, or close), since each split pane
-  // has its own durable record that must appear/fold alongside the tab roots.
-  const liveSignature = tabs
-    .map((tab) =>
-      sessionPanes(tab.layout)
-        .map((pane) => pane.sessionId)
-        .join("/"),
-    )
-    .join(",");
 
   const refresh = React.useCallback(
-    () => useTicketSessionRecordsStore.getState().refresh(ticketId),
+    () => useTicketSessionRecordsStore.getState().ensure(ticketId),
+    [ticketId],
+  );
+  // `refresh`, not `ensure`: `ensure` no-ops on a ticket whose listing already
+  // loaded, so a retry routed through it would do nothing on exactly the
+  // surface that offers it.
+  const retry = React.useCallback(
+    () => void useTicketSessionRecordsStore.getState().refresh(ticketId),
     [ticketId],
   );
 
+  // The BASELINE read, and only that. A window that has just opened has missed
+  // every push that came before it, so a ticket's rows are read once and
+  // `volli:session-activity` carries the list from there — which is why this no
+  // longer re-fires on the set of open panes (`liveSignature`). A split, a
+  // create and a close are all durable Session facts the push announces; a
+  // refetch on the same trigger would just race the push to say the same
+  // thing. `ensure` no-ops on a warm ticket, so a rail page flip or a ticket
+  // re-open paints from cache without re-asking main.
   React.useEffect(() => {
     void refresh();
-  }, [refresh, liveSignature]);
+  }, [refresh]);
 
   // Renaming the root pane of a live tab goes through the shared optimistic-
   // persist path (so its tab strip updates too); a non-root live pane or an
@@ -563,18 +684,36 @@ export function TicketSessionsPanel({
   };
   const terminalRows = buildTicketSessionRows(rowsInput);
   const { current: terminalCurrent, history: terminalHistory } = groupSessionRows(terminalRows);
-  // A chat Session's only lifecycle fact is whether its attachment is still
-  // open, which is the same current/history line `groupSessionRows` draws.
+  // A chat Session's lifecycle is NOT whether its attachment is open (VC-406):
+  // a Session is durable and outlives every attachment it has ever had, so
+  // closing its tab ends nothing. `isLive` is the record's own answer, and it
+  // is what keeps a Session that is BLOCKED on a person out of the fold.
   const chatRows = buildTicketChatSessionRows(chatSessions);
-  const chatCurrent = chatRows.filter((row) => row.isOpen);
-  const chatHistory = chatRows.filter((row) => !row.isOpen);
+  const chatCurrent = chatRows.filter((row) => row.isLive);
+  const chatHistory = chatRows.filter((row) => !row.isLive);
 
-  const current = mergeSessionRailRows(terminalCurrent, chatCurrent);
+  // Whatever is asking for a person leads the live rows; the record stays a
+  // chronology.
+  const current = orderSessionRailRowsByAttention(
+    mergeSessionRailRows(
+      filterSessionHistory(terminalCurrent, rosterQuery),
+      filterChatSessionHistory(chatCurrent, rosterQuery),
+    ),
+  );
   const history = mergeSessionRailRows(terminalHistory, chatHistory);
   const filteredHistory = mergeSessionRailRows(
-    filterSessionHistory(terminalHistory, historyQuery),
-    filterChatSessionHistory(chatHistory, historyQuery),
+    filterSessionHistory(terminalHistory, rosterQuery),
+    filterChatSessionHistory(chatHistory, rosterQuery),
   );
+  // The WHOLE roster, unfiltered, which is what the filter's own threshold is
+  // counted over: the query reaches both halves, so what doing without it costs
+  // is the total rather than either half (`HOME_SESSION_FILTER_THRESHOLD` makes
+  // the same call one scope up).
+  const rosterSize = terminalCurrent.length + chatCurrent.length + history.length;
+  const filterable = rosterSize > SESSION_FILTER_THRESHOLD || searching;
+  // A query dissolves the fold: its matches in the record are ROWS ON THE PAGE,
+  // not rows behind a caret the reader would have to guess was hiding them.
+  const foldable = history.length > 0 && !searching;
 
   /**
    * NOTHING HERE POLLS. Two clocks, each waiting on an instant a pure function
@@ -601,7 +740,19 @@ export function TicketSessionsPanel({
   // dependency as well as an input — a boundary computed against a clock that
   // is deliberately behind can land in the past, and keying the effect on the
   // boundary alone would then recompute the same instant and arm nothing.
-  const ageBoundaryAt = nextSessionRailAgeChangeAt(filteredHistory, ageNow);
+  //
+  // TWO READINGS, ONE CLOCK (VC-406). Every row carries an age now, and a live
+  // row's is measured from when the Session last DID something while a record
+  // row's is measured from when it stopped — so the boundary is the sooner of
+  // the two, computed each against the stamp its own rows print. One reading
+  // over both would arm the timer on an instant half the column is not waiting
+  // for.
+  const ageBoundaryAt = soonest(
+    nextSessionRailAgeChangeAt(current, ageNow, (row) =>
+      sessionRailRowActivityAt(row, lastOutputAt),
+    ),
+    nextSessionRailAgeChangeAt(filteredHistory, ageNow),
+  );
   React.useEffect(() => {
     if (ageBoundaryAt === null) return;
     const timer = window.setTimeout(() => setAgeNow(Date.now()), delayUntil(ageBoundaryAt));
@@ -610,6 +761,8 @@ export function TicketSessionsPanel({
 
   const listProps = {
     projectId,
+    now: ageNow,
+    lastOutputAt,
     // Read off the listing rows before the panel splits them into two record
     // arrays, which is where the row wrapper carrying it is lost (VC-131).
     provenance: ticketSessionProvenance(rows),
@@ -625,16 +778,41 @@ export function TicketSessionsPanel({
   };
 
   return (
-    <>
-      <section className={SECTION}>
+    <RailFold
+      asChild
+      open={open && foldable}
+      onOpenChange={() => useUiStore.getState().toggleRailFold("sessionsRecord")}
+    >
+      <section className={SECTION} aria-label="Sessions" data-testid="ticket-sessions">
         {/* The heading is inset by the rows' own `px-2`, not by the section's
             edge: a label that hangs left of the list it names reads as a
             divider between blocks rather than as that list's title. The row is
             `justify-between` and carries the reviewed design's always-present
             "+" at its right (the scratch's `SessionRows` header) — the height
             comes from the control, so there is no reserved dead space when the
-            roster is full. */}
-        <RailSectionHeadingRow label="Sessions">
+            roster is full. The label is the record's fold. */}
+        <RailFoldHeadingRow
+          label="Sessions"
+          open={open}
+          foldable={foldable}
+          triggerLabel={
+            open
+              ? "Hide past sessions"
+              : `Show ${history.length} past session${history.length === 1 ? "" : "s"}`
+          }
+          testId="ticket-sessions-fold"
+          // The mark rides the eyebrow the block already owns — no reserved
+          // strip, and no word beside it: this row's budget is a label and one
+          // control, and the third thing is what pushes "+ Chat" off the end of
+          // a 240px rail.
+          status={
+            <RailHeadingReadStatus
+              feedback={feedback}
+              onRetry={retry}
+              testId="ticket-sessions-read-status"
+            />
+          }
+        >
           <NewSessionControl
             disabled={effectiveCreating}
             placement="rail"
@@ -644,46 +822,74 @@ export function TicketSessionsPanel({
             onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
-        </RailSectionHeadingRow>
-        {current.length === 0 ? (
+        </RailFoldHeadingRow>
+        {/* ONE field over the WHOLE roster, live rows and record alike — in
+            flow, above the rows it narrows, exactly where Home's is. It used to
+            live INSIDE the fold and reach only the record, so a reader who
+            typed the title of a running Session was told the roster held no
+            match for it. */}
+        {filterable ? (
+          <div className="relative mb-1">
+            <MagnifyingGlassIcon
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              type="search"
+              value={rosterQuery}
+              onChange={(event) => setRosterQuery(event.target.value)}
+              aria-label="Find a session"
+              placeholder="Find a session…"
+              className="h-8 pl-8 text-ui md:text-ui"
+            />
+          </div>
+        ) : null}
+        {feedback?.kind === "reading" ? (
+          // The baseline read is in flight. The heading and its "+" stay live
+          // above — a pending list blocks nothing about starting a Session —
+          // and the rows hold their box below.
+          <SessionListSkeleton />
+        ) : null}
+        {/* A refused baseline knows nothing about this Ticket's Sessions. The
+            toast carries the bridge detail; this keeps the block from claiming
+            the roster is empty when it has never been read, and carries the one
+            action that can change that. */}
+        <RailReadFaultBody
+          feedback={feedback}
+          detail={listingError}
+          onRetry={retry}
+          testId="ticket-sessions-error"
+        />
+        {current.length === 0 && (!searching || filteredHistory.length === 0) && canClaimEmpty ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.
-          <p className={SESSION_SECTION_EMPTY}>No active sessions</p>
-        ) : (
-          <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
-        )}
-      </section>
-      {history.length > 0 ? (
-        <section className={SECTION} data-testid="session-history">
-          <RailSectionHeadingRow label="History">
-            <Badge variant="count-pill">{history.length}</Badge>
-          </RailSectionHeadingRow>
-          {/* Past four rows the column stops being scannable, so the filter
-              appears — in flow, like everything else in the stack. */}
-          {history.length > 4 ? (
-            <div className="relative mb-1">
-              <MagnifyingGlassIcon
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                type="search"
-                value={historyQuery}
-                onChange={(event) => setHistoryQuery(event.target.value)}
-                aria-label="Search session history"
-                placeholder="Search history…"
-                className="h-8 pl-8 text-ui md:text-ui"
-              />
+          // Gated on a read having LANDED — a refused one has proved nothing.
+          <p className={SESSION_SECTION_EMPTY}>
+            {searching ? "No matching sessions" : "No active sessions"}
+          </p>
+        ) : null}
+        {current.length > 0 ? (
+          <SessionList rows={current} variant="current" {...listProps} />
+        ) : null}
+        {/* The record. While a query is active it is drawn in flow with the live
+            matches above it; otherwise it lives under the eyebrow's fold, which
+            Radix mounts only while open (and through the close animation), so a
+            folded record costs no rows and no age-clock re-derivation. */}
+        {searching ? (
+          filteredHistory.length > 0 ? (
+            <div className="flex flex-col gap-1 pt-1" data-testid="session-history">
+              <SessionList rows={filteredHistory} variant="history" {...listProps} />
             </div>
-          ) : null}
-          {filteredHistory.length > 0 ? (
-            <SessionList rows={filteredHistory} variant="history" now={ageNow} {...listProps} />
-          ) : (
-            <p className={SESSION_SECTION_EMPTY}>No matching sessions</p>
-          )}
-        </section>
-      ) : null}
-    </>
+          ) : null
+        ) : foldable ? (
+          <RailFoldBody>
+            <div className="flex flex-col gap-1 pt-1" data-testid="session-history">
+              <SessionList rows={filteredHistory} variant="history" {...listProps} />
+            </div>
+          </RailFoldBody>
+        ) : null}
+      </section>
+    </RailFold>
   );
 }

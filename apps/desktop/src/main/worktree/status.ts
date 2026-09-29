@@ -11,10 +11,22 @@
  * `git status` read is reported as `uncommitted: true`, not clean — mirroring
  * `dirty.ts`'s errs-dirty philosophy. An unreadable tree must never be presented
  * to the user as "nothing to commit".
+ *
+ * ## Why this is async (VC-369)
+ *
+ * The Details rail runs this on every mount and every watch event, and it used
+ * the SYNCHRONOUS runner: five serial `execFileSync` children on the Electron
+ * main process, each bounded at `GIT_COMMAND_TIMEOUT_MS` (8s). A probe measured
+ * the main event loop starved for the read's entire duration — a 10ms timer
+ * fired zero times across 1.6s against a slow git — which is the whole-app
+ * rainbow wheel when a ticket workspace opens. The reads stay SERIAL, exactly
+ * as they were: the fix is that main keeps turning between them, not that the
+ * read got faster, and spawning five git children at once is the wrong answer
+ * on the loaded machine where this hurts most.
  */
-import { resolveComparisonRef } from "./comparison-ref";
-import { detectSequencerState } from "./sequencer";
-import type { RunGit } from "./types";
+import { resolveComparisonRefAsync } from "./comparison-ref";
+import { detectSequencerStateAsync } from "./sequencer";
+import type { RunGitAsync } from "./types";
 
 export interface WorktreeStatusInput {
   worktreePath: string;
@@ -43,9 +55,9 @@ export interface WorktreeStatusReport {
 }
 
 /** `git status --porcelain` non-empty; a READ FAILURE counts as uncommitted, never clean. */
-function readUncommitted(git: RunGit, cwd: string): boolean {
+async function readUncommitted(git: RunGitAsync, cwd: string): Promise<boolean> {
   try {
-    return git(["status", "--porcelain"], cwd).trim().length > 0;
+    return (await git(["status", "--porcelain"], cwd)).trim().length > 0;
   } catch {
     return true;
   }
@@ -57,17 +69,17 @@ function readUncommitted(git: RunGit, cwd: string): boolean {
  * commits reachable from branch but not base (AHEAD). Any git failure or an
  * unparseable line yields nulls — a stale count must degrade to "unknown".
  */
-function readAheadBehind(
-  git: RunGit,
+async function readAheadBehind(
+  git: RunGitAsync,
   input: WorktreeStatusInput,
-): { aheadOfBase: number | null; behindBase: number | null } {
+): Promise<{ aheadOfBase: number | null; behindBase: number | null }> {
   // Measured against `origin/<base>` when that ref exists (what a fetch just
   // updated, and what the PR will actually diff against) — see comparison-ref.ts.
-  const base = resolveComparisonRef(git, input.worktreePath, input.baseBranch);
+  const base = await resolveComparisonRefAsync(git, input.worktreePath, input.baseBranch);
   if (!base) return { aheadOfBase: null, behindBase: null };
   const branch = input.branch ?? "HEAD";
   try {
-    const out = git(
+    const out = await git(
       ["rev-list", "--left-right", "--count", `${base}...${branch}`],
       input.worktreePath,
     );
@@ -88,10 +100,10 @@ function readAheadBehind(
  * "Push updates" would send. Any failure (no remote-tracking ref — never pushed
  * or no remote — or an unparseable count) degrades to `null`, never a guess.
  */
-function readUnpushed(git: RunGit, input: WorktreeStatusInput): number | null {
+async function readUnpushed(git: RunGitAsync, input: WorktreeStatusInput): Promise<number | null> {
   if (!input.branch) return null;
   try {
-    const out = git(
+    const out = await git(
       ["rev-list", "--count", `refs/remotes/origin/${input.branch}..${input.branch}`],
       input.worktreePath,
     );
@@ -103,11 +115,14 @@ function readUnpushed(git: RunGit, input: WorktreeStatusInput): number | null {
 }
 
 /** Computes the Details-rail worktree status report (see {@link WorktreeStatusReport}). */
-export function getWorktreeStatus(git: RunGit, input: WorktreeStatusInput): WorktreeStatusReport {
+export async function getWorktreeStatus(
+  git: RunGitAsync,
+  input: WorktreeStatusInput,
+): Promise<WorktreeStatusReport> {
   return {
-    uncommitted: readUncommitted(git, input.worktreePath),
-    sequencerActive: detectSequencerState(git, input.worktreePath) === "active",
-    ...readAheadBehind(git, input),
-    unpushed: readUnpushed(git, input),
+    uncommitted: await readUncommitted(git, input.worktreePath),
+    sequencerActive: (await detectSequencerStateAsync(git, input.worktreePath)) === "active",
+    ...(await readAheadBehind(git, input)),
+    unpushed: await readUnpushed(git, input),
   };
 }

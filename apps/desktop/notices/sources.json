@@ -1,0 +1,123 @@
+{
+  "$comment": [
+    "The reviewed half of the desktop licence notice: everything a dependency walk",
+    "cannot see, AND that this app itself owns. scripts/generate-third-party-notices.mjs",
+    "reads this file, folds it into THIRD-PARTY-NOTICES, and fails when an entry drifts",
+    "from what is installed.",
+    "",
+    "Material another workspace package vendored is NOT recorded here. That package",
+    "declares it in its own package.json under \"volli.notices\", so the declaration and",
+    "the files it names move together under one review — see packages/shared and",
+    "packages/agent-runtime. The generator collects those from every first-party package",
+    "in the dependency closure.",
+    "",
+    "See README.md in this directory for how to edit it and what is still open."
+  ],
+  "platformNative": [
+    {
+      "name": "@img/sharp-darwin-arm64",
+      "version": "0.35.4",
+      "spdx": "Apache-2.0",
+      "note": [
+        "sharp's native addon for macOS arm64. electron-builder ships and unpacks the",
+        "whole @img tree (asarUnpack) because the addon cannot load from inside an asar.",
+        "Pinned here rather than read from node_modules because the package installs on",
+        "darwin/arm64 only, and the notice has to render the same on every host."
+      ],
+      "text": "texts/img-sharp-darwin-arm64.LICENSE.txt",
+      "verify": {
+        "file": "LICENSE",
+        "mode": "equals"
+      }
+    },
+    {
+      "name": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.3.3",
+      "spdx": "LGPL-3.0-or-later",
+      "note": [
+        "The prebuilt libvips-cpp dylib sharp's addon loads, shipped and unpacked with it.",
+        "The package publishes no licence file; the text below is its README's own",
+        "licensing notice, reproduced verbatim, listing every library inside the binary",
+        "and the terms each is used under. Bundled library versions are in the package's",
+        "versions.json. The LGPL entries in that table are declarations, not a compliance",
+        "conclusion — see section 10 and notices/README.md."
+      ],
+      "text": "texts/img-sharp-libvips-darwin-arm64.NOTICE.txt",
+      "verify": {
+        "file": "README.md",
+        "mode": "contains"
+      }
+    },
+    {
+      "name": "@vscode/ripgrep-darwin-arm64",
+      "version": "1.18.0",
+      "spdx": "MIT",
+      "note": [
+        "The `rg` executable find-across-files spawns (VC-193), shipped unpacked because",
+        "an executable cannot be spawned from inside an asar. Pinned for the same",
+        "platform reason as the two @img packages above."
+      ],
+      "text": "texts/vscode-ripgrep-darwin-arm64.LICENSE.txt",
+      "verify": {
+        "file": "LICENSE",
+        "mode": "equals"
+      }
+    }
+  ],
+  "toolchain": [
+    {
+      "name": "electron",
+      "note": [
+        "The application bundle IS an Electron app: its runtime, helpers and framework",
+        "are the shipped executable, so Electron's own licence belongs here even though",
+        "the package is a devDependency. electron-builder copies Chromium's bundled",
+        "third-party licence catalogue from node_modules/electron/dist into",
+        "Contents/Resources/LICENSES.chromium.html; the stale-notice check allows the",
+        "lazily downloaded source to be absent offline, but rejects it when present and empty."
+      ]
+    },
+    {
+      "name": "tailwindcss",
+      "note": [
+        "A build-time dependency whose own CSS (preflight and the utility bodies it",
+        "generates) is emitted into the renderer bundle's stylesheet."
+      ]
+    },
+    {
+      "name": "tw-animate-css",
+      "note": [
+        "Imported by src/renderer/src/globals.css, so its animation utilities are part of",
+        "the same emitted stylesheet."
+      ]
+    }
+  ],
+  "vendored": [
+    {
+      "title": "shadcn/ui component primitives",
+      "paths": ["apps/desktop/src/renderer/src/components/ui/"],
+      "upstream": "https://github.com/shadcn-ui/ui",
+      "spdx": "MIT",
+      "evidence": "apps/desktop/components.json (schema ui.shadcn.com, style new-york) and the shadcn references in the primitives themselves; the components are generated into the repository rather than installed.",
+      "text": "texts/shadcn-ui.LICENSE.txt"
+    },
+    {
+      "title": "AI Elements chat primitives",
+      "paths": [
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/prompt-input.tsx",
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/conversation.tsx",
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/message.tsx"
+      ],
+      "upstream": "https://github.com/vercel/ai-elements at revision 9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)",
+      "spdx": "Apache-2.0",
+      "evidence": "apps/desktop/src/renderer/src/components/ui/ai-elements/PROVENANCE.md (VC-410) establishes the upstream project, the revision, and the Apache-2.0 grant, and records how the revision was recovered from content because it was never pinned. Each of the three files carries an Apache-2.0 §4(b) modification notice pointing at that document, held in place by vendor-provenance.test.ts. reasoning.tsx and shimmer.tsx are deliberately NOT attributed there: two import lines each is all that survives of upstream in them.",
+      "text": "texts/ai-elements.LICENSE.txt"
+    }
+  ],
+  "fragments": [
+    {
+      "title": "Bundled editor theme data",
+      "file": "editor-themes.NOTICE",
+      "source": "apps/desktop/notices/editor-themes.NOTICE, generated by scripts/generate-editor-theme-notices.mjs from shikijs/textmate-grammars-themes packages/tm-themes/NOTICE."
+    }
+  ]
+}

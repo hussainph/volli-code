@@ -58,11 +58,15 @@ describe("MessageResponse", () => {
     );
   });
 
-  it("keeps code and Mermaid but does not enable math rendering", () => {
-    const message = renderToStaticMarkup(<MessageResponse>Answer</MessageResponse>);
+  it("selects the live and settled plugin maps", () => {
+    const live = renderToStaticMarkup(
+      <MessageResponse isAnimating>Incremental response</MessageResponse>,
+    );
+    const settled = renderToStaticMarkup(<MessageResponse>Answer</MessageResponse>);
     const reasoning = renderToStaticMarkup(<ReasoningBody>Thinking</ReasoningBody>);
 
-    expect(message).toContain('data-plugins="cjk,code,mermaid"');
+    expect(live).toContain('data-plugins="cjk,mermaid"');
+    expect(settled).toContain('data-plugins="cjk,code,mermaid"');
     expect(reasoning).toContain('data-plugins="cjk,code,mermaid"');
   });
 

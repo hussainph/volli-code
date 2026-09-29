@@ -15,7 +15,7 @@ import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { ensureHarnessWorkspaceFiles, excludeWithBlock } from "./harness-workspace";
-import { runGitCapturing } from "./worktree";
+import { runGitCapturingAsync } from "./worktree";
 
 let scratchRoot: string | null = null;
 
@@ -68,7 +68,7 @@ function run(worktree: string, adapters: readonly HarnessAdapter[] = [adapterFor
     adapters,
     socketPath: "/tmp/volli.sock",
     shimPath: "/vol/Application Support/Volli Code/bin/volli",
-    git: runGitCapturing,
+    git: runGitCapturingAsync,
   });
 }
 

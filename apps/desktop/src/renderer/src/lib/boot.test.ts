@@ -1,8 +1,10 @@
 import type { BootstrapPayload } from "../../../ipc/contract";
-import type { VenueSnapshot } from "@volli/shared";
+import { CHAT_DRAFTS_APP_STATE_KEY, type VenueSnapshot } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
@@ -25,12 +27,17 @@ function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
 /** A fake in-memory gateway implementing BootGateway's result unions, controllable per test. */
 function fakeGateway(overrides: Partial<BootGateway> = {}): BootGateway {
   const bootstrap = vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload() }));
+  const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+    ok: true,
+    tickets: [],
+    labels: [],
+  }));
   const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
     ok: true,
     data: payload(),
     imported: 0,
   }));
-  return { bootstrap, importLegacy, ...overrides };
+  return { bootstrap, projectRoster, importLegacy, ...overrides };
 }
 
 /** A fake localStorage-shaped BootStorage, Map-backed so `key`/`length` behave like the real thing. */
@@ -397,9 +404,106 @@ describe("boot", () => {
     expect(useUiStore.getState().uiScale).toBe(1.25);
     expect(useWorkspaceStore.getState().byProject.p1?.boardView).toBe("list");
   });
+
+  it("reopens a persisted unsent chat Draft without creating a resident Session", async () => {
+    const draftId = "550e8400-e29b-41d4-a716-446655440000";
+    const chatDrafts = JSON.stringify({
+      state: {
+        drafts: {
+          [draftId]: {
+            text: "survive a relaunch",
+            attachments: [],
+            held: [],
+            touchedAt: 10,
+            provisional: {
+              projectId: "p1",
+              ticketId: "t1",
+              operationId: "stable-create-operation",
+              title: null,
+              phase: "draft",
+            },
+          },
+        },
+      },
+      version: 1,
+    });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({
+          projects: [
+            {
+              id: "p1",
+              name: "P1",
+              path: "/p1",
+              ticketPrefix: "P1",
+              colorIndex: 0,
+              sortOrder: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          ticketsByProject: {
+            p1: [
+              {
+                id: "t1",
+                projectId: "p1",
+                ticketNumber: 1,
+                title: "Ticket",
+                body: "",
+                status: "backlog",
+                priority: "medium",
+                labels: [],
+                usesWorktree: true,
+                preferredHarnessId: "claude-code",
+                order: 0,
+                worktreePath: null,
+                branch: null,
+                baseBranch: null,
+                prUrl: null,
+                createdAt: 0,
+                updatedAt: 0,
+              },
+            ],
+          },
+          appState: { [CHAT_DRAFTS_APP_STATE_KEY]: chatDrafts },
+        }),
+      })),
+    });
+    useChatDraftsStore.setState({ drafts: {} });
+    useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });
+
+    try {
+      await boot(gateway, fakeStorage());
+
+      expect(useChatDraftsStore.getState().drafts[draftId]).toMatchObject({
+        text: "survive a relaunch",
+        provisional: { operationId: "stable-create-operation", phase: "draft" },
+      });
+      expect(useChatSessionsStore.getState().openTabs).toEqual({ t1: [draftId] });
+      expect(useChatSessionsStore.getState().sessions).toEqual({});
+      // Reachable, not forced in front. A typed Draft's `chat:<uuid>` is
+      // already in the persisted workspace layout, so claiming the
+      // renderer-only focus overlay here would make the surface's commit
+      // effect overwrite the tab the person actually quit on.
+      expect(useChatSessionsStore.getState().provisionalActive).toEqual({});
+      expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
+    } finally {
+      useChatDraftsStore.setState({ drafts: {} });
+      useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });
+    }
+  });
 });
 
 describe("refreshPlanningData", () => {
+  // The "a read failed, heal wholesale next time" bit is board state now, so a
+  // wholesale hydrate is what drains it — the same door the app uses, rather
+  // than a test-only reset. A failing-read test therefore cannot decide how the
+  // NEXT test's targeted change is read.
+  beforeEach(() => {
+    useBoardStore.getState().hydrate({}, {});
+  });
+
   it("replaces planning stores from a fresh bootstrap while preserving the live selection", async () => {
     const project = {
       id: "p1",
@@ -442,6 +546,149 @@ describe("refreshPlanningData", () => {
     expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
     expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
     expect(useBoardStore.getState().ticketsByProject.p1).toEqual([ticket]);
+  });
+
+  it("refreshes only a known project's roster", async () => {
+    const existingTicket = {
+      id: "t1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "Before",
+      body: "Keep this body",
+      status: "backlog" as const,
+      priority: "medium" as const,
+      labels: [],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code" as const,
+      order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      prUrl: null,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const refreshedTicket = {
+      id: "t1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "After",
+      status: "doing" as const,
+      priority: "medium" as const,
+      labels: ["bug"],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code" as const,
+      order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      prUrl: null,
+      createdAt: 0,
+      updatedAt: 1,
+    };
+    const label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    useBoardStore.getState().hydrate({ p1: [existingTicket], p2: [] }, { p1: [], p2: [] });
+    const untouchedTickets = useBoardStore.getState().ticketsByProject.p2;
+    const beforeChange = useBoardStore.getState().lastPlanningChange.version;
+    const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+      ok: true,
+      tickets: [refreshedTicket],
+      labels: [label],
+    }));
+    const gateway = fakeGateway({ projectRoster });
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+
+    expect(projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
+    expect(gateway.bootstrap).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([
+      { ...refreshedTicket, body: "Keep this body" },
+    ]);
+    expect(useBoardStore.getState().labelsByProject.p1).toEqual([label]);
+    expect(useBoardStore.getState().ticketsByProject.p2).toBe(untouchedTickets);
+    expect(useBoardStore.getState().lastPlanningChange).toEqual({
+      version: beforeChange + 1,
+      ticketId: null,
+      projectId: "p1",
+    });
+  });
+
+  it("refreshes wholesale when the change names a project the board does not hold", async () => {
+    const project = {
+      id: "p1",
+      name: "P1",
+      path: "/p1",
+      ticketPrefix: "P1",
+      colorIndex: 0,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    useProjectsStore.getState().hydrate([project], "p1");
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const gateway = fakeGateway();
+
+    expect(await refreshPlanningData({ projectId: "p-new", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+
+    expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects).toEqual([]);
+    expect(useBoardStore.getState().ticketsByProject).toEqual({});
+  });
+
+  it("forces the next refresh wholesale after a scoped failure", async () => {
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+      ok: false,
+      error: "db gone",
+    }));
+    const gateway = fakeGateway({ projectRoster });
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: false,
+      error: "db gone",
+    });
+    projectRoster.mockClear();
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+    expect(projectRoster).not.toHaveBeenCalled();
+  });
+
+  it("forces the next refresh wholesale after a wholesale failure, then clears recovery", async () => {
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    let firstCall = true;
+    const bootstrap = vi.fn<BootGateway["bootstrap"]>(async () => {
+      if (firstCall) {
+        firstCall = false;
+        return { ok: false, error: "db gone" };
+      }
+      return {
+        ok: true,
+        data: payload({ ticketsByProject: { p1: [] }, labelsByProject: { p1: [] } }),
+      };
+    });
+    const gateway = fakeGateway({ bootstrap });
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: false, error: "db gone" });
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(bootstrap).toHaveBeenCalledTimes(2);
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+
+    bootstrap.mockClear();
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(gateway.projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
   });
 
   it("publishes lastPlanningChange so per-ticket surfaces refetch, but only on a successful refresh", async () => {
@@ -502,6 +749,30 @@ describe("refreshPlanningData", () => {
         });
       });
       expect(snapshot).toHaveBeenLastCalledWith("p1", "t1");
+    });
+
+    it("keeps the venue boundary around a scoped roster refresh", async () => {
+      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const seen: unknown[] = [];
+      const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => {
+        seen.push(useVenueStore.getState().byScope[venueKey("p1", "t1")]);
+        seen.push(snapshot.mock.calls.length);
+        return { ok: true, tickets: [], labels: [] };
+      });
+      const gateway = fakeGateway({ projectRoster });
+
+      await refreshPlanningData({ ticketId: "t1", projectId: "p1", kind: "worktree" }, gateway);
+
+      expect(seen).toEqual([{ status: "loading" }, 2]);
+      expect(gateway.bootstrap).not.toHaveBeenCalled();
+      expect(projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
+      await vi.waitFor(() => {
+        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+          status: "ready",
+        });
+      });
     });
 
     it("leaves Home's project venue card measuring the main checkout", async () => {
@@ -592,6 +863,81 @@ describe("refreshPlanningData", () => {
       await vi.waitFor(() => {
         expect(snapshot).toHaveBeenCalledWith("p1", "t1");
       });
+    });
+  });
+
+  describe("a comment", () => {
+    it("re-reads nothing: no row the board holds can have moved", async () => {
+      // The board HOLDS p1 — the normal case, and the one that matters. With an
+      // empty board the scoped arm is unreachable, so a regression that made a
+      // comment read again would still be caught by the bootstrap assertion
+      // alone and the scoped assertion below would prove nothing.
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const gateway = fakeGateway();
+      const before = useBoardStore.getState().lastPlanningChange.version;
+
+      const result = await refreshPlanningData(
+        { ticketId: "t1", projectId: "p1", kind: "comment" },
+        gateway,
+      );
+
+      expect(result).toEqual({ ok: true });
+      // BOTH reads, because a comment must make no read at all — not merely a
+      // narrower one.
+      expect(gateway.bootstrap).not.toHaveBeenCalled();
+      expect(gateway.projectRoster).not.toHaveBeenCalled();
+      // The per-ticket surfaces still hear about it — the Activity feed IS how
+      // a comment reaches the screen.
+      expect(useBoardStore.getState().lastPlanningChange).toEqual({
+        version: before + 1,
+        ticketId: "t1",
+        projectId: "p1",
+      });
+    });
+
+    it("leaves a pending recovery armed, so the next board-moving change still heals", async () => {
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const failing = fakeGateway({
+        projectRoster: vi.fn<BootGateway["projectRoster"]>(async () => ({
+          ok: false,
+          error: "db gone",
+        })),
+      });
+      await refreshPlanningData({ projectId: "p1", kind: "ticket" }, failing);
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      // A comment returns before the recovery arm is even consulted. It must
+      // not be mistaken for the healthy read that clears it.
+      const gateway = fakeGateway();
+      await refreshPlanningData({ projectId: "p1", kind: "comment" }, gateway);
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway);
+      expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+      expect(gateway.projectRoster).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a refresh that throws", () => {
+    it("arms recovery, so the next board-moving change is wholesale", async () => {
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const gateway = fakeGateway({
+        projectRoster: vi.fn<BootGateway["projectRoster"]>(async () => {
+          throw new Error("transport died");
+        }),
+      });
+
+      await expect(
+        refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway),
+      ).rejects.toThrow("transport died");
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      const healthy = fakeGateway();
+      expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, healthy)).toEqual({
+        ok: true,
+      });
+      expect(healthy.bootstrap).toHaveBeenCalledTimes(1);
+      expect(healthy.projectRoster).not.toHaveBeenCalled();
     });
   });
 

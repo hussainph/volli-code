@@ -145,6 +145,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Durable acceptance receipts; without them a replay could duplicate accepted work.",
   },
   {
+    table: "session_projection_checkpoints",
+    decision: "rebuild",
+    reason:
+      "A derived cache over canonical Session events; restore leaves it empty and reads rebuild it safely.",
+  },
+  {
     table: "session_attachments",
     decision: "include",
     reason:
@@ -249,6 +255,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "Global settings, theme, retention and automation cursors; it holds no credential (see `secrets`).",
   },
+  {
+    table: "mcp_servers",
+    decision: "include",
+    reason:
+      "Per-project MCP server configuration and selected tool catalogs; transport settings contain no credentials.",
+  },
+  {
+    table: "mcp_operations",
+    decision: "include",
+    reason:
+      "The append-only audit of MCP installs and removals (VC-380). Included because it is the only record of a server that was REMOVED, which is exactly the one a restored profile cannot reconstruct from configuration; it holds provenance notes and outcomes, never a credential.",
+  },
   // ---- Rebuilt -------------------------------------------------------------
   {
     table: "session_usage",
@@ -325,6 +343,10 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
  */
 export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "projects",
+  "mcp_servers",
+  // After `projects`, which it references; it deliberately has no foreign key
+  // to `mcp_servers`, so it does not depend on that table being restored.
+  "mcp_operations",
   "labels",
   "tickets",
   "ticket_labels",

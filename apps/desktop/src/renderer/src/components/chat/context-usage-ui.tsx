@@ -20,6 +20,7 @@ import {
   type ContextSegmentId,
   type SessionContextUsage,
 } from "@volli/session-presentation";
+import { COMPOSER_CONTROL_SIZE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -64,11 +65,11 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="xs"
+          size={COMPOSER_CONTROL_SIZE}
           variant="ghost"
           aria-label={summary}
           title={summary}
-          className={cn("gap-1.5 px-1.5 tabular-nums", toneClass(usage.fraction))}
+          className={cn("tabular-nums", toneClass(usage.fraction))}
         >
           <UsageRing fraction={usage.fraction} />
           {/* The number a glance needs: share of the window when the window is
@@ -76,8 +77,19 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
               text-ui — the model and effort pills are its peers on this rung,
               and a second type size inside one control row is a hierarchy
               nobody declared. Quietness comes from the muted tone, not from
-              shrinking the type. */}
-          <span>{percent ?? formatTokens(usage.usedTokens)}</span>
+              shrinking the type.
+
+              AND IT IS THE FIRST THING THE ROW GIVES UP (VC-335). Below 24rem
+              of composer — a narrow split, the app's own 265px default — the
+              ring stands alone, which is T3 Code's meter at every width: the
+              ring already says the share, and the four characters it frees
+              are the model name's, the one value in the row with something to
+              lose. Measured against the composer, not the window
+              (`@container/composer`), and the accessible name still carries
+              the number. */}
+          <span className="hidden @min-[24rem]/composer:inline">
+            {percent ?? formatTokens(usage.usedTokens)}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-64 p-3">
@@ -241,7 +253,7 @@ function UsageRing({ fraction }: { fraction: number | null }) {
   const circumference = 2 * Math.PI * radius;
   const filled = fraction === null ? 0 : Math.max(0.02, Math.min(1, fraction));
   return (
-    <svg viewBox="0 0 12 12" aria-hidden className="size-3 shrink-0">
+    <svg viewBox="0 0 12 12" aria-hidden className="size-3.5 shrink-0">
       <circle
         cx="6"
         cy="6"

@@ -14,6 +14,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  commandRefusal,
   rejectedReceipt,
 } from "./wire";
 
@@ -359,5 +360,82 @@ describe("rejectedReceipt", () => {
     expect(rejectedReceipt(null)).toBeNull();
     expect(rejectedReceipt({})).toBeNull();
     expect(rejectedReceipt({ receipt: "accepted" })).toBeNull();
+  });
+
+  it("stays blind to the weight, which is the reader beside it's job", () => {
+    // `#run` latches a refusal onto the Session whatever it weighed; only the
+    // reporting path cares, so only `commandRefusal` reads the mark.
+    expect(
+      rejectedReceipt({ refusal: "benign", receipt: { status: "rejected", detail: "nope" } }),
+    ).toBe("nope");
+  });
+});
+
+describe("commandRefusal", () => {
+  it("reads a refusal the host marked benign at its own weight", () => {
+    expect(
+      commandRefusal({
+        refusal: "benign",
+        receipt: { status: "rejected", code: "PI_BUSY", detail: "Already compacting." },
+      }),
+    ).toEqual({ severity: "benign", message: "Already compacting." });
+  });
+
+  it("calls a refusal nobody marked a failure", () => {
+    // The safe default, and the one a second runtime gets for free: a client
+    // may not decide on its own that somebody else's refusal was harmless.
+    expect(commandRefusal({ receipt: { status: "rejected", detail: "gone" } })).toEqual({
+      severity: "failure",
+      message: "gone",
+    });
+  });
+
+  it("calls a refusal marked with anything it does not recognise a failure", () => {
+    for (const mark of ["Benign", "failure", "", 1, null, {}]) {
+      expect(
+        commandRefusal({ refusal: mark, receipt: { status: "rejected", detail: "x" } }),
+      ).toEqual({ severity: "failure", message: "x" });
+    }
+  });
+
+  it("reports an unreconciled receipt rather than letting it pass for success", () => {
+    // BOUNDARIES.md rule 4: a receipt is local acceptance, not finality, and
+    // "we do not know" must not be readable as "it worked".
+    expect(
+      commandRefusal({ receipt: { status: "unreconciled", detail: "lost the socket" } }),
+    ).toEqual({ severity: "failure", message: "lost the socket" });
+  });
+
+  it("names the uncertainty itself when an unreconciled receipt carries no words", () => {
+    expect(commandRefusal({ receipt: { status: "unreconciled", detail: null } })).toEqual({
+      severity: "failure",
+      message: "the runtime could not confirm whether this ran",
+    });
+    expect(commandRefusal({ receipt: { status: "unreconciled", detail: "" } })).toEqual({
+      severity: "failure",
+      message: "the runtime could not confirm whether this ran",
+    });
+  });
+
+  it("never invents a refusal from a mark beside an accepted receipt", () => {
+    expect(commandRefusal({ refusal: "benign", receipt: { status: "accepted" } })).toBeNull();
+    expect(commandRefusal({ receipt: { status: "completed" } })).toBeNull();
+  });
+
+  it("reads nothing refused out of a shape that carries no receipt", () => {
+    expect(commandRefusal(null)).toBeNull();
+    expect(commandRefusal({})).toBeNull();
+    expect(commandRefusal({ receipt: "rejected" })).toBeNull();
+    expect(commandRefusal({ receipt: ["rejected"] })).toBeNull();
+  });
+
+  it("falls back through detail, then code, then the bare word", () => {
+    expect(commandRefusal({ receipt: { status: "rejected", code: "closed" } })?.message).toBe(
+      "closed",
+    );
+    expect(commandRefusal({ receipt: { status: "rejected" } })?.message).toBe("rejected");
+    expect(commandRefusal({ receipt: { status: "rejected", detail: "", code: 7 } })?.message).toBe(
+      "rejected",
+    );
   });
 });

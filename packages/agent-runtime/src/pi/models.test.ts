@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
@@ -13,6 +21,53 @@ import {
   piOwnedModelAccess,
   piOwnedModels,
 } from "./models";
+
+/**
+ * `open`, counted, with an overridable `stat()` on what it hands back, and
+ * the handle-reads that follow — the parse the hold exists to spare.
+ *
+ * The cache's whole job is to keep one inspection's eighty asks down to one
+ * read of `auth.json`, and the open plus the parse are what one read costs.
+ * The `stat()` pin stages the one case a real filesystem makes hard to write:
+ * a filesystem whose mtime does not move when the store rewrites the file.
+ */
+const fsHooks = vi.hoisted(() => ({
+  openPaths: [] as string[],
+  parsedOpens: 0,
+  fstatMtimeMs: undefined as number | undefined,
+  /**
+   * One entry per handle-read to hold open until a test releases it, taken in
+   * order, so a test can stage a pass a write overtakes and a later pass
+   * alongside it. Reads past the end of the queue are not held at all.
+   */
+  stalls: [] as Promise<void>[],
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: unknown[]) => {
+      fsHooks.openPaths.push(String(args[0]));
+      const handle = await (actual.open as (...inner: unknown[]) => Promise<unknown>)(...args);
+      const pinned = fsHooks.fstatMtimeMs;
+      if (pinned !== undefined) {
+        Object.defineProperty(handle, "stat", { value: async () => ({ mtimeMs: pinned }) });
+      }
+      return handle;
+    },
+    readFile: async (...args: unknown[]) => {
+      // The credential store is the one reader here that reads an opened
+      // handle; a string path is someone else's file.
+      if (typeof args[0] !== "string") {
+        fsHooks.parsedOpens += 1;
+        const stall = fsHooks.stalls.shift();
+        if (stall !== undefined) await stall;
+      }
+      return (actual.readFile as (...inner: unknown[]) => Promise<unknown>)(...args);
+    },
+  };
+});
 
 const OAUTH = {
   type: "oauth",
@@ -42,6 +97,10 @@ const held = { agentDir: process.env.PI_CODING_AGENT_DIR };
 
 afterEach(() => {
   vi.restoreAllMocks();
+  fsHooks.openPaths.length = 0;
+  fsHooks.parsedOpens = 0;
+  fsHooks.fstatMtimeMs = undefined;
+  fsHooks.stalls.length = 0;
   if (held.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = held.agentDir;
 });
@@ -133,6 +192,152 @@ describe("PiFileCredentialStore reads", () => {
     const store = storeIn(dir);
     await expect(store.read("openai-codex")).rejects.toThrow(/Could not read Pi credentials/);
     chmodSync(join(dir, "auth.json"), 0o600);
+  });
+});
+
+describe("PiFileCredentialStore caching", () => {
+  it("opens auth.json once for a burst of readers while it is unchanged", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH, anthropic: OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+    fsHooks.openPaths.length = 0;
+    fsHooks.parsedOpens = 0;
+
+    // One inspection asks this way: every provider's `checkAuth` and
+    // `getAvailable`, all at once, for the same document.
+    await Promise.all([
+      store.read("openai-codex"),
+      store.read("anthropic"),
+      store.list(),
+      store.read("openai-codex"),
+    ]);
+    expect(fsHooks.openPaths.filter((path) => path === authPath)).toHaveLength(1);
+    expect(fsHooks.parsedOpens).toBe(1);
+
+    // The next burst opens the file again to see whether it is still the one
+    // held, and serves the parse rather than parsing anew.
+    await store.read("anthropic");
+    expect(fsHooks.openPaths.filter((path) => path === authPath)).toHaveLength(2);
+    expect(fsHooks.parsedOpens).toBe(1);
+  });
+
+  it("drops the held parse when the file changes underneath it", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+    await expect(store.read("openai-codex")).resolves.toEqual(OAUTH);
+
+    // The `pi` CLI's own write: bytes and mtime both move. The mtime is set
+    // explicitly so the read cannot be a cache miss by filesystem accident on
+    // a filesystem with coarser timestamps than this test's clock.
+    writeFileSync(
+      authPath,
+      JSON.stringify({ "openai-codex": { ...OAUTH, access: "pi-refreshed" } }),
+      "utf8",
+    );
+    const moved = new Date(Date.now() + 1_000);
+    utimesSync(authPath, moved, moved);
+
+    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "pi-refreshed" });
+  });
+
+  it("never serves a credential it read before its own write", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+    await expect(store.read("openai-codex")).resolves.toEqual(OAUTH);
+
+    // Pin the mtime every opened handle reports to the one the hold already
+    // carries, so only this store's own invalidation can make the write
+    // visible — the case a filesystem too coarse to move the mtime on a
+    // rewrite is.
+    fsHooks.fstatMtimeMs = statSync(authPath).mtimeMs;
+
+    await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
+    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "rotated" });
+  });
+
+  it("never holds the parse of a read a write overtook", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+    // Pin every handle's mtime to the one the file has now, so the mtime alone
+    // can never tell the pre-write bytes from the post-write ones. That is the
+    // coarse-timestamp filesystem, and it is what leaves the write's own end
+    // of the hold as the only thing standing between a later reader and the
+    // past.
+    fsHooks.fstatMtimeMs = statSync(authPath).mtimeMs;
+
+    // A read opens the file, and is still reading it when the write lands.
+    const release = Promise.withResolvers<void>();
+    fsHooks.stalls.push(release.promise);
+    const overtaken = store.read("openai-codex");
+    await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
+
+    // It answers with what the file said when it asked, which is honest...
+    release.resolve();
+    await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
+
+    // ...but it must not have left that behind for the next reader, who asked
+    // after the write and is owed what the write put there.
+    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "rotated" });
+  });
+
+  it("does not join a shared pass that a write has already overtaken", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const store = storeIn(dir);
+
+    const release = Promise.withResolvers<void>();
+    fsHooks.stalls.push(release.promise);
+    const overtaken = store.read("openai-codex");
+    await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
+
+    // This reader arrives after the write and while the earlier pass is still
+    // out. Joining that pass would hand it the credential the write replaced,
+    // so it must start a pass of its own.
+    const after = store.read("openai-codex");
+    release.resolve();
+    await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
+    await expect(after).resolves.toMatchObject({ access: "rotated" });
+  });
+
+  it("lets an overtaken pass settle without emptying the pass that replaced it", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+
+    // Two passes out at once: the one a write overtook, and the one a reader
+    // arriving after that write started.
+    const releaseOvertaken = Promise.withResolvers<void>();
+    const releaseCurrent = Promise.withResolvers<void>();
+    fsHooks.stalls.push(releaseOvertaken.promise);
+    const overtaken = store.read("openai-codex");
+    // The write's own read is deliberately not held: it happens under the
+    // lock, and holding it would just stall the write.
+    await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
+    fsHooks.stalls.push(releaseCurrent.promise);
+    const current = store.read("openai-codex");
+
+    // The overtaken one settles first. Its slot is not the current one's, so
+    // emptying it must not send the reader below to the file again.
+    releaseOvertaken.resolve();
+    await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
+    fsHooks.openPaths.length = 0;
+    const joined = store.read("openai-codex");
+
+    releaseCurrent.resolve();
+    await expect(current).resolves.toMatchObject({ access: "rotated" });
+    await expect(joined).resolves.toMatchObject({ access: "rotated" });
+    expect(fsHooks.openPaths.filter((path) => path === authPath)).toHaveLength(0);
+  });
+
+  it("reads again after a failed pass rather than repeating it", async () => {
+    const dir = agentDirWith('{"openai-codex": {"access": "sk-live-secret');
+    const store = storeIn(dir);
+    await expect(store.read("openai-codex")).rejects.toThrow(/unreadable/);
+
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": OAUTH }), "utf8");
+    await expect(store.read("openai-codex")).resolves.toEqual(OAUTH);
   });
 });
 

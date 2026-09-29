@@ -90,6 +90,7 @@ import type {
   AutomationsResult,
   AutomationSetEnabledInput,
   AutomationSetEnabledResult,
+  AutomationHistoryScopeInput,
   AutomationSkipsResult,
   AutomationUpdateInput,
   PendingArmedRunCancelInput,
@@ -147,6 +148,15 @@ import type {
   LegacyImportResult,
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
+  McpCatalogResult,
+  McpProjectInput,
+  McpSaveInput,
+  McpServerIdInput,
+  McpServerInput,
+  McpServerResult,
+  McpServersResult,
+  McpSetEnabledInput,
+  McpSetToolsInput,
   PickFolderResult,
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimResult,
@@ -158,8 +168,12 @@ import type {
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
+  ProjectRosterResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectSessionDefaultsInput,
@@ -195,6 +209,7 @@ import type {
   ThemeSetProjectResult,
   ThemeStateInput,
   ThemeStateResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -393,6 +408,9 @@ const api = {
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
     bootstrap: (): Promise<BootstrapResult> => invoke("volli:data-bootstrap"),
+    /** One project's live board without ticket bodies — what a targeted refresh re-reads instead of the whole board (VC-387). */
+    projectRoster: (input: ProjectIdInput): Promise<ProjectRosterResult> =>
+      invoke("volli:data-project-roster", input),
     /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
     importLegacy: (req: LegacyImportRequest): Promise<LegacyImportResult> =>
       invoke("volli:legacy-import", req),
@@ -491,6 +509,18 @@ const api = {
         ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
   },
+  mcp: {
+    list: (input: McpProjectInput): Promise<McpServersResult> => invoke("volli:mcp-list", input),
+    test: (input: McpServerInput): Promise<McpCatalogResult> => invoke("volli:mcp-test", input),
+    save: (input: McpSaveInput): Promise<McpServerResult> => invoke("volli:mcp-save", input),
+    refresh: (input: McpServerIdInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-refresh", input),
+    setEnabled: (input: McpSetEnabledInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-set-enabled", input),
+    setTools: (input: McpSetToolsInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-set-tools", input),
+    remove: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-remove", input),
+  },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
@@ -514,6 +544,16 @@ const api = {
     setAuthorityPolicy: (
       input: ProjectAuthorityPolicyInput,
     ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
+    /**
+     * Points an existing project at the folder it moved to (VC-430) — the same
+     * row, so its id, tickets, settings and history come with it. Refused when
+     * the folder is missing, is a file, or is one another project tracks.
+     */
+    relink: (input: ProjectRelinkInput): Promise<ProjectRelinkResult> =>
+      invoke("volli:project-relink", input),
+    /** Whether a project's registered folder is still on disk (VC-430). */
+    checkFolder: (projectId: string): Promise<ProjectFolderResult> =>
+      invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -549,6 +589,8 @@ const api = {
     /** A ticket's full event history, chronological — backs the Activity feed. */
     events: (input: TicketIdInput): Promise<TicketEventsResult> =>
       invoke("volli:ticket-events", input),
+    /** One ticket's Markdown body — read by the OPEN ticket, since the refresh roster no longer carries it (VC-387). */
+    body: (input: TicketIdInput): Promise<TicketBodyResult> => invoke("volli:ticket-body", input),
     /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
     latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
       invoke("volli:ticket-latest-signals", input),
@@ -587,7 +629,7 @@ const api = {
       invoke("volli:blob-materialized", input),
     /** Detaches one attachment; the bytes stay until collection. */
     remove: (input: BlobLinkIdInput): Promise<Result> => invoke("volli:blob-remove", input),
-    /** Attaches Blobs imported before their ticket existed, once it has an id. */
+    /** Attaches Blobs imported before their owner existed, once it has an id. */
     linkDrafts: (input: BlobLinkDraftsInput): Promise<BlobLinksResult> =>
       invoke("volli:blob-link-drafts", input),
     /**
@@ -913,6 +955,15 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
+    /**
+     * ONE Automation's Runs in one project, newest first (VC-297) — the
+     * editor's own history, asked for rather than sieved out of the project's.
+     */
+    runsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-automation", input),
+    /** That Automation's Skipped occurrences, read beside its Runs (VC-297). */
+    skipsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-automation", input),
     /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
@@ -1420,7 +1471,7 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:terminal-exit" satisfies VolliIpcEvent, listener);
     },
-    /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+    /** Reads the user's resolved Ghostty config as the renderer's terminal appearance. */
     ghosttyConfig: (): Promise<GhosttyConfigResult> => invoke("volli:ghostty-config-get"),
     /** Subscribes to live Ghostty config reloads; returns the unsubscribe function. */
     onGhosttyConfigChanged: (

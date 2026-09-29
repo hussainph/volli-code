@@ -13,7 +13,14 @@
  * outlives every view — the store's three lifecycle actions are the whole of
  * what a client asks of it, plus the fold.
  */
-import { errorMessage, isDefaultModelRequired, type ModelSelection } from "@volli/shared";
+import {
+  errorMessage,
+  inlineImageBytesIn,
+  isDefaultModelRequired,
+  sessionImageBudgetRefusal,
+  type BlobLinkView,
+  type ModelSelection,
+} from "@volli/shared";
 import { create } from "zustand";
 
 import {
@@ -25,7 +32,6 @@ import {
   getOrCreateChatClient,
   markAttaching,
   markDelivered,
-  rejectedReceipt,
   retitleSlice,
   seedSlice,
   settleSlice,
@@ -34,16 +40,23 @@ import {
   type ChatSessionWrites,
   type QueuedMessage,
 } from "@volli/session-presentation";
+import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { browserChatTransport } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
+import { useChatDraftsStore, type ChatDraft } from "@renderer/stores/chat-drafts";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
 export interface CreateChatSessionInput {
   projectId: string;
   ticketId: string | null;
   title: string | null;
+  /** Stable for a promotion retry; omitted by every immediate creator. */
+  operationId?: string;
+  /** The provisional UUID the durable Session adopts. */
+  requestedSessionId?: string;
   /** Skill slugs the Session starts with — attach-time RESOURCE injection. */
   skills?: readonly string[];
   /**
@@ -64,6 +77,8 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * yet, and `retryAttach` addresses it rather than making another.
    */
   createChatSession(input: CreateChatSessionInput): Promise<string | null>;
+  /** Promotes one provisional Draft in place, serialized across concurrent sends. */
+  promoteChatSession(sessionId: string): Promise<boolean>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
   adoptChatSession(sessionId: string): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
@@ -91,7 +106,14 @@ export interface ChatSessionsState extends ChatSessionWrites {
   setStarting(ownerId: string, starting: boolean): void;
 
   /**
-   * Which chat Sessions have a tab open, per surface owner — a ticketId
+   * Renderer-only focus for an empty provisional Draft. It must be usable
+   * without writing the workspace app_state row that relaunches durable tabs.
+   */
+  provisionalActive: Readonly<Record<string, string>>;
+  setProvisionalActive(ownerId: string, sessionId: string | null): void;
+
+  /**
+   * Which chat Sessions and provisional Drafts have a tab open, per surface owner — a ticketId
    * while its ticket is on the board, the projectId otherwise (a ticketless
    * chat, or one whose ticket left the board), the same owner-id convention
    * `starting` above uses. A Session's tab lives under exactly one owner at a
@@ -123,9 +145,22 @@ export interface ChatSessionsState extends ChatSessionWrites {
    */
   openChatTab(ownerId: string, sessionId: string): void;
   /**
-   * Drops the tab from `ownerId`'s strip and retires the Session's resident
-   * state with it. Closing a chat view loses nothing — the Session is durable,
-   * and reopening it adopts the same history.
+   * Reopens every persisted typed Draft after the app_state hydrate.
+   *
+   * Both live-id sets are required: a Draft naming a project or Ticket the
+   * board no longer has is the whole reason this runs at boot rather than on
+   * first render, and an optional set would let a caller skip the check by
+   * omission rather than by decision.
+   */
+  restoreProvisionalChatTabs(
+    drafts: Readonly<Record<string, ChatDraft>>,
+    liveTicketIds: ReadonlySet<string>,
+    liveProjectIds: ReadonlySet<string>,
+  ): void;
+  /**
+   * Drops the tab from `ownerId`'s strip and retires resident Session state.
+   * A still-uncreated Draft is explicitly abandoned with the view; a create
+   * that already landed stays durable and keeps its promotion recovery state.
    */
   closeChatTab(ownerId: string, sessionId: string): void;
   /**
@@ -142,8 +177,8 @@ export interface ChatSessionsState extends ChatSessionWrites {
   ): void;
   /**
    * Clears the temporary origins for a ticket that was permanently deleted.
-   * The project-hosted tabs and their resident clients stay open; only their
-   * now-impossible restoration path is retired.
+   * Durable project-hosted Sessions stay open, but an uncreated Draft scoped
+   * to that ticket is abandoned: it cannot honestly promote without its owner.
    */
   clearRehomedTicketProvenance(ticketId: string): void;
   /**
@@ -156,11 +191,40 @@ export interface ChatSessionsState extends ChatSessionWrites {
   dropChatTabs(ownerIds: readonly string[]): void;
 }
 
+/** Every ownerless Blob a provisional Draft has to hand to its Session, once per hash. */
+function provisionalOwnerlessAttachments(draft: ChatDraft): BlobLinkView[] {
+  const byHash = new Map<string, BlobLinkView>();
+  const remember = (attachments: readonly BlobLinkView[] | undefined) => {
+    for (const attachment of attachments ?? []) {
+      if (attachment.linkId === null && !byHash.has(attachment.blobHash)) {
+        byHash.set(attachment.blobHash, attachment);
+      }
+    }
+  };
+  remember(draft.attachments);
+  for (const message of draft.held) remember(message.attachments);
+  return [...byHash.values()];
+}
+
+/** The link payload for those Blobs — the two fields the owner-transfer needs. */
+function blobLinkDrafts(
+  attachments: readonly BlobLinkView[],
+): { blobHash: string; label?: string }[] {
+  return attachments.map((attachment) => ({
+    blobHash: attachment.blobHash,
+    ...(attachment.label.length === 0 ? {} : { label: attachment.label }),
+  }));
+}
+
 /** Factory so tests get isolated instances (sessions.ts's convention). */
 export function createChatSessionsStore(
   transport: () => ChatSessionTransport = browserChatTransport,
 ) {
   return create<ChatSessionsState>()((set, get, api) => {
+    // A close after create but before Blob transfer finishes cannot delete the
+    // durable row, but it must stop that in-flight promotion from attaching a
+    // resident runtime behind the closed tab.
+    const closedCreatedDrafts = new Set<string>();
     /**
      * Every write lands through here, so a Session that has been closed under a
      * command still in flight is a no-op rather than a resurrected slice.
@@ -185,83 +249,235 @@ export function createChatSessionsStore(
         // (VC-169): an event failure surfaces as an error toast, and the
         // auto-title write goes through the shared rename path — which owns
         // the optimistic labels, the rollback, and its own failure toast.
-        notify: toastError,
+        // The core always states the tone (VC-141). `"neutral"` is a plain
+        // sonner toast at the library's own default duration — right for a
+        // refusal that is a transient confirmation — never the longer-held,
+        // closeable error one `toastError` exists to give a real failure.
+        notify: (message, tone) => (tone === "neutral" ? toast(message) : toastError(message)),
         renameSession: (target, title, refineFrom) => {
           void renameChatSession(target, title, refineFrom);
         },
       });
+
+    /**
+     * Seed one resident slice and start its Session: stream open, executor
+     * attaching. Idempotent enough for a replayed promotion, which may find
+     * the slice already here.
+     *
+     * The client performs the attach, and is the ONLY thing that does. The
+     * store used to attach here itself while the client attached everywhere
+     * else, and the two could not see each other: promotion queues the first
+     * message immediately, so the queue's own reattach (VC-367) fired while
+     * this attach was still landing and the ledger refused the second with
+     * "already has a live executor". One attacher, one latch.
+     *
+     * Never awaited — the slow half (worktree ensure, Agent Runtime boot) stays
+     * off the create/promotion critical path, which is VC-16's optimistic open.
+     */
+    const makeResident = (sessionId: string, ticketId: string | null): void => {
+      if (get().sessions[sessionId] === undefined) {
+        set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
+      }
+      // A ticketed refusal is reported by durable Ticket Attention on the
+      // projection, so a slice-level error would say the same thing twice. A
+      // ticketless Session has no Attention surface, so its refusal is the
+      // slice's to carry.
+      void attach(sessionId).startAttach({ refusalIsReportedElsewhere: ticketId !== null });
+    };
+
+    /** The durable mint shared by immediate starts and Draft promotion. */
+    const mint = async (
+      edge: ChatSessionTransport,
+      input: CreateChatSessionInput,
+      makeClient: boolean,
+    ): Promise<string | null> => {
+      let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
+      try {
+        created = await edge.createSession({
+          operationId: input.operationId ?? edge.newCommandId(),
+          projectId: input.projectId,
+          ticketId: input.ticketId,
+          title: input.title,
+          ...(input.requestedSessionId === undefined
+            ? {}
+            : { requestedSessionId: input.requestedSessionId }),
+          ...(input.skills !== undefined && input.skills.length > 0
+            ? { skills: input.skills }
+            : {}),
+          ...(input.model === undefined ? {} : { model: input.model }),
+        });
+      } catch (failure) {
+        // A create refused for the missing default model is a predictable
+        // configuration state, not an error: the recovery is Model Access,
+        // so this opens it instead of raising a toast about it (VC-53).
+        if (isDefaultModelRequired(errorMessage(failure))) {
+          useUiStore.getState().setSettingsOpen(true, "model-access");
+          return null;
+        }
+        // The one failure with nothing durable to carry it: there is no id, so
+        // there is no slice, so a toast is the only place it can be said.
+        toastError(`Could not start Session: ${errorMessage(failure)}`);
+        return null;
+      }
+      if (
+        input.requestedSessionId !== undefined &&
+        created.sessionId !== input.requestedSessionId
+      ) {
+        // A host that minted its own id instead of taking the one this chat has
+        // carried since it was opened. Everything holding that id — the tab,
+        // the split pane, the staged files — now names something that is not
+        // this Session, so the promotion cannot be completed honestly.
+        //
+        // The two ids are diagnosis, not recovery: they go to the log, where a
+        // support report can find them, and the person gets the one sentence
+        // that tells them what to do (CLAUDE.md — keep the measurements off the
+        // page).
+        console.error(
+          `[chat] promotion refused: requested Session ${input.requestedSessionId}, host minted ${created.sessionId}`,
+        );
+        toastError("Could not start Session. Try sending again.");
+        return null;
+      }
+      if (makeClient) makeResident(created.sessionId, input.ticketId);
+      return created.sessionId;
+    };
 
     return {
       sessions: {},
       openTabs: {},
       rehomedTicketBySession: {},
       starting: {},
+      provisionalActive: {},
 
       async createChatSession(input) {
         const edge = transport();
-        let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
-        try {
-          created = await edge.createSession({
-            operationId: edge.newCommandId(),
-            projectId: input.projectId,
-            ticketId: input.ticketId,
-            title: input.title,
-            ...(input.skills !== undefined && input.skills.length > 0
-              ? { skills: input.skills }
-              : {}),
-            ...(input.model === undefined ? {} : { model: input.model }),
-          });
-        } catch (failure) {
-          // A create refused for the missing default model is a predictable
-          // configuration state, not an error: the recovery is Model Access,
-          // so this opens it instead of raising a toast about it (VC-53).
-          if (isDefaultModelRequired(errorMessage(failure))) {
-            useUiStore.getState().setSettingsOpen(true, "model-access");
-            return null;
-          }
-          // The one failure with nothing durable to carry it: there is no id, so
-          // there is no slice, so a toast is the only place it can be said.
-          toastError(`Could not start Session: ${errorMessage(failure)}`);
-          return null;
-        }
-        const sessionId = created.sessionId;
         // The Session is durable and addressable NOW — the id resolves and the
-        // caller lands the tab while the attach below is still in flight. The
-        // slice seeds `starting`, the latch only a settle clears, so the
-        // composer queues anything typed meanwhile and the release loop
-        // delivers it once an executor is live (VC-16's optimistic open).
-        set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
-        const client = attach(sessionId);
-        void client.connect();
-        // The slow half — worktree ensure + Agent Runtime boot — runs in the
-        // background, deliberately not awaited. Its outcome still lands on the
-        // slice: the same settle rules the bundled start applied, plus the
-        // transport-failure arm, because now a Session exists to carry it.
-        void (async () => {
-          try {
-            const attached = await edge.attachSession({
-              operationId: edge.newCommandId(),
-              sessionId,
-            });
-            const refusal = rejectedReceipt(attached);
-            // A ticketed refusal is reported by durable Ticket Attention on the
-            // projection, so a slice-level error here would say the same thing
-            // twice. A ticketless Session has no Attention surface, so its
-            // refusal is settled onto the slice.
-            get().settle(
-              sessionId,
-              attached.state === "ready" || input.ticketId !== null
-                ? null
-                : `Could not start Session: ${refusal ?? "Runtime recovery is required."}`,
-            );
-          } catch (failure) {
-            // An attach that never reached main has no receipt and no Attention
-            // — the slice is the only surface that can carry it, whatever the
-            // Session's Role.
-            get().settle(sessionId, `Could not start Session: ${errorMessage(failure)}`);
+        // caller lands the tab while `makeResident`'s attach runs behind it.
+        return mint(edge, input, true);
+      },
+
+      promoteChatSession(sessionId) {
+        return useChatDraftsStore.getState().promote(sessionId, async (provisional) => {
+          const edge = transport();
+          // The chat image budget is a per-Session rule, so a Draft's imports
+          // were never held to it — there was no Session to measure (VC-358).
+          // Ask it HERE, before anything durable exists: a strip that cannot
+          // join a conversation must not first mint the empty Session it would
+          // then have to be refused from. The cohort is closed by the time this
+          // runs — ChatPlane holds later gestures, and this barrier settles the
+          // imports that began before Send — so nothing can arrive behind it.
+          // A brand-new Session has inlined nothing, hence `0` used.
+          await useChatDraftsStore.getState().waitForAttachmentImports(sessionId);
+          const staged = useChatDraftsStore.getState().drafts[sessionId];
+          // A close can land while that barrier is awaited. Nothing durable
+          // exists yet, so the honest answer is to mint nothing at all: this is
+          // the one window where withdrawn intent can still leave no trace,
+          // and once `session.create` has gone out it never can again.
+          if (staged?.provisional === undefined) return false;
+          const overBudget = sessionImageBudgetRefusal(
+            0,
+            inlineImageBytesIn(provisionalOwnerlessAttachments(staged)),
+          );
+          if (overBudget !== null) {
+            toastError(overBudget);
+            return false;
           }
-        })();
-        return sessionId;
+          const createdId = await mint(
+            edge,
+            {
+              projectId: provisional.projectId,
+              ticketId: provisional.ticketId,
+              title: provisional.title,
+              operationId: provisional.operationId,
+              requestedSessionId: sessionId,
+              ...(provisional.skills === undefined ? {} : { skills: provisional.skills }),
+              ...(provisional.model === undefined ? {} : { model: provisional.model }),
+            },
+            // A provisional view owns no resident client yet. Wait until create
+            // is still wanted and every staged Blob has a Session owner; a
+            // close racing create must not briefly connect a client it then
+            // disposes, and attach must not observe ownerless prompt files.
+            false,
+          );
+          if (createdId === null) return false;
+
+          // Close may have abandoned the renderer-owned Draft while create was
+          // in flight. The row that just landed is durable and stays honest in
+          // history, but withdrawn intent earns neither an attachment/runtime
+          // nor a resident client.
+          if (useChatDraftsStore.getState().drafts[sessionId]?.provisional === undefined) {
+            get().closeChatSession(sessionId);
+            return true;
+          }
+
+          useChatDraftsStore.getState().markProvisionalSessionCreated(sessionId);
+          // Files that began before Send may finish while create or a previous
+          // link batch is in flight. Wait for their strip commits and re-read
+          // after every awaited transfer. ChatPlane holds later gestures until
+          // this flight settles, so the final empty read closes the ownerless
+          // Blob boundary.
+          while (true) {
+            await useChatDraftsStore.getState().waitForAttachmentImports(sessionId);
+            const draft = useChatDraftsStore.getState().drafts[sessionId];
+            const blobs =
+              draft === undefined ? [] : blobLinkDrafts(provisionalOwnerlessAttachments(draft));
+            if (blobs.length === 0) break;
+            try {
+              const linked = await window.api.attachments.linkDrafts({ sessionId, blobs });
+              if (!linked.ok) {
+                toastError(`Could not prepare attachments: ${linked.error}`);
+                return false;
+              }
+              const linkedHashes = new Set(linked.blobs.map(({ blobHash }) => blobHash));
+              const missing = blobs.find(({ blobHash }) => !linkedHashes.has(blobHash));
+              if (missing !== undefined) {
+                toastError(`Could not prepare attachment: ${missing.label ?? missing.blobHash}`);
+                return false;
+              }
+              useChatDraftsStore.getState().adoptLinkedAttachments(sessionId, linked.blobs);
+            } catch (failure) {
+              toastError(`Could not prepare attachments: ${errorMessage(failure)}`);
+              return false;
+            }
+          }
+
+          // Keep the `session-created` recovery marker until ChatPlane has put
+          // the held first message into its runtime queue. A renderer crash in
+          // that last handoff must restore an unsent provisional row rather
+          // than a durable Draft whose `sending` copy has no retry surface.
+          if (provisional.ticketId !== null) {
+            void useTicketSessionRecordsStore.getState().refresh(provisional.ticketId);
+          }
+          // The link transfer has landed before either the resident projection
+          // client connects or main materializes the checkout. A tab closed
+          // after create remains a durable Session, but it does not earn a
+          // hidden resident client/runtime.
+          // Project teardown can remove the tab and Draft after create while a
+          // Blob transfer is awaited. The durable row may survive elsewhere,
+          // but no removed project earns a hidden resident runtime.
+          const drafts = useChatDraftsStore.getState();
+          const draft = drafts.drafts[sessionId];
+          if (draft?.provisional === undefined) {
+            get().closeChatSession(sessionId);
+            return true;
+          }
+          if (closedCreatedDrafts.delete(sessionId)) {
+            // One read, held across both decisions: nothing awaits between them,
+            // so a second `getState()` could only ever return the same Draft —
+            // and asking twice invites a reader to believe otherwise.
+            for (const message of draft.held) {
+              if (message.state === "sending") drafts.markHeld(sessionId, message.id, "unsent");
+            }
+            drafts.completePromotion(sessionId);
+            get().closeChatSession(sessionId);
+            return true;
+          }
+          // Create replay keeps the stable Draft operation/id. Runtime attach
+          // is a new attempt: replaying a prior rejected attach receipt after
+          // relaunch would make recovery permanently refuse the same work.
+          makeResident(sessionId, provisional.ticketId);
+          return true;
+        });
       },
 
       // `ready` rather than `starting`, unlike the create above: adopting makes
@@ -269,6 +485,10 @@ export function createChatSessionsStore(
       // name, and the composer is gated by whether an executor is live — which
       // the arriving snapshot answers — and never by this.
       adoptChatSession(sessionId) {
+        // A Draft tab can travel through the same sidebar/split doors as a
+        // durable chat. Opening that view must not manufacture a resident
+        // client (and therefore an attach) before its first message promotes it.
+        if (useChatDraftsStore.getState().drafts[sessionId]?.provisional !== undefined) return;
         if (get().sessions[sessionId] !== undefined) return;
         set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("ready") } }));
         const client = attach(sessionId);
@@ -337,7 +557,18 @@ export function createChatSessionsStore(
         });
       },
 
+      setProvisionalActive(ownerId, sessionId) {
+        set((state) => {
+          if ((state.provisionalActive[ownerId] ?? null) === sessionId) return state;
+          const provisionalActive = { ...state.provisionalActive };
+          if (sessionId === null) delete provisionalActive[ownerId];
+          else provisionalActive[ownerId] = sessionId;
+          return { provisionalActive };
+        });
+      },
+
       openChatTab(ownerId, sessionId) {
+        closedCreatedDrafts.delete(sessionId);
         set((state) => {
           let strippedElsewhere = false;
           const openTabs: Record<string, readonly string[]> = {};
@@ -361,6 +592,48 @@ export function createChatSessionsStore(
         });
       },
 
+      restoreProvisionalChatTabs(drafts, liveTicketIds, liveProjectIds) {
+        const rehomed: Record<string, string> = {};
+        for (const [sessionId, draft] of Object.entries(drafts)) {
+          const provisional = draft.provisional;
+          if (provisional === undefined) continue;
+          // A removed project has no reachable surface and its durable removal
+          // has already cascaded any partial Session row. Retire the stale Draft
+          // rather than restoring an owner key no renderer can ever select.
+          if (!liveProjectIds.has(provisional.projectId)) {
+            useChatDraftsStore.getState().discardProvisional(sessionId);
+            continue;
+          }
+          // A ticket that left the live board while the app was away has no
+          // workspace to host this tab. Keep the Draft reachable under Home,
+          // while retaining its ticket birth scope for promotion and for a
+          // later board return.
+          const ticketIsLive =
+            provisional.ticketId === null || liveTicketIds.has(provisional.ticketId);
+          const ownerId = ticketIsLive
+            ? (provisional.ticketId ?? provisional.projectId)
+            : provisional.projectId;
+          if (!ticketIsLive && provisional.ticketId !== null) {
+            rehomed[sessionId] = provisional.ticketId;
+          }
+          get().openChatTab(ownerId, sessionId);
+        }
+        // Deliberately no `provisionalActive` here. That overlay exists for ONE
+        // thing: letting an EMPTY Draft be focused without writing the
+        // workspace's active-tab record. Every Draft restored here has content
+        // — an empty one is filtered out of persistence — so its `chat:<uuid>`
+        // tab is already in the persisted layout, and forcing focus onto it
+        // would make the commit effect overwrite the tab the person actually
+        // left the app on. Restoring a Draft makes it reachable; it does not
+        // decide what comes forward. That is the recorded tab's job, as it was
+        // before this ticket.
+        if (Object.keys(rehomed).length > 0) {
+          set((state) => ({
+            rehomedTicketBySession: { ...state.rehomedTicketBySession, ...rehomed },
+          }));
+        }
+      },
+
       closeChatTab(ownerId, sessionId) {
         // The tab decides, and it decides first: retiring the Session before
         // knowing whether this owner held a tab for it would dispose the client
@@ -369,20 +642,35 @@ export function createChatSessionsStore(
         const tabs = get().openTabs[ownerId];
         if (tabs === undefined || !tabs.includes(sessionId)) return;
         get().closeChatSession(sessionId);
+        const draft = useChatDraftsStore.getState().drafts[sessionId];
+        // Close is the explicit abandon gesture for a Draft whether or not it
+        // has typed/staged content. Once create has landed, though, the durable
+        // Session cannot be hidden or deleted; keep its recovery metadata until
+        // Blob transfer finishes while preventing that flight from attaching.
+        const abandonDraft = draft?.provisional?.phase === "draft";
+        if (draft?.provisional?.phase === "session-created") {
+          closedCreatedDrafts.add(sessionId);
+        }
         const remaining = tabs.filter((candidate) => candidate !== sessionId);
         set((state) => {
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
           delete rehomedTicketBySession[sessionId];
+          const provisionalActive = { ...state.provisionalActive };
+          if (provisionalActive[ownerId] === sessionId) delete provisionalActive[ownerId];
           if (remaining.length > 0) {
             return {
               openTabs: { ...state.openTabs, [ownerId]: remaining },
               rehomedTicketBySession,
+              provisionalActive,
             };
           }
           const openTabs = { ...state.openTabs };
           delete openTabs[ownerId];
-          return { openTabs, rehomedTicketBySession };
+          return { openTabs, rehomedTicketBySession, provisionalActive };
         });
+        // An uncreated provisional tab was the only handle to this Draft.
+        // Closing it abandons the renderer/app_state copy completely.
+        if (abandonDraft) useChatDraftsStore.getState().discardProvisional(sessionId);
       },
 
       reconcileTicketChatTabs(projectId, departedTicketIds, returnedTicketIds) {
@@ -392,6 +680,7 @@ export function createChatSessionsStore(
           let projectTabs: string[] = [...(openTabs[projectId] ?? [])];
           let projectTabsChanged = false;
           let nextRehomedTicketBySession: Record<string, string> | undefined;
+          let nextProvisionalActive: Record<string, string> | undefined;
 
           const rehomedTicketBySession = (): Readonly<Record<string, string>> =>
             nextRehomedTicketBySession ?? state.rehomedTicketBySession;
@@ -406,6 +695,14 @@ export function createChatSessionsStore(
             if (rehomedTicketBySession()[sessionId] === ticketId) return;
             mutableRehomedTicketBySession()[sessionId] = ticketId;
           };
+          const provisionalActive = (): Readonly<Record<string, string>> =>
+            nextProvisionalActive ?? state.provisionalActive;
+          const mutableProvisionalActive = (): Record<string, string> => {
+            if (nextProvisionalActive === undefined) {
+              nextProvisionalActive = { ...state.provisionalActive };
+            }
+            return nextProvisionalActive;
+          };
 
           for (const ticketId of departedTicketIds) {
             const fromTabs = openTabs[ticketId];
@@ -415,6 +712,12 @@ export function createChatSessionsStore(
             for (const sessionId of fromTabs) {
               if (!projectTabs.includes(sessionId)) projectTabs.push(sessionId);
               markRehomed(sessionId, ticketId);
+            }
+            const active = provisionalActive()[ticketId];
+            if (active !== undefined && fromTabs.includes(active)) {
+              const mutable = mutableProvisionalActive();
+              delete mutable[ticketId];
+              mutable[projectId] = active;
             }
             delete openTabs[ticketId];
           }
@@ -437,30 +740,73 @@ export function createChatSessionsStore(
 
             const provenance = mutableRehomedTicketBySession();
             for (const sessionId of restored) delete provenance[sessionId];
+            const active = provisionalActive()[projectId];
+            if (active !== undefined && restoring.has(active)) {
+              const mutable = mutableProvisionalActive();
+              delete mutable[projectId];
+              mutable[ticketId] = active;
+            }
           }
 
           if (projectTabsChanged) {
             if (projectTabs.length > 0) openTabs[projectId] = projectTabs;
             else delete openTabs[projectId];
           }
-          if (!changed && nextRehomedTicketBySession === undefined) return state;
-          return nextRehomedTicketBySession === undefined
-            ? { openTabs }
-            : { openTabs, rehomedTicketBySession: nextRehomedTicketBySession };
+          if (
+            !changed &&
+            nextRehomedTicketBySession === undefined &&
+            nextProvisionalActive === undefined
+          ) {
+            return state;
+          }
+          return {
+            openTabs,
+            ...(nextRehomedTicketBySession === undefined
+              ? {}
+              : { rehomedTicketBySession: nextRehomedTicketBySession }),
+            ...(nextProvisionalActive === undefined
+              ? {}
+              : { provisionalActive: nextProvisionalActive }),
+          };
         });
       },
 
       clearRehomedTicketProvenance(ticketId) {
+        const abandonedDraftIds = new Set(
+          Object.entries(useChatDraftsStore.getState().drafts).flatMap(([sessionId, draft]) =>
+            draft.provisional?.phase === "draft" && draft.provisional.ticketId === ticketId
+              ? [sessionId]
+              : [],
+          ),
+        );
         set((state) => {
-          const sessionIds = Object.entries(state.rehomedTicketBySession)
+          const provenanceIds = Object.entries(state.rehomedTicketBySession)
             .filter(([, sourceTicketId]) => sourceTicketId === ticketId)
             .map(([sessionId]) => sessionId);
-          if (sessionIds.length === 0) return state;
+          if (provenanceIds.length === 0 && abandonedDraftIds.size === 0) return state;
 
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
-          for (const sessionId of sessionIds) delete rehomedTicketBySession[sessionId];
-          return { rehomedTicketBySession };
+          for (const sessionId of provenanceIds) delete rehomedTicketBySession[sessionId];
+          let openTabs = state.openTabs;
+          let provisionalActive = state.provisionalActive;
+          if (abandonedDraftIds.size > 0) {
+            const keptTabs: Record<string, readonly string[]> = {};
+            for (const [ownerId, tabs] of Object.entries(state.openTabs)) {
+              const kept = tabs.filter((sessionId) => !abandonedDraftIds.has(sessionId));
+              if (kept.length > 0) keptTabs[ownerId] = kept;
+            }
+            openTabs = keptTabs;
+            provisionalActive = Object.fromEntries(
+              Object.entries(state.provisionalActive).filter(
+                ([, sessionId]) => !abandonedDraftIds.has(sessionId),
+              ),
+            );
+          }
+          return { rehomedTicketBySession, openTabs, provisionalActive };
         });
+        for (const sessionId of abandonedDraftIds) {
+          useChatDraftsStore.getState().discardProvisional(sessionId);
+        }
       },
 
       dropChatTabs(ownerIds) {
@@ -483,12 +829,20 @@ export function createChatSessionsStore(
           }
           const sessions = { ...state.sessions };
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
+          const provisionalActive = { ...state.provisionalActive };
+          for (const ownerId of ownerIds) delete provisionalActive[ownerId];
           for (const sessionId of removedSessionIds) {
             delete sessions[sessionId];
             delete rehomedTicketBySession[sessionId];
           }
-          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession };
+          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession, provisionalActive };
         });
+        // This path means the owning project is gone, not merely that a tab was
+        // closed or a Ticket left the live board. No surface remains from which
+        // a provisional Draft could be recovered or promoted.
+        for (const sessionId of removedSessionIds) {
+          useChatDraftsStore.getState().discardProvisional(sessionId);
+        }
       },
     };
   });

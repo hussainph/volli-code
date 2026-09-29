@@ -15,6 +15,7 @@ import { useStore } from "zustand";
 import { agentStateWord, type IslandAgent } from "@volli/session-presentation";
 
 import type { ChatSessionsStore } from "@renderer/chat/use-session-controller";
+import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { SessionPeekDialog } from "@renderer/components/chat/session-peek-dialog";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -46,6 +47,9 @@ export function SubagentPeekDialog({
       open={agent !== null}
       title={agent?.label ?? "Conversation"}
       state={agent === null ? undefined : agentStateWord(agent)}
+      metadata={
+        agent === null ? undefined : <AgentModelLine agent={agent} className="max-w-full text-ui" />
+      }
       openLabel={agent?.promoted ? "Focus tab" : "Open as tab"}
       onOpen={agent === null || onOpenAsTab === undefined ? undefined : () => onOpenAsTab(agent.id)}
       onClose={onClose}

@@ -77,6 +77,11 @@ import {
   trashEntry,
   writeFile as writeFsFile,
 } from "./volli-fs";
+import {
+  GIT_MAX_CONCURRENT_CHILDREN,
+  resetGitChildSlotsForTest,
+  withGitChildSlot,
+} from "./worktree/git";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -200,6 +205,40 @@ describe("ensureProjectArtifactsDir", () => {
 });
 
 // ---- buildFileIndex ----------------------------------------------------------
+
+describe("buildFileIndex and the shared git bound", () => {
+  afterEach(() => resetGitChildSlotsForTest());
+
+  it("lists through the bounded runner, not a private child of its own", async () => {
+    // The file index used to spawn its own `execFileAsync` with no deadline and
+    // no slot (VC-389). It now goes through the shared runner — with a longer
+    // deadline of its own, because `--others` walks the whole working tree — so
+    // opening several projects at once cannot outrun the bound.
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "README.md"), "# hi", "utf8");
+
+    const release: Array<() => void> = [];
+    const holding = Array.from({ length: GIT_MAX_CONCURRENT_CHILDREN }, () =>
+      withGitChildSlot(() => new Promise<void>((resolve) => release.push(resolve))),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    let settled = false;
+    const index = buildFileIndex(project).then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    // Not merely slow: with a free slot the same call finishes well inside this.
+    expect(settled).toBe(false);
+
+    for (const resolve of release) resolve();
+    const { files } = await index;
+    // And it really did list through git, rather than falling back to the walk.
+    expect(files.map((file) => file.relPath)).toContain("README.md");
+    await Promise.allSettled(holding);
+  });
+});
 
 describe("buildFileIndex", () => {
   it("lists git-tracked/untracked repo files plus force-included artifacts (classified, artifact-flagged)", async () => {

@@ -14,8 +14,9 @@ import { ensure } from "./ensure";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
 import { readWorktreeStatus } from "./read";
-import { scriptedGit } from "./scripted-git";
-import type { WorktreePhase } from "./types";
+import { resetRepositoryTurnsForTest } from "./repository-turn";
+import { scriptedGit, type GitCall } from "./scripted-git";
+import type { RunGitAsync, WorktreePhase } from "./types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
@@ -23,13 +24,73 @@ let tempDirs: string[] = [];
 beforeEach(() => {
   ctx = openTestDb();
   resetPhasesForTest();
+  resetRepositoryTurnsForTest();
 });
 
 afterEach(() => {
   ctx.cleanup();
+  resetRepositoryTurnsForTest();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
 });
+
+/**
+ * Lets real macrotasks run, so an "it has not started" assertion is evidence.
+ * The pipeline reaches its `worktree add` through several awaits; a single
+ * microtask boundary would prove nothing about whether the second ticket was
+ * held back or merely a tick behind.
+ */
+async function settlePipelines(): Promise<void> {
+  for (let turn = 0; turn < 4; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * A git whose `worktree add` parks until the test releases it, so a second
+ * ticket's pipeline can be observed while the first is mid-mutation. Answers
+ * the listing from its own `cwd`, so it serves one project or several.
+ */
+function parkingGit() {
+  const calls: GitCall[] = [];
+  const parked: Array<() => void> = [];
+  const gitAsync: RunGitAsync = async (args, cwd) => {
+    calls.push({ args, cwd });
+    if (args[0] === "worktree" && args[1] === "list") {
+      return `worktree ${cwd}\nHEAD abc\nbranch refs/heads/main\n`;
+    }
+    if (args[0] === "rev-parse" && args[1] === "--verify") {
+      if (args[3] === "refs/heads/main") return "sha\n";
+      throw new Error("no such ref"); // the ticket branch does not exist yet
+    }
+    if (args[0] === "worktree" && args[1] === "add") {
+      await new Promise<void>((release) => parked.push(release));
+    }
+    return "";
+  };
+  return {
+    gitAsync,
+    parked,
+    /** Every command that CHANGES the repository; the reads are not ordered. */
+    changes: (): GitCall[] =>
+      calls.filter((call) => call.args[0] === "worktree" && call.args[1] !== "list"),
+    reads: (): GitCall[] => calls.filter((call) => call.args[1] === "list"),
+    releaseNext: (): void => parked.shift()?.(),
+  };
+}
+
+/** A second ticket in the same project, so two starts race one repository. */
+function seedSecondTicket(projectId: string) {
+  insertTicket(
+    ctx.db,
+    testTicket(projectId, {
+      id: "ticket-2",
+      ticketNumber: 13,
+      title: "Second ticket",
+      status: "doing",
+    }),
+  );
+}
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `volli-${prefix}-`));
@@ -73,6 +134,129 @@ function happyGit(projectPath: string) {
     return ""; // worktree add / prune
   });
 }
+
+describe("ensure — per-repository ordering", () => {
+  it("holds a second ticket's worktree add until the first ticket's finishes", async () => {
+    // `ensure` is single-flight per TICKET, so nothing stopped two tickets in
+    // one project from running `worktree add` and `worktree prune` against the
+    // same repository at once. Git does not promise that is safe: it picks the
+    // admin folder name under `$GIT_DIR/worktrees/` by finding a free name and
+    // then creating it, and its own documentation offers `worktree add --lock`
+    // as the version "without a race condition".
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const { project } = seed(projectPath);
+    seedSecondTicket(project.id);
+    const git = parkingGit();
+    const deps = {
+      db: ctx.db,
+      git: poisonedSyncGit,
+      gitAsync: git.gitAsync,
+      home,
+      blobsRoot: "unused",
+    };
+
+    const first = ensure(deps, "ticket-1");
+    const second = ensure(deps, "ticket-2");
+    await settlePipelines();
+
+    // One change in flight, and it is the first ticket's.
+    expect(git.changes().length).toBe(1);
+    expect(git.changes()[0]!.args.join(" ")).toContain("VC-12");
+    // The second pipeline is not stalled somewhere earlier: it ran its own
+    // reads and is waiting at the mutation. Reads are deliberately unordered.
+    expect(git.reads().length).toBe(2);
+
+    git.releaseNext();
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await settlePipelines();
+
+    // Only once the first finished did the second's add reach git.
+    expect(git.changes().length).toBe(2);
+    expect(git.changes()[1]!.args.join(" ")).toContain("VC-13");
+    git.releaseNext();
+    await expect(second).resolves.toMatchObject({ ok: true });
+  });
+
+  it("reaches BOTH adds within the same settle budget when they are different tickets in different projects", async () => {
+    // The negative control for the test above. `settlePipelines()` has to be
+    // long enough for a pipeline to reach its `worktree add`, or
+    // `expect(changes().length).toBe(1)` proves only that the budget was short
+    // — and would still pass with the repository turn deleted. Same budget, same
+    // two pipelines, ordering removed by putting them in two repositories.
+    const home = tempDir("home");
+    for (const [id, path] of [
+      ["proj-ccccccc1", tempDir("proj-c")],
+      ["proj-ddddddd2", tempDir("proj-d")],
+    ] as const) {
+      insertProject(ctx.db, testProject({ id, path, baseBranch: "main" }));
+      insertTicket(
+        ctx.db,
+        testTicket(id, { id: `ticket-${id}`, ticketNumber: 12, title: "X", status: "doing" }),
+      );
+    }
+    const git = parkingGit();
+    const deps = {
+      db: ctx.db,
+      git: poisonedSyncGit,
+      gitAsync: git.gitAsync,
+      home,
+      blobsRoot: "unused",
+    };
+
+    const first = ensure(deps, "ticket-proj-ccccccc1");
+    const second = ensure(deps, "ticket-proj-ddddddd2");
+    await settlePipelines();
+
+    expect(git.changes().length).toBe(2);
+
+    git.releaseNext();
+    git.releaseNext();
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await expect(second).resolves.toMatchObject({ ok: true });
+  });
+
+  it("lets two projects create worktrees at the same time", async () => {
+    // The ordering is per repository. A single app-wide lock would satisfy the
+    // test above while quietly serializing every Session start on the machine.
+    const home = tempDir("home");
+    const firstPath = tempDir("proj-a");
+    const secondPath = tempDir("proj-b");
+    for (const [id, path] of [
+      ["proj-aaaaaaa1", firstPath],
+      ["proj-bbbbbbb2", secondPath],
+    ] as const) {
+      insertProject(ctx.db, testProject({ id, path, baseBranch: "main" }));
+      insertTicket(
+        ctx.db,
+        testTicket(id, {
+          id: `ticket-${id}`,
+          ticketNumber: 12,
+          title: "MCP server",
+          status: "doing",
+        }),
+      );
+    }
+    const git = parkingGit();
+    const deps = {
+      db: ctx.db,
+      git: poisonedSyncGit,
+      gitAsync: git.gitAsync,
+      home,
+      blobsRoot: "unused",
+    };
+
+    const first = ensure(deps, "ticket-proj-aaaaaaa1");
+    const second = ensure(deps, "ticket-proj-bbbbbbb2");
+    await settlePipelines();
+
+    expect(git.parked.length).toBe(2);
+    git.releaseNext();
+    git.releaseNext();
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await expect(second).resolves.toMatchObject({ ok: true });
+  });
+});
 
 describe("ensure — success", () => {
   it("materializes the worktree through the async git runner alone — the sync runner would block the main process", async () => {
@@ -396,7 +580,7 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
 
     // The state VC-81 was left in: scoped to a worktree, with no worktree, and
     // the read verb refusing every question an agent asks about its work.
-    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+    expect(await readWorktreeStatus(deps, "t1")).toMatchObject({
       kind: "no-worktree",
       usesWorktree: true,
     });
@@ -411,7 +595,7 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
     expect(row?.branch).toBe("volli/VC-12-mcp-server");
     expect(row?.base_branch).toBe("main");
     expect(existsSync(row!.worktree_path!)).toBe(true);
-    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+    expect(await readWorktreeStatus(deps, "t1")).toMatchObject({
       kind: "ok",
       displayId: "VC-12",
       branch: "volli/VC-12-mcp-server",

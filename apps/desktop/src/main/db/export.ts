@@ -209,6 +209,16 @@ export interface ExportSessionAttachment {
   /** Parsed structured attachment failure. */
   failure: ExportJsonValue;
   createdSequence: number;
+  /**
+   * The sequence of the `attachment.closed` event that ended this attachment,
+   * or `null` while it is still open (VC-403).
+   *
+   * A derived mark rather than a fact of its own: the close is recorded as an
+   * event, and this column is the ledger's index over it. Carried here because
+   * the export is a faithful copy of each canonical table, and a column an
+   * import wrote back as `null` would read as an attachment that never closed.
+   */
+  closedSequence: number | null;
 }
 
 export interface ExportSessionEvent {
@@ -709,13 +719,14 @@ interface SessionAttachmentRow {
   observed_kind: string;
   failure: string | null;
   created_sequence: number;
+  closed_sequence: number | null;
 }
 
 function exportSessionAttachments(db: Database.Database): ExportSessionAttachment[] {
   const rows = prepared<[], SessionAttachmentRow>(
     db,
     `SELECT id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
-            native_detail, observed_kind, failure, created_sequence
+            native_detail, observed_kind, failure, created_sequence, closed_sequence
        FROM session_attachments
       ORDER BY session_id COLLATE BINARY, created_sequence, id COLLATE BINARY`,
   ).all();
@@ -735,6 +746,7 @@ function exportSessionAttachments(db: Database.Database): ExportSessionAttachmen
     failure:
       attachment.failure === null ? null : (JSON.parse(attachment.failure) as ExportJsonValue),
     createdSequence: attachment.created_sequence,
+    closedSequence: attachment.closed_sequence,
   }));
 }
 

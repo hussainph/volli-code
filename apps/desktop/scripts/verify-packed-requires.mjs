@@ -80,6 +80,20 @@ const IGNORED_PACKAGES = new Set([
   // require()s it — it exists so `node-gyp rebuild` can compile the addon.
   // The packaged app ships the binary rebuild:native already produced.
   "node-addon-api",
+  // ajv and ajv-formats are both BUNDLED (VC-8: @volli/shared validates MCP
+  // input schemas, and the MCP client ships an ajv-backed validator provider),
+  // so neither is missing from the app. What the scan sees is not a require
+  // either package performs: it is a string literal each writes into code it
+  // GENERATES. ajv's `compile.js` emits
+  // `require("ajv/dist/runtime/validation_error").default` on the `$async`
+  // branch, and ajv-formats' `addFormats` sets `ajv.opts.code.formats` to
+  // `require("ajv-formats/dist/formats").<export>`. Both are the STANDALONE
+  // spelling of a value that in-process compilation passes by reference
+  // (`scopeValue`'s `ref`), reached only when `opts.code.source` asks ajv to
+  // serialize a validator to a module — which nothing here does. Whitelisting
+  // these trees would ship packages to satisfy requires that cannot run.
+  "ajv",
+  "ajv-formats",
 ]);
 
 if (!existsSync(TARGET_DIR) || !statSync(TARGET_DIR).isDirectory()) {

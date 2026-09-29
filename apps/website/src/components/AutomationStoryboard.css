@@ -1,0 +1,987 @@
+/* AutomationStoryboard — four product artifacts on one ember path
+   (audit §6.3: saved setup → explicit Trigger → fresh Run → visible history).
+
+   Same brand system as the rest of the site: near-black panels, hairlines,
+   Mona Sans, one ember accent. Nothing here imports the demo's stylesheet —
+   the weights are matched by hand so the two read as the same product while
+   staying independently deletable.
+
+   Motion is one pass, never a loop (the spinner excepted), and every element's
+   resting style is also the last keyframe of whatever animates it. */
+
+.storyboard {
+  /* The gap is a shared value, not a coincidence: the connectors are sized
+     from it so a line spans the gutter exactly and touches both panels. */
+  --story-gap: 24px;
+  --story-panel-min: 260px;
+}
+
+.story-frames {
+  display: grid;
+  width: 100%;
+  max-width: 1312px;
+  margin: 0 auto;
+  padding: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--story-gap);
+  /* No horizontal padding: like .statement-grid, the section around it owns
+     the page gutter. */
+  list-style: none;
+}
+
+/* Each frame spans two rows of the parent grid — panel, then caption — so
+   panels in one row share the tallest panel's height and every caption starts
+   on the same line, whichever panel has the most inside it. */
+.story-frame {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: subgrid;
+  grid-row: span 2;
+}
+
+/* ---- Panel shell -------------------------------------------------------- */
+
+.story-panel {
+  position: relative;
+  display: flex;
+  min-height: var(--story-panel-min);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  /* A dot grain at ~5% over the panel colour: surface, not glow. It sits in
+     the background stack so the chrome bar and every row paint over it. */
+  background:
+    radial-gradient(rgb(255 255 255 / 4%) 0.6px, transparent 0.8px) 0 0 / 7px 7px,
+    #101010;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 4%) inset,
+    0 14px 34px rgb(0 0 0 / 34%);
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.story-chrome {
+  display: flex;
+  height: 32px;
+  padding: 0 11px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #1f1f1f;
+  background: #141414;
+}
+
+.story-chrome-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #e7e7e9;
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.story-chrome-meta {
+  color: var(--quiet);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.story-chrome .story-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* The Session panel's chrome is a tab strip rather than a title bar. */
+.story-chrome--tabs {
+  padding: 0 8px;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.story-tab {
+  display: inline-flex;
+  max-width: 60%;
+  height: 21px;
+  padding: 0 9px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #77777b;
+  font-size: 11px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-tab.is-active {
+  border-color: #2c2c2c;
+  background: #1b1b1b;
+  color: #e7e7e9;
+}
+
+.story-tab .story-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.story-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+/* Ember marks the Automation itself. Everywhere else the bolt is quiet, so the
+   accent still means something. */
+.story-chrome-title .story-icon,
+.story-armed-mark,
+.story-window > .story-icon,
+.story-run.is-new > .story-icon {
+  color: var(--ember);
+}
+
+/* ---- Caption ------------------------------------------------------------ */
+
+.story-caption {
+  display: grid;
+  padding-top: 14px;
+  gap: 6px;
+  align-self: start;
+}
+
+.story-step {
+  color: #555559;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.story-caption h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15.5px;
+  font-weight: 520;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.story-caption p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 380;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* ---- 01 · the saved record ---------------------------------------------- */
+
+.story-record {
+  display: flex;
+  min-height: 0;
+  padding: 12px;
+  flex: 1;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.story-record-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.story-record-head > strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 590;
+  letter-spacing: -0.015em;
+}
+
+.story-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.story-switch > .story-switch-knob {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 1px solid #333333;
+  border-radius: 999px;
+  background: #272727;
+}
+
+.story-switch > .story-switch-knob::after {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #8a8a8e;
+  content: "";
+}
+
+.story-switch.is-on > .story-switch-knob {
+  border-color: transparent;
+  background: var(--ember);
+}
+
+/* 26px pill − 1px border − 11px knob − 1px inset = 13px travel. */
+.story-switch.is-on > .story-switch-knob::after {
+  left: 13px;
+  background: #ffffff;
+}
+
+.story-label {
+  color: #85858a;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.story-instructions {
+  margin: -3px 0 0;
+  padding: 9px 10px;
+  border: 1px solid #242424;
+  border-radius: 10px;
+  background: #161616;
+  color: #b0b0b4;
+  font-size: 12.5px;
+  font-weight: 380;
+  line-height: 1.5;
+}
+
+/* The /code-review and @CONTEXT.md references are tokens the product resolves,
+   so they read as code, not as emphasis. */
+.story-instructions code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(232 101 42 / 10%);
+  color: #ff966c;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.story-fields {
+  display: grid;
+  margin: 0;
+  gap: 7px;
+}
+
+.story-fields > div {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.story-fields dt {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.story-fields dd {
+  margin: 0;
+  color: #d0d0d3;
+  font-size: 12px;
+}
+
+.story-pill {
+  display: inline-flex;
+  padding: 1px 7px;
+  align-items: center;
+  border: 1px solid #303030;
+  border-radius: 999px;
+  background: #191919;
+  color: #cfcfd2;
+  font-size: 11px;
+  font-weight: 520;
+}
+
+/* ---- 02 · the armed column and its window ------------------------------- */
+
+.story-columns {
+  display: grid;
+  min-height: 0;
+  /* The bottom padding is clearance for the absolutely positioned countdown
+     card, so the columns never sit under it. */
+  padding: 12px 12px 76px;
+  flex: 1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.story-column {
+  display: grid;
+  padding: 8px 7px 7px;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgb(28 28 28 / 62%);
+}
+
+.story-column header {
+  display: flex;
+  min-height: 18px;
+  padding: 0 2px;
+  align-items: center;
+  gap: 6px;
+  color: #f2f2f4;
+  font-size: 11px;
+}
+
+.story-column header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-column header > span:last-child {
+  margin-left: auto;
+  color: var(--quiet);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+}
+
+.story-column.is-armed {
+  border-color: rgb(232 101 42 / 32%);
+  background: rgb(232 101 42 / 7%);
+}
+
+.story-armed-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.story-armed-mark .story-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.story-card {
+  display: grid;
+  padding: 7px 8px;
+  gap: 4px;
+  border: 1px solid #292929;
+  border-radius: 8px;
+  background: #161616;
+}
+
+.story-card > span {
+  color: var(--quiet);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.025em;
+}
+
+.story-card > strong {
+  color: #f0f0f2;
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+/* The card the ticket left: still on the board a moment ago, already gone. */
+.story-card.is-ghost {
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.28;
+}
+
+.story-card.is-arriving {
+  border-color: rgb(232 101 42 / 45%);
+}
+
+.story-window {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  width: 92%;
+  padding: 9px 10px;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border: 1px solid rgb(232 101 42 / 38%);
+  border-radius: 10px;
+  background: #181311;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+  transform: translateX(-50%);
+}
+
+.story-window-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #e7e7e9;
+  font-size: 11.5px;
+  font-weight: 560;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The app prints "name on HB-27 · 3s" on one 320px line; a four-up panel
+   is ~240px, so the ticket half takes a second line rather than an ellipsis
+   that would hide the one fact the window exists to state. */
+.story-window-text small {
+  display: block;
+  color: var(--quiet);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.story-window-cancel {
+  padding: 3px 8px;
+  flex-shrink: 0;
+  border: 1px solid #3b3532;
+  border-radius: 999px;
+  background: #201b18;
+  color: #d0d0d3;
+  font-size: 10.5px;
+  font-weight: 560;
+}
+
+.story-window-bar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: rgb(255 255 255 / 6%);
+}
+
+/* Resting state is a nearly drained window, because the label says 3s. */
+.story-window-fill {
+  display: block;
+  width: 14%;
+  height: 100%;
+  background: var(--ember);
+}
+
+/* ---- 03 · the fresh Session --------------------------------------------- */
+
+.story-thread {
+  display: flex;
+  min-height: 0;
+  padding: 12px;
+  flex: 1;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.story-turn {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.story-author {
+  color: #85858a;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.story-turn p {
+  margin: 0;
+  color: #b0b0b4;
+  font-size: 12px;
+  font-weight: 380;
+  line-height: 1.55;
+}
+
+/* The Instructions are the Automation speaking, so the turn carries its mark:
+   a faint ember rule plus an ember author label. */
+.story-turn.is-instructions {
+  padding-left: 9px;
+  border-left: 2px solid rgb(232 101 42 / 42%);
+}
+
+.story-turn.is-instructions .story-author {
+  color: #d08557;
+}
+
+.story-working {
+  display: flex;
+  margin-top: -2px;
+  align-items: center;
+  gap: 7px;
+  color: #c8c8cb;
+  font-size: 11.5px;
+}
+
+.story-spinner {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 1.5px solid #3a2f2b;
+  border-radius: 50%;
+  border-top-color: #e67b49;
+  animation: story-spin 900ms linear infinite;
+}
+
+.story-working small {
+  color: var(--quiet);
+  font-size: 10.5px;
+}
+
+/* Key over value, not beside it: a branch name is ~180px of monospace and a
+   four-up panel's value column is less than that, so a side-by-side grid
+   showed an ellipsis where the branch was the point. */
+.story-session-meta {
+  display: grid;
+  margin-top: auto;
+  padding: 10px 12px;
+  gap: 1px;
+  border-top: 1px solid #1f1f1f;
+}
+
+.story-session-meta span {
+  color: var(--quiet);
+  font-size: 10.5px;
+}
+
+.story-session-meta b + span {
+  margin-top: 6px;
+}
+
+.story-session-meta b {
+  min-width: 0;
+  overflow: hidden;
+  color: #b5b5b8;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 04 · the Run history ----------------------------------------------- */
+
+.story-runs {
+  display: grid;
+  margin: 0;
+  padding: 8px;
+  gap: 2px;
+  list-style: none;
+}
+
+.story-run {
+  display: flex;
+  min-width: 0;
+  padding: 9px;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 9px;
+  color: var(--quiet);
+}
+
+.story-run > .story-icon {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  color: var(--quiet);
+}
+
+/* The app prints a Run on one line (name · id · model · reasoning … time)
+   in a full-width list; a four-up panel leaves ~200px, which truncated the
+   model to one letter. Two lines instead: name and time first, then id and
+   model in the app's order. The break is a zero-height full-width flex item
+   (::after, ordered between the two groups), so nothing in the markup exists
+   only to make room. The separator after the time has nothing to separate. */
+.story-run-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 5px;
+  overflow: hidden;
+}
+
+.story-run-text > * {
+  order: 2;
+}
+
+.story-run-text::after {
+  flex-basis: 100%;
+  order: 1;
+  height: 0;
+  content: "";
+}
+
+.story-run-text > b {
+  order: 0;
+  flex: 1 1 auto;
+  color: #e7e7e9;
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.story-run-text > small {
+  order: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--quiet);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.story-run-text > small + span[aria-hidden="true"] {
+  display: none;
+}
+
+.story-run-text code {
+  flex-shrink: 0;
+  color: #9a9a9f;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+}
+
+.story-run-model {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 380;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Run the pulse just produced. The wash is the only thing marking it, and
+   it survives with motion switched off. */
+.story-run.is-new {
+  background: linear-gradient(90deg, rgb(232 101 42 / 11%), rgb(232 101 42 / 3%) 76%, transparent);
+}
+
+/* The reason is the point of a skip row, so it wraps rather than truncating
+   the way a model id can; its Run now button takes the width back. */
+.story-run.is-skip .story-run-model {
+  flex: 1 0 100%;
+  overflow: visible;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.story-run.is-skip .story-run-text > span[aria-hidden="true"] {
+  display: none;
+}
+
+.story-run-action {
+  padding: 3px 8px;
+  flex-shrink: 0;
+  align-self: center;
+  border: 1px solid #303030;
+  border-radius: 999px;
+  background: #1b1b1b;
+  color: #c6c6c9;
+  font-size: 10.5px;
+  font-weight: 560;
+}
+
+/* ---- Connectors --------------------------------------------------------- */
+
+/* One hairline per frame after the first, lying in the gutter to its left at
+   the panels' mid-line — half the panel's min-height, so all four meet. */
+.story-link {
+  position: absolute;
+  top: calc(var(--story-panel-min) / 2);
+  right: 100%;
+  width: var(--story-gap);
+  height: 1px;
+  background: #232323;
+  pointer-events: none;
+}
+
+.story-link > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ember);
+  box-shadow: 0 0 6px rgb(232 101 42 / 40%);
+  transform-origin: left center;
+}
+
+/* ---- The pulse ---------------------------------------------------------- */
+
+/* One pass, ~3.85s end to end, started once by the component's observer.
+   Every animation uses fill-mode `both`, so the delay holds the first keyframe
+   and the last keyframe is the resting style — the sequence can stop anywhere
+   without losing a fact. The pre-live values below match each first keyframe,
+   so arming the board is a continuation rather than a jump, and they stay
+   legible if the class never arrives (no JS). */
+
+.storyboard:where(:not(.is-live)) .story-link > span {
+  transform: scaleX(0);
+}
+
+.storyboard:where(:not(.is-live)) .story-turn,
+.storyboard:where(:not(.is-live)) .story-working,
+.storyboard:where(:not(.is-live)) .story-run {
+  opacity: 0.55;
+}
+
+.storyboard.is-live .story-frame[data-step="2"] .story-link > span {
+  animation: story-draw 500ms var(--ease-out) both;
+}
+
+.storyboard.is-live .story-card.is-arriving {
+  animation: story-arrive 900ms var(--ease-out) 500ms both;
+}
+
+.storyboard.is-live .story-window-fill {
+  animation: story-drain 1200ms linear 500ms both;
+}
+
+.storyboard.is-live .story-frame[data-step="3"] .story-link > span {
+  animation: story-draw 500ms var(--ease-out) 1700ms both;
+}
+
+.storyboard.is-live .story-frame[data-step="3"] .story-turn,
+.storyboard.is-live .story-working {
+  animation: story-rise 450ms var(--ease-out) 2200ms both;
+}
+
+.storyboard.is-live .story-frame[data-step="3"] .story-turn + .story-turn {
+  animation-delay: 2350ms;
+}
+
+.storyboard.is-live .story-working {
+  animation-delay: 2500ms;
+}
+
+.storyboard.is-live .story-frame[data-step="4"] .story-link > span {
+  animation: story-draw 500ms var(--ease-out) 2950ms both;
+}
+
+/* The two older rows rise as the frame's connector draws, so the history is
+   there before the new Run lands on top of it. */
+.storyboard.is-live .story-run:not(.is-new) {
+  animation: story-rise 450ms var(--ease-out) 2950ms both;
+}
+
+.storyboard.is-live .story-run:not(.is-new) + .story-run:not(.is-new) {
+  animation-delay: 3100ms;
+}
+
+.storyboard.is-live .story-run.is-new {
+  animation: story-rise 500ms var(--ease-out) 3350ms both;
+}
+
+@keyframes story-draw {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes story-draw-y {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes story-rise {
+  from {
+    opacity: 0.55;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The card that landed is acknowledged once and then settles into the resting
+   border it already had. */
+@keyframes story-arrive {
+  0% {
+    border-color: rgb(232 101 42 / 22%);
+    box-shadow: 0 0 0 0 rgb(232 101 42 / 0%);
+  }
+
+  35% {
+    border-color: rgb(232 101 42 / 88%);
+    box-shadow: 0 0 0 3px rgb(232 101 42 / 12%);
+  }
+
+  100% {
+    border-color: rgb(232 101 42 / 45%);
+    box-shadow: 0 0 0 0 rgb(232 101 42 / 0%);
+  }
+}
+
+/* Width, not scaleX: the fill is 2px tall and alone in its row, so the layout
+   cost is nil and the resting 14% stays readable in the rule above. */
+@keyframes story-drain {
+  from {
+    width: 70%;
+  }
+
+  to {
+    width: 14%;
+  }
+}
+
+@keyframes story-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Breakpoints -------------------------------------------------------- */
+
+/* 2×2. Frames 2 and 4 keep the horizontal line from their left neighbour;
+   frame 3 starts a row, so its line stands in the row gap above it. */
+@media (max-width: 1050px) {
+  .story-frames {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .story-frame[data-step="3"] .story-link {
+    top: auto;
+    right: auto;
+    bottom: 100%;
+    left: 50%;
+    width: 1px;
+    height: var(--story-gap);
+    transform: translateX(-50%);
+  }
+
+  .story-frame[data-step="3"] .story-link > span {
+    transform-origin: center top;
+  }
+
+  .storyboard:where(:not(.is-live)) :where(.story-frame[data-step="3"]) .story-link > span {
+    transform: scaleY(0);
+  }
+
+  .storyboard.is-live .story-frame[data-step="3"] .story-link > span {
+    animation-name: story-draw-y;
+  }
+}
+
+/* One column: every line becomes the vertical step between two artifacts.
+   Nothing sits beside a panel any more, so the shared min-height that kept
+   four panels level would only leave dead space under the shorter ones. */
+@media (max-width: 700px) {
+  .storyboard {
+    --story-gap: 26px;
+    --story-panel-min: 0px;
+  }
+
+  .story-frames {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .story-frame .story-link {
+    top: auto;
+    right: auto;
+    bottom: 100%;
+    left: 50%;
+    width: 1px;
+    height: var(--story-gap);
+    transform: translateX(-50%);
+  }
+
+  .story-frame .story-link > span {
+    transform-origin: center top;
+  }
+
+  .storyboard:where(:not(.is-live)) :where(.story-frame) .story-link > span {
+    transform: scaleY(0);
+  }
+
+  .storyboard.is-live .story-frame[data-step="2"] .story-link > span,
+  .storyboard.is-live .story-frame[data-step="3"] .story-link > span,
+  .storyboard.is-live .story-frame[data-step="4"] .story-link > span {
+    animation-name: story-draw-y;
+  }
+}
+
+@media (max-width: 560px) {
+  .story-panel {
+    border-radius: 12px;
+  }
+
+  .story-caption h3 {
+    font-size: 15px;
+  }
+
+  .story-caption p {
+    font-size: 13px;
+  }
+
+  /* Two mini columns survive a phone width, but only just: the ghost card is
+     what says where the ticket came from, so it is tightened, not dropped. */
+  .story-columns {
+    padding: 10px 10px 74px;
+    gap: 6px;
+  }
+
+  .story-column {
+    padding: 7px 5px 6px;
+  }
+
+  .story-card > strong {
+    font-size: 11.5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* global.css already forces transitions off here; animations need the same
+     hammer, and the pre-live dimming has to lift without waiting for the
+     class the observer adds. */
+  .storyboard *,
+  .storyboard *::before,
+  .storyboard *::after {
+    animation: none !important;
+  }
+
+  .storyboard .story-link > span {
+    transform: none;
+  }
+
+  .storyboard .story-turn,
+  .storyboard .story-working,
+  .storyboard .story-run {
+    opacity: 1;
+    transform: none;
+  }
+
+  .storyboard .story-window-fill {
+    width: 14%;
+  }
+}

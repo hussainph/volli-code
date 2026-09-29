@@ -1,11 +1,10 @@
 /**
  * VC-291 — deterministic terminal reflow matrix.
  *
- * Executes the ticket's matrix against the REAL built app (restty canvas
- * renderer, live PTY). Terminal text is not in the DOM, so markers are read by
- * screenshotting the pane and OCRing it through the macOS Vision framework;
- * shell state is read through side effects, the way the repo's other terminal
- * smokes do it.
+ * Executes the ticket's matrix against the REAL built app (xterm.js DOM
+ * renderer, live PTY). Terminal text is present in the DOM, while screenshots
+ * and OCR remain the durable action-boundary evidence; shell state is read
+ * through side effects, the way the repo's other terminal smokes do it.
  *
  * Cases (each on a newly seeded pane, `--runs` times):
  *   control   — wait 10s, no layout change.
@@ -56,6 +55,7 @@ import os from "node:os";
 import { join, resolve } from "node:path";
 
 import {
+  closeAppBounded,
   evidenceDir,
   launch,
   makeGitRepo,
@@ -116,11 +116,11 @@ const RUN_CONFIG = {
   panesPerRun: PANES_PER_RUN,
   // What the analyzer must hold this evidence set to. Declared up front, so a
   // row cannot pick a lower bar after seeing its own result.
-  expectBackend: FORCE_WEBGL2 ? "webgl2" : "webgpu",
+  expectBackend: "xterm-dom",
   minLiveTerminals: PANES_PER_RUN > 0 ? PANES_PER_RUN + 1 : 0,
   forcedBackend: FORCE_WEBGL2
-    ? "webgl2 (navigator.gpu hidden by an init script — harness-only lever, VC-348)"
-    : "auto (production default)",
+    ? "xterm-dom (--webgl2 retained as a compatibility flag; no GPU backend is used)"
+    : "xterm-dom (production renderer)",
 };
 
 // ---- seed -------------------------------------------------------------------
@@ -395,13 +395,13 @@ async function seedRun(caseName, runNo) {
     seedTabIndex = (await strip.count()) - 1;
   }
   await waitUntil(
-    "seed terminal canvas",
+    "seed terminal DOM renderer",
     async () => (await visibleCanvasRects(page)).length >= 1,
     {
       timeout: 20000,
     },
   );
-  await sleep(2400); // restty boot: fonts, wasm, first paint
+  await sleep(1200); // xterm boot: DOM open, font metrics, first fit
 
   const run = {
     case: caseName,
@@ -702,10 +702,7 @@ try {
 
   await waitUntil(
     "renderer boot",
-    async () =>
-      page.evaluate(() =>
-        (window.volliCtxSpy ?? []).some((c) => c.type === "webgpu" || c.type === "webgl2"),
-      ),
+    async () => page.evaluate(() => document.querySelector(".xterm") !== null),
     { timeout: 20000 },
   ).catch(() => {});
   MATRIX.meta.backend = await readBackend(page);
@@ -775,7 +772,12 @@ try {
   MATRIX.meta.finishedAt = new Date().toISOString();
   await fs.writeFile(join(EVIDENCE, "matrix.json"), JSON.stringify(MATRIX, null, 2));
   await page.screenshot({ path: join(EVIDENCE, "final-window.png") }).catch(() => {});
-  await app.close().catch(() => {});
+  // Playwright's app.close() can wait indefinitely when a PTY or compositor
+  // helper is still draining. The matrix is a long-running research probe, but
+  // teardown must never turn a finished run into an unbounded hang.
+  await closeAppBounded(app).catch((error) => {
+    console.error(`bounded Electron close failed: ${error?.message ?? error}`);
+  });
 
   // Keep each run's own reference file, named after the run it belongs to.
   let kept = 0;

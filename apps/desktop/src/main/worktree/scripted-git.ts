@@ -21,7 +21,16 @@ export interface ScriptedGit {
    * synchronous handler; a `throw` becomes a rejection.
    */
   gitAsync: RunGitAsync;
+  /**
+   * Every call through either seam, in observed order. This stays shared because
+   * existing suites assert command ordering across a whole operation; the two
+   * per-seam lists below add the VC-383 assertion without breaking that evidence.
+   */
   calls: GitCall[];
+  /** Calls that reached the synchronous runner only. */
+  syncCalls: GitCall[];
+  /** Calls that reached the asynchronous runner only. */
+  asyncCalls: GitCall[];
   /** Count of recorded calls whose args start with `prefix`. */
   countMatching: (prefix: readonly string[]) => number;
 }
@@ -35,14 +44,26 @@ export function scriptedGit(
   handler: (args: readonly string[], cwd: string) => string,
 ): ScriptedGit {
   const calls: GitCall[] = [];
+  const syncCalls: GitCall[] = [];
+  const asyncCalls: GitCall[] = [];
   const git: RunGit = (args, cwd) => {
-    calls.push({ args, cwd });
+    const call = { args, cwd };
+    calls.push(call);
+    syncCalls.push(call);
+    return handler(args, cwd);
+  };
+  const gitAsync: RunGitAsync = async (args, cwd) => {
+    const call = { args, cwd };
+    calls.push(call);
+    asyncCalls.push(call);
     return handler(args, cwd);
   };
   return {
     git,
-    gitAsync: async (args, cwd) => git(args, cwd),
+    gitAsync,
     calls,
+    syncCalls,
+    asyncCalls,
     countMatching: (prefix) =>
       calls.filter((call) => prefix.every((token, i) => call.args[i] === token)).length,
   };

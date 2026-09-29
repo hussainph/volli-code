@@ -57,6 +57,7 @@ import { join } from "node:path";
 import {
   activeTabLabel,
   assistantReplyTexts,
+  closeAppBounded,
   createRunner,
   ensurePiAuthInto,
   evidenceDir,
@@ -184,11 +185,38 @@ async function main() {
 
     await attempt(
       2,
-      "Home's own Chat control creates a ticketless (Board Session) chat tab",
+      "Home's Chat control opens only a provisional Draft — no Board Session or empty app_state row",
       async () => {
         await goToHome(page);
         chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
-        return { ok: chatTabLabel !== null, detail: chatTabLabel };
+        // Cross app_state's debounce and the old eager-create window: absence is
+        // the behavior under test, not a race against a slower Session mint.
+        await sleep(600);
+        const evidence = await page.evaluate(async (id) => {
+          const [listed, boot] = await Promise.all([
+            window.api.sessions.list({ projectId: id }),
+            window.api.data.bootstrap(),
+          ]);
+          if (!listed.ok) throw new Error(listed.error);
+          if (!boot.ok) throw new Error(boot.error);
+          return {
+            sessions: listed.sessions.length,
+            chatDraftState: boot.data.appState["volli:chat-drafts"] ?? null,
+            workspace: boot.data.appState["volli:workspace"] ?? null,
+          };
+        }, projectId);
+        const workspaceHasChat = evidence.workspace?.includes('"chat:') ?? false;
+        return {
+          ok:
+            chatTabLabel !== null &&
+            evidence.sessions === 0 &&
+            evidence.chatDraftState === null &&
+            !workspaceHasChat,
+          detail:
+            `tab=${chatTabLabel} sessions=${evidence.sessions} ` +
+            `draftState=${evidence.chatDraftState === null ? "absent" : "present"} ` +
+            `workspaceChat=${workspaceHasChat}`,
+        };
       },
     );
 
@@ -213,10 +241,13 @@ async function main() {
         )
           .then(() => true)
           .catch(() => false);
-        const placeholderShown = (await page.getByRole("button", { name: /^Model: / }).count()) > 0;
+        // The picker deliberately exposes an aria-label beginning `Model:`;
+        // `getByRole(..., { name })` above matches the recorded label within
+        // that identity. A second /^Model:/ lookup is therefore the same real
+        // pill, not an unresolved placeholder.
         return {
-          ok: shown && !placeholderShown,
-          detail: `label=${defaultModel.label} shown=${shown} placeholderShown=${placeholderShown}`,
+          ok: shown,
+          detail: `label=${defaultModel.label} shown=${shown}`,
         };
       },
     );
@@ -224,7 +255,7 @@ async function main() {
     let submittedAt = null;
     await attempt(
       4,
-      "submitting the one real prompt starts a turn (streaming/working state appears)",
+      "the first Send promotes the Draft and starts a turn (streaming/working state appears)",
       async () => {
         submittedAt = await submitPrompt(page, PROMPT_TEXT);
         await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
@@ -267,7 +298,7 @@ async function main() {
     // ---- relaunch on the same profile, adopt (no live attach), and assert
     // the DURABLE transcript is what renders both sides of the exchange.
     await sleep(500);
-    await app.close();
+    await closeAppBounded(app);
 
     const app2 = await launch({ dbPath, userDataDir, extraEnv: { HOME: fakeHome } });
     const relaunchStdout = [];
@@ -367,12 +398,12 @@ async function main() {
         return { ok: back === 0, detail: back === 0 ? "stayed closed" : "the tab came back" };
       });
     } finally {
-      await app2.close().catch(() => {});
+      await closeAppBounded(app2).catch(() => {});
     }
 
     console.log(`\nEvidence dir: ${EVIDENCE_DIR}`);
   } finally {
-    await app.close().catch(() => {});
+    await closeAppBounded(app).catch(() => {});
   }
   return summarize();
 }

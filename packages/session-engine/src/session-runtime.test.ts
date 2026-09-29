@@ -18,6 +18,7 @@ import {
   NativeAttachmentError,
   SessionRuntimeConflictError,
   SessionRuntimeNotFoundError,
+  SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
   type HarnessCommand,
   type HostedSessionRuntime,
@@ -33,6 +34,7 @@ import {
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
+import { PROJECTION_CACHE_LIMIT } from "./session-runtime";
 
 const venue = { id: "machine-1", kind: "local" as const };
 
@@ -191,6 +193,7 @@ function composition(
     /** One clock for engine and runtime, as the composition root supplies. */
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
+    onProjectionCheckpointFailure?: (error: unknown) => void;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -214,6 +217,9 @@ function composition(
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
       ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
+      ...(options.onProjectionCheckpointFailure
+        ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
+        : {}),
     }),
   };
 }
@@ -239,6 +245,41 @@ async function createAndAttach(runtime: SessionRuntime) {
 }
 
 describe("SessionRuntime native adapter contract", () => {
+  it("honors a client-requested Session id on create, and the ledger derivation absent one (VC-358)", async () => {
+    const { runtime } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+
+    const minted = await runtime.command({
+      commandId: "command-create-minted",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Ledger-minted",
+      },
+    });
+    const promoted = await runtime.command({
+      commandId: "command-create-promoted",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Client-minted",
+        requestedSessionId: requested,
+      },
+    });
+
+    expect(minted.sessionId).toBe("session-1");
+    expect(promoted.sessionId).toBe(requested);
+    await expect(runtime.projection({ sessionId: requested })).resolves.toMatchObject({
+      projection: { session: { id: requested, title: "Client-minted" } },
+    });
+  });
+
   it("records product model selection without an adapter command", async () => {
     const { runtime } = composition();
     const created = await runtime.command({
@@ -1199,6 +1240,231 @@ describe("SessionRuntime native adapter contract", () => {
     ]);
   });
 
+  it("reads a snapshot's transcript artifacts through a bounded window, in event order", async () => {
+    // VC-383: one artifact read per transcript event, awaited serially, made a
+    // long Session's chat wait a thousand disk round trips before its first
+    // paint. The reads now overlap up to a fixed window — and the window is
+    // the whole claim, so hold both edges: more than one read in flight, never
+    // more than the bound, and the frames land in event order regardless of
+    // which read finished first.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const turns = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 3;
+    const artifactIndexes = new Map<string, number>();
+    const completed: number[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: async (record) => {
+        const reference = await memory.write(record);
+        artifactIndexes.set(reference.id, artifactIndexes.size);
+        return reference;
+      },
+      read: async (reference) => {
+        const index = artifactIndexes.get(reference.id)!;
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        // The last artifact issued has the shortest delay, so this fixture
+        // settles reads out of issue order. A completion-order `push` would
+        // therefore scramble the snapshot rather than accidentally passing.
+        for (let delay = turns - index; delay > 0; delay -= 1) await Promise.resolve();
+        completed.push(index);
+        inFlight -= 1;
+        return memory.read(reference);
+      },
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    for (let index = 0; index < turns; index += 1) {
+      await adapter.emit({
+        kind: "message-settled",
+        turnId: `turn-${index}`,
+        occurredAt: 300 + index,
+        message: { entryId: `assistant-${index}`, role: "assistant", text: `Reply ${index}` },
+      });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(completed).not.toEqual(Array.from({ length: turns }, (_, index) => index));
+    expect(snapshot.frames.map(({ sequence }) => sequence)).toEqual(
+      snapshot.frames.map((_, index) => index + 1),
+    );
+    expect(snapshot.transcript).toMatchObject(
+      Array.from({ length: turns }, (_, index) => ({
+        message: { parts: [{ text: `Reply ${index}` }] },
+      })),
+    );
+  });
+
+  it("stops a snapshot's artifact pool after a mid-pool read rejects", async () => {
+    // VC-383: Feed the pool only transcript events, so every first-window
+    // cursor index is a read. The successful peers wait until the failure is
+    // visible; an old worker would then keep consuming later indices, while a
+    // stopped pool has only this first window in its attempt log.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const artifactCount = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 1;
+    const failedArtifact = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
+    const failure = new Error("transcript artifact cannot be verified");
+    const artifactIndexes = new Map<string, number>();
+    const reads: number[] = [];
+    const failedRead = new Gate();
+    const releasePeers = new Gate();
+    const firstWindowSettled = new Gate();
+    let settledPeers = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: async (record) => {
+        const reference = await memory.write(record);
+        artifactIndexes.set(reference.id, artifactIndexes.size);
+        return reference;
+      },
+      read: async (reference) => {
+        const index = artifactIndexes.get(reference.id)!;
+        reads.push(index);
+        if (index === failedArtifact) {
+          failedRead.resolve();
+          throw failure;
+        }
+        if (index < SNAPSHOT_ARTIFACT_READ_CONCURRENCY) {
+          await releasePeers.promise;
+          settledPeers += 1;
+          if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
+            firstWindowSettled.resolve();
+          }
+        }
+        return memory.read(reference);
+      },
+    };
+    const seeded = composition({ artifacts });
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < artifactCount; index += 1) {
+      await seeded.adapter.emit({
+        kind: "message-settled",
+        turnId: `failed-turn-${index}`,
+        occurredAt: 400 + index,
+        message: {
+          entryId: `failed-assistant-${index}`,
+          role: "assistant",
+          text: `Failed reply ${index}`,
+        },
+      });
+    }
+    const transcriptEvents = (await seeded.engine.listEvents({ sessionId })).filter(
+      (event) => event.payload.kind === "transcript.referenced",
+    );
+    expect(transcriptEvents).toHaveLength(artifactCount);
+    const transcriptOnly: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => transcriptEvents,
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: transcriptOnly,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = runtime.snapshot({ sessionId });
+    await failedRead.promise;
+    await expect(snapshot).rejects.toBe(failure);
+    releasePeers.resolve();
+    await firstWindowSettled.promise;
+    await settleMicrotasks();
+
+    expect(reads).toHaveLength(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(reads).toContain(failedArtifact);
+    expect(reads.length).toBeLessThan(transcriptEvents.length);
+  });
+
+  it("reads every artifact when a snapshot has fewer events than its window", async () => {
+    // VC-383: a short history still takes one worker per actual event, rather
+    // than reserving a full window or treating a small snapshot as empty.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const replies = 3;
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: async (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const seeded = composition({ artifacts });
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < replies; index += 1) {
+      await seeded.adapter.emit({
+        kind: "message-settled",
+        turnId: `short-turn-${index}`,
+        occurredAt: 500 + index,
+        message: {
+          entryId: `short-assistant-${index}`,
+          role: "assistant",
+          text: `Short reply ${index}`,
+        },
+      });
+    }
+    const transcriptEvents = (await seeded.engine.listEvents({ sessionId })).filter(
+      (event) => event.payload.kind === "transcript.referenced",
+    );
+    const transcriptOnly: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => transcriptEvents,
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: transcriptOnly,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(transcriptEvents.length).toBeLessThan(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(snapshot.frames.map(({ event }) => event.id)).toEqual(
+      transcriptEvents.map(({ id }) => id),
+    );
+    expect(reads).toBe(transcriptEvents.length);
+    expect(snapshot.transcript).toMatchObject(
+      Array.from({ length: replies }, (_, index) => ({
+        message: { parts: [{ text: `Short reply ${index}` }] },
+      })),
+    );
+  });
+
+  it("returns empty frames and transcript without reading artifacts for an empty event list", async () => {
+    // VC-383: zero events creates zero workers, and there is no phantom
+    // artifact operation for an empty Session history.
+    const seeded = composition();
+    const sessionId = await createAndAttach(seeded.runtime);
+    const memory = createInMemoryTranscriptArtifactStore();
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: async (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const emptyEvents: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => [],
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: emptyEvents,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.throughSequence).toBe(0);
+    expect(snapshot.frames).toEqual([]);
+    expect(snapshot.transcript).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
   it("does not append or publish a transcript reference when the artifact write fails", async () => {
     const { runtime, adapter } = composition({
       artifacts: {
@@ -1795,6 +2061,75 @@ describe("SessionRuntime native adapter contract", () => {
       kind: "context.compact",
       instructions: null,
     });
+  });
+
+  // VC-141: the adapter's judgement of its own refusal has to survive the
+  // trip, or a client is left re-deriving it from rejection codes it should
+  // never have to know.
+  it.each(["benign", "failure"] as const)(
+    "carries a %s compaction refusal out beside the durable receipt",
+    async (severity) => {
+      const { runtime, adapter } = composition();
+      const sessionId = await createAndAttach(runtime);
+      adapter.dispatchReceipt = {
+        commandId: "compact-weighed",
+        status: "rejected",
+        code: "PI_NOTHING_TO_COMPACT",
+        detail: "There is nothing left to summarize.",
+        native: null,
+        severity,
+      };
+
+      const result = await runtime.command({
+        commandId: "compact-weighed",
+        sessionId,
+        command: { kind: "context.compact" },
+      });
+
+      expect(result.refusal).toBe(severity);
+      // Still not durable content: the ledger keeps the code and the runtime's
+      // sentence, which is everything a later reader needs to judge it again.
+      expect(result.receipt).toMatchObject({
+        status: "rejected",
+        code: "PI_NOTHING_TO_COMPACT",
+      });
+      expect(result.receipt).not.toHaveProperty("severity");
+    },
+  );
+
+  it("leaves the refusal unmarked when the adapter judged nothing", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    adapter.dispatchReceipt = {
+      commandId: "compact-unmarked",
+      status: "rejected",
+      code: "PI_ATTACHMENT_CLOSED",
+      detail: "This attachment is closed.",
+      native: null,
+    };
+
+    const result = await runtime.command({
+      commandId: "compact-unmarked",
+      sessionId,
+      command: { kind: "context.compact" },
+    });
+
+    // Null, never a guess: a client reads an unvouched refusal as a failure.
+    expect(result.refusal).toBeNull();
+  });
+
+  it("marks nothing on a compaction the adapter accepted", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    const result = await runtime.command({
+      commandId: "compact-accepted",
+      sessionId,
+      command: { kind: "context.compact" },
+    });
+
+    expect(result.refusal).toBeNull();
+    expect(result.receipt).toMatchObject({ status: "accepted" });
   });
 
   it("refuses a compaction addressed to no executor at all", async () => {
@@ -3296,7 +3631,11 @@ describe("SessionRuntime native adapter contract", () => {
     stop();
     expect(adapter.releaseReasons).toContain("shutdown");
 
-    const emptyEvents: SessionEngine = { ...engine, listEvents: async () => [] };
+    const emptyEvents: SessionEngine = {
+      ...engine,
+      listEvents: async () => [],
+      getProjectionCheckpoint: async () => null,
+    };
     const external = composition({
       engine: emptyEvents,
       adapter: new FakeAdapter(),
@@ -3615,6 +3954,181 @@ describe("SessionRuntime native adapter contract", () => {
     expect(reads).toEqual([sessionId]);
   });
 
+  it("restores a cold projection from a checkpoint and folds only its durable tail", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+    const checkpoint = await base.engine.getProjectionCheckpoint({ sessionId });
+    expect(checkpoint?.throughSequence).toBe(before.throughSequence);
+
+    await base.engine.submit({
+      commandId: "command-after-checkpoint",
+      sessionId,
+      intent: { kind: "session.signal", signal: "done", reason: "Tail applied" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue },
+    });
+    const cursors: (number | undefined)[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        cursors.push(query.afterSequence);
+        return base.engine.listEvents(query);
+      },
+    };
+    const restarted = composition({ engine: counting }).runtime;
+
+    const after = await restarted.projection({ sessionId });
+
+    expect(after.projection.signal).toMatchObject({ signal: "done", reason: "Tail applied" });
+    expect(after.throughSequence).toBe(before.throughSequence + 3);
+    expect(cursors).toEqual([before.throughSequence]);
+  });
+
+  it("reports a checkpoint write it could not perform, and still answers the read", async () => {
+    const base = composition();
+    const failure = new Error("checkpoint table is read-only");
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    // The projection is correct whether or not its cache could be written:
+    // that is what makes the write failure invisible without this report.
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await runtime.close();
+
+    expect(reported.length).toBeGreaterThan(0);
+    expect(new Set(reported)).toEqual(new Set([failure]));
+  });
+
+  it("reports an unreadable checkpoint and falls back to the whole-log fold", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("checkpoint row could not be decoded");
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      getProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+  });
+
+  it("reports a tail read that fails on a checkpoint hit, and refolds the whole log", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("tail page could not be read");
+    let failTail = true;
+    const failingTail: SessionEngine = {
+      ...base.engine,
+      // Only the tail read after a checkpoint cursor fails; the whole-log read
+      // starts at zero and still succeeds, which is the fallback under test.
+      listEvents: async (query) => {
+        if (failTail && (query.afterSequence ?? 0) > 0) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingTail,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+    failTail = false;
+    await runtime.close();
+  });
+
+  it("reports a checkpoint it could not capture when an attachment closes", async () => {
+    const base = composition();
+    const failure = new Error("event read failed while closing");
+    let failReads = false;
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        if (failReads) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const sessionId = await createAndAttach(runtime);
+    await runtime.projection({ sessionId });
+
+    failReads = true;
+    // The executor closing itself must still be recorded: capturing the prefix
+    // is a best-effort cache write, not part of making the close durable.
+    await expect(
+      base.adapter.emit({ kind: "attachment", state: "closed" }),
+    ).resolves.toBeUndefined();
+    expect(reported).toContain(failure);
+
+    failReads = false;
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { liveExecutor: null },
+    });
+    await runtime.close();
+  });
+
+  it("keeps working when the host's checkpoint failure reporter itself throws", async () => {
+    const base = composition();
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw new Error("checkpoint table is read-only");
+      },
+    };
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: () => {
+        throw new Error("diagnostics sink is broken");
+      },
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await expect(runtime.close()).resolves.toBeUndefined();
+  });
+
   it("bounds how many folded histories it keeps", async () => {
     const base = composition();
     const reads: string[] = [];
@@ -3653,6 +4167,146 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.projection({ sessionId: oldest });
 
     expect(reads).toEqual([...sessions, oldest]);
+  });
+
+  /**
+   * Pure recency is the wrong eviction rule for this cache (VC-388, audit item
+   * D4).
+   *
+   * A Session somebody is watching is the one whose fold will be wanted again
+   * within the second, and background work reads Sessions nobody has open all
+   * the time — a listing, an await, a watchdog sweep. Under recency alone the
+   * background read wins, because it happened later, and the open tab pays a
+   * full re-fold for a Session it never stopped looking at.
+   */
+  it("keeps a subscribed Session's fold while unwatched Sessions crowd the cache", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+    };
+    const { runtime } = composition({ engine: counting, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+
+    // Enough unwatched Sessions to evict the whole cache twice over.
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    // A re-read here would mean the tab's own Session was thrown away to make
+    // room for Sessions nobody has open.
+    expect(reads).toEqual([]);
+
+    // And once the tab closes it is an ordinary candidate again, so the bound
+    // still holds: nothing is pinned by a subscriber that no longer exists.
+    release();
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`after-close-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([watched]);
+
+    await runtime.close();
+  });
+
+  /**
+   * The exemption lasts exactly as long as the subscription, and a
+   * subscription that never opened is not one. `subscribe` registers the
+   * watcher before it replays history, so a replay that fails has to take the
+   * registration back whole — the entry as well as the member — or an empty
+   * Set would read as "watched" for the rest of the process.
+   */
+  it("does not pin a Session whose subscribe failed before it opened", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    let failReplayFor: string | null = null;
+    const faulty: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+      listEvents: async (query) => {
+        if (query.sessionId === failReplayFor) throw new Error("replay failed");
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime } = composition({ engine: faulty, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const unopened = await create("unopened-create");
+    await runtime.projection({ sessionId: unopened });
+    failReplayFor = unopened;
+    await expect(
+      runtime.subscribe({ sessionId: unopened, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: unopened });
+    // A cache hit here would mean the failed subscribe left its Session
+    // exempt from the bound with nobody watching it.
+    expect(reads).toEqual([unopened]);
+
+    // The other half: a failed subscribe beside a live one takes back only
+    // its own registration. The tab that did open still holds its Session.
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+    failReplayFor = watched;
+    await expect(
+      runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-again-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([]);
+    release();
+
+    await runtime.close();
   });
 });
 

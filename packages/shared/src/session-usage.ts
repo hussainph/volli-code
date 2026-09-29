@@ -143,6 +143,11 @@ export const EMPTY_SESSION_USAGE_SUMMARY: SessionUsageSummary = Object.freeze({
  */
 const COST_PRECISION = 1e6;
 
+/** Rounds a non-null cost exactly as the public usage summary does. */
+export function roundSessionUsageCost(costUsd: number): number {
+  return Math.round(costUsd * COST_PRECISION) / COST_PRECISION;
+}
+
 export function summarizeSessionUsage(usage: readonly SessionUsage[]): SessionUsageSummary {
   if (usage.length === 0) return EMPTY_SESSION_USAGE_SUMMARY;
 
@@ -189,8 +194,7 @@ export function summarizeSessionUsage(usage: readonly SessionUsage[]): SessionUs
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
-    knownCostUsd:
-      pricedRequestCount === 0 ? null : Math.round(costUsd * COST_PRECISION) / COST_PRECISION,
+    knownCostUsd: pricedRequestCount === 0 ? null : roundSessionUsageCost(costUsd),
     costCoverage: usageCoverage(usage.length, pricedRequestCount),
     costBasis: soleBasis ?? (bases.size === 0 ? "unavailable" : "mixed"),
     cachedInputShare: promptTokens === 0 ? null : cacheReadTokens / promptTokens,
@@ -266,8 +270,7 @@ export function mergeSessionUsageSummaries(
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
-    knownCostUsd:
-      pricedRequestCount === 0 ? null : Math.round(costUsd * COST_PRECISION) / COST_PRECISION,
+    knownCostUsd: pricedRequestCount === 0 ? null : roundSessionUsageCost(costUsd),
     costCoverage: usageCoverage(requestCount, pricedRequestCount),
     costBasis: soleBasis ?? (bases.size === 0 ? "unavailable" : "mixed"),
     cachedInputShare: promptTokens === 0 ? null : cacheReadTokens / promptTokens,

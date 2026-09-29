@@ -12,8 +12,38 @@ import {
   ghFindPr,
   ghPrStatus,
   pushBranch,
+  runNet,
 } from "./net";
+import { GIT_MAX_CONCURRENT_CHILDREN, resetGitChildSlotsForTest, withGitChildSlot } from "./git";
 import { netFailure, scriptedNet } from "./scripted-net";
+
+describe("the network runner and the local git bound", () => {
+  it("runs OUTSIDE the shared pool, so a push cannot starve the local reads", async () => {
+    // The one deliberate exclusion (VC-389). These verbs are bounded at 120 s;
+    // a push holding one of five slots would strand every 8 s local read queued
+    // behind it. `commit.ts`'s local `git add`/`git commit` ride this same
+    // runner, so they are outside the bound too — which is why git.ts says so.
+    const release: Array<() => void> = [];
+    const holding = Array.from({ length: GIT_MAX_CONCURRENT_CHILDREN }, () =>
+      withGitChildSlot(() => new Promise<void>((resolve) => release.push(resolve))),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    try {
+      // Every slot is taken, and this still runs to completion right now.
+      const { stdout } = await runNet(
+        process.execPath,
+        ["-e", "process.stdout.write('ran')"],
+        process.cwd(),
+      );
+      expect(stdout).toBe("ran");
+    } finally {
+      for (const resolve of release) resolve();
+      await Promise.allSettled(holding);
+      resetGitChildSlotsForTest();
+    }
+  });
+});
 
 const OSXKEYCHAIN: CredentialHelperIssue = {
   kind: "osxkeychain-may-prompt-gui",

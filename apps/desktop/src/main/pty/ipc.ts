@@ -22,6 +22,8 @@ import type { DbHandle } from "../data-ipc";
 import { SpawnLedger } from "../process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "../session-control";
+import { createSessionConcurrencyEnvReader } from "../session-concurrency";
+import type { SessionConcurrencyEnvReader } from "../session-concurrency";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
 
@@ -167,6 +169,18 @@ export function registerTerminalIpcHandlers(
   handle: DbHandle,
   agentRuntime: AgentRuntimeEnvironment | null = null,
   sessionEngine: SessionEngine | null = handle.ok ? createDesktopSessionEngine(handle.db) : null,
+  /**
+   * The process's one reader of who is working (VC-339, VC-403). `index.ts`
+   * passes the same instance the structured door uses, so both answer this
+   * machine's load from one read. Defaults to a reader over this handle's own
+   * engine, which is what a test registering handlers on a fixture database
+   * wants; the default is never the production path.
+   */
+  concurrencyEnvReader: SessionConcurrencyEnvReader | null = sessionEngine === null
+    ? null
+    : createSessionConcurrencyEnvReader({
+        listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+      }),
 ): PtyManager {
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
@@ -186,6 +200,7 @@ export function registerTerminalIpcHandlers(
         // Every terminal shell lands in the spawn ledger (VC-341), so a shell
         // that outlives this launch can still be attributed to its Session.
         new SpawnLedger(handle.db),
+        concurrencyEnvReader,
       )
     : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
 

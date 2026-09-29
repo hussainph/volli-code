@@ -1,9 +1,11 @@
 /**
  * The color primitives the theme generator is built on, hand-rolled so
  * `@volli/shared` stays runtime-dependency-free (the package rule: pure,
- * unit-tested domain code with no imports at all). The tests cross-check this
- * math against `culori` and `apca-w3`, which are devDependencies of this
- * package only and are never imported by `src/*.ts`.
+ * unit-tested domain code with no imports at all). The OKLab/OKLCH math is
+ * cross-checked in test against `culori`, a devDependency of this package only
+ * and never imported by `src/*.ts`. The APCA math below is verified against
+ * this repository's own frozen vectors and a second transcription of the
+ * published formula — see the note above the constants.
  */
 
 /** Gamma-encoded sRGB, each channel 0–1. */
@@ -131,6 +133,17 @@ export function srgbToLinear(channel: number): number {
   const magnitude = Math.abs(channel);
   const linear = magnitude <= 0.04045 ? magnitude / 12.92 : ((magnitude + 0.055) / 1.055) ** 2.4;
   return Math.sign(channel) * linear;
+}
+
+/** WCAG 2 relative-luminance contrast on emitted sRGB colors (not APCA). */
+export function wcagContrast(foreground: string, background: string): number {
+  const luminance = (hex: string) => {
+    const { r, g, b } = hexToRgb(hex);
+    return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+  };
+  const a = luminance(foreground);
+  const b = luminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
 /** Linear-light → sRGB, the exact inverse of {@link srgbToLinear}. */
@@ -263,8 +276,15 @@ export function oklchToHex(L: number, C: number, h: number): string {
 
 /*
  * APCA-W3 0.1.9 constants (the W3C-licensed `sRGBcalc` formulation). These are
- * a published, versioned magic-number set — they are not tunable, and the
- * tests pin every one of them against `apca-w3` itself.
+ * a published, versioned magic-number set — they are not tunable.
+ *
+ * Every one of them is pinned by test (VC-412): `color.test.ts` re-derives the
+ * frozen vectors in `apca-reference.ts` from a second, independently written
+ * transcription of the published formula, then perturbs each constant of that
+ * transcription in turn and requires a vector to reject the result. The
+ * `apca-w3` package used to serve as the oracle; it was removed because it
+ * depends on AGPL-licensed `colorparsley`, and `scripts/check-excluded-dependencies.mjs`
+ * now keeps both out of this repository.
  */
 const APCA_TRC = 2.4;
 const APCA_R_COEFFICIENT = 0.2126729;
@@ -311,10 +331,8 @@ function softClampBlack(y: number): number {
  * remember which comparisons are reversed is a generator that will eventually
  * forget. Polarity is never in question here: the ladder decides it.
  *
- * WCAG 2's contrast ratio is deliberately not used. It is a ratio of relative
- * luminances that badly misjudges dark themes — it rates near-black pairs as
- * far more distinguishable than they look — and this whole design is a dark
- * theme with a near-black ladder.
+ * This perceptual measure complements, rather than replaces, the WCAG ratio
+ * used by the primary control's normative AA constraint.
  */
 export function apcaLc(textHex: string, backgroundHex: string): number {
   const textY = softClampBlack(apcaY(textHex));

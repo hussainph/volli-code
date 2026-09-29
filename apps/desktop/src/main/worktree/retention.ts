@@ -34,7 +34,6 @@ import { archiveTicketCommand } from "../ticket-commands";
 import type { WorktreeTrimReport } from "../../ipc/contract";
 import type { BusyWorktreeSites } from "./activity";
 import type { AgentSiteReleaseReport } from "./agent-sites";
-import { runGitCapturingAsync } from "./git";
 import { remove, type WorktreeRemoveOptions } from "./remove";
 import { trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
@@ -327,7 +326,7 @@ export async function trimFinishedWorktree(
   // turns it off mid-session has turned it off for the next Done move too.
   if (!settings.trimOnFinish) return TRIM_SKIP("automatic trim is off");
 
-  const trimmed = await trimIgnoredArtifacts(deps.worktree.gitAsync ?? runGitCapturingAsync, {
+  const trimmed = await trimIgnoredArtifacts(deps.worktree.gitAsync, {
     worktreePath: ticket.worktree_path,
     keepPatterns: settings.keepPatterns,
     ...(deps.busySites === undefined ? {} : { busySites: deps.busySites }),

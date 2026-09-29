@@ -23,6 +23,7 @@ import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@vol
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   BlobLinkView,
+  CommandRefusalSeverity,
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
@@ -36,6 +37,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  commandRefusal,
   rejectedReceipt,
 } from "./wire";
 
@@ -114,6 +116,37 @@ export function isDeliverable(slice: ChatSessionSlice): boolean {
 }
 
 /**
+ * Whether the queue is holding words that nothing is coming to collect.
+ *
+ * The queue's own rule (VC-367). {@link isDeliverable} says a message cannot
+ * leave *right now*, which is an ordinary and temporary thing: an executor is
+ * starting, a model is being written down, a turn is mid-flight. What it cannot
+ * distinguish is the one case where waiting is not temporary at all — a Session
+ * whose executor is GONE. Nothing about that state ever ends on its own, so a
+ * message held behind it is held forever, which is the silent queue this
+ * predicate exists to end.
+ *
+ * Asked only of a queue that has something in it, because the answer is an
+ * ACTION: bringing an executor back costs a process and a model turn, and
+ * nothing should pay that for a Session nobody is trying to talk to. The three
+ * exclusions are the states where an attach would be wrong rather than merely
+ * early — no projection yet (this client has not read the Session), `starting`
+ * (an attach is already in flight, and `retryAttach` would refuse it anyway),
+ * and `archived` (there is nothing left to attach to).
+ *
+ * `error` is deliberately NOT excluded: a person who types after a failed
+ * attach is asking for it again, and that is the whole difference between a
+ * latch a command set and a wall.
+ */
+export function queueNeedsExecutor(slice: ChatSessionSlice): boolean {
+  if (slice.queue.length === 0) return false;
+  if (slice.lifecycle === "starting") return false;
+  const projection = slice.projection;
+  if (projection === null || projection.status === "archived") return false;
+  return projection.liveExecutor === null;
+}
+
+/**
  * The lifecycle a Session settles to when its stream moves.
  *
  * Only a batch that actually crossed a turn boundary — or gained or lost an
@@ -145,6 +178,20 @@ export function settledLifecycle(
     working !== isWorking(before) || after.transcript.turnEpoch !== before.transcript.turnEpoch;
   if (!spoke) return after.lifecycle;
   return working ? "working" : "ready";
+}
+
+/** How one attach should report a refusal. */
+export interface AttachOptions {
+  /**
+   * The refusal already has a durable home, so the slice must stay quiet.
+   *
+   * True for a TICKET Session's attach: a worktree that cannot be materialized
+   * is recorded as Ticket Attention, which is the surface a person acts on. A
+   * ticketless Session has no such surface, so its refusal is the slice's to
+   * carry. A THROWN attach is neither — nothing was recorded anywhere — and is
+   * always settled onto the slice.
+   */
+  refusalIsReportedElsewhere?: boolean;
 }
 
 /* ---------------------------------------------------------------- the store */
@@ -256,6 +303,10 @@ export interface ChatSessionRpc {
     subscribe: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
     };
+    // Deliberately `unknown`-shaped past the session id: every reader of a
+    // command result goes through `wire.ts`, which reads it structurally
+    // because this crosses the RPC edge as JSON. A declared field here would
+    // be a promise the transport never made.
     command: { mutate(input: ChatCommandRequest): Promise<{ sessionId: string }> };
     cancelInteraction: {
       mutate(input: { sessionId: string; interactionId: string }): Promise<unknown>;
@@ -348,6 +399,8 @@ export interface ChatSessionTransport {
     projectId: string;
     ticketId: string | null;
     title: string | null;
+    /** A provisional Draft's UUID, adopted as the durable Session id on promotion. */
+    requestedSessionId?: string;
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
     /**
@@ -360,14 +413,32 @@ export interface ChatSessionTransport {
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
 
+/**
+ * How loud one {@link ChatSessionClientDeps.notify} line is.
+ *
+ * The presentation half of {@link CommandRefusalSeverity}: `"failure"` is a
+ * thing that went wrong and reads as `"error"`, `"benign"` is a thing that
+ * simply did not happen and reads as `"neutral"`. Two vocabularies on purpose
+ * — the host judges what a refusal WAS, and the client decides how loudly to
+ * say it, which is the one of the two a second client may reasonably differ on.
+ */
+export type NotifyTone = "error" | "neutral";
+
 export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
   /**
-   * One line to a person about a command that failed as a moment, not a state
+   * One line to a person about a command that ended as a moment, not a state
    * — the surface {@link ChatSessionClient.#eventRun} speaks to. The desktop
    * passes its error toast; nothing here assumes what the line becomes.
+   *
+   * `tone` is required rather than defaulted, so a second client cannot ship a
+   * `notify` that quietly drops the distinction: `"error"` is a stopped turn,
+   * a decision that did not land, a model that would not change. `"neutral"`
+   * is a refusal the host vouched for as benign — a history with nothing left
+   * to summarize is an outcome the person chose to ask about, not a failure
+   * (CLAUDE.md's line between the two).
    */
-  notify(message: string): void;
+  notify(message: string, tone: NotifyTone): void;
   /**
    * Retitle the durable Session everywhere it is named — the auto-title's one
    * write ({@link ChatSessionClient.#autoTitle}). Fire-and-forget by
@@ -379,6 +450,12 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 }
 
 export type ProductSessionResult = SessionStartResult;
+
+/** The tone a refusal of each weight is said in. */
+const TONE_OF: Readonly<Record<CommandRefusalSeverity, NotifyTone>> = {
+  benign: "neutral",
+  failure: "error",
+};
 
 export class ChatSessionClient {
   readonly sessionId: string;
@@ -418,8 +495,34 @@ export class ChatSessionClient {
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
   #draining = false;
+  /** A store write arrived mid-drain; the pass that owns the latch owes it one. */
+  #drainRequested = false;
   /** Queue ids owned by either an explicit persisted steer or resident drain. */
   readonly #claimedQueued = new Set<string>();
+  /**
+   * The queue this client has already tried to bring an executor back for.
+   * Null re-arms the attempt; see {@link ChatSessionClient.#attachForQueue}.
+   */
+  #queueAttachSignature: string | null = null;
+  /**
+   * The projection this client's own attach succeeded against, while that
+   * attach's executor has not been reported yet — or null.
+   *
+   * An attach RPC answering "ready" says the ledger accepted it, NOT that the
+   * projection has caught up: the executor reaches this client on the stream, a
+   * moment later. In between, a Session that is starting perfectly well looks
+   * exactly like one whose executor is gone — and a Chat Draft's first message
+   * is already in the queue by then (VC-358), which is the state
+   * {@link queueNeedsExecutor} exists to act on. Asking again there is what
+   * made the ledger refuse the second attach with "already has a live
+   * executor".
+   *
+   * Held only until the NEXT projection arrives, whatever it says. If it
+   * carries an executor the wait was right; if it does not, the attach truly
+   * did not take and the queue may ask again. Either way this ends, so it can
+   * never become the silent queue it is protecting.
+   */
+  #awaitingExecutorFor: SessionPresentationProjection | null = null;
 
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
@@ -496,29 +599,78 @@ export class ChatSessionClient {
    * because a snapshot that failed left this client blind to the very projection
    * that says whether an executor is live.
    */
-  async retryAttach(): Promise<boolean> {
+  async retryAttach(options?: AttachOptions): Promise<boolean> {
     const slice = this.#slice();
     if (slice === undefined || slice.lifecycle === "starting" || slice.projection === null) {
       return false;
     }
     this.#writes().attaching(this.sessionId);
     void this.connect();
+    return this.#attachOnce(options);
+  }
+
+  /**
+   * The FIRST attach of a Session this surface just brought into residence —
+   * a create, or a Chat Draft promoted by its first message (VC-358).
+   *
+   * One attacher, deliberately. The store used to perform this attach itself
+   * while the client performed every other one, and the two could not see each
+   * other: with a message already queued (which is exactly what promotion
+   * does), the queue's own reattach fired while the store's attach was still
+   * landing and the ledger refused the second with "already has a live
+   * executor". The client owns the attach door now, so its own latch covers
+   * every path into it.
+   *
+   * Unlike {@link retryAttach} this does not require a projection: there has
+   * not been one yet. It opens the stream and attaches in the same gesture,
+   * which is what makes the Session live.
+   */
+  startAttach(options?: AttachOptions): Promise<boolean> {
+    this.#writes().attaching(this.sessionId);
+    void this.connect();
+    return this.#attachOnce(options);
+  }
+
+  /**
+   * The attach itself, with no opinion about the stream beside it.
+   *
+   * Split from {@link retryAttach} so the queue's own reattach (VC-367) can
+   * reuse the one attach door without the reopen: that path runs on a stream
+   * that is already delivering, and re-reading the snapshot under it would
+   * replace the projection this attach is about to move with the one it had
+   * before.
+   */
+  async #attachOnce(options?: AttachOptions): Promise<boolean> {
     try {
       const attached = await this.#attachSession({
         operationId: this.#newCommandId(),
         sessionId: this.sessionId,
       });
       const refusal = rejectedReceipt(attached);
+      // One wording for the receiptless case, whichever door asked. The store
+      // used to own the first attach and said this; the client said
+      // "attachment needs recovery" for every other. Now that there is one
+      // attacher there is one sentence, and it is the one written as a
+      // sentence — a person meeting it twice can tell it is the same state.
       const failure =
         attached.state === "ready" && refusal === null
           ? null
-          : (refusal ?? "attachment needs recovery");
-      this.#writes().settle(
-        this.sessionId,
-        failure === null ? null : `Could not start Session: ${failure}`,
-      );
+          : (refusal ?? "Runtime recovery is required.");
+      // A refusal with a durable home is told once, there. Saying it on the
+      // slice as well would put the same sentence in two places and give the
+      // person two things to dismiss for one problem.
+      const slicePart =
+        failure === null || options?.refusalIsReportedElsewhere === true
+          ? null
+          : `Could not start Session: ${failure}`;
+      // Before the settle, which is the store write the drain re-enters on.
+      this.#awaitingExecutorFor = failure === null ? (this.#slice()?.projection ?? null) : null;
+      this.#writes().settle(this.sessionId, slicePart);
       return failure === null;
     } catch (failure) {
+      // A throw never reached the host, so there is no receipt and no durable
+      // Attention anywhere: the slice is the only surface that can carry it,
+      // whatever the Session's Role.
       this.#writes().settle(this.sessionId, `Could not start Session: ${errorMessage(failure)}`);
       return false;
     }
@@ -591,17 +743,32 @@ export class ChatSessionClient {
   /**
    * Summarize this Session's context now, because someone typed `/compact`.
    *
-   * Every way it does not happen comes back as a rejected receipt — a turn
-   * still running, a history with nothing left to summarize, a summary the
-   * provider refused — and {@link #run} settles all of them onto the Session
-   * as one readable line. That is the whole difference between this and the
-   * two compactions nobody asked for: those report to the ledger, and this
-   * reports to a person.
+   * Every way it does not happen comes back as a refused receipt — a turn
+   * still running, a compaction already running, a history with nothing left
+   * to summarize, a summary the provider refused. VC-141: all of them are a
+   * one-shot toast, never the `sessionError` band {@link #run} would have
+   * latched. A refusal is not a failure of the Session's plumbing, and a
+   * persistent error row with a Retry button that re-attaches a perfectly fine
+   * executor is the wrong report for any of them — least of all for the one a
+   * person's own `/compact` simply ran into (CLAUDE.md's line between the two).
+   *
+   * Which refusals are benign is not decided here. The host marks each one,
+   * and {@link #eventRun} says it in that weight using the runtime's own
+   * sentence — which is why a context busy with a live turn and a context busy
+   * with another compaction read differently, as the runtime wrote them.
    */
   compactContext(instructions: string | null): Promise<boolean> {
     const attachmentId = this.#liveAttachmentId();
-    if (attachmentId === null) return Promise.resolve(false);
-    return this.#run("Compact", () =>
+    if (attachmentId === null) {
+      // The one refusal this side can see, and it still owes a person a word
+      // (VC-141): a `/compact` that vanished because nothing was attached is
+      // the same "did that work?" silence the rest of this method exists to
+      // end. Said in the composer verb's own voice, which refuses the sibling
+      // case — a turn already live — in the same breath.
+      this.#notify("Compaction can't run until the Session is live", "error");
+      return Promise.resolve(false);
+    }
+    return this.#eventRun("Compact", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -937,9 +1104,24 @@ export class ChatSessionClient {
    * its own send to land, and a delivered message has already made the Session
    * busy by the time the next pass reads it. An id latch could not, because the
    * store write that empties the queue re-enters this synchronously.
+   *
+   * A re-entry while the latch is held is REMEMBERED rather than dropped
+   * (VC-367). The loop re-reads the slice on every pass, so a write that lands
+   * mid-pass is normally picked up by the next one — but the passes that end in
+   * `return` have no next one, and a message enqueued in that window would sit
+   * there with nothing coming for it. Which is this ticket's whole complaint,
+   * one level down: a person typing again while a reattach is in flight is the
+   * likeliest way to hit it.
+   *
+   * It also owns the other half of the same promise: a queue that cannot release
+   * because the Session has NO executor gets one brought back, rather than
+   * holding the words forever. See {@link #attachForQueue}.
    */
   async #drain(): Promise<void> {
-    if (this.#draining) return;
+    if (this.#draining) {
+      this.#drainRequested = true;
+      return;
+    }
     this.#draining = true;
     try {
       for (;;) {
@@ -950,13 +1132,30 @@ export class ChatSessionClient {
         // row becomes durable. Releasing an earlier neighbor here would start
         // a different turn and make the selected row steer the wrong work.
         if (this.#claimedQueued.size > 0) return;
+        // Re-arm the reattach the moment the Session stops needing one, so a
+        // second death is answered as readily as the first.
+        if (!queueNeedsExecutor(slice)) this.#queueAttachSignature = null;
+        // A projection has arrived since this client's own attach succeeded, so
+        // whatever it says is now the answer and the wait is over.
+        if (this.#awaitingExecutorFor !== null && slice.projection !== this.#awaitingExecutorFor) {
+          this.#awaitingExecutorFor = null;
+        }
         const next = nextRelease(slice.queue, {
           working: slice.lifecycle === "working",
           // A failure is explicit recovery, not a reason to keep feeding a
           // harness that just refused the last thing it was handed.
           ready: slice.lifecycle !== "error" && isDeliverable(slice),
         });
-        if (next === null) return;
+        if (next === null) {
+          // Nothing to release — which is either ordinary waiting, or the one
+          // state that never ends by itself. Only the second does anything, and
+          // deciding that synchronously keeps ordinary waiting on the cheap
+          // path it has always been on.
+          const signature = this.#queueAttachRequest(slice);
+          if (signature === null) return;
+          if (await this.#attachForQueue(signature)) continue;
+          return;
+        }
         this.#claimedQueued.add(next.id);
         let outcome: MessageDelivery;
         try {
@@ -969,7 +1168,70 @@ export class ChatSessionClient {
       }
     } finally {
       this.#draining = false;
+      if (this.#drainRequested) {
+        this.#drainRequested = false;
+        void this.#drain();
+      }
     }
+  }
+
+  /**
+   * Brings an executor back for a queue that has no way to drain (VC-367).
+   *
+   * This is what makes sending to a crashed Session honest. A relaunch closes
+   * the attachment of every Session whose process died, so `liveExecutor` reads
+   * null and every message typed afterwards routes to the queue — where, before
+   * this, nothing ever came for it: the release rule waits on an executor and
+   * no other path was going to produce one. The composer looked like it had
+   * accepted the message and the Session simply never started.
+   *
+   * The attach is the same door the error row's Retry presses
+   * ({@link #attachOnce}), so a send can never reattach in a way a person
+   * could not. Success leaves the ordinary release rule to deliver the words;
+   * failure settles the band, which IS the visible refusal, with that same
+   * Retry beside it.
+   *
+   * The stream is deliberately NOT reopened alongside, which is the one way
+   * this differs from Retry. This runs from inside the drain, on a client whose
+   * store is moving and whose subscription is therefore delivering — re-reading
+   * the snapshot under it would put back the very projection the attach is
+   * about to move, and the release rule reads that projection. A stream this
+   * client genuinely lost has already latched its own band, and the Retry on it
+   * is the door that reopens ({@link recover}).
+   *
+   * One attempt per queue, not per pass — {@link #queueAttachRequest} is that
+   * latch, and it has already established everything {@link retryAttach} guards
+   * on: a slice that exists, a projection read, and a lifecycle that is not
+   * `starting`. Re-asking here would be an unreachable branch, so the
+   * `attaching` latch is written directly.
+   */
+  async #attachForQueue(signature: string): Promise<boolean> {
+    this.#queueAttachSignature = signature;
+    this.#writes().attaching(this.sessionId);
+    return this.#attachOnce();
+  }
+
+  /**
+   * The signature of a queue that wants an executor and has not been tried yet,
+   * or null for one that wants nothing or has already asked.
+   *
+   * Synchronous, so the drain's ordinary "nothing to release" pass never yields
+   * — a pass that awaited there would let a concurrent store write re-enter and
+   * be refused, which is this ticket's own bug one level down.
+   *
+   * The drain re-enters on every store write, including the several an attach
+   * makes, so an unlatched arm would spend a process per frame. The signature is
+   * the queue itself rather than a bare boolean so that typing a SECOND message
+   * after a refusal asks again — a person sending again is asking again, and a
+   * latch that ignored them would be the same silence in a different place.
+   */
+  #queueAttachRequest(slice: ChatSessionSlice): string | null {
+    // This client attached a moment ago and is still waiting to be told what
+    // that produced. Asking again now would be asking twice for one thing.
+    if (this.#awaitingExecutorFor !== null) return null;
+    if (!queueNeedsExecutor(slice)) return null;
+    const signature = slice.queue.map((entry) => entry.id).join(",");
+    return this.#queueAttachSignature === signature ? null : signature;
   }
 
   /* ------------------------------------------------------------- the shared */
@@ -1010,17 +1272,23 @@ export class ChatSessionClient {
    * failure of the Session's plumbing, and a success of it does not repair
    * one either — clearing a latched transport error on an unrelated command's
    * round trip is how a frozen transcript ended up looking healthy.
+   *
+   * Two weights, not one (VC-141). A refusal the host marked benign is read
+   * out in the host's own words at a neutral tone and nothing is prefixed onto
+   * it: it is a whole sentence about the thing the person asked for, and
+   * naming the command again would be calling an outcome a fault. Every other
+   * refusal — including every refusal nobody vouched for — keeps the
+   * `Label: reason` shape that says which command went wrong.
    */
   async #eventRun(label: string, call: () => Promise<unknown>): Promise<boolean> {
     try {
-      const refusal = rejectedReceipt(await call());
-      if (refusal !== null) {
-        this.#notify(`${label}: ${refusal}`);
-        return false;
-      }
-      return true;
+      const refusal = commandRefusal(await call());
+      if (refusal === null) return true;
+      const tone = TONE_OF[refusal.severity];
+      this.#notify(tone === "neutral" ? refusal.message : `${label}: ${refusal.message}`, tone);
+      return false;
     } catch (failure) {
-      this.#notify(`${label}: ${errorMessage(failure)}`);
+      this.#notify(`${label}: ${errorMessage(failure)}`, "error");
       return false;
     }
   }

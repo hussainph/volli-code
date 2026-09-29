@@ -2,11 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askInteractionId,
   askUserInteractionId,
+  assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
+  confirmAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
   observationPayload,
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
   projectSession,
   sameCommandReceipt,
   sameCommandReceiptOutcome,
@@ -21,6 +25,7 @@ import {
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
   SESSION_INTERRUPTION_REASONS,
+  SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY,
   SESSION_USER_BLOCKING_ATTENTION_KINDS,
   sessionAwaitsUser,
   sessionEndedInterrupted,
@@ -34,6 +39,7 @@ import type {
   SessionInteraction,
   SessionInteractionPrompt,
   SessionObservation,
+  SessionProjectionCheckpoint,
 } from "./session-ledger";
 import type { SessionUsage } from "./session-usage";
 
@@ -1101,6 +1107,194 @@ describe("projectSession", () => {
   });
 });
 
+describe("Session projection checkpoints", () => {
+  it("resumes every split with the same projection as a whole-log fold", () => {
+    const first = {
+      id: "command-start-a",
+      sessionId: session.id,
+      createdAt: 1,
+      route: { adapterId: "pi", attachmentId: null },
+      intent: { kind: "executor.start" as const, adapterId: "pi", continuity: "fresh" as const },
+    };
+    const second = {
+      ...first,
+      id: "command-start-b",
+      createdAt: 2,
+    };
+    const events = [
+      event(1, { kind: "command.recorded", command: first }),
+      event(2, { kind: "command.recorded", command: second }),
+      event(3, { kind: "session.retitled", title: "Checkpoint title" }),
+      event(4, {
+        kind: "command.receipt.recorded",
+        receipt: {
+          id: "receipt-start-b-rejected",
+          commandId: second.id,
+          status: "rejected" as const,
+          code: "adapter_rejected",
+          detail: null,
+          recordedAt: 40,
+          sequence: 4,
+        },
+      }),
+      event(5, { kind: "session.signaled", signal: "done" as const, reason: "Tail applied" }),
+    ];
+    const whole = projectSession(session, events);
+
+    for (let split = 0; split <= events.length; split += 1) {
+      const checkpoint = createSessionProjectionCheckpoint(session, events.slice(0, split));
+      const resumed = advanceSessionProjection(checkpoint, events.slice(split));
+      expect(resumed.projection).toEqual(whole);
+      expect(resumed.throughSequence).toBe(5);
+    }
+  });
+
+  it("hydrates active collections from checkpoint state", () => {
+    const attachment = {
+      id: "attachment-checkpoint",
+      sessionId: session.id,
+      adapterId: "codex",
+      venue: localVenue,
+      continuity: "fresh" as const,
+      native: null,
+      authority: null,
+    };
+    const attention: SessionAttention = {
+      id: "attention-checkpoint",
+      kind: "input_required",
+      attachmentId: attachment.id,
+      detail: null,
+      diagnostic: null,
+    };
+    const interaction: SessionInteraction = {
+      id: "interaction-checkpoint",
+      attachmentId: attachment.id,
+      kind: "question",
+      title: "Continue?",
+      detail: null,
+      options: [{ id: "yes", label: "Yes", description: null }],
+      multiple: false,
+      native: { id: "native-interaction-checkpoint", detail: null },
+    };
+    const checkpoint = createSessionProjectionCheckpoint(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attention.raised", attention }),
+      event(3, { kind: "interaction.opened", interaction }),
+    ]);
+
+    const resumed = advanceSessionProjection(checkpoint, [
+      event(4, {
+        kind: "attachment.closed",
+        attachmentId: attachment.id,
+        outcome: "completed",
+      }),
+      event(5, {
+        kind: "attachment.closed",
+        attachmentId: "missing",
+        outcome: "completed",
+      }),
+    ]);
+
+    expect(resumed.projection.attachments.map(({ id }) => id)).toEqual([attachment.id]);
+    expect(resumed.projection.attention.active.map(({ id }) => id)).toEqual([attention.id]);
+    expect(resumed.projection.interactions.active.map(({ id }) => id)).toEqual([interaction.id]);
+  });
+
+  it("prefers the live row for row-backed fields and the fold for projected ones", () => {
+    const checkpoint = createSessionProjectionCheckpoint(session, [
+      event(1, { kind: "session.retitled", title: "Named by an event" }),
+    ]);
+    // The Ticket moved and the Session was renamed by a fact. The row owns the
+    // first (nothing in the log records it), the log owns the second — and a
+    // checkpoint that answered from its own frozen copy of the row would serve
+    // a Ticket link that no longer exists.
+    const moved: Session = { ...session, ticketId: "ticket-2", title: "Stale row title" };
+    const resumed = advanceSessionProjection(checkpoint, [], moved);
+
+    expect(resumed.projection.session.ticketId).toBe("ticket-2");
+    expect(resumed.projection.session.title).toBe("Named by an event");
+    expect(() => advanceSessionProjection(checkpoint, [], { ...moved, id: "other" })).toThrow(
+      "Invalid Session projection checkpoint",
+    );
+  });
+
+  // The adapters call the assertion directly at their write boundary, so its
+  // own cascade is tested directly rather than only through a fold.
+  describe("assertSessionProjectionCheckpoint", () => {
+    const valid = (): SessionProjectionCheckpoint => createSessionProjectionCheckpoint(session, []);
+
+    it("rejects anything that is not a checkpoint-shaped object", () => {
+      // Persisted JSON is untrusted cache state, so the input is `unknown` and
+      // a string, an array or a null row must be refused before any field read.
+      for (const candidate of [null, undefined, "checkpoint", 7, [valid()]]) {
+        expect(() => assertSessionProjectionCheckpoint(candidate)).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+    });
+
+    it("refuses a checkpoint for a Session the caller did not ask about", () => {
+      expect(() =>
+        assertSessionProjectionCheckpoint(valid(), { expectedSessionId: "another-session" }),
+      ).toThrow("Invalid Session projection checkpoint");
+      expect(() =>
+        assertSessionProjectionCheckpoint(valid(), { expectedSessionId: session.id }),
+      ).not.toThrow();
+    });
+
+    it("refuses a non-null cost accumulator that is not a finite number", () => {
+      for (const usageCostUsdExact of [Number.NaN, Number.POSITIVE_INFINITY, "0.5"]) {
+        expect(() => assertSessionProjectionCheckpoint({ ...valid(), usageCostUsdExact })).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+    });
+
+    it("separates a nonsense durable head from a checkpoint that is genuinely ahead", () => {
+      const checkpoint = { ...valid(), throughSequence: 4 };
+      // Ahead of a real head: the cache is stale-ahead and says so.
+      expect(() => assertSessionProjectionCheckpoint(checkpoint, { latestSequence: 3 })).toThrow(
+        "Session projection checkpoint is ahead of durable history",
+      );
+      // A head that is not a sequence at all is an invalid CALL, not evidence
+      // about the checkpoint, so it must not be reported as staleness.
+      for (const latestSequence of [-1, 2.5]) {
+        expect(() => assertSessionProjectionCheckpoint(checkpoint, { latestSequence })).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+      expect(() =>
+        assertSessionProjectionCheckpoint(checkpoint, { latestSequence: 4 }),
+      ).not.toThrow();
+    });
+
+    it("uses the adapter's own wording when it supplies one", () => {
+      expect(() =>
+        assertSessionProjectionCheckpoint(null, { invalidMessage: "ledger says no" }),
+      ).toThrow("ledger says no");
+    });
+  });
+
+  it("rejects malformed checkpoint metadata", () => {
+    const checkpoint = createSessionProjectionCheckpoint(session, []);
+    expect(checkpoint.compatibility).toBe(SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY);
+    const invalid = [
+      { ...checkpoint, version: 2 as typeof checkpoint.version },
+      { ...checkpoint, compatibility: "session-event-kinds:retired" },
+      { ...checkpoint, projection: undefined },
+      { ...checkpoint, sessionId: "another-session" },
+      { ...checkpoint, throughSequence: 0.5 },
+      { ...checkpoint, throughSequence: -1 },
+    ] as unknown as SessionProjectionCheckpoint[];
+
+    for (const candidate of invalid) {
+      expect(() => advanceSessionProjection(candidate, [])).toThrow(
+        "Invalid Session projection checkpoint",
+      );
+    }
+  });
+});
+
 // The executor's own process status (VC-290). `outcome` says completed or
 // failed; only this fact can say WHICH code, and only when something actually
 // watched the process end.
@@ -1575,6 +1769,39 @@ describe("projectSession usage", () => {
     expect(usage.cachedInputShare).toBe(0.8);
   });
 
+  it("merges usage before and after a projection checkpoint without losing coverage", () => {
+    const before = recorded(1, metered({ costUsd: 0.25 }));
+    const after = recorded(2, metered({ costUsd: null, costBasis: "unavailable" }));
+    const resumed = advanceSessionProjection(createSessionProjectionCheckpoint(session, [before]), [
+      after,
+    ]);
+
+    expect(resumed.projection.usage).toEqual(projectSession(session, [before, after]).usage);
+    expect(resumed.projection.usage).toMatchObject({
+      requestCount: 2,
+      pricedRequestCount: 1,
+      knownCostUsd: 0.25,
+      costCoverage: "partial",
+    });
+  });
+
+  it("preserves sub-micro-dollar usage across every checkpoint split", () => {
+    const events = [
+      recorded(1, metered({ costUsd: 0.0000015 })),
+      recorded(2, metered({ costUsd: 0.0000004 })),
+      recorded(3, metered({ costUsd: 0.0000004 })),
+    ];
+    const whole = projectSession(session, events);
+
+    for (let split = 0; split <= events.length; split += 1) {
+      const checkpoint = createSessionProjectionCheckpoint(session, events.slice(0, split));
+      const resumed = advanceSessionProjection(checkpoint, events.slice(split));
+      expect(resumed.projection.usage).toEqual(whole.usage);
+      expect(resumed.usageCostUsdExact).toBe(0.0000023);
+      expect(resumed.projection.usage.knownCostUsd).toBe(0.000002);
+    }
+  });
+
   // Telemetry arriving is not the agent doing something. A backfill or a
   // reprojection that floated every old Session to the top of a recency-sorted
   // listing would rewrite the user's sense of what they were last working on.
@@ -1950,5 +2177,10 @@ describe("the frozen ask interaction id derivations", () => {
     // call can raise both a gate ask and a budget ask (VC-204).
     expect(askInteractionId("x")).not.toBe(askUserInteractionId("x"));
     expect(budgetAskInteractionId("x")).not.toBe(askInteractionId("x"));
+    // VC-380's confirmation, a third frozen segment for the same reason: a
+    // question the verb's own door raises before it writes anything.
+    expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
+    expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
+    expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
   });
 });

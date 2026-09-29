@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { MAX_INLINE_IMAGE_BYTES, MAX_SESSION_INLINE_IMAGE_BYTES } from "@volli/shared";
 
-import { attachBlob, sessionInlineImageBytes, workspaceRelPath } from "./blob-attach";
+import {
+  attachBlob,
+  sessionInlineImageBytes,
+  sessionLinkBudgetRefusal,
+  workspaceRelPath,
+} from "./blob-attach";
 import { blobExists } from "./blob-store";
 import { listSessionLinks, listTicketLinks } from "./db/blobs-repo";
 import { insertProject } from "./db/projects-repo";
@@ -289,5 +294,74 @@ describe("attachBlob: the guards that keep a session usable", () => {
       );
     }
     expect(listTicketLinks(ctx.db, ticketId)).toHaveLength(5);
+  });
+});
+
+describe("sessionLinkBudgetRefusal: the same ceiling, asked at promotion (VC-358)", () => {
+  /** Stages one ownerless image, the way a provisional chat's composer does. */
+  async function staged(name: string, bytes: Uint8Array): Promise<string> {
+    const outcome = await attachBlob(
+      ctx.db,
+      root,
+      { fileName: name, bytes, owner: { unowned: true } },
+      1,
+    );
+    if (outcome.kind !== "blob") throw new Error("expected a staged blob");
+    return outcome.blob.blobHash;
+  }
+
+  it("admits a staged batch that fits", async () => {
+    const hash = await staged("one.png", new Uint8Array(1024));
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [hash])).toBeNull();
+  });
+
+  it("refuses a batch no single file could have been refused for", async () => {
+    // Each image is individually legal, and none of them passed the import
+    // check: a Draft has no Session to measure. Together they are over, and
+    // this is the last moment anything can say so.
+    const hashes: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      hashes.push(await staged(`shot-${i}.png`, image));
+    }
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, hashes)).toMatch(/past the 20.0 MB/);
+  });
+
+  it("counts what the Session already holds, so a second batch cannot go around the first", async () => {
+    for (let i = 0; i < 4; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      await attachBlob(
+        ctx.db,
+        root,
+        { fileName: `shot-${i}.png`, bytes: image, owner: { sessionId } },
+        1,
+      );
+    }
+    const hash = await staged("one-more.png", new Uint8Array(1024));
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [hash])).toMatch(
+      /Remove one and send again/,
+    );
+  });
+
+  it("counts a re-offered blob once, so a retried promotion answers as the first did", async () => {
+    const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+    const hash = await staged("shot.png", image);
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [hash])).toBeNull();
+    await attachBlob(ctx.db, root, { fileName: "shot.png", bytes: image, owner: { sessionId } }, 1);
+    // The same hash, now linked. Counting it again would invent 5 MB of use
+    // that no conversation is carrying.
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [hash])).toBeNull();
+  });
+
+  it("does not spend the budget on files that never inline", async () => {
+    const doc = await staged("spec.pdf", new Uint8Array(MAX_INLINE_IMAGE_BYTES));
+    const svg = await staged("diagram.svg", new Uint8Array(MAX_INLINE_IMAGE_BYTES));
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [doc, svg])).toBeNull();
+  });
+
+  it("ignores a hash it cannot resolve — an unknown blob is the link's refusal to make", () => {
+    expect(sessionLinkBudgetRefusal(ctx.db, sessionId, ["a".repeat(64)])).toBeNull();
   });
 });

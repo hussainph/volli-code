@@ -79,9 +79,13 @@ function stubEngine(current: () => SessionProjection | null) {
     getBaseSession: unused("getBaseSession"),
     listSessions: unused("listSessions"),
     countSessions: unused("countSessions"),
+    listAttachedSessions: unused("listAttachedSessions"),
     listSessionStarts: unused("listSessionStarts"),
     listLatestTicketSignals: unused("listLatestTicketSignals"),
     listEvents: unused("listEvents"),
+    latestEventSequence: unused("latestEventSequence"),
+    getProjectionCheckpoint: unused("getProjectionCheckpoint"),
+    saveProjectionCheckpoint: unused("saveProjectionCheckpoint"),
     reportUsage: unused("reportUsage"),
   } as unknown as SessionEngine;
   return engine;
@@ -318,16 +322,22 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
-  it("forwards every read to the wrapped engine untouched", async () => {
+  it("forwards every non-activity method to the wrapped engine untouched", async () => {
     const engine = stubEngine(() => projection());
     const reads = {
       getSession: vi.fn(async () => null),
       getBaseSession: vi.fn(async () => null),
       listSessions: vi.fn(async () => []),
       countSessions: vi.fn(async () => 0),
+      // The concurrency budget's read (VC-403). A read like any other: it
+      // must pass straight through, and must never mark a Session dirty.
+      listAttachedSessions: vi.fn(async () => []),
       listSessionStarts: vi.fn(async () => []),
       listLatestTicketSignals: vi.fn(async () => []),
       listEvents: vi.fn(async () => []),
+      latestEventSequence: vi.fn(async () => 0),
+      getProjectionCheckpoint: vi.fn(async () => null),
+      saveProjectionCheckpoint: vi.fn(async () => undefined),
       // A cost read is a read: it must pass straight through, and must never
       // be mistaken for a write that marks a Session dirty.
       reportUsage: vi.fn(async () => ({
@@ -343,9 +353,13 @@ describe("watchSessionActivity", () => {
     await watch.engine.getBaseSession({ sessionId: "session-1" });
     await watch.engine.listSessions({ projectId: "project-1", scope: "all" });
     await watch.engine.countSessions({ projectId: "project-1", scope: "all" });
+    await watch.engine.listAttachedSessions();
     await watch.engine.listSessionStarts({ sinceMs: 0 });
     await watch.engine.listLatestTicketSignals({ projectId: "project-1" });
     await watch.engine.listEvents({ sessionId: "session-1" });
+    await watch.engine.latestEventSequence({ sessionId: "session-1" });
+    await watch.engine.getProjectionCheckpoint({ sessionId: "session-1" });
+    await watch.engine.saveProjectionCheckpoint({} as never);
     await watch.engine.reportUsage({ scope: { kind: "all" } });
 
     for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);

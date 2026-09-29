@@ -174,7 +174,7 @@ export async function costVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, projections, envSession, sessionEngine, now } = context;
+  const { options, projects, envSession, sessionEngine, now } = context;
 
   const groupByArg = request.args["groupBy"];
   if (groupByArg !== undefined && !isSessionUsageGrouping(groupByArg)) {
@@ -207,7 +207,9 @@ export async function costVerb(
     scope = { kind: "all" };
     scopeLabel = "all projects";
   } else if (sessionSelector !== undefined) {
-    const resolved = sessionForCostHandle(projections, sessionSelector);
+    // Only this branch needs the fleet fold (VC-403) — a `--session` handle is
+    // the one selector `cost` resolves against a Session projection at all.
+    const resolved = sessionForCostHandle(await context.loadProjections(), sessionSelector);
     if (!resolved.ok) return resolved.response;
     scope = { kind: "session", sessionId: resolved.sessionId };
     scopeLabel = `session ${shortSessionId(resolved.sessionId)}`;

@@ -34,12 +34,13 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { refExists, resolveBaseBranch } from "./base";
-import { GitError, runGitCapturingAsync, stderrOf } from "./git";
+import { GitError, stderrOf } from "./git";
 import { homeDir } from "./home";
 import { resolveWorktreeIdentity } from "./identity";
 import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
+import { withRepositoryWorktreeTurn } from "./repository-turn";
 import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 /**
@@ -114,12 +115,12 @@ async function runEnsure(
   const project = getProjectById(deps.db, ticket.project_id);
   if (!project) return err("Unknown project");
 
-  // Every git step below runs through the ASYNC runner — this pipeline runs on
-  // Electron main, and one `execFileSync` here freezes every window for the
-  // duration of a `git worktree add` (VC-16's rainbow wheel). The fallback is
-  // the real async runner, never `deps.git`, which would put the work back on
-  // the main thread (types.ts's rule for the Change Set reads, same reason).
-  const git = deps.gitAsync ?? runGitCapturingAsync;
+  // Every git step below runs through the REQUIRED async runner — this pipeline
+  // runs on Electron main, and one `execFileSync` here freezes every window for
+  // the duration of a `git worktree add` (VC-16's rainbow wheel). Requiring the
+  // seam makes a missing bundle fail at its construction site instead of quietly
+  // escaping to real git or back onto the main thread.
+  const git = deps.gitAsync;
 
   setPhase(ticketId, "creating", deps.onPhase);
 
@@ -163,7 +164,17 @@ async function runEnsure(
       ? [identity.path, identity.branch]
       : ["-b", identity.branch, identity.path, base!.startPoint];
     try {
-      await addWorktree(git, project.path, addArgs, reconciled.value.prune);
+      // The repository's turn wraps the MUTATION, not the decision (VC-389).
+      // `reconcile` read the listing outside it, so `prune` can be one tick
+      // stale by the time the turn comes — deliberately: holding the turn
+      // across the reads would serialize every Session start in a project on
+      // work that changes nothing. Staleness is safe in both directions here,
+      // because `addWorktree` prunes and retries once when the add fails on a
+      // record it did not expect, and a prune nobody needed is a no-op.
+      const prune = reconciled.value.prune;
+      await withRepositoryWorktreeTurn(project.path, () =>
+        addWorktree(git, project.path, addArgs, prune),
+      );
     } catch (caught) {
       const message =
         caught instanceof GitError && caught.stderr.trim()

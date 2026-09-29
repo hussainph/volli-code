@@ -139,15 +139,19 @@ export function InlineRename({
     onDoubleClick: (event: React.MouseEvent<HTMLInputElement>) => event.stopPropagation(),
   };
 
+  // `select-text` on both drawings: the field can sit inside a `select-none`
+  // row (a tab, a menu-like surface), and the row's "no selection" rule must
+  // not reach the thing you are editing — the value would not even select on
+  // open.
   if (size === "field") {
-    return <Input {...shared} className={cn(mono && "font-mono", className)} />;
+    return <Input {...shared} className={cn("select-text", mono && "font-mono", className)} />;
   }
 
   return (
     <input
       {...shared}
       className={cn(
-        "min-w-0 text-foreground outline-none",
+        "min-w-0 text-foreground outline-none select-text",
         SIZE_CLASS[size],
         mono && "font-mono",
         className,

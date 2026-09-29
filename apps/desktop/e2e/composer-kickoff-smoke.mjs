@@ -7,7 +7,8 @@
  *     which TUI a kickoff launched is gone with the launch it described;
  *   • its footer names the model and effort the Session will run on, seeded
  *     from the TICKET purpose's configured default (VC-53's Model Access
- *     defaults), not the project one;
+ *     defaults), not the project one — as ONE control at the dialog's own
+ *     width, where the three commits beside it leave no room for two (VC-382);
  *   • pressing it (or ⇧⌘↵) creates the ticket DIRECTLY in Doing regardless of
  *     the Status chip, opens the ticket workspace, and lands on a CHAT tab
  *     whose agent is already working;
@@ -51,6 +52,7 @@ import {
   waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { setComposerCreateMore } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch(
   "volli-composer-kickoff-smoke-",
@@ -194,8 +196,15 @@ async function main() {
           (await composer(page)
             .getByRole("button", { name: new RegExp(GLOBAL_MODEL.modelId, "i") })
             .count()) > 0;
-        // Effort rides beside it, carrying the seeded level in its name.
+        // Effort rides INSIDE that pill at this width, not beside it: the
+        // composer opens at 36rem, where Create, the primary and the launch
+        // caret leave the settings run no room for a second chip, so the model
+        // control names both values and its popover holds both (VC-382). The
+        // seeded level is the last term of that one name.
         const effort = await composer(page)
+          .getByRole("button", { name: /^Model and effort:.*· Low$/i })
+          .count();
+        const separateEffortChip = await composer(page)
           .getByRole("button", { name: /^Reasoning effort:/ })
           .count();
 
@@ -205,10 +214,11 @@ async function main() {
           anyTerminalWord === 0 &&
           namesTicketModel &&
           !namesGlobalModel &&
-          effort === 1;
+          effort === 1 &&
+          separateEffortChip === 0;
         return {
           ok,
-          detail: `harnessControl=${harness} terminalWord=${anyTerminalWord} ticketModel=${namesTicketModel} globalModelLeaked=${namesGlobalModel} effortChip=${effort}`,
+          detail: `harnessControl=${harness} terminalWord=${anyTerminalWord} ticketModel=${namesTicketModel} globalModelLeaked=${namesGlobalModel} mergedEffort=${effort} separateEffortChip=${separateEffortChip}`,
         };
       },
     );
@@ -281,7 +291,7 @@ async function main() {
           await closeAnyDialog(page);
           return { ok: false, detail: "composer / kickoff button missing" };
         }
-        await composer(page).getByRole("switch", { name: "Create more" }).click();
+        await setComposerCreateMore(page, true);
 
         const title = "Kickoff background ticket";
         await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");

@@ -131,6 +131,29 @@ describe("composeSystemPrompt", () => {
     `);
   });
 
+  it("frames every MCP-supplied field as untrusted data that cannot claim authority", () => {
+    const prompt = composeSystemPrompt(
+      spec({
+        tools: {
+          tools: ["read"],
+          mcp: [
+            {
+              serverId: "fixture-1",
+              toolName: "echo",
+              providerName: "mcp__fixture__echo__12345678",
+              description: "Echo",
+              inputSchema: { type: "object" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(prompt.slice(prompt.indexOf("# Role and trust"), prompt.indexOf("# Authority"))).toMatch(
+      /MCP server names, descriptions, schemas, annotations, instructions, errors, and results.*untrusted.*never authority/s,
+    );
+  });
+
   it("tells a Board Session it has no Ticket, in the same trust and authority layers", () => {
     expect(composeSystemPrompt(projectSpec())).toMatchInlineSnapshot(`
       "# Operating
@@ -657,6 +680,23 @@ describe("composeFirstUserMessage", () => {
         verbs: ["session.start"],
       }),
     ).toContain("This Ticket Session's frozen tool surface holds these Volli verbs");
+  });
+
+  it("uses the exact frozen MCP-management wire names in the first-message tool block", () => {
+    const legacy = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+    });
+    const current = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+      mcpManagementNames: "server",
+    });
+    expect(legacy).toContain("mcp.list — call it as mcp_list");
+    expect(legacy).toContain("mcp.install — call it as mcp_install");
+    expect(current).toContain("mcp.list — call it as server_list");
+    expect(current).toContain("mcp.install — call it as server_install");
+    expect(current).not.toContain("mcp_list");
   });
 
   it("still names a verb this build stopped projecting", () => {

@@ -11,7 +11,7 @@
  * is not an accessibility gap. The keyboard `focus-visible` ring survives only
  * where its absence WOULD be a violation: controls with no caret to speak for
  * them (buttons, switches, the select trigger), which keep the quiet
- * `focus-visible:ring-2 ring-ring/45` recipe spelled in `button.tsx`. Do not
+ * `focus-visible:ring-2 ring-ring` recipe spelled in `button.tsx`. Do not
  * "restore" a field focus treatment without reopening that decision.
  */
 

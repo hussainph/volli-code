@@ -811,8 +811,9 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
         transition: transition ?? undefined,
       }}
       // Above its neighbours while it travels, so the tab being dragged is not
-      // drawn under the ones it is passing.
-      className={cn(isDragging && "z-10", ghosted && "opacity-40", props.className)}
+      // drawn under the ones it is passing, and the hand closes on it while it
+      // carries the tab.
+      className={cn(isDragging && "z-10 cursor-grabbing", ghosted && "opacity-40", props.className)}
       drag={renamingNow ? null : { listeners, dragging: isDragging }}
     />
   );
@@ -981,7 +982,13 @@ function TabShell({
             // shift instead — the very motion the flag turned off. The board card
             // needs no such line because its own transition list is `border-color`
             // alone (`board/ticket-card.tsx`).
-            "group relative flex h-7 shrink-0 items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+            // `cursor-default select-none` because a tab is a control, not a
+            // line of text: a plain div holding a label gets the browser's
+            // text caret, and a press-drag across it paints a text selection
+            // instead of answering the click. Every other clickable row has
+            // said this since `menu-classes.ts` (VC-381); this was the one
+            // row that never did.
+            "group relative flex h-7 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring",
             folder ? "rounded-t-lg" : "rounded-md",
             // A closable tab pays its right inset in the × instead of in padding.
             folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
@@ -1125,7 +1132,7 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
         // The house hover-reveal contract in full (`ticket/rail-panel-parts.tsx`
         // is the reference): the duration and the reduced-motion escape are
         // part of it, and every tab copy had dropped both.
-        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity duration-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 motion-reduce:transition-none",
+        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity duration-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         dirty ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
       )}
     >
