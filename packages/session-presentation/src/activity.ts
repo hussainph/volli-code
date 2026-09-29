@@ -13,7 +13,6 @@
  * context object, so a row's text is unit-testable without React.
  */
 import {
-  ACTIVITY_BROWSE_VERBS,
   activityDuration,
   isDurableActivity,
   readActivityDescriptor,
@@ -751,14 +750,30 @@ function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
 
 /* ------------------------------------------------------------------- browse */
 
-/*
- * One verb per browser action, from `ACTIVITY_BROWSE_VERBS` — the table a
- * Browser Trace frame (VC-453) reads too. Element actions take the element as
- * their object and the page as their meta; page actions take the page. The
- * card under the row is the UI's, keyed on `ActivityRow.browse`, so the
- * presenter leaves `detail` empty for every action that has a tab — except a
- * tab listing, which has no tab and shows its text.
+/**
+ * One verb per browser action, in Volli's words. Element actions take the
+ * element as their object and the page as their meta; page actions take the
+ * page. The card under the row is the UI's, keyed on `ActivityRow.browse`,
+ * so the presenter leaves `detail` empty for every action that has a tab —
+ * except a tab listing, which has no tab and shows its text.
  */
+const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
+  open: "Opened",
+  back: "Went back",
+  forward: "Went forward",
+  reload: "Reloaded",
+  click: "Clicked",
+  type: "Typed into",
+  press: "Pressed",
+  select: "Selected in",
+  hover: "Hovered",
+  scroll: "Scrolled",
+  wait: "Waited",
+  read: "Read page",
+  screenshot: "Screenshot",
+  console: "Read console",
+  tabs: "Listed tabs",
+};
 
 /** Actions whose object is an element the page named, quoted as the page's words. */
 const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
@@ -800,23 +815,30 @@ function browseFacts(context: ActivityContext): ActivityFacts {
   return facts;
 }
 
+/**
+ * What one browser action says on its own: the verb, and the object when the
+ * action has one the row names — an element (quoted as the page's words), a
+ * key, or a direction. The transcript row and a Browser Trace frame (VC-453)
+ * both read it, so the row and the replay of the same call cannot name it
+ * differently; the row adds the page as its meta, the replay draws the page
+ * beside the caption.
+ */
+export function browseCaption(
+  action: ActivityBrowseAction,
+  target: string | null,
+): { verb: string; object: string | null } {
+  const verb = BROWSE_VERBS[action];
+  if (ELEMENT_ACTIONS.has(action)) return { verb, object: quotedTarget(target) };
+  if (PAGE_INPUT_ACTIONS.has(action)) return { verb, object: target };
+  return { verb, object: null };
+}
+
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
-  const verb = ACTIVITY_BROWSE_VERBS[facet.action];
-  if (ELEMENT_ACTIONS.has(facet.action)) {
+  const verb = BROWSE_VERBS[facet.action];
+  if (ELEMENT_ACTIONS.has(facet.action) || PAGE_INPUT_ACTIONS.has(facet.action)) {
     return {
-      verb,
-      object: quotedTarget(facet.target),
-      openPath: null,
-      meta: page,
-      metaTone: "muted",
-      detail: null,
-    };
-  }
-  if (PAGE_INPUT_ACTIONS.has(facet.action)) {
-    return {
-      verb,
-      object: facet.target,
+      ...browseCaption(facet.action, facet.target),
       openPath: null,
       meta: page,
       metaTone: "muted",

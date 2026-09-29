@@ -75,17 +75,25 @@ describe("traceIndexAtOffset", () => {
 });
 
 describe("followTraceIndex", () => {
+  const run = (tabId: string, seqs: number[]) =>
+    seqs.map((seq) => frame(tabId, { seq, at: seq * 1_000 }));
+
   it("follows the newest step when the person was watching it", () => {
-    expect(followTraceIndex(4, 5, 8)).toBe(7);
+    expect(followTraceIndex(4, run("a", [0, 1, 2, 3, 4]), run("a", [0, 1, 2, 3, 4, 5, 6, 7]))).toBe(
+      7,
+    );
   });
 
-  it("stays where a person scrubbed back to", () => {
-    expect(followTraceIndex(1, 5, 8)).toBe(1);
+  it("stays on the same step a person scrubbed back to, even as the bound shifts every position", () => {
+    expect(followTraceIndex(1, run("a", [0, 1, 2, 3, 4]), run("a", [0, 1, 2, 3, 4, 5]))).toBe(1);
+    // The bound let steps 0 and 1 go: step 2 is now first.
+    expect(followTraceIndex(2, run("a", [0, 1, 2, 3, 4]), run("a", [2, 3, 4, 5, 6]))).toBe(0);
   });
 
-  it("opens an empty replay that just gained steps at its newest, and clamps a shrunk one", () => {
-    expect(followTraceIndex(0, 0, 3)).toBe(0);
-    expect(followTraceIndex(4, 9, 3)).toBe(2);
+  it("clamps when the step itself was let go, and opens a replay that just gained steps at its newest", () => {
+    expect(followTraceIndex(0, run("a", [0, 1, 2]), run("a", [2, 3]))).toBe(0);
+    expect(followTraceIndex(0, [], run("a", [0, 1, 2]))).toBe(0);
+    expect(followTraceIndex(3, run("a", [0, 1]), run("a", [0, 1, 2]))).toBe(2);
   });
 });
 

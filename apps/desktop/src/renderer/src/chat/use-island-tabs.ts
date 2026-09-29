@@ -251,9 +251,12 @@ export function useIslandTabs(
   sessionId: string,
   projectId: string,
   flash: IslandFlashPush,
-  /** Where `replayTab` opens the Browser replay (VC-453); omitted, it opens nowhere. */
-  openTrace?: (request: BrowserTraceRequest) => void,
+  deps: {
+    /** Where `replayTab` opens the Browser replay (VC-453); omitted, it opens nowhere. */
+    openTrace?: ((request: BrowserTraceRequest) => void) | undefined;
+  } = {},
 ): IslandTabsFeed {
+  const { openTrace } = deps;
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Hydration is the baseline. A chat can mount before main has answered the
   // project's listing, and the tabs that arrive with that answer existed all

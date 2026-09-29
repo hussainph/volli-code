@@ -10,7 +10,9 @@
  * replay, which needs every frame in order long after the live set moved on.
  * So the trace copies each step's frame out of the picture store the moment
  * the step is recorded — while the live set certainly still holds it — into
- * its own sink under its own bounds. The picture id is kept as the frame's
+ * its own directory under its own bounds — through the picture store's own
+ * persistence seam (`picture-disk.ts`), so a frame on disk is the same
+ * self-describing pair a kept screenshot is. The picture id is kept as the frame's
  * name, so the card's picture and the replay's frame are one id: once the
  * live set has let a capture go, the host answers the card from here.
  *
@@ -42,7 +44,11 @@ import {
   newBrowserTrace,
 } from "@volli/shared";
 
-import { type BrowserPictureMime, pictureDataUrl } from "./picture-store";
+import {
+  type BrowserPicturePersistence,
+  type BrowserPictureRecord,
+  pictureDataUrl,
+} from "./picture-store";
 
 /** How long a trace is kept after its last step. */
 export const BROWSER_TRACE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
@@ -60,21 +66,23 @@ const URL_LIMIT = 2_048;
 /** Volli's own words for a failure; bounded because a thrown message is not ours to size. */
 const ERROR_LIMIT = 400;
 
-export interface BrowserTraceFrameBytes {
+/** A frame as the picture store holds it: the bytes and the record that says what they are. */
+export interface BrowserTraceFrame {
   bytes: Uint8Array;
-  mime: BrowserPictureMime;
+  record: BrowserPictureRecord;
 }
 
+/**
+ * Where traces are kept: the trace records themselves, and — through the
+ * picture store's own persistence seam, pointed at a directory of its own —
+ * the frames they name, each with the picture's self-describing record.
+ */
 export interface BrowserTracePersistence {
   writeTrace(trace: BrowserTrace): void;
-  writeFrame(pictureId: string, frame: BrowserTraceFrameBytes): void;
-  readFrame(pictureId: string): BrowserTraceFrameBytes | null;
   /** Every trace the sink still holds, for rehydration and the sweep. */
   listTraces(): readonly BrowserTrace[];
-  /** Every frame id the sink holds, so a frame no trace names can be swept. */
-  listFrames(): readonly string[];
   removeTrace(traceId: string): void;
-  removeFrame(pictureId: string): void;
+  frames: BrowserPicturePersistence;
 }
 
 /** One settled tool call, as the host saw it. The store cleans and numbers it. */
@@ -96,7 +104,7 @@ export interface BrowserTraceStoreDependencies {
   createId: () => string;
   now: () => number;
   /** The frame a step's picture id names, from the picture store's live set. */
-  frameOf: (pictureId: string) => BrowserTraceFrameBytes | null;
+  frameOf: (pictureId: string) => BrowserTraceFrame | null;
   /** Absent means traces live only as long as the process — tests and a build with no disk. */
   persist?: BrowserTracePersistence;
   stepLimit?: number;
@@ -125,8 +133,8 @@ export class BrowserTraceStore {
         this.frames.set(pictureId, trace.traceId);
       }
     }
-    for (const pictureId of deps.persist?.listFrames() ?? []) {
-      if (!this.frames.has(pictureId)) deps.persist?.removeFrame(pictureId);
+    for (const frame of deps.persist?.frames.list() ?? []) {
+      if (!this.frames.has(frame.id)) deps.persist?.frames.remove(frame.id);
     }
     this.sweep();
   }
@@ -154,7 +162,7 @@ export class BrowserTraceStore {
     if (pictureId !== null && this.deps.persist !== undefined) {
       const frame = this.deps.frameOf(pictureId);
       if (frame === null) pictureId = null;
-      else this.deps.persist.writeFrame(pictureId, frame);
+      else this.deps.persist.frames.write(frame.bytes, frame.record);
     }
 
     const { trace, dropped } = appendBrowserTraceStep(
@@ -193,7 +201,7 @@ export class BrowserTraceStore {
    */
   frameDataUrl(pictureId: string): string | null {
     if (!this.frames.has(pictureId)) return null;
-    const frame = this.deps.persist?.readFrame(pictureId) ?? null;
+    const frame = this.deps.persist?.frames.read(pictureId) ?? null;
     return frame === null ? null : pictureDataUrl(frame.bytes, frame.mime);
   }
 
@@ -230,6 +238,6 @@ export class BrowserTraceStore {
   private forgetFrame(pictureId: string | null): void {
     if (pictureId === null) return;
     this.frames.delete(pictureId);
-    this.deps.persist?.removeFrame(pictureId);
+    this.deps.persist?.frames.remove(pictureId);
   }
 }

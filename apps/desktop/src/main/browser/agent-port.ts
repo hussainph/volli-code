@@ -90,6 +90,7 @@ import type {
 } from "./tab-host";
 import { BrowserSessionTabLimitError, BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
 import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-controller";
+import { traced } from "./trace-steps";
 import type { BrowserTraceStepInput } from "./trace-store";
 
 /**
@@ -767,106 +768,14 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
   return {
     ...port,
     tabs: scoped(port.tabs),
-    navigate: scoped(traced(options, session.sessionId, port.navigate, navigateStep)),
+    navigate: scoped(
+      traced.navigate(options.host, options.scope, session.sessionId, port.navigate),
+    ),
     snapshot: scoped(port.snapshot),
-    act: scoped(traced(options, session.sessionId, port.act, actStep)),
+    act: scoped(traced.act(options.host, session.sessionId, port.act)),
     screenshot: scoped(port.screenshot),
     console: scoped(port.console),
     acquire: scoped(port.acquire),
     release: scoped(port.release),
-  };
-}
-
-/* ------------------------------------------------------------ traces (VC-453) */
-
-type TracedFacts = Omit<BrowserTraceStepInput, "sessionId" | "outcome" | "rule">;
-
-/**
- * Wraps a changing call so the host hears how it settled — answered, refused
- * or failed — in the order the calls settle, which is the order a replay
- * shows. Only after the call ran: a call withdrawn before it started never
- * happened, and the wrapper sits inside `scoped` so it is never reached.
- * Whether the tab is one to record is the host's judgement, not this one's.
- */
-function traced<I extends { signal: AbortSignal }, O>(
-  options: AgentBrowserPortOptions,
-  sessionId: string,
-  run: (input: I) => Promise<O>,
-  facts: (input: I, answer: O | null, page: RuntimeBrowserPage | null) => TracedFacts | null,
-): (input: I) => Promise<O> {
-  const record = options.host.recordTraceStep?.bind(options.host);
-  if (record === undefined) return run;
-  return async (input) => {
-    try {
-      const answer = await run(input);
-      const step = facts(input, answer, null);
-      if (step !== null) record({ ...step, sessionId, outcome: "ok", rule: null });
-      return answer;
-    } catch (error) {
-      const refusal = error instanceof BrowserRefusal ? error : null;
-      const step = facts(input, null, refusal?.page ?? null);
-      if (step !== null) {
-        record({
-          ...step,
-          sessionId,
-          outcome: refusal === null ? "failed" : "refused",
-          rule: refusal?.rule ?? null,
-          // Volli's words for a failure; a refusal's words are its rule.
-          error: refusal === null ? failureWords(error, input.signal) : null,
-        });
-      }
-      throw error;
-    }
-  };
-}
-
-function failureWords(error: unknown, signal: AbortSignal): string {
-  if (signal.aborted) return "The call was withdrawn before it finished.";
-  return error instanceof Error && error.message.length > 0 ? error.message : String(error);
-}
-
-type NavigateInput = Parameters<RuntimeBrowserPort["navigate"]>[0];
-type ActInput = Parameters<RuntimeBrowserPort["act"]>[0];
-
-function navigateStep(
-  input: NavigateInput,
-  answer: RuntimeBrowserSnapshot | null,
-  page: RuntimeBrowserPage | null,
-): TracedFacts | null {
-  const tabId = answer?.tabId ?? page?.tabId ?? input.tabId;
-  // A refused open with no tab has no page to replay; the transcript keeps it.
-  if (tabId === undefined) return null;
-  const aimed = input.navigation.kind === "url" ? input.navigation.url : null;
-  return {
-    tabId,
-    action: input.navigation.kind === "url" ? "open" : input.navigation.kind,
-    target: null,
-    url: answer?.url ?? aimed ?? page?.url ?? null,
-    title: answer?.title ?? page?.title ?? null,
-    generation: answer?.generation ?? null,
-    pictureId: answer?.picture ?? null,
-    error: answer?.error ?? null,
-  };
-}
-
-function actStep(
-  input: ActInput,
-  answer: RuntimeBrowserActResult | null,
-  page: RuntimeBrowserPage | null,
-): TracedFacts {
-  // The page's own name for what was touched, else what the call named. The
-  // text a `type` or `select` carried is never a target: it may be a secret.
-  const named = input.ref ?? input.key ?? input.direction ?? null;
-  const target =
-    answer === null || answer.target === null ? named : (answer.target.name ?? answer.target.ref);
-  return {
-    tabId: answer?.tabId ?? page?.tabId ?? input.tabId,
-    action: input.kind,
-    target,
-    url: answer?.url ?? page?.url ?? null,
-    title: answer?.title ?? page?.title ?? null,
-    generation: answer?.generation ?? input.generation,
-    pictureId: answer?.picture ?? null,
-    error: answer?.error ?? null,
   };
 }

@@ -23,11 +23,12 @@
  * typed into a page is recorded: a `type` step names the field, never the
  * text, because the text may be a password.
  *
- * Tolerant on read, like every record that outlives the build that wrote it:
- * {@link readBrowserTrace} answers null for a record it cannot trust as a
+ * Tolerant on read, because it is evidence rather than history: a step this
+ * build cannot read costs the person one frame of a replay, never the rest of
+ * it. {@link readBrowserTrace} answers null for a record it cannot trust as a
  * whole and drops a single step it cannot read rather than the trace.
  */
-import { ACTIVITY_BROWSE_VERBS, type ActivityBrowseAction } from "./session-activity";
+import type { ActivityBrowseAction } from "./session-activity";
 
 /** The record's own version. A reader that meets another answers null. */
 export const BROWSER_TRACE_VERSION = 1;
@@ -269,8 +270,9 @@ export type BrowserTraceFrame = {
 
 /**
  * A Session's traces as one replay: every kept step across its tabs, in the
- * order the calls settled. Ties keep the trace's own order, so two steps a
- * clock stamped alike still replay in the order they were recorded.
+ * order the calls settled. Within one trace a tie keeps the recorded order;
+ * across two tabs a tie (the same millisecond) breaks by trace id — stable,
+ * so every client replays it alike, though not necessarily in call order.
  */
 export function browserTraceTimeline(traces: readonly BrowserTrace[]): BrowserTraceFrame[] {
   return traces
@@ -307,33 +309,6 @@ export function browserTraceStartIndex(
     if (index >= 0) return index;
   }
   return Math.max(0, timeline.length - 1);
-}
-
-/** Actions whose object is an element the page named, quoted as the page's words. */
-const ELEMENT_ACTIONS: ReadonlySet<BrowserTraceAction> = new Set([
-  "click",
-  "type",
-  "select",
-  "hover",
-]);
-
-/**
- * What a frame's caption says, in the transcript row's own words: the verb,
- * and its object when it has one. An element's name is quoted, because it is
- * the page's words; a bare ref (`e12`) is Volli's and is not. Navigation
- * takes no object: the frame shows the URL beside the caption.
- */
-export function browserTraceCaption(step: BrowserTraceStep): {
-  verb: string;
-  object: string | null;
-} {
-  const verb = ACTIVITY_BROWSE_VERBS[step.action];
-  if (step.target === null) return { verb, object: null };
-  if (ELEMENT_ACTIONS.has(step.action)) {
-    return { verb, object: /^e\d+$/.test(step.target) ? step.target : `“${step.target}”` };
-  }
-  if (step.action === "press" || step.action === "scroll") return { verb, object: step.target };
-  return { verb, object: null };
 }
 
 /* --------------------------------------------------------------- helpers */

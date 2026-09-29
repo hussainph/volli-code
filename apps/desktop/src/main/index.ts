@@ -2262,7 +2262,7 @@ app.whenReady().then(async () => {
     traces: new BrowserTraceStore({
       createId: randomUUID,
       now: Date.now,
-      frameOf: (pictureId) => browserPictures.bytesOf(pictureId),
+      frameOf: (pictureId) => browserPictures.copyOf(pictureId),
       persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the

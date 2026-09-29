@@ -8,6 +8,7 @@ import type { DynamicToolUIPart, UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  browseCaption,
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
@@ -1150,6 +1151,21 @@ describe("presenters", () => {
  * would draw the same rows. Element actions name the element the page named;
  * page actions name the page.
  */
+describe("browseCaption (VC-453)", () => {
+  it("quotes an element's page name and leaves a bare ref as Volli's", () => {
+    expect(browseCaption("click", "Sign in")).toEqual({ verb: "Clicked", object: "“Sign in”" });
+    expect(browseCaption("type", "e12")).toEqual({ verb: "Typed into", object: "e12" });
+    expect(browseCaption("hover", null)).toEqual({ verb: "Hovered", object: null });
+  });
+
+  it("names a key or a direction as given, and gives navigation no object", () => {
+    expect(browseCaption("press", "Enter")).toEqual({ verb: "Pressed", object: "Enter" });
+    expect(browseCaption("scroll", "down")).toEqual({ verb: "Scrolled", object: "down" });
+    expect(browseCaption("open", "ignored")).toEqual({ verb: "Opened", object: null });
+    expect(browseCaption("wait", null)).toEqual({ verb: "Waited", object: null });
+  });
+});
+
 describe("browse presenter", () => {
   const browse = (
     action: ActivityBrowse["action"],

@@ -363,7 +363,10 @@ async function main() {
     2,
     "every frame is on disk in the traces directory, and the person's tab left nothing",
     async () => {
-      const frames = await fs.readdir(join(tracesRoot, "frames"));
+      const frameFiles = await fs.readdir(join(tracesRoot, "frames"));
+      // Each frame is the picture disk's self-describing pair: bytes and record.
+      const frames = frameFiles.filter((name) => name.endsWith(".jpg"));
+      const sidecars = frameFiles.filter((name) => name.endsWith(".json"));
       const records = (await fs.readdir(tracesRoot)).filter((name) => name.endsWith(".json"));
       const named = recorded
         .flatMap((trace) => trace.steps)
@@ -377,6 +380,7 @@ async function main() {
           named.length >= 2 &&
           named.every((id) => frames.includes(`${id}.jpg`)) &&
           frames.length === named.length &&
+          sidecars.length === named.length &&
           records.length === 1 &&
           driven.personPicture !== null &&
           !personFrame &&
@@ -449,6 +453,17 @@ async function main() {
     }),
   );
   await fs.writeFile(join(tracesRoot, "frames", `${STALE_FRAME}.jpg`), "stale");
+  await fs.writeFile(
+    join(tracesRoot, "frames", `${STALE_FRAME}.json`),
+    JSON.stringify({
+      id: STALE_FRAME,
+      tabId: "long-gone",
+      generation: 1,
+      capturedAt: 1,
+      ownerSessionId: sessionId,
+      mime: "image/jpeg",
+    }),
+  );
 
   await closeAppBounded(app);
   app = null;

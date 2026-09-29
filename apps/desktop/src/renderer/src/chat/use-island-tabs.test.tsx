@@ -138,7 +138,7 @@ async function mount(
   const flashes: IslandFlash[] = [];
   function Probe() {
     const channel = useIslandFlash();
-    const feed = useIslandTabs(SESSION, PROJECT, channel.push, openTrace);
+    const feed = useIslandTabs(SESSION, PROJECT, channel.push, { openTrace });
     seen.push({ feed, flash: channel.flash });
     if (channel.flash !== null && flashes.at(-1)?.id !== channel.flash.id) {
       flashes.push(channel.flash);

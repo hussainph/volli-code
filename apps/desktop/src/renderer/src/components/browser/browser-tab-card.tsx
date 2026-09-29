@@ -110,8 +110,10 @@ export function useBrowserPicture(api: BrowserApi | null, pictureId: string | nu
 
 /* -------------------------------------------------------------------- card */
 
-/** `example.com/path` for the card's address line, or the raw text when it does not parse. */
-function displayUrl(url: string | null): string | null {
+/** `example.com/path` for the card's address line — and the replay's — or the raw text when it does not parse. */
+export function displayUrl(url: string): string;
+export function displayUrl(url: string | null): string | null;
+export function displayUrl(url: string | null): string | null {
   if (url === null) return null;
   try {
     const parsed = new URL(url);

@@ -4,7 +4,7 @@ import type { BrowserTrace } from "@volli/shared";
 
 import {
   BrowserTraceStore,
-  type BrowserTraceFrameBytes,
+  type BrowserTraceFrame,
   type BrowserTracePersistence,
   type BrowserTraceStepInput,
   type BrowserTraceStoreDependencies,
@@ -16,25 +16,37 @@ import {
  */
 function disk() {
   const traces = new Map<string, BrowserTrace>();
-  const frames = new Map<string, BrowserTraceFrameBytes>();
+  const frames = new Map<string, BrowserTraceFrame>();
   const persist: BrowserTracePersistence = {
     writeTrace: (trace) => void traces.set(trace.traceId, structuredClone(trace)),
-    writeFrame: (id, frame) => void frames.set(id, frame),
-    readFrame: (id) => frames.get(id) ?? null,
     listTraces: () => [...traces.values()],
-    listFrames: () => [...frames.keys()],
     removeTrace: (id) => void traces.delete(id),
-    removeFrame: (id) => void frames.delete(id),
+    frames: {
+      write: (bytes, record) => void frames.set(record.id, { bytes, record }),
+      read: (id) => {
+        const held = frames.get(id);
+        return held === undefined ? null : { bytes: held.bytes, mime: held.record.mime };
+      },
+      list: () => [...frames.values()].map((one) => one.record),
+      remove: (id) => void frames.delete(id),
+    },
   };
   return { traces, frames, persist };
 }
 
 /** The picture store's live set, as far as the trace store can see it. */
-const live = new Map<string, BrowserTraceFrameBytes>();
+const live = new Map<string, BrowserTraceFrame>();
 const frameOf = (id: string) => live.get(id) ?? null;
-const jpeg = (label: string): BrowserTraceFrameBytes => ({
+const jpeg = (label: string, id = label): BrowserTraceFrame => ({
   bytes: Buffer.from(label),
-  mime: "image/jpeg",
+  record: {
+    id,
+    tabId: "tab-1",
+    generation: 1,
+    capturedAt: 1_000,
+    ownerSessionId: "session-1",
+    mime: "image/jpeg",
+  },
 });
 
 function store(
@@ -72,8 +84,8 @@ function step(over: Partial<BrowserTraceStepInput> = {}): BrowserTraceStepInput 
 
 describe("BrowserTraceStore", () => {
   it("keeps one ordered trace per Session and tab, and copies each step's frame out of the live set", () => {
-    live.set("p-1", jpeg("one"));
-    live.set("p-2", jpeg("two"));
+    live.set("p-1", jpeg("one", "p-1"));
+    live.set("p-2", jpeg("two", "p-2"));
     const sink = disk();
     const traces = store({ persist: sink.persist });
 
@@ -130,9 +142,9 @@ describe("BrowserTraceStore", () => {
   });
 
   it("answers a frame read only for an id a kept trace names", () => {
-    live.set("p-9", jpeg("nine"));
+    live.set("p-9", jpeg("nine", "p-9"));
     const sink = disk();
-    sink.frames.set("stranger", jpeg("x"));
+    sink.frames.set("stranger", jpeg("x", "stranger"));
     const traces = store({ persist: sink.persist });
     traces.record(step({ pictureId: "p-9" }));
 
@@ -143,7 +155,7 @@ describe("BrowserTraceStore", () => {
   });
 
   it("drops the frames of steps the step bound lets go of", () => {
-    for (const id of ["a", "b", "c"]) live.set(id, jpeg(id));
+    for (const id of ["a", "b", "c"]) live.set(id, jpeg(id, id));
     const sink = disk();
     const traces = store({ persist: sink.persist, stepLimit: 2 });
     for (const id of ["a", "b", "c"]) traces.record(step({ pictureId: id }));
@@ -155,10 +167,10 @@ describe("BrowserTraceStore", () => {
   });
 
   it("rehydrates after a relaunch, sweeps orphans, and starts a fresh trace for a tab id seen before", () => {
-    live.set("p-r", jpeg("r"));
+    live.set("p-r", jpeg("r", "p-r"));
     const sink = disk();
     store({ persist: sink.persist }).record(step({ pictureId: "p-r" }));
-    sink.frames.set("orphan", jpeg("left behind"));
+    sink.frames.set("orphan", jpeg("left behind", "orphan"));
 
     let nextId = 100;
     const relaunched = new BrowserTraceStore({
@@ -218,7 +230,7 @@ describe("BrowserTraceStore", () => {
   });
 
   it("keeps total frames inside the bound by dropping whole older traces, never the newest", () => {
-    for (const id of ["f1", "f2", "f3", "f4", "f5"]) live.set(id, jpeg(id));
+    for (const id of ["f1", "f2", "f3", "f4", "f5"]) live.set(id, jpeg(id, id));
     const sink = disk();
     let now = 0;
     const traces = store({ persist: sink.persist, now: () => (now += 10), frameLimit: 2 });

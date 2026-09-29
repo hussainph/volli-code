@@ -5,7 +5,6 @@ import {
   BROWSER_TRACE_TEXT_LIMIT,
   type BrowserTrace,
   type BrowserTraceStep,
-  browserTraceCaption,
   browserTracePictureIds,
   browserTraceStartIndex,
   browserTraceTimeline,
@@ -256,39 +255,5 @@ describe("browserTraceStartIndex", () => {
 
   it("is zero for an empty replay", () => {
     expect(browserTraceStartIndex([], { pictureId: "x" })).toBe(0);
-  });
-});
-
-describe("browserTraceCaption", () => {
-  const at = (overrides: Partial<BrowserTraceStep>): BrowserTraceStep => ({
-    ...step(overrides),
-    seq: 0,
-  });
-
-  it("quotes an element's page name and leaves a bare ref as Volli's", () => {
-    expect(browserTraceCaption(at({ action: "click", target: "Sign in" }))).toEqual({
-      verb: "Clicked",
-      object: "“Sign in”",
-    });
-    expect(browserTraceCaption(at({ action: "type", target: "e12" }))).toEqual({
-      verb: "Typed into",
-      object: "e12",
-    });
-  });
-
-  it("names a key or a direction as it was given", () => {
-    expect(browserTraceCaption(at({ action: "press", target: "Enter" })).object).toBe("Enter");
-    expect(browserTraceCaption(at({ action: "scroll", target: "down" })).object).toBe("down");
-  });
-
-  it("gives navigation and targetless actions no object", () => {
-    expect(browserTraceCaption(at({ action: "open", target: "x" }))).toEqual({
-      verb: "Opened",
-      object: null,
-    });
-    expect(browserTraceCaption(at({ action: "wait", target: null }))).toEqual({
-      verb: "Waited",
-      object: null,
-    });
   });
 });

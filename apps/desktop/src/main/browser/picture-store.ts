@@ -144,11 +144,19 @@ export class BrowserPictureStore {
   }
 
   /**
-   * The picture's bytes, for a host that keeps its own copy — a Browser Trace
-   * (VC-453) copies each step's frame the moment it is recorded, while the
-   * live set still holds it. Null when nothing here or on disk answers.
+   * The picture's bytes with the record that says what they are, for a host
+   * that keeps its own copy — a Browser Trace (VC-453) copies each step's
+   * frame the moment it is recorded, while the live set still holds it, and
+   * writes it through this same persistence seam into a directory of its own.
+   * Null when nothing here or on disk answers.
    */
-  bytesOf(id: string): { bytes: Uint8Array; mime: BrowserPictureMime } | null {
+  copyOf(id: string): { bytes: Uint8Array; record: BrowserPictureRecord } | null {
+    const held = this.bytesOf(id);
+    const record = this.describe(id);
+    return held === null || record === null ? null : { bytes: held.bytes, record };
+  }
+
+  private bytesOf(id: string): { bytes: Uint8Array; mime: BrowserPictureMime } | null {
     const record = this.minted.get(id);
     if (record === undefined) return null;
     const held = this.live.get(id);

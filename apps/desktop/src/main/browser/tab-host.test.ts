@@ -2599,15 +2599,17 @@ describe("BrowserTabHost traces (VC-453)", () => {
     traces = new BrowserTraceStore({
       createId: () => `trace-${++nextTrace}`,
       now: () => clock,
-      frameOf: (pictureId) => pictures.bytesOf(pictureId),
+      frameOf: (pictureId) => pictures.copyOf(pictureId),
       persist: {
         writeTrace: () => undefined,
-        writeFrame: (id, frame) => void frames.set(id, frame),
-        readFrame: (id) => frames.get(id) ?? null,
         listTraces: () => [],
-        listFrames: () => [...frames.keys()],
         removeTrace: () => undefined,
-        removeFrame: (id) => void frames.delete(id),
+        frames: {
+          write: (bytes, record) => void frames.set(record.id, { bytes, mime: record.mime }),
+          read: (id) => frames.get(id) ?? null,
+          list: () => [],
+          remove: (id) => void frames.delete(id),
+        },
       },
       stepLimit: 150,
     });

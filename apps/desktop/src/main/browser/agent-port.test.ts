@@ -1677,7 +1677,7 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
     ]);
   });
 
-  it("records a call the host could not complete as failed, in words, and rethrows it", async () => {
+  it("records a call the host could not complete as failed, in Volli's words, and rethrows it", async () => {
     const { port: traced, steps } = tracing(
       [state({ tabId: "mine", createdBy: "session", ticketId: "t1" })],
       {},
@@ -1697,13 +1697,13 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
         action: "back",
         tabId: "mine",
         outcome: "failed",
-        error: "The engine went away",
+        error: "The browser could not complete this action.",
         rule: null,
       },
     ]);
   });
 
-  it("says a withdrawn call was withdrawn, and a non-Error failure as it was thrown", async () => {
+  it("says a withdrawn call was withdrawn, and never quotes what was thrown", async () => {
     const withdrawn = new AbortController();
     let thrown = "gone";
     const { port: traced, steps } = tracing(
@@ -1727,7 +1727,7 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
 
     expect(steps.map((step) => step.error)).toEqual([
       "The call was withdrawn before it finished.",
-      "plain",
+      "The browser could not complete this action.",
     ]);
   });
 
@@ -1747,6 +1747,66 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
     ).rejects.toBeDefined();
 
     expect(steps).toEqual([]);
+  });
+
+  it("records an open that failed after its tab was born, against that tab", async () => {
+    const fake = fakeHost([]);
+    const steps: BrowserTraceStepInput[] = [];
+    const failing = createAgentBrowserPort({
+      host: { ...fake.host, recordTraceStep: (step) => steps.push(step) },
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor,
+      waitForLoad: async () => {
+        throw new Error("renderer went away");
+      },
+      holdAwake: () => () => {},
+    });
+
+    await expect(
+      failing.navigate({ navigation: { kind: "url", url: "https://example.com/" }, signal }),
+    ).rejects.toThrow("renderer went away");
+
+    expect(steps).toMatchObject([
+      { action: "open", tabId: "opened-1", url: "https://example.com/", outcome: "failed" },
+    ]);
+  });
+
+  it("keeps no trace of a tab the Session was never shown", async () => {
+    const { port: traced, steps } = tracing([
+      state({ tabId: "theirs", createdBy: "session", ticketId: "t1", ownerSessionId: "s9" }),
+    ]);
+    await expect(
+      traced.act({ tabId: "theirs", generation: 1, kind: "click", ref: "e1", signal }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-tab" });
+    expect(steps).toEqual([]);
+  });
+
+  it("never turns a successful call into a failure when the recorder throws", async () => {
+    const fake = fakeHost([]);
+    let calls = 0;
+    const sturdy = createAgentBrowserPort({
+      host: {
+        ...fake.host,
+        recordTraceStep: () => {
+          calls += 1;
+          throw new Error("disk full");
+        },
+      },
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor,
+      waitForLoad: async () => {},
+      holdAwake: () => () => {},
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(
+      sturdy.navigate({ navigation: { kind: "url", url: "https://example.com/" }, signal }),
+    ).resolves.toMatchObject({ url: "https://example.com/" });
+    expect(calls).toBe(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("records no frame when the host declined to look", async () => {

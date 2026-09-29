@@ -39,78 +39,79 @@ function trace(traceId = TRACE): BrowserTrace {
   ).trace;
 }
 
+const pictureRecord = (id: string, mime: "image/jpeg" | "image/png") => ({
+  id,
+  tabId: "tab-1",
+  generation: 1,
+  capturedAt: 1_100,
+  ownerSessionId: "session-1",
+  mime,
+});
+
 describe("browserTraceDisk", () => {
   it("lives in its own directory under userData, apart from the pictures and the Blob store", () => {
     expect(browserTracesRoot("/data")).toBe(join("/data", "browser-traces"));
   });
 
-  it("writes a self-describing trace and its frames under UUID names, and reads them back", () => {
+  it("writes a self-describing trace, and its frames through the picture disk's seam", () => {
     const sink = browserTraceDisk(root);
 
     sink.writeTrace(trace());
-    sink.writeFrame(FRAME, { bytes: Buffer.from("jpg"), mime: "image/jpeg" });
-    sink.writeFrame(PNG_FRAME, { bytes: Buffer.from("png"), mime: "image/png" });
+    sink.frames.write(Buffer.from("jpg"), pictureRecord(FRAME, "image/jpeg"));
+    sink.frames.write(Buffer.from("png"), pictureRecord(PNG_FRAME, "image/png"));
 
     expect(readdirSync(root).toSorted()).toEqual([`${TRACE}.json`, "frames"]);
-    expect(readdirSync(join(root, "frames")).toSorted()).toEqual([
-      `${PNG_FRAME}.png`,
-      `${FRAME}.jpg`,
-    ]);
+    expect(readdirSync(join(root, "frames")).toSorted()).toEqual(
+      [`${PNG_FRAME}.json`, `${PNG_FRAME}.png`, `${FRAME}.jpg`, `${FRAME}.json`].toSorted(),
+    );
     expect(sink.listTraces()).toEqual([trace()]);
-    expect(sink.listFrames().toSorted()).toEqual([PNG_FRAME, FRAME].toSorted());
-    expect(sink.readFrame(FRAME)).toEqual({ bytes: Buffer.from("jpg"), mime: "image/jpeg" });
-    expect(sink.readFrame(PNG_FRAME)).toEqual({ bytes: Buffer.from("png"), mime: "image/png" });
+    expect(
+      sink.frames
+        .list()
+        .map((one) => one.id)
+        .toSorted(),
+    ).toEqual([PNG_FRAME, FRAME].toSorted());
+    expect(sink.frames.read(FRAME)).toEqual({ bytes: Buffer.from("jpg"), mime: "image/jpeg" });
   });
 
-  it("refuses to write any name that is not a UUID, and reads or removes none", () => {
+  it("refuses to write a trace under any name that is not a UUID, and removes none", () => {
     const sink = browserTraceDisk(root);
 
     expect(() => sink.writeTrace(trace("../escape"))).toThrow("UUIDs");
-    expect(() =>
-      sink.writeFrame("../escape", { bytes: Buffer.from("x"), mime: "image/jpeg" }),
-    ).toThrow("UUIDs");
-    expect(sink.readFrame("../../etc/passwd")).toBeNull();
     sink.writeTrace(trace());
     sink.removeTrace("../escape");
-    sink.removeFrame("../escape");
     expect(sink.listTraces()).toHaveLength(1);
   });
 
-  it("answers empty before anything was written, and null for a frame it does not hold", () => {
+  it("answers empty before anything was written", () => {
     const sink = browserTraceDisk(join(root, "never"));
     expect(sink.listTraces()).toEqual([]);
-    expect(sink.listFrames()).toEqual([]);
-    expect(sink.readFrame(FRAME)).toBeNull();
+    expect(sink.frames.list()).toEqual([]);
   });
 
-  it("skips what it cannot trust: a torn record, a renamed one, stray files", () => {
+  it("sweeps what it cannot trust as it lists — a torn record, a renamed one, a crash's .tmp — and leaves what is not its own", () => {
     const sink = browserTraceDisk(root);
     sink.writeTrace(trace());
-    writeFileSync(join(root, "7c6b5a4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d.json"), "{ torn");
+    const torn = "7c6b5a4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d.json";
+    const renamed = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a.json";
+    const leftover = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e.json.tmp";
+    writeFileSync(join(root, torn), "{ torn");
     // A valid record under someone else's name answers for nothing.
-    writeFileSync(join(root, "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a.json"), JSON.stringify(trace()));
+    writeFileSync(join(root, renamed), JSON.stringify(trace()));
+    writeFileSync(join(root, leftover), "{");
     writeFileSync(join(root, "notes.txt"), "hello");
-    writeFileSync(join(root, `${FRAME}.json`), JSON.stringify({ ...trace(), traceId: "nope" }));
-    mkdirSync(join(root, "frames"), { recursive: true });
-    writeFileSync(join(root, "frames", "readme"), "x");
-    writeFileSync(join(root, "frames", "not-a-uuid.jpg"), "x");
-    writeFileSync(join(root, "frames", `${FRAME}.gif`), "x");
+    mkdirSync(join(root, "7e6d5c4b-3a2f-4e1d-8c0b-9a8f7e6d5c4b.json"));
 
     expect(sink.listTraces().map((one) => one.traceId)).toEqual([TRACE]);
-    expect(sink.listFrames()).toEqual([]);
+    expect(readdirSync(root).toSorted()).toEqual(
+      [`${TRACE}.json`, "7e6d5c4b-3a2f-4e1d-8c0b-9a8f7e6d5c4b.json", "notes.txt"].toSorted(),
+    );
   });
 
-  it("removes a trace and a frame, whichever type the frame was", () => {
+  it("removes a trace record", () => {
     const sink = browserTraceDisk(root);
     sink.writeTrace(trace());
-    sink.writeFrame(FRAME, { bytes: Buffer.from("jpg"), mime: "image/jpeg" });
-    sink.writeFrame(PNG_FRAME, { bytes: Buffer.from("png"), mime: "image/png" });
-
     sink.removeTrace(TRACE);
-    sink.removeFrame(FRAME);
-    sink.removeFrame(PNG_FRAME);
-
     expect(sink.listTraces()).toEqual([]);
-    expect(readdirSync(join(root, "frames"))).toEqual([]);
   });
 });

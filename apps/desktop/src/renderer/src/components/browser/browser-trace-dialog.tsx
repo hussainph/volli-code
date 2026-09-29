@@ -44,6 +44,7 @@ import {
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import {
+  displayUrl,
   prefetchBrowserPicture,
   useBrowserPicture,
 } from "@renderer/components/browser/browser-tab-card";
@@ -127,7 +128,7 @@ function TraceReplay({
 }) {
   const [state, setState] = React.useState<ReplayState>({ kind: "loading" });
   const [index, setIndex] = React.useState(0);
-  const length = React.useRef(0);
+  const shown = React.useRef<readonly BrowserTraceFrame[]>(NO_FRAMES);
   const signature = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -141,8 +142,8 @@ function TraceReplay({
         if (!first && next === signature.current) return;
         signature.current = next;
         const timeline = browserTraceTimeline(result.traces);
-        const before = length.current;
-        length.current = timeline.length;
+        const before = shown.current;
+        shown.current = timeline;
         setState({
           kind: "ready",
           timeline,
@@ -151,7 +152,7 @@ function TraceReplay({
         setIndex((current) =>
           first
             ? browserTraceStartIndex(timeline, request)
-            : followTraceIndex(current, before, timeline.length),
+            : followTraceIndex(current, before, timeline),
         );
       } catch (reason) {
         if (!live) return;
@@ -191,12 +192,12 @@ function TraceReplay({
   // the island's popover, be handed back to the island's anchor as the popover
   // closes. A key-per-element handler would go deaf in exactly that case.
   const count = timeline.length;
-  const standing = React.useRef(at);
-  standing.current = at;
+  const currentIndex = React.useRef(at);
+  currentIndex.current = at;
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      const next = traceIndexForKey(event.key, standing.current, count);
+      const next = traceIndexForKey(event.key, currentIndex.current, count);
       if (next === null) return;
       event.preventDefault();
       setIndex(next);
@@ -333,7 +334,7 @@ function Frame({ api, pictureId }: { api: BrowserApi; pictureId: string | null }
 
 /**
  * One segment per step, the current one raised in the primary tone and the
- * refused or failed ones in the destructive tone, so a person can see where
+ * refused, failed or did-not-load ones in the destructive tone, so a person can see where
  * things went wrong before scrubbing to them. A slider to assistive
  * technology; the keys are the replay's own, handled above.
  */
@@ -381,7 +382,7 @@ function ScrubTrack({
             "min-w-0 flex-1 rounded-xs transition-[height] duration-100 motion-reduce:transition-none",
             position === index
               ? "h-4 bg-primary"
-              : frame.step.outcome === "ok"
+              : frame.step.outcome === "ok" && frame.step.error === null
                 ? "h-2 bg-muted-foreground/35"
                 : "h-2 bg-destructive/70",
           )}
@@ -389,14 +390,4 @@ function ScrubTrack({
       ))}
     </div>
   );
-}
-
-/** `example.com/path` — the card's address form; the full URL rides the title. */
-function displayUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
-  } catch {
-    return url;
-  }
 }

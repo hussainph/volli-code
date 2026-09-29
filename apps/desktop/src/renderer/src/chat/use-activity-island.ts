@@ -97,7 +97,7 @@ export function useActivityIsland(
   deps: ActivityIslandDeps = {},
 ): ActivityIslandBinding {
   const { flash, push } = useIslandFlash();
-  const tabs = useIslandTabs(sessionId, projectId, push, deps.openTrace);
+  const tabs = useIslandTabs(sessionId, projectId, push, { openTrace: deps.openTrace });
   const plan = useIslandPlan(sessionId, deps.store);
   const shells = useIslandShells(sessionId, { openOutput: deps.openShellOutput });
   // The agents feed's deps are a subset of the mount's, under the same names.

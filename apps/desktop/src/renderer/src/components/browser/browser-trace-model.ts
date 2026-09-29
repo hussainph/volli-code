@@ -5,15 +5,13 @@
  * drag lands on, whether a growing trace pulls the person along, and what a
  * frame's caption reads. None of that shows in a screenshot, so it is gated.
  *
- * The record itself — its order, where a replay opens, the verb a step takes
- * — is `@volli/shared`'s, so a cloud or mobile client replays the same trace
- * the same way. What is here is only what a desktop keyboard and pointer add.
+ * The record itself — its order, where a replay opens — is `@volli/shared`'s,
+ * and a step's words are `@volli/session-presentation`'s `browseCaption`, the
+ * transcript row's own, so a cloud or mobile client replays the same trace the
+ * same way. What is here is only what a desktop keyboard and pointer add.
  */
-import {
-  browserTraceCaption,
-  type BrowserTraceFrame,
-  type BrowserTraceOutcome,
-} from "@volli/shared";
+import type { BrowserTraceFrame, BrowserTraceOutcome } from "@volli/shared";
+import { browseCaption } from "@volli/session-presentation";
 
 /** Which Session's replay to open, and the step to open it at. */
 export interface BrowserTraceRequest {
@@ -68,11 +66,26 @@ export function traceIndexAtOffset(offset: number, width: number, length: number
 /**
  * Where the replay stands after the trace was re-read. A person watching the
  * newest step follows the Session as it adds more; one who scrubbed back
- * stays where they were.
+ * stays on the SAME step — found by its trace and number, since a trace at
+ * its bound lets its oldest steps go and every position shifts under them.
+ * A step that was itself let go leaves the replay at the nearest position.
  */
-export function followTraceIndex(index: number, before: number, after: number): number {
-  if (before > 0 && index >= before - 1) return clampTraceIndex(after - 1, after);
-  return clampTraceIndex(index, after);
+export function followTraceIndex(
+  index: number,
+  before: readonly BrowserTraceFrame[],
+  after: readonly BrowserTraceFrame[],
+): number {
+  if (before.length > 0 && index >= before.length - 1) {
+    return clampTraceIndex(after.length - 1, after.length);
+  }
+  const standing = before[index];
+  const kept =
+    standing === undefined
+      ? -1
+      : after.findIndex(
+          (frame) => frame.traceId === standing.traceId && frame.step.seq === standing.step.seq,
+        );
+  return kept >= 0 ? kept : clampTraceIndex(index, after.length);
 }
 
 /** What one frame of the replay reads. */
@@ -101,7 +114,7 @@ export function browserTraceFacts(
   const frame = timeline[index];
   if (first === undefined || frame === undefined) return null;
   const { step } = frame;
-  const caption = browserTraceCaption(step);
+  const caption = browseCaption(step.action, step.target);
   const tabs = [...new Set(timeline.map((one) => one.tabId))];
   return {
     ...caption,
