@@ -11,9 +11,10 @@ import {
   COLUMN_ROW_STRIDE_FALLBACK,
   COLUMN_WINDOW_MINIMUM,
   columnWindow,
-  measuredRowStride,
+  learnRowStride,
   mergeColumnWindows,
   scrollOffsetForRow,
+  scrollOffsetInRows,
   shouldAdoptRowStride,
   type ColumnWindow,
 } from "@renderer/components/board/column-window";
@@ -80,24 +81,10 @@ interface BoardColumnProps {
 const COLUMN_ROW_GAP = 8;
 
 /**
- * Where the scroller is, in the window's own coordinates: row × stride, read
- * from the card actually at the top of the viewport rather than divided out of
- * `scrollTop`.
- *
- * The two disagree whenever the spacers' estimate and the real cards do, and
- * the browser is what makes that disagreement matter. When a window change
- * swaps a spacer for real cards above the fold, Chromium's scroll anchoring
- * moves `scrollTop` to keep the card in view exactly where it was, and fires
- * `scroll`. Divided by the stride, that moved offset names a DIFFERENT row, so
- * the window moved again, anchoring moved `scrollTop` back, and the column
- * re-rendered every frame at rest with its top cards remounting too often to be
- * picked up (VC-451). Anchoring holds the card in view still by definition, so
- * reading THAT card is a reading anchoring cannot move.
- *
- * Falls back to plain `scrollTop` when no mounted card is at the fold — a jump
- * that landed inside a spacer, or a column not laid out yet — which is the one
- * case where the estimate is all there is. A binary search over the mounted
- * slots in DOM order, so a scroll event costs a handful of rect reads.
+ * The DOM half of `scrollOffsetInRows` (column-window.ts, VC-451): the
+ * scroller's offset read from the card at the top of its viewport, so the
+ * browser's scroll anchoring cannot flip the window. The arithmetic and its
+ * fallbacks live in the pure module; this only hands it the rect reads.
  */
 function scrollTopInRows(
   scroller: HTMLElement,
@@ -105,27 +92,19 @@ function scrollTopInRows(
   indexById: ReadonlyMap<string, number>,
   rowStride: number,
 ): number {
-  const raw = scroller.scrollTop;
-  if (list === null) return raw;
+  const rawScrollTop = scroller.scrollTop;
+  if (list === null) return rawScrollTop;
   const slots = list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]");
-  const fold = scroller.getBoundingClientRect().top;
-  let low = 0;
-  let high = slots.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (slots[middle]!.getBoundingClientRect().bottom > fold) high = middle;
-    else low = middle + 1;
-  }
-  // Every mounted card is above the fold: it is in the trailing spacer.
-  if (low === slots.length) return raw;
-  const slot = slots[low]!;
-  const box = slot.getBoundingClientRect();
-  // The first mounted card is below the fold: it is in the leading spacer.
-  if (low === 0 && box.top > fold) return raw;
-  const index = indexById.get(slot.dataset["boardTicketSlot"] ?? "");
-  if (index === undefined) return raw;
-  // Clamped: a card taller than the stride must still read as its own row.
-  return index * rowStride + Math.min(rowStride, Math.max(0, fold - box.top));
+  return scrollOffsetInRows({
+    rawScrollTop,
+    fold: scroller.getBoundingClientRect().top,
+    rowStride,
+    rows: {
+      count: slots.length,
+      edgesAt: (i) => slots[i]!.getBoundingClientRect(),
+      indexAt: (i) => indexById.get(slots[i]!.dataset["boardTicketSlot"] ?? ""),
+    },
+  });
 }
 
 /**
@@ -171,7 +150,6 @@ function useColumnWindow({
   const strideRef = React.useRef(rowStride);
   const dragRef = React.useRef(dragActive);
   const countRef = React.useRef(count);
-  const idsRef = React.useRef(ticketIds);
   const indexById = React.useMemo(
     () => new Map(ticketIds.map((id, index) => [id, index])),
     [ticketIds],
@@ -181,9 +159,8 @@ function useColumnWindow({
     strideRef.current = rowStride;
     dragRef.current = dragActive;
     countRef.current = count;
-    idsRef.current = ticketIds;
     indexByIdRef.current = indexById;
-  }, [rowStride, dragActive, count, ticketIds, indexById]);
+  }, [rowStride, dragActive, count, indexById]);
   // Every height this column has measured, by ticket — see the effect below.
   const heightsRef = React.useRef(new Map<string, number>());
 
@@ -235,30 +212,22 @@ function useColumnWindow({
   // Re-run on the window or the count moving, which is exactly when the
   // mounted SET changed and there is something new to learn.
   //
-  // The stride is averaged over every card this column has EVER measured, kept
-  // by ticket id — never over the mounted slice alone. The write here feeds
-  // back into `range`, and a slice-only average made the stride a function of
-  // the window it chooses: with cards of mixed height, rows 11–50 measured 70.5
-  // and rows 10–49 measured 68, and at a scroll offset where those two strides
-  // name different windows each measurement moved the window to the other.
-  // Every hop was a layout-effect write, so React nested them until it threw
-  // #185 (VC-451). A ledger answers the same for a window it has already seen,
-  // so a revisited window adopts nothing and the chain stops; the deadband in
-  // `shouldAdoptRowStride` still absorbs sub-pixel wobble. Entries for tickets
-  // that have left the column are dropped, so the ledger is bounded by what the
-  // column holds.
+  // The stride comes from every card this column has EVER measured, kept by
+  // ticket id in a ledger — never from the mounted slice alone, which made the
+  // stride a function of the window it chooses (`learnRowStride`, VC-451). The
+  // deadband in `shouldAdoptRowStride` still absorbs sub-pixel wobble.
   React.useLayoutEffect(() => {
     const list = listRef.current;
     if (list === null) return;
-    const ledger = heightsRef.current;
-    for (const slot of list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]")) {
-      const id = slot.dataset["boardTicketSlot"];
-      const height = slot.offsetHeight;
-      if (id !== undefined && Number.isFinite(height) && height > 0) ledger.set(id, height);
-    }
-    const held = new Set(idsRef.current);
-    for (const id of ledger.keys()) if (!held.has(id)) ledger.delete(id);
-    const measured = measuredRowStride([...ledger.values()], COLUMN_ROW_GAP);
+    const measured = learnRowStride(
+      heightsRef.current,
+      [...list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].flatMap((slot) => {
+        const id = slot.dataset["boardTicketSlot"];
+        return id === undefined ? [] : [[id, slot.offsetHeight] as const];
+      }),
+      indexByIdRef.current,
+      COLUMN_ROW_GAP,
+    );
     if (measured === null || !shouldAdoptRowStride(strideRef.current, measured)) return;
     strideRef.current = measured;
     setRowStride(measured);
@@ -415,9 +384,9 @@ export const BoardColumn = React.memo(function BoardColumn({
 
   return (
     <div
-      // The ⌥ picker's own hit test reads this: one `elementFromPoint` per
-      // pointer move answers both which column is under the hand and which
-      // panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
+      // The ⌥ picker's own hit test reads this: the first element under the
+      // hand that sits in a column answers both which column is under it and
+      // which panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
       // so the panel floating over the list still reads as this column.
       data-board-column={status}
       data-drop-aimed={aimed || undefined}
