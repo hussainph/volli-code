@@ -19,6 +19,7 @@ import {
   MODEL_PICKER_VIEWS,
   isolatePerformanceObserver,
   MODEL_PURPOSES,
+  presentedScheduledResume,
   readOptionalPerformanceClock,
   REASONING_LEVELS,
   SESSION_ROLES,
@@ -49,6 +50,8 @@ export type RendererSessionCommand =
       | { kind: "executor.retry" }
       | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
+      | { kind: "resume.schedule" }
+      | { kind: "resume.cancel" }
     >;
 
 export interface RendererSessionCommandRequest {
@@ -577,6 +580,15 @@ const commandSchema = z.discriminatedUnion("kind", [
     resolution: interactionResolutionSchema,
   }),
   z.object({ kind: z.literal("adapter.release"), attachmentId: nonEmptyString }),
+  // A person's schedule and its withdrawal. `resume.settle` is deliberately
+  // absent: what became of a schedule is the host's to record, never a client's.
+  z.object({
+    kind: z.literal("resume.schedule"),
+    attentionId: nonEmptyString,
+    attachmentId: nonEmptyString,
+    resumeAt: positiveSafeInteger,
+  }),
+  z.object({ kind: z.literal("resume.cancel"), scheduleId: nonEmptyString }),
 ]);
 
 const commandRequestSchema = z
@@ -1064,6 +1076,11 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
     // different attachments (VC-285). The codec owns what may cross; this edge
     // only composes it, as it does for every other scrubbed field here.
     projection.authority = scrubSessionAuthority(source.liveExecutor);
+  }
+  // Derived from the Session's own commands and receipts, which never cross
+  // this edge themselves: the surface gets the one schedule it may draw.
+  if (source.commands !== undefined && source.receipts !== undefined) {
+    projection.scheduledResume = presentedScheduledResume(source);
   }
   return {
     projection: projection as SessionPresentationProjection,

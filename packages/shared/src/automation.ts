@@ -21,7 +21,7 @@
 
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 import { parseAutomationSchedule, type AutomationSchedule } from "./automation-schedule";
-import { isModelTier, type ModelTier } from "./model-access-policy";
+import { isAgentModelTier, type AgentModelTier } from "./model-access-policy";
 import { parseSessionModel } from "./project-identity";
 import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
 
@@ -53,10 +53,16 @@ export interface InvalidAutomationRuntime {
  *
  * A discriminated shape rather than a bare tier string in the same column,
  * so a stored value is never ambiguous about which of the three it is.
+ *
+ * The tier is an {@link AgentModelTier}, not the wider {@link ModelTier}
+ * (VC-431). A Run starts a Session, and `utility` is the slot for work nobody
+ * asked for — no Session may run on it — so the row a Run can name is the
+ * agent-facing set the editor already offers, stated in the type rather than
+ * only at the save door.
  */
 export interface AutomationRuntimeTier {
   kind: "tier";
-  tier: ModelTier;
+  tier: AgentModelTier;
 }
 
 /**
@@ -98,19 +104,26 @@ export function isValidAutomationRuntime(
 /**
  * A stored or transported Runtime, read in today's vocabulary.
  *
- * `null` is inherit. A whole pin is a pin. A tier THIS build knows is a tier.
- * Everything else — a partial pin, a tier from another build, bytes that were
- * never JSON — is the explicit invalid row with the raw value kept, and never
- * `null`: inherit still RUNS, so an unreadable Runtime coerced to it would
- * start a Session under a policy nobody chose. The one reader for the SQLite
- * column and any future transport, so the two cannot disagree about which
- * shapes are runnable.
+ * `null` is inherit. A whole pin is a pin. A tier a Run may START on is a
+ * tier. Everything else — a partial pin, a tier from another build, bytes that
+ * were never JSON — is the explicit invalid row with the raw value kept, and
+ * never `null`: inherit still RUNS, so an unreadable Runtime coerced to it
+ * would start a Session under a policy nobody chose. The one reader for the
+ * SQLite column and any future transport, so the two cannot disagree about
+ * which shapes are runnable.
+ *
+ * The tier test is the AGENT-facing one (VC-431), which is the same set the
+ * save door and the editor check. `utility` is the slot for work nobody asked
+ * for, so a record naming it — written by an older build, whose save door
+ * still admitted it, or by a door that bypassed the editor — reads back as the
+ * invalid row and REFUSES rather than starting a Session on the Utility row.
+ * Narrowing the save door alone would have left those rows running.
  */
 export function parseAutomationRuntime(raw: unknown): AutomationRuntime {
   if (raw === null) return null;
   if (typeof raw === "object" && (raw as { kind?: unknown }).kind === "tier") {
     const tier = (raw as { tier?: unknown }).tier;
-    return isModelTier(tier) ? { kind: "tier", tier } : { kind: "invalid", raw };
+    return isAgentModelTier(tier) ? { kind: "tier", tier } : { kind: "invalid", raw };
   }
   return parseSessionModel(raw) ?? { kind: "invalid", raw };
 }

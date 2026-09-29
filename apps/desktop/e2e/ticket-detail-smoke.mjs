@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance smoke for Volli's ticket-detail view, reconciled with
- * the ROUND-2 UX (docs/plans/ticket-detail-mvp.md §29–39). Drives the REAL
+ * the ROUND-2 UX. Drives the REAL
  * packaged renderer through Playwright against a scratch SQLite database
  * (`VOLLI_DB_PATH`) + isolated user-data dir, exercising the reworked surface:
  *
@@ -29,16 +29,19 @@
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
- *      Doc ↔ session keeps the terminal alive; the rail shows a status chip and
- *      invents NO harness name (since the Calm Stack neither the roster nor
- *      History prints one — check 6 carries the positive half).
+ *      Doc ↔ session keeps the terminal alive; the rail's live row says the
+ *      state in its MARK's accessible name and the age on the line under the
+ *      title (VC-30 D4/D5), and invents NO harness name (since the Calm Stack
+ *      neither the roster nor History prints one — check 6 carries the positive
+ *      half).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it);
- *      the ACTIVE band row's hover `title` carries the truthful source
- *      ("Shell", never the default Claude harness) — the one surface that
- *      still carries it — while its meta line names the ticket's column
- *      ("Doing"), which is what the source label used to sit in front of.
+ *      the ACTIVE band row's MARK carries the truthful source ("Shell", never
+ *      the default Claude harness) — a peekable row has no native `title` any
+ *      more (VC-30 D1), so the glyph's accessible name is where the vendor is
+ *      stated — while its second line says WHERE and WHEN (`VC-1 · just now`)
+ *      and no state word, which is what the source label was displaced by.
  *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
  *   8. Icon-mode rail — Sessions is the default mode; Properties renders
@@ -54,10 +57,10 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session stands in History — a sibling SECTION of Sessions with
- *      no disclosure, since the Calm Stack retired the drawer — carrying its
- *      ended-ago metadata. Back returns to the board even though the in-memory
- *      nav history starts fresh.
+ *      renamed session stands in the roster's folded RECORD — under the
+ *      Sessions eyebrow, whose label is the fold (VC-406) — carrying its
+ *      ended-ago metadata once unfolded. Back returns to the board even though
+ *      the in-memory nav history starts fresh.
  *  12. File-tab save guard — a repository file opened as a ticket file tab is an
  *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
  *      VISIBLE on its tab and DEFENDED on close: typing shows the dirty dot, the
@@ -177,14 +180,17 @@ const SESSION_INITIAL = "Session 1";
 const SESSION_RENAMED = "Renamed session";
 
 /**
- * A sidebar session row's meta line (`VC-1 · Doing · Working` — the ticket's
- * status, with the source label moved to the row's hover `title`).
+ * A sidebar session row's meta line — WHERE the Session lives and WHEN it last
+ * spoke (`VC-1 · just now`), and never a state word: since VC-30 (D5) the mark
+ * beside it is what carries the state.
  *
- * Everything dimmed in the row promotes together under decision #74's vibrancy
- * rule, so the hook class is `session-row-dim` and the title carries it too —
- * pin the selector to the one span that holds the mono ticket id.
+ * The hook is the meta line's OWN class rather than the title's. Both lines are
+ * `text-ui` now, so `session-row-dim` (the canvas HEAD rung, `globals.css`)
+ * belongs to the title alone, and decision #74's dim→promote pair lives here:
+ * `session-row-meta` is the class the row's hover and selected states pull up to
+ * the row's ink.
  */
-const SESSION_ROW_META = "span.session-row-dim:has(> span.font-mono)";
+const SESSION_ROW_META = "span.session-row-meta";
 
 // ---- check 12: the ticket file tab's dirty-close guard ---------------------
 // A repository (non-artifact) Markdown file, so `fileSavePolicy` puts it on the
@@ -867,17 +873,45 @@ async function main() {
         });
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
-        const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
-        // The Calm Stack roster is one flat line per Session — glyph, title,
-        // status — so the harness name is no longer printed anywhere under this
+        // THE STATE AND THE AGE, on the row that draws them since VC-30 (D4/D5,
+        // `ticket-sessions-panel.tsx`). Both facts the old single chip carried
+        // are still asserted, at the two places the redesigned row says them:
+        // the leading SessionGlyph's accessible name pins the state vocabulary
+        // ("Shell · Working" — one naming rule for both sidebars,
+        // `sessionGlyphName`), and the line under the title pins the age, which
+        // a live row now prints ALONE because the mark already said the state.
+        // Reading the name rather than visible text is what keeps the harness
+        // absence assertions below meaningful: `getByText` sees rendered copy,
+        // never an `aria-label`.
+        const railLiveRow = aside
+          .locator('li[data-peek-surface="rail"]')
+          .filter({ hasText: SESSION_INITIAL });
+        const railMarkName = await waitUntil("live rail row's mark", async () => {
+          if ((await railLiveRow.count()) < 1) return null;
+          const name = await railLiveRow
+            .first()
+            .locator("[data-session-glyph]")
+            .first()
+            .getAttribute("aria-label");
+          return name === null || name.length === 0 ? null : name;
+        }).catch(() => null);
+        const railState = /· (Working|Idle|Exited)$/.test(railMarkName ?? "");
+        const railAge =
+          (await railLiveRow
+            .first()
+            .getByText(/^(just now|\d+[mhdw] ago)$/)
+            .count()) >= 1;
+        const railChip = railState && railAge;
+        // The Calm Stack roster is one flat line per Session — mark, title,
+        // age — so the harness name is no longer printed anywhere under this
         // `aside`: not on a roster row, and not in History either, where
         // `session-history.ts` keeps it only as a SEARCH key and never renders
         // it. So both halves here are absence assertions, and absence alone
         // cannot tell a rail that resolves the right harness from one that
         // resolves none. The positive half — that the source resolved, and
         // resolved truthfully — moves to check 6, at the ACTIVE band row's
-        // hover `title` (`session-band-row.tsx`), which is the one surface in
-        // the app that still carries it.
+        // MARK (`session-band-row.tsx`), whose accessible name is where the
+        // vendor is named now that no row carries a native `title` (VC-30 D1).
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
         const noHarnessInRoster = (await aside.getByText("Shell", { exact: true }).count()) === 0;
 
@@ -898,7 +932,7 @@ async function main() {
           envOk && aliveOk && railRow && railChip && noHarnessInRoster && noFalseClaude && !!doing;
         return {
           ok,
-          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} noHarnessInRoster=${noHarnessInRoster} noClaude=${noFalseClaude} doing=${!!doing}`,
+          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} railMark=${JSON.stringify(railMarkName)} railAge=${railAge} noHarnessInRoster=${noHarnessInRoster} noClaude=${noFalseClaude} doing=${!!doing}`,
         };
       },
     );
@@ -928,18 +962,27 @@ async function main() {
         // Navigate away, then use the attention/index sidebar rather than the
         // board card. The row must restore the exact session destination.
         await escapeToBoard(page);
-        const activeSessionRow = page
-          .locator('[data-sidebar="menu-button"]')
+        // The Active row is the shipped two-line `ListRow` now (VC-30 D4/D5), so
+        // it is no longer a `SidebarMenuButton`: a band row addresses itself to
+        // the peek by `data-peek-row` on its `<li>` (`use-session-peek.tsx`),
+        // and the row's activation target is the button inside it — which is
+        // what a person clicks and what publishes `data-active`. Filtered by the
+        // same two facts as before: the session's title, and the ticket its
+        // second line names.
+        const activeSessionItem = page
+          .locator('li[data-peek-row][data-peek-surface="nav"]')
           .filter({ hasText: SESSION_INITIAL })
           .filter({ hasText: DISPLAY_ID });
+        const activeSessionRow = activeSessionItem.locator("button[data-active]");
         await waitUntil(
           "live session row in the session bands",
-          async () => (await activeSessionRow.count()) === 1,
+          async () =>
+            (await activeSessionItem.count()) === 1 && (await activeSessionRow.count()) === 1,
         );
         // Decision #74's vibrancy rule, on the only surface that can show it: a
-        // real live row. Everything dimmed in the row promotes TOGETHER on
-        // selection — the row's fill is a veil, so the meta line measures under
-        // the contrast floor un-promoted and over it promoted.
+        // real live row. The dimmed second line promotes to the ROW's own ink on
+        // selection — the row's fill is a veil, so that line measures under the
+        // contrast floor un-promoted and over it promoted.
         //
         // The promotion rule fires on `:hover` too, not just `data-active`, and
         // Playwright's virtual cursor is left wherever the last `.click()`
@@ -949,25 +992,36 @@ async function main() {
         await page.mouse.move(0, 0);
         await sleep(200);
 
-        // THE TRUTHFUL SOURCE LABEL, at the surface that still carries it.
+        // THE TRUTHFUL SOURCE LABEL, at the surface that carries it now.
         // Check 5 can only say the rail invents nothing; a rail that drew the
-        // row and the chip while resolving no harness at all would satisfy it.
+        // row and its age while resolving no harness at all would satisfy it.
         // This is the positive half: a Session booted by the rail's Terminal
         // control resolves to `Shell`, not to the default Claude harness.
         //
-        // It reads the row's hover `title`, not its meta line. That line's
-        // first slot now holds the ticket's STATUS — the fact a band of twenty
-        // Sessions is actually scanned by — and the source moved to the tooltip
-        // when the status took the slot (`session-band-row.tsx`). Both halves
-        // are asserted, because either one alone can pass while the change is
-        // half-made: the source still has to resolve truthfully, AND it has to
-        // have really been displaced by `Doing`, the column this ticket was
-        // moved to above. Substring questions on both — the row joins its
-        // tokens with `·`.
+        // It reads the row's MARK, not a hover `title`: a peekable row has no
+        // native tooltip any more (VC-30 D1 — the peek card says the untruncated
+        // title, the harness and the provenance, and a browser tooltip would
+        // open on top of it), and the mark's accessible name is where the vendor
+        // and the state are stated (`sessionGlyphName`, e.g. "Shell · Working").
+        //
+        // Both halves are still asserted, because either alone can pass while
+        // the change is half-made: the source has to resolve TRUTHFULLY, and it
+        // has to have really left the second line — which says WHERE and WHEN
+        // (`VC-1 · just now`) and never a state word or a harness name. That is
+        // the same displacement the old `Doing` assertion measured, against the
+        // line the redesign actually draws.
+        const markName =
+          (await activeSessionRow
+            .locator("[data-session-glyph]")
+            .first()
+            .getAttribute("aria-label")) ?? "";
+        const truthfulSource = markName.includes("Shell") && !markName.includes("Claude Code");
         const metaText = (await activeSessionRow.locator(SESSION_ROW_META).textContent()) ?? "";
-        const rowTitle = (await activeSessionRow.getAttribute("title")) ?? "";
-        const truthfulSource = rowTitle.includes("Shell") && !rowTitle.includes("Claude Code");
-        const statusInMeta = metaText.includes("Doing") && !metaText.includes("Shell");
+        const placeInMeta =
+          metaText.includes(DISPLAY_ID) &&
+          !/Working|Waiting|Idle|Parked|Exited|Stopped|Interrupted|Not reporting/.test(metaText) &&
+          !metaText.includes("Shell") &&
+          !metaText.includes("Claude Code");
 
         const subtextBefore = await activeSessionRow
           .locator(SESSION_ROW_META)
@@ -1020,10 +1074,10 @@ async function main() {
           !!shellAlive &&
           subtextHighlighted &&
           truthfulSource &&
-          statusInMeta;
+          placeInMeta;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} statusInMeta=${statusInMeta} meta=${JSON.stringify(metaText)} title=${JSON.stringify(rowTitle)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} placeInMeta=${placeInMeta} meta=${JSON.stringify(metaText)} mark=${JSON.stringify(markName)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );
@@ -1463,36 +1517,44 @@ async function main() {
           return kept && deletedGone;
         });
 
-        // The prior session folds out of the working set and into History,
-        // which is a SIBLING SECTION of Sessions — one shape, one inset, no
-        // seam. It used to be a `RailDrawer`, and this check used to prove the
-        // drawer was collapsed and then click it open; that primitive was the
-        // old rail's, it existed so History and a Details drawer could stack as
-        // siblings, and Details is gone. So the disclosure is gone with it and
-        // the row is simply THERE — which is a stronger claim than the one this
-        // check made before, not a weaker one: previously the row was allowed to
-        // be absent until something clicked.
+        // The prior session folds out of the working set and into the
+        // roster's RECORD (VC-406): one Sessions section, whose eyebrow label
+        // is the fold — `SESSIONS ›` with the record away, folded by default
+        // and remembered app-wide. There is no "History" heading and no count
+        // on the face; the trigger's name carries the count. This is not the
+        // old rail's `RailDrawer` (a full-bleed rule, the whole block behind
+        // it): nothing bleeds past the section's inset, the live rows stay on
+        // screen, only the record folds, and the trigger does not move.
         //
-        // A history row is the SAME one-line row as the roster's
+        // A record row is the SAME one-line row as the roster's
         // (`ticket-sessions-panel.tsx` renders both), so it prints no harness
         // name either — `session-history.ts` keeps the label only to match on
-        // when you search. What is left is what a history row exists to carry:
+        // when you search. What is left is what a record row exists to carry:
         // identity and pastness. Source truthfulness is check 6's, at the
         // sidebar band that still prints it.
-        const historyHeading = aside.getByRole("heading", { name: /History/ });
-        const historyIsSection =
-          (await historyHeading.count()) === 1 &&
-          (await aside.getByRole("button", { name: /^History/ }).count()) === 0;
+        const noHistoryHeading =
+          (await aside.getByRole("heading", { name: /History/ }).count()) === 0;
+        const fold = aside.getByTestId("ticket-sessions-fold");
+        const foldOffered = await waitUntil(
+          "the roster offers its record fold",
+          async () => (await fold.count()) === 1,
+        ).catch(() => false);
+        const foldName = foldOffered ? await fold.getAttribute("aria-label") : null;
+        const foldNamesCount = /^Show \d+ past sessions?$/.test(foldName ?? "");
+        if (foldOffered && (await fold.getAttribute("aria-expanded")) === "false") {
+          await fold.click();
+        }
+        const historyIsSection = noHistoryHeading && !!foldOffered && foldNamesCount;
         // Both halves are captured so a failure names WHICH one broke: this
         // check used to time out reporting a bare `false`, which said nothing
         // about whether the row was missing or merely untimestamped.
         let sessionDiag = { row: false, endedAgo: false, railText: "" };
         const sessionOk = await waitUntil(
-          "prior renamed session stands in history without a disclosure",
+          "prior renamed session stands in the unfolded record",
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-            // History rows trail with when the session ended, not a redundant
-            // "Exited" chip — the section heading already says these are past.
+            // Record rows trail with when the session ended, not a redundant
+            // "Exited" chip — the fold already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
             sessionDiag = {
               row,
@@ -1527,7 +1589,7 @@ async function main() {
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} (row=${sessionDiag.row} endedAgo=${sessionDiag.endedAgo} rail=${JSON.stringify(sessionDiag.railText)}) restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} recordFold=${historyIsSection} (heading=${noHistoryHeading} offered=${!!foldOffered} name=${JSON.stringify(foldName)}) session=${!!sessionOk} (row=${sessionDiag.row} endedAgo=${sessionDiag.endedAgo} rail=${JSON.stringify(sessionDiag.railText)}) restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

@@ -1114,6 +1114,12 @@ describe("mapPiActivity browser tools (VC-238)", () => {
     expect(facet("browser_screenshot", { tabId: "t" })?.action).toBe("screenshot");
     expect(facet("browser_console", { tabId: "t" })?.action).toBe("console");
     expect(facet("browser_tabs", {})?.action).toBe("tabs");
+    // A search names its query before the host answers (VC-364).
+    expect(facet("browser_find", { tabId: "t", query: "Delete account" })).toMatchObject({
+      action: "find",
+      tabId: "t",
+      target: "Delete account",
+    });
   });
 
   it("prefers the host's report of what an action touched over the ref the model passed", () => {

@@ -58,7 +58,7 @@
  * are a floor: it streams ONE turn a chunk at a time through two closed fences
  * and stops inside a third, so every chunk hands Shiki a code string it has
  * never seen. It is the transport-independent half of the delta-frames work
- * (`docs/plans/delta-frames.md`, probe 3) — the wire decides how text arrives,
+ * (probe 3) — the wire decides how text arrives,
  * this decides what the renderer does with a fence one character longer.
  */
 import * as React from "react";

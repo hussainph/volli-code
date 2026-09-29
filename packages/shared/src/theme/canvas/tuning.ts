@@ -16,8 +16,8 @@
  *
  * Each value's own comment says what it is and what it costs. The measurement
  * runs — the alpha sweeps, the band probes, the arrangements that were tried and
- * dropped — live in `docs/plans/arc-theming-migration.md` § Appendix — measured
- * derivations, and every entry below that had one points at its heading.
+ * dropped — were recorded in the arc theming migration plan's appendix (git
+ * history), and every entry below that had one names its heading.
  */
 export const ARC_TUNING = {
   /**

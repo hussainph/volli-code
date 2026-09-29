@@ -448,7 +448,7 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  *
  * The runtime hands Pi its own uncontained environment now, so this reaches a
  * Session only through an injected `executionEnvFactory`. It is kept whole
- * because `docs/plans/authority-two-axis-rearchitecture.md` rebuilds the
+ * because the two-axis authority rearchitecture rebuilds the
  * boundary on it, and a boundary is a bad thing to delete and rewrite from
  * memory.
  *
@@ -613,6 +613,18 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     _options?: { maxLines?: number },
     _context?: Context,
   ): Promise<Result<string[], FileError>> {
+    return this.#unsupported();
+  }
+  /**
+   * Pi 0.87's pull-based line reader, which its Node environment builds
+   * `readTextLines` on. The same answer as `readTextLines`: nothing this
+   * runtime hands the scoped environment reads a file line by line, and a
+   * capability nobody uses stays fail-closed rather than quietly delegated.
+   */
+  async openTextLineReader(
+    _path: string,
+    _context?: Context,
+  ): ReturnType<ExecutionEnv["openTextLineReader"]> {
     return this.#unsupported();
   }
   async appendFile(

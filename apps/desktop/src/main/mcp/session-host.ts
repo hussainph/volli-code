@@ -10,7 +10,11 @@ import {
 } from "@volli/shared";
 
 import { openMcpProtocolClient } from "./client";
-import type { McpProtocolClient, OpenMcpProtocolClient } from "./discovery";
+import {
+  McpTransportFailure,
+  type McpProtocolClient,
+  type OpenMcpProtocolClient,
+} from "./discovery";
 
 const SAFE_UNAVAILABLE = "MCP server is unavailable for this Session";
 
@@ -76,6 +80,22 @@ function combineSignals(
       right.removeEventListener("abort", abort);
     },
   };
+}
+
+/**
+ * `pending`, unless `signal` aborts first.
+ *
+ * The caller stops waiting; the work behind `pending` does not stop. That is
+ * the point: a shared connection one caller gave up on is still the
+ * connection every other caller is waiting for.
+ */
+function untilAborted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function safeSummary(value: unknown, fallback: string): string {
@@ -144,15 +164,44 @@ function convertResult(
 }
 
 /**
+ * One protocol client a host opened for one server, and the calls on it.
+ *
+ * Identity matters more than the server id it is filed under: a call that
+ * fails retires the connection IT used, and only if that connection is still
+ * the one the host would hand out — never whichever one happens to be cached
+ * by the time its failure is noticed.
+ */
+interface ClientEntry {
+  readonly opening: Promise<McpProtocolClient>;
+  /** Calls holding this client, from acquisition until they settle. */
+  inFlight: number;
+  /** No longer handed to new calls; closed once `inFlight` reaches zero. */
+  retired: boolean;
+  closing: Promise<void> | undefined;
+}
+
+/**
  * Attachment-scoped MCP connection owner. Clients are opened lazily, reused by
  * server id, and all retired when the attachment closes.
+ *
+ * One client per server is shared by every call this attachment makes to it,
+ * so no single call may decide its fate (VC-454). A connection is opened under
+ * the attachment's lifetime, not under the signal of whichever call asked
+ * first; a caller that gives up stops waiting and the open carries on for the
+ * rest. A client is retired only when a call on it fails with
+ * {@link McpTransportFailure} — never for a call's own abort, a server's error
+ * answer, a timeout or an oversized result — and a retired client is closed
+ * only after the last call still running on it settles, so a sibling that
+ * could still succeed is not cut off by someone else's failure.
  */
 export class McpSessionHost {
   readonly port: RuntimeMcpPort;
   readonly #workspacePath: string;
   readonly #servers: ReadonlyMap<string, McpServerDraft>;
   readonly #open: OpenMcpProtocolClient;
-  readonly #clients = new Map<string, Promise<McpProtocolClient>>();
+  readonly #clients = new Map<string, ClientEntry>();
+  /** Retired clients still draining or closing; owned here so `close()` can reach them. */
+  readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
   #closed = false;
 
@@ -163,20 +212,37 @@ export class McpSessionHost {
     this.port = { call: (request, signal) => this.#call(request, signal) };
   }
 
-  async #client(server: McpServerDraft, signal: AbortSignal): Promise<McpProtocolClient> {
+  #entry(server: McpServerDraft): ClientEntry {
     const existing = this.#clients.get(server.id);
     if (existing !== undefined) return existing;
-    const combined = combineSignals(this.#lifetime.signal, signal);
-    const opening = this.#open(server, this.#workspacePath, combined.signal).finally(
-      combined.release,
+    const entry: ClientEntry = {
+      opening: this.#open(server, this.#workspacePath, this.#lifetime.signal),
+      inFlight: 0,
+      retired: false,
+      closing: undefined,
+    };
+    this.#clients.set(server.id, entry);
+    // A connection that never opened has nothing to close; it is simply no
+    // longer the one handed out. Registered before any caller awaits it.
+    entry.opening.catch(() => {
+      if (this.#clients.get(server.id) === entry) this.#clients.delete(server.id);
+    });
+    return entry;
+  }
+
+  #retire(serverId: string, entry: ClientEntry): void {
+    if (this.#clients.get(serverId) === entry) this.#clients.delete(serverId);
+    if (entry.retired) return;
+    entry.retired = true;
+    this.#retired.add(entry);
+  }
+
+  #closeEntry(entry: ClientEntry): Promise<void> {
+    entry.closing ??= entry.opening.then(
+      (client) => client.close().catch(() => undefined),
+      () => undefined,
     );
-    this.#clients.set(server.id, opening);
-    try {
-      return await opening;
-    } catch (error) {
-      if (this.#clients.get(server.id) === opening) this.#clients.delete(server.id);
-      throw error;
-    }
+    return entry.closing;
   }
 
   async #call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult> {
@@ -185,9 +251,10 @@ export class McpSessionHost {
     if (server === undefined || !server.enabled) throw new Error(SAFE_UNAVAILABLE);
     signal.throwIfAborted();
     const combined = combineSignals(this.#lifetime.signal, signal);
-    let client: McpProtocolClient | null = null;
+    const entry = this.#entry(server);
+    entry.inFlight += 1;
     try {
-      client = await this.#client(server, combined.signal);
+      const client = await untilAborted(entry.opening, combined.signal);
       const result = await client.callTool({
         name: request.toolName,
         arguments: request.arguments,
@@ -195,12 +262,13 @@ export class McpSessionHost {
       });
       return convertResult(result);
     } catch (error) {
+      // This call was withdrawn, or the attachment closed under it. Either way
+      // the connection did nothing wrong and stays for every other caller.
+      if (combined.signal.aborted) throw combined.signal.reason;
       if (error instanceof Error && error.message === "MCP result exceeded the safe size limit") {
         throw error;
       }
-      if (this.#clients.get(server.id) !== undefined) this.#clients.delete(server.id);
-      await client?.close().catch(() => undefined);
-      if (combined.signal.aborted) throw combined.signal.reason;
+      if (error instanceof McpTransportFailure) this.#retire(server.id, entry);
       return {
         content: [
           {
@@ -212,6 +280,14 @@ export class McpSessionHost {
       };
     } finally {
       combined.release();
+      entry.inFlight -= 1;
+      // Not awaited: this call's answer does not wait on a goodbye to a
+      // connection it no longer uses, which for HTTP is a request of its own.
+      // The entry stays in `#retired` until the close lands, so `close()`
+      // still waits for it.
+      if (entry.retired && entry.inFlight === 0) {
+        void this.#closeEntry(entry).then(() => this.#retired.delete(entry));
+      }
     }
   }
 
@@ -219,8 +295,9 @@ export class McpSessionHost {
     if (this.#closed) return;
     this.#closed = true;
     this.#lifetime.abort(new Error("MCP attachment closed"));
-    const clients = [...this.#clients.values()];
+    const entries = [...this.#clients.values(), ...this.#retired];
     this.#clients.clear();
-    await Promise.allSettled(clients.map(async (client) => (await client).close()));
+    this.#retired.clear();
+    await Promise.allSettled(entries.map((entry) => this.#closeEntry(entry)));
   }
 }

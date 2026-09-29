@@ -41,7 +41,7 @@ export interface Migration {
 }
 
 /**
- * Migration 001: the v1 schema — see docs/CONCEPT.md decisions #28–#30. A
+ * Migration 001: the v1 schema. A
  * SNAPSHOT, not the current schema: applied migrations are immutable, so later
  * evolution lives in the migrations below it (002 adds `tickets.archived_at`
  * and replaces `tickets_project_status` with the two partial indexes).
@@ -132,8 +132,8 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
 `;
 
 /**
- * Migration 003: the ticket-detail MVP (docs/plans/ticket-detail-mvp.md,
- * decisions #14/#18/#22). Three additions, all additive/nullable — no
+ * Migration 003: the ticket-detail MVP (decisions #14/#18/#22). Three
+ * additions, all additive/nullable — no
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
@@ -355,7 +355,7 @@ ALTER TABLE projects ADD COLUMN theme_seed TEXT;
 `;
 
 /**
- * Migration 014: per-project canvas + appearance (docs/plans/arc-theming-migration.md).
+ * Migration 014: per-project canvas + appearance (the arc theming migration).
  * Two nullable columns, replacing what 013's four columns meant rather than
  * what they held: a project now overrides the CANVAS (the authored gradient)
  * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
@@ -639,7 +639,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
 `;
 
 /**
- * Migration 020: Blobs (VC-50, `docs/plans/attachments.md`) — the bytes behind
+ * Migration 020: Blobs (VC-50) — the bytes behind
  * every user-supplied file, and the links naming where each one is attached.
  * Replaces migration 011's `ticket_attachments`, which owned both at once:
  * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
@@ -957,8 +957,8 @@ CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, oc
 `;
 
 /**
- * Migration 025: the durable authority policy store (VC-44, slice 7 of
- * `docs/plans/authority-two-axis-rearchitecture.md`).
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of the
+ * two-axis authority rearchitecture).
  *
  * One nullable JSON column, `NULL` = inherit every built-in default, taking
  * 019's shape for 019's reason: the payload is a variable-shaped document, no
@@ -2229,6 +2229,38 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
+ *
+ * A read receipt is not work, so it is deliberately NOT a Session ledger fact.
+ * Marking a Session read would otherwise append to `session_events`, churn the
+ * projection checkpoints beside it, and move `lastActivityAt` — a Session would
+ * climb its own listing because somebody LOOKED at it. So the receipt is a
+ * per-Session row of its own, on the shape `session_provenances` already
+ * established for a fact about a Session that the ledger does not own.
+ *
+ * One nullable column carries the whole state: a stamp is "unread since then"
+ * and `NULL` is read. A Session with no row at all is read too, which is what
+ * makes the resting case cost nothing — a machine where nobody has ever left an
+ * agent running unattended stores nothing here.
+ *
+ * The partial index holds only the unread rows, for `session_attachments`'
+ * reason one migration up: the unread set is a handful while the table grows
+ * with every Session, so the index is the size of the answer.
+ *
+ * Losing this table costs one wrong dot and nothing else, which is why it has
+ * no backfill: there is no durable evidence of what somebody had already read.
+ */
+const MIGRATION_052_SESSION_READ_RECEIPTS = `
+CREATE TABLE IF NOT EXISTS session_read_receipts (
+  session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  unread_since INTEGER
+);
+CREATE INDEX IF NOT EXISTS session_read_receipts_unread
+  ON session_read_receipts(unread_since)
+  WHERE unread_since IS NOT NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2494,6 +2526,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session_attachments — an indexed closure mark, so asking who is attached costs no fold",
     sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
     apply: applyMigration051AttachmentClosure,
+  },
+  {
+    version: 52,
+    name: "session_read_receipts — unread is its own axis, durable across relaunch (VC-30 × VC-108)",
+    sql: MIGRATION_052_SESSION_READ_RECEIPTS,
   },
 ];
 

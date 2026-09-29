@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  getGhosttyTheme,
-  isGhosttyThemeName,
-  listGhosttyThemeNames,
-  parseGhosttyColor,
-  parseGhosttyTerminalColor,
-  parseGhosttyTheme,
-} from "./ghostty-theme";
+import { parseGhosttyColor, parseGhosttyTerminalColor, parseGhosttyTheme } from "./ghostty-theme";
 
 describe("parseGhosttyColor", () => {
   it("parses a 6-digit hex with a leading #", () => {
@@ -141,55 +134,8 @@ describe("parseGhosttyTheme", () => {
     expect(theme.colors.background).toBeUndefined();
   });
 
-  it("produces no name — only the catalog lookup sets one", () => {
+  it("produces no name — the parser is handed text, not a theme's identity", () => {
     const theme = parseGhosttyTheme("background = #000000");
     expect(theme.name).toBeUndefined();
-  });
-});
-
-describe("the vendored catalog", () => {
-  const WELL_KNOWN = ["Catppuccin Mocha", "Dracula", "GitHub Dark", "Tomorrow Night"];
-
-  it("lists well-known theme names", () => {
-    const names = listGhosttyThemeNames();
-    for (const name of WELL_KNOWN) expect(names).toContain(name);
-  });
-
-  it("lists names sorted case-insensitively", () => {
-    const names = listGhosttyThemeNames();
-    const sorted = names.toSorted((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
-    expect(names).toEqual(sorted);
-  });
-
-  it("recognizes only catalog names", () => {
-    expect(isGhosttyThemeName("Dracula")).toBe(true);
-    expect(isGhosttyThemeName("No Such Theme")).toBe(false);
-  });
-
-  it("resolves a well-known theme, naming it after the catalog entry", () => {
-    const theme = getGhosttyTheme("Dracula");
-    expect(theme).not.toBeNull();
-    expect(theme?.name).toBe("Dracula");
-    expect(theme?.colors.background).toEqual({ r: 0x28, g: 0x2a, b: 0x36 });
-  });
-
-  it("returns null for a name outside the catalog", () => {
-    expect(getGhosttyTheme("No Such Theme")).toBeNull();
-  });
-
-  it("caches a parsed theme across calls", () => {
-    const first = getGhosttyTheme("Nord");
-    const second = getGhosttyTheme("Nord");
-    expect(first).toBe(second);
-  });
-
-  it("parses every catalog entry into a theme with a full palette and a background/foreground", () => {
-    for (const name of listGhosttyThemeNames()) {
-      const theme = getGhosttyTheme(name);
-      expect(theme, name).not.toBeNull();
-      expect(theme?.colors.palette.length, name).toBeGreaterThanOrEqual(16);
-      expect(theme?.colors.background, name).toBeDefined();
-      expect(theme?.colors.foreground, name).toBeDefined();
-    }
   });
 });

@@ -170,9 +170,12 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { SubagentPeekDialog } from "@renderer/components/chat/subagent-peek-dialog";
 import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
@@ -253,6 +256,9 @@ export interface ChatPlaneProps {
    * stands the rest of the plane down, so it has to be told. Default true.
    */
   visible?: boolean;
+  /** Modal previews cannot let a tall question/composer grow past their header.
+   * Cap and scroll the dock there, keeping part of the transcript visible. */
+  constrainComposer?: boolean;
   /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
@@ -282,6 +288,7 @@ export function ChatPlane({
   onOpenSession,
   store,
   visible: surfaceVisible = true,
+  constrainComposer = false,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
@@ -308,11 +315,22 @@ export function ChatPlane({
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
   );
+  // Where a Session's Browser replay opens (VC-453): one request, so one
+  // replay at a time is structural. The transcript card and the island both
+  // open it; the card through its host below, the island through its deps.
+  const [traceRequest, setTraceRequest] = React.useState<BrowserTraceRequest | null>(null);
+  const closeTrace = React.useCallback(() => setTraceRequest(null), []);
+  const cardHost = browser?.cardHost ?? null;
+  const tracedCardHost = React.useMemo(
+    () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
+    [cardHost],
+  );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
     peekSession: setPeekedAgentId,
     ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
+    ...(browser === null ? {} : { openTrace: setTraceRequest }),
   });
   // The peeked child as the island models it; a child that left the listing
   // while peeked closes the overlay with it.
@@ -338,6 +356,8 @@ export function ChatPlane({
     selectModel,
     submit,
     dismissError,
+    scheduleResume,
+    cancelScheduledResume,
   } = controller;
   const session = controller.session;
 
@@ -1425,9 +1445,39 @@ export function ChatPlane({
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
+      scheduleResume: (request) => void scheduleResume(request),
+      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
     }),
-    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [
+      cancelScheduledResume,
+      dismissBlocker,
+      dismissError,
+      liveExecutorId,
+      recover,
+      retryRuntime,
+      scheduleResume,
+      setSettingsOpen,
+    ],
   );
+  // The clock the resume offer is read against. It only has to move when an
+  // offered reset passes — then "Resume at" gives way to the plain Retry — so
+  // it wakes once, at the nearest reset, rather than ticking.
+  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
+  const nearestReset = React.useMemo(() => {
+    let nearest: number | null = null;
+    for (const item of activeAttention) {
+      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
+      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
+    }
+    return nearest;
+  }, [activeAttention]);
+  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setResumeNow(Date.now());
+    if (nearestReset === null) return;
+    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
+    return () => window.clearTimeout(timer);
+  }, [nearestReset]);
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
   const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
@@ -1449,6 +1499,8 @@ export function ChatPlane({
       catalogError,
       sessionModel,
       signInProviders,
+      scheduledResume: projection?.scheduledResume ?? null,
+      now: resumeNow,
     },
     blockerActs,
     interactions.length > 0,
@@ -1472,7 +1524,7 @@ export function ChatPlane({
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
-      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
+      <BrowserCardHostContext.Provider value={tracedCardHost}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
               against (VC-273) — the agent writes the path the brief handed it,
@@ -1562,7 +1614,11 @@ export function ChatPlane({
           transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
+        data-slot="chat-composer-dock"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
+        )}
       >
         <ContentColumn>
           {/* Above whatever the slot holds, card included. A card answers the
@@ -1644,8 +1700,14 @@ export function ChatPlane({
       {shellsApi === undefined ? null : (
         <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
       )}
+      {browser === null ? null : (
+        <BrowserTraceDialog request={traceRequest} api={browser.api} onClose={closeTrace} />
+      )}
       <SubagentPeekDialog
         agent={peekedAgent}
+        projectId={projectId}
+        ticketId={ticketId}
+        onOpenFile={onOpenFile}
         onClose={closePeek}
         returnFocus={peekReturnFocus}
         {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}
@@ -1949,8 +2011,7 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * cache now answer variable heights better, but they do not answer this plane's
  * scroller ownership or disclosure-driven height changes. With the document
  * already bounded to 60 rows, their observers, estimates and correction state
- * cost more than they save. The sourced verdict and the conditions that would
- * reopen it are in `docs/research/perf/react-zustand-streaming.md` §3.
+ * cost more than they save.
  *
  * WHAT THE READER SEES. At rest, the last {@link TRANSCRIPT_TAIL_ROWS} rows.
  * Above them, "Show earlier" — and the same sentinel the button sits on pages

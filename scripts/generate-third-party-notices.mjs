@@ -1024,42 +1024,48 @@ function decideFixtureNotices(entries, present) {
  * one the grep got wrong: material in the tree, notice file absent.
  */
 function selfTestPackageNotices() {
-  const themeEntry = {
-    title: "Ghostty terminal theme catalog",
-    covers: ["src/ghostty-theme-sources.generated.ts"],
-    document: "THIRD-PARTY-THEMES.md",
+  // A SYNTHETIC entry, and deliberately not a real one. This fixture used to be
+  // the Ghostty theme catalog, which VC-413 deleted for unverified provenance;
+  // naming it here would both describe material that no longer exists and trip
+  // `check:vendored-themes`, which fails any tracked file that names the retired
+  // module. The rule under test is about files and declarations, not about which
+  // material happens to be declared this month.
+  const vendoredEntry = {
+    title: "Example vendored collection",
+    covers: ["src/example-vendored.generated.ts"],
+    document: "THIRD-PARTY-EXAMPLE.md",
   };
   const run = decideFixtureNotices;
 
   const bothHere = run(
-    [themeEntry],
-    ["src/ghostty-theme-sources.generated.ts", "THIRD-PARTY-THEMES.md"],
+    [vendoredEntry],
+    ["src/example-vendored.generated.ts", "THIRD-PARTY-EXAMPLE.md"],
   );
   assert.deepEqual(bothHere.failures, []);
   assert.deepEqual(
     bothHere.include.map((item) => item.document),
-    ["THIRD-PARTY-THEMES.md"],
+    ["THIRD-PARTY-EXAMPLE.md"],
     "material and notice both present: the notice is folded in",
   );
 
-  // THE REGRESSION THIS RULE EXISTS FOR. The Ghostty catalog shipped as
-  // `ghostty-theme-sources.generated.ts`, whose 463 entries say "iTerm2 Dark
-  // Background" and never the marker "iTerm2-Color-Schemes". The old grep
-  // therefore concluded the material had not shipped, stayed green, and would
-  // have packaged the catalog with no attribution. Keyed on the file instead,
-  // the same state is a failure that names both sides.
-  const materialWithoutNotice = run([themeEntry], ["src/ghostty-theme-sources.generated.ts"]);
+  // THE REGRESSION THIS RULE EXISTS FOR. The predecessor was a grep for a marker
+  // string across shipped sources, and the material it most needed to catch — a
+  // generated catalog of third-party themes — never contained the marker. The
+  // grep concluded the material had not shipped, stayed green, and would have
+  // packaged it with no attribution. Keyed on the file instead, the same state
+  // is a failure that names both sides.
+  const materialWithoutNotice = run([vendoredEntry], ["src/example-vendored.generated.ts"]);
   assert.deepEqual(materialWithoutNotice.include, [], "nothing is folded in");
   assert.equal(materialWithoutNotice.failures.length, 1);
   assert.match(
     materialWithoutNotice.failures[0],
-    /THIRD-PARTY-THEMES\.md.*no attribution/s,
+    /THIRD-PARTY-EXAMPLE\.md.*no attribution/s,
     "material present with its notice absent fails, naming the missing notice",
   );
 
   // The mirror: a declaration whose material is gone has rotted. Silence here
   // would let a mistyped path masquerade as coverage.
-  const noticeWithoutMaterial = run([themeEntry], ["THIRD-PARTY-THEMES.md"]);
+  const noticeWithoutMaterial = run([vendoredEntry], ["THIRD-PARTY-EXAMPLE.md"]);
   assert.deepEqual(noticeWithoutMaterial.include, []);
   assert.match(
     noticeWithoutMaterial.failures[0],
@@ -1296,12 +1302,12 @@ function selfTestLiveDeclarations() {
     "this repository's own package-declared notices must satisfy the rule",
   );
   assert.ok(
-    owned.documents.length + owned.vendored.length >= 3,
-    "shared declares the theme catalog and APCA; agent-runtime declares pi-automode",
+    owned.documents.length + owned.vendored.length >= 2,
+    "shared declares APCA; agent-runtime declares the vendored pi-automode helpers",
   );
   assert.ok(
-    owned.documents.some((doc) => /THIRD-PARTY-THEMES\.md/.test(doc.source)),
-    "the Ghostty theme attribution is collected from @volli/shared, not grepped for",
+    owned.vendored.some((entry) => /APCA/i.test(entry.title ?? "")),
+    "the APCA-W3 declaration is collected from @volli/shared, not grepped for",
   );
 }
 

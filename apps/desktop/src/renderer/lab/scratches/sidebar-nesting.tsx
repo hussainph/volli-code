@@ -269,6 +269,7 @@ function chatRecord(
     bornTicketless: overrides.ticketId === null,
     role: overrides.ticketId === null ? "project" : "ticket",
     parentSessionId: null,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "medium" },
     ...overrides,
   };
 }

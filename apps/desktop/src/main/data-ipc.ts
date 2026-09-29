@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
@@ -25,6 +25,7 @@ import {
 } from "./db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
@@ -64,8 +65,11 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -79,6 +83,10 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
   SessionStopInput,
@@ -155,7 +163,14 @@ import {
  * models rather than here, so this handler stays dumb transport and the
  * performance harness can measure the same function the handler calls.
  */
-import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
+import {
+  createDesktopSessionEngine,
+  publishSessionListingRow,
+  readSessionPeekContent,
+  sessionListingRowsForRoster,
+  type SessionPeekContentPorts,
+} from "./session-control";
+import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { prepared } from "./db/prepared";
 import {
   getTicket,
@@ -180,8 +195,8 @@ import {
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "./ticket-commands";
-import { detectProjectBaseBranch } from "./project-base-branch";
-import { broadcastDataChanged } from "./broadcast";
+import { detectProjectBaseBranchAsync } from "./project-base-branch";
+import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
@@ -398,7 +413,7 @@ async function materializeSwitchedOnWorktree(
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
-    detectBaseBranch?: (projectPath: string) => string | null;
+    detectBaseBranch?: (projectPath: string) => Promise<string | null>;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -460,6 +475,14 @@ export function registerDataIpcHandlers(
      * with the reason — nothing is running for it to end.
      */
     sessionRuntime?: StopSessionByIdPorts["runtime"];
+    /**
+     * Reads one durable transcript artifact, for the peek card's fold (VC-30).
+     * The same port `session peek` on the CLI socket is given, from the same
+     * store. Absent (tests, degraded boot) means a peek answers with its counts
+     * and no entries — honest about having no artifact store, rather than
+     * claiming a store looked and failed.
+     */
+    readTranscriptArtifact?: SessionPeekContentPorts["readArtifact"];
     /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
@@ -627,30 +650,39 @@ export function registerDataIpcHandlers(
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": (input: ProjectCreateInput): ProjectCreateResult => {
+    "volli:project-create": async (input: ProjectCreateInput): Promise<ProjectCreateResult> => {
       const existing = findProjectByPath(db, input.path);
       if (existing) {
         return { ok: true, project: existing, created: false };
       }
       let stats;
       try {
-        stats = statSync(input.path);
+        stats = await stat(input.path);
       } catch {
         return { ok: false, error: "Project path does not exist" };
       }
       if (!stats.isDirectory()) {
         return { ok: false, error: "Project path is not a directory" };
       }
-      const now = Date.now();
+      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
+        input.path,
+      );
+      // Detection yields to other IPC requests. Re-read mutable project state only
+      // after it returns, then validate and insert without another await.
+      const createdWhileDetecting = findProjectByPath(db, input.path);
+      if (createdWhileDetecting) {
+        return { ok: true, project: createdWhileDetecting, created: false };
+      }
       const ticketPrefix = derivePrefix(input.name);
       const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
       if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
+      const now = Date.now();
       const project: Project = {
         id: randomUUID(),
         name: input.name,
         path: input.path,
         ticketPrefix,
-        baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
+        baseBranch,
         colorIndex: countProjects(db) % PROJECT_COLORS.length,
         sortOrder: nextSortOrder(db),
         createdAt: now,
@@ -658,6 +690,42 @@ export function registerDataIpcHandlers(
       };
       insertProject(db, project);
       return { ok: true, project, created: true };
+    },
+
+    /**
+     * Whether one project's registered folder is still there (VC-430) — the
+     * read the recovery path hangs off. Cheap by construction: one row and one
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
+     */
+    "volli:project-folder-check": (input: ProjectIdInput): Promise<ProjectFolderResult> =>
+      inspectProjectFolder(db, input.projectId),
+
+    /**
+     * Points an existing project at the folder it moved to (VC-430).
+     *
+     * The whole judgement lives in `relinkProject`, including the refusal that
+     * matters most: a folder another project already tracks is never taken,
+     * because the alternative a person reaches for — adding the new folder —
+     * is exactly what mints the duplicate this channel exists to avoid.
+     *
+     * `busyWorktreeSites` is threaded through so the answer can warn about
+     * Sessions still running in the folder being left; it is the same supplier
+     * the destructive worktree paths ask, because "what is live in this
+     * directory" must have one answer in this process.
+     */
+    "volli:project-relink": async (input: ProjectRelinkInput): Promise<ProjectRelinkResult> => {
+      const outcome = await relinkProject(
+        { db, busyWorktreeSites: options.busyWorktreeSites },
+        { projectId: input.id, path: input.path },
+      );
+      if (!outcome.ok) return outcome;
+      // Every surface that reads a project path has to re-read: the rail, the
+      // file browsers, Configure, and the renderer's own root allowlist mirror.
+      broadcastDataChanged({ projectId: outcome.project.id });
+      return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
     "volli:project-remove": (id: string): ProjectMutationResult => {
@@ -1206,6 +1274,65 @@ export function registerDataIpcHandlers(
       };
     },
 
+    /**
+     * A person's own read decision (VC-30).
+     *
+     * Two acts, in this order and for two different audiences. The receipt is
+     * persisted first, because it is the durable answer and everything else is
+     * a projection of it. Then the Session's listing row is re-published on
+     * `volli:session-activity` — the same broadcast the push channel uses,
+     * carrying a row built by the same `sessionListingRow` — because this write
+     * moves no ledger fact, so the activity watch has nothing to notice and the
+     * OTHER sidebar, the ticket rail and the second window would otherwise keep
+     * drawing the dot until something unrelated refreshed them.
+     *
+     * The caller already moved its own row optimistically; the answer is what it
+     * reverts to if this failed.
+     */
+    "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
+      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      if (existing === null) return { ok: false, error: "Unknown session" };
+      // Main's clock, never the renderer's: the receipt is main's record, and a
+      // stamp from a window with a skewed clock would date the dot wrongly for
+      // every other window.
+      writeSessionUnread(db, input.sessionId, input.unread ? Date.now() : null);
+      await publishSessionListingRow(
+        {
+          db,
+          getSession: (query) => sessionEngine.getSession(query),
+          liveAttachmentIds,
+          publish: broadcastSessionActivity,
+        },
+        input.sessionId,
+      );
+      return { ok: true, read: readSessionUnread(db, input.sessionId) };
+    },
+
+    /**
+     * One peek's content (VC-30): the Session's transcript tail plus the
+     * question it is asking, folded once per glance.
+     *
+     * Straight through to `peek-content.ts`, which composes the engine fold the
+     * CLI's `session peek` already uses. Nothing here adopts the Session or
+     * opens a stream — hovering a row must cost one read and leave nothing to
+     * tear down.
+     */
+    "volli:session-peek-content": async (
+      input: SessionPeekContentInput,
+    ): Promise<SessionPeekContentResult> => {
+      const content = await readSessionPeekContent(
+        {
+          listEvents: (query) => sessionEngine.listEvents(query),
+          ...(options.readTranscriptArtifact === undefined
+            ? {}
+            : { readArtifact: options.readTranscriptArtifact }),
+          getSession: (query) => sessionEngine.getSession(query),
+        },
+        input,
+      );
+      return { ok: true, content };
+    },
+
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
       // Straight through to the ledger's own unscoped read: the window is the
       // caller's (it draws a fixed number of days), and every project counts,
@@ -1625,7 +1752,7 @@ export function registerDataIpcHandlers(
       return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
-    // ---- Done flow (docs/plans/done-flow.md) --------------------------------
+    // ---- Done flow ----------------------------------------------------------
     // The Details-rail diff/commit/push-PR affordances. `status`/`diff` are
     // read-only (no broadcast); `commit` records an event and `push-pr` writes
     // `pr_url`, so both broadcast to re-hydrate every board.

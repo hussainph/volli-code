@@ -29,6 +29,7 @@ import {
   type AssistantMessage,
   type CredentialStore,
   type Models,
+  type ToolResultMessage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import {
@@ -58,6 +59,7 @@ import {
   type ProviderReasoningDroppedObservation,
   type ReasoningDropCause,
   type RuntimeAttachmentHandle,
+  type RuntimeContextCarry,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
   type RuntimeFailure,
@@ -86,12 +88,14 @@ import {
   type ConversationReader,
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
+import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
   providerCompactionFromDetails,
   projectOpenAICompaction,
   projectAnthropicCompaction,
+  readProviderCompaction,
   type NativeRequestObservation,
 } from "./provider-compaction";
 import { AuthorityEscalation } from "./escalation";
@@ -110,36 +114,46 @@ import {
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { failureResetsAt } from "./quota-reset";
 import { headerUsageUpdate } from "./usage-limits/passive";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { piContext, type Context } from "./pi-context";
+import { providerImageGuard, withProviderSafeImages } from "./provider-images";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { applyToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
   attentionReasonFor,
   classifyAssistantMessage,
   isTransientTransportFailure,
+  isUnreachedAuthFailure,
   recoveryRefFor,
+  retryHintMs,
   sanitizeDiagnostic,
   sessionUsageFrom,
 } from "./transcript";
+import { ALWAYS_ONLINE, type ConnectivityPort } from "./connectivity";
+import {
+  DEFAULT_STREAM_SUPERVISION,
+  superviseStreams,
+  type StreamSupervisionTiming,
+} from "./stream-supervision";
+import {
+  autoRetryDelayMs,
+  planTransportRetry,
+  TRANSPORT_NOTICE_AFTER_ATTEMPTS,
+} from "./transport-retry";
 
 /**
- * How hard a dropped socket is chased before the failure becomes the user's.
- *
- * Behavioral, not durable: nothing derived from these numbers is written to
- * history, so retuning them changes only how long recovery takes and how many
- * attempts the exhaustion message names.
+ * The detail a transport notice carries while the machine has no network. A
+ * noun phrase under the chat's "Reconnecting" row, and nothing more.
  */
-const AUTO_RETRY_LIMIT = 10;
-const AUTO_RETRY_BASE_MS = 500;
-const AUTO_RETRY_CEILING_MS = 8_000;
-const AUTO_RETRY_JITTER_MS = 100;
+const OFFLINE_NOTICE = "Waiting for network";
 const OPENCODE_GO_PROVIDER = "opencode-go";
 const OPENCODE_SESSION_HEADER = "x-opencode-session";
 
@@ -165,12 +179,6 @@ function withOpenCodeGoSessionHeader(
       },
     });
   };
-}
-
-/** Exponential backoff to a ceiling, jittered so ten Sessions do not reconnect in lockstep. */
-export function autoRetryDelayMs(attempt: number): number {
-  const backoff = Math.min(AUTO_RETRY_BASE_MS * 2 ** attempt, AUTO_RETRY_CEILING_MS);
-  return backoff + Math.random() * AUTO_RETRY_JITTER_MS;
 }
 
 /**
@@ -255,6 +263,21 @@ export interface PiRuntimeHostOptions {
    */
   retryBackoffMs?: (attempt: number) => number;
   /**
+   * Whether the machine has a network, and when it woke (VC-443). A transient
+   * failure while offline waits for the network instead of spending the online
+   * retry budget, and a wake cuts any provider request that stays silent past
+   * it. Main implements it over Electron's `net` and `powerMonitor`; absent,
+   * the host is {@link ALWAYS_ONLINE} and nothing ever wakes.
+   */
+  connectivity?: ConnectivityPort;
+  /**
+   * How long a provider request may stay silent before it is cut and retried,
+   * and how long one open across a sleep has to speak after the wake.
+   * Injectable so deterministic tests need not wait nine minutes; see
+   * `stream-supervision.ts` for why the product values are what they are.
+   */
+  streamSupervision?: StreamSupervisionTiming;
+  /**
    * The compaction policy every attachment is run under, read at the moment it
    * is needed rather than captured at attach.
    *
@@ -291,11 +314,21 @@ export interface PiRuntimeHostOptions {
     holder?: UsageLimitsHolder;
     fetch: UsageProbeFetch;
   };
+  /**
+   * Whether a Session's frozen, host-authored parallel-read marks may take
+   * effect (VC-454). Developer-only for now, and off unless a host says
+   * otherwise: absent, every Session dispatches its tool batches one call at a
+   * time whatever its record holds, which makes this the kill switch for
+   * Sessions already born with marks. On, a Session runs Pi's parallel mode
+   * only if its own MCP definitions carry the mark — see `tool-dispatch.ts`.
+   */
+  parallelMcpReads?: boolean;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  parallelMcpReads: boolean;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -306,6 +339,8 @@ interface PiRuntimeHost {
     identity: RuntimeSessionIdentity,
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
+  connectivity: ConnectivityPort;
+  streamSupervision: StreamSupervisionTiming;
   compactionPolicy: () => CompactionPolicy;
   observability: ObservabilitySink;
   /**
@@ -336,16 +371,19 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one structured executor port.
+ * Build the one structured executor port. The models are resolved once rather
+ * than per attachment: the credential store behind them serializes this
+ * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
  *
- * The models are resolved once, here, rather than per attachment: the credential
- * store behind them serializes this process's writes to Pi's `auth.json`, and a
- * fresh store per attach would serialize nothing.
+ * Every Session it attaches dispatches a model-issued tool batch sequentially,
+ * unless {@link PiRuntimeHostOptions.parallelMcpReads} is on AND that Session's
+ * own frozen MCP definitions carry host-authored parallel-read marks.
  */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    parallelMcpReads: options.parallelMcpReads === true,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -357,6 +395,8 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     executionEnvFactory:
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
+    connectivity: options.connectivity ?? ALWAYS_ONLINE,
+    streamSupervision: options.streamSupervision ?? DEFAULT_STREAM_SUPERVISION,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
     observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
     ...(options.usageLimits === undefined
@@ -537,7 +577,7 @@ function durableMessage(message: AgentMessage): AgentMessage {
  * Images ride alongside the text as `ImageContent`, which is the only form a
  * model can actually look at (VC-50). They persist into Pi's recovery sidecar
  * with the message, which is exactly why attaching is bounded by a per-image
- * ceiling AND a per-session budget upstream — see `docs/plans/attachments.md`.
+ * ceiling AND a per-session budget upstream.
  *
  * The shapes below are read back by {@link isPersistedUserContent}, which has
  * to recognize every one of them: the two functions are one decision written
@@ -745,6 +785,236 @@ function reasoningElisionRecordedAfter(
 }
 
 /**
+ * The context marker a fresh attachment writes when it continues an earlier
+ * one's conversation (VC-457). Its entries are that conversation from the
+ * newest PORTABLE compaction on (see {@link carriedConversation}), reasoning
+ * dropped and bounded in size — so the marker is the whole of what the new
+ * sidecar needs and the old one is never read again. A carry of a carry holds
+ * the earlier marker's entries expanded, never the marker itself, so repeated
+ * reattaches flatten rather than nest.
+ */
+interface ContextCarriedMarker {
+  kind: "context-carried";
+  fromAttachmentId: string;
+  entries: JsonValue;
+}
+
+const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
+  "message",
+  "compaction",
+  "branch_summary",
+]);
+
+/** The entries a `context-carried` marker holds, or undefined for any other entry. */
+function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
+  if (entry.customType !== VOLLI_CONTEXT_MARKER) return undefined;
+  const data = entry.data;
+  if (!isRecord(data) || data["kind"] !== "context-carried") return undefined;
+  const entries = data["entries"];
+  // A marker that no longer validates carries nothing rather than failing the
+  // Session: the conversation it held is lost to the model, which is what a
+  // fresh attachment was anyway, and never worse.
+  if (!Array.isArray(entries)) return [];
+  return (entries as readonly unknown[]).filter(
+    (candidate): candidate is Entry =>
+      isRecord(candidate) &&
+      typeof candidate["type"] === "string" &&
+      CARRIED_ENTRY_TYPES.has(candidate["type"]) &&
+      typeof candidate["id"] === "string",
+  );
+}
+
+/**
+ * The most a carry copies into a new sidecar, in serialized characters.
+ *
+ * Far above any provider's context window (a million-token window is roughly
+ * four million characters of prose only for the densest text, and a live
+ * request compacts long before it), so a conversation that fits a model is
+ * carried whole. What it bounds is the pathological case: an uncompacted
+ * transcript heavy with tool output or images, re-copied on every reattach.
+ * Past it the OLDEST turns are left out, at a user-turn boundary, and the
+ * model is told so.
+ */
+export const CONTEXT_CARRY_MAX_CHARS = 1_500_000;
+
+/**
+ * The share of the ATTACHING model's context window a carry may fill, as
+ * that model estimates it.
+ *
+ * The character bound above protects the sidecar; this one protects the first
+ * turn. A carry sized for the model that wrote it can be far past what the
+ * model now attaching accepts (a 1M-window Session resumed on a 128k one), and
+ * the proactive compaction that would otherwise rescue it summarises over the
+ * oversized history itself — so a carry that does not fit is a first turn
+ * that may never be sendable. Half the window leaves the other half for the
+ * system prompt, the tool schemas, the new message and the reply, and keeps
+ * the carried conversation under the compaction threshold so the Session
+ * compacts normally from there.
+ */
+export const CONTEXT_CARRY_WINDOW_SHARE = 0.5;
+
+/** How a carry is priced against the attaching model; absent when its window is unknown. */
+interface CarryTokenBudget {
+  tokens: number;
+  tokensOf: (entry: Entry) => number;
+}
+
+/**
+ * An earlier attachment's conversation, read the way that attachment would
+ * have replayed it, ready to be carried into a fresh one.
+ *
+ * The same three reads a resume makes — acceptance markers become user
+ * messages, a settled reply history disagrees about is withheld, recorded
+ * reasoning drops are applied. Then four things only a carry needs:
+ *
+ * - **Cut at the newest PORTABLE compaction**, not the newest compaction. A
+ *   provider-native checkpoint is opaque state bound to one model and route;
+ *   when the new attachment cannot replay it, `compactionPathForModel` drops it
+ *   and rebuilds from the history it replaced — which a resume still has on
+ *   disk, and a carry must therefore still hold. A prose summary is portable to
+ *   any model, so everything before one is safely left behind.
+ * - **Reasoning dropped** from all of it: a fresh attachment is a new request
+ *   chain, and "every thinking block before some point" is the one removal
+ *   every provider accepts.
+ * - **Bounded**, oldest turns first, by {@link CONTEXT_CARRY_MAX_CHARS} and by
+ *   {@link CONTEXT_CARRY_WINDOW_SHARE} of the attaching model's window, so the
+ *   first turn after a reattach is one that model can accept.
+ * - **No orphaned tool results.** A withheld reply takes its tool calls with
+ *   it, and a result whose call is not in the carried history is one no
+ *   provider accepts.
+ */
+function carriedConversation(
+  entries: readonly Entry[],
+  budget: CarryTokenBudget | undefined,
+): Entry[] {
+  const markers = entries
+    .filter((entry): entry is CustomEntry => entry.type === "custom")
+    .map(recoveredObservation)
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
+  const settledMarkers = new Map<string, number>();
+  for (const marker of markers) {
+    if (marker.kind !== "message-settled") continue;
+    settledMarkers.set(
+      marker.message.entryId,
+      (settledMarkers.get(marker.message.entryId) ?? 0) + 1,
+    );
+  }
+  const settled = new Set(
+    entries.flatMap((entry) =>
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      classifyAssistantMessage(entry.id, entry.message as AssistantMessage).kind === "settled"
+        ? [entry.id]
+        : [],
+    ),
+  );
+  const withheld = new Set([
+    ...[...settled].filter((entryId) => settledMarkers.get(entryId) !== 1),
+    ...[...settledMarkers.keys()].filter((entryId) => !settled.has(entryId)),
+  ]);
+  const reader: ConversationReader = {
+    acceptedMessage: (entry) => {
+      const marker = recoveredObservation(entry);
+      return marker !== null &&
+        marker.kind === "command-accepted" &&
+        marker.operation === "message.submit"
+        ? marker.message
+        : undefined;
+    },
+    replayable: (entry) => recoverableMessage(entry) && !withheld.has(entry.id),
+    carriedEntries: carriedEntriesOf,
+  };
+  const path = conversationPath(withDroppedReasoning(entries), reader);
+  const portable = path.findLastIndex(
+    (entry) =>
+      entry.type === "compaction" && readProviderCompaction(entry.details).kind === "absent",
+  );
+  const carried: Entry[] = [];
+  for (const entry of portable < 0 ? path : path.slice(portable)) {
+    carried.push(
+      entry.type === "message"
+        ? Object.assign({}, entry, { message: withoutReasoning(entry.message) })
+        : entry,
+    );
+  }
+  return withoutOrphanedToolResults(boundedCarry(carried, budget));
+}
+
+/** The attaching model's share for a carry, priced as that model estimates it. */
+function carryTokenBudget(
+  model: Parameters<typeof estimatedContextTokens>[1],
+): CarryTokenBudget | undefined {
+  const window = contextWindowOf(model);
+  if (window === undefined) return undefined;
+  return {
+    tokens: Math.floor(window * CONTEXT_CARRY_WINDOW_SHARE),
+    tokensOf: (entry) => estimatedContextTokens(contextMessages([entry]), model),
+  };
+}
+
+/**
+ * The oldest turns left out until the carry fits both bounds — the sidecar's
+ * characters and the attaching model's window — cut where a user turn begins.
+ */
+function boundedCarry(entries: readonly Entry[], budget: CarryTokenBudget | undefined): Entry[] {
+  const chars = entries.map((entry) => JSON.stringify(entry).length);
+  const tokens = entries.map((entry) => budget?.tokensOf(entry) ?? 0);
+  let totalChars = chars.reduce((sum, size) => sum + size, 0);
+  let totalTokens = tokens.reduce((sum, size) => sum + size, 0);
+  const over = (): boolean =>
+    totalChars > CONTEXT_CARRY_MAX_CHARS || (budget !== undefined && totalTokens > budget.tokens);
+  if (!over()) return [...entries];
+  let start = 0;
+  while (start < entries.length && over()) {
+    totalChars -= chars[start]!;
+    totalTokens -= tokens[start]!;
+    start += 1;
+  }
+  // Begin a whole turn: a user message (or a summary, which stands in for
+  // turns), so no reply or tool result is carried without what prompted it.
+  while (start < entries.length && !beginsTurn(entries[start]!)) start += 1;
+  const omitted = start;
+  const note: Entry = {
+    type: "message",
+    id: `volli-carry-omitted-${omitted}`,
+    parentId: null,
+    seq: 0,
+    timestamp: 0,
+    message: {
+      role: "user",
+      content: `[Volli: the ${omitted} oldest entries of this Session's earlier conversation were too large to carry into this attachment and were left out. The Session's transcript in the app still has them; this notice is from Volli, not your user.]`,
+      timestamp: 0,
+    },
+  };
+  return [note, ...entries.slice(start)];
+}
+
+function beginsTurn(entry: Entry): boolean {
+  return entry.type === "compaction" || (entry.type === "message" && entry.message.role === "user");
+}
+
+/** Tool results whose call is carried; the rest would be refused by every provider. */
+function withoutOrphanedToolResults(entries: readonly Entry[]): Entry[] {
+  const calls = new Set<string>();
+  const collect = (message: AgentMessage): void => {
+    if (message.role !== "assistant") return;
+    for (const block of (message as AssistantMessage).content) {
+      if (block.type === "toolCall") calls.add(block.id);
+    }
+  };
+  for (const entry of entries) {
+    if (entry.type === "message") collect(entry.message);
+    if (entry.type === "compaction") entry.retainedTail.forEach(collect);
+  }
+  return entries.filter(
+    (entry) =>
+      entry.type !== "message" ||
+      entry.message.role !== "toolResult" ||
+      calls.has((entry.message as ToolResultMessage).toolCallId),
+  );
+}
+
+/**
  * The observations a restart can be told about again.
  *
  * {@link CompactionObservation} joins them, and the case for it is not that the
@@ -900,8 +1170,10 @@ function isRecoverableObservation(value: unknown): boolean {
           "context",
           "runtime-failure",
           "partial-turn",
+          "transport",
         ]) &&
-        typeof value["message"] === "string"
+        typeof value["message"] === "string" &&
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -1099,6 +1371,48 @@ async function assertOwnedRecoveryPath(root: string, candidate: string): Promise
 }
 
 /**
+ * Read the conversation an earlier attachment's sidecar holds (VC-457).
+ *
+ * The same guards a resume applies before it touches a sidecar — listed under
+ * the workspace it ran in, owned by this runtime's data directory, identity
+ * naming THIS Session and the attachment that wrote it — because a carry is a
+ * read of another file into this Session's context, and "cannot tell whose
+ * this is" must never resolve to "then it is yours". Opened, read, and closed:
+ * the earlier sidecar is never written.
+ */
+async function readCarriedConversation(
+  sidecars: JsonlSessionRepo,
+  sessionDataDir: string,
+  carry: RuntimeContextCarry,
+  expected: SidecarIdentity,
+  budget: CarryTokenBudget | undefined,
+  context: Context,
+): Promise<Entry[]> {
+  // No legacy-sidecar migration here, unlike a resume: a closed attachment's
+  // sidecar was migrated by the attach that last opened it, or predates this
+  // build's whole Pi line and is not worth reopening a conversation from.
+  const candidates = (await sidecars.list({ cwd: carry.workspacePath }, context)).filter(
+    (candidate) => candidate.id === carry.sessionId,
+  );
+  const candidate = candidates.length === 1 ? candidates[0]! : undefined;
+  if (candidate === undefined || resolve(candidate.path) !== resolve(carry.sessionFilePath)) {
+    throw new Error("the earlier attachment's Pi sidecar is not where its record says.");
+  }
+  await assertOwnedRecoveryPath(sessionDataDir, candidate.path);
+  const opened = await sidecars.open(candidate, context);
+  try {
+    await assertSidecarIdentity(opened, expected, context);
+    const branch = await sidecarBranch(opened, context);
+    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context), budget);
+  } finally {
+    await opened.close(piContext()).catch(
+      /* v8 ignore next -- closing a sidecar we only read is best effort. */
+      () => undefined,
+    );
+  }
+}
+
+/**
  * The sidecar identity now lives in the shared sidecar-storage contract.
  *
  * Until Pi 0.85.0 this was the JSONL session's `metadata` field. The replacement
@@ -1249,6 +1563,7 @@ async function attachSession(
   let sidecarPath: string | undefined;
   let toolEnv: ExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
+  let stopWatchingResume: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
   let createdSidecar = false;
 
@@ -1348,6 +1663,42 @@ async function attachSession(
     // read, and every append and scan below goes through this one.
     const mainBranch = await sidecarBranch(sidecar, attachContext);
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
+    // A fresh attachment that continues an earlier one's conversation
+    // (VC-457): the earlier sidecar is read once, and what the model last saw
+    // there is written into this one as a single context marker before
+    // anything else, so every later read of THIS sidecar — this attach's
+    // replay, a compaction, a resume after a relaunch — finds it in place. A
+    // carry that cannot be read is not a failed attach: the Session opens
+    // without it, as it always did, and says so below.
+    let carryFailure: string | undefined =
+      inputRecovery === undefined && spec.carry === undefined ? spec.carryUnreadable : undefined;
+    let carried = false;
+    if (inputRecovery === undefined && spec.carry !== undefined) {
+      try {
+        const entries = await readCarriedConversation(
+          sidecars,
+          host.sessionDataDir,
+          spec.carry,
+          { ...expectedIdentity, volliAttachmentId: spec.carry.attachmentId },
+          carryTokenBudget(model),
+          attachContext,
+        );
+        if (entries.length > 0) {
+          await mainBranch.appendCustomEntry(
+            VOLLI_CONTEXT_MARKER,
+            {
+              kind: "context-carried",
+              fromAttachmentId: spec.carry.attachmentId,
+              entries: JSON.parse(JSON.stringify(entries)) as JsonValue,
+            } satisfies ContextCarriedMarker,
+            attachContext,
+          );
+          carried = true;
+        }
+      } catch (error) {
+        carryFailure = errorMessage(error);
+      }
+    }
     // The BRANCH, not the file. Today these are the same entries — this runtime
     // writes one lane and never forks — but they stop being the same the moment
     // anything does, and what reads this now is the elision rule, which takes
@@ -1356,9 +1707,10 @@ async function attachSession(
     // same question the live path asks (`conversationBranch`) is what keeps a
     // future sibling branch from quietly resurrecting elided history — the one
     // failure this ticket exists to prevent.
-    const recoveredEntries = inputRecovery
-      ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
-      : [];
+    const recoveredEntries =
+      inputRecovery !== undefined || carried
+        ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
+        : [];
     const customEntries = recoveredEntries.filter(
       (entry): entry is CustomEntry => entry.type === "custom",
     );
@@ -1396,6 +1748,15 @@ async function attachSession(
         continue;
       }
       if (entry.type !== "custom") continue;
+      const carriedEntries = carriedEntriesOf(entry);
+      if (carriedEntries !== undefined) {
+        for (const carriedEntry of carriedEntries) {
+          if (carriedEntry.type === "message" && carriedEntry.message.role === "user") {
+            rememberResources(readPromptResourceBlocks(userMessageText(carriedEntry.message)));
+          }
+        }
+        continue;
+      }
       const marker = markersByCursor.get(entry.id);
       if (marker?.kind !== "command-accepted" || marker.operation !== "message.submit") {
         continue;
@@ -1476,6 +1837,7 @@ async function attachSession(
           : undefined;
       },
       replayable: (entry) => recoverableMessage(entry) && !disagreedSettledEntryIds.has(entry.id),
+      carriedEntries: carriedEntriesOf,
     };
     /**
      * The elided context, not the whole history — this is the landmine.
@@ -1596,6 +1958,19 @@ async function attachSession(
       });
       activeAttentionReasons.add("runtime-failure");
     }
+    // Durable like the recovery notices above, and ALSO told live once the
+    // attachment has started: a fresh attachment is never reconciled from its
+    // own sidecar, so a marker alone would reach no one until a relaunch.
+    let carryAttention: AttentionObservation | undefined;
+    if (carryFailure !== undefined) {
+      carryAttention = await persistObservation({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: `This attachment could not carry the Session's earlier conversation forward, so the model starts without it: ${carryFailure}`,
+      });
+      activeAttentionReasons.add("runtime-failure");
+    }
     for (const recoveredTurnId of openTurnIds) {
       await persistObservation({
         kind: "attention",
@@ -1605,6 +1980,18 @@ async function attachSession(
       });
       activeAttentionReasons.add("partial-turn");
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
+    }
+    // A notice that the last process was reconnecting describes a wait no
+    // process is running any more. Retired here rather than left for the next
+    // turn to clear, so a relaunched Session does not claim to be reconnecting
+    // while it sits idle.
+    if (activeAttentionReasons.delete("transport")) {
+      await persistObservation({
+        kind: "attention",
+        state: "cleared",
+        reason: "transport",
+        message: "Runtime recovered.",
+      });
     }
     // An unreadable checkpoint is a recovered Session, not an unattachable one:
     // the history it replaced is still on disk and is what {@link contextMessages}
@@ -1656,7 +2043,16 @@ async function attachSession(
     // bindings: the array Pi resolves against and the list the Snapshot records
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
-    const tools = createSessionTools(spec, ownedToolEnv);
+    // Selected per Session from its own frozen record (VC-454). Sequential
+    // dispatch hands the array back untouched; a Session whose MCP definitions
+    // carry host-authored parallel-read marks — honoured only when this
+    // runtime was built to — gets every other tool marked sequential. Names
+    // and schemas, the provider-visible half, never change.
+    const { tools, toolExecution } = applyToolDispatch(
+      createSessionTools(spec, ownedToolEnv),
+      spec.tools.mcp ?? [],
+      host.parallelMcpReads,
+    );
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -1689,9 +2085,21 @@ async function attachSession(
      * for its own reason — a new message, a manual Retry — gets a whole one,
      * while a turn resumed in place carries on spending the same one, so a
      * connection that will never hold cannot be chased forever.
+     *
+     * Spent only while ONLINE: a turn waiting for the network to come back is
+     * not failing, and waits as long as it has to (VC-443). `autoRetryWaitedMs`
+     * is the backoff the turn has scheduled, which is what the budget in
+     * `transport-retry.ts` is measured in.
      */
     let autoRetryAttempts = 0;
+    let autoRetryWaitedMs = 0;
     let autoRetryPending = false;
+    /**
+     * The detail of the transport notice this attachment has raised, while it
+     * stands. Re-raised only when the detail changes, so a provider failing the
+     * same way twenty times writes one fact rather than twenty.
+     */
+    let transportNotice: string | undefined;
     let resumingTurn = false;
     /**
      * Whether this turn has already spent its one overflow recovery.
@@ -1744,8 +2152,18 @@ async function attachSession(
      */
     let contextRewrite: Promise<void> = Promise.resolve();
     let rewritingContext = false;
-    /** Set only while a backoff is being waited out; see {@link interruptTurn}. */
+    /**
+     * Set only while a backoff or a network wait is being waited out; see
+     * {@link interruptTurn}.
+     */
     let cancelBackoff: (() => void) | undefined;
+    /**
+     * Set only while a BACKOFF is being waited out: a wake ends it early, since
+     * the timer that was running across the sleep says nothing about the
+     * network now. A network wait is not woken this way — it ends when the
+     * port says the network is back, not when the lid opens.
+     */
+    let wakeBackoff: (() => void) | undefined;
     type PendingMessageDelivery = {
       commandId: string | null;
       operation: "message.submit";
@@ -1931,12 +2349,11 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = contextTokenProjector(
-        context.messages,
-        requestModel,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The whole normalized transcript, prefix included: since Pi 0.86 the
+      // system prompt and tool declarations ARE messages (the leading system
+      // one), and the projector prices them there rather than off fields the
+      // context no longer has.
+      const occupied = contextTokenProjector(context.messages, requestModel);
       return Math.max(
         floor,
         Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
@@ -1960,18 +2377,37 @@ async function attachSession(
           : {}),
       });
     };
+    // A provider request that goes silent — most often a socket that died
+    // while the machine slept — is cut and failed as a transient transport
+    // failure, so it rides the same `continue` retry a dropped socket does
+    // rather than hanging the turn for half an hour (VC-443).
+    const streamSupervisor = superviseStreams(streamWithCompaction, host.streamSupervision);
+
+    // The prompt and the declarations, as the one leading system message Pi's
+    // transcript now carries them in (0.86). Built here rather than left to
+    // the `Agent`, which seeds one only when the array it is handed does not
+    // already start with a system message: a sidecar whose first replayable
+    // entry is a tool-change system message Pi emitted ahead of the first
+    // prompt would otherwise be taken for a transcript that already has its
+    // prompt, and the composed one would never be sent. The same object is put
+    // back at the head of every array this runtime rebuilds from the sidecar
+    // (compaction, model switch), so the prefix is the same bytes on every
+    // request of the attachment and the projector's memo hits on it.
+    const head = systemHead(
+      composeSystemPrompt({
+        role: spec.identity.role,
+        tools: spec.tools,
+        promptResources: spec.promptResources,
+      }),
+      tools,
+    );
 
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt({
-          role: spec.identity.role,
-          tools: spec.tools,
-          promptResources: spec.promptResources,
-        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
-        messages: recoveredMessages,
+        messages: withSystemHead(head, recoveredMessages),
       },
       onPayload: (payload) => {
         if (nativeCompactionState === undefined) return undefined;
@@ -1985,8 +2421,11 @@ async function attachSession(
           throw new Error("Native compaction checkpoint is missing from the request.");
         return projected;
       },
+      // Every image made legal for the request's model before it is sent
+      // (`provider-images.ts`); the attempt clock starts after, on the stream.
+      // Outside the supervisor, so resize time never counts as provider silence.
       streamFn: withOpenCodeGoSessionHeader(
-        instrumentStreamFn(streamWithCompaction, {
+        instrumentStreamFn(withProviderSafeImages(streamSupervisor.streamFn, providerImageGuard), {
           sink: host.observability,
           runId,
           now: host.now,
@@ -2006,7 +2445,7 @@ async function attachSession(
         sidecarMetadata.id,
       ),
       sessionId: sidecarMetadata.id,
-      toolExecution: "sequential",
+      toolExecution,
       // Pi's harness converter, not the `Agent`'s default, and the difference is
       // exactly one message role. The default keeps `user`, `assistant` and
       // `toolResult` and DROPS everything else — including the
@@ -2038,17 +2477,141 @@ async function attachSession(
     };
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";
+    // The machine woke: a request open across the sleep is probably talking to
+    // a socket the server dropped, and a backoff timer that ran across it says
+    // nothing about the network now. Both are re-decided rather than waited out.
+    stopWatchingResume = host.connectivity.onResume(() => {
+      streamSupervisor.wake();
+      wakeBackoff?.();
+    });
 
-    /** A wait the turn can be taken out of, rather than one it has to sit through. */
+    /**
+     * A wait the turn can be taken out of, rather than one it has to sit through.
+     *
+     * Both waits begin after an await (the notice they follow is written
+     * first), and a Stop that lands there finds no wait to cancel yet — so each
+     * re-reads `interrupting` before it starts, rather than sitting out a wait
+     * nobody is left to want.
+     */
     const waitBeforeRetry = async (ms: number): Promise<void> => {
+      if (interrupting) return;
       await new Promise<void>((wake) => {
         const timer = setTimeout(wake, ms);
         cancelBackoff = () => {
           clearTimeout(timer);
           wake();
         };
+        wakeBackoff = cancelBackoff;
       });
       cancelBackoff = undefined;
+      wakeBackoff = undefined;
+    };
+
+    /**
+     * Wait for the host to report a network, for as long as that takes.
+     *
+     * Ended early by the same Stop a backoff is, and by the run's own signal.
+     * Answers whether the network actually came back: a wait that ended any
+     * other way is either a Stop — which the caller re-reads `interrupting`
+     * for — or a port that broke its contract, which is not a network and is
+     * charged to the online budget rather than retried for free.
+     */
+    const waitForNetwork = async (runSignal: AbortSignal): Promise<boolean> => {
+      if (interrupting) return false;
+      const waiting = new AbortController();
+      const stop = (): void => waiting.abort();
+      cancelBackoff = stop;
+      runSignal.addEventListener("abort", stop, { once: true });
+      try {
+        await host.connectivity.waitUntilOnline(waiting.signal);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        runSignal.removeEventListener("abort", stop);
+        cancelBackoff = undefined;
+      }
+    };
+
+    /**
+     * Say, in the chat, that the runtime is reconnecting on its own.
+     *
+     * An Attention of the `transport` reason, which the ledger reads as
+     * `transport_retrying`: a waiting row, not an error — no notification, no
+     * red dot — cleared by the first sign the provider is answering again.
+     * Durable like every other Attention, because a notice raised and then
+     * orphaned by a crash would otherwise be one nothing could ever clear; the
+     * next attach retires it.
+     */
+    const raiseTransportNotice = async (detail: string): Promise<void> => {
+      if (transportNotice === detail) return;
+      transportNotice = detail;
+      activeAttentionReasons.add("transport");
+      await commitObservation(
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "transport",
+          message: detail,
+        }),
+      );
+    };
+
+    const clearTransportNotice = async (): Promise<void> => {
+      if (transportNotice === undefined) return;
+      transportNotice = undefined;
+      activeAttentionReasons.delete("transport");
+      await commitObservation(
+        await persistObservation({
+          kind: "attention",
+          state: "cleared",
+          reason: "transport",
+          message: "Runtime recovered.",
+        }),
+      );
+    };
+
+    /**
+     * Wait out a transport failure, and say whether the turn should resume.
+     *
+     * Offline, the wait is for the network and costs nothing: a laptop closed
+     * for three hours comes back to a turn that simply carries on (VC-443).
+     * Online, it is the bounded backoff in `transport-retry.ts` — the provider
+     * is reachable and failing, and that is worth a person's attention once the
+     * budget is spent. A backoff that ends to find the network gone waits for
+     * it too, rather than spending the retry on a request that cannot leave.
+     *
+     * `eligible` is false for a failure only an absent network can excuse — a
+     * credential refresh that never reached its server — which is waited out
+     * offline and handed to the person online.
+     */
+    const recoverFromTransport = async (
+      failed: RuntimeFailure,
+      signal: AbortSignal,
+      eligible: boolean,
+    ): Promise<boolean> => {
+      if (!host.connectivity.isOnline()) {
+        await raiseTransportNotice(OFFLINE_NOTICE);
+        if ((await waitForNetwork(signal)) || interrupting) return true;
+      }
+      if (!eligible) return false;
+      const plan = planTransportRetry(
+        { attempts: autoRetryAttempts, waitedMs: autoRetryWaitedMs },
+        host.retryBackoffMs(autoRetryAttempts),
+        retryHintMs(failed.message),
+      );
+      if (plan.kind === "give-up") return false;
+      autoRetryAttempts += 1;
+      autoRetryWaitedMs += plan.delayMs;
+      if (autoRetryAttempts >= TRANSPORT_NOTICE_AFTER_ATTEMPTS) {
+        await raiseTransportNotice(failed.message);
+      }
+      await waitBeforeRetry(plan.delayMs);
+      if (!interrupting && !host.connectivity.isOnline()) {
+        await raiseTransportNotice(OFFLINE_NOTICE);
+        await waitForNetwork(signal);
+      }
+      return true;
     };
 
     /**
@@ -2327,8 +2890,9 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
-          // turns without their reasoning, all read off the entry just written.
-          agent.state.messages = outcome.messages;
+          // turns without their reasoning, all read off the entry just written
+          // — behind the head, which the entry never holds.
+          agent.state.messages = withSystemHead(head, outcome.messages);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -2402,11 +2966,13 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
+        // The live array already leads with the system message that carries
+        // the prompt and tools; handing the projector the prompt as well would
+        // count it twice. (Tools would not — the estimator prices each
+        // declaration once over the transcript — but there is nothing to add.)
         const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,
-          agent.state.systemPrompt,
-          agent.state.tools,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
         const path = await conversationBranch();
@@ -2440,10 +3006,12 @@ async function attachSession(
     /**
      * What this runtime can still do about a failed turn without asking anybody.
      *
-     * Two recoveries, one shape: both spend something the turn is allowed to
-     * spend once, both keep the turn open while they do it, and both hand back
-     * the same answer — that the run may be resumed in place. Everything else is
-     * the user's to decide, and says so by returning false.
+     * Three recoveries, one shape: each spends something the turn has a budget
+     * for, each keeps the turn open while it does it, and each hands back the
+     * same answer — that the run may be resumed in place. Everything else is
+     * the user's to decide, and says so by returning false. The transport one
+     * alone may wait without spending anything: a machine with no network is
+     * waited on, not charged ({@link recoverFromTransport}).
      *
      * Overflow remains a one-shot recovery for provider limits the proactive
      * budget could not predict. It runs only after the failed loop has ended.
@@ -2458,10 +3026,9 @@ async function attachSession(
       failed: RuntimeFailure,
       signal: AbortSignal,
     ): Promise<boolean> => {
-      if (isTransientTransportFailure(failed) && autoRetryAttempts < AUTO_RETRY_LIMIT) {
-        autoRetryAttempts += 1;
-        await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
-        return true;
+      const transient = isTransientTransportFailure(failed);
+      if (transient || isUnreachedAuthFailure(failed)) {
+        return recoverFromTransport(failed, signal, transient);
       }
       // **Refused reasoning is answered by dropping it.** A provider that binds
       // each `thinking` block to everything sent before it has found a block
@@ -2506,6 +3073,7 @@ async function attachSession(
         if (!resumed) {
           turnId = randomUUID();
           autoRetryAttempts = 0;
+          autoRetryWaitedMs = 0;
           overflowRecoveryUsed = false;
           reasoningRecoveryUsed = false;
           await commitObservation(
@@ -2559,6 +3127,9 @@ async function attachSession(
       }
 
       if (event.type === "message_update") {
+        // The provider is answering again, which is the whole of what the
+        // reconnecting notice was waiting to hear.
+        await clearTransportNotice();
         const streamed = event.assistantMessageEvent;
         if (streamed.type === "text_delta") {
           await commitObservation({ kind: "delta", turnId, channel: "text", text: streamed.delta });
@@ -2637,6 +3208,7 @@ async function attachSession(
         await commitObservation(dropped);
       }
       if (failure === undefined) {
+        await clearTransportNotice();
         for (const reason of activeAttentionReasons) {
           const cleared = await persistObservation({
             kind: "attention",
@@ -2672,6 +3244,10 @@ async function attachSession(
             autoRetryPending = true;
             return;
           }
+          // No longer reconnecting: the dead end below is the one standing
+          // claim, and a "Reconnecting" row beside it would be a wait nobody is
+          // running.
+          await clearTransportNotice();
           // Including a context refusal that compaction could not answer — an
           // overflow with nothing left to summarize is still a dead end, and
           // still has to say so.
@@ -2690,17 +3266,31 @@ async function attachSession(
               : []),
           ];
           const reason = attentionReasonFor(failure);
+          // A spent allowance whose reset the failure states: carried on the
+          // Attention so a person can schedule the resume (quota-reset.ts).
+          const resetsAt =
+            reason === "runtime-failure"
+              ? failureResetsAt({
+                  failure,
+                  providerId: agent.state.model.provider,
+                  observedAt: host.now(),
+                  holder: host.usageLimits?.holder,
+                })
+              : null;
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
             message:
               spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
+            ...(resetsAt === null ? {} : { resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
         }
       }
+      // A Stop during a reconnect ends the wait with the turn.
+      await clearTransportNotice();
       await commitObservation(
         await persistObservation({ kind: "turn", state: "interrupted", turnId }),
       );
@@ -2771,17 +3361,18 @@ async function attachSession(
         await rewritingTheContext(() =>
           compactBeforeTurn([
             queuedUserMessage(
-              agent.state.messages.length === 0
+              conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
           ]),
         );
-        const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec, framedText)
-            : framedText;
+        // Asked of the conversation, not of the array: the array is never empty
+        // now that the system head lives in it (see `transcript-context.ts`).
+        const delivered = conversationIsEmpty(agent.state.messages)
+          ? composeFirstUserMessage(spec, framedText)
+          : framedText;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,
@@ -2917,7 +3508,7 @@ async function attachSession(
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = contextMessages(path);
+          agent.state.messages = withSystemHead(head, contextMessages(path));
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
@@ -3034,6 +3625,9 @@ async function attachSession(
         await detachedRunSettled;
         unsubscribe?.();
         unsubscribe = undefined;
+        stopWatchingResume?.();
+        stopWatchingResume = undefined;
+        streamSupervisor.dispose();
         // Cleanup runs on an uncancellable context on purpose: this is the
         // path taken precisely when the attachment's own signal has aborted,
         // and cancellation must not be able to stop the release of what it
@@ -3115,12 +3709,14 @@ async function attachSession(
       state: spec.recovery === undefined ? "started" : "recovered",
       recovery,
     });
+    if (carryAttention !== undefined) await commitObservation(carryAttention);
     return handle;
   } catch (error) {
     if (abortListener !== undefined) {
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
+    stopWatchingResume?.();
     await toolEnv?.cleanup(piContext()).catch(
       /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
       () => undefined,

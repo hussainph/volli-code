@@ -17,7 +17,7 @@
  * mind rather than two rectangles swapping — and because nothing in the real
  * world appears from nothing.
  *
- * MOTION, per the decision framework (`docs/plans/split-view.md` §6):
+ * MOTION, per the split-view plan's decision framework:
  *  • Opacity and the four box properties, named exactly, 150ms `ease-out`. The
  *    plan asked for 120ms on the fade and 150ms on the morph; one element can
  *    only have one duration without an inline `transition` (which `motion-reduce`

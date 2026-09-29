@@ -113,6 +113,19 @@ terminal instead, where it usually means "interrupt".
 | `⌥⌘Enter` | Enter or leave terminal focus mode |
 | `⌘+` / `⌘-` | Change the terminal font size |
 | `⌘0` | Reset the terminal font size |
+| `⌃⇧M` (Control+Shift+M) | Toggle Tab focus navigation for this terminal pane |
+
+Tab normally goes to the shell for completion. To leave the terminal with Tab,
+press **Control+Shift+M**, then **Tab** or **Shift+Tab** to move forward or backward
+through the app's controls. Tab back into the terminal and press the chord again
+to restore shell completion. The mode survives hiding or moving the pane; each
+split pane has its own mode.
+The terminal input's accessible description and its hover text name the chord,
+and a notification confirms each mode change.
+
+Terminal output is exposed as screen-reader rows, including scrollback navigation,
+with each region named for its tab and pane number. VoiceOver users can navigate
+the rows to read output rather than relying only on live announcements.
 
 Font-size shortcuts change the focused terminal only. To scale the whole app,
 move focus out of the terminal first.

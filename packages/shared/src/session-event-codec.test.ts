@@ -167,6 +167,12 @@ const payloads = samples(
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
     },
   },
+  // Old surfaces keep the historical mcp_* wire projection; the new marker is
+  // durable so reattachment and a model switch never change the tool names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "server" },
+  },
   { kind: "session.signaled", signal: "done", reason: null },
   { kind: "session.signaled", signal: "blocked", reason: "stuck" },
   // The stop fact (VC-86): each actor arm crosses whole.
@@ -265,6 +271,28 @@ const payloads = samples(
       attachmentId: null,
       detail: null,
       diagnostic: null,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "adapter_unrecoverable",
+      id: "attention-4",
+      attachmentId: "attachment-1",
+      detail: "429: Usage limit reached for 5 hour.",
+      diagnostic: null,
+      resetsAt: 1_800_000_000_000,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "adapter_unrecoverable",
+      id: "attention-4",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      resetsAt: null,
     },
   },
   { kind: "attention.cleared", attentionId: "attention-1" },
@@ -514,6 +542,28 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         resolution: { optionIds: ["once"], response: null },
         reference: { id: "sha256:r", mediaType: null, digest: null },
       },
+      {
+        kind: "resume.schedule",
+        attentionId: "attention-1",
+        attachmentId: "attachment-1",
+        resumeAt: 1_800_000_000_000,
+      },
+      { kind: "resume.cancel", scheduleId: "schedule-1" },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "skipped", reason: "superseded", detail: null },
+      },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "skipped", reason: "refused", detail: "There is no failed Pi turn." },
+      },
     ];
     for (const intent of intents) {
       const withRoute: SessionCommand = {
@@ -596,6 +646,43 @@ const resolved = (resolution: unknown) =>
   );
 
 describe("decodeSessionEventPayload tolerance and corruption", () => {
+  it("reads a stopped-run Attention written before `resetsAt` existed as stating no reset", () => {
+    const legacy = decodeSessionEventPayload(
+      {
+        kind: "attention.raised",
+        attention: {
+          kind: "adapter_unrecoverable",
+          id: "a-1",
+          attachmentId: null,
+          detail: "Codex error: The usage limit has been reached",
+          diagnostic: null,
+        },
+      },
+      "payload",
+    );
+    expect(legacy.kind === "attention.raised" && legacy.attention).toMatchObject({
+      kind: "adapter_unrecoverable",
+      resetsAt: null,
+    });
+    // Absent is legacy; present-and-wrong is corruption inside a known kind.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "attention.raised",
+          attention: {
+            kind: "adapter_unrecoverable",
+            id: "a-1",
+            attachmentId: null,
+            detail: null,
+            diagnostic: null,
+            resetsAt: "soon",
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.attention.resetsAt must be an integer");
+  });
+
   it("reads a Session written before `role` existed as the Role its birth Ticket implied (VC-9)", () => {
     const legacyTicket = decodeSessionEventPayload(
       {
@@ -813,6 +900,15 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.tools[1] has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "unknown" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.mcpManagementNames has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },
@@ -1230,6 +1326,21 @@ describe("decodeSessionCommand and its parts", () => {
     );
   });
 
+  it("rejects a malformed scheduled-resume outcome as corruption", () => {
+    expect(() =>
+      decodeSessionCommandIntent(
+        { kind: "resume.settle", scheduleId: "s", outcome: { kind: "maybe" } },
+        "intent",
+      ),
+    ).toThrow("intent.outcome.kind has an unsupported value");
+    expect(() =>
+      decodeSessionCommandIntent(
+        { kind: "resume.settle", scheduleId: "s", outcome: { kind: "skipped", reason: "bored" } },
+        "intent",
+      ),
+    ).toThrow("intent.outcome.reason has an unsupported value");
+  });
+
   it("rejects an unknown intent kind loudly — commands are not tolerant history", () => {
     expect(() => decodeSessionCommandIntent({ kind: "session.merge" }, "intent")).toThrow(
       "intent.kind is not a known Session command",
@@ -1255,6 +1366,17 @@ describe("decodeCommandReceipt", () => {
     expect(() => decodeCommandReceipt({ ...receipt, status: "maybe" }, "receipt")).toThrow(
       "receipt.status is not a known receipt status",
     );
+  });
+
+  it("reads the scheduled-resume result kinds", () => {
+    for (const kind of ["resume.scheduled", "resume.cancelled", "resume.settled"] as const) {
+      expect(
+        decodeCommandReceipt(
+          { ...receipt, status: "completed", result: { kind, sessionId: "session-1" } },
+          "receipt",
+        ),
+      ).toMatchObject({ result: { kind } });
+    }
   });
 
   it("rejects an unknown result kind", () => {

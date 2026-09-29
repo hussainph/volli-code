@@ -113,7 +113,7 @@ function PaneEmptyRow({
         "transition-[color,background-color,scale] duration-150 ease-out",
         "hover:bg-accent/50 active:scale-[0.97] active:bg-accent/70",
         "motion-reduce:transition-[color,background-color] motion-reduce:scale-100!",
-        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        "focus-visible:ring-2 focus-visible:ring-ring",
       )}
     >
       {/* Outline at 14px: these are four peers, and none of them is the

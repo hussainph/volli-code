@@ -135,6 +135,17 @@ export function srgbToLinear(channel: number): number {
   return Math.sign(channel) * linear;
 }
 
+/** WCAG 2 relative-luminance contrast on emitted sRGB colors (not APCA). */
+export function wcagContrast(foreground: string, background: string): number {
+  const luminance = (hex: string) => {
+    const { r, g, b } = hexToRgb(hex);
+    return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+  };
+  const a = luminance(foreground);
+  const b = luminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
 /** Linear-light → sRGB, the exact inverse of {@link srgbToLinear}. */
 export function linearToSrgb(channel: number): number {
   const magnitude = Math.abs(channel);
@@ -320,10 +331,8 @@ function softClampBlack(y: number): number {
  * remember which comparisons are reversed is a generator that will eventually
  * forget. Polarity is never in question here: the ladder decides it.
  *
- * WCAG 2's contrast ratio is deliberately not used. It is a ratio of relative
- * luminances that badly misjudges dark themes — it rates near-black pairs as
- * far more distinguishable than they look — and this whole design is a dark
- * theme with a near-black ladder.
+ * This perceptual measure complements, rather than replaces, the WCAG ratio
+ * used by the primary control's normative AA constraint.
  */
 export function apcaLc(textHex: string, backgroundHex: string): number {
   const textY = softClampBlack(apcaY(textHex));

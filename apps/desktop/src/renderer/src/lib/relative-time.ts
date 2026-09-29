@@ -45,7 +45,12 @@ export function relativeTime(epochMs: number, now: number = Date.now()): string 
   const diff = now - epochMs;
 
   if (diff < 45 * SECOND) return "just now";
-  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m ago`;
+  // The minute rung opens at 45 seconds, so `Math.floor` alone reads the first
+  // fifteen of them as "0m ago" — an age that says nothing happened in no time
+  // at all. The bucket a stamp sits in is unchanged (see `nextAgeChangeAt`,
+  // whose "just now" bucket still closes at 45 seconds); only its WORDS are,
+  // and the first word past "just now" is one minute.
+  if (diff < HOUR) return `${Math.max(1, Math.floor(diff / MINUTE))}m ago`;
   if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
   if (diff < WEEK) return `${Math.floor(diff / DAY)}d ago`;
   if (diff < ROLLUP_AFTER) return `${Math.floor(diff / WEEK)}w ago`;

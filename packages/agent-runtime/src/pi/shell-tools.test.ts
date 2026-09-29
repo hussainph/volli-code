@@ -53,9 +53,13 @@ describe("shell tools", () => {
     expect(read?.content[0]).toMatchObject({ type: "text" });
   });
 
-  it("names the three shell tools in the Authority vocabulary, last and in the offered order", () => {
+  it("names the three shell tools in the Authority vocabulary, in the offered order", () => {
     expect(SHELL_TOOL_NAMES).toEqual(["shell_start", "shell_output", "shell_kill"]);
-    expect(NON_CODING_TOOL_IDS.slice(-3)).toEqual(SHELL_TOOL_NAMES);
+    // Contiguous and after `todo_write`; `browser_find` (VC-364) was appended
+    // after them, so they are no longer last.
+    const at = NON_CODING_TOOL_IDS.indexOf("shell_start");
+    expect(NON_CODING_TOOL_IDS.slice(at, at + 3)).toEqual(SHELL_TOOL_NAMES);
+    expect(at).toBeGreaterThan(NON_CODING_TOOL_IDS.indexOf("todo_write"));
     for (const name of SHELL_TOOL_NAMES) {
       expect(createShellTool(name, unusedPort()).name).toBe(name);
     }

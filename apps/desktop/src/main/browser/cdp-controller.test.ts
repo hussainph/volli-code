@@ -49,6 +49,28 @@ const BUTTON_TREE = {
 /** A 10×10 box at (100, 200), in CDP's content-quad spelling. */
 const BUTTON_BOX = { model: { content: [100, 200, 110, 200, 110, 210, 100, 210] } };
 
+/** A flat page of `[role, name, backendDOMNodeId]` rows under one root, as CDP answers it. */
+function tree(rows: [string, string, number][]): { nodes: object[] } {
+  return {
+    nodes: [
+      {
+        nodeId: "root",
+        ignored: false,
+        role: { value: "RootWebArea" },
+        childIds: rows.map((_, index) => `n${index}`),
+      },
+      ...rows.map(([role, name, backendDOMNodeId], index) => ({
+        nodeId: `n${index}`,
+        ignored: false,
+        role: { value: role },
+        name: { value: name },
+        backendDOMNodeId,
+        childIds: [],
+      })),
+    ],
+  };
+}
+
 describe("BrowserTabController", () => {
   it("prints a snapshot from the tree the page's own engine computed, stamped with the tab generation", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
@@ -94,7 +116,7 @@ describe("BrowserTabController", () => {
     expect(mouse[0]?.params).toMatchObject({ x: 105, y: 205, button: "left", clickCount: 1 });
   });
 
-  it("never aliases a ref from an older snapshot onto the latest snapshot", async () => {
+  it("keeps the same element's ref across snapshots of one generation", async () => {
     const page = wire({
       "Accessibility.getFullAXTree": BUTTON_TREE,
       "DOM.getBoxModel": BUTTON_BOX,
@@ -103,12 +125,92 @@ describe("BrowserTabController", () => {
     const first = await controller.snapshot();
     const second = await controller.snapshot();
 
-    expect(first.text).toContain("[ref=e1]");
-    expect(second.text).toContain("[ref=e2]");
+    // Same backend node, same generation, same ref (VC-364) — and nothing new.
+    expect(first.text).toBe('- button "Save" [ref=e1]');
+    expect(second.text).toBe('- button "Save" [ref=e1]');
     await expect(
-      controller.act({ generation: first.generation, kind: "click", ref: "e1" }),
-    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+      controller.act({ generation: second.generation, kind: "click", ref: "e1" }),
+    ).resolves.toEqual({ target: { ref: "e1", name: "Save" } });
+  });
+
+  it("marks an element no earlier read of the generation showed as [new]", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": BUTTON_TREE };
+    const controller = new BrowserTabController(wire(answers).transport);
+    await controller.snapshot();
+    answers["Accessibility.getFullAXTree"] = tree([
+      ["button", "Save", 77],
+      ["button", "Undo", 78],
+    ]);
+
+    const second = await controller.snapshot();
+
+    expect(second.text).toBe(
+      ['- button "Save" [ref=e1]', '- button "Undo" [ref=e2] [new]'].join("\n"),
+    );
+  });
+
+  it("refuses a ref whose element left the page, though the generation still remembers it", async () => {
+    const answers: Record<string, unknown> = {
+      "Accessibility.getFullAXTree": tree([
+        ["button", "Save", 77],
+        ["button", "Delete", 78],
+      ]),
+      "DOM.getBoxModel": BUTTON_BOX,
+    };
+    const page = wire(answers);
+    const controller = new BrowserTabController(page.transport);
+    await controller.snapshot();
+    answers["Accessibility.getFullAXTree"] = tree([["button", "Save", 77]]);
+    const after = await controller.snapshot();
+
+    await expect(
+      controller.act({ generation: after.generation, kind: "click", ref: "e2" }),
+    ).rejects.toMatchObject({
+      rule: "browser.unknown-ref",
+      message: expect.stringContaining("no longer on the page"),
+    });
     expect(page.sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
+
+    // If the same node returns, it is the same element and gets its old ref.
+    answers["Accessibility.getFullAXTree"] = tree([
+      ["button", "Save", 77],
+      ["button", "Delete", 78],
+    ]);
+    expect((await controller.snapshot()).text).toContain('- button "Delete" [ref=e2]');
+  });
+
+  it("forgets every ref when the generation changes", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": BUTTON_TREE };
+    const controller = new BrowserTabController(wire(answers).transport);
+    await controller.snapshot();
+
+    controller.syncGeneration(1);
+    answers["Accessibility.getFullAXTree"] = tree([["link", "Home", 500]]);
+    const next = await controller.snapshot();
+
+    // A new page starts numbering afresh, and its first read marks nothing.
+    expect(next).toMatchObject({ text: '- link "Home" [ref=e1]', generation: 1 });
+  });
+
+  it("never leaves a ref the snapshot bound cut away actionable", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": tree([
+        ["button", "first button here", 77],
+        ["button", "second one", 78],
+      ]),
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
+    const controller = new BrowserTabController(page.transport, { maxSnapshotChars: 40 });
+    const printed = await controller.snapshot();
+
+    expect(printed).toMatchObject({
+      text: '- button "first button here" [ref=e1]',
+      truncated: true,
+    });
+    await expect(
+      controller.act({ generation: printed.generation, kind: "click", ref: "e2" }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+    expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
   });
 
   it("refuses a ref from a stale generation without dispatching anything", async () => {
@@ -615,5 +717,141 @@ describe("BrowserTabController", () => {
     ).rejects.toThrow(BrowserRefusal);
 
     expect(page.sent.map((call) => call.method)).not.toContain("Input.dispatchKeyEvent");
+  });
+});
+
+/** 800 distinct buttons, backend ids from `from`: short enough to print whole. */
+function batch(from: number): [string, string, number][] {
+  return Array.from({ length: 800 }, (_, index) => ["button", `B${from + index}`, from + index]);
+}
+
+describe("BrowserTabController.find (VC-364)", () => {
+  it("finds past the snapshot's bound, and its refs are the ones that act", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": tree([
+        ["button", "first button with a much longer name here", 77],
+        ["button", "Delete account", 78],
+      ]),
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
+    const controller = new BrowserTabController(page.transport, { maxSnapshotChars: 70 });
+    const snapshot = await controller.snapshot();
+    expect(snapshot.text).not.toContain("Delete");
+
+    const found = await controller.find("delete ACCOUNT");
+
+    expect(found).toEqual({
+      text: ["...", '- button "Delete account" [ref=e2] [new] [match]'].join("\n"),
+      generation: 0,
+      matches: 1,
+      shown: 1,
+      truncated: false,
+      empty: false,
+    });
+    // The find re-read the tree: two reads of the AX tree, no page script.
+    expect(page.sent.map((call) => call.method)).toEqual([
+      "Accessibility.getFullAXTree",
+      "Accessibility.getFullAXTree",
+    ]);
+    await expect(
+      controller.act({ generation: found.generation, kind: "click", ref: "e2" }),
+    ).resolves.toEqual({ target: { ref: "e2", name: "Delete account" } });
+    expect(page.sent).toContainEqual({
+      method: "DOM.scrollIntoViewIfNeeded",
+      params: { backendNodeId: 78 },
+    });
+  });
+
+  it("replaces the actionable set: a ref the find did not show needs a fresh read", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": tree([
+        ["button", "Save", 77],
+        ["button", "Delete", 78],
+      ]),
+    });
+    const controller = new BrowserTabController(page.transport);
+    await controller.snapshot();
+    const found = await controller.find("delete");
+
+    await expect(
+      controller.act({ generation: found.generation, kind: "click", ref: "e1" }),
+    ).rejects.toMatchObject({
+      rule: "browser.unknown-ref",
+      message: expect.stringContaining("did not show it"),
+    });
+    expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
+  });
+
+  it("leaves the latest snapshot's refs standing when a find shows nothing", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    expect(await controller.find("checkout")).toMatchObject({ text: "", matches: 0 });
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+    ).resolves.toEqual({ target: { ref: "e1", name: "Save" } });
+  });
+
+  it("marks nothing new after an earlier read that showed nothing", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": { nodes: [] } };
+    const controller = new BrowserTabController(wire(answers).transport);
+    await controller.snapshot();
+    answers["Accessibility.getFullAXTree"] = BUTTON_TREE;
+
+    expect((await controller.snapshot()).text).toBe('- button "Save" [ref=e1]');
+  });
+
+  it("past its bound, the ledger keeps only the latest read and never reuses a number", async () => {
+    const answers: Record<string, unknown> = {};
+    const controller = new BrowserTabController(wire(answers).transport);
+    // Thirteen reads of 800 distinct buttons each overflow the 10,000 bound.
+    for (let read = 0; read < 13; read += 1) {
+      answers["Accessibility.getFullAXTree"] = tree(batch(read * 800));
+      expect((await controller.snapshot()).truncated).toBe(false);
+    }
+    // The early batches were forgotten, so a node from one comes back under a
+    // fresh number past every number already shown — never an old one — while
+    // the latest read's elements keep theirs.
+    answers["Accessibility.getFullAXTree"] = tree([
+      ["button", "B9600", 9_600],
+      ["button", "B0", 0],
+    ]);
+
+    expect((await controller.snapshot()).text).toBe(
+      ['- button "B9600" [ref=e9601]', '- button "B0" [ref=e10401] [new]'].join("\n"),
+    );
+  });
+
+  it("tells no matches apart from an empty tree", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": BUTTON_TREE };
+    const controller = new BrowserTabController(wire(answers).transport);
+
+    expect(await controller.find("checkout")).toMatchObject({ matches: 0, empty: false });
+    answers["Accessibility.getFullAXTree"] = { nodes: [] };
+    expect(await controller.find("checkout")).toMatchObject({ matches: 0, empty: true });
+  });
+
+  it("refuses an empty or oversized query without reading the page", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+
+    await expect(controller.find("   ")).rejects.toMatchObject({ rule: "browser.find-query" });
+    await expect(controller.find("x".repeat(201))).rejects.toMatchObject({
+      rule: "browser.find-query",
+    });
+    expect(page.sent).toEqual([]);
+  });
+
+  it("gives a timed-out find its own recovery guidance", async () => {
+    const controller = new BrowserTabController(
+      { send: () => new Promise<unknown>(() => undefined) },
+      { maxCommandMs: 5 },
+    );
+
+    await expect(controller.find("save")).rejects.toThrow(/searching/);
   });
 });

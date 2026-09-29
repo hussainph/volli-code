@@ -180,7 +180,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   React.useEffect(() => subscribeWorktreePhases(), []);
 
   // The single subscription to the involuntary harness channel, for the same
-  // reason again (docs/plans/harness-events.md): the events address live
+  // reason again: the events address live
   // sessions by the same id the PTY streams above carry, and this layer is the
   // only component that outlives every surface reading them — the sidebar's
   // Active band, the ticket rail, the session header.

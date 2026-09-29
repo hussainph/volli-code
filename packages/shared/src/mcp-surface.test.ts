@@ -26,14 +26,7 @@ describe("MCP Agent Tool Surface", () => {
         capabilities: { coding: ["read"], interaction: ["ask_user"] },
         mcpTools: [tool],
       }),
-    ).toEqual([
-      "read",
-      "ask_user",
-      "ticket.await",
-      "session.delegate",
-      "session.await",
-      tool.providerName,
-    ]);
+    ).toEqual(["read", "ask_user", "session.delegate", "watch", tool.providerName]);
   });
 
   it("bounds a Subagent Session to MCP tools already frozen on its parent", () => {
@@ -112,5 +105,28 @@ describe("MCP Agent Tool Surface", () => {
     expect(() =>
       decodeSessionEventPayload(payload([{ ...tool, providerName: "mcp__not valid" }]), "payload"),
     ).toThrow(/providerName is invalid/i);
+  });
+
+  it("round-trips host-authored parallel-read eligibility and refuses any other value (VC-454)", () => {
+    const tool: McpToolDefinition = { ...definition(), parallelRead: true };
+    const payload = {
+      kind: "session.input.recorded" as const,
+      input: { kind: "tool-surface" as const, tools: [tool.providerName], mcpTools: [tool] },
+    };
+
+    expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
+      payload,
+    );
+    for (const damaged of [false, "true", 1, null]) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            ...payload,
+            input: { ...payload.input, mcpTools: [{ ...tool, parallelRead: damaged }] },
+          },
+          "payload",
+        ),
+      ).toThrow(/parallelRead must be true when present/);
+    }
   });
 });

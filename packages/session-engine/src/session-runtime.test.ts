@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
   AuthoritySnapshot,
+  ObservabilityEvent,
+  ObservabilitySink,
   RuntimeObservation,
   SessionEvent,
   SessionLedgerIds,
@@ -194,6 +196,7 @@ function composition(
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
+    observability?: ObservabilitySink;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -220,6 +223,7 @@ function composition(
       ...(options.onProjectionCheckpointFailure
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
+      ...(options.observability ? { observability: options.observability } : {}),
     }),
   };
 }
@@ -1088,6 +1092,127 @@ describe("SessionRuntime native adapter contract", () => {
     });
     expect(adapter.releases).toBe(1);
     expect((await runtime.snapshot({ sessionId })).projection.liveExecutor).toBeNull();
+  });
+
+  it("carries the newest closed attachment into a context_replay attach, and records a first one as fresh (VC-457)", async () => {
+    const { runtime, adapter } = composition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const sessionId = created.sessionId;
+    // A reattach door asks for a replay without reading history first; with
+    // nothing to carry, what the attachment IS is fresh.
+    await runtime.command({
+      commandId: "command-attach-1",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(adapter.specs[0]).toMatchObject({ continuity: "fresh", native: null });
+    expect(adapter.specs[0]).not.toHaveProperty("carryFrom");
+    const first = (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(first.continuity).toBe("fresh");
+
+    await runtime.command({
+      commandId: "command-release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: first.id },
+    });
+    await runtime.command({
+      commandId: "command-attach-2",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(adapter.specs[1]).toMatchObject({
+      continuity: "context_replay",
+      native: null,
+      carryFrom: {
+        attachmentId: first.id,
+        directory: "/projects/fake",
+        native: { id: "native-session-1", detail: { provider: "fake" } },
+      },
+    });
+    const second = (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(second.id).not.toBe(first.id);
+    expect(second.continuity).toBe("context_replay");
+  });
+
+  it("skips another executor's and a failed attachment, and reports an unreadable one (VC-457)", async () => {
+    const { runtime, engine, adapter } = composition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const sessionId = created.sessionId;
+    let occurredAt = 900;
+    const closedAttachment = async (id: string, adapterId: string, native: unknown) => {
+      await engine.observe({
+        id,
+        sessionId,
+        occurredAt: occurredAt++,
+        provenance: { source: { kind: "adapter", id: adapterId, detail: null }, venue },
+        kind: "attachment.opened",
+        attachment: {
+          id,
+          sessionId,
+          adapterId,
+          venue,
+          continuity: "fresh",
+          native: native as never,
+          authority: null,
+        },
+      });
+      await engine.observe({
+        id: `${id}:closed`,
+        sessionId,
+        occurredAt: occurredAt++,
+        provenance: { source: { kind: "adapter", id: adapterId, detail: null }, venue },
+        kind: "attachment.closed",
+        attachmentId: id,
+        outcome: "completed",
+      });
+    };
+    await closedAttachment("unreadable", "fake", { id: "n", detail: { kind: "other" } });
+    // A failed attach, newer than it, records no native binding and is passed over.
+    adapter.attachFailure = new Error("no");
+    await runtime.command({
+      commandId: "command-attach-failed",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    adapter.attachFailure = null;
+    await closedAttachment("terminal", "terminal", { id: "t", detail: null });
+
+    await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    const spec = adapter.specs.at(-1)!;
+    // A conversation that existed and cannot be read is told to the adapter,
+    // which raises it; the attachment itself is fresh.
+    expect(spec.continuity).toBe("fresh");
+    expect(spec.carryFrom).toEqual({
+      attachmentId: "unreadable",
+      unreadable: expect.stringContaining("native binding"),
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.continuity).toBe(
+      "fresh",
+    );
   });
 
   it("drops a released binding's tail instead of recording it against the closed attachment", async () => {
@@ -1999,6 +2124,86 @@ describe("SessionRuntime native adapter contract", () => {
       command: { kind: "executor.retry", attachmentId },
     });
     expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+  });
+
+  it("carries a quota reset onto the Attention and runs a scheduled resume through its commands", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      kind: "attention",
+      state: "raised",
+      reason: "runtime-failure",
+      message: "429: Usage limit reached for 5 hour.",
+      resetsAt: 9_000,
+    });
+    const attention = (await runtime.snapshot({ sessionId })).projection.attention.primary!;
+    expect(attention).toMatchObject({
+      kind: "adapter_unrecoverable",
+      attachmentId,
+      resetsAt: 9_000,
+    });
+    const frames: string[] = [];
+    await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if ("event" in emission) frames.push(emission.event.payload.kind);
+      },
+    );
+
+    const scheduled = await runtime.command({
+      commandId: "schedule-1",
+      sessionId,
+      command: {
+        kind: "resume.schedule",
+        attentionId: attention.id,
+        attachmentId,
+        resumeAt: 9_000,
+      },
+    });
+    expect(scheduled.receipt).toMatchObject({ status: "completed" });
+    // Published, so an open chat redraws the row the moment it lands.
+    expect(frames).toEqual(["command.recorded", "command.receipt.recorded"]);
+
+    // The resume is an ordinary retry under the schedule's frozen id: a second
+    // fire replays the one command instead of running a second turn.
+    for (let fire = 0; fire < 2; fire += 1) {
+      await runtime.command({
+        commandId: "schedule-1:resume",
+        sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      });
+    }
+    expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+
+    const settled = await runtime.command({
+      commandId: "schedule-1:settle",
+      sessionId,
+      command: {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+    });
+    expect(settled.receipt).toMatchObject({ status: "completed" });
+    const events = await engine.listEvents({ sessionId });
+    const provenanceOf = (commandId: string) =>
+      events.find(
+        ({ payload }) => payload.kind === "command.recorded" && payload.command.id === commandId,
+      )?.provenance.source;
+    // A person chose the schedule; nobody chose the outcome.
+    expect(provenanceOf("schedule-1")).toMatchObject({ kind: "user" });
+    expect(provenanceOf("schedule-1:settle")).toMatchObject({
+      kind: "system",
+      id: "scheduled-resume",
+    });
+
+    const cancelled = await runtime.command({
+      commandId: "cancel-1",
+      sessionId,
+      command: { kind: "resume.cancel", scheduleId: "schedule-1" },
+    });
+    expect(cancelled.receipt).toMatchObject({ status: "rejected", code: "resume_not_pending" });
   });
 
   it("records and dispatches an explicit compaction to the live attachment", async () => {
@@ -4311,7 +4516,7 @@ describe("SessionRuntime native adapter contract", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The transient overlay (docs/plans/delta-frames.md, "Engine"). Nothing below
+// The transient overlay (delta frames). Nothing below
 // this line may cost a durable write: a delta is what the assistant is saying
 // right now, and only a settle point is what it said.
 // ---------------------------------------------------------------------------
@@ -5076,5 +5281,258 @@ describe("SessionRuntime transient transcript overlay", () => {
     // The baseline reached the chain before the subscriber left; the append
     // queued behind it never reaches a listener that is no longer listening.
     expect(seen).toEqual(["overlay", "command.recorded"]);
+  });
+});
+
+function recordingSink(): { events: ObservabilityEvent[]; sink: ObservabilitySink } {
+  const events: ObservabilityEvent[] = [];
+  return { events, sink: { record: (event) => void events.push(event) } };
+}
+
+/** One clock the test moves by hand, shared by engine and runtime. */
+function manualClock(at = 1_000): { at: number; now: () => number } {
+  const clock = { at, now: () => clock.at };
+  return clock;
+}
+
+function submit(runtime: SessionRuntime, sessionId: string, id: string, text = "Hello") {
+  return runtime.command({
+    commandId: `command-${id}`,
+    sessionId,
+    command: { kind: "message.submit", message: userMessage(id, text) },
+  });
+}
+
+describe("SessionRuntime turn queue time (VC-455)", () => {
+  it("measures arrival, the wait behind a busy Session, and dispatch, up to the turn's start", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatches = [new Gate(), new Gate()];
+    let dispatchCount = 0;
+    adapter.dispatchStarted = () => dispatches[dispatchCount++]?.resolve();
+    const releaseDispatch = new Gate();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    clock.at = 1_000;
+    const first = submit(runtime, sessionId, "first", "PRIVATE-first-message");
+    await dispatches[0]!.promise;
+    // Received now, then held behind the first message's admission.
+    clock.at = 1_010;
+    const second = submit(runtime, sessionId, "second", "PRIVATE-second-message");
+    clock.at = 1_040;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-first" });
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-first" });
+    await dispatches[1]!.promise;
+    clock.at = 1_100;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-second" });
+    releaseDispatch.resolve();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual([
+      { kind: "turn-queue", queuedMs: 40 },
+      { kind: "turn-queue", queuedMs: 90 },
+    ]);
+    // Metadata only: no Session, command, turn or message identity.
+    const exported = JSON.stringify(events);
+    for (const secret of ["PRIVATE", sessionId, "command-", "turn-first", "turn-second"]) {
+      expect(exported).not.toContain(secret);
+    }
+  });
+
+  it("measures nothing for a turn that opened before the message reached the executor", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const store = createInMemoryTranscriptArtifactStore();
+    const writeStarted = new Gate();
+    const releaseWrite = new Gate();
+    let holdWrites = false;
+    const { runtime, adapter } = composition({
+      clock,
+      observability: sink,
+      artifacts: {
+        write: async (artifact) => {
+          if (holdWrites) {
+            holdWrites = false;
+            writeStarted.resolve();
+            await releaseWrite.promise;
+          }
+          return store.write(artifact);
+        },
+        read: (reference) => store.read(reference),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+
+    holdWrites = true;
+    const message = submit(runtime, sessionId, "early");
+    await writeStarted.promise;
+    // Some other turn opens while this message is still being recorded: it
+    // releases the admission, but it is not this message's turn.
+    clock.at = 1_020;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-unrelated" });
+    releaseWrite.resolve();
+    await message;
+    // Its own start then has no admission left to be measured against.
+    clock.at = 1_050;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-late" });
+
+    expect(adapter.dispatches).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  it("measures nothing for a message that joined a running turn", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatches = [new Gate(), new Gate()];
+    let dispatchCount = 0;
+    adapter.dispatchStarted = () => dispatches[dispatchCount++]?.resolve();
+    const releaseDispatch = new Gate();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const running = submit(runtime, sessionId, "running");
+    await dispatches[0]!.promise;
+    clock.at = 1_010;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-running" });
+    // Received while that turn runs, and handed to the executor, which folds it
+    // into the running turn: no turn of its own ever opens for it. The running
+    // turn's end is not its start.
+    clock.at = 1_020;
+    const joined = submit(runtime, sessionId, "joined");
+    await dispatches[1]!.promise;
+    clock.at = 1_050;
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-running" });
+    releaseDispatch.resolve();
+    await Promise.all([running, joined]);
+
+    expect(events).toEqual([{ kind: "turn-queue", queuedMs: 10 }]);
+  });
+
+  it("does not credit a message with a turn that opened before its own dispatch", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const store = createInMemoryTranscriptArtifactStore();
+    const holds: Array<{ started: Gate; release: Gate }> = [];
+    const { runtime, adapter } = composition({
+      clock,
+      observability: sink,
+      artifacts: {
+        write: async (artifact) => {
+          const hold = holds.shift();
+          if (hold !== undefined) {
+            hold.started.resolve();
+            await hold.release.promise;
+          }
+          return store.write(artifact);
+        },
+        read: (reference) => store.read(reference),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const first = { started: new Gate(), release: new Gate() };
+    const second = { started: new Gate(), release: new Gate() };
+    holds.push(first, second);
+
+    const firstMessage = submit(runtime, sessionId, "first");
+    await first.started.promise;
+    // An unrelated start releases the first message early, so the second is
+    // admitted while the first has still not reached the executor.
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-unrelated" });
+    const secondMessage = submit(runtime, sessionId, "second");
+    await second.started.promise;
+    first.release.resolve();
+    await firstMessage;
+    // The first message's own turn opens while the second is still being
+    // recorded. It is not the second message's turn.
+    clock.at = 1_070;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-first" });
+    second.release.resolve();
+    await secondMessage;
+
+    expect(adapter.dispatches).toBe(2);
+    expect(events).toEqual([]);
+  });
+
+  it("measures nothing for a replayed start", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    // A start recovered by reconciliation is history, not a clock reading.
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+    const held = submit(runtime, sessionId, "held");
+    await dispatchStarted.promise;
+    adapter.reconcileObservations = [
+      { kind: "turn", state: "started", turnId: "turn-replayed", occurredAt: 1 },
+    ];
+    clock.at = 9_000;
+    await runtime.reconcile({ sessionId, attachmentId });
+    releaseDispatch.resolve();
+    await held;
+
+    expect(events).toEqual([]);
+  });
+
+  it("reports a clock that ran backwards as unmeasured rather than as zero", async () => {
+    const clock = manualClock(5_000);
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = submit(runtime, sessionId, "stepped");
+    await dispatchStarted.promise;
+    clock.at = 4_000;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-stepped" });
+    releaseDispatch.resolve();
+    await message;
+
+    expect(events).toEqual([]);
+  });
+
+  it("costs a throwing sink the measurement and nothing else", async () => {
+    const clock = manualClock();
+    let attempts = 0;
+    const { runtime, adapter } = composition({
+      clock,
+      observability: {
+        record: () => {
+          attempts += 1;
+          throw new Error("collector down");
+        },
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = submit(runtime, sessionId, "sink-throws");
+    await dispatchStarted.promise;
+    clock.at = 1_030;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-sink-throws" });
+    releaseDispatch.resolve();
+
+    await expect(message).resolves.toMatchObject({ receipt: { status: "accepted" } });
+    expect(attempts).toBe(1);
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames.some(
+        ({ event }) =>
+          event.payload.kind === "turn.started" && event.payload.turnId === "turn-sink-throws",
+      ),
+    ).toBe(true);
   });
 });

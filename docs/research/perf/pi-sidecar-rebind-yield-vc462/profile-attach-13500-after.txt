@@ -1,0 +1,28 @@
+$ node apps/desktop/e2e/bench/pi-context-scaling/profile-attach.mjs --entries 13500  # patched pi-agent-core storage.js, at d63315f6, 2026-09-29T20:09:50Z, load before { 6.59 10.54 9.73 } after { 6.57 10.34 9.68 }
+sidecar: 13502 entries, 39.99 MB
+re-attach ms: 194, 171, 159, 310, 168, 167
+re-attach loop-delay max ms: 33, 34, 26, 36, 33, 31
+
+self time over 5 re-attaches (885 ms sampled):
+    343 ms  parseJsonlTransaction  session/jsonl/io.js:51
+    146 ms  completeLinesInSlices  session/jsonl/storage.js:26
+     88 ms  (garbage collector)  :0
+     48 ms  decode  node:internal/encoding:482
+     33 ms  decodeUTF8  :0
+     32 ms  (program)  :0
+     25 ms  (idle)  :0
+     25 ms  attachSession  src/pi/runtime.ts:823
+     18 ms  applyValidated  harness/session/in-memory-storage-state.js:54
+     13 ms  recoveredObservation  src/pi/runtime.ts:538
+     12 ms  hasEntryId  harness/session/in-memory-storage-state.js:50
+      9 ms  applyValueSetOrListAppend  harness/session/in-memory-storage-state.js:150
+      9 ms  hasEntryOrUsageId  harness/session/in-memory-storage-state.js:49
+      8 ms  openV4  session/jsonl/storage.js:78
+      6 ms  isRecoverableObservation  src/pi/runtime.ts:553
+      6 ms  conversationPath  src/pi/compaction.ts:63
+      5 ms  scanBranch  harness/session/in-memory-storage-state.js:206
+      5 ms  readFileHandle  node:internal/fs/promises:513
+      3 ms  replayCommitted  session/jsonl/storage.js:117
+      3 ms  isRuntimeValue  src/pi/runtime.ts:693
+
+network attempts refused: 0

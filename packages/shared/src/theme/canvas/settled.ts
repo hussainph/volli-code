@@ -20,8 +20,9 @@
  *
  * Every number was solved against the ember default at vibrancy 0.6 — the canvas
  * the app ships with — and then measured across the editor's other seeds to
- * confirm it does not fall apart on them. The measurement runs live in
- * `docs/plans/arc-theming-migration.md` § Appendix — measured derivations.
+ * confirm it does not fall apart on them. The measurement runs were recorded
+ * in the arc theming migration plan's appendix (git history); the
+ * "Appendix §" notes below name its headings.
  */
 
 import type { ResolvedAppearance } from "./types";

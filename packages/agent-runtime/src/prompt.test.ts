@@ -1,7 +1,9 @@
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  roleVerbBundle,
   type SessionRuntimeSpec,
+  type VerbToolKey,
 } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
@@ -90,16 +92,17 @@ describe("composeSystemPrompt", () => {
 
       # Execution
 
-      Answer or review requests by investigating and reporting; do not edit unless a
-      change is requested or authorized. For implementation, inspect relevant
-      workspace state and applicable repository instructions before editing. Prefer
-      available specialized tools to shell substitutes, and parallelize independent
-      reads when the tool interface supports it. Preserve user and concurrent-agent
-      changes; never discard or overwrite work you did not create. Carry each requested
-      change through focused implementation and proportional verification; do not stop
-      at analysis when action is authorized. Ask only for a genuine blocking decision
-      that the task and workspace cannot resolve. Finish with the outcome, the exact
-      checks run and their results, and any unresolved blockers.
+      Answer or review requests by investigating and reporting; edit only when a
+      change is requested or authorized. Before editing, inspect the relevant workspace
+      state and repository instructions. Prefer available specialized tools to shell
+      substitutes, and parallelize independent calls. When web_search and web_fetch
+      are available, read public web content with them, not curl, wget or scripts;
+      localhost and local dev servers are fine from the shell. Preserve user and
+      concurrent-agent changes; never discard work you did not create. Carry each
+      requested change through focused implementation and proportional
+      verification; do not stop at analysis when action is authorized. Ask only for
+      a genuine blocking decision. Finish with the outcome, the exact checks run and
+      their results, and any unresolved blockers.
 
       # Role and trust
 
@@ -166,16 +169,17 @@ describe("composeSystemPrompt", () => {
 
       # Execution
 
-      Answer or review requests by investigating and reporting; do not edit unless a
-      change is requested or authorized. For implementation, inspect relevant
-      workspace state and applicable repository instructions before editing. Prefer
-      available specialized tools to shell substitutes, and parallelize independent
-      reads when the tool interface supports it. Preserve user and concurrent-agent
-      changes; never discard or overwrite work you did not create. Carry each requested
-      change through focused implementation and proportional verification; do not stop
-      at analysis when action is authorized. Ask only for a genuine blocking decision
-      that the task and workspace cannot resolve. Finish with the outcome, the exact
-      checks run and their results, and any unresolved blockers.
+      Answer or review requests by investigating and reporting; edit only when a
+      change is requested or authorized. Before editing, inspect the relevant workspace
+      state and repository instructions. Prefer available specialized tools to shell
+      substitutes, and parallelize independent calls. When web_search and web_fetch
+      are available, read public web content with them, not curl, wget or scripts;
+      localhost and local dev servers are fine from the shell. Preserve user and
+      concurrent-agent changes; never discard work you did not create. Carry each
+      requested change through focused implementation and proportional
+      verification; do not stop at analysis when action is authorized. Ask only for
+      a genuine blocking decision. Finish with the outcome, the exact checks run and
+      their results, and any unresolved blockers.
 
       # Role and trust
 
@@ -229,6 +233,14 @@ describe("composeSystemPrompt", () => {
     // so an open question is surfaced there rather than guessed at.
     expect(prompt).toContain("Your last message is your answer");
     expect(prompt).toMatch(/open question|could not settle/);
+    // The answer is the whole deliverable, so it is shaped for a parent that
+    // saw none of the work: checkable evidence, and long results in the file
+    // the brief names rather than in the message (VC-459).
+    expect(prompt).toContain("written for a reader who saw none of your\nwork");
+    expect(prompt).toContain(
+      "the evidence behind it (file paths, lines,\ncommands and their results)",
+    );
+    expect(prompt).toContain("If the task names a file for long results, write them there");
     // No person to ask: the prompt must not end on "ask the user", because
     // there is no `ask_user` in the room and no one waiting on this Session.
     expect(prompt).not.toMatch(/When in doubt,\nask the user\.$/);
@@ -384,23 +396,139 @@ describe("composeSystemPrompt", () => {
     }).find((section) => section.id === "execution");
     if (execution === undefined) throw new Error("expected the Execution layer");
 
+    // The core's own budget (VC-332): still inside 150–250 after VC-459 added
+    // the web rule, and capped tighter so the delegation paragraph, budgeted
+    // separately below, keeps its room.
     expect(Math.ceil(execution.text.length / 4)).toBeGreaterThanOrEqual(150);
-    expect(Math.ceil(execution.text.length / 4)).toBeLessThanOrEqual(250);
+    expect(Math.ceil(execution.text.length / 4)).toBeLessThanOrEqual(210);
     expect(execution.text).toContain("Answer or review requests");
-    expect(execution.text).toContain("do not edit unless");
-    expect(execution.text).toContain("applicable repository instructions before editing");
-    expect(execution.text).toContain("available specialized tools to shell substitutes");
-    expect(execution.text).toContain("parallelize independent");
-    expect(execution.text).toContain("Preserve user and concurrent-agent");
-    expect(execution.text).toContain("focused implementation and proportional verification");
+    expect(execution.text).toContain("edit only when a\nchange is requested or authorized");
+    expect(execution.text).toContain(
+      "inspect the relevant workspace\nstate and repository instructions",
+    );
+    expect(execution.text).toContain("available specialized tools to shell");
+    expect(execution.text).toContain("parallelize independent calls");
+    expect(execution.text).toContain("Preserve user and\nconcurrent-agent changes");
+    expect(execution.text).toContain("focused implementation and proportional\nverification");
     expect(execution.text).toContain("genuine blocking decision");
-    expect(execution.text).toContain("exact\nchecks run and their results");
+    expect(execution.text).toContain("the exact checks run and\ntheir results");
     expect(execution.text).toContain("unresolved blockers");
+  });
+
+  // VC-459: public web content goes through the tools that carry Volli's URL
+  // policy, not a shell fetch that performs the same read with none of its
+  // checks — while local requests, which that policy refuses, stay the shell's.
+  it("routes public web reads to web_search and web_fetch, and leaves localhost to the shell", () => {
+    for (const role of ["ticket", "project", "subagent"] as const) {
+      const execution = systemPromptSections({ role, tools: { tools: ["read"] } }).find(
+        (section) => section.id === "execution",
+      );
+      expect(execution?.text).toContain(
+        "read public web content with them, not curl, wget or scripts",
+      );
+      expect(execution?.text).toContain("localhost and local dev servers are fine from the shell");
+    }
+  });
+
+  // The web tools are port-gated and the prompt cannot see ports (VC-164), so
+  // a surface without them composes the same bytes. The rule must therefore be
+  // qualified by availability rather than state that the Session holds them.
+  it("qualifies the web rule by availability, since a surface may lack both tools", () => {
+    const withoutWeb = systemPromptSections({
+      role: "ticket",
+      tools: { tools: ["read", "edit", "write", "execute"] },
+    }).find((section) => section.id === "execution");
+    expect(withoutWeb?.text).toContain("When web_search and web_fetch\nare available,");
+    expect(withoutWeb?.text).not.toMatch(/(?<!When )web_search and web_fetch over/);
   });
 
   it("is deterministic", () => {
     expect(composeSystemPrompt(spec())).toBe(composeSystemPrompt(spec()));
     expect(composeSystemPrompt(projectSpec())).toBe(composeSystemPrompt(projectSpec()));
+  });
+});
+
+/**
+ * When to delegate (VC-459): one ladder, inline → subagent → Ticket + Session →
+ * Automation, said in the Execution layer where the decision is made.
+ */
+describe("the delegation paragraph", () => {
+  const CODING = ["read", "edit", "write", "execute"] as const;
+
+  function execution(role: "ticket" | "project" | "subagent", verbs: readonly VerbToolKey[]) {
+    const section = systemPromptSections({
+      role,
+      tools: { tools: [...CODING], verbs },
+    }).find((candidate) => candidate.id === "execution");
+    if (section === undefined) throw new Error("expected the Execution layer");
+    return section.text;
+  }
+
+  it("teaches a Board Session the whole ladder, Tickets and Automations included", () => {
+    const text = execution("project", roleVerbBundle("project"));
+    // The core is shared with every Role; what follows it is the paragraph.
+    expect(text.slice(execution("project", []).length + 2)).toMatchInlineSnapshot(`
+        "Keep work inline for a known file, a small edit, a quick lookup, or anything
+        needing what you have already worked out. Use session_delegate for bounded work
+        whose raw output you will not need again (broad search, log or test triage,
+        diff review, web research), independent checks to run in parallel, or a second
+        opinion. Launch independent subagents together, give each file one owner, and
+        brief each as if it knows nothing: goal, paths, constraints, what to report.
+        Substantial implementation belongs on a Ticket with its own Session
+        (session_start): its own worktree, branch and review, visible on the board.
+        When a saved Automation already describes the job, use automation_run."
+      `);
+  });
+
+  it("teaches a Ticket Session inline and subagent, and session_start only for its own Ticket", () => {
+    const text = execution("ticket", roleVerbBundle("ticket"));
+    expect(text).toContain("Use session_delegate for bounded work");
+    expect(text).toContain(
+      "If you hold session_start, use it only to split this Ticket's own work.",
+    );
+    // `automation_run` is in the Board bundle alone.
+    expect(text).not.toContain("automation_run");
+    expect(text).not.toContain("Substantial implementation belongs on a Ticket");
+  });
+
+  it("names the inline cases before any delegation, and the brief a child needs", () => {
+    for (const role of ["ticket", "project"] as const) {
+      const text = execution(role, roleVerbBundle(role));
+      const inline = text.indexOf(
+        "Keep work inline for a known file, a small edit, a quick lookup",
+      );
+      expect(inline).toBeGreaterThan(0);
+      expect(inline).toBeLessThan(text.indexOf("session_delegate"));
+      expect(text).toContain("needing what you have already worked out");
+      expect(text).toContain("Launch independent subagents together, give each file one owner");
+      expect(text).toContain("brief each as if it knows nothing: goal, paths, constraints");
+    }
+  });
+
+  it("stays within its own budget, so the whole layer is rebudgeted deliberately", () => {
+    const core = execution("ticket", []);
+    for (const role of ["ticket", "project"] as const) {
+      const text = execution(role, roleVerbBundle(role));
+      const paragraph = text.length - core.length - 2;
+      expect(Math.ceil(paragraph / 4)).toBeLessThanOrEqual(175);
+      expect(Math.ceil(text.length / 4)).toBeLessThanOrEqual(380);
+    }
+  });
+
+  it("is said only to a Session that holds session_delegate, and never to a subagent", () => {
+    // A subagent's bundle is empty by construction; one that somehow named the
+    // verb is still not told to delegate, because it cannot.
+    expect(execution("subagent", [])).not.toContain("session_delegate");
+    expect(execution("subagent", ["session.delegate"])).not.toContain("session_delegate");
+    // A Session frozen before the verb existed is not told to call a tool it lacks.
+    expect(execution("project", ["session.start"])).not.toContain("session_delegate");
+    expect(execution("ticket", [])).toBe(execution("subagent", []));
+  });
+
+  it("is Role-static: a birth grant does not change it", () => {
+    expect(execution("ticket", [...roleVerbBundle("ticket"), "session.start"])).toBe(
+      execution("ticket", roleVerbBundle("ticket")),
+    );
   });
 });
 
@@ -614,10 +742,11 @@ describe("composeTurnReminderBlock — the workspace environment fact", () => {
       --- BEGIN SESSION TOOLS ---
       This Board Session's frozen tool surface holds these Volli verbs as named tools:
         session.start — call it as session_start
+      Use any of them whenever the work calls for it.
       Membership was fixed when this Session was created and does not change while
-      it runs. A Volli verb not named here is not in this Session's tool array: do
-      not probe for it, and do not reach for an equivalent another way. Where the
-      \`volli\` CLI still offers a verb, the shell remains its door.
+      it runs; a Volli verb not named here is not in this Session's tool array, so
+      do not reach for an equivalent another way. Where the \`volli\` CLI still offers
+      a verb, the shell remains its door.
       --- END SESSION TOOLS ---
 
       --- BEGIN WORKSPACE ENVIRONMENT ---
@@ -664,13 +793,30 @@ describe("composeFirstUserMessage", () => {
       --- BEGIN SESSION TOOLS ---
       This Ticket Session's frozen tool surface holds no Volli verbs as named tools.
       Membership was fixed when this Session was created and does not change while
-      it runs. A Volli verb not named here is not in this Session's tool array: do
-      not probe for it, and do not reach for an equivalent another way. Where the
-      \`volli\` CLI still offers a verb, the shell remains its door.
+      it runs; a Volli verb not named here is not in this Session's tool array, so
+      do not reach for an equivalent another way. Where the \`volli\` CLI still offers
+      a verb, the shell remains its door.
       --- END SESSION TOOLS ---
 
       Start with the transport."
     `);
+  });
+
+  // VC-459: a listed verb is an offer. The block invites use of what it names
+  // and keeps its one real rule about what it does not — no workaround — without
+  // the "do not probe" wall that read as discouraging the listed tools too.
+  it("invites use of the verbs it names, and says nothing inviting when it names none", () => {
+    const holding = composeToolSurfaceBlock("ticket", {
+      tools: ["read"],
+      verbs: ["session.delegate"],
+    });
+    expect(holding).toContain("Use any of them whenever the work calls for it.");
+    expect(holding).not.toContain("probe");
+    expect(holding).toContain("do not reach for an equivalent another way");
+
+    const empty = composeToolSurfaceBlock("ticket", { tools: ["read"] });
+    expect(empty).not.toContain("Use any of them");
+    expect(empty).toContain("do not reach for an equivalent another way");
   });
 
   it("does not mislabel a per-Session grant as Role-bundle membership", () => {
@@ -680,6 +826,23 @@ describe("composeFirstUserMessage", () => {
         verbs: ["session.start"],
       }),
     ).toContain("This Ticket Session's frozen tool surface holds these Volli verbs");
+  });
+
+  it("uses the exact frozen MCP-management wire names in the first-message tool block", () => {
+    const legacy = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+    });
+    const current = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+      mcpManagementNames: "server",
+    });
+    expect(legacy).toContain("mcp.list — call it as mcp_list");
+    expect(legacy).toContain("mcp.install — call it as mcp_install");
+    expect(current).toContain("mcp.list — call it as server_list");
+    expect(current).toContain("mcp.install — call it as server_install");
+    expect(current).not.toContain("mcp_list");
   });
 
   it("still names a verb this build stopped projecting", () => {
@@ -712,10 +875,11 @@ describe("composeFirstUserMessage", () => {
       --- BEGIN SESSION TOOLS ---
       This Board Session's frozen tool surface holds these Volli verbs as named tools:
         session.start — call it as session_start
+      Use any of them whenever the work calls for it.
       Membership was fixed when this Session was created and does not change while
-      it runs. A Volli verb not named here is not in this Session's tool array: do
-      not probe for it, and do not reach for an equivalent another way. Where the
-      \`volli\` CLI still offers a verb, the shell remains its door.
+      it runs; a Volli verb not named here is not in this Session's tool array, so
+      do not reach for an equivalent another way. Where the \`volli\` CLI still offers
+      a verb, the shell remains its door.
       --- END SESSION TOOLS ---
 
       Where does the runtime attach?"

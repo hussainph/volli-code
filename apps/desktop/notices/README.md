@@ -68,9 +68,9 @@ it names move together under one review:
 "volli": {
   "notices": [
     {
-      "title": "Ghostty terminal theme catalog (iTerm2-Color-Schemes)",
-      "covers": ["src/ghostty-theme-sources.generated.ts"],
-      "document": "THIRD-PARTY-THEMES.md"
+      "title": "Example vendored collection",
+      "covers": ["src/example-vendored.generated.ts"],
+      "document": "THIRD-PARTY-EXAMPLE.md"
     }
   ]
 }
@@ -89,15 +89,16 @@ structural rather than a guess:
 An entry may carry `document` (fold a whole attribution file in), `text` (a
 licence file beside the material), or `unresolved` (provenance nobody has
 established — recorded, never invented). Today `@volli/shared` declares the
-Ghostty theme catalog and the APCA-W3 formulation; `@volli/agent-runtime`
-declares the vendored pi-automode helpers.
+APCA-W3 formulation; `@volli/agent-runtime` declares the vendored pi-automode
+helpers.
 
-> This replaced a marker grep that searched every shipped source file for the
-> string `iTerm2-Color-Schemes`. The catalog landed as
-> `ghostty-theme-sources.generated.ts`, whose 463 entries say "iTerm2 Dark
-> Background" and never that marker, so the grep concluded the material had not
-> shipped and stayed green. Matching a file is checkable; guessing how someone
-> else will spell something is not.
+> This replaced a marker grep that searched every shipped source file for a
+> vendor's name. The material it most needed to catch was a generated catalog of
+> third-party terminal themes whose entries never contained the marker, so the
+> grep concluded the material had not shipped and stayed green. Matching a file
+> is checkable; guessing how someone else will spell something is not. (That
+> catalog is gone — see open item 2 — but the lesson it taught is why this rule
+> keys on files.)
 
 ## When you have to regenerate
 
@@ -123,13 +124,19 @@ licensing review that reaches conclusions is tracked separately.
    is only whether reproducing the published constants carries an obligation of
    its own, which is part of the separate licensing review. Declared by
    `@volli/shared` as `unresolved`.
-2. **Per-theme licences in the Ghostty catalog.** `THIRD-PARTY-THEMES.md`
-   (VC-410) chains the collection to iTerm2-Color-Schemes' MIT grant and records
-   that the grant explicitly does **not** reach individual themes, that upstream
-   issue #638 is open on it, and that Monokai's own terms forbid redistributing
-   a collective work containing Monokai Pro. That question belongs to the review
-   that owns it; this pipeline only guarantees the attribution travels inside
-   the `.app`.
+2. **Terminal themes — CLOSED by removal (VC-413), not by a licence finding.**
+   The app used to ship a catalog of 463 third-party terminal themes, and
+   VC-410 chained it to iTerm2-Color-Schemes' MIT grant while recording that the
+   grant explicitly does **not** reach individual themes, that upstream issue
+   #638 is open on it, and that Monokai's terms forbid redistributing a
+   collective work containing Monokai Pro. Rather than answer a question nobody
+   here was entitled to answer, the owner removed the material: the catalog, its
+   generator, `THIRD-PARTY-THEMES.md` and the `check:theme-provenance` gate that
+   kept the two in step are all deleted. Volli now ships **no** terminal theme —
+   a theme is read from the user's own Ghostty config on their own machine, and
+   the fallback palette is derived from this app's design tokens.
+   `check:vendored-themes` fails any tracked file that starts redistributing
+   theme material again.
 3. **Declarations flagged for review.** The document's last section lists every
    declaration that is not a plain permissive grant — today the libvips binary's
    `LGPL-3.0-or-later`, DOMPurify's `(MPL-2.0 OR Apache-2.0)`, and node-forge's

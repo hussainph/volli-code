@@ -128,6 +128,13 @@ export interface SessionController {
   dismissError(): void;
   /** Summarize the context now, on explicit request. False means it did not. */
   compactContext(instructions: string | null): Promise<boolean>;
+  /** Resume a quota-stopped run at its stated reset — see {@link ChatSessionClient.scheduleResume}. */
+  scheduleResume(input: {
+    attentionId: string;
+    attachmentId: string;
+    resumeAt: number;
+  }): Promise<boolean>;
+  cancelScheduledResume(scheduleId: string): Promise<boolean>;
   close(): void;
 }
 
@@ -256,6 +263,9 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     },
     compactContext: (instructions) =>
       getChatClient(sessionId)?.compactContext(instructions) ?? refused,
+    scheduleResume: (input) => getChatClient(sessionId)?.scheduleResume(input) ?? refused,
+    cancelScheduledResume: (scheduleId) =>
+      getChatClient(sessionId)?.cancelScheduledResume(scheduleId) ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

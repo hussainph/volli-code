@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import { isValidBranchName, slugify, ticketBranchName } from "./ticket-branch";
+import {
+  classifyTicketWorktreeCheckout,
+  isValidBranchName,
+  slugify,
+  ticketBranchDisplayId,
+  ticketBranchName,
+} from "./ticket-branch";
 
 describe("slugify", () => {
   it("slugifies a basic title", () => {
@@ -52,6 +58,85 @@ describe("ticketBranchName", () => {
 
   it("omits the separator when the title has no slug characters", () => {
     expect(ticketBranchName("VC-3", "!!! @@@ ###")).toBe("volli/VC-3");
+  });
+});
+
+describe("ticketBranchDisplayId", () => {
+  it.each([
+    ["volli/VC-12-mcp-server", "VC-12"],
+    ["volli/VC-12", "VC-12"],
+    ["volli/VC-2-3-things", "VC-2"],
+    ["volli/A1B2C-7-x", "A1B2C-7"],
+    // Round-trips whatever `ticketBranchName` builds, slug or none.
+    [ticketBranchName("VC-297", "Automation editor history shows every automation"), "VC-297"],
+    [ticketBranchName("VC-3", "!!!"), "VC-3"],
+  ])("reads %s as %s", (branch, displayId) => {
+    expect(ticketBranchDisplayId(branch)).toBe(displayId);
+  });
+
+  it.each([
+    ["main"],
+    ["fix/browser-tab-smoke-popup-flake"],
+    ["volli/"],
+    ["volli/VC"],
+    ["volli/VC-"],
+    ["volli/VC-12x-slug"],
+    ["volli/vc-12-lowercase-prefix"],
+    ["volli/1VC-12-digit-first"],
+    ["volli/ABCDEF-1-prefix-too-long"],
+    ["feature/volli/VC-12-nested"],
+    ["refs/heads/volli/VC-12-full-ref"],
+  ])("reads %s as no ticket", (branch) => {
+    expect(ticketBranchDisplayId(branch)).toBeNull();
+  });
+});
+
+describe("classifyTicketWorktreeCheckout", () => {
+  const expectedBranch = "volli/VC-297-automation-editor-history-shows-every-automation";
+  const classify = (checkedOutBranch: string | null) =>
+    classifyTicketWorktreeCheckout({ displayId: "VC-297", expectedBranch, checkedOutBranch });
+
+  it("is expected when the worktree is on the ticket's own branch", () => {
+    expect(classify(expectedBranch)).toEqual({ kind: "expected" });
+  });
+
+  it("adopts another branch of the same ticket (an agent's narrower branch)", () => {
+    expect(classify("volli/VC-297-scoped-history-reads")).toEqual({
+      kind: "adopt",
+      branch: "volli/VC-297-scoped-history-reads",
+    });
+  });
+
+  it("adopts the old-slug branch a retitle drifted away from", () => {
+    expect(classify("volli/VC-297-automation-history")).toEqual({
+      kind: "adopt",
+      branch: "volli/VC-297-automation-history",
+    });
+    expect(classify("volli/VC-297")).toEqual({ kind: "adopt", branch: "volli/VC-297" });
+  });
+
+  it("adopts a same-ticket branch even when the recorded branch is outside the convention", () => {
+    expect(
+      classifyTicketWorktreeCheckout({
+        displayId: "VC-12",
+        expectedBranch: "feature/user-named",
+        checkedOutBranch: "volli/VC-12-agent-branch",
+      }),
+    ).toEqual({ kind: "adopt", branch: "volli/VC-12-agent-branch" });
+  });
+
+  it.each([
+    ["another ticket's branch", "volli/VC-298-something-else"],
+    ["a ticket whose number only starts the same", "volli/VC-2970-lookalike"],
+    ["the same number under another prefix", "volli/VD-297-other-project"],
+    ["a branch outside the convention", "fix/browser-tab-smoke-popup-flake"],
+    ["the main branch", "main"],
+  ])("refuses %s as foreign", (_label, branch) => {
+    expect(classify(branch)).toEqual({ kind: "foreign", branch });
+  });
+
+  it("refuses a detached HEAD — there is no branch to record", () => {
+    expect(classify(null)).toEqual({ kind: "detached" });
   });
 });
 

@@ -40,8 +40,13 @@
  * to fail the command that triggered it.
  */
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
-import { PERSON_STARTED } from "@volli/shared";
-import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
+import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
+import type {
+  SessionListingRow,
+  SessionProjection,
+  SessionProvenance,
+  SessionReadState,
+} from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
 
@@ -68,6 +73,22 @@ export interface SessionActivityWatchPorts {
    * every row reads as person-started, which is the quiet answer.
    */
   provenanceOf?: (session: { sessionId: string; ticketId: string | null }) => SessionProvenance;
+  /**
+   * Whether a Session has unread work (VC-30), on the same terms as
+   * `provenanceOf` above and for the same reason: the renderer upserts the
+   * WHOLE row, so a push that dropped the receipt would clear an unread dot the
+   * first time that Session did anything — which is every time, because a turn
+   * ending is exactly what makes it unread.
+   *
+   * Read per published Session rather than per flush: the unread edge is
+   * decided by `session-read-watch.ts` inside this same fold (through
+   * {@link SessionActivityWatchPorts.observe}, which runs first), so the receipt
+   * this reads is the one that fold just wrote.
+   *
+   * Optional for the reason `provenanceOf` is: a test with no database has no
+   * receipts to read, and absent means every row rests at read.
+   */
+  readOf?: (sessionId: string) => SessionReadState;
   /**
    * The executor bindings this host process holds right now. Durable structured
    * attachments survive relaunch so they can be lazily rehydrated, but they do
@@ -152,6 +173,7 @@ export function watchSessionActivity(
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] session activity watch:", error));
   const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
+  const readOf = ports.readOf ?? (() => SESSION_READ);
 
   const dirty = new Set<string>();
   /**
@@ -207,6 +229,7 @@ export function watchSessionActivity(
             ticketId: projection.session.ticketId,
           }),
           liveAttachmentIds,
+          readOf(sessionId),
         );
         const signature = JSON.stringify(row);
         if (published.get(sessionId) === signature) continue;

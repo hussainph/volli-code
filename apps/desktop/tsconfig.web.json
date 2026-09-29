@@ -29,5 +29,9 @@
     "e2e/bench/**/*.ts",
     "e2e/bench/**/*.tsx",
     "src/preload/*.d.ts"
-  ]
+  ],
+  // VC-456's real-path turn bench is node-side: it composes src/main's SQLite
+  // ledger and Pi adapter, whose storage modules import with explicit `.ts`.
+  // tsconfig.bench.json checks it under the node settings instead.
+  "exclude": ["e2e/bench/turn-real-path/**"]
 }

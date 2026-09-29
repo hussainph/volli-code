@@ -144,7 +144,7 @@ const TICKET_WORKTREE: Venue = {
       state: "modified",
     },
     { path: "packages/cli/src/session.ts", added: 9, removed: 1, state: "modified" },
-    { path: "docs/plans/auto-title.md", added: 27, removed: 0, state: "untracked" },
+    { path: "docs/auto-title.md", added: 27, removed: 0, state: "untracked" },
   ],
   diff: { added: 214, removed: 63, files: 4, base: "main" },
 };
