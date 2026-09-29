@@ -318,38 +318,95 @@ function plannedRounds(random: () => number): number {
   return 3;
 }
 
+/** A runtime whose only provider is pi-ai's faux one, wearing `catalogModel`. */
+function fauxRuntime(sessionDataDir: string, catalogModel: Model<string>) {
+  const faux = fauxProvider({
+    api: catalogModel.api,
+    provider: catalogModel.provider,
+    models: [{ id: catalogModel.id, reasoning: catalogModel.reasoning }],
+  });
+  const models = createModels();
+  // The catalog entry itself, not the faux one: the sidecar should name the
+  // exact model object the desktop will rehydrate these messages under.
+  models.setProvider({ ...faux.provider, getModels: () => [catalogModel] });
+  return { faux, runtime: createPiAgentRuntime({ sessionDataDir, models }) };
+}
+
+function projectSpec(
+  target: Pick<HistoryTarget, "sessionId" | "rootThreadId" | "attachmentId" | "projectId">,
+  workspacePath: string,
+  model: ModelSelection,
+  recovery: RuntimeRecoveryRef | undefined,
+): SessionRuntimeSpec {
+  return {
+    identity: {
+      role: "project",
+      sessionId: target.sessionId,
+      rootThreadId: target.rootThreadId,
+      attachmentId: target.attachmentId,
+      projectId: target.projectId,
+      ticketId: null,
+    },
+    workspacePath,
+    venue: "local",
+    model,
+    brief: { text: "VC-445 synthetic context-scaling fixture." },
+    tools: { tools: ["read", "edit", "write", "execute"] },
+    ...(recovery === undefined ? {} : { recovery }),
+    observer: async () => undefined,
+  };
+}
+
+/**
+ * A fresh, empty sidecar, created the way a first attach creates one. Only the
+ * standalone attach profile uses this; the Electron bench gets its sidecars
+ * from the app's own `sessions.attach`.
+ */
+export async function createSidecar(options: {
+  sessionDataDir: string;
+  workspacePath: string;
+  model: ModelSelection;
+  catalogModel: Model<string>;
+  identity: Pick<HistoryTarget, "sessionId" | "rootThreadId" | "attachmentId" | "projectId">;
+}): Promise<RuntimeRecoveryRef> {
+  const { runtime } = fauxRuntime(options.sessionDataDir, options.catalogModel);
+  const handle = await runtime.startSession(
+    projectSpec(options.identity, options.workspacePath, options.model, undefined),
+  );
+  const recovery = handle.recovery;
+  await handle.close();
+  if (recovery === undefined) throw new Error("the runtime created no recovery sidecar");
+  return recovery;
+}
+
+/** Re-attach to an existing sidecar and close it again: one Pi rehydration. */
+export async function reattachOnce(options: {
+  sessionDataDir: string;
+  workspacePath: string;
+  model: ModelSelection;
+  catalogModel: Model<string>;
+  target: Pick<
+    HistoryTarget,
+    "sessionId" | "rootThreadId" | "attachmentId" | "projectId" | "recovery"
+  >;
+}): Promise<number> {
+  const { runtime } = fauxRuntime(options.sessionDataDir, options.catalogModel);
+  const started = performance.now();
+  const handle = await runtime.startSession(
+    projectSpec(options.target, options.workspacePath, options.model, options.target.recovery),
+  );
+  const elapsed = performance.now() - started;
+  await handle.close();
+  return elapsed;
+}
+
 export async function growSidecarHistories(options: HistoryOptions): Promise<HistoryResult[]> {
   const results: HistoryResult[] = [];
   for (const target of options.targets) {
     const startedAt = performance.now();
     const random = mulberry32(target.seed);
-    const faux = fauxProvider({
-      api: options.catalogModel.api,
-      provider: options.catalogModel.provider,
-      models: [{ id: options.catalogModel.id, reasoning: options.catalogModel.reasoning }],
-    });
-    const models = createModels();
-    // The catalog entry itself, not the faux one: the sidecar should name the
-    // exact model object the desktop will rehydrate these messages under.
-    models.setProvider({ ...faux.provider, getModels: () => [options.catalogModel] });
-    const runtime = createPiAgentRuntime({ sessionDataDir: options.sessionDataDir, models });
-    const spec: SessionRuntimeSpec = {
-      identity: {
-        role: "project",
-        sessionId: target.sessionId,
-        rootThreadId: target.rootThreadId,
-        attachmentId: target.attachmentId,
-        projectId: target.projectId,
-        ticketId: null,
-      },
-      workspacePath: options.workspacePath,
-      venue: "local",
-      model: options.model,
-      brief: { text: "VC-445 synthetic context-scaling fixture." },
-      tools: { tools: ["read", "edit", "write", "execute"] },
-      recovery: target.recovery,
-      observer: async () => undefined,
-    };
+    const { faux, runtime } = fauxRuntime(options.sessionDataDir, options.catalogModel);
+    const spec = projectSpec(target, options.workspacePath, options.model, target.recovery);
     const handle = await runtime.startSession(spec);
     let turns = 0;
     let toolCalls = 0;

@@ -1,0 +1,1873 @@
+{
+  "ticket": "VC-445",
+  "generatedAt": "2026-09-29T16:43:39.845Z",
+  "durationMinutes": 8.88,
+  "command": "node apps/desktop/e2e/pi-context-scaling-bench.mjs --attached 1 --histories 4500,13500 --repetitions 6 --output /tmp/vc445-large-out",
+  "environment": {
+    "machine": {
+      "model": "MacBookPro17,1",
+      "cpu": "Apple M1",
+      "cores": 8,
+      "memoryGiB": 16,
+      "macos": "26.5.1",
+      "macosBuild": "25F80",
+      "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23789667)\t100%; charged; 0:00 remaining present: true"
+    },
+    "build": {
+      "gitSha": "e7e6c13845566a741381f56b8e22a76e1cf57ab6",
+      "gitDirty": false,
+      "electron": "44.0.0",
+      "node": "v24.18.0",
+      "mainBundleBuiltAt": "2026-09-29T15:01:04.243Z",
+      "buildKind": "production bundle (pnpm run build), launched unpackaged through Playwright"
+    }
+  },
+  "protocol": {
+    "repetitions": 6,
+    "warmupLaunches": 1,
+    "windowMs": 6000,
+    "settleMs": 6000,
+    "echoPauseMs": 5,
+    "rpcPauseMs": 25,
+    "seed": 445,
+    "order": "one discarded warm-up launch of the heaviest arm, then each repetition runs every arm once in a seeded shuffle",
+    "gc": "two forced full GCs 150 ms apart, then 500 ms, before each memory snapshot; forced GCs are excluded from window GC counts",
+    "hydration": "sequential model.select (re-selecting the Session's own model) per Session through window.api.sessionRpc",
+    "bindingProof": "sessions.list live flag (SessionRuntime.openNativeBindings) vs session.projection liveExecutor (ledger)"
+  },
+  "fixture": {
+    "project": "synthetic git repo, generated TypeScript files",
+    "files": 24,
+    "selection": {
+      "providerId": "openai",
+      "modelId": "gpt-5-mini",
+      "reasoningLevel": "low"
+    },
+    "sessionsPerHistory": 1,
+    "histories": {
+      "4500": {
+        "entries": {
+          "min": 4501,
+          "max": 4501
+        },
+        "messages": {
+          "min": 1317,
+          "max": 1317
+        },
+        "bytes": {
+          "min": 16206296,
+          "max": 16206296
+        },
+        "turns": {
+          "min": 341,
+          "max": 341
+        }
+      },
+      "13500": {
+        "entries": {
+          "min": 13501,
+          "max": 13501
+        },
+        "messages": {
+          "min": 3924,
+          "max": 3924
+        },
+        "bytes": {
+          "min": 47332886,
+          "max": 47332886
+        },
+        "turns": {
+          "min": 1040,
+          "max": 1040
+        }
+      }
+    },
+    "prepareCensus": {
+      "sessions": 2,
+      "durableOpen": 2,
+      "live": 2
+    }
+  },
+  "failedLaunches": [],
+  "arms": [
+    {
+      "key": "control",
+      "attached": 0,
+      "historyEntries": 0,
+      "launches": 6,
+      "boundVerified": true,
+      "sidecar": {
+        "entriesPerSession": null,
+        "bytesPerSession": null
+      },
+      "hydrationPerSessionMs": null,
+      "hydrationFirstMs": null,
+      "hydrationLaterMs": null,
+      "hydrationTotalMs": {
+        "n": 6,
+        "median": 29.962,
+        "min": 28.979,
+        "max": 41.168
+      },
+      "memory": {
+        "mainWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 279.328,
+            "min": 211.344,
+            "max": 356.516
+          },
+          "post": {
+            "n": 6,
+            "median": 220.297,
+            "min": 206.484,
+            "max": 352.344
+          },
+          "delta": {
+            "n": 6,
+            "median": -3.062,
+            "min": -80.078,
+            "max": 2.141
+          }
+        },
+        "mainRssMiB": {
+          "pre": {
+            "n": 6,
+            "median": 279.32,
+            "min": 211.219,
+            "max": 356.5
+          },
+          "post": {
+            "n": 6,
+            "median": 220.281,
+            "min": 206.453,
+            "max": 352.344
+          },
+          "delta": {
+            "n": 6,
+            "median": -3,
+            "min": -80.109,
+            "max": 2.188
+          }
+        },
+        "mainHeapUsedMiB": {
+          "pre": {
+            "n": 6,
+            "median": 57.505,
+            "min": 57.491,
+            "max": 57.532
+          },
+          "post": {
+            "n": 6,
+            "median": 57.551,
+            "min": 57.539,
+            "max": 57.571
+          },
+          "delta": {
+            "n": 6,
+            "median": 0.04,
+            "min": 0.039,
+            "max": 0.066
+          }
+        },
+        "mainHeapTotalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 98.891,
+            "min": 97.891,
+            "max": 99.391
+          },
+          "post": {
+            "n": 6,
+            "median": 64.016,
+            "min": 63.391,
+            "max": 99.141
+          },
+          "delta": {
+            "n": 6,
+            "median": -34.625,
+            "min": -36,
+            "max": 0.25
+          }
+        },
+        "mainExternalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "post": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "delta": {
+            "n": 6,
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "rendererWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 145.203,
+            "min": 103.313,
+            "max": 192.25
+          },
+          "post": {
+            "n": 6,
+            "median": 115.242,
+            "min": 108.25,
+            "max": 195.094
+          },
+          "delta": {
+            "n": 6,
+            "median": 2.43,
+            "min": -37.281,
+            "max": 9.109
+          }
+        },
+        "mainFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 202.5,
+            "min": 191,
+            "max": 207
+          },
+          "post": {
+            "n": 6,
+            "median": 203.5,
+            "min": 187,
+            "max": 207
+          },
+          "delta": {
+            "n": 6,
+            "median": 1,
+            "min": -4,
+            "max": 2
+          }
+        },
+        "rendererFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 72,
+            "min": 70,
+            "max": 73
+          },
+          "post": {
+            "n": 6,
+            "median": 74,
+            "min": 72,
+            "max": 76
+          },
+          "delta": {
+            "n": 6,
+            "median": 2,
+            "min": 1,
+            "max": 3
+          }
+        }
+      },
+      "descendants": {
+        "pre": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "post": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "appMetricsPre": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "appMetricsPost": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        }
+      },
+      "fullGcPauseMs": {
+        "pre": {
+          "n": 6,
+          "median": 26.391,
+          "min": 18.047,
+          "max": 48.156
+        },
+        "post": {
+          "n": 6,
+          "median": 22.262,
+          "min": 18.485,
+          "max": 27.698
+        }
+      },
+      "windows": {
+        "idle": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6050.004,
+            "min": 6033.591,
+            "max": 6061.095
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 628.935,
+            "min": 595.861,
+            "max": 684.44
+          },
+          "eventLoopDelay": {
+            "samples": 25595,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.272,
+              "min": 1.204,
+              "max": 1.345
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.92,
+              "min": 1.419,
+              "max": 2.488
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 25.305,
+              "min": 9.937,
+              "max": 57.803
+            }
+          },
+          "tickGapMs": {
+            "n": 3448,
+            "min": 9.09,
+            "p50": 10.425,
+            "p95": 11.74,
+            "max": 59.363,
+            "mean": 10.512,
+            "variance": 2.661
+          },
+          "ipcEchoMs": {
+            "n": 5577,
+            "min": 0,
+            "p50": 0.3,
+            "p95": 2.1,
+            "max": 56.2,
+            "mean": 0.606,
+            "variance": 2.575
+          },
+          "sessionRpcMs": {
+            "n": 1347,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 3.2,
+            "max": 47.1,
+            "mean": 0.923,
+            "variance": 5.56
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 3
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 18.103
+            },
+            "pauseMs": {
+              "n": 6,
+              "min": 0.366,
+              "p50": 5.524,
+              "p95": 9.719,
+              "max": 9.719,
+              "mean": 5.491,
+              "variance": 14.557
+            }
+          },
+          "loopVsEcho": {
+            "bins": 366,
+            "pearson": 0.888
+          }
+        },
+        "hydration": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 29.962,
+            "min": 28.979,
+            "max": 41.168
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 3.526,
+            "min": 2.297,
+            "max": 7.41
+          },
+          "eventLoopDelay": {
+            "samples": 136,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.256,
+              "min": 1.185,
+              "max": 1.377
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.583,
+              "min": 1.272,
+              "max": 2.074
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 1.986,
+              "min": 1.308,
+              "max": 8.946
+            }
+          },
+          "tickGapMs": {
+            "n": 14,
+            "min": 9.406,
+            "p50": 10.344,
+            "p95": 11.319,
+            "max": 11.319,
+            "mean": 10.38,
+            "variance": 0.317
+          },
+          "ipcEchoMs": {
+            "n": 6,
+            "min": 0.3,
+            "p50": 0.4,
+            "p95": 1.4,
+            "max": 1.4,
+            "mean": 0.65,
+            "variance": 0.149
+          },
+          "sessionRpcMs": {
+            "n": 6,
+            "min": 0.6,
+            "p50": 0.6,
+            "p95": 1.6,
+            "max": 1.6,
+            "mean": 0.95,
+            "variance": 0.186
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "pauseMs": null
+          },
+          "loopVsEcho": {
+            "bins": 6,
+            "pearson": 0.703
+          }
+        },
+        "steady": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6059.192,
+            "min": 6028.877,
+            "max": 6085.272
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 527.678,
+            "min": 376.841,
+            "max": 688.733
+          },
+          "eventLoopDelay": {
+            "samples": 27098,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.247,
+              "min": 1.184,
+              "max": 1.416
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.388,
+              "min": 1.34,
+              "max": 3.518
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 13.484,
+              "min": 5.927,
+              "max": 22.512
+            }
+          },
+          "tickGapMs": {
+            "n": 3504,
+            "min": 9.043,
+            "p50": 10.416,
+            "p95": 11.2,
+            "max": 31.894,
+            "mean": 10.369,
+            "variance": 1.032
+          },
+          "ipcEchoMs": {
+            "n": 5729,
+            "min": 0,
+            "p50": 0.3,
+            "p95": 1,
+            "max": 26.7,
+            "mean": 0.43,
+            "variance": 0.98
+          },
+          "sessionRpcMs": {
+            "n": 1362,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 1.9,
+            "max": 15.7,
+            "mean": 0.639,
+            "variance": 1.287
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "pauseMs": null
+          },
+          "loopVsEcho": {
+            "bins": 366,
+            "pearson": 0.857
+          }
+        }
+      }
+    },
+    {
+      "key": "n1-h4500",
+      "attached": 1,
+      "historyEntries": 4500,
+      "launches": 6,
+      "boundVerified": true,
+      "sidecar": {
+        "entriesPerSession": {
+          "n": 6,
+          "median": 4501,
+          "min": 4501,
+          "max": 4501
+        },
+        "bytesPerSession": {
+          "n": 6,
+          "median": 16206296,
+          "min": 16206296,
+          "max": 16206296
+        }
+      },
+      "hydrationPerSessionMs": {
+        "n": 6,
+        "min": 118.4,
+        "p50": 150,
+        "p95": 225.4,
+        "max": 225.4,
+        "mean": 161.1,
+        "variance": 1282.693
+      },
+      "hydrationFirstMs": {
+        "n": 6,
+        "min": 118.4,
+        "p50": 150,
+        "p95": 225.4,
+        "max": 225.4,
+        "mean": 161.1,
+        "variance": 1282.693
+      },
+      "hydrationLaterMs": null,
+      "hydrationTotalMs": {
+        "n": 6,
+        "median": 204.317,
+        "min": 139.51,
+        "max": 271.749
+      },
+      "memory": {
+        "mainWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 260.258,
+            "min": 194.344,
+            "max": 367.359
+          },
+          "post": {
+            "n": 6,
+            "median": 293.922,
+            "min": 201.844,
+            "max": 351.563
+          },
+          "delta": {
+            "n": 6,
+            "median": 18.672,
+            "min": -29.266,
+            "max": 50.094
+          }
+        },
+        "mainRssMiB": {
+          "pre": {
+            "n": 6,
+            "median": 260.242,
+            "min": 194.281,
+            "max": 367.344
+          },
+          "post": {
+            "n": 6,
+            "median": 293.922,
+            "min": 201.828,
+            "max": 351.563
+          },
+          "delta": {
+            "n": 6,
+            "median": 18.727,
+            "min": -29.25,
+            "max": 50.109
+          }
+        },
+        "mainHeapUsedMiB": {
+          "pre": {
+            "n": 6,
+            "median": 57.512,
+            "min": 57.472,
+            "max": 57.529
+          },
+          "post": {
+            "n": 6,
+            "median": 73.346,
+            "min": 73.328,
+            "max": 73.363
+          },
+          "delta": {
+            "n": 6,
+            "median": 15.835,
+            "min": 15.831,
+            "max": 15.856
+          }
+        },
+        "mainHeapTotalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 99.141,
+            "min": 98.141,
+            "max": 100.141
+          },
+          "post": {
+            "n": 6,
+            "median": 112.641,
+            "min": 100.141,
+            "max": 113.641
+          },
+          "delta": {
+            "n": 6,
+            "median": 13.25,
+            "min": 0.75,
+            "max": 15
+          }
+        },
+        "mainExternalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "post": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "delta": {
+            "n": 6,
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "rendererWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 145.359,
+            "min": 106.438,
+            "max": 187
+          },
+          "post": {
+            "n": 6,
+            "median": 139.961,
+            "min": 106.875,
+            "max": 149.563
+          },
+          "delta": {
+            "n": 6,
+            "median": -1.148,
+            "min": -44.375,
+            "max": 3.156
+          }
+        },
+        "mainFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 203,
+            "min": 194,
+            "max": 207
+          },
+          "post": {
+            "n": 6,
+            "median": 233,
+            "min": 226,
+            "max": 236
+          },
+          "delta": {
+            "n": 6,
+            "median": 29.5,
+            "min": 26,
+            "max": 40
+          }
+        },
+        "rendererFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 71.5,
+            "min": 70,
+            "max": 72
+          },
+          "post": {
+            "n": 6,
+            "median": 73,
+            "min": 72,
+            "max": 74
+          },
+          "delta": {
+            "n": 6,
+            "median": 2,
+            "min": 1,
+            "max": 2
+          }
+        }
+      },
+      "descendants": {
+        "pre": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "post": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "appMetricsPre": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "appMetricsPost": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        }
+      },
+      "fullGcPauseMs": {
+        "pre": {
+          "n": 6,
+          "median": 23.408,
+          "min": 19.651,
+          "max": 30.314
+        },
+        "post": {
+          "n": 6,
+          "median": 24.646,
+          "min": 18.214,
+          "max": 31.466
+        }
+      },
+      "windows": {
+        "idle": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6044.613,
+            "min": 6029.438,
+            "max": 6087.186
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 557.652,
+            "min": 400.555,
+            "max": 713.624
+          },
+          "eventLoopDelay": {
+            "samples": 27758,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.253,
+              "min": 1.175,
+              "max": 1.324
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.467,
+              "min": 1.265,
+              "max": 1.666
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 21.156,
+              "min": 2.992,
+              "max": 98.959
+            }
+          },
+          "tickGapMs": {
+            "n": 3503,
+            "min": 7.24,
+            "p50": 10.417,
+            "p95": 10.993,
+            "max": 98.927,
+            "mean": 10.357,
+            "variance": 4.273
+          },
+          "ipcEchoMs": {
+            "n": 5786,
+            "min": 0,
+            "p50": 0.2,
+            "p95": 0.6,
+            "max": 129.5,
+            "mean": 0.384,
+            "variance": 3.932
+          },
+          "sessionRpcMs": {
+            "n": 1363,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 1.1,
+            "max": 125.6,
+            "mean": 0.622,
+            "variance": 12.991
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 3
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 23.971
+            },
+            "pauseMs": {
+              "n": 4,
+              "min": 1.313,
+              "p50": 8.913,
+              "p95": 11.556,
+              "max": 11.556,
+              "mean": 8.221,
+              "variance": 16.905
+            }
+          },
+          "loopVsEcho": {
+            "bins": 366,
+            "pearson": 0.938
+          }
+        },
+        "hydration": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 204.317,
+            "min": 139.51,
+            "max": 271.749
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 273.605,
+            "min": 203.069,
+            "max": 342.153
+          },
+          "eventLoopDelay": {
+            "samples": 321,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.208,
+              "min": 1.125,
+              "max": 1.306
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 10.871,
+              "min": 3.207,
+              "max": 19.268
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 74.072,
+              "min": 58.458,
+              "max": 109.511
+            }
+          },
+          "tickGapMs": {
+            "n": 51,
+            "min": 9.26,
+            "p50": 11.009,
+            "p95": 92.584,
+            "max": 116.682,
+            "mean": 22.494,
+            "variance": 599.147
+          },
+          "ipcEchoMs": {
+            "n": 58,
+            "min": 0.1,
+            "p50": 1,
+            "p95": 80.9,
+            "max": 109.1,
+            "mean": 12.074,
+            "variance": 570.324
+          },
+          "sessionRpcMs": {
+            "n": 24,
+            "min": 0.4,
+            "p50": 1.7,
+            "p95": 89.9,
+            "max": 105.5,
+            "mean": 20.733,
+            "variance": 972.33
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 3,
+              "min": 3,
+              "max": 3
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 10.939,
+              "min": 7.987,
+              "max": 19.066
+            },
+            "pauseMs": {
+              "n": 18,
+              "min": 0.265,
+              "p50": 0.481,
+              "p95": 18.512,
+              "max": 18.512,
+              "mean": 3.959,
+              "variance": 28.955
+            }
+          },
+          "loopVsEcho": {
+            "bins": 16,
+            "pearson": 0.616
+          }
+        },
+        "steady": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6062.833,
+            "min": 6041.183,
+            "max": 6083.26
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 504.26,
+            "min": 457.086,
+            "max": 570.476
+          },
+          "eventLoopDelay": {
+            "samples": 28050,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.254,
+              "min": 1.189,
+              "max": 1.318
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.421,
+              "min": 1.315,
+              "max": 1.536
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 14.467,
+              "min": 6.66,
+              "max": 33.161
+            }
+          },
+          "tickGapMs": {
+            "n": 3528,
+            "min": 9.058,
+            "p50": 10.421,
+            "p95": 10.999,
+            "max": 35.683,
+            "mean": 10.302,
+            "variance": 0.797
+          },
+          "ipcEchoMs": {
+            "n": 5811,
+            "min": 0,
+            "p50": 0.2,
+            "p95": 0.6,
+            "max": 33.2,
+            "mean": 0.339,
+            "variance": 0.494
+          },
+          "sessionRpcMs": {
+            "n": 1371,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 0.9,
+            "max": 17.4,
+            "mean": 0.488,
+            "variance": 0.594
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "pauseMs": null
+          },
+          "loopVsEcho": {
+            "bins": 366,
+            "pearson": 0.864
+          }
+        }
+      }
+    },
+    {
+      "key": "n1-h13500",
+      "attached": 1,
+      "historyEntries": 13500,
+      "launches": 6,
+      "boundVerified": true,
+      "sidecar": {
+        "entriesPerSession": {
+          "n": 6,
+          "median": 13501,
+          "min": 13501,
+          "max": 13501
+        },
+        "bytesPerSession": {
+          "n": 6,
+          "median": 47332886,
+          "min": 47332886,
+          "max": 47332886
+        }
+      },
+      "hydrationPerSessionMs": {
+        "n": 6,
+        "min": 296.9,
+        "p50": 323.5,
+        "p95": 469.7,
+        "max": 469.7,
+        "mean": 361.267,
+        "variance": 3355.182
+      },
+      "hydrationFirstMs": {
+        "n": 6,
+        "min": 296.9,
+        "p50": 323.5,
+        "p95": 469.7,
+        "max": 469.7,
+        "mean": 361.267,
+        "variance": 3355.182
+      },
+      "hydrationLaterMs": null,
+      "hydrationTotalMs": {
+        "n": 6,
+        "median": 369.036,
+        "min": 328.642,
+        "max": 509.836
+      },
+      "memory": {
+        "mainWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 265.508,
+            "min": 251.281,
+            "max": 360.531
+          },
+          "post": {
+            "n": 6,
+            "median": 329.008,
+            "min": 277.938,
+            "max": 429.938
+          },
+          "delta": {
+            "n": 6,
+            "median": 61.953,
+            "min": 26.656,
+            "max": 84.25
+          }
+        },
+        "mainRssMiB": {
+          "pre": {
+            "n": 6,
+            "median": 265.492,
+            "min": 251.266,
+            "max": 360.516
+          },
+          "post": {
+            "n": 6,
+            "median": 328.984,
+            "min": 277.922,
+            "max": 429.938
+          },
+          "delta": {
+            "n": 6,
+            "median": 61.953,
+            "min": 26.656,
+            "max": 84.25
+          }
+        },
+        "mainHeapUsedMiB": {
+          "pre": {
+            "n": 6,
+            "median": 57.515,
+            "min": 57.503,
+            "max": 57.579
+          },
+          "post": {
+            "n": 6,
+            "median": 101.627,
+            "min": 101.608,
+            "max": 101.688
+          },
+          "delta": {
+            "n": 6,
+            "median": 44.107,
+            "min": 44.102,
+            "max": 44.12
+          }
+        },
+        "mainHeapTotalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 99.141,
+            "min": 97.891,
+            "max": 99.641
+          },
+          "post": {
+            "n": 6,
+            "median": 168.75,
+            "min": 168.125,
+            "max": 168.875
+          },
+          "delta": {
+            "n": 6,
+            "median": 69.609,
+            "min": 68.984,
+            "max": 70.984
+          }
+        },
+        "mainExternalMiB": {
+          "pre": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "post": {
+            "n": 6,
+            "median": 15.686,
+            "min": 15.686,
+            "max": 15.686
+          },
+          "delta": {
+            "n": 6,
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "rendererWorkingSetMiB": {
+          "pre": {
+            "n": 6,
+            "median": 144.914,
+            "min": 137.484,
+            "max": 189.734
+          },
+          "post": {
+            "n": 6,
+            "median": 132.016,
+            "min": 114.703,
+            "max": 191.859
+          },
+          "delta": {
+            "n": 6,
+            "median": -13.414,
+            "min": -31.219,
+            "max": 4.203
+          }
+        },
+        "mainFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 203.5,
+            "min": 190,
+            "max": 204
+          },
+          "post": {
+            "n": 6,
+            "median": 266,
+            "min": 260,
+            "max": 363
+          },
+          "delta": {
+            "n": 6,
+            "median": 68.5,
+            "min": 58,
+            "max": 159
+          }
+        },
+        "rendererFootprintMiB": {
+          "pre": {
+            "n": 6,
+            "median": 72,
+            "min": 70,
+            "max": 73
+          },
+          "post": {
+            "n": 6,
+            "median": 73,
+            "min": 72,
+            "max": 75
+          },
+          "delta": {
+            "n": 6,
+            "median": 1.5,
+            "min": 1,
+            "max": 2
+          }
+        }
+      },
+      "descendants": {
+        "pre": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "post": {
+          "n": 6,
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "appMetricsPre": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "appMetricsPost": {
+          "n": 6,
+          "median": 4,
+          "min": 4,
+          "max": 4
+        }
+      },
+      "fullGcPauseMs": {
+        "pre": {
+          "n": 6,
+          "median": 22.414,
+          "min": 17.318,
+          "max": 27.063
+        },
+        "post": {
+          "n": 6,
+          "median": 28.95,
+          "min": 17.634,
+          "max": 36.983
+        }
+      },
+      "windows": {
+        "idle": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6048.581,
+            "min": 6039.675,
+            "max": 6061.937
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 597.54,
+            "min": 524.345,
+            "max": 811.697
+          },
+          "eventLoopDelay": {
+            "samples": 27219,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.251,
+              "min": 1.18,
+              "max": 1.424
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.401,
+              "min": 1.27,
+              "max": 2.871
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 12.718,
+              "min": 4.919,
+              "max": 24.248
+            }
+          },
+          "tickGapMs": {
+            "n": 3508,
+            "min": 9.06,
+            "p50": 10.43,
+            "p95": 11.15,
+            "max": 25.267,
+            "mean": 10.332,
+            "variance": 0.88
+          },
+          "ipcEchoMs": {
+            "n": 5762,
+            "min": 0,
+            "p50": 0.3,
+            "p95": 1,
+            "max": 22.9,
+            "mean": 0.412,
+            "variance": 0.757
+          },
+          "sessionRpcMs": {
+            "n": 1362,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 1.4,
+            "max": 19,
+            "mean": 0.614,
+            "variance": 1.265
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 2,
+              "min": 0,
+              "max": 3
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 10.601,
+              "min": 0,
+              "max": 19.867
+            },
+            "pauseMs": {
+              "n": 10,
+              "min": 0.36,
+              "p50": 7.136,
+              "p95": 11.623,
+              "max": 11.623,
+              "mean": 5.946,
+              "variance": 12.977
+            }
+          },
+          "loopVsEcho": {
+            "bins": 366,
+            "pearson": 0.816
+          }
+        },
+        "hydration": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 369.036,
+            "min": 328.642,
+            "max": 509.836
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 494.409,
+            "min": 448.049,
+            "max": 565.927
+          },
+          "eventLoopDelay": {
+            "samples": 603,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.25,
+              "min": 1.163,
+              "max": 1.299
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 4.426,
+              "min": 2.494,
+              "max": 7.008
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 211.091,
+              "min": 173.801,
+              "max": 288.096
+            }
+          },
+          "tickGapMs": {
+            "n": 90,
+            "min": 9.236,
+            "p50": 10.236,
+            "p95": 195.699,
+            "max": 295.303,
+            "mean": 25.597,
+            "variance": 2876.607
+          },
+          "ipcEchoMs": {
+            "n": 114,
+            "min": 0.2,
+            "p50": 0.9,
+            "p95": 172.5,
+            "max": 285.3,
+            "mean": 13.544,
+            "variance": 2325.305
+          },
+          "sessionRpcMs": {
+            "n": 39,
+            "min": 0.3,
+            "p50": 1.2,
+            "p95": 229.9,
+            "max": 274.7,
+            "mean": 32.862,
+            "variance": 5627.529
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 8,
+              "min": 8,
+              "max": 8
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 22.451,
+              "min": 17.346,
+              "max": 32.224
+            },
+            "pauseMs": {
+              "n": 48,
+              "min": 0.098,
+              "p50": 0.726,
+              "p95": 8.554,
+              "max": 11.519,
+              "mean": 2.945,
+              "variance": 9.098
+            }
+          },
+          "loopVsEcho": {
+            "bins": 19,
+            "pearson": 0.999
+          }
+        },
+        "steady": {
+          "launches": 6,
+          "wallMs": {
+            "n": 6,
+            "median": 6066.33,
+            "min": 6048.66,
+            "max": 6119.405
+          },
+          "mainCpuMs": {
+            "n": 6,
+            "median": 542.908,
+            "min": 478.712,
+            "max": 757.906
+          },
+          "eventLoopDelay": {
+            "samples": 26302,
+            "p50Ms": {
+              "n": 6,
+              "median": 1.253,
+              "min": 1.188,
+              "max": 1.36
+            },
+            "p95Ms": {
+              "n": 6,
+              "median": 1.678,
+              "min": 1.272,
+              "max": 2.918
+            },
+            "maxMs": {
+              "n": 6,
+              "median": 18.645,
+              "min": 17.482,
+              "max": 98.173
+            }
+          },
+          "tickGapMs": {
+            "n": 3479,
+            "min": 3.655,
+            "p50": 10.418,
+            "p95": 11.461,
+            "max": 105.732,
+            "mean": 10.458,
+            "variance": 4.002
+          },
+          "ipcEchoMs": {
+            "n": 5650,
+            "min": 0,
+            "p50": 0.2,
+            "p95": 1.7,
+            "max": 99.1,
+            "mean": 0.501,
+            "variance": 2.842
+          },
+          "sessionRpcMs": {
+            "n": 1353,
+            "min": 0.1,
+            "p50": 0.4,
+            "p95": 2.8,
+            "max": 103.3,
+            "mean": 0.854,
+            "variance": 10.317
+          },
+          "ipcFailures": 0,
+          "gc": {
+            "countPerLaunch": {
+              "n": 6,
+              "median": 2,
+              "min": 1,
+              "max": 3
+            },
+            "totalMsPerLaunch": {
+              "n": 6,
+              "median": 14.713,
+              "min": 2.545,
+              "max": 96.863
+            },
+            "pauseMs": {
+              "n": 12,
+              "min": 0.392,
+              "p50": 4.247,
+              "p95": 96.863,
+              "max": 96.863,
+              "mean": 12.779,
+              "variance": 659.336
+            }
+          },
+          "loopVsEcho": {
+            "bins": 367,
+            "pearson": 0.941
+          }
+        }
+      }
+    }
+  ],
+  "fits": {
+    "mainHeapUsedMiB": [
+      {
+        "historyEntries": 4500,
+        "metric": "mainHeapUsedMiB",
+        "fit": {
+          "n": 2,
+          "slope": 15.795,
+          "intercept": 0.04,
+          "r2": 1
+        }
+      },
+      {
+        "historyEntries": 13500,
+        "metric": "mainHeapUsedMiB",
+        "fit": {
+          "n": 2,
+          "slope": 44.067,
+          "intercept": 0.04,
+          "r2": 1
+        }
+      }
+    ],
+    "mainWorkingSetMiB": [
+      {
+        "historyEntries": 4500,
+        "metric": "mainWorkingSetMiB",
+        "fit": {
+          "n": 2,
+          "slope": 21.734,
+          "intercept": -3.062,
+          "r2": 1
+        }
+      },
+      {
+        "historyEntries": 13500,
+        "metric": "mainWorkingSetMiB",
+        "fit": {
+          "n": 2,
+          "slope": 65.015,
+          "intercept": -3.062,
+          "r2": 1
+        }
+      }
+    ],
+    "mainRssMiB": [
+      {
+        "historyEntries": 4500,
+        "metric": "mainRssMiB",
+        "fit": {
+          "n": 2,
+          "slope": 21.727,
+          "intercept": -3,
+          "r2": 1
+        }
+      },
+      {
+        "historyEntries": 13500,
+        "metric": "mainRssMiB",
+        "fit": {
+          "n": 2,
+          "slope": 64.953,
+          "intercept": -3,
+          "r2": 1
+        }
+      }
+    ],
+    "mainFootprintMiB": [
+      {
+        "historyEntries": 4500,
+        "metric": "mainFootprintMiB",
+        "fit": {
+          "n": 2,
+          "slope": 28.5,
+          "intercept": 1,
+          "r2": 1
+        }
+      },
+      {
+        "historyEntries": 13500,
+        "metric": "mainFootprintMiB",
+        "fit": {
+          "n": 2,
+          "slope": 67.5,
+          "intercept": 1,
+          "r2": 1
+        }
+      }
+    ]
+  },
+  "hostLoad": {
+    "launchLoad1m": {
+      "n": 18,
+      "min": 6.28,
+      "p50": 9.04,
+      "p95": 23.91,
+      "max": 23.91,
+      "mean": 11.503,
+      "variance": 25.853
+    },
+    "memoryPressureLevels": [
+      1,
+      2
+    ],
+    "power": [
+      "Now drawing from 'AC Power'"
+    ]
+  },
+  "lowLoad": {
+    "threshold": 12,
+    "launchesKept": 10,
+    "launchesDropped": 8,
+    "arms": [
+      {
+        "key": "control",
+        "launches": 3,
+        "heapUsedDeltaMiB": {
+          "n": 3,
+          "median": 0.04,
+          "min": 0.039,
+          "max": 0.041
+        },
+        "hydrationLaterMs": null,
+        "hydrationTickGapMs": {
+          "n": 8,
+          "min": 9.883,
+          "p50": 10.369,
+          "p95": 11.319,
+          "max": 11.319,
+          "mean": 10.55,
+          "variance": 0.189
+        },
+        "hydrationIpcEchoMs": {
+          "n": 3,
+          "min": 0.4,
+          "p50": 0.9,
+          "p95": 1.4,
+          "max": 1.4,
+          "mean": 0.9,
+          "variance": 0.167
+        },
+        "steadyTickGapMs": {
+          "n": 1734,
+          "min": 9.043,
+          "p50": 10.417,
+          "p95": 11.662,
+          "max": 21.714,
+          "mean": 10.47,
+          "variance": 1.374
+        },
+        "steadyIpcEchoMs": {
+          "n": 2784,
+          "min": 0,
+          "p50": 0.3,
+          "p95": 1.8,
+          "max": 20,
+          "mean": 0.539,
+          "variance": 1.537
+        }
+      },
+      {
+        "key": "n1-h4500",
+        "launches": 3,
+        "heapUsedDeltaMiB": {
+          "n": 3,
+          "median": 15.836,
+          "min": 15.831,
+          "max": 15.856
+        },
+        "hydrationLaterMs": null,
+        "hydrationTickGapMs": {
+          "n": 23,
+          "min": 9.419,
+          "p50": 11.127,
+          "p95": 67.434,
+          "max": 68.126,
+          "mean": 20.478,
+          "variance": 355.988
+        },
+        "hydrationIpcEchoMs": {
+          "n": 26,
+          "min": 0.1,
+          "p50": 0.6,
+          "p95": 59.4,
+          "max": 64.3,
+          "mean": 9.935,
+          "variance": 378.208
+        },
+        "steadyTickGapMs": {
+          "n": 1767,
+          "min": 9.058,
+          "p50": 10.421,
+          "p95": 10.898,
+          "max": 22.402,
+          "mean": 10.277,
+          "variance": 0.485
+        },
+        "steadyIpcEchoMs": {
+          "n": 2909,
+          "min": 0,
+          "p50": 0.2,
+          "p95": 0.4,
+          "max": 11,
+          "mean": 0.279,
+          "variance": 0.152
+        }
+      },
+      {
+        "key": "n1-h13500",
+        "launches": 4,
+        "heapUsedDeltaMiB": {
+          "n": 4,
+          "median": 44.105,
+          "min": 44.102,
+          "max": 44.116
+        },
+        "hydrationLaterMs": null,
+        "hydrationTickGapMs": {
+          "n": 58,
+          "min": 9.236,
+          "p50": 10.18,
+          "p95": 195.699,
+          "max": 230.007,
+          "mean": 24.06,
+          "variance": 2332.177
+        },
+        "hydrationIpcEchoMs": {
+          "n": 75,
+          "min": 0.2,
+          "p50": 0.9,
+          "p95": 172.5,
+          "max": 223.5,
+          "mean": 12.219,
+          "variance": 1888.756
+        },
+        "steadyTickGapMs": {
+          "n": 2330,
+          "min": 3.655,
+          "p50": 10.409,
+          "p95": 11.168,
+          "max": 105.732,
+          "mean": 10.42,
+          "variance": 5.213
+        },
+        "steadyIpcEchoMs": {
+          "n": 3798,
+          "min": 0,
+          "p50": 0.2,
+          "p95": 1.2,
+          "max": 99.1,
+          "mean": 0.44,
+          "variance": 3.462
+        }
+      }
+    ]
+  },
+  "tripwire": {
+    "blocked": [],
+    "chromiumBlocked": []
+  }
+}
