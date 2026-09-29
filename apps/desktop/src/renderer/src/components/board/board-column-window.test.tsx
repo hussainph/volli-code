@@ -464,3 +464,220 @@ describe("selection", () => {
     expect(scroller().scrollTop).toBe(parked);
   });
 });
+
+/**
+ * The row stride is LEARNED from the cards, and the window is chosen FROM the
+ * stride — so whatever the column learns from must not depend on the window,
+ * or the two drive each other (VC-451).
+ *
+ * That is the loop the stress harness took the board out with, at rest just
+ * after a drop: averaged over only the mounted slice, the stride came out
+ * 70.5 over rows 11–50 and 68 over rows 10–49, and at a scroll offset where
+ * those two strides name different windows each measurement moved the window
+ * to the other one. Every hop is a layout-effect state write, so React nested
+ * them until it gave up with `Maximum update depth exceeded` (#185) and the
+ * board fell through to its error boundary.
+ *
+ * jsdom has no layout, so the heights are invented — but the loop is pure
+ * JavaScript (height → stride → window → height), so jsdom reaches React's own
+ * nested-update limit exactly as Chromium did.
+ */
+/** Rows 1–50 are one-line cards; row 51 onwards are tall ones. */
+function tallFromRow51(id: string): number {
+  return Number(id.slice(1)) > 50 ? 160 : 60;
+}
+
+describe("a column whose cards are not all one height", () => {
+  let restoreHeights: (() => void) | null = null;
+  let errors: string[] = [];
+
+  beforeEach(() => {
+    errors = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map((arg) => String(arg)).join(" "));
+    });
+    const real = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        const id = this.dataset["boardTicketSlot"];
+        return id === undefined ? 0 : tallFromRow51(id);
+      },
+    });
+    restoreHeights = () => {
+      if (real !== undefined) Object.defineProperty(HTMLElement.prototype, "offsetHeight", real);
+    };
+  });
+
+  afterEach(() => {
+    restoreHeights?.();
+    restoreHeights = null;
+    vi.restoreAllMocks();
+  });
+
+  it("settles on one window when the scroll offset sits where two slices' strides disagree", async () => {
+    await mount(column(100));
+    giveScrollerLayout(100);
+
+    // 1170px down: at stride 68 that is row 17 (window from 11), at stride
+    // 70.5 it is row 16 (window from 10) — the boundary the loop lives on.
+    let thrown: unknown = null;
+    try {
+      await scrollTo(1170);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeNull();
+    expect(errors.filter((line) => line.includes("Maximum update depth"))).toEqual([]);
+    // Still a column, still bounded: the window settled rather than the root
+    // tearing down.
+    expect(mountedCards()).toBe(COLUMN_WINDOW_MINIMUM);
+  });
+});
+
+/**
+ * Chromium's scroll anchoring, played against the window (VC-451).
+ *
+ * When content above the fold changes size — a spacer standing in for rows
+ * becomes those rows, or the other way round — the browser moves `scrollTop`
+ * so the card that was in view stays exactly where it was, and fires `scroll`.
+ * That is the browser keeping its promise to the reader, and it means a
+ * window chosen from `scrollTop ÷ stride` alone can never settle when the
+ * spacer's estimate and the real cards disagree: the window moves, anchoring
+ * moves `scrollTop` by the difference, the new offset names the old window,
+ * and round it goes — a column re-rendering every frame at rest, its top cards
+ * remounting so often a hand can never pick one up. The stress harness caught
+ * both columns flipping 606 ↔ 964 for as long as it watched.
+ *
+ * What a column that anchoring cannot fool reads instead is the card actually
+ * in view, which is precisely the thing anchoring holds still.
+ */
+/** Rows 1–10 are tall cards; every later row is a one-liner. */
+function heightOf(id: string): number {
+  return Number(id.slice(1)) <= 10 ? 160 : 60;
+}
+
+const VIEWPORT_H = 600;
+const GAP = 8;
+
+/** A viewport rect at `top`, as the column's hit reads see it. */
+function rectAt(top: number, height: number): DOMRect {
+  return {
+    x: 0,
+    y: top,
+    left: 0,
+    right: 272,
+    width: 272,
+    top,
+    bottom: top + height,
+    height,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+describe("a column the browser scroll-anchors", () => {
+  let restore: (() => void) | null = null;
+
+  /** A card's offset in the scroller's CONTENT, laid out from the rendered DOM. */
+  function contentOffsetOf(id: string): number | null {
+    let y = 0;
+    for (const child of dropzone().children) {
+      const node = child as HTMLElement;
+      if (node.dataset.columnSpacer !== undefined) {
+        y += Number.parseFloat(node.style.height) + GAP;
+        continue;
+      }
+      const slot = node.matches("[data-board-ticket-slot]")
+        ? node
+        : node.querySelector<HTMLElement>("[data-board-ticket-slot]");
+      const slotId = slot?.dataset.boardTicketSlot;
+      if (slotId === undefined) continue;
+      if (slotId === id) return y;
+      y += heightOf(slotId) + GAP;
+    }
+    return null;
+  }
+
+  beforeEach(() => {
+    const realHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    const realRect = Element.prototype.getBoundingClientRect;
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        const id = this.dataset["boardTicketSlot"];
+        return id === undefined ? 0 : heightOf(id);
+      },
+    });
+    Element.prototype.getBoundingClientRect = function laidOut(this: Element) {
+      if (this === scroller()) return rectAt(0, VIEWPORT_H);
+      const id = (this as HTMLElement).dataset?.["boardTicketSlot"];
+      const y = id === undefined ? null : contentOffsetOf(id);
+      if (id === undefined || y === null) return rectAt(0, 0);
+      return rectAt(y - scroller().scrollTop, heightOf(id));
+    };
+    restore = () => {
+      if (realHeight !== undefined) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", realHeight);
+      }
+      Element.prototype.getBoundingClientRect = realRect;
+    };
+  });
+
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  /** The first card whose bottom edge is below the top of the viewport, and where it sits. */
+  function cardInView(): { id: string; offset: number } {
+    const top = scroller().scrollTop;
+    for (const id of mountedIds()) {
+      const y = contentOffsetOf(id);
+      if (y !== null && y + heightOf(id) > top) return { id, offset: y - top };
+    }
+    throw new Error("no mounted card is in view");
+  }
+
+  /**
+   * Scroll, then behave as Chromium does after every commit that moved the
+   * window: hold the card that was in view where it was, and fire `scroll`.
+   * Answers how many times the window moved before it held still.
+   */
+  async function scrollAnchored(offset: number, frames = 10): Promise<number> {
+    scroller().scrollTop = offset;
+    let held = cardInView();
+    let before = mountedIds().join();
+    await act(async () => {
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+    let moves = 0;
+    for (let frame = 0; frame < frames; frame++) {
+      const now = mountedIds().join();
+      if (now === before) break;
+      moves += 1;
+      const y = contentOffsetOf(held.id);
+      if (y === null) break;
+      scroller().scrollTop = y - held.offset;
+      held = cardInView();
+      before = now;
+      await act(async () => {
+        scroller().dispatchEvent(new Event("scroll"));
+      });
+    }
+    return moves;
+  }
+
+  it("holds its window still once the browser has anchored the card in view", async () => {
+    await mount(column(100));
+    giveScrollerLayout(100);
+
+    // 652px down, row 4 (a tall card) is the one in view. Divided by the
+    // learned stride of 93, the same offset reads as row 7 — and the two
+    // readings name different windows, which is the disagreement anchoring
+    // turns into a loop.
+    const moves = await scrollAnchored(652);
+
+    expect(moves).toBeLessThanOrEqual(1);
+  });
+});
