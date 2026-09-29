@@ -12,8 +12,8 @@ import {
   ConversationContent,
 } from "@renderer/components/ui/ai-elements/conversation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
-import type { SessionFixture } from "./card";
-import type { SendOutcome } from "../scratches/session-peek-wireframe-model";
+import type { SessionFixture } from "./session-peek-wireframe-card";
+import type { SendOutcome } from "./session-peek-wireframe-model";
 
 const CONTEXT: TurnContext = {
   onOpenFile: () => {},

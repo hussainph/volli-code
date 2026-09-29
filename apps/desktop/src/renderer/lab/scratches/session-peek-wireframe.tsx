@@ -3,11 +3,14 @@
  *
  * Hover reads without moving focus. Answer/Send explicitly hold a recipient
  * and reveal the reply form; "pin" is only the controller's internal name.
- * The original sketch remains available at #session-peek.
+ * The v1 sketch is retired; the shipped peek lives in components/session-peek.
  *
- * session-peek/use-peek-controller.ts owns timers, wiring and geometry (shared
- * with the sidebar-integration scratch); session-peek/card.tsx owns the card;
- * the pure reducer next door owns dwell, persistence, send and dismissal rules.
+ * The scratch is self-contained: its controller (timers, wiring),
+ * geometry, card and conversation overlay are siblings named
+ * `session-peek-wireframe-*`, and the pure reducer next door owns dwell,
+ * persistence, send and dismissal rules. They were briefly shared with a
+ * sidebar-integration scratch; that scratch was retired once production
+ * landed, so they live beside the wireframe again.
  * The conversation overlay reads separate source-message fixtures, never the
  * generated summary. Opening it preserves an unfinished reply and closing it
  * returns focus to the originating card (or row after a completed send).
@@ -21,15 +24,15 @@ import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 
-import { PeekConversation } from "../session-peek/conversation";
-import { usePeekController } from "../session-peek/use-peek-controller";
+import { PeekConversation } from "./session-peek-wireframe-conversation";
+import { usePeekController } from "./session-peek-wireframe-controller";
 import {
   SessionPeekCard,
   SessionGlyph,
   STATE_WORD,
   type SessionFixture,
   type FixtureState,
-} from "../session-peek/card";
+} from "./session-peek-wireframe-card";
 import {
   stressCopy,
   CONTENT_LIMITS_NOTE,
@@ -497,13 +500,8 @@ export default function SessionPeekWireframeScratch() {
               Lab translation of <span className="font-mono">hover-peek-wireframe.excalidraw</span>.
               Four fixture sessions, no backend: sending, opening a session, the badge flip and the
               transcript line below are all simulations, and Undo removes a fixture entry rather
-              than recalling anything.{" "}
-              <a
-                className="text-primary-text underline-offset-4 hover:underline"
-                href="#session-peek"
-              >
-                v1 scratch for comparison →
-              </a>
+              than recalling anything. The shipped peek lives in
+              <span className="font-mono"> components/session-peek</span>.
             </p>
           </header>
 

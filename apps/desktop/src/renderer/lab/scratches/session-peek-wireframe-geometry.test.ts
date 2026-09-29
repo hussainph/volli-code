@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { positionPeek } from "./geometry";
+import { positionPeek } from "./session-peek-wireframe-geometry";
 
 describe("peek viewport geometry", () => {
   it("does not constrain a bottom-row card to its unmeasured height", () => {

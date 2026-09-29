@@ -35,7 +35,7 @@
  */
 import * as React from "react";
 
-import { clamp, positionPeek, type PeekPosition } from "./geometry";
+import { clamp, positionPeek, type PeekPosition } from "./session-peek-wireframe-geometry";
 import {
   CONFIRMATION_MS,
   GRACE_MS,
@@ -47,7 +47,7 @@ import {
   type PeekSurface,
   type PeekTarget,
   type SendOutcome,
-} from "../scratches/session-peek-wireframe-model";
+} from "./session-peek-wireframe-model";
 
 /** Keyboard focus arriving on a row opens its peek after this, not the pointer dwell. */
 export const FOCUS_DWELL_MS = 250;

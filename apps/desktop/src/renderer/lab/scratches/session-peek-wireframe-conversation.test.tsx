@@ -3,9 +3,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { PeekConversation } from "./conversation";
-import type { SessionFixture } from "./card";
-import type { SendOutcome } from "../scratches/session-peek-wireframe-model";
+import { PeekConversation } from "./session-peek-wireframe-conversation";
+import type { SessionFixture } from "./session-peek-wireframe-card";
+import type { SendOutcome } from "./session-peek-wireframe-model";
 
 const fixture: SessionFixture = {
   rowId: "first",

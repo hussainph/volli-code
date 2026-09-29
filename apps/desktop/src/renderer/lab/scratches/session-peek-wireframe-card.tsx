@@ -23,8 +23,8 @@ import {
   MESSAGE_PROMPT_ID,
   type PeekState,
   type PeekEvent,
-} from "../scratches/session-peek-wireframe-model";
-import type { PeekCopy, SummaryState } from "../scratches/session-peek-content";
+} from "./session-peek-wireframe-model";
+import type { PeekCopy, SummaryState } from "./session-peek-content";
 
 export type FixtureState = "active" | "waiting" | "idle" | "failed";
 export interface SessionFixture extends PeekCopy {

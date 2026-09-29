@@ -1,4 +1,4 @@
-import type { PeekSurface } from "../scratches/session-peek-wireframe-model";
+import type { PeekSurface } from "./session-peek-wireframe-model";
 
 const PEEK_GAP = 8;
 /** The clamp's breathing room at every edge of the window. */
