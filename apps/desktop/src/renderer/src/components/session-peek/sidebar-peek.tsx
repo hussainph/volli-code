@@ -201,6 +201,14 @@ export function sessionGlyphName(providerLabel: string, state: StatusDotState | 
     case "interrupted":
     case "error":
       return `${providerLabel} · ${SESSION_ACTIVITY_LABEL.interrupted}`;
+    // An ended Session is named for how it ended, never as merely quiet: the
+    // rail's record fold prints these same words on the line under the mark.
+    case "parked":
+      return `${providerLabel} · ${SESSION_ACTIVITY_LABEL.parked}`;
+    case "exited":
+      return `${providerLabel} · ${SESSION_ACTIVITY_LABEL.exited}`;
+    case "stopped":
+      return `${providerLabel} · ${SESSION_ACTIVITY_LABEL.stopped}`;
     default:
       return `${providerLabel} · ${SESSION_ACTIVITY_LABEL.idle}`;
   }

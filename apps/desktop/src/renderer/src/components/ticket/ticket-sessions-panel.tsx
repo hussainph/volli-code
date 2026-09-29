@@ -19,6 +19,7 @@ import { renameChatSession } from "@renderer/chat/rename";
 import { PeekConversation } from "@renderer/components/session-peek/peek-conversation";
 import {
   createSidebarPeekPorts,
+  sessionGlyphName,
   UnreadDot,
   usePeekHold,
 } from "@renderer/components/session-peek/sidebar-peek";
@@ -447,18 +448,11 @@ function rowGlyph(entry: SessionRailRow, status: TicketSessionStatus): React.Rea
       state={sessionRailRowDotState(entry)}
       kind={entry.kind}
       // The row no longer prints the state word in its live half, so the mark's
-      // name is where both facts are said (`SessionGlyph` writes no word of its
-      // own — composing them is the row's job).
-      //
-      // NOT `sidebar-peek.ts`'s `sessionGlyphName` (VC-30, F2b), deliberately.
-      // That rule rests every ended state on one word, `Idle`, on the premise
-      // that "no row PRINTS the state any more" — which is true of the live
-      // half and false of the record fold, where the row's own second line
-      // says `Stopped · …` beside an `exited` dot. Naming a finished Session
-      // `Claude Code · Idle` there would contradict the line under it and tell
-      // a screen reader a dead Session is merely quiet. This stays on the
-      // rail's exact word until that map names the ended states.
-      name={`${label} · ${sessionStatusLabel(status)}`}
+      // name is where both facts are said — through the one naming rule both
+      // sidebars share. Named from the row's STATUS, not the badge's state: an
+      // ended Session wears the resting badge but is named for how it ended,
+      // which is also the word the record fold prints under it.
+      name={sessionGlyphName(label, status)}
     />
   );
 }

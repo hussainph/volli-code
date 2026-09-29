@@ -348,7 +348,9 @@ describe("sessionGlyphName", () => {
     expect(sessionGlyphName("anthropic", "interrupted")).toBe("anthropic · Interrupted");
     expect(sessionGlyphName("anthropic", "error")).toBe("anthropic · Interrupted");
     expect(sessionGlyphName("Chat", "idle")).toBe("Chat · Idle");
-    expect(sessionGlyphName("Chat", "parked")).toBe("Chat · Idle");
     expect(sessionGlyphName("Chat", "ready")).toBe("Chat · Idle");
+    expect(sessionGlyphName("Claude Code", "parked")).toBe("Claude Code · Parked");
+    expect(sessionGlyphName("Claude Code", "exited")).toBe("Claude Code · Exited");
+    expect(sessionGlyphName("Claude Code", "stopped")).toBe("Claude Code · Stopped");
   });
 });
