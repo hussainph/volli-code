@@ -2,36 +2,42 @@
  * VC-30 — the band rows and the rail row, in one row language, for the
  * sidebar-integration scratch.
  *
- * Every geometry here is the shipped row's (`sidebar/session-band-row.tsx`,
- * `ticket/ticket-sessions-panel.tsx`): the same primitives, heights, insets
- * and the same 3ch age column. What changes is exactly three things, so a
+ * The geometry is the shipped rows' (`sidebar/session-band-row.tsx`,
+ * `ticket/ticket-sessions-panel.tsx`, `ui/list-row.tsx`): the same
+ * primitives, heights, insets and 3ch age column. What changes, so that a
  * difference on screen is one the design makes:
  *
  *   1. THE LEADING SLOT IS THE MARK (`row-mark.tsx`), in every band and in the
  *      rail. The Active row's 6px dot, the Previous row's kind glyph and the
  *      rail's kind glyph + dot all become one mark that says the vendor and
- *      carries the state. The rail's status line drops its dot for the same
- *      reason: one carrier of state per row.
- *   2. THE FOLDER'S CARET SITS IN THE MARK'S 14px BOX, so a collapsed folder,
+ *      carries the state.
+ *   2. ONE TWO-LINE ROW FOR BOTH SIDEBARS. An Active row is the rail's row —
+ *      the shipped two-line `ListRow` (52px) the v2 wireframe drew — so the
+ *      mark sits on the row's vertical centre in a 24px slot rather than on
+ *      the title's line, and the two sidebars cannot drift apart.
+ *   3. THE SECOND LINE SAYS WHERE AND WHEN, NEVER HOW. `VLT-14 · 2m ago`, in
+ *      the row's own `text-ui` (v2's line), not the band's tracked label.
+ *      The shipped line's state words — "Doing · Working", "Answer a
+ *      question" — are gone: the mark carries the state, and a line that
+ *      repeats it is noise at a glance. In the rail the ticket is the page
+ *      itself, so only the "when" is left.
+ *   4. THE FOLDER'S CARET SITS IN THE MARK'S 14px BOX, so a collapsed folder,
  *      an ungrouped Session and a child inside an open folder all share one
  *      left axis — the folder reads as part of the list's system rather than
  *      as a control bolted onto it.
- *   3. NO NATIVE `title` TOOLTIP on a peekable row. The shipped rows use it
+ *   5. NO NATIVE `title` TOOLTIP on a peekable row. The shipped rows use it
  *      for the untruncated title and the harness; the peek now says both, and
  *      a browser tooltip would open on top of it at almost the same instant.
  *
  * Rows are addressed by `data-peek-row` / `data-peek-surface` (see
- * `use-peek-controller.ts`): a Session's `<li>`, a folder's BUTTON.
+ * `use-peek-controller.ts`): a Session's `<li>`, a folder's BUTTON. A row
+ * drawn with no surface is a specimen — no peek, nothing to open — for the
+ * scratch's side-by-side comparison.
  */
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import {
-  displayTicketId,
-  TICKET_STATUS_LABELS,
-  type ChatWaitingReason,
-  type Ticket,
-} from "@volli/shared";
+import { displayTicketId, type Ticket } from "@volli/shared";
 
 import type {
   ActiveSessionRow,
@@ -39,20 +45,12 @@ import type {
 } from "@renderer/components/sidebar/active-session-listing";
 import { providerMark } from "@renderer/components/models/model-identity";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
-import { compactAge } from "@renderer/lib/relative-time";
+import { compactAge, relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
 import { VENDOR_LABEL, type VendorId } from "./sidebar-corpus";
 import { folderRowId } from "./sidebar-model";
-
-/** LAB COPY of `session-band-row.tsx`'s `WAITING_COPY` (module-private there). */
-const WAITING_COPY: Record<ChatWaitingReason, string> = {
-  question: "Answer a question",
-  permission: "Approve a tool call",
-  auth: "Sign in needed",
-};
 
 /** The shipped band's identity lane. */
 const ID_LANE = "inline-flex shrink-0 items-center font-mono text-label tracking-normal";
@@ -76,76 +74,101 @@ function Identity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefi
   return <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>;
 }
 
-/** The shipped Active meta line's words: why a human is needed, else where and what. */
-function activeStateLine(row: ActiveSessionRow, delivered: boolean): string {
-  if (row.attention !== null && !delivered) {
-    if (row.attention.signal === "blocked") {
-      return row.attention.reason === null ? "Blocked" : `Blocked · ${row.attention.reason}`;
-    }
-    return row.waitingOn === null ? "Waiting for you" : WAITING_COPY[row.waitingOn];
-  }
-  const place = row.ticket === null ? row.source : TICKET_STATUS_LABELS[row.ticket.status];
-  return `${place} · ${SESSION_ACTIVITY_LABEL[delivered ? "working" : row.activity]}`;
-}
+/** Where a Session's peek listens: a sidebar, or nowhere (a specimen). */
+export type RowSurface = "nav" | "rail" | null;
 
 /**
- * Two lines: what it is, then where it lives and what it is doing. The mark
- * sits on the title's line, where the dot sat; the working title still sweeps.
+ * The two-line Session row both sidebars draw: the shipped `ListRow` at its
+ * 52px density, the mark centred in a 24px slot, the title over one quiet
+ * line. A working title keeps the shipped band's sweep.
  */
+function TwoLineSessionRow({
+  rowId,
+  surface,
+  title,
+  subtitle,
+  mark,
+  working,
+  selected,
+  onActivate,
+}: {
+  rowId: string;
+  surface: RowSurface;
+  title: string;
+  subtitle: string;
+  mark: React.ReactNode;
+  working: boolean;
+  selected: boolean;
+  onActivate(rowId: string): void;
+}) {
+  return (
+    <li
+      data-peek-row={surface === null ? undefined : rowId}
+      data-peek-surface={surface ?? undefined}
+    >
+      <ListRow
+        density="two-line"
+        selected={selected}
+        onActivate={surface === null ? null : () => onActivate(rowId)}
+        leading={mark}
+        primary={
+          working ? (
+            <span className="session-title-sweep min-w-0 flex-1 text-ui font-medium">
+              {title}
+              <span className="session-title-peak" aria-hidden>
+                {title}
+              </span>
+            </span>
+          ) : (
+            title
+          )
+        }
+        secondary={subtitle}
+      />
+    </li>
+  );
+}
+
+/** Where, then when. The ticketless Session says so rather than leaving a hole. */
+function activeSubtitle(row: ActiveSessionRow, ticketPrefix: string, now: number): string {
+  const where =
+    row.ticket === null ? "No ticket" : displayTicketId(ticketPrefix, row.ticket.ticketNumber);
+  return row.lastActivityAt === null
+    ? where
+    : `${where} · ${relativeTime(row.lastActivityAt, now)}`;
+}
+
+/** An Active Session: two lines, the mark carrying the state, the line under the title only where and when. */
 export const ActiveRow = React.memo(function ActiveRow({
   row,
   ticketPrefix,
   now,
   selected,
-  delivered,
   working,
   mark,
+  surface = "nav",
   onActivate,
 }: {
   row: ActiveSessionRow;
   ticketPrefix: string;
   now: number;
   selected: boolean;
-  delivered: boolean;
   working: boolean;
   mark: React.ReactNode;
+  surface?: RowSurface;
   onActivate(rowId: string): void;
 }) {
   return (
-    <SidebarMenuItem data-peek-row={row.id} data-peek-surface="nav">
-      <SidebarMenuButton
-        size="lg"
-        isActive={selected}
-        onClick={() => onActivate(row.id)}
-        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
-      >
-        <span className="mt-0.5 flex shrink-0">{mark}</span>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {working ? (
-            <span className="session-row-dim session-title-sweep text-ui">
-              {row.title}
-              <span className="session-title-peak" aria-hidden>
-                {row.title}
-              </span>
-            </span>
-          ) : (
-            <span className="session-row-dim truncate text-ui text-sidebar-foreground transition-colors">
-              {row.title}
-            </span>
-          )}
-          <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
-            <Identity ticket={row.ticket} ticketPrefix={ticketPrefix} />
-            <span aria-hidden>·</span>
-            <span className="truncate">{activeStateLine(row, delivered)}</span>
-            {row.lastActivityAt !== null ? (
-              <span className="shrink-0 text-label tabular-nums">
-                {compactAge(row.lastActivityAt, now)}
-              </span>
-            ) : null}
-          </span>
-        </span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
+    <TwoLineSessionRow
+      rowId={row.id}
+      surface={surface}
+      title={row.title}
+      subtitle={activeSubtitle(row, ticketPrefix, now)}
+      mark={mark}
+      working={working}
+      selected={selected}
+      onActivate={onActivate}
+    />
   );
 });
 
@@ -157,6 +180,7 @@ export const PreviousRow = React.memo(function PreviousRow({
   selected,
   mark,
   showIdentity = true,
+  surface = "nav",
   onActivate,
 }: {
   row: PreviousSessionRow;
@@ -165,14 +189,18 @@ export const PreviousRow = React.memo(function PreviousRow({
   selected: boolean;
   mark: React.ReactNode;
   showIdentity?: boolean;
+  surface?: Exclude<RowSurface, "rail">;
   onActivate(rowId: string): void;
 }) {
   return (
-    <SidebarMenuItem data-peek-row={row.id} data-peek-surface="nav">
+    <SidebarMenuItem
+      data-peek-row={surface === null ? undefined : row.id}
+      data-peek-surface={surface ?? undefined}
+    >
       <SidebarMenuButton
         size="sm"
         isActive={selected}
-        onClick={() => onActivate(row.id)}
+        onClick={surface === null ? undefined : () => onActivate(row.id)}
         className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
       >
         {mark}
@@ -274,36 +302,39 @@ export const FolderRow = React.memo(function FolderRow({
 });
 
 /**
- * The in-ticket rail's row: the shipped two-line `ListRow`, with the mark in
- * the leading slot and the status line reduced to words and an age.
+ * The in-ticket rail's row: the same two-line row as Active. The ticket is
+ * the page it sits on, so its second line is only when.
  */
 export function RailRow({
   rowId,
   title,
   mark,
-  status,
+  at,
+  now,
+  working,
   selected,
   onActivate,
 }: {
   rowId: string;
   title: string;
   mark: React.ReactNode;
-  status: string;
+  /** Last activity, or when it ended; `null` for a Session that never spoke. */
+  at: number | null;
+  now: number;
+  working: boolean;
   selected: boolean;
   onActivate(rowId: string): void;
 }) {
   return (
-    <li data-peek-row={rowId} data-peek-surface="rail">
-      <ListRow
-        density="two-line"
-        onActivate={() => onActivate(rowId)}
-        className={cn(selected && "bg-muted/60")}
-        leading={<span className="flex size-4 shrink-0 items-center justify-center">{mark}</span>}
-        primary={<span className="min-w-0 flex-1 truncate text-ui font-medium">{title}</span>}
-        secondary={
-          <span className="min-w-0 truncate text-label text-muted-foreground">{status}</span>
-        }
-      />
-    </li>
+    <TwoLineSessionRow
+      rowId={rowId}
+      surface="rail"
+      title={title}
+      subtitle={at === null ? "" : relativeTime(at, now)}
+      mark={mark}
+      working={working}
+      selected={selected}
+      onActivate={onActivate}
+    />
   );
 }

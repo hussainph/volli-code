@@ -15,9 +15,12 @@
  * Session is that peek's own button. Hover never swaps the content: the list
  * the reader is scanning must not change under the pointer.
  *
- * The frame, width and bridge behaviour are the Session card's, so the two
- * read as one surface with two subjects — which is also the card a board
- * ticket would open (the brief's "extend this to other surfaces").
+ * The frame, width, bridge behaviour and GRID are the Session card's
+ * (`card.tsx`: 12px inset, 24px lead column, 12px rhythm), so the two read as
+ * one surface with two subjects — which is also the card a board ticket would
+ * open (the brief's "extend this to other surfaces"). The list's rows are the
+ * sidebar's two-line rows in miniature: the mark centred in the lead column,
+ * the title over the one line that says what the Session did.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -27,7 +30,9 @@ import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { displayTicketId, TICKET_STATUS_LABELS, type Ticket } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
 
+import { CARD_HEADER, CARD_HEADER_TEXT } from "./card";
 import type { PeekPosition } from "./geometry";
 
 export interface TicketPeekSession {
@@ -106,44 +111,42 @@ export const TicketPeekCard = React.forwardRef<
           onPointerLeave();
       }}
     >
-      <header className="flex shrink-0 items-start gap-2 border-b border-border p-4">
+      <header className={CARD_HEADER}>
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-muted/50">
           <TicketIcon aria-hidden className="size-4 text-muted-foreground" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <span className="rounded bg-muted px-1 font-mono text-label tracking-normal text-muted-foreground">
-              {id}
-            </span>
-            <span className="text-ui text-muted-foreground">
-              {TICKET_STATUS_LABELS[ticket.status]}
-            </span>
-          </div>
+        <div className={CARD_HEADER_TEXT}>
           <p
             data-peek-ticket-title=""
-            className="line-clamp-2 text-ui font-semibold text-foreground [overflow-wrap:anywhere]"
+            className="line-clamp-2 font-semibold text-foreground [overflow-wrap:anywhere]"
             title={ticket.title}
           >
             {ticket.title}
           </p>
+          <div className="flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
+            <span className="rounded bg-muted px-1 font-mono text-label tracking-normal">{id}</span>
+            <span>
+              {TICKET_STATUS_LABELS[ticket.status]} · {count}
+            </span>
+          </div>
         </div>
         <Button size="icon-sm" variant="ghost" aria-label={`Open ${id}`} onClick={onOpenTicket}>
           <ArrowSquareOutIcon />
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
-        <p className="px-2 pt-1 pb-2 text-label text-muted-foreground uppercase">{count}</p>
-        <ul className="flex flex-col gap-1" aria-label={`${id} sessions`}>
+      {/* 4px + a row's 8px puts every mark on the 12px inset; 6px + 6px is the 12px rhythm. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 py-1.5">
+        <ul className="flex flex-col" aria-label={`${id} sessions`}>
           {sessions.map((session) => (
             <li key={session.rowId}>
               <button
                 type="button"
                 data-peek-drill={session.rowId}
-                className="group/drill flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+                className="group/drill flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => onDrill(session.rowId)}
               >
-                <span className="mt-0.5 flex shrink-0">{session.mark}</span>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                {session.mark}
+                <span className="flex min-w-0 flex-1 flex-col">
                   <span className="flex min-w-0 items-baseline gap-2">
                     <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                       {session.title}
@@ -159,7 +162,7 @@ export const TicketPeekCard = React.forwardRef<
                 <CaretRightIcon
                   aria-hidden
                   weight="bold"
-                  className="mt-1 size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/drill:opacity-100 group-focus-visible/drill:opacity-100 motion-reduce:transition-none"
+                  className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/drill:opacity-100 group-focus-visible/drill:opacity-100 motion-reduce:transition-none"
                 />
               </button>
             </li>
@@ -185,17 +188,31 @@ export function FolderStrip({
   back?: () => void;
   pager?: { index: number; count: number; onStep(delta: number): void };
 }) {
+  // On the card's grid: the crumb's glyph centres on the lead column (the
+  // button's own 8px padding, pulled back 2px) and its label starts on the
+  // text's 44px edge, whether it is a way back or a plain name.
+  const crumb = "-ml-0.5 gap-3.5 px-2";
   return (
     <div
       data-peek-strip=""
-      className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2 py-1 text-ui text-muted-foreground"
+      className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-3 py-1 text-muted-foreground"
     >
       {back === undefined ? (
-        <span className="px-2 font-mono text-label tracking-normal">{ticketLabel}</span>
+        <span className={cn("inline-flex h-5 items-center", crumb)}>
+          <TicketIcon aria-hidden className="size-3" />
+          <span className="font-mono text-label tracking-normal">{ticketLabel}</span>
+        </span>
       ) : (
-        <Button type="button" size="xs" variant="ghost" onClick={back}>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-label={`Back to ${ticketLabel}`}
+          className={crumb}
+          onClick={back}
+        >
           <CaretLeftIcon />
-          <span className="font-mono tracking-normal">{ticketLabel}</span>
+          <span className="font-mono text-label tracking-normal">{ticketLabel}</span>
         </Button>
       )}
       {pager === undefined ? null : (

@@ -89,6 +89,46 @@ export function SessionGlyph({ fixture, state }: { fixture: SessionFixture; stat
   );
 }
 
+/*
+ * THE CARD'S GRID. One set of numbers for every strip and block, so nothing in
+ * the card keeps spacing of its own:
+ *
+ *   • A 12px INSET on every strip — header, blocks, notices, footer.
+ *   • A 24px LEAD COLUMN, then 8px to the text: text starts 44px in,
+ *     everywhere. The header's mark fills the column; a block's 16px icon
+ *     centres in it on the block's first line; a ghost button's icon is pulled
+ *     onto it, so an icon never floats off the column by its button's padding.
+ *   • 12px between blocks and at the header's and body's edges; 8px inside a
+ *     block (a question to its options) and on the thin strips (notices, the
+ *     footer).
+ *
+ * The ticket card (`ticket-card.tsx`) is drawn on the same grid from these.
+ */
+export const CARD_HEADER = "flex shrink-0 items-start gap-2 border-b border-border p-3";
+/** The header's text column: 2px down, so a 20px first line centres on the 24px mark. */
+export const CARD_HEADER_TEXT = "flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5";
+export const CARD_BODY =
+  "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain py-3";
+/** A ghost button's icon, pulled 6px left onto the lead column's centre. */
+export const GHOST_ON_LEAD = "-ml-1.5";
+
+/** A block: its icon in the lead column on the first line of text, the text at 44px. */
+export function CardBlock({
+  icon,
+  className,
+  children,
+  ...rest
+}: React.HTMLAttributes<HTMLDivElement> & { icon: React.ReactNode }) {
+  return (
+    <div className={cn("flex items-start gap-2 px-3", className)} {...rest}>
+      <span aria-hidden className="flex h-5 w-6 shrink-0 items-center justify-center">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
 /** Two lines for identity; full values remain available in the conversation overlay. */
 function Identity({
   fixture,
@@ -106,9 +146,9 @@ function Identity({
   onOpen(): void;
 }) {
   return (
-    <header className="flex shrink-0 items-start gap-2 border-b border-border p-4">
+    <header className={CARD_HEADER}>
       {glyph ?? <SessionGlyph fixture={fixture} state={state} />}
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className={CARD_HEADER_TEXT}>
         <p
           data-peek-session-title=""
           className="line-clamp-2 text-ui font-semibold text-foreground [overflow-wrap:anywhere]"
@@ -135,24 +175,21 @@ function Identity({
 function TicketContext({ fixture }: { fixture: SessionFixture }) {
   if (fixture.ticketId === null) return null;
   return (
-    <div className="flex items-start gap-2 px-4 pt-4">
-      <TicketIcon aria-hidden className="mt-1 size-4 shrink-0 text-muted-foreground" />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="rounded bg-muted px-1 font-mono text-label tracking-normal text-muted-foreground">
-            {fixture.ticketId}
-          </span>
-          <span className="text-ui text-muted-foreground">{fixture.ticketStage}</span>
-        </div>
-        <p
-          data-peek-ticket-title=""
-          className="line-clamp-2 text-ui text-foreground [overflow-wrap:anywhere]"
-          title={fixture.ticketTitle ?? undefined}
-        >
-          {fixture.ticketTitle}
-        </p>
+    <CardBlock icon={<TicketIcon className="size-4 text-muted-foreground" />}>
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="rounded bg-muted px-1 font-mono text-label tracking-normal text-muted-foreground">
+          {fixture.ticketId}
+        </span>
+        <span className="text-muted-foreground">{fixture.ticketStage}</span>
       </div>
-    </div>
+      <p
+        data-peek-ticket-title=""
+        className="line-clamp-2 text-foreground [overflow-wrap:anywhere]"
+        title={fixture.ticketTitle ?? undefined}
+      >
+        {fixture.ticketTitle}
+      </p>
+    </CardBlock>
   );
 }
 
@@ -164,13 +201,9 @@ function Summary({
   summaryState: SummaryState;
 }) {
   return (
-    <div className="flex items-start gap-2 px-4 py-4">
-      <ClockCounterClockwiseIcon
-        aria-hidden
-        className="mt-1 size-4 shrink-0 text-muted-foreground"
-      />
+    <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
       <div
-        className="min-w-0 flex-1 text-ui text-muted-foreground"
+        className="text-muted-foreground"
         data-summary-state={summaryState}
         aria-busy={summaryState === "loading"}
       >
@@ -194,7 +227,7 @@ function Summary({
           </p>
         )}
       </div>
-    </div>
+    </CardBlock>
   );
 }
 
@@ -229,7 +262,7 @@ function AnswerForm({
     <form
       id="peek-reply-form"
       aria-label={`Reply to ${fixture.sessionTitle} (${fixture.ticketId ?? "Board"})`}
-      className={cn("flex flex-col gap-2 px-4 pb-4", pendingQuestion && "pt-4")}
+      className="flex flex-col"
       onSubmit={(event) => {
         event.preventDefault();
         if (!pendingQuestion || state.questionIndex === prompts.length - 1) {
@@ -246,108 +279,119 @@ function AnswerForm({
       }}
     >
       {pendingQuestion && prompt ? (
-        <fieldset
-          key={prompt.id}
-          ref={questionRef}
-          tabIndex={-1}
-          className="min-w-0 outline-none"
-          disabled={busy}
-          aria-describedby={
-            [prompt.detail ? "peek-question-detail" : null, errorId].filter(Boolean).join(" ") ||
-            undefined
-          }
-        >
-          <legend
-            id="peek-question-label"
-            data-peek-question=""
-            className="pb-2 font-medium text-foreground [overflow-wrap:anywhere]"
+        <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
+          <fieldset
+            key={prompt.id}
+            ref={questionRef}
+            tabIndex={-1}
+            className="flex min-w-0 flex-col gap-2 outline-none"
+            disabled={busy}
+            aria-describedby={
+              [prompt.detail ? "peek-question-detail" : null, errorId].filter(Boolean).join(" ") ||
+              undefined
+            }
           >
-            {prompt.label}
-          </legend>
-          {prompts.length > 1 ? (
-            <p className="pb-2 text-ui text-muted-foreground tabular-nums">
-              Question {state.questionIndex + 1} of {prompts.length}
-            </p>
-          ) : null}
-          {prompt.detail ? (
-            <p
-              id="peek-question-detail"
-              className="pb-2 text-ui whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]"
+            <legend
+              id="peek-question-label"
+              data-peek-question=""
+              className="pb-2 font-medium text-foreground [overflow-wrap:anywhere]"
             >
-              {prompt.detail}
-            </p>
-          ) : null}
-          <div className="flex flex-col gap-1">
-            {prompt.options.map((option, index) => (
-              <label
-                key={option.id}
-                className={cn(
-                  "flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-ui text-foreground focus-within:ring-2 focus-within:ring-ring/45",
-                  promptDraft(state.draft, prompt.id).optionIds.includes(option.id)
-                    ? "bg-accent"
-                    : "hover:bg-muted/50",
-                )}
+              {prompt.label}
+            </legend>
+            {prompts.length > 1 ? (
+              <p className="text-muted-foreground tabular-nums">
+                Question {state.questionIndex + 1} of {prompts.length}
+              </p>
+            ) : null}
+            {prompt.detail ? (
+              <p
+                id="peek-question-detail"
+                className="whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]"
               >
-                <input
-                  type={prompt.multiple ? "checkbox" : "radio"}
-                  name={`peek-answer-${prompt.id}`}
-                  aria-labelledby={`peek-option-${index}-label`}
-                  aria-describedby={
-                    option.description ? `peek-option-${index}-description` : undefined
-                  }
-                  className="mt-1 size-3 shrink-0 accent-primary"
-                  checked={promptDraft(state.draft, prompt.id).optionIds.includes(option.id)}
-                  onChange={() => dispatch({ type: "select-option", prompt, optionId: option.id })}
-                />
-                <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
-                  <span id={`peek-option-${index}-label`}>{option.label}</span>
-                  {option.description ? (
-                    <span
-                      id={`peek-option-${index}-description`}
-                      className="whitespace-pre-line text-muted-foreground"
-                    >
-                      {option.description}
-                    </span>
-                  ) : null}
-                </span>
-              </label>
-            ))}
-          </div>
-          {prompt.custom ? (
-            <Textarea
-              aria-labelledby="peek-question-label"
-              aria-describedby={
-                [prompt.detail ? "peek-question-detail" : null, errorId]
-                  .filter(Boolean)
-                  .join(" ") || undefined
-              }
-              rows={2}
-              className="mt-2 min-h-16 resize-y px-2 py-2 text-ui"
-              placeholder="Your answer"
-              value={promptDraft(state.draft, prompt.id).response}
-              onFocus={() => dispatch({ type: "focus-field" })}
-              onBlur={() => dispatch({ type: "blur-field" })}
-              onChange={(event) =>
-                dispatch({ type: "type-other", promptId: prompt.id, text: event.target.value })
-              }
-            />
-          ) : null}
-        </fieldset>
+                {prompt.detail}
+              </p>
+            ) : null}
+            {/* Options hang 8px into the gutter, so each radio sits on the text's edge. */}
+            <div className="flex flex-col gap-0.5">
+              {prompt.options.map((option, index) => (
+                <label
+                  key={option.id}
+                  className={cn(
+                    "-ml-2 flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-foreground focus-within:ring-2 focus-within:ring-ring/45",
+                    promptDraft(state.draft, prompt.id).optionIds.includes(option.id)
+                      ? "bg-accent"
+                      : "hover:bg-muted/50",
+                  )}
+                >
+                  <input
+                    type={prompt.multiple ? "checkbox" : "radio"}
+                    name={`peek-answer-${prompt.id}`}
+                    aria-labelledby={`peek-option-${index}-label`}
+                    aria-describedby={
+                      option.description ? `peek-option-${index}-description` : undefined
+                    }
+                    className="mt-1 size-3 shrink-0 accent-primary"
+                    checked={promptDraft(state.draft, prompt.id).optionIds.includes(option.id)}
+                    onChange={() =>
+                      dispatch({ type: "select-option", prompt, optionId: option.id })
+                    }
+                  />
+                  <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
+                    <span id={`peek-option-${index}-label`}>{option.label}</span>
+                    {option.description ? (
+                      <span
+                        id={`peek-option-${index}-description`}
+                        className="whitespace-pre-line text-muted-foreground"
+                      >
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {prompt.custom ? (
+              <Textarea
+                aria-labelledby="peek-question-label"
+                aria-describedby={
+                  [prompt.detail ? "peek-question-detail" : null, errorId]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                rows={2}
+                className="min-h-16 resize-y px-2 py-2 text-ui"
+                placeholder="Your answer"
+                value={promptDraft(state.draft, prompt.id).response}
+                onFocus={() => dispatch({ type: "focus-field" })}
+                onBlur={() => dispatch({ type: "blur-field" })}
+                onChange={(event) =>
+                  dispatch({ type: "type-other", promptId: prompt.id, text: event.target.value })
+                }
+              />
+            ) : null}
+          </fieldset>
+        </CardBlock>
       ) : pendingQuestion ? null : (
-        <Textarea
-          aria-label={`Message to ${fixture.sessionTitle} (${fixture.ticketId ?? "Board"})`}
-          aria-describedby={errorId}
-          rows={2}
-          className="min-h-16 resize-y px-2 py-2 text-ui"
-          placeholder="Message"
-          value={promptDraft(state.draft, MESSAGE_PROMPT_ID).response}
-          disabled={busy}
-          onFocus={() => dispatch({ type: "focus-field" })}
-          onBlur={() => dispatch({ type: "blur-field" })}
-          onChange={(event) =>
-            dispatch({ type: "type-other", promptId: MESSAGE_PROMPT_ID, text: event.target.value })
-          }
-        />
+        <CardBlock icon={null}>
+          <Textarea
+            aria-label={`Message to ${fixture.sessionTitle} (${fixture.ticketId ?? "Board"})`}
+            aria-describedby={errorId}
+            rows={2}
+            className="min-h-16 resize-y px-2 py-2 text-ui"
+            placeholder="Message"
+            value={promptDraft(state.draft, MESSAGE_PROMPT_ID).response}
+            disabled={busy}
+            onFocus={() => dispatch({ type: "focus-field" })}
+            onBlur={() => dispatch({ type: "blur-field" })}
+            onChange={(event) =>
+              dispatch({
+                type: "type-other",
+                promptId: MESSAGE_PROMPT_ID,
+                text: event.target.value,
+              })
+            }
+          />
+        </CardBlock>
       )}
     </form>
   );
@@ -458,27 +502,25 @@ export const SessionPeekCard = React.forwardRef<
         onClose={onClose}
         onOpen={onOpen}
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+      <div className={CARD_BODY}>
         {showTicket ? <TicketContext fixture={fixture} /> : null}
         {!pinned || !pendingQuestion ? (
           <Summary fixture={fixture} summaryState={summaryState} />
         ) : null}
         {fixture.failure === null ? null : (
-          <div className="flex items-start gap-2 px-4 pb-4 text-destructive">
-            <WarningIcon aria-hidden className="mt-1 size-4 shrink-0" />
-            <p className="min-w-0 [overflow-wrap:anywhere]">{fixture.failure}</p>
-          </div>
+          <CardBlock icon={<WarningIcon className="size-4" />} className="text-destructive">
+            <p className="[overflow-wrap:anywhere]">{fixture.failure}</p>
+          </CardBlock>
         )}
         {pendingQuestion && !pinned ? (
-          <div className="flex items-start gap-2 px-4 pb-4">
-            <QuestionIcon aria-hidden className="mt-1 size-4 shrink-0 text-attention" />
+          <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
             <p
               data-peek-question=""
-              className="min-w-0 font-medium text-foreground [overflow-wrap:anywhere]"
+              className="font-medium text-foreground [overflow-wrap:anywhere]"
             >
               {prompts[0]?.label}
             </p>
-          </div>
+          </CardBlock>
         ) : null}
         {pinned && !sent ? (
           <AnswerForm
@@ -491,32 +533,33 @@ export const SessionPeekCard = React.forwardRef<
       </div>
       {/* Recovery and submission never scroll out of reach with long content. */}
       {state.send.kind === "failed" && pinned ? (
-        <div
+        <CardBlock
           role="alert"
           id="peek-send-error"
-          className="flex shrink-0 items-start gap-2 border-t border-border bg-destructive/10 px-4 py-2 text-destructive"
+          icon={<WarningIcon className="size-4" />}
+          className="shrink-0 border-t border-border bg-destructive/10 py-2 text-destructive"
         >
-          <WarningIcon aria-hidden className="mt-1 size-4 shrink-0" />
-          <p className="min-w-0 [overflow-wrap:anywhere]">{state.send.reason}</p>
-        </div>
+          <p className="[overflow-wrap:anywhere]">{state.send.reason}</p>
+        </CardBlock>
       ) : null}
       {sent && pinned ? (
-        <div
+        <CardBlock
           role="status"
-          className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2 text-positive"
+          icon={<CheckCircleIcon className="size-4" />}
+          className="shrink-0 border-t border-border py-2 text-positive"
         >
-          <CheckCircleIcon aria-hidden className="size-4" />
           Sent
-        </div>
+        </CardBlock>
       ) : null}
       {canViewConversation || canReply ? (
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-4 py-2">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2">
           {canViewConversation ? (
             <Button
               data-view-conversation=""
               type="button"
               size="sm"
               variant="ghost"
+              className={GHOST_ON_LEAD}
               onClick={onLook}
             >
               <ChatCircleIcon />

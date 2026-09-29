@@ -126,6 +126,29 @@ describe("the scratch's contract", () => {
     expect(host.querySelector('[data-peek-row="chat:chat-p3"]')).toBeNull();
   });
 
+  it("says where and when under an Active title, and never the state the mark carries", () => {
+    const subtitle = (rowId: string, surface: "nav" | "rail" = "nav") =>
+      row(rowId, surface).querySelector('button > span:not([role="img"]) > span:last-child')
+        ?.textContent;
+    expect(subtitle("chat:chat-a1")).toBe("VLT-14 · 2m ago");
+    expect(subtitle("chat:chat-a2")).toBe("VLT-14 · just now");
+    expect(subtitle("chat:chat-a5")).toBe("No ticket · 22m ago");
+    // The rail sits inside the ticket, so only the when is left.
+    expect(subtitle("chat:chat-a1", "rail")).toBe("2m ago");
+    for (const rowId of ["chat:chat-a1", "chat:chat-a2", "chat:chat-a4", "chat:chat-a5"]) {
+      expect(row(rowId).textContent).not.toMatch(
+        /Doing|Working|Idle|Interrupted|Answer a question/,
+      );
+    }
+  });
+
+  it("draws Active and the rail with one two-line row, so the two sidebars cannot drift", () => {
+    expect(button(row("chat:chat-a1")).className).toBe(
+      button(row("chat:chat-a1", "rail")).className,
+    );
+    expect(button(row("chat:chat-a1")).parentElement?.className).toContain("min-h-13");
+  });
+
   it("says each row's vendor and state on its mark", () => {
     expect(row("chat:chat-a1").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "Anthropic · Waiting for you",
@@ -133,6 +156,37 @@ describe("the scratch's contract", () => {
     expect(row("chat:chat-a4").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "Z.ai · Interrupted",
     );
+  });
+});
+
+describe("the marks, side by side", () => {
+  const specimens = () => host.querySelector<HTMLElement>('[aria-label="Row mark, side by side"]')!;
+
+  it("draws the same rows as status ink and as logo + badge, inert, outside the peek", () => {
+    const columns = [...specimens().querySelectorAll<HTMLElement>("[data-mark-specimen]")];
+    expect(columns.map((column) => column.dataset.markSpecimen)).toEqual(["ink", "badge"]);
+    expect(columns[0]?.closest("[inert]")).not.toBeNull();
+    expect(specimens().querySelector("[data-peek-row], [data-peek-surface]")).toBeNull();
+    for (const column of columns) {
+      const marks = [...column.querySelectorAll<HTMLElement>('[role="img"][data-row-mark]')];
+      // Five Active rows and three Previous ones, each in its column's style.
+      expect(marks).toHaveLength(8);
+      expect(new Set(marks.map((mark) => mark.dataset.rowMark))).toEqual(
+        new Set([column.dataset.markSpecimen]),
+      );
+    }
+  });
+
+  it("follows the live rows: an answer delivered from a peek flips both columns", async () => {
+    await hover(row("chat:chat-a1", "rail"));
+    await click(control("Answer", card()!));
+    await act(async () => card()!.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
+    await click(control("Send", card()!));
+    await advance(500);
+    const names = [...specimens().querySelectorAll<HTMLElement>("[data-mark-specimen]")].map(
+      (column) => column.querySelector('[role="img"]')?.getAttribute("aria-label"),
+    );
+    expect(names).toEqual(["Anthropic · Working", "Anthropic · Working"]);
   });
 });
 
@@ -160,6 +214,9 @@ describe("a folder's peek (ticket mode, the proposal)", () => {
     let peek = card();
     expect(peek?.getAttribute("aria-label")).toBe("Peek at Chat, VLT-11");
     expect(peek?.querySelector("[data-peek-strip]")?.textContent).toContain("VLT-11");
+    expect(peek?.querySelector("[data-peek-strip] button")?.getAttribute("aria-label")).toBe(
+      "Back to VLT-11",
+    );
     // The strip names the ticket; the card does not repeat it, and offers no reply.
     expect(peek?.querySelector("[data-peek-ticket-title]")).toBeNull();
     expect(peek?.textContent).not.toContain("Send");

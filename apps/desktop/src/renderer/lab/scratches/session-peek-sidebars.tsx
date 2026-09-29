@@ -28,7 +28,9 @@
  * THE QUESTIONS IT PUTS, as controls: what hovering a FOLDER shows (the ticket,
  * its newest Session, or nothing); what the folder row carries at rest (the
  * shipped count, or who worked on it); and which mark leads every row (the
- * VC-402 status ink, the v2 logo-and-badge, or today's dot).
+ * VC-402 status ink, the v2 logo-and-badge, or today's dot). The two marks
+ * still in contention are also drawn side by side, on the live rows, so they
+ * can be judged without flipping a switch and remembering the other.
  */
 import * as React from "react";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -60,14 +62,14 @@ import {
   SidebarProvider,
 } from "@renderer/components/ui/sidebar";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
-import { compactAge, relativeTime } from "@renderer/lib/relative-time";
+import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
 import { NOW, project, tickets } from "../fixtures";
 import { appApi, seedApp } from "../seed";
 import { SessionPeekCard } from "../session-peek/card";
 import { PeekConversation } from "../session-peek/conversation";
-import { RowMark, type MarkStyle } from "../session-peek/row-mark";
+import { RowMark, type MarkSize, type MarkStyle, type MarkSurface } from "../session-peek/row-mark";
 import {
   CORPUS,
   LISTING_INPUT,
@@ -124,6 +126,13 @@ const PEEK_WIDTH = 360;
 const WARM_DWELL_MS = 150;
 const PREFIX = project.ticketPrefix;
 const TICKETS = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+
+/** Previous rows the side-by-side draws: a bare Session, a dead turn, a terminal. */
+const SPECIMEN_PREVIOUS = new Set(["chat-p8", "chat-p6", "term-p2"]);
+const SPECIMEN_STYLES = [
+  ["ink", "Status ink (VC-402)"],
+  ["badge", "Logo + badge (v2)"],
+] as const satisfies readonly (readonly [MarkStyle, string])[];
 
 /** The listing never changes here: the corpus is fixed and the clock is frozen. */
 const LISTING = buildActiveSessionListing({ ...LISTING_INPUT, now: NOW });
@@ -210,7 +219,8 @@ function Bullets({ heading, items }: { heading: string; items: readonly string[]
 }
 
 const PROPOSED: readonly string[] = [
-  "One mark per row, everywhere: the vendor's mark carries the state (VC-402) in Active, Previous, inside folders and in the rail. The rail's status line drops its dot — one carrier of state per row.",
+  "One mark per row, everywhere: the vendor's mark carries the state in Active, Previous, inside folders and in the rail — as status ink (VC-402) or as v2's corner badge, compared below.",
+  "One two-line row in both sidebars: Active is drawn as the rail's row, the mark centred on the row. The second line says where and when (VLT-14 · 2m ago) and never how — the mark already says it.",
   "A folder peeks its TICKET: status, title, and each Session with one line on what it did. Three Sessions called “Chat” become three different sentences. Pressing one drills into its own peek; ← goes back.",
   "Folder peeks are read-only. Nothing behind a folder can be waiting on you (attention pins a Session to Active), and an answer needs one recipient — so Answer and Send live on Session rows only.",
   "Expanding a folder closes its peek: pressing the caret means “show me inline”, and the rows it reveals peek on their own.",
@@ -316,18 +326,24 @@ export default function SessionPeekSidebarsScratch() {
     return previous === undefined ? null : listedPrevious(previous);
   };
 
-  const mark = (rowId: string, size: "row" | "card" = "row") => {
+  const mark = (
+    rowId: string,
+    size: MarkSize = "row",
+    surface: MarkSurface = "sidebar",
+    style: MarkStyle = markStyle,
+  ) => {
     const session = corpusOf(rowId);
     const row = listed(rowId);
     if (session === undefined || row === null) return null;
     return (
       <RowMark
-        style={markStyle}
+        style={style}
         vendor={session.vendor}
         kind={session.kind}
         state={row.state}
         name={markName(session, row.state)}
         size={size}
+        surface={surface}
       />
     );
   };
@@ -447,7 +463,7 @@ export default function SessionPeekSidebarsScratch() {
                 {
                   rowId,
                   title: row.title,
-                  mark: mark(rowId),
+                  mark: mark(rowId, "two-line", "popover"),
                   age: row.at > 0 ? compactAge(row.at, NOW) : "",
                   summary: session.summary,
                 },
@@ -480,7 +496,7 @@ export default function SessionPeekSidebarsScratch() {
               summaryState="ready"
               dispatch={dispatch}
               delivered={delivered(subject.rowId)}
-              glyph={mark(subject.rowId, "card")}
+              glyph={mark(subject.rowId, "card", "popover")}
               accessory={
                 via.kind === "drill" ? (
                   <FolderStrip ticketLabel={ticketLabel} back={back} />
@@ -533,9 +549,8 @@ export default function SessionPeekSidebarsScratch() {
               ticketPrefix={PREFIX}
               now={NOW}
               selected={row.id === inFront}
-              delivered={delivered(row.id)}
               working={listedRow.state === "working"}
-              mark={mark(row.id)}
+              mark={mark(row.id, "two-line")}
               onActivate={activate}
             />
           );
@@ -600,35 +615,22 @@ export default function SessionPeekSidebarsScratch() {
 
   const railTicket = TICKETS.get(railTicketId);
   const roster = railRoster(LISTING, railTicketId);
-  const railStatus = (rowId: string): string => {
-    const active = ACTIVE_BY_ID.get(rowId);
-    if (active !== undefined) {
-      const words =
-        active.attention !== null && !delivered(rowId)
-          ? SESSION_ACTIVITY_LABEL.waiting
-          : SESSION_ACTIVITY_LABEL[delivered(rowId) ? "working" : active.activity];
-      return active.lastActivityAt === null
-        ? words
-        : `${words} · ${relativeTime(active.lastActivityAt, NOW)}`;
-    }
-    const previous = PREVIOUS_BY_ID.get(rowId);
-    if (previous === undefined) return "";
-    const age = relativeTime(previous.endedOrQuietAt, NOW);
-    return previous.activity === "interrupted" || previous.activity === "stopped"
-      ? `${SESSION_ACTIVITY_LABEL[previous.activity]} · ${age}`
-      : age;
+  const railRow = (rowId: string, rowTitle: string) => {
+    const row = listed(rowId);
+    return (
+      <RailRow
+        key={rowId}
+        rowId={rowId}
+        title={rowTitle}
+        mark={mark(rowId, "two-line")}
+        at={row === null || row.at <= 0 ? null : row.at}
+        now={NOW}
+        working={row?.state === "working"}
+        selected={rowId === inFront}
+        onActivate={activate}
+      />
+    );
   };
-  const railRow = (rowId: string, rowTitle: string) => (
-    <RailRow
-      key={rowId}
-      rowId={rowId}
-      title={rowTitle}
-      mark={mark(rowId)}
-      status={railStatus(rowId)}
-      selected={rowId === inFront}
-      onActivate={activate}
-    />
-  );
 
   const inFrontRow = listed(inFront);
   const inFrontSession = corpusOf(inFront);
@@ -775,6 +777,67 @@ export default function SessionPeekSidebarsScratch() {
             </Button>
           </div>
         </div>
+
+        <section
+          aria-label="Row mark, side by side"
+          className="flex max-w-[720px] flex-col gap-3 rounded-xl border border-border p-4"
+        >
+          <div className="flex flex-col gap-1">
+            <h2 className="text-ui font-medium">Status ink or logo + badge</h2>
+            <p className="text-ui text-muted-foreground">
+              The same live rows both ways — an answer sent from a peek flips both columns. They are
+              specimens: they neither peek nor open.
+            </p>
+          </div>
+          <SidebarProvider className="min-h-0 w-full">
+            <div inert className="grid w-full grid-cols-2 gap-3">
+              {SPECIMEN_STYLES.map(([style, label]) => (
+                <figure
+                  key={style}
+                  data-mark-specimen={style}
+                  className="flex min-w-0 flex-col gap-2"
+                >
+                  <figcaption className="text-label text-muted-foreground uppercase">
+                    {label}
+                  </figcaption>
+                  <div className="flex flex-col gap-2 rounded-xl border border-sidebar-border bg-sidebar p-2 text-sidebar-foreground">
+                    <ul className="flex flex-col gap-1">
+                      {LISTING.active.map((row) => (
+                        <ActiveRow
+                          key={row.id}
+                          row={row}
+                          ticketPrefix={PREFIX}
+                          now={NOW}
+                          selected={row.id === inFront}
+                          working={listed(row.id)?.state === "working"}
+                          mark={mark(row.id, "two-line", "sidebar", style)}
+                          surface={null}
+                          onActivate={activate}
+                        />
+                      ))}
+                    </ul>
+                    <SidebarMenu>
+                      {LISTING.previous
+                        .filter((row) => SPECIMEN_PREVIOUS.has(corpusIdOf(row.id)))
+                        .map((row) => (
+                          <PreviousRow
+                            key={row.id}
+                            row={row}
+                            ticketPrefix={PREFIX}
+                            now={NOW}
+                            selected={false}
+                            mark={mark(row.id, "row", "sidebar", style)}
+                            surface={null}
+                            onActivate={activate}
+                          />
+                        ))}
+                    </SidebarMenu>
+                  </div>
+                </figure>
+              ))}
+            </div>
+          </SidebarProvider>
+        </section>
 
         <div className="flex max-w-[720px] flex-col gap-2">
           <Bullets heading="What this proposes" items={PROPOSED} />
