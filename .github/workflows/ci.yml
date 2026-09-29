@@ -9,18 +9,51 @@ name: CI
 #
 # The budget that replaced it is WALL CLOCK, plus GitHub's cap on concurrent
 # macOS jobs (5 on Free/Pro/Team). So this file spends minutes freely and
-# guards latency instead:
+# guards latency instead. The number it is tuned against is the time an agent
+# waits on a PR (VC-461): before this layout, a median of ~10 min, and a
+# second push costs the whole of it again.
 #
+#   - Tests are SHARDED across Linux jobs. The old critical path was one job
+#     that ran every check and build and THEN `vp run -r test:coverage`, which
+#     alone took a median ~7.8 of its ~9.1 min: the other packages in about
+#     50s, then the desktop Vitest suite (596 files, 372s) after them. Now `Check + Build`
+#     carries every non-test step, the desktop suite runs as a matrix of
+#     shards, the other packages run in one job of their own, and all of them
+#     start at once.
+#   - The 100% protected-coverage gate is judged ONCE, over the MERGED
+#     coverage of every desktop shard, by `Coverage (desktop)` — with the
+#     thresholds read from apps/desktop/vite.config.ts exactly as an unsharded
+#     run reads them. A shard ran a quarter of the tests, so its own coverage
+#     is a quarter of the truth; each shard zeroes the thresholds on its
+#     command line and hands its coverage on in a vitest blob report instead.
+#     The other packages are small enough to stay unsharded, so they keep
+#     judging their own thresholds in place.
 #   - Smokes run CONCURRENTLY rather than serially. Each one boots the built
 #     Electron app and then mostly waits on it (measured on an M-series Mac:
 #     12–44% of one core, ~55s wall each), so a runner can carry several at
 #     once. They are safely parallel because lib/smoke-kit.mjs mkdtemp's a
 #     fresh scratch dir, database and --user-data-dir per run, and the agent
 #     socket resolves under that user-data dir.
-#   - A BOOT TIER runs first. If the app cannot start, that is known in about a
-#     minute instead of after a full matrix proves it three more times.
+#   - The BOOT TIER runs BESIDE the smoke shards, not before them. It used to
+#     gate them, so that an app that cannot start was reported in a minute and
+#     the shards never spent their time proving it again. That ordering put
+#     the boot tier's whole job (a median 3.6 min, most of it checkout,
+#     install and build) in front of every green run to save time on the rare
+#     red one, so it was dropped. What it costs, stated plainly: (1) a PR now
+#     holds 4 of the 5 concurrent macOS slots at once (boot + 3 shards)
+#     instead of 1 and then 3, so two PRs pushed together queue one of them
+#     a little sooner; (2) an app that cannot boot now fails in all four jobs,
+#     and the three shards hold their slots until their own probes give up.
+#     The boot tier is still its own job: it is the fastest readable answer
+#     to "does the app start", it is what runs on main, and it carries the
+#     macOS-only licence assertions.
 #   - A COARSE path gate skips the desktop lanes entirely for changes that
 #     provably cannot reach the Electron app (website, docs site, prose).
+#   - ONE job, `CI gate`, is the required check. It waits on every lane and
+#     fails unless each one passed or was skipped by its own condition. The
+#     condition is re-derived there, not trusted: a smoke lane that skipped
+#     when it should have run fails the gate. Rulesets name that one check
+#     rather than the lanes, whose names change whenever a shard count does.
 #
 # Deliberately NOT done: per-smoke path mapping ("only run the smokes near the
 # diff"). Integration probes exist to catch NON-LOCAL breakage, so selecting
@@ -106,8 +139,12 @@ jobs:
             echo "-> prose/website only; skipping desktop smoke lanes"
           fi
 
-  core:
-    name: Check + Test
+  # Every gate that is not a test suite: format/lint, the licence and
+  # design-system checks, typecheck, and the builds. None of it waits on the
+  # tests any more, and the tests do not wait on it — no test reads a build
+  # artifact (packages/cli's own test packs the bundle it spawns).
+  check:
+    name: Check + Build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -255,26 +292,200 @@ jobs:
           test -f apps/desktop/dist-electron/preload.cjs
           test -f apps/desktop/dist/index.html
 
-      # The identical suite plus the 100%-threshold gate over the protected
-      # logic layer. This remains the hard regression gate.
-      #
+  # The desktop Vitest suite, one shard per job. Together with `coverage-
+  # desktop` below this is the identical suite plus the 100%-threshold gate
+  # over the protected logic layer that one job used to run: still the hard
+  # regression gate, split so no single runner carries all 596 files.
+  #
+  # The shard count lives in the matrix list and nowhere else. The command
+  # reads it back as `strategy.job-total`, the blob filename records it, and
+  # the merge job checks every index up to it arrived — so changing the list
+  # is the whole edit. Vitest assigns files to shards by hashing their paths,
+  # so a shard's share moves a little as files are added; 4 keeps each one
+  # comfortably under the macOS smoke shards that are the other long pole.
+  #
+  # `fail-fast: false`, deliberately: when a change breaks tests in two
+  # shards, the person fixing it should see both failures from one push, not
+  # one failure per push.
+  test-desktop:
+    name: Test (desktop ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
       # `--maxWorkers` restores vitest's own default — one worker per core —
       # which every package's config caps at 2 for a developer laptop shared
       # with several agent Sessions (VC-339, `vitest.workers.ts`). A runner has
-      # the box to itself, so it gets the whole box and CI wall time is
-      # unchanged. `nproc`, not a literal: a bigger runner then buys what it is
-      # paid for, and this line never has to be revisited.
+      # the box to itself, so it gets the whole box. `nproc`, not a literal: a
+      # bigger runner then buys what it is paid for, and this line never has
+      # to be revisited.
       #
       # The FLAG and not `VITEST_MAX_WORKERS`: that variable is the Session
       # concurrency budget's vitest entry, and a budget may only ever lower a
       # cap — `vitest.workers.ts` clamps it for exactly that reason. An explicit
       # flag is this invocation saying what it may take, and it outranks both.
-      - name: Test protected coverage surface
-        run: vp run -r test:coverage --maxWorkers=$(nproc)
+      #
+      # The four `--coverage.thresholds.*=0` flags are the one deliberate
+      # loosening, and it is scoped to this command line: a shard holds only
+      # its share of the tests, so its coverage of the protected surface is
+      # partial by construction and judging it would fail every shard. Nothing
+      # is waived — the coverage still rides out in the blob report and is
+      # judged, whole, by `coverage-desktop`. The text table is swapped for
+      # json-summary for the same reason: a per-shard table of partly covered
+      # files would read as a failure to anyone scanning this log.
+      #
+      # Two reporters: `default` so a failing test is readable right here, and
+      # `blob` for the merge. The blob path is absolute because the reporter
+      # resolves a relative one against the config's `root` (src/renderer),
+      # not against this directory.
+      - name: Run shard ${{ matrix.shard }} of ${{ strategy.job-total }}
+        working-directory: apps/desktop
+        run: >-
+          vp test run
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          --maxWorkers=$(nproc)
+          --reporter=default --reporter=blob
+          --outputFile.blob="$RUNNER_TEMP/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json"
+          --coverage --coverage.reporter=json-summary
+          --coverage.thresholds.statements=0 --coverage.thresholds.branches=0
+          --coverage.thresholds.functions=0 --coverage.thresholds.lines=0
 
-  # Fail fast: five probes that each boot the app through a different door
-  # (board, composer, terminal, worktree, agent socket). If the app does not
-  # start, this says so in ~1 minute and the shard matrix never runs.
+      # `overwrite` so "Re-run all jobs" replaces this shard's blob instead
+      # of failing on the name it left last attempt.
+      - name: Upload blob report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-blob-${{ matrix.shard }}
+          path: ${{ runner.temp }}/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  # THE protected-coverage gate for the desktop app. It runs no tests: it
+  # replays every shard's blob report, merges their coverage into one map, and
+  # applies apps/desktop/vite.config.ts's thresholds to it — the same config,
+  # the same numbers, no flags overriding them. Merging adds hit counts, so a
+  # line counts as covered only if some shard's tests actually ran it, and
+  # every shard's map already lists the protected files it never touched at
+  # zero; a file nothing covers still fails here exactly as it did unsharded.
+  #
+  # Two ways this job could pass while checking nothing, both closed below:
+  #   - `--merge-reports` WITHOUT `--coverage` replays the test results,
+  #     prints a green summary, and never loads the coverage provider — so no
+  #     threshold is ever evaluated. The flag is load-bearing.
+  #   - A missing shard shrinks the merged map. That would most likely fail
+  #     the thresholds anyway, but "most likely" is not a gate, so the job
+  #     refuses to merge unless every shard's blob is present.
+  coverage-desktop:
+    name: Coverage (desktop)
+    needs: test-desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Download blob reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-blob-*
+          path: ${{ runner.temp }}/desktop-blobs
+          merge-multiple: true
+
+      - name: Require a blob from every shard
+        shell: bash
+        working-directory: ${{ runner.temp }}/desktop-blobs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          blobs=(desktop-*-of-*.json)
+          if (( ${#blobs[@]} == 0 )); then
+            echo "::error::no desktop blob reports were downloaded"
+            exit 1
+          fi
+          total="${blobs[0]##*-of-}"
+          total="${total%.json}"
+          for (( i = 1; i <= total; i++ )); do
+            if [[ ! -f "desktop-$i-of-$total.json" ]]; then
+              echo "::error::shard $i/$total left no blob report"
+              exit 1
+            fi
+          done
+          if (( ${#blobs[@]} != total )); then
+            echo "::error::expected $total blob reports, found ${#blobs[@]}: ${blobs[*]}"
+            exit 1
+          fi
+          echo "all $total shard blobs present:"
+          ls -l
+
+      - name: Merge shards and enforce coverage thresholds
+        working-directory: apps/desktop
+        run: vp test run --merge-reports="$RUNNER_TEMP/desktop-blobs" --coverage
+
+  # Every other package's suite and its own coverage gate, unsharded: together
+  # they take about 50s, less than a desktop shard. Each package's thresholds
+  # are judged in place, exactly as before.
+  #
+  # The filter selects by DIRECTORY and then subtracts the desktop app, and
+  # both halves matter. An exclusion-only filter (`--filter '!@volli/desktop'`)
+  # also selects the workspace ROOT, whose own `test:coverage` is
+  # `vp run -r test:coverage` — which would run the whole desktop suite again
+  # in this job. And `--filter` cannot be combined with `-r`. A new package
+  # under apps/ or packages/ is picked up with no edit here; one without a
+  # `test:coverage` script is skipped, as `-r` skipped apps/docs.
+  test-packages:
+    name: Test (packages)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
+      - name: Test protected coverage surface
+        run: >-
+          vp run
+          --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
+          test:coverage --maxWorkers=$(nproc)
+
+  # Five probes that each boot the app through a different door (board,
+  # composer, terminal, worktree, agent socket), plus the macOS-only licence
+  # assertions. It runs BESIDE the shard matrix rather than gating it — see
+  # the header for why and for what that costs — so it is no longer what
+  # stops the shards on a broken boot, only the quickest place to read one.
   smoke-boot:
     name: Smoke (boot tier)
     needs: changes
@@ -332,12 +543,14 @@ jobs:
   # registration step to forget.
   #
   # Only on pull_request: a push to main has already been gated by its PR, and
-  # holding four more macOS jobs against the 5-job concurrency cap would queue
+  # holding three more macOS jobs against the 5-job concurrency cap would queue
   # the next PR behind a run whose answer is already known. The boot tier still
   # runs on main to catch semantic merge breakage.
+  #
+  # Needs only `changes`, not `smoke-boot`: the two start together (VC-461).
   smoke-rest:
     name: Smoke (shard ${{ matrix.shard }}/3)
-    needs: [changes, smoke-boot]
+    needs: changes
     if: needs.changes.outputs.desktop == 'true' && github.event_name == 'pull_request'
     runs-on: macos-15
     timeout-minutes: 40
@@ -365,3 +578,65 @@ jobs:
 
       - name: Run shard ${{ matrix.shard }} of 3 and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
+
+  # The one check a ruleset should require. It waits on every lane, including
+  # ones that failed or were cancelled (`always()`), and passes only when each
+  # lane either succeeded or was skipped by its OWN condition — the smoke
+  # conditions are re-derived here from the same inputs, so a lane that skips
+  # when it should have run is a failure, not a pass.
+  #
+  # `always()` and not `!cancelled()`, on purpose: a required check that is
+  # SKIPPED counts as passing, so a gate that stood down on cancellation would
+  # hand a cancelled run a green light. Under `always()` a cancelled run's gate
+  # still runs and fails on the cancelled lanes.
+  #
+  # Adding a lane means adding it to `needs` and to the list below; a lane the
+  # gate does not name is a lane nothing requires.
+  gate:
+    name: CI gate
+    if: always()
+    needs: [changes, check, test-desktop, coverage-desktop, test-packages, smoke-boot, smoke-rest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every lane to pass or to skip by its own condition
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+          SCOPE: ${{ needs.changes.result }}
+          CHECK: ${{ needs.check.result }}
+          TEST_DESKTOP: ${{ needs.test-desktop.result }}
+          COVERAGE_DESKTOP: ${{ needs.coverage-desktop.result }}
+          TEST_PACKAGES: ${{ needs.test-packages.result }}
+          SMOKE_BOOT: ${{ needs.smoke-boot.result }}
+          SMOKE_REST: ${{ needs.smoke-rest.result }}
+        run: |
+          set -euo pipefail
+          status=0
+          expect() {
+            if [[ "$2" == "$3" ]]; then
+              echo "ok    $1: $2"
+            else
+              echo "::error::$1 is '$2', expected '$3'"
+              status=1
+            fi
+          }
+
+          # Mirrors the `if:` on each smoke job. Anything the path gate did not
+          # clear to skip must have run and passed.
+          boot=skipped
+          rest=skipped
+          if [[ "$DESKTOP" == "true" ]]; then
+            boot=success
+            if [[ "$EVENT" == "pull_request" ]]; then rest=success; fi
+          fi
+
+          expect "Scope" "$SCOPE" success
+          expect "Check + Build" "$CHECK" success
+          expect "Test (desktop shards)" "$TEST_DESKTOP" success
+          expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
+          expect "Test (packages)" "$TEST_PACKAGES" success
+          expect "Smoke (boot tier)" "$SMOKE_BOOT" "$boot"
+          expect "Smoke (shards)" "$SMOKE_REST" "$rest"
+          exit "$status"
