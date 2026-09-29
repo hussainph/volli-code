@@ -6,14 +6,13 @@ import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeS
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import {
-  effectiveHarnessId,
   errorMessage,
-  harnessLabel,
   sessionProvenanceOf,
   type SessionListingRow,
   type SessionProvenance,
   type SessionRecord,
 } from "@volli/shared";
+import { sessionSourceHarness } from "@volli/session-presentation";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { PeekConversation } from "@renderer/components/session-peek/peek-conversation";
@@ -27,7 +26,11 @@ import {
   useSessionPeek,
   type SessionPeekRow,
 } from "@renderer/components/session-peek/use-session-peek";
-import { harnessVendorId, SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import {
+  sessionRowVendor,
+  type SessionRowVendor,
+} from "@renderer/components/sidebar/session-band-row";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
@@ -432,27 +435,48 @@ function chatProviderLabel(entry: SessionRailRow & { kind: "chat" }): string {
 }
 
 /**
+ * A rail row's vendor. A chat is drawn with its model's provider; a companion
+ * by the shipped source rule (`sessionSourceHarness`) that the left band reads
+ * too — a bare shell names no harness and reads `Shell`. Never
+ * `effectiveHarnessId` alone: its fallback is the DEFAULT harness, which put
+ * Claude Code's name and logo on a plain terminal.
+ */
+function railRowVendor(entry: SessionRailRow): SessionRowVendor {
+  if (entry.kind === "chat") {
+    return {
+      providerId: entry.row.record.model?.providerId ?? null,
+      providerLabel: chatProviderLabel(entry),
+    };
+  }
+  const record = entry.row.record;
+  return sessionRowVendor({
+    kind: "terminal",
+    harnessId: sessionSourceHarness({ kind: "terminal", record }),
+    source: record.launchKind === "shell" ? "Shell" : "Terminal",
+  });
+}
+
+/**
  * The mark for one rail row: the vendor's logo where the Session names one
  * (a chat's model provider, a companion's harness vendor — `harnessVendorId`),
  * the shipped kind glyph where it does not, and the row's own state as the
  * badge. The state is `sessionRailRowDotState`'s answer, never re-derived here.
  */
 function rowGlyph(entry: SessionRailRow, status: TicketSessionStatus): React.ReactElement {
-  const chat = entry.kind === "chat";
-  const harness = chat ? null : effectiveHarnessId(entry.row.record);
-  const label = chat ? chatProviderLabel(entry) : harnessLabel(harness ?? "Terminal");
+  const vendor = railRowVendor(entry);
   return (
     <SessionGlyph
-      providerId={chat ? (entry.row.record.model?.providerId ?? null) : harnessVendorId(harness)}
-      providerLabel={label}
+      providerId={vendor.providerId}
+      providerLabel={vendor.providerLabel}
       state={sessionRailRowDotState(entry)}
       kind={entry.kind}
+      fallback={vendor.fallback}
       // The row no longer prints the state word in its live half, so the mark's
       // name is where both facts are said — through the one naming rule both
       // sidebars share. Named from the row's STATUS, not the badge's state: an
       // ended Session wears the resting badge but is named for how it ended,
       // which is also the word the record fold prints under it.
-      name={sessionGlyphName(label, status)}
+      name={sessionGlyphName(vendor.providerLabel, status)}
     />
   );
 }
@@ -957,7 +981,7 @@ export function TicketSessionsPanel({
     const rowId = sessionRailRowId(entry);
     const sessionId = sessionRailRowSessionId(entry);
     const chat = entry.kind === "chat";
-    const rowHarness = chat ? null : effectiveHarnessId(entry.row.record);
+    const rowVendor = railRowVendor(entry);
     const activate = railRowActivation(entry, activationScope);
     if (activate !== null) activations.set(rowId, activate);
     peekRows.set(rowId, {
@@ -969,8 +993,8 @@ export function TicketSessionsPanel({
       ticket: null,
       kind: entry.kind,
       state: sessionRailRowDotState(entry),
-      providerId: chat ? (entry.row.record.model?.providerId ?? null) : harnessVendorId(rowHarness),
-      providerLabel: chat ? chatProviderLabel(entry) : harnessLabel(rowHarness ?? "Terminal"),
+      providerId: rowVendor.providerId,
+      providerLabel: rowVendor.providerLabel,
       at: sessionRailRowActivityAt(entry, lastOutputAt),
       unread: unread.has(sessionId),
       model: chat ? entry.row.record.model : null,

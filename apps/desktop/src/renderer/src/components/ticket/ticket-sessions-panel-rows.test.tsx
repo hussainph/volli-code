@@ -265,8 +265,12 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain('data-session-glyph="waiting"');
     expect(html).toContain(fixture.record.title);
     expect(html).not.toContain("Chat · Live");
-    // A companion's mark is its harness VENDOR's logo, named for the harness.
-    expect(html).toContain('aria-label="Claude Code · Exited"');
+    // A companion's mark is named by the shipped source rule, the one the left
+    // band reads: this record was launched as a bare SHELL, so it is `Shell` —
+    // never the default harness its `harnessId` falls back to, which would put
+    // Claude Code's name and logo on a plain terminal.
+    expect(html).toContain('aria-label="Shell · Exited"');
+    expect(html).not.toContain('aria-label="Claude Code · Exited"');
   });
 
   it("gives a live row the age alone, and keeps the state word in the record", () => {
