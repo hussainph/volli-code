@@ -235,6 +235,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Where the Browser replay moves (VC-453): which step a key, a drag or
+        // a growing trace lands on. None of it shows in a screenshot.
+        "src/components/browser/browser-trace-model.ts",
         "src/components/board/board-dnd.ts",
         // Desktop selection gestures are board policy, not view glue: modifier
         // toggles may span columns while Shift ranges stay in one visual column.

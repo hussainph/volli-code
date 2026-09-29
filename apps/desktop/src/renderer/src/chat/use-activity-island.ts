@@ -41,6 +41,7 @@ import {
   EMPTY_ACTIVITY_ISLAND,
 } from "@volli/session-presentation";
 
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { useIslandShells } from "@renderer/components/chat/island-shells";
 import { useIslandAgents } from "./use-island-agents";
 import { useIslandFlash } from "./use-island-flash";
@@ -67,6 +68,8 @@ export interface ActivityIslandDeps {
   peekSession?: (sessionId: string) => void;
   /** Where `promoteAgent` opens a child: the host's own open-session door (VC-269). */
   openSession?: (sessionId: string) => void;
+  /** Where `replayTab` opens a Session's Browser replay: the plane's modal (VC-453). */
+  openTrace?: (request: BrowserTraceRequest) => void;
 }
 
 /**
@@ -82,7 +85,7 @@ export interface ActivityIslandDeps {
  * `PlanCard`), so a no-op here is never a silent no-op on screen.
  *
  * The composed object below is annotated `ActivityIslandActions`, so the
- * compiler — not a comment — is what proves the eight verbs are all supplied.
+ * compiler — not a comment — is what proves the nine verbs are all supplied.
  */
 const VERBS_WITHOUT_A_FEED = {
   jumpStep() {},
@@ -94,7 +97,7 @@ export function useActivityIsland(
   deps: ActivityIslandDeps = {},
 ): ActivityIslandBinding {
   const { flash, push } = useIslandFlash();
-  const tabs = useIslandTabs(sessionId, projectId, push);
+  const tabs = useIslandTabs(sessionId, projectId, push, deps.openTrace);
   const plan = useIslandPlan(sessionId, deps.store);
   const shells = useIslandShells(sessionId, { openOutput: deps.openShellOutput });
   // The agents feed's deps are a subset of the mount's, under the same names.

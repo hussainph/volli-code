@@ -13,6 +13,7 @@
  * context object, so a row's text is unit-testable without React.
  */
 import {
+  ACTIVITY_BROWSE_VERBS,
   activityDuration,
   isDurableActivity,
   readActivityDescriptor,
@@ -750,30 +751,14 @@ function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
 
 /* ------------------------------------------------------------------- browse */
 
-/**
- * One verb per browser action, in Volli's words. Element actions take the
- * element as their object and the page as their meta; page actions take the
- * page. The card under the row is the UI's, keyed on `ActivityRow.browse`,
- * so the presenter leaves `detail` empty for every action that has a tab —
- * except a tab listing, which has no tab and shows its text.
+/*
+ * One verb per browser action, from `ACTIVITY_BROWSE_VERBS` — the table a
+ * Browser Trace frame (VC-453) reads too. Element actions take the element as
+ * their object and the page as their meta; page actions take the page. The
+ * card under the row is the UI's, keyed on `ActivityRow.browse`, so the
+ * presenter leaves `detail` empty for every action that has a tab — except a
+ * tab listing, which has no tab and shows its text.
  */
-const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
-  open: "Opened",
-  back: "Went back",
-  forward: "Went forward",
-  reload: "Reloaded",
-  click: "Clicked",
-  type: "Typed into",
-  press: "Pressed",
-  select: "Selected in",
-  hover: "Hovered",
-  scroll: "Scrolled",
-  wait: "Waited",
-  read: "Read page",
-  screenshot: "Screenshot",
-  console: "Read console",
-  tabs: "Listed tabs",
-};
 
 /** Actions whose object is an element the page named, quoted as the page's words. */
 const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
@@ -817,7 +802,7 @@ function browseFacts(context: ActivityContext): ActivityFacts {
 
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
-  const verb = BROWSE_VERBS[facet.action];
+  const verb = ACTIVITY_BROWSE_VERBS[facet.action];
   if (ELEMENT_ACTIONS.has(facet.action)) {
     return {
       verb,

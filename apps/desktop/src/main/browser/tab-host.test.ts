@@ -29,6 +29,7 @@ import {
   isAllowedBrowserUrl,
 } from "./tab-host";
 import { BrowserPictureStore, type BrowserPictureRecord } from "./picture-store";
+import { BrowserTraceStore, type BrowserTraceStepInput } from "./trace-store";
 
 class FakeSession {
   permissionRequestHandler:
@@ -2355,5 +2356,160 @@ describe("BrowserTabHost limits (VC-238)", () => {
         createdBy: "user",
       }),
     ).toThrow(BrowserTabLimitError);
+  });
+});
+
+const traceStep = (
+  tabId: string,
+  over: Partial<BrowserTraceStepInput> = {},
+): BrowserTraceStepInput => ({
+  sessionId: "session-a",
+  tabId,
+  action: "click",
+  target: "Save",
+  url: "https://agent.example.com/",
+  title: "Agent",
+  generation: 1,
+  outcome: "ok",
+  rule: null,
+  error: null,
+  pictureId: null,
+  ...over,
+});
+
+describe("BrowserTabHost traces (VC-453)", () => {
+  let traces: BrowserTraceStore;
+  let frames: Map<string, { bytes: Uint8Array; mime: "image/jpeg" | "image/png" }>;
+
+  beforeEach(() => {
+    frames = new Map();
+    let nextTrace = 0;
+    traces = new BrowserTraceStore({
+      createId: () => `trace-${++nextTrace}`,
+      now: () => clock,
+      frameOf: (pictureId) => pictures.bytesOf(pictureId),
+      persist: {
+        writeTrace: () => undefined,
+        writeFrame: (id, frame) => void frames.set(id, frame),
+        readFrame: (id) => frames.get(id) ?? null,
+        listTraces: () => [],
+        listFrames: () => [...frames.keys()],
+        removeTrace: () => undefined,
+        removeFrame: (id) => void frames.delete(id),
+      },
+      stepLimit: 150,
+    });
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-traced-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      traces,
+      now: () => clock,
+    });
+  });
+
+  it("records a Session tab's step with its frame, and the frame outlives the live picture set", async () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    views[0]!.webContents.captureBytes = "after-click";
+    const pictureId = await host.capturePicture(tab.tabId);
+
+    host.recordTraceStep(traceStep(tab.tabId, { pictureId }));
+
+    const [trace] = host.tracesOf("session-a");
+    expect(trace?.steps.map((kept) => [kept.action, kept.pictureId])).toEqual([
+      ["click", pictureId],
+    ]);
+    expect(frames.has(pictureId!)).toBe(true);
+    // A fresh picture store stands in for a live set that has moved on.
+    host = new BrowserTabHost({
+      createId: () => "unused",
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+      pictures: new BrowserPictureStore({ createId: () => "x", now: () => 0 }),
+      traces,
+    });
+    expect(host.pictureOf(pictureId!)).toBe(
+      `data:image/jpeg;base64,${Buffer.from("after-click").toString("base64")}`,
+    );
+    expect(host.pictureOf("never-minted")).toBeNull();
+  });
+
+  it("never records a tab the person created, even while a Session drives it", () => {
+    const tab = host.open({
+      url: "https://person.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.recordTraceStep(traceStep(tab.tabId));
+    expect(host.tracesOf("session-a")).toEqual([]);
+  });
+
+  it("records nothing for a tab that has already closed, or with no trace store at all", () => {
+    host.recordTraceStep(traceStep("closed-tab"));
+    expect(host.tracesOf("session-a")).toEqual([]);
+
+    let nextId = 0;
+    const untraced = new BrowserTabHost({
+      createId: () => `untraced-${++nextId}`,
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+      pictures,
+    });
+    const tab = untraced.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    untraced.recordTraceStep(traceStep(tab.tabId));
+    expect(untraced.tracesOf("session-a")).toEqual([]);
+    expect(untraced.pictureOf("never-minted")).toBeNull();
+  });
+
+  it("logs a trace it could not write and leaves the call's result alone", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(traces, "record").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() => host.recordTraceStep(traceStep(tab.tabId))).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("was not recorded"),
+      expect.any(Error),
+    );
+    warn.mockRestore();
   });
 });

@@ -139,13 +139,22 @@ export class BrowserPictureStore {
 
   /** The picture as an `<img src>`, or null when nothing here or on disk answers to the id. */
   dataUrl(id: string): string | null {
+    const held = this.bytesOf(id);
+    return held === null ? null : pictureDataUrl(held.bytes, held.mime);
+  }
+
+  /**
+   * The picture's bytes, for a host that keeps its own copy — a Browser Trace
+   * (VC-453) copies each step's frame the moment it is recorded, while the
+   * live set still holds it. Null when nothing here or on disk answers.
+   */
+  bytesOf(id: string): { bytes: Uint8Array; mime: BrowserPictureMime } | null {
     const record = this.minted.get(id);
     if (record === undefined) return null;
     const held = this.live.get(id);
-    if (held !== undefined) return encode(held.bytes, held.mime);
+    if (held !== undefined) return held;
     if (!record.persisted) return null;
-    const stored = this.deps.persist?.read(id) ?? null;
-    return stored === null ? null : encode(stored.bytes, stored.mime);
+    return this.deps.persist?.read(id) ?? null;
   }
 
   /** What a picture is of, for a card that only holds the id. */
@@ -177,6 +186,7 @@ export class BrowserPictureStore {
   }
 }
 
-function encode(bytes: Uint8Array, mime: BrowserPictureMime): string {
+/** Bytes as an `<img src>`: the one encoding every picture read answers with. */
+export function pictureDataUrl(bytes: Uint8Array, mime: BrowserPictureMime): string {
   return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
 }

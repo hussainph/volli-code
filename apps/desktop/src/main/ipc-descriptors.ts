@@ -300,6 +300,11 @@ export const BROWSER_IPC: {
       args.length === 1 && isRecord(args[0]) && typeof args[0]["pictureId"] === "string",
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-traces": {
+    guard: (args): args is IpcArgs<"volli:browser-traces"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["sessionId"] === "string",
+    invalidError: "Invalid Browser Trace request",
+  },
   "volli:browser-take-over": {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",

@@ -56,6 +56,29 @@ export const ACTIVITY_BROWSE_ACTIONS = [
 export type ActivityBrowseAction = (typeof ACTIVITY_BROWSE_ACTIONS)[number];
 
 /**
+ * One verb per browser action, in Volli's words: what a transcript row and a
+ * Browser Trace frame (VC-453) both say the action was. One table, so the row
+ * and the replay of the same call can never name it differently.
+ */
+export const ACTIVITY_BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
+  open: "Opened",
+  back: "Went back",
+  forward: "Went forward",
+  reload: "Reloaded",
+  click: "Clicked",
+  type: "Typed into",
+  press: "Pressed",
+  select: "Selected in",
+  hover: "Hovered",
+  scroll: "Scrolled",
+  wait: "Waited",
+  read: "Read page",
+  screenshot: "Screenshot",
+  console: "Read console",
+  tabs: "Listed tabs",
+};
+
+/**
  * The browse facet of a descriptor: what a `browse` row says beyond its label.
  *
  * Every field but `action` is nullable, in the descriptor's own spirit: the

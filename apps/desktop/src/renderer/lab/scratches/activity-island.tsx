@@ -567,6 +567,8 @@ export default function ActivityIslandHarness() {
     () => ({
       closeTab: (id) => dispatch({ type: "close-tab", id }),
       promoteTab: (id) => dispatch({ type: "promote-tab", id }),
+      // The lab has no host and no traces to replay (VC-453).
+      replayTab: () => {},
       peekAgent: (id) => dispatch({ type: "peek-agent", id }),
       promoteAgent: (id) => dispatch({ type: "promote-agent", id }),
       stopAgent: (id) => dispatch({ type: "stop-agent", id }),

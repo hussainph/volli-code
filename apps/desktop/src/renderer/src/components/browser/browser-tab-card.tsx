@@ -19,12 +19,13 @@
  * here so a transcript of forty rows does not ask forty times per repaint.
  */
 import * as React from "react";
-import { errorMessage, type ActivityBrowse } from "@volli/shared";
+import { errorMessage, isBrowserTraceAction, type ActivityBrowse } from "@volli/shared";
 import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import type { BrowserTabPresentation, BrowserTabState } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
@@ -41,6 +42,11 @@ export interface BrowserCardHost {
   api: BrowserApi;
   /** A Session's title by id, for naming a child that drives a tab. Null when unknown. */
   sessionTitle(sessionId: string): string | null;
+  /**
+   * Opens the Browser replay (VC-453) — the chat's modal. Absent where there
+   * is nowhere to open it, and the card then offers no Replay.
+   */
+  openTrace?(request: BrowserTraceRequest): void;
 }
 
 export const BrowserCardHostContext = React.createContext<BrowserCardHost | null>(null);
@@ -56,6 +62,14 @@ const PICTURE_CACHE_LIMIT = 64;
 /** Test seam: forget every cached picture. */
 export function forgetBrowserPictures(): void {
   PICTURES.clear();
+}
+
+/**
+ * Asks for a picture ahead of showing it — the replay warms its neighbours so
+ * a step forward lands on a frame already in hand. Same cache, same bound.
+ */
+export function prefetchBrowserPicture(api: BrowserApi, pictureId: string): void {
+  void pictureOf(api, pictureId);
 }
 
 function pictureOf(api: BrowserApi, pictureId: string): Promise<string | null> {
@@ -135,6 +149,18 @@ export function BrowserTabCard({
           host.sessionTitle,
         );
   const driven = (live?.ownerSessionId ?? facet.ownerSessionId) !== null;
+  // A replay exists only for what a trace records: a navigate or act in a tab
+  // a Session owns (VC-453). The transcript is durable and so is the trace, so
+  // this needs no live tab — it is how a reopened chat replays after a relaunch.
+  const openTrace = host?.openTrace;
+  const replay =
+    host !== null &&
+    openTrace !== undefined &&
+    facet.tabId !== null &&
+    facet.ownerSessionId !== null &&
+    isBrowserTraceAction(facet.action)
+      ? () => openTrace({ sessionId: host.sessionId, tabId: facet.tabId, pictureId: facet.picture })
+      : null;
 
   const request = React.useCallback(
     async (operation: Promise<{ ok: true } | { ok: false; error: string }>, label: string) => {
@@ -182,9 +208,9 @@ export function BrowserTabCard({
         </div>
       ) : null}
       {facet.picture !== null ? <Picture state={picture} /> : null}
-      {host !== null && live !== undefined ? (
+      {host !== null && (live !== undefined || replay !== null) ? (
         <div className="flex flex-wrap items-center gap-1">
-          {live.createdBy === "session" ? (
+          {live?.createdBy === "session" ? (
             live.presentation === "headless" ? (
               <>
                 <Button
@@ -223,14 +249,23 @@ export function BrowserTabCard({
               </>
             )
           ) : null}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="ml-auto"
-            onClick={() => void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")}
-          >
-            Close
-          </Button>
+          {replay === null ? null : (
+            <Button size="xs" variant="ghost" onClick={replay}>
+              Replay
+            </Button>
+          )}
+          {live === undefined ? null : (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() =>
+                void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")
+              }
+            >
+              Close
+            </Button>
+          )}
         </div>
       ) : null}
     </div>

@@ -263,6 +263,7 @@ describe("useActivityIsland", () => {
       "peekAgent",
       "promoteAgent",
       "promoteTab",
+      "replayTab",
       "stopAgent",
     ]);
   });

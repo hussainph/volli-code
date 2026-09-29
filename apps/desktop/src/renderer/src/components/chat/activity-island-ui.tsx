@@ -66,6 +66,7 @@ import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleIcon,
+  ClockCounterClockwiseIcon,
   ProhibitIcon,
   EyeIcon,
   GlobeSimpleIcon,
@@ -861,6 +862,11 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                       <ArrowSquareOutIcon />
                     </ActionButton>
                   ) : null}
+                  {/* Every tab here is a Session's, so every one has a replay
+                      (VC-453) — possibly empty, which the replay says. */}
+                  <ActionButton label="Replay" onPress={() => actions.replayTab(tab.id)}>
+                    <ClockCounterClockwiseIcon />
+                  </ActionButton>
                   <ActionButton
                     label="Close tab"
                     armedLabel="Click again to close"

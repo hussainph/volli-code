@@ -50,6 +50,7 @@ import { isBrowserStartUrl } from "../../../browser-start-page";
 import type { BrowserTabState, Result } from "../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import type { BrowserCardHost } from "@renderer/components/browser/browser-tab-card";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { toastError } from "@renderer/lib/toast";
 import {
   BROWSER_NEW_TAB_TITLE,
@@ -180,7 +181,7 @@ export function islandTabOf(
  */
 export interface IslandTabsFeed {
   model: Pick<ActivityIslandModel, "tabs">;
-  actions: Pick<ActivityIslandActions, "closeTab" | "promoteTab">;
+  actions: Pick<ActivityIslandActions, "closeTab" | "promoteTab" | "replayTab">;
 }
 
 const NO_TABS: readonly IslandTab[] = [];
@@ -250,6 +251,8 @@ export function useIslandTabs(
   sessionId: string,
   projectId: string,
   flash: IslandFlashPush,
+  /** Where `replayTab` opens the Browser replay (VC-453); omitted, it opens nowhere. */
+  openTrace?: (request: BrowserTraceRequest) => void,
 ): IslandTabsFeed {
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Hydration is the baseline. A chat can mount before main has answered the
@@ -350,8 +353,16 @@ export function useIslandTabs(
           hostOf(tabId),
         );
       },
+      // The replay is the OWNER's: a child's tab was driven by the child, so
+      // its trace is recorded under the child's Session (VC-453).
+      replayTab: (tabId) => {
+        const tab = rawTabs?.find((one) => one.tabId === tabId);
+        const owner = tab?.ownerSessionId ?? null;
+        if (openTrace === undefined || owner === null) return;
+        openTrace({ sessionId: owner, tabId, pictureId: null });
+      },
     }),
-    [api, hostOf, request],
+    [api, hostOf, openTrace, rawTabs, request],
   );
 
   return React.useMemo(() => ({ model: { tabs }, actions }), [tabs, actions]);

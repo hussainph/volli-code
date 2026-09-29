@@ -74,6 +74,7 @@ function actionsSpy(): ActivityIslandActions {
   return {
     closeTab: vi.fn(),
     promoteTab: vi.fn(),
+    replayTab: vi.fn(),
     peekAgent: vi.fn(),
     promoteAgent: vi.fn(),
     stopAgent: vi.fn(),
@@ -487,6 +488,16 @@ describe("row verbs", () => {
     click(actionIn("tabs", "Show here"));
     expect(actions.promoteTab).toHaveBeenCalledTimes(2);
     expect(actions.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("opens a tab's Browser replay from its row, without promoting it (VC-453)", async () => {
+    const actions = actionsSpy();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actions);
+    click(cluster("tabs"));
+
+    click(actionIn("tabs", "Replay"));
+    expect(actions.replayTab).toHaveBeenCalledWith("t1");
+    expect(actions.promoteTab).not.toHaveBeenCalled();
   });
 
   it("draws a tab already pinned here inert, and a strip tab as one that can be shown here (VC-268)", async () => {

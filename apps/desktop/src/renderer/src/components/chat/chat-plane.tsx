@@ -173,6 +173,8 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { SubagentPeekDialog } from "@renderer/components/chat/subagent-peek-dialog";
 import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
@@ -308,11 +310,22 @@ export function ChatPlane({
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
   );
+  // Where a Session's Browser replay opens (VC-453): one request, so one
+  // replay at a time is structural. The transcript card and the island both
+  // open it; the card through its host below, the island through its deps.
+  const [traceRequest, setTraceRequest] = React.useState<BrowserTraceRequest | null>(null);
+  const closeTrace = React.useCallback(() => setTraceRequest(null), []);
+  const cardHost = browser?.cardHost ?? null;
+  const tracedCardHost = React.useMemo(
+    () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
+    [cardHost],
+  );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
     peekSession: setPeekedAgentId,
     ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
+    ...(browser === null ? {} : { openTrace: setTraceRequest }),
   });
   // The peeked child as the island models it; a child that left the listing
   // while peeked closes the overlay with it.
@@ -1472,7 +1485,7 @@ export function ChatPlane({
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
-      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
+      <BrowserCardHostContext.Provider value={tracedCardHost}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
               against (VC-273) — the agent writes the path the brief handed it,
@@ -1643,6 +1656,9 @@ export function ChatPlane({
       </div>
       {shellsApi === undefined ? null : (
         <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
+      )}
+      {browser === null ? null : (
+        <BrowserTraceDialog request={traceRequest} api={browser.api} onClose={closeTrace} />
       )}
       <SubagentPeekDialog
         agent={peekedAgent}

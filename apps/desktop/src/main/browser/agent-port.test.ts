@@ -11,6 +11,7 @@ import {
 } from "./agent-port";
 import { BrowserAgentCoordinator } from "./agent-coordinator";
 import type { CdpTransport, TabCursorDriver } from "./cdp-controller";
+import type { BrowserTraceStepInput } from "./trace-store";
 import { BrowserSessionTabLimitError, type BrowserSessionHolder } from "./tab-host";
 
 /** The one-button page every scripted transport answers with. */
@@ -1526,5 +1527,231 @@ describe("createAgentBrowserPort holds (VC-239)", () => {
       signal,
     });
     expect(events).toEqual(["input mousePressed", "input mouseReleased"]);
+  });
+});
+
+describe("createAgentBrowserPort traces (VC-453)", () => {
+  /** A port over the fake host with the trace door wired, recording what it hears. */
+  function tracing(
+    tabs: BrowserTabState[],
+    options: { declineCapture?: boolean } = {},
+    override: Partial<AgentBrowserHost> = {},
+  ) {
+    const fake = fakeHost(tabs, options);
+    const steps: BrowserTraceStepInput[] = [];
+    const host: AgentBrowserHost = {
+      ...fake.host,
+      ...override,
+      recordTraceStep: (step) => steps.push(step),
+    };
+    const traced = createAgentBrowserPort({
+      host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor,
+      waitForLoad: async () => {},
+      holdAwake: () => () => {},
+    });
+    return { port: traced, steps, fake };
+  }
+
+  it("hears every navigate and act in the order they settled, with the page's name for the target", async () => {
+    const { port: traced, steps } = tracing([]);
+
+    const opened = await traced.navigate({
+      navigation: { kind: "url", url: "https://example.com/" },
+      signal,
+    });
+    const snap = await traced.snapshot({ tabId: opened.tabId, signal });
+    await traced.act({
+      tabId: opened.tabId,
+      generation: snap.generation,
+      kind: "click",
+      ref: refIn(snap.snapshotText),
+      signal,
+    });
+    await traced.act({
+      tabId: opened.tabId,
+      generation: snap.generation,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+    await traced.navigate({ tabId: opened.tabId, navigation: { kind: "reload" }, signal });
+
+    // Reads are not steps: a snapshot changes nothing.
+    expect(steps.map((step) => [step.action, step.target, step.outcome])).toEqual([
+      ["open", null, "ok"],
+      ["click", "Save", "ok"],
+      ["press", "Enter", "ok"],
+      ["reload", null, "ok"],
+    ]);
+    expect(steps[0]).toMatchObject({
+      sessionId: ME.sessionId,
+      tabId: opened.tabId,
+      url: "https://example.com/",
+      generation: opened.generation,
+      pictureId: opened.picture,
+      rule: null,
+      error: null,
+    });
+    expect(steps[1]?.pictureId).toMatch(/^live:/);
+  });
+
+  it("never records the text a type carried, only the field it went into", async () => {
+    const { port: traced, steps } = tracing([
+      state({ tabId: "mine", createdBy: "session", ticketId: "t1" }),
+    ]);
+    const snap = await traced.snapshot({ tabId: "mine", signal });
+    await traced.act({
+      tabId: "mine",
+      generation: snap.generation,
+      kind: "type",
+      ref: refIn(snap.snapshotText),
+      text: "hunter2",
+      signal,
+    });
+
+    expect(steps).toHaveLength(1);
+    expect(JSON.stringify(steps)).not.toContain("hunter2");
+    expect(steps[0]?.target).toBe("Save");
+  });
+
+  it("records a refused act with its rule, the page it was aimed at, and the ref the call named", async () => {
+    const { port: traced, steps } = tracing([
+      state({
+        tabId: "mine",
+        createdBy: "session",
+        ticketId: "t1",
+        url: "https://example.com/sign-in",
+        title: "Sign in",
+        generation: 4,
+      }),
+    ]);
+
+    await expect(
+      traced.act({ tabId: "mine", generation: 1, kind: "click", ref: "e1", signal }),
+    ).rejects.toBeInstanceOf(BrowserRefusal);
+
+    expect(steps).toEqual([
+      {
+        sessionId: ME.sessionId,
+        tabId: "mine",
+        action: "click",
+        target: "e1",
+        url: "https://example.com/sign-in",
+        title: "Sign in",
+        generation: 1,
+        outcome: "refused",
+        rule: "browser.stale-ref",
+        error: null,
+        pictureId: null,
+      },
+    ]);
+  });
+
+  it("records a refused navigation on a tab against the target it aimed at", async () => {
+    const {
+      port: traced,
+      steps,
+      fake,
+    } = tracing([state({ tabId: "mine", createdBy: "session", ticketId: "t1" })]);
+    fake.holds.set("mine", { kind: "person" });
+
+    await expect(
+      traced.navigate({
+        tabId: "mine",
+        navigation: { kind: "url", url: "https://example.com/next" },
+        signal,
+      }),
+    ).rejects.toMatchObject({ rule: "browser.person-has-tab" });
+
+    expect(steps).toMatchObject([
+      {
+        action: "open",
+        tabId: "mine",
+        url: "https://example.com/next",
+        outcome: "refused",
+        rule: "browser.person-has-tab",
+      },
+    ]);
+  });
+
+  it("records a call the host could not complete as failed, in words, and rethrows it", async () => {
+    const { port: traced, steps } = tracing(
+      [state({ tabId: "mine", createdBy: "session", ticketId: "t1" })],
+      {},
+      {
+        back: () => {
+          throw new Error("The engine went away");
+        },
+      },
+    );
+
+    await expect(
+      traced.navigate({ tabId: "mine", navigation: { kind: "back" }, signal }),
+    ).rejects.toThrow("The engine went away");
+
+    expect(steps).toMatchObject([
+      {
+        action: "back",
+        tabId: "mine",
+        outcome: "failed",
+        error: "The engine went away",
+        rule: null,
+      },
+    ]);
+  });
+
+  it("says a withdrawn call was withdrawn, and a non-Error failure as it was thrown", async () => {
+    const withdrawn = new AbortController();
+    let thrown = "gone";
+    const { port: traced, steps } = tracing(
+      [state({ tabId: "mine", createdBy: "session", ticketId: "t1" })],
+      {},
+      {
+        reload: () => {
+          if (thrown === "gone") withdrawn.abort();
+          throw thrown;
+        },
+      },
+    );
+
+    await expect(
+      traced.navigate({ tabId: "mine", navigation: { kind: "reload" }, signal: withdrawn.signal }),
+    ).rejects.toBe("gone");
+    thrown = "plain";
+    await expect(
+      traced.navigate({ tabId: "mine", navigation: { kind: "reload" }, signal }),
+    ).rejects.toBe("plain");
+
+    expect(steps.map((step) => step.error)).toEqual([
+      "The call was withdrawn before it finished.",
+      "plain",
+    ]);
+  });
+
+  it("leaves a refused open with no tab out of every trace, and a call withdrawn before it ran", async () => {
+    const { port: traced, steps } = tracing([]);
+    const withdrawn = new AbortController();
+    withdrawn.abort();
+
+    await expect(
+      traced.navigate({ navigation: { kind: "url", url: "file:///etc/passwd" }, signal }),
+    ).rejects.toBeInstanceOf(BrowserRefusal);
+    await expect(
+      traced.navigate({
+        navigation: { kind: "url", url: "https://example.com/" },
+        signal: withdrawn.signal,
+      }),
+    ).rejects.toBeDefined();
+
+    expect(steps).toEqual([]);
+  });
+
+  it("records no frame when the host declined to look", async () => {
+    const { port: traced, steps } = tracing([], { declineCapture: true });
+    await traced.navigate({ navigation: { kind: "url", url: "https://example.com/" }, signal });
+    expect(steps[0]?.pictureId).toBeNull();
   });
 });
