@@ -11,9 +11,10 @@ import {
   COLUMN_ROW_STRIDE_FALLBACK,
   COLUMN_WINDOW_MINIMUM,
   columnWindow,
-  measuredRowStride,
+  learnRowStride,
   mergeColumnWindows,
   scrollOffsetForRow,
+  scrollOffsetInRows,
   shouldAdoptRowStride,
   type ColumnWindow,
 } from "@renderer/components/board/column-window";
@@ -80,6 +81,33 @@ interface BoardColumnProps {
 const COLUMN_ROW_GAP = 8;
 
 /**
+ * The DOM half of `scrollOffsetInRows` (column-window.ts, VC-451): the
+ * scroller's offset read from the card at the top of its viewport, so the
+ * browser's scroll anchoring cannot flip the window. The arithmetic and its
+ * fallbacks live in the pure module; this only hands it the rect reads.
+ */
+function scrollTopInRows(
+  scroller: HTMLElement,
+  list: HTMLElement | null,
+  indexById: ReadonlyMap<string, number>,
+  rowStride: number,
+): number {
+  const rawScrollTop = scroller.scrollTop;
+  if (list === null) return rawScrollTop;
+  const slots = list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]");
+  return scrollOffsetInRows({
+    rawScrollTop,
+    fold: scroller.getBoundingClientRect().top,
+    rowStride,
+    rows: {
+      count: slots.length,
+      edgesAt: (i) => slots[i]!.getBoundingClientRect(),
+      indexAt: (i) => indexById.get(slots[i]!.dataset["boardTicketSlot"] ?? ""),
+    },
+  });
+}
+
+/**
  * Which slice of `tickets` this column mounts, tracked against its scroller.
  *
  * State rather than a ref because the render depends on it, and it is written
@@ -87,14 +115,15 @@ const COLUMN_ROW_GAP = 8;
  * by four pixels resolves to the same window and does not re-render anything.
  */
 function useColumnWindow({
-  count,
+  ticketIds,
   selectedIndex,
   revealIndex,
   dragActive,
   scrollerRef,
   listRef,
 }: {
-  count: number;
+  /** Every ticket the column HOLDS, in order — the count, and the ledger's keys. */
+  ticketIds: readonly string[];
   selectedIndex: number;
   /** A row to scroll into the window on demand, or `-1` for none (VC-419). */
   revealIndex: number;
@@ -102,6 +131,7 @@ function useColumnWindow({
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
 }): { window: ColumnWindow; rowStride: number } {
+  const count = ticketIds.length;
   const [rowStride, setRowStride] = React.useState(COLUMN_ROW_STRIDE_FALLBACK);
   const [range, setRange] = React.useState<ColumnWindow>(() => ({
     first: 0,
@@ -120,18 +150,31 @@ function useColumnWindow({
   const strideRef = React.useRef(rowStride);
   const dragRef = React.useRef(dragActive);
   const countRef = React.useRef(count);
+  const indexById = React.useMemo(
+    () => new Map(ticketIds.map((id, index) => [id, index])),
+    [ticketIds],
+  );
+  const indexByIdRef = React.useRef(indexById);
   React.useLayoutEffect(() => {
     strideRef.current = rowStride;
     dragRef.current = dragActive;
     countRef.current = count;
-  }, [rowStride, dragActive, count]);
+    indexByIdRef.current = indexById;
+  }, [rowStride, dragActive, count, indexById]);
+  // Every height this column has measured, by ticket — see the effect below.
+  const heightsRef = React.useRef(new Map<string, number>());
 
   const recompute = React.useCallback(() => {
     const scroller = scrollerRef.current;
     if (scroller === null) return;
     const next = columnWindow({
       count: countRef.current,
-      scrollTop: scroller.scrollTop,
+      scrollTop: scrollTopInRows(
+        scroller,
+        listRef.current,
+        indexByIdRef.current,
+        strideRef.current,
+      ),
       viewportHeight: scroller.clientHeight,
       rowStride: strideRef.current,
     });
@@ -139,7 +182,7 @@ function useColumnWindow({
       const merged = dragRef.current ? mergeColumnWindows(previous, next) : next;
       return merged.first === previous.first && merged.last === previous.last ? previous : merged;
     });
-  }, [scrollerRef]);
+  }, [scrollerRef, listRef]);
 
   // Scroll and resize are the two things that move the window, and both are
   // the scroller's own. `passive` because nothing here ever cancels a scroll.
@@ -167,16 +210,24 @@ function useColumnWindow({
   // estimate — it never gates the first render on a measurement.
   //
   // Re-run on the window or the count moving, which is exactly when the
-  // mounted SET changed and there is something new to learn. The write it can
-  // make feeds back into `range`, so the deadband in `shouldAdoptRowStride` is
-  // what stops measure → write → measure from becoming a loop.
+  // mounted SET changed and there is something new to learn.
+  //
+  // The stride comes from every card this column has EVER measured, kept by
+  // ticket id in a ledger — never from the mounted slice alone, which made the
+  // stride a function of the window it chooses (`learnRowStride`, VC-451). The
+  // deadband in `shouldAdoptRowStride` still absorbs sub-pixel wobble.
   React.useLayoutEffect(() => {
     const list = listRef.current;
     if (list === null) return;
-    const heights = [...list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].map(
-      (slot) => slot.offsetHeight,
+    const measured = learnRowStride(
+      heightsRef.current,
+      [...list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].flatMap((slot) => {
+        const id = slot.dataset["boardTicketSlot"];
+        return id === undefined ? [] : [[id, slot.offsetHeight] as const];
+      }),
+      indexByIdRef.current,
+      COLUMN_ROW_GAP,
     );
-    const measured = measuredRowStride(heights, COLUMN_ROW_GAP);
     if (measured === null || !shouldAdoptRowStride(strideRef.current, measured)) return;
     strideRef.current = measured;
     setRowStride(measured);
@@ -310,7 +361,7 @@ export const BoardColumn = React.memo(function BoardColumn({
     [tickets, revealTicketId],
   );
   const { window: mountedRange, rowStride } = useColumnWindow({
-    count: tickets.length,
+    ticketIds: sortableIds,
     selectedIndex,
     revealIndex,
     dragActive,
@@ -333,9 +384,9 @@ export const BoardColumn = React.memo(function BoardColumn({
 
   return (
     <div
-      // The ⌥ picker's own hit test reads this: one `elementFromPoint` per
-      // pointer move answers both which column is under the hand and which
-      // panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
+      // The ⌥ picker's own hit test reads this: the first element under the
+      // hand that sits in a column answers both which column is under it and
+      // which panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
       // so the panel floating over the list still reads as this column.
       data-board-column={status}
       data-drop-aimed={aimed || undefined}

@@ -37,8 +37,13 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Automation, Ticket, TicketStatus } from "@volli/shared";
+import type { Automation, PendingArmedRun, Ticket, TicketStatus } from "@volli/shared";
 
+import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
+import {
+  receivePendingArmedRuns,
+  useArmedRunStore,
+} from "@renderer/components/automations/armed-run";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
@@ -188,6 +193,65 @@ function boardBoxes(): [Element, Box][] {
   return boxes;
 }
 
+/**
+ * The armed countdown stack, where `armed-run-window.tsx` puts it: fixed to
+ * the window, `bottom-6`, centred, `w-80` cards stacking UP from the bottom
+ * edge with `gap-2`, painted over the board at `z-50`. Invented pixels again,
+ * but the geometry is the product's: three windows still counting down reach
+ * up over the bottom of the middle columns, which is exactly where a hand
+ * aiming low at a column ends up.
+ */
+const COUNTDOWN_W = 320;
+const COUNTDOWN_H = 48;
+const COUNTDOWN_GAP = 8;
+const COUNTDOWN_BOTTOM = 24;
+
+function countdownBoxes(): [Element, Box][] {
+  const cards = [...document.querySelectorAll("[data-armed-run-window]")];
+  const stack = cards[0]?.parentElement;
+  if (stack == null) return [];
+  const height = cards.length * COUNTDOWN_H + (cards.length - 1) * COUNTDOWN_GAP;
+  const top = VIEWPORT.height - COUNTDOWN_BOTTOM - height;
+  const boxes: [Element, Box][] = [[stack, { left: 0, top, width: VIEWPORT.width, height }]];
+  cards.forEach((card, index) => {
+    boxes.push([
+      card,
+      {
+        left: (VIEWPORT.width - COUNTDOWN_W) / 2,
+        top: top + index * (COUNTDOWN_H + COUNTDOWN_GAP),
+        width: COUNTDOWN_W,
+        height: COUNTDOWN_H,
+      },
+    ]);
+  });
+  return boxes;
+}
+
+/** Everything laid out, in paint order: the board, then the chrome over it. */
+function layoutBoxes(): [Element, Box][] {
+  return [...boardBoxes(), ...countdownBoxes()];
+}
+
+/**
+ * What a browser's hit test reports at (x, y), topmost first. An element
+ * styled `pointer-events-none` is not hit-testable and never appears — the
+ * countdown's full-width wrapper is one, and its cards opt back in with
+ * `pointer-events-auto` because Cancel must stay clickable.
+ */
+function hitsAt(x: number, y: number): Element[] {
+  return layoutBoxes()
+    .filter(
+      ([node, box]) =>
+        !classesOf(node).includes("pointer-events-none") &&
+        x >= box.left &&
+        x <= box.left + box.width &&
+        y >= box.top &&
+        y <= box.top + box.height,
+    )
+    .map(([node]) => node)
+    .toReversed();
+}
+
 const NO_BOX: Box = { left: 0, top: 0, width: 0, height: 0 };
 
 function domRect(box: Box): DOMRect {
@@ -247,7 +311,7 @@ function installLayout(): () => void {
   for (const name of ["scrollBy", "scrollTo", "scrollIntoView"]) element[name] = () => {};
 
   Element.prototype.getBoundingClientRect = function measured(this: Element) {
-    return domRect(boardBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
+    return domRect(layoutBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
   };
 
   window.getComputedStyle = ((node: Element, pseudo?: string | null) => {
@@ -265,13 +329,11 @@ function installLayout(): () => void {
     });
   }) as typeof window.getComputedStyle;
 
-  document.elementFromPoint = ((x: number, y: number) => {
-    const hit = boardBoxes().findLast(
-      ([, box]) =>
-        x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
-    );
-    return hit?.[0] ?? null;
-  }) as typeof document.elementFromPoint;
+  // jsdom ships neither hit test; a browser always ships both, and they agree.
+  document.elementFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)[0] ?? null) as typeof document.elementFromPoint;
+  document.elementsFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)) as typeof document.elementsFromPoint;
 
   const restoreAnimations = installAnimations();
   return () => {
@@ -282,6 +344,7 @@ function installLayout(): () => void {
       Reflect.deleteProperty(element, name);
     }
     Reflect.deleteProperty(document, "elementFromPoint");
+    Reflect.deleteProperty(document, "elementsFromPoint");
   };
 }
 
@@ -346,6 +409,10 @@ async function mountBoard(): Promise<void> {
         <BoardBoundary projectId="p1">
           <Board projectId="p1" ticketPrefix="PRB" />
         </BoardBoundary>
+        {/* Beside the board, as app-shell mounts it: floating chrome that
+            outlives the board and paints over it. Renders nothing until a
+            countdown is pending. */}
+        <ArmedRunWindows />
       </TooltipProvider>,
     );
   });
@@ -367,7 +434,7 @@ interface Point {
   y: number;
 }
 
-function pointerEvent(type: string, at: Point): PointerEvent {
+function pointerEvent(type: string, at: Point, alt = false): PointerEvent {
   return new PointerEvent(type, {
     bubbles: true,
     cancelable: true,
@@ -376,12 +443,14 @@ function pointerEvent(type: string, at: Point): PointerEvent {
     isPrimary: true,
     clientX: at.x,
     clientY: at.y,
+    altKey: alt,
   });
 }
 
-async function move(at: Point): Promise<void> {
+/** A pointer move, seen by dnd-kit's sensor and by the board's own hit test alike. */
+async function move(at: Point, alt = false): Promise<void> {
   await act(async () => {
-    document.dispatchEvent(pointerEvent("pointermove", at));
+    document.dispatchEvent(pointerEvent("pointermove", at, alt));
   });
 }
 
@@ -394,6 +463,15 @@ function columnNamed(status: TicketStatus): Element {
   const found = document.querySelector(`[data-board-column="${status}"]`);
   if (found === null) throw new Error(`no column for ${status}`);
   return found;
+}
+
+/** Whether `status` is drawing its Offered list at landing-target size (⌥ held). */
+function grown(status: TicketStatus): boolean {
+  return (
+    columnNamed(status)
+      .querySelector("[data-offered-panel]")
+      ?.getAttribute("data-offered-panel") === "expanded"
+  );
 }
 
 function ticketSlots(status: TicketStatus): string[] {
@@ -598,6 +676,7 @@ beforeEach(() => {
     selectedByProject: {},
     unloadedTicketBodies: {},
   });
+  useArmedRunStore.setState({ pending: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -787,6 +866,58 @@ describe("a store write that lands while a card is in the air", () => {
       expect(renders.sortable).toBeGreaterThan(0);
       // And the moved ticket actually arrived, which only a live read can show.
       expect(ticketSlots("todo")).toContain("t4");
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+});
+
+/** One countdown still running, as main projects it to every window. */
+function pendingRun(ticketId: string, openedAt: number): PendingArmedRun {
+  return {
+    id: `arrival-${ticketId}`,
+    ticketId,
+    projectId: "p1",
+    ticketDisplayId: `PRB-${ticketId}`,
+    automationId: AUTOMATION.id,
+    automationName: AUTOMATION.name,
+    status: "doing",
+    origin: "armed",
+    openedAt,
+    startAt: Date.now() + 60_000,
+  };
+}
+
+/**
+ * The countdown is floating chrome that must stay clickable — its Cancel is
+ * the only way to stop a Run about to start — so it is painted over the board
+ * and wins the browser's hit test wherever it sits. The ⌥ picker reads the
+ * column under the hand from that same hit test, so a drag aimed low at a
+ * column could land "in no column" and the picker never opened (VC-451).
+ */
+describe("a card in the air over a running countdown", () => {
+  it(
+    "opens the column's picker when ⌥ is held with the pointer over a countdown card",
+    async () => {
+      await mountBoard();
+      // Three drops in quick succession, all still counting down: the stack
+      // reaches up over the bottom of the middle columns.
+      await act(async () => {
+        receivePendingArmedRuns([pendingRun("t2", 1), pendingRun("t3", 2), pendingRun("t4", 3)]);
+      });
+      await liftTodoCardAndSettle();
+
+      const doing = columnNamed("doing").getBoundingClientRect();
+      const aim = { x: Math.round(doing.left + doing.width / 2), y: doing.bottom - 10 };
+      // The premise, checked rather than assumed: the topmost thing under the
+      // hand is a countdown card, not anything inside the column.
+      expect(
+        document.elementFromPoint(aim.x, aim.y)?.closest("[data-armed-run-window]"),
+      ).not.toBeNull();
+
+      await move(aim, true);
+
+      expect(grown("doing")).toBe(true);
       expect(loopErrors()).toEqual([]);
     },
     BUDGET,

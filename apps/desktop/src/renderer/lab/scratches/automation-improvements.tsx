@@ -1,5 +1,6 @@
 /** VC-329 review hub: shipping components over the same in-memory fixtures. */
 import * as React from "react";
+import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { Button } from "@renderer/components/ui/button";
@@ -118,6 +119,10 @@ export default function AutomationImprovementsScratch() {
           ) : null}
         </div>
       </div>
+      {/* Beside the Toaster, as app-shell mounts it: the countdown paints over
+          the board, so a drag in this preview meets it where a real one would
+          (VC-451). Renders nothing until something is pending. */}
+      <ArmedRunWindows />
       <Toaster />
     </TooltipProvider>
   );
