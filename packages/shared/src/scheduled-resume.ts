@@ -185,7 +185,7 @@ export interface PresentedScheduledResume {
  *
  * One the Session has already overtaken — continued by hand, stopped, archived,
  * or already fired — is going to be skipped or settled, and drawing it as
- * "Scheduled" would promise a resume that will not happen. Whether ANOTHER
+ * "Resumes at …" would promise a resume that will not happen. Whether ANOTHER
  * Session on the Ticket supersedes it is not known here and is left to the
  * fire-time check; a surface draws the one Session it has.
  */

@@ -814,9 +814,9 @@ describe("sessionBlocker", () => {
       );
 
       expect(blocker).toMatchObject({
-        message: "Session stopped",
+        message: `Resumes at ${resumeClock(RESET, NOW)}`,
+        detail: stop.detail,
         tone: "waiting",
-        note: `Scheduled ${resumeClock(RESET, NOW)}`,
         action: { label: "Cancel" },
         secondaryAction: { label: "Retry" },
       });
