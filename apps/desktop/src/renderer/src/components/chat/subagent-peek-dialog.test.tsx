@@ -44,6 +44,7 @@ const PROJECTION: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: true,
+  scheduledResume: null,
 };
 function bridgeNode(path: string[]): unknown {
   return new Proxy(() => {}, {

@@ -559,11 +559,14 @@ describe("Session tRPC router", () => {
       "liveExecutor",
       "modelSelection",
       "modelTier",
+      "scheduledResume",
       "session",
       "signal",
       "status",
       "turnActive",
     ]);
+    // Derived from the commands and receipts that never cross this edge.
+    expect(resolved.projection.scheduledResume).toBeNull();
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     // The tier the model resolved from crosses whole (VC-259): it is the
     // user's own vocabulary, and the header reads it beside the model.
@@ -711,6 +714,7 @@ describe("Session tRPC router", () => {
       "liveExecutor",
       "modelSelection",
       "modelTier",
+      "scheduledResume",
       "session",
       "signal",
       "status",
@@ -1820,6 +1824,110 @@ describe("Session tRPC router", () => {
       },
     ]);
     expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
+  });
+
+  it("passes a person's scheduled resume and its cancel, and never a settle", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "schedule-1",
+      sessionId: "session-1",
+      command: {
+        kind: "resume.schedule",
+        attentionId: "attention-1",
+        attachmentId: "attachment-1",
+        resumeAt: 1_800_000_000_000,
+      },
+    });
+    await caller.session.command({
+      commandId: "cancel-1",
+      sessionId: "session-1",
+      command: { kind: "resume.cancel", scheduleId: "schedule-1" },
+    });
+    expect(fixture.calls.command.map(({ command }) => command.kind)).toEqual([
+      "resume.schedule",
+      "resume.cancel",
+    ]);
+    // What became of a schedule is the host's to record, never a client's.
+    await expect(
+      caller.session.command({
+        commandId: "settle-1",
+        sessionId: "session-1",
+        command: {
+          kind: "resume.settle",
+          scheduleId: "schedule-1",
+          outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+        } as never,
+      }),
+    ).rejects.toThrow();
+    // A reset is an instant, never zero or fractional.
+    await expect(
+      caller.session.command({
+        commandId: "schedule-2",
+        sessionId: "session-1",
+        command: {
+          kind: "resume.schedule",
+          attentionId: "attention-1",
+          attachmentId: "attachment-1",
+          resumeAt: 0,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("presents the one scheduled resume a surface may draw", async () => {
+    const base = snapshot();
+    const attachment = attachmentWithRecovery();
+    const runtime: SessionRuntime = {
+      ...runtimeFixture().runtime,
+      projection: async () => ({
+        throughSequence: 6,
+        projection: {
+          ...base.projection,
+          attachments: [attachment],
+          liveExecutor: attachment,
+          commands: [
+            {
+              id: "schedule-1",
+              sessionId: "session-1",
+              createdAt: 10,
+              intent: {
+                kind: "resume.schedule",
+                attentionId: "attention-1",
+                attachmentId: attachment.id,
+                resumeAt: 5_000,
+              },
+              route: null,
+            },
+          ],
+          receipts: [
+            {
+              id: "receipt-schedule-1",
+              commandId: "schedule-1",
+              status: "completed",
+              result: { kind: "resume.scheduled", sessionId: "session-1" },
+              recordedAt: 10,
+              sequence: 5,
+            },
+          ],
+        },
+      }),
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+    expect(resolved.projection.scheduledResume).toEqual({
+      id: "schedule-1",
+      attentionId: "attention-1",
+      resumeAt: 5_000,
+    });
   });
 
   it("passes an explicit compaction, with or without instructions", async () => {

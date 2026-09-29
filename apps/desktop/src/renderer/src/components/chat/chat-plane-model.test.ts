@@ -63,6 +63,7 @@ import {
   messageRoute,
   resolvingWith,
   restoreStripAttachments,
+  resumeClock,
   sameInteractionId,
   sameMessages,
   sameQueuedMessage,
@@ -238,6 +239,8 @@ const ACTS: SessionBlockerActs = {
   signIn: NO_OP,
   dismissError: NO_OP,
   dismiss: NO_OP,
+  scheduleResume: NO_OP,
+  cancelScheduledResume: NO_OP,
 };
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
@@ -249,6 +252,8 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     catalogError: null,
     sessionModel: { providerId: "openai-codex", providerLabel: "OpenAI Codex", state: "available" },
     signInProviders: [],
+    scheduledResume: null,
+    now: 0,
     ...overrides,
   };
 }
@@ -257,7 +262,23 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
 type PlainAttentionKind = Exclude<SessionAttention["kind"], "quota_exhausted" | "rate_limited">;
 
 function attention(kind: PlainAttentionKind, detail: string | null = null): SessionAttention {
-  return { id: `attention-${kind}`, attachmentId: null, detail, diagnostic: null, kind };
+  const base = { id: `attention-${kind}`, attachmentId: null, detail, diagnostic: null };
+  return kind === "adapter_unrecoverable" ? { ...base, kind, resetsAt: null } : { ...base, kind };
+}
+
+/** A run a spent allowance stopped, stating (or not) when it resets. */
+function quotaStopped(
+  resetsAt: number | null,
+  attachmentId: string | null = "attachment-1",
+): SessionAttention {
+  return {
+    id: "attention-quota",
+    attachmentId,
+    kind: "adapter_unrecoverable",
+    detail: "429: Usage limit reached for 5 hour.",
+    diagnostic: null,
+    resetsAt,
+  };
 }
 
 function raised(primary: SessionAttention): SessionBlockerInput {
@@ -699,7 +720,7 @@ describe("sessionBlocker", () => {
     expect(drawn).toEqual([
       ["Sign-in required", "Settings"],
       ["Configuration invalid", "Settings"],
-      ["Reconnecting", "Retry"],
+      ["Reconnecting", null],
       ["Disconnected", "Retry"],
       ["Context limit reached", null],
       ["Turn interrupted", null],
@@ -730,6 +751,117 @@ describe("sessionBlocker", () => {
     });
     blocker?.action?.act();
     expect(acted).toEqual(["retryRuntime"]);
+  });
+
+  describe("a run stopped on a spent allowance", () => {
+    const NOW = Date.UTC(2026, 8, 10, 1, 0);
+    const RESET = NOW + 3 * 60 * 60_000;
+    const recorded = () => {
+      const acted: string[] = [];
+      const acts: SessionBlockerActs = {
+        ...ACTS,
+        retryRuntime: () => acted.push("retry"),
+        scheduleResume: (input) => acted.push(`schedule ${JSON.stringify(input)}`),
+        cancelScheduledResume: (scheduleId) => acted.push(`cancel ${scheduleId}`),
+      };
+      return { acted, acts };
+    };
+
+    it("offers Resume at the reset beside Retry, and schedules nothing until chosen", () => {
+      const { acted, acts } = recorded();
+      const stop = quotaStopped(RESET);
+      const blocker = sessionBlocker(
+        blockerInput({ attention: { active: [stop], primary: stop }, now: NOW }),
+        acts,
+        false,
+      );
+
+      expect(blocker).toMatchObject({
+        message: "Session stopped",
+        tone: "error",
+        action: { label: "Retry" },
+        secondaryAction: { label: `Resume at ${resumeClock(RESET, NOW)}` },
+      });
+      expect(acted).toEqual([]);
+      blocker?.secondaryAction?.act();
+      expect(acted).toEqual([
+        `schedule ${JSON.stringify({ attentionId: "attention-quota", attachmentId: "attachment-1", resumeAt: RESET })}`,
+      ]);
+    });
+
+    it("offers no resume for a reset already behind, none stated, or no attachment", () => {
+      for (const stop of [quotaStopped(NOW), quotaStopped(null), quotaStopped(RESET, null)]) {
+        const blocker = sessionBlocker(
+          blockerInput({ attention: { active: [stop], primary: stop }, now: NOW }),
+          ACTS,
+          false,
+        );
+        expect(blocker).toMatchObject({ action: { label: "Retry" }, secondaryAction: null });
+      }
+    });
+
+    it("shows a scheduled resume as a wait with its Cancel, Retry still beside it", () => {
+      const { acted, acts } = recorded();
+      const stop = quotaStopped(RESET);
+      const blocker = sessionBlocker(
+        blockerInput({
+          attention: { active: [stop], primary: stop },
+          scheduledResume: { id: "schedule-1", attentionId: "attention-quota", resumeAt: RESET },
+          now: NOW,
+        }),
+        acts,
+        false,
+      );
+
+      expect(blocker).toMatchObject({
+        message: "Session stopped",
+        tone: "waiting",
+        note: `Scheduled ${resumeClock(RESET, NOW)}`,
+        action: { label: "Cancel" },
+        secondaryAction: { label: "Retry" },
+      });
+      // A wait on a time the person chose is not an error to hide.
+      expect(blocker?.dismiss).toBeUndefined();
+      blocker?.action?.act();
+      blocker?.secondaryAction?.act();
+      expect(acted).toEqual(["cancel schedule-1", "retry"]);
+    });
+
+    it("ignores a schedule made for a different failure than the one drawn", () => {
+      const stop = quotaStopped(RESET);
+      const blocker = sessionBlocker(
+        blockerInput({
+          attention: { active: [stop], primary: stop },
+          scheduledResume: { id: "schedule-0", attentionId: "attention-other", resumeAt: RESET },
+          now: NOW,
+        }),
+        ACTS,
+        false,
+      );
+      expect(blocker).toMatchObject({ tone: "error", action: { label: "Retry" } });
+    });
+
+    it("brings a dismissed stop back when it states a new reset", () => {
+      const first = sessionBlocker(raised(quotaStopped(RESET)), ACTS, false);
+      const again = sessionBlocker(raised(quotaStopped(RESET + 60_000)), ACTS, false);
+      expect(first?.dismissKey).not.toBe(again?.dismissKey);
+    });
+  });
+
+  describe("resumeClock", () => {
+    const at = new Date(2026, 8, 10, 4, 24).getTime();
+    const clock = new Date(at).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    it("names the clock alone today, the weekday this week, and the date beyond", () => {
+      expect(resumeClock(at, new Date(2026, 8, 10, 1, 0).getTime())).toBe(clock);
+      const weekday = new Date(at).toLocaleDateString(undefined, { weekday: "short" });
+      expect(resumeClock(at, new Date(2026, 8, 7, 23, 0).getTime())).toBe(`${weekday} ${clock}`);
+      const date = new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      expect(resumeClock(at, new Date(2026, 8, 1, 12, 0).getTime())).toBe(`${date} ${clock}`);
+    });
   });
 
   it("names the provider's own time where it sent one, and invents none where it did not", () => {

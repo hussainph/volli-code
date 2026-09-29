@@ -61,6 +61,8 @@ export const NOTIFICATION_PRODUCERS = [
   "session-watchdog",
   /** A verified harness hook reported that its agent is blocked on a human. */
   "harness-input-needed",
+  /** A resume a person scheduled for a quota reset was skipped at its time. */
+  "scheduled-resume-skipped",
   /** The retention watch saw a ticket's pull request merge. */
   "pull-request-merged",
   /** The retention watch reclaimed a stale worktree directory (VC-113). */
@@ -114,6 +116,9 @@ export const NOTIFICATION_PRODUCER_POLICY: Record<NotificationProducer, Notifica
   "run-attention": { kind: "preference", event: "needs-you" },
   "session-watchdog": { kind: "preference", event: "needs-you" },
   "harness-input-needed": { kind: "preference", event: "needs-you" },
+  // A skipped resume leaves the stopped Session exactly where the person left
+  // it, still waiting on them — the same switch as every other "needs you".
+  "scheduled-resume-skipped": { kind: "preference", event: "needs-you" },
   "pull-request-merged": { kind: "preference", event: "finished" },
   "worktree-reclaimed": { kind: "preference", event: "swept" },
   // Same switch as the worktree reclaim, and the same act one layer down:

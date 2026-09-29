@@ -273,7 +273,9 @@ type ChatCommand =
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string }
-  | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution };
+  | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution }
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  | { kind: "resume.cancel"; scheduleId: string };
 
 export interface ChatCommandRequest {
   commandId: string;
@@ -736,6 +738,42 @@ export class ChatSessionClient {
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         command: { kind: "executor.retry", attachmentId },
+      }),
+    );
+  }
+
+  /**
+   * Resume the run a spent allowance stopped, at the reset its Attention
+   * stated — a person's choice, recorded now and run by the host at that time.
+   * A refusal (the Attention moved on, the executor closed) toasts, as every
+   * one-shot command here does.
+   */
+  scheduleResume(input: {
+    attentionId: string;
+    attachmentId: string;
+    resumeAt: number;
+  }): Promise<boolean> {
+    return this.#eventRun("Resume", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: {
+          kind: "resume.schedule",
+          attentionId: input.attentionId,
+          attachmentId: input.attachmentId,
+          resumeAt: input.resumeAt,
+        },
+      }),
+    );
+  }
+
+  /** Withdraw the scheduled resume named by its schedule id. */
+  cancelScheduledResume(scheduleId: string): Promise<boolean> {
+    return this.#eventRun("Cancel", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: { kind: "resume.cancel", scheduleId },
       }),
     );
   }

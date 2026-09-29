@@ -39,6 +39,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: false,
+  scheduledResume: null,
 };
 
 const slice: ChatSessionSlice = {
