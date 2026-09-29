@@ -17,7 +17,6 @@ import {
   type MessageEntry,
   type Session,
   type StreamFn,
-  type ToolExecutionMode,
 } from "@earendil-works/pi-agent-core";
 import {
   Agent,
@@ -123,6 +122,7 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { applyToolDispatch, SEQUENTIAL_TOOL_DISPATCH, type ToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
   attentionReasonFor,
@@ -316,7 +316,7 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
-  toolExecution: ToolExecutionMode;
+  toolDispatch: ToolDispatch;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -359,22 +359,26 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one production structured executor port. Ordinary Sessions remain
- * sequential; test fixtures have a separate internal factory below.
+ * Build the one production structured executor port. Every Session it attaches
+ * dispatches a model-issued tool batch sequentially.
  */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
-  return createPiAgentRuntimeWithToolExecution(options, "sequential");
+  return createPiAgentRuntimeWithToolDispatch(options, SEQUENTIAL_TOOL_DISPATCH);
 }
 
 /**
- * Internal fixture-only opt-in used by tests/benchmarks, intentionally omitted
- * from `src/index.ts` and therefore not part of the package's runtime API.
+ * Test-only opt-in (VC-444): the same runtime with a fixture-chosen
+ * {@link ToolDispatch}. Parallel dispatch is never a bare flag — only MCP tools
+ * whose exact `serverId:toolName` is on the fixture's allowlist may overlap,
+ * and every built-in or unlisted tool is marked sequential, so a batch that
+ * mixes them runs serially. Deliberately absent from `src/index.ts` and every
+ * `package.json#exports` entry; a runtime test pins that.
  */
 export function createPiAgentRuntimeForFixture(
   options: PiRuntimeHostOptions,
-  toolExecution: ToolExecutionMode,
+  toolDispatch: ToolDispatch,
 ): AgentRuntime {
-  return createPiAgentRuntimeWithToolExecution(options, toolExecution);
+  return createPiAgentRuntimeWithToolDispatch(options, toolDispatch);
 }
 
 /**
@@ -382,14 +386,14 @@ export function createPiAgentRuntimeForFixture(
  * than per attachment: the credential store behind them serializes this
  * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
  */
-function createPiAgentRuntimeWithToolExecution(
+function createPiAgentRuntimeWithToolDispatch(
   options: PiRuntimeHostOptions,
-  toolExecution: ToolExecutionMode,
+  toolDispatch: ToolDispatch,
 ): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
-    toolExecution,
+    toolDispatch,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -1717,7 +1721,14 @@ async function attachSession(
     // bindings: the array Pi resolves against and the list the Snapshot records
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
-    const tools = createSessionTools(spec, ownedToolEnv);
+    // Sequential dispatch hands the array back untouched; the fixture-only
+    // parallel dispatch marks every tool that is not an allowlisted MCP read
+    // sequential. Names and schemas — the provider-visible half — never change.
+    const { tools, toolExecution } = applyToolDispatch(
+      createSessionTools(spec, ownedToolEnv),
+      spec.tools.mcp ?? [],
+      host.toolDispatch,
+    );
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -2110,7 +2121,7 @@ async function attachSession(
         sidecarMetadata.id,
       ),
       sessionId: sidecarMetadata.id,
-      toolExecution: host.toolExecution,
+      toolExecution,
       // Pi's harness converter, not the `Agent`'s default, and the difference is
       // exactly one message role. The default keeps `user`, `assistant` and
       // `toolResult` and DROPS everything else — including the
