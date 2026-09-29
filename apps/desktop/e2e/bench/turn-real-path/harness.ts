@@ -314,6 +314,8 @@ function writtenEvents(written: unknown): WrittenEvent[] {
     .toSorted((left, right) => left.sequence - right.sequence);
 }
 
+const doNothing = (): void => undefined;
+
 function interactionIdOf(payload: Record<string, unknown>): string | null {
   const interaction = payload["interaction"];
   if (typeof interaction !== "object" || interaction === null) return null;
@@ -630,7 +632,7 @@ export async function createRealPathComposition(
             }),
           );
         };
-        let unsubscribe = (): void => undefined;
+        let unsubscribe = doNothing;
         if (watch === "all") {
           unsubscribe = await runtime.subscribe(
             { sessionId, afterSequence: attached.throughSequence },

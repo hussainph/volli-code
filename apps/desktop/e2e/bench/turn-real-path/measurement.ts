@@ -373,6 +373,10 @@ function fileSyncLine(probe: unknown): string {
   return `one at a time p50 / p95 ${fmt(value.sequentialMs, 2)} ms; 40 at once p50 / p95 ${fmt(value.concurrent40Ms, 1)} ms each, ${value.concurrent40WallMs} ms wall, ${value.concurrent40SyncsPerSecond} syncs/s`;
 }
 
+function sectionTitle(store: ArtifactStoreKind, watch: WatchMode): string {
+  return `## ${store === "file" ? "Production path" : "Diagnostic control"}: ${store === "file" ? "file" : "in-memory"} transcript artifacts, ${watch === "all" ? "every Session watched" : "no Session watched"}\n`;
+}
+
 export function formatMarkdown(report: {
   generatedAt: string;
   environment: Record<string, unknown>;
@@ -386,8 +390,6 @@ export function formatMarkdown(report: {
   const attributionHeader =
     "| In flight | Provider per turn | `read` ×2 per turn | `bash` | Authority wait | Wait start → question seen | `interaction.resolve` round trip | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const shape = (report.arms[0]?.summary as Summary | undefined)?.ledgerShapes[0]?.shape ?? "n/a";
-  const title = (store: ArtifactStoreKind, watch: WatchMode): string =>
-    `## ${store === "file" ? "Production path" : "Diagnostic control"}: ${store === "file" ? "file" : "in-memory"} transcript artifacts, ${watch === "all" ? "every Session watched" : "no Session watched"}\n`;
   const sections = [
     `# Agent turn critical path on the real Session path (VC-456)\n`,
     `Fixture \`${FIXTURE_VERSION}\` · generated ${report.generatedAt} · ${repetitions} measured waves per arm after ${WARMUP_WAVES} discarded warm-up wave · in flight ${concurrencies.join(" / ")}.\n`,
@@ -401,7 +403,7 @@ export function formatMarkdown(report: {
   }
   for (const arms of groups.values()) {
     const first = arms[0]!;
-    sections.push(title(first.artifactStore, first.watch));
+    sections.push(sectionTitle(first.artifactStore, first.watch));
     if (first.artifactStore === "memory") {
       sections.push(
         `Everything else identical: SQLite ledger, Pi sidecars, tools, gate, subscribers. Not a product configuration; it isolates what durable artifact publication costs.\n`,
