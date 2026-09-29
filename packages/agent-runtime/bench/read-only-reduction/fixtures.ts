@@ -1,5 +1,11 @@
 /** Fixed, in-memory fixtures for the VC-442 read-only reduction prototype. */
 
+/** Declared harness delays, shared by every lane, sweep, report and test. */
+export const SCRIPTED_PROVIDER_ROUND_MS = 35;
+export const FIXTURE_READ_LATENCY_MS = 8;
+/** Declared per-call waits for the mocked MCP-like network tool. */
+export const MOCK_CALL_LATENCIES_MS = [50, 250, 900] as const;
+
 export const FIXTURE_PATHS = [
   "/fixture/team.txt",
   "/fixture/service.md",

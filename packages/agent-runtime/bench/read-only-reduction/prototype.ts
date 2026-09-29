@@ -1,13 +1,19 @@
 /**
  * Off-by-default, fixture-only VC-442 prototype. Nothing in this module is
- * imported by the runtime or exposed on a Session's frozen tool surface.
+ * imported by the runtime or placed on any Session's Agent Tool Surface.
  */
 
 import { countTokens } from "gpt-tokenizer/encoding/cl100k_base";
-import { FIXTURES, FIXTURE_PATHS, TASKS, type FixturePath, type FixtureTaskId } from "./fixtures";
+import {
+  FIXTURE_PATHS,
+  FIXTURE_READ_LATENCY_MS,
+  FIXTURES,
+  SCRIPTED_PROVIDER_ROUND_MS,
+  TASKS,
+  type FixturePath,
+  type FixtureTaskId,
+} from "./fixtures";
 
-const PROVIDER_LATENCY_MS = 35;
-const FIXTURE_READ_LATENCY_MS = 8;
 const MAX_TASK_MS = 2_000;
 const MAX_TOOL_CALLS = 16;
 const MAX_NESTED_READS = 16;
@@ -33,12 +39,25 @@ export interface ToolSchemaFixture {
   parameters: Record<string, unknown>;
 }
 
-export interface FilterProgram {
+/**
+ * The closed filter AST. Its source is either explicit `paths`, or an
+ * `indexPath` whose fixed `files` field names the paths; the index is read and
+ * its entries pass the same capability check as explicit paths. Never code.
+ */
+export type FilterProgram = {
   version: 1;
   operation: "select-lines";
-  paths: FixturePath[];
   containsAny: string[];
   maxMatches: number;
+} & ({ paths: FixturePath[]; indexPath?: never } | { indexPath: FixturePath; paths?: never });
+
+/** One observable nested-read event, in the order it happened. */
+export interface NestedReadEvent {
+  readId: number;
+  kind: "read-start" | "read-end" | "read-cancelled";
+  path: FixturePath;
+  /** Milliseconds since the run started. */
+  atMs: number;
 }
 
 export interface FixtureRunResult {
@@ -58,10 +77,22 @@ export interface FixtureRunResult {
   correct: boolean;
   retainedEvidence: number;
   evidenceCount: number;
-  retries: number;
+  /** Tool-call ids in the order their results were committed to history. */
   resultOrder: string[];
+  /** Nested-read paths in the order their reads finished. */
+  completionOrder: FixturePath[];
+  readEvents: NestedReadEvent[];
   maxConcurrency: number;
   historyMessages: number;
+}
+
+export interface FixtureRunOptions {
+  signal?: AbortSignal;
+  limits?: Partial<ReductionLimits>;
+  /** Per-fixture read delay overrides, used to make completion order differ from call order. */
+  readLatencyMs?: Partial<Record<FixturePath, number>>;
+  /** Observer for every nested read, including reads cancelled by a failed run. */
+  onReadEvent?: (event: NestedReadEvent) => void;
 }
 
 interface FixtureMessage {
@@ -80,11 +111,6 @@ interface ToolResponse {
   text: string;
 }
 
-interface ReadSample {
-  startedAt: number;
-  endedAt: number;
-}
-
 function tokenCount(text: string): number {
   return countTokens(text, TOKEN_OPTIONS);
 }
@@ -100,7 +126,8 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
+/** An abortable timer: the only "I/O" anything in this prototype performs. */
+export function delay(ms: number, signal: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   return new Promise<void>((resolve, reject) => {
     const onAbort = (): void => {
@@ -115,6 +142,23 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
     }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export async function readSequential<T, U>(
+  items: readonly T[],
+  read: (item: T, index: number) => Promise<U>,
+): Promise<U[]> {
+  const result: U[] = [];
+  for (let index = 0; index < items.length; index += 1)
+    result.push(await read(items[index]!, index));
+  return result;
+}
+
+export function median(values: readonly number[]): number {
+  if (values.length === 0) throw new Error("median needs at least one value.");
+  const sorted = values.toSorted((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
 }
 
 function isFixturePath(value: unknown): value is FixturePath {
@@ -147,14 +191,18 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
 export function validateFilterProgram(value: unknown): FilterProgram {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["version", "operation", "paths", "containsAny", "maxMatches"])
+    !hasOnlyKeys(value, ["version", "operation", "paths", "indexPath", "containsAny", "maxMatches"])
   ) {
     throw new Error("filter program must be a closed object with no executable fields.");
   }
   if (value.version !== 1 || value.operation !== "select-lines") {
     throw new Error("filter program version or operation is unsupported.");
   }
-  const paths = validatePaths(value.paths, "filter paths");
+  const hasPaths = Object.hasOwn(value, "paths");
+  const hasIndex = Object.hasOwn(value, "indexPath");
+  if (hasPaths === hasIndex) {
+    throw new Error("filter program needs exactly one source: paths or indexPath.");
+  }
   const terms = value.containsAny;
   if (!Array.isArray(terms) || terms.length < 1 || terms.length > MAX_FILTER_TERMS) {
     throw new Error(`containsAny must contain between 1 and ${MAX_FILTER_TERMS} literal terms.`);
@@ -179,13 +227,17 @@ export function validateFilterProgram(value: unknown): FilterProgram {
   ) {
     throw new Error(`maxMatches must be an integer from 1 to ${MAX_FILTER_MATCHES}.`);
   }
-  return {
-    version: 1,
-    operation: "select-lines",
-    paths,
+  const common = {
+    version: 1 as const,
+    operation: "select-lines" as const,
     containsAny,
     maxMatches: value.maxMatches,
   };
+  if (hasIndex) {
+    const [indexPath] = validatePaths([value.indexPath], "filter indexPath");
+    return { ...common, indexPath: indexPath! };
+  }
+  return { ...common, paths: validatePaths(value.paths, "filter paths") };
 }
 
 /** Every bound the prototype enforces, overridable only by tests to prove enforcement. */
@@ -208,7 +260,7 @@ const DEFAULT_LIMITS: Readonly<ReductionLimits> = Object.freeze({
 });
 
 /**
- * Per-run budget. Memory is bounded through bytes: every value the harness
+ * Per-task budget. Memory is bounded through bytes: every value the harness
  * holds is an immutable in-memory fixture, and every returned result is
  * charged against a per-result and an aggregate byte ceiling before it is kept.
  */
@@ -218,17 +270,18 @@ export class RunBudget {
   toolCalls = 0;
   nestedReads = 0;
   resultBytes = 0;
-  maxConcurrency = 0;
-  private activeReads = 0;
 
-  constructor(limits: Partial<ReductionLimits> = {}) {
-    this.startedAt = nowMs();
+  constructor(
+    limits: Partial<ReductionLimits> = {},
+    private readonly clock: () => number = nowMs,
+  ) {
+    this.startedAt = clock();
     this.limits = Object.freeze({ ...DEFAULT_LIMITS, ...limits });
   }
 
   check(signal: AbortSignal): void {
     throwIfAborted(signal);
-    if (nowMs() - this.startedAt > this.limits.maxTaskMs)
+    if (this.clock() - this.startedAt > this.limits.maxTaskMs)
       throw new Error("fixture task exceeded its time budget.");
   }
 
@@ -251,53 +304,50 @@ export class RunBudget {
     this.nestedReads += count;
   }
 
-  beginRead(): void {
-    this.activeReads += 1;
-    this.maxConcurrency = Math.max(this.maxConcurrency, this.activeReads);
-  }
-
-  endRead(): void {
-    this.activeReads -= 1;
-  }
-
   recordResult(text: string): number {
     const bytes = new TextEncoder().encode(text).byteLength;
-    if (
-      bytes > this.limits.maxToolResultBytes ||
-      this.resultBytes + bytes > this.limits.maxRunResultBytes
-    ) {
-      throw new Error("fixture tool result exceeded its byte budget.");
-    }
+    if (bytes > this.limits.maxToolResultBytes)
+      throw new Error("fixture tool result exceeded its per-result byte budget.");
+    if (this.resultBytes + bytes > this.limits.maxRunResultBytes)
+      throw new Error("fixture task exceeded its aggregate result byte budget.");
     this.resultBytes += bytes;
     return bytes;
   }
 }
 
-/** The only read capability: exact fixture keys, no filesystem or process APIs. */
+/** The only read capability: exact fixture keys, no filesystem or host APIs. */
 export class FixtureReader {
-  readonly samples: ReadSample[] = [];
+  readonly events: NestedReadEvent[] = [];
+  private nextReadId = 0;
 
   constructor(
     private readonly budget: RunBudget,
     private readonly signal: AbortSignal,
+    private readonly options: Pick<FixtureRunOptions, "readLatencyMs" | "onReadEvent"> = {},
   ) {}
+
+  private emit(event: NestedReadEvent): void {
+    this.events.push(event);
+    this.options.onReadEvent?.(event);
+  }
 
   private async readReserved(path: FixturePath): Promise<string> {
     const contents = FIXTURES[path];
     const bytes = new TextEncoder().encode(contents).byteLength;
     if (bytes > this.budget.limits.maxToolResultBytes)
       throw new Error("fixture exceeds the per-read byte budget.");
-    this.budget.beginRead();
-    const startedAt = nowMs();
+    const readId = (this.nextReadId += 1);
+    const at = (): number => nowMs() - this.budget.startedAt;
+    this.emit({ readId, kind: "read-start", path, atMs: at() });
     try {
-      await delay(FIXTURE_READ_LATENCY_MS, this.signal);
+      await delay(this.options.readLatencyMs?.[path] ?? FIXTURE_READ_LATENCY_MS, this.signal);
       this.budget.check(this.signal);
-      const endedAt = nowMs();
-      this.samples.push({ startedAt, endedAt });
-      return contents;
-    } finally {
-      this.budget.endRead();
+    } catch (error) {
+      this.emit({ readId, kind: "read-cancelled", path, atMs: at() });
+      throw error;
     }
+    this.emit({ readId, kind: "read-end", path, atMs: at() });
+    return contents;
   }
 
   async read(path: unknown): Promise<string> {
@@ -306,22 +356,27 @@ export class FixtureReader {
     return this.readReserved(fixturePath!);
   }
 
-  async readMany(
-    value: unknown,
-    parallel: boolean,
-  ): Promise<readonly { path: FixturePath; text: string }[]> {
+  /** The compound tool reads its explicit paths one after another, in caller order. */
+  async readMany(value: unknown): Promise<readonly { path: FixturePath; text: string }[]> {
     const paths = validatePaths(value, "read_many paths");
     this.budget.reserveReads(paths.length, this.signal);
-    const contents = parallel
-      ? await Promise.all(paths.map((path) => this.readReserved(path)))
-      : await readSequential(paths, (path) => this.readReserved(path));
+    const contents = await readSequential(paths, (path) => this.readReserved(path));
     return paths.map((path, index) => ({ path, text: contents[index]! }));
   }
 
   async filter(value: unknown): Promise<string> {
     const program = validateFilterProgram(value);
-    this.budget.reserveReads(program.paths.length, this.signal);
-    const sources = await readSequential(program.paths, async (path) => ({
+    let paths: FixturePath[];
+    if (program.indexPath === undefined) {
+      paths = program.paths;
+    } else {
+      // The one data-dependent step: a fixed field of a fixture index names
+      // the paths. They pass the same capability check and read budget.
+      this.budget.reserveReads(1, this.signal);
+      paths = taskPathsAfterIndex(await this.readReserved(program.indexPath));
+    }
+    this.budget.reserveReads(paths.length, this.signal);
+    const sources = await readSequential(paths, async (path) => ({
       path,
       text: await this.readReserved(path),
     }));
@@ -345,18 +400,18 @@ export class FixtureReader {
   }
 }
 
-async function readSequential<T, U>(
-  items: readonly T[],
-  read: (item: T, index: number) => Promise<U>,
-): Promise<U[]> {
-  const result: U[] = [];
-  for (let index = 0; index < items.length; index += 1)
-    result.push(await read(items[index]!, index));
-  return result;
-}
-
 function pathSchema(): Record<string, unknown> {
   return { type: "string", enum: [...FIXTURE_PATHS] };
+}
+
+function pathListSchema(): Record<string, unknown> {
+  return {
+    type: "array",
+    items: pathSchema(),
+    minItems: 1,
+    maxItems: MAX_PATHS_PER_CALL,
+    uniqueItems: true,
+  };
 }
 
 function directCall(path: FixturePath): ToolCall {
@@ -383,15 +438,7 @@ function toolSchemas(lane: ReductionLane): ToolSchemaFixture[] {
           "Read up to eight explicit fixture paths in caller order; no path discovery or shell is available.",
         parameters: {
           type: "object",
-          properties: {
-            paths: {
-              type: "array",
-              items: pathSchema(),
-              minItems: 1,
-              maxItems: MAX_PATHS_PER_CALL,
-              uniqueItems: true,
-            },
-          },
+          properties: { paths: pathListSchema() },
           required: ["paths"],
           additionalProperties: false,
         },
@@ -404,7 +451,7 @@ function toolSchemas(lane: ReductionLane): ToolSchemaFixture[] {
       {
         name: "filter_lines",
         description:
-          "Run the closed select-lines fixture filter. This accepts literals only, never source code.",
+          "Run the closed select-lines fixture filter over explicit paths or the files a fixture index lists. Literals only, never source code.",
         parameters: {
           type: "object",
           properties: {
@@ -413,13 +460,8 @@ function toolSchemas(lane: ReductionLane): ToolSchemaFixture[] {
               properties: {
                 version: { type: "integer", const: 1 },
                 operation: { type: "string", const: "select-lines" },
-                paths: {
-                  type: "array",
-                  items: pathSchema(),
-                  minItems: 1,
-                  maxItems: MAX_PATHS_PER_CALL,
-                  uniqueItems: true,
-                },
+                paths: pathListSchema(),
+                indexPath: pathSchema(),
                 containsAny: {
                   type: "array",
                   items: { type: "string", maxLength: MAX_FILTER_TERM_CHARS },
@@ -428,7 +470,8 @@ function toolSchemas(lane: ReductionLane): ToolSchemaFixture[] {
                 },
                 maxMatches: { type: "integer", minimum: 1, maximum: MAX_FILTER_MATCHES },
               },
-              required: ["version", "operation", "paths", "containsAny", "maxMatches"],
+              required: ["version", "operation", "containsAny", "maxMatches"],
+              oneOf: [{ required: ["paths"] }, { required: ["indexPath"] }],
               additionalProperties: false,
             },
           },
@@ -452,55 +495,39 @@ function taskPathsAfterIndex(indexText: string): FixturePath[] {
   return validatePaths(parsed.files, "fixture index files");
 }
 
-function ordinaryTaskPaths(taskId: FixtureTaskId): readonly FixturePath[] {
-  switch (taskId) {
-    case "single-call":
-      return TASKS[taskId].paths;
-    case "independent-multi-read":
-      return TASKS[taskId].paths;
-    case "dependent-loop-filter":
-      return [];
-    case "noisy-large-output":
-      return TASKS[taskId].paths;
-  }
-}
-
 function resultTextForMany(items: readonly { path: FixturePath; text: string }[]): string {
   return items.map(({ path, text }) => `--- ${path} ---\n${text}`).join("\n");
 }
 
-function readSamplesMetrics(samples: readonly ReadSample[]): {
+function readEventMetrics(events: readonly NestedReadEvent[]): {
   toolMs: number;
   maxConcurrency: number;
+  completionOrder: FixturePath[];
 } {
-  const toolMs = samples.reduce((total, sample) => total + sample.endedAt - sample.startedAt, 0);
-  const edges = samples
-    .flatMap((sample) => [
-      { at: sample.startedAt, delta: 1 },
-      { at: sample.endedAt, delta: -1 },
-    ])
-    .toSorted((left, right) => left.at - right.at || left.delta - right.delta);
+  const starts = new Map<number, number>();
+  let toolMs = 0;
   let active = 0;
   let maxConcurrency = 0;
-  for (const edge of edges) {
-    active += edge.delta;
-    maxConcurrency = Math.max(maxConcurrency, active);
+  const completionOrder: FixturePath[] = [];
+  for (const event of events) {
+    if (event.kind === "read-start") {
+      starts.set(event.readId, event.atMs);
+      active += 1;
+      maxConcurrency = Math.max(maxConcurrency, active);
+    } else {
+      active -= 1;
+      toolMs += event.atMs - (starts.get(event.readId) ?? event.atMs);
+      if (event.kind === "read-end") completionOrder.push(event.path);
+    }
   }
-  return { toolMs, maxConcurrency };
-}
-
-function strategyForLane(lane: ReductionLane): "direct" | "batch" | "compound" | "filter" {
-  if (lane === "direct-sequential") return "direct";
-  if (lane === "safe-batch-serial" || lane === "safe-batch-parallel") return "batch";
-  if (lane === "fixed-read-many") return "compound";
-  return "filter";
+  return { toolMs, maxConcurrency, completionOrder };
 }
 
 /** One scripted-provider task run. This is a deterministic harness, not Pi or a model. */
 export async function runFixtureTask(
   taskId: FixtureTaskId,
   lane: ReductionLane,
-  options: { signal?: AbortSignal; limits?: Partial<ReductionLimits> } = {},
+  options: FixtureRunOptions = {},
 ): Promise<FixtureRunResult> {
   const startedAt = nowMs();
   const controller = new AbortController();
@@ -515,7 +542,7 @@ export async function runFixtureTask(
   );
   const { signal } = controller;
   const task = TASKS[taskId];
-  const reader = new FixtureReader(budget, signal);
+  const reader = new FixtureReader(budget, signal, options);
   const schemas = toolSchemas(lane);
   const stablePrefix = [
     "VC-442 scripted fixture benchmark; no production Session, model, shell or workspace is attached.",
@@ -533,8 +560,6 @@ export async function runFixtureTask(
   let cacheWriteTokens = 0;
   let resultTokens = 0;
   let callId = 0;
-  const strategy = strategyForLane(lane);
-  const parallelBatch = lane === "safe-batch-parallel";
 
   const providerRound = async (): Promise<void> => {
     budget.check(signal);
@@ -542,11 +567,13 @@ export async function runFixtureTask(
     inputTokens += tokenCount(requestText);
     if (providerRounds === 0) cacheWriteTokens += prefixTokens;
     else cacheReadTokens += prefixTokens;
-    await delay(PROVIDER_LATENCY_MS, signal);
+    await delay(SCRIPTED_PROVIDER_ROUND_MS, signal);
     providerRounds += 1;
     budget.check(signal);
   };
 
+  // Results are committed to history in call order, whatever order they
+  // finished in. There is no retry path: a failed call fails the whole run.
   const persistResult = (response: ToolResponse): void => {
     budget.recordResult(response.text);
     resultTokens += tokenCount(response.text);
@@ -568,14 +595,10 @@ export async function runFixtureTask(
       budget.recordToolCall(signal);
       const id = `call-${callId + index + 1}`;
       let text: string;
-      if (call.name === "read") {
-        text = await reader.read(call.args.path);
-      } else if (call.name === "read_many") {
-        text = resultTextForMany(await reader.readMany(call.args.paths, false));
-      } else {
-        const program = call.args.program;
-        text = await reader.filter(program);
-      }
+      if (call.name === "read") text = await reader.read(call.args.path);
+      else if (call.name === "read_many")
+        text = resultTextForMany(await reader.readMany(call.args.paths));
+      else text = await reader.filter(call.args.program);
       return { name: call.name, callId: id, text };
     };
     const responses = runParallel
@@ -586,67 +609,41 @@ export async function runFixtureTask(
     return responses;
   };
 
-  const runDirectOneByOne = async (paths: readonly FixturePath[]): Promise<ToolResponse[]> => {
-    const results: ToolResponse[] = [];
-    for (const path of paths) results.push(...(await runToolRound([directCall(path)], false)));
-    return results;
+  const filterCall = (source: { paths: FixturePath[] } | { indexPath: FixturePath }): ToolCall => ({
+    name: "filter_lines",
+    args: {
+      program: {
+        version: 1,
+        operation: "select-lines",
+        ...source,
+        containsAny: [...task.filterTerms],
+        maxMatches: MAX_FILTER_MATCHES,
+      },
+    },
+  });
+
+  /** How each lane reads a known list of independent paths. */
+  const readPaths: Record<ReductionLane, (paths: readonly FixturePath[]) => Promise<unknown>> = {
+    "direct-sequential": async (paths) => {
+      for (const path of paths) await runToolRound([directCall(path)], false);
+    },
+    "safe-batch-serial": (paths) => runToolRound(paths.map(directCall), false),
+    "safe-batch-parallel": (paths) => runToolRound(paths.map(directCall), true),
+    "fixed-read-many": (paths) =>
+      runToolRound([{ name: "read_many", args: { paths: [...paths] } }], false),
+    "filter-program": (paths) => runToolRound([filterCall({ paths: [...paths] })], false),
   };
-  const runBatchedReads = (paths: readonly FixturePath[]): Promise<ToolResponse[]> =>
-    runToolRound(paths.map(directCall), parallelBatch);
-  const runCompound = (paths: readonly FixturePath[]): Promise<ToolResponse[]> =>
-    runToolRound([{ name: "read_many", args: { paths } }], false);
-  const runFilter = (paths: readonly FixturePath[]): Promise<ToolResponse[]> =>
-    runToolRound(
-      [
-        {
-          name: "filter_lines",
-          args: {
-            program: {
-              version: 1,
-              operation: "select-lines",
-              paths: [...paths],
-              containsAny: [...task.filterTerms],
-              maxMatches: MAX_FILTER_MATCHES,
-            },
-          },
-        },
-      ],
-      false,
-    );
 
   try {
-    if (strategy === "direct") {
-      if (taskId === "dependent-loop-filter") {
-        const index = await runDirectOneByOne([TASKS["dependent-loop-filter"].indexPath]);
-        const paths = taskPathsAfterIndex(index[0]!.text);
-        await runDirectOneByOne(paths);
-      } else {
-        await runDirectOneByOne(ordinaryTaskPaths(taskId));
-      }
-    } else if (strategy === "batch") {
-      if (taskId === "dependent-loop-filter") {
-        const index = await runDirectOneByOne([TASKS["dependent-loop-filter"].indexPath]);
-        const paths = taskPathsAfterIndex(index[0]!.text);
-        await runBatchedReads(paths);
-      } else {
-        await runBatchedReads(ordinaryTaskPaths(taskId));
-      }
-    } else if (strategy === "compound") {
-      if (taskId === "dependent-loop-filter") {
-        const index = await runDirectOneByOne([TASKS["dependent-loop-filter"].indexPath]);
-        const paths = taskPathsAfterIndex(index[0]!.text);
-        await runCompound(paths);
-      } else {
-        await runCompound(ordinaryTaskPaths(taskId));
-      }
-    } else if (strategy === "filter") {
-      if (taskId === "dependent-loop-filter") {
-        const index = await runDirectOneByOne([TASKS["dependent-loop-filter"].indexPath]);
-        const paths = taskPathsAfterIndex(index[0]!.text);
-        await runFilter(paths);
-      } else {
-        await runFilter(ordinaryTaskPaths(taskId));
-      }
+    if (!("indexPath" in task)) {
+      await readPaths[lane](task.paths);
+    } else if (lane === "filter-program") {
+      // The filter follows the index inside one call, so it needs no round
+      // to learn the shard paths. Every other lane must read the index first.
+      await runToolRound([filterCall({ indexPath: task.indexPath })], false);
+    } else {
+      const [index] = await runToolRound([directCall(task.indexPath)], false);
+      await readPaths[lane](taskPathsAfterIndex(index!.text));
     }
 
     // All prior results remain in the transcript and are serialized again on
@@ -654,15 +651,15 @@ export async function runFixtureTask(
     // not model inference: it succeeds only if the exact ground-truth lines made
     // it through the tool-result history.
     await providerRound();
-    const taskResults = taskOutputs(taskId, toolOutputs);
+    const allResults = toolOutputs.join("\n");
     const retainedEvidence = task.requiredEvidence.filter((line) =>
-      taskResults.includes(line),
+      allResults.includes(line),
     ).length;
     const answer =
       retainedEvidence === task.requiredEvidence.length
         ? task.expectedAnswer
         : "INSUFFICIENT_EVIDENCE";
-    const readMetrics = readSamplesMetrics(reader.samples);
+    const readMetrics = readEventMetrics(reader.events);
     return {
       taskId,
       lane,
@@ -680,8 +677,9 @@ export async function runFixtureTask(
       correct: answer === task.expectedAnswer,
       retainedEvidence,
       evidenceCount: task.requiredEvidence.length,
-      retries: 0,
       resultOrder,
+      completionOrder: readMetrics.completionOrder,
+      readEvents: [...reader.events],
       maxConcurrency: readMetrics.maxConcurrency,
       historyMessages: history.length,
     };
@@ -689,142 +687,21 @@ export async function runFixtureTask(
     clearTimeout(deadline);
     parentSignal?.removeEventListener("abort", forwardAbort);
     // A failed sibling in a parallel batch must not leave the others running:
-    // aborting here cancels any still-pending read delay. Reads are
-    // side-effect-free and never retried, so nothing needs undoing.
+    // aborting here cancels any still-pending read. Reads are side-effect-free
+    // and never retried, so nothing needs undoing.
     if (!controller.signal.aborted) controller.abort(new Error("fixture run settled."));
   }
 }
 
-export interface MockReadonlyLatencySensitivity {
-  latencyMs: number;
-  reads: number;
-  sequentialMs: number;
-  parallelMs: number;
-  savedMs: number;
-  turnSavedPercent: number;
-  providerRounds: number;
-  maxConcurrency: number;
-  sameResults: boolean;
-}
-
-/**
- * Isolated synthetic MCP-like latency sweep. These delayed calls return fixed
- * in-memory values and open no network connection; only their declared latency
- * changes. Provider rounds stay fixed so the result isolates read-only overlap.
- */
-export async function runMockReadonlyLatencySensitivity(
-  options: { latenciesMs?: readonly number[]; reads?: number; repeats?: number } = {},
-): Promise<MockReadonlyLatencySensitivity[]> {
-  const latencies = options.latenciesMs ?? [50, 250, 900];
-  const reads = options.reads ?? 4;
-  const repeats = options.repeats ?? 3;
-  if (!Number.isInteger(reads) || reads < 2 || reads > MAX_PATHS_PER_CALL) {
-    throw new Error(`latency sweep reads must be between 2 and ${MAX_PATHS_PER_CALL}.`);
-  }
-  if (!Number.isInteger(repeats) || repeats < 1 || repeats > 20) {
-    throw new Error("latency sweep repeats must be an integer from 1 to 20.");
-  }
-  if (
-    latencies.length === 0 ||
-    latencies.some((latency) => !Number.isFinite(latency) || latency < 1 || latency > 2_000)
-  ) {
-    throw new Error("latency sweep values must be from 1 to 2000 milliseconds.");
-  }
-
-  const measure = async (
-    latencyMs: number,
-    parallel: boolean,
-  ): Promise<{ elapsedMs: number; maxConcurrency: number; results: string[] }> => {
-    const controller = new AbortController();
-    const budgetTimer = setTimeout(
-      () => controller.abort(new Error("latency sensitivity task exceeded its bound.")),
-      latencyMs * reads + 2_000,
-    );
-    const startedAt = nowMs();
-    let active = 0;
-    let maxConcurrency = 0;
-    const read = async (index: number): Promise<string> => {
-      active += 1;
-      maxConcurrency = Math.max(maxConcurrency, active);
-      try {
-        await delay(latencyMs, controller.signal);
-        return `fixed-read-result-${index}`;
-      } finally {
-        active -= 1;
-      }
-    };
-    try {
-      await delay(PROVIDER_LATENCY_MS, controller.signal);
-      const indices = Array.from({ length: reads }, (_, index) => index);
-      const results = parallel
-        ? await Promise.all(indices.map((index) => read(index)))
-        : await readSequential(indices, (index) => read(index));
-      await delay(PROVIDER_LATENCY_MS, controller.signal);
-      return { elapsedMs: nowMs() - startedAt, maxConcurrency, results };
-    } finally {
-      clearTimeout(budgetTimer);
-    }
-  };
-
-  const rows: MockReadonlyLatencySensitivity[] = [];
-  for (const latencyMs of latencies) {
-    const serialSamples = [];
-    const parallelSamples = [];
-    for (let repeat = 0; repeat < repeats; repeat += 1) {
-      serialSamples.push(await measure(latencyMs, false));
-      parallelSamples.push(await measure(latencyMs, true));
-    }
-    const serialMs = medianNumbers(serialSamples.map((sample) => sample.elapsedMs));
-    const parallelMs = medianNumbers(parallelSamples.map((sample) => sample.elapsedMs));
-    const expected = serialSamples[0]!.results.join(",");
-    const sameResults = [...serialSamples, ...parallelSamples].every(
-      (sample) => sample.results.join(",") === expected,
-    );
-    rows.push({
-      latencyMs,
-      reads,
-      sequentialMs: serialMs,
-      parallelMs,
-      savedMs: serialMs - parallelMs,
-      turnSavedPercent: serialMs === 0 ? 0 : ((serialMs - parallelMs) / serialMs) * 100,
-      providerRounds: 2,
-      maxConcurrency: Math.max(...parallelSamples.map((sample) => sample.maxConcurrency)),
-      sameResults,
-    });
-  }
-  return rows;
-}
-
-function medianNumbers(values: readonly number[]): number {
-  const sorted = values.toSorted((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
-}
-
-function taskOutputs(taskId: FixtureTaskId, outputs: readonly string[]): string {
-  // Preserve the complete set of tool results for the correctness oracle. The
-  // transcript itself is held separately in `history` and never compacted.
-  return `${taskId}\n${outputs.join("\n")}`;
-}
-
 /** Fresh schemas used only to measure local construction/JSON overhead. */
-export function buildToolSchemasForBenchmark(lane: ReductionLane): ToolSchemaFixture[] {
-  return toolSchemas(lane);
-}
+export { toolSchemas as buildToolSchemasForBenchmark };
 
 export const REDUCTION_BOUNDS = Object.freeze({
-  providerLatencyMs: PROVIDER_LATENCY_MS,
-  fixtureReadLatencyMs: FIXTURE_READ_LATENCY_MS,
-  maxTaskMs: MAX_TASK_MS,
-  maxToolCalls: MAX_TOOL_CALLS,
-  maxNestedReads: MAX_NESTED_READS,
   maxPathsPerCall: MAX_PATHS_PER_CALL,
-  maxToolResultBytes: MAX_TOOL_RESULT_BYTES,
-  maxRunResultBytes: MAX_RUN_RESULT_BYTES,
   maxFilterTerms: MAX_FILTER_TERMS,
   maxFilterTermChars: MAX_FILTER_TERM_CHARS,
   maxFilterMatches: MAX_FILTER_MATCHES,
-  maxFilterLinesScanned: MAX_FILTER_LINES_SCANNED,
+  ...DEFAULT_LIMITS,
 });
 
 export const READ_ONLY_REDUCTION_LANES: readonly ReductionLane[] = [

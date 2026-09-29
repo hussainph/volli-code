@@ -1,107 +1,94 @@
+/**
+ * The VC-442 bench driver: runs every task/lane and both MCP-like sweeps, then
+ * renders them. This is operator-side code (like the test), so unlike the
+ * capability modules it may reuse the sibling bench's table renderer.
+ */
+
+import { table } from "../parallel-tools/report";
 import {
-  buildToolSchemasForBenchmark,
-  READ_ONLY_REDUCTION_LANES,
-  runFixtureTask,
-  runMockReadonlyLatencySensitivity,
-  type MockReadonlyLatencySensitivity,
-  type FixtureRunResult,
-  type ReductionLane,
-} from "./prototype";
-import { TASKS, type FixtureTaskId } from "./fixtures";
+  FIXTURE_READ_LATENCY_MS,
+  MOCK_CALL_LATENCIES_MS,
+  SCRIPTED_PROVIDER_ROUND_MS,
+  TASKS,
+  type FixtureTaskId,
+} from "./fixtures";
 import {
   barrierNetworkMs,
   buildMcpDecisionSweep,
-  modelledAllInOneMs,
+  runMockReadonlyLatencySweep,
   SWEEP_CALLS,
-  SWEEP_LATENCIES_MS,
   type McpDecisionRow,
+  type MeasuredLatencyRow,
 } from "./mcp-decision-sweep";
+import {
+  buildToolSchemasForBenchmark,
+  median,
+  READ_ONLY_REDUCTION_LANES,
+  runFixtureTask,
+  type FixtureRunResult,
+  type ReductionLane,
+} from "./prototype";
 
 const TASK_IDS = Object.keys(TASKS) as FixtureTaskId[];
 const DEFAULT_REPEATS = 3;
+const MAX_REPEATS = 20;
 const SCHEMA_SAMPLES = 101;
 
-export interface ReductionSummary extends Omit<
-  FixtureRunResult,
-  "elapsedMs" | "toolMs" | "maxConcurrency" | "historyMessages" | "resultOrder"
-> {
-  elapsedMs: number;
-  toolMs: number;
+type NumericField =
+  | "elapsedMs"
+  | "providerRounds"
+  | "toolCalls"
+  | "nestedReads"
+  | "toolMs"
+  | "inputTokens"
+  | "cacheReadTokens"
+  | "cacheWriteTokens"
+  | "resultTokens"
+  | "resultBytes"
+  | "schemaTokens"
+  | "historyMessages";
+
+export type ReductionSummary = Pick<FixtureRunResult, NumericField | "taskId" | "lane"> & {
+  correct: boolean;
+  retainedEvidence: number;
+  evidenceCount: number;
   maxConcurrency: number;
-  historyMessages: number;
   schemaBuildP50Us: number;
-}
+};
 
 export interface ReadOnlyReductionReport {
   repeats: number;
   summaries: ReductionSummary[];
-  latencySensitivity: MockReadonlyLatencySensitivity[];
+  measuredLatency: MeasuredLatencyRow[];
   mcpDecision: McpDecisionRow[];
   text: string;
 }
 
-function median(values: readonly number[]): number {
-  const sorted = values.toSorted((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
-}
-
-function pad(value: string, width: number): string {
-  return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
-}
-
-function padLeft(value: string, width: number): string {
-  return value.length >= width ? value : `${" ".repeat(width - value.length)}${value}`;
-}
-
-function markdownTable(headers: string[], rows: string[][]): string {
-  const widths = headers.map((header, column) =>
-    Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
-  );
-  const line = (cells: string[], align: "left" | "right"): string =>
-    `| ${cells.map((cell, column) => (align === "right" ? padLeft(cell, widths[column]!) : pad(cell, widths[column]!))).join(" | ")} |`;
-  return [
-    line(headers, "left"),
-    `|${widths.map((width) => "-".repeat(width + 2)).join("|")}|`,
-    ...rows.map((row) => line(row, "left")),
-  ].join("\n");
-}
-
-function medianResult(
-  results: readonly FixtureRunResult[],
-  schemaBuildP50Us: number,
-): ReductionSummary {
+function summarize(results: readonly FixtureRunResult[], schemaBuildP50Us: number) {
   const first = results[0];
   if (first === undefined) throw new Error("a reduction summary needs at least one sample.");
-  const same = (field: keyof FixtureRunResult): number => {
-    const values = results.map((result) => result[field]);
-    if (values.some((value) => typeof value !== "number"))
-      throw new Error(`${field} is not numeric.`);
-    return median(values as number[]);
-  };
-  const evidence = Math.min(...results.map((result) => result.retainedEvidence));
+  const medianOf = (field: NumericField): number => median(results.map((result) => result[field]));
   return {
     taskId: first.taskId,
     lane: first.lane,
-    elapsedMs: same("elapsedMs"),
-    providerRounds: same("providerRounds"),
-    toolCalls: same("toolCalls"),
-    nestedReads: same("nestedReads"),
-    toolMs: same("toolMs"),
-    inputTokens: same("inputTokens"),
-    cacheReadTokens: same("cacheReadTokens"),
-    cacheWriteTokens: same("cacheWriteTokens"),
-    resultTokens: same("resultTokens"),
-    resultBytes: same("resultBytes"),
-    schemaTokens: same("schemaTokens"),
+    elapsedMs: medianOf("elapsedMs"),
+    providerRounds: medianOf("providerRounds"),
+    toolCalls: medianOf("toolCalls"),
+    nestedReads: medianOf("nestedReads"),
+    toolMs: medianOf("toolMs"),
+    inputTokens: medianOf("inputTokens"),
+    cacheReadTokens: medianOf("cacheReadTokens"),
+    cacheWriteTokens: medianOf("cacheWriteTokens"),
+    resultTokens: medianOf("resultTokens"),
+    resultBytes: medianOf("resultBytes"),
+    schemaTokens: medianOf("schemaTokens"),
+    historyMessages: medianOf("historyMessages"),
     correct: results.every((result) => result.correct),
-    retainedEvidence: evidence,
+    retainedEvidence: Math.min(...results.map((result) => result.retainedEvidence)),
     evidenceCount: first.evidenceCount,
-    retries: same("retries"),
-    schemaBuildP50Us,
     maxConcurrency: Math.max(...results.map((result) => result.maxConcurrency)),
-    historyMessages: same("historyMessages"),
-  };
+    schemaBuildP50Us,
+  } satisfies ReductionSummary;
 }
 
 function measureSchemaBuildP50Us(lane: ReductionLane): number {
@@ -135,14 +122,7 @@ function laneSummary(
   return summary;
 }
 
-export async function buildReadOnlyReductionReport(
-  options: { repeats?: number } = {},
-): Promise<ReadOnlyReductionReport> {
-  const repeats = options.repeats ?? DEFAULT_REPEATS;
-  if (!Number.isInteger(repeats) || repeats < 1 || repeats > 20) {
-    throw new Error("benchmark repeats must be an integer from 1 to 20.");
-  }
-
+async function measure(repeats: number): Promise<Omit<ReadOnlyReductionReport, "text">> {
   const schemaBuildUs = new Map<ReductionLane, number>();
   for (const lane of READ_ONLY_REDUCTION_LANES)
     schemaBuildUs.set(lane, measureSchemaBuildP50Us(lane));
@@ -152,28 +132,29 @@ export async function buildReadOnlyReductionReport(
       const results: FixtureRunResult[] = [];
       for (let repeat = 0; repeat < repeats; repeat += 1)
         results.push(await runFixtureTask(taskId, lane));
-      const summary = medianResult(results, schemaBuildUs.get(lane)!);
-      if (!summary.correct || summary.retainedEvidence !== summary.evidenceCount) {
-        throw new Error(`${taskId}/${lane} lost required evidence or changed the scripted answer.`);
-      }
-      if (summary.retries !== 0)
-        throw new Error(`${taskId}/${lane} unexpectedly retried a read-only operation.`);
-      summaries.push(summary);
+      summaries.push(summarize(results, schemaBuildUs.get(lane)!));
     }
   }
+  const measuredLatency = await runMockReadonlyLatencySweep({ repeats });
+  return { repeats, summaries, measuredLatency, mcpDecision: buildMcpDecisionSweep() };
+}
 
-  const latencySensitivity = await runMockReadonlyLatencySensitivity();
+function render(data: Omit<ReadOnlyReductionReport, "text">): string {
+  const { repeats, summaries, measuredLatency, mcpDecision } = data;
   const out: string[] = [];
   out.push("# VC-442 read-only result-reduction fixture benchmark");
   out.push("");
   out.push(
-    `fixture preset: read-only-reduction-v1 | repeats per task/lane: ${repeats} | median wall time`,
+    `fixture preset: read-only-reduction-v2 | repeats per task/lane: ${repeats} | median wall time`,
   );
   out.push(
-    "provider latency: 35ms per scripted round | fixture read latency: 8ms per read (declared harness delays)",
+    `provider latency: ${SCRIPTED_PROVIDER_ROUND_MS}ms per scripted round | fixture read latency: ${FIXTURE_READ_LATENCY_MS}ms per read (declared harness delays)`,
   );
   out.push(
     "tokenizer: cl100k BPE over serialized scripted inputs; cache figures count only the fixed system+tool prefix, not the user turn or prior results",
+  );
+  out.push(
+    "retries: none by construction (the harness has no retry path; a failed call fails the run), so no retry column is reported",
   );
   out.push("");
   out.push("## Task latency, rounds, and correctness");
@@ -192,23 +173,12 @@ export async function buildReadOnlyReductionReport(
         `${row.toolCalls}/${row.nestedReads}`,
         `${row.retainedEvidence}/${row.evidenceCount}`,
         row.correct ? "yes" : "no",
-        String(row.retries),
       ]);
     }
   }
   out.push(
-    markdownTable(
-      [
-        "task",
-        "lane",
-        "p50 ms",
-        "turn Δ",
-        "provider rounds",
-        "calls/reads",
-        "evidence",
-        "correct",
-        "retries",
-      ],
+    table(
+      ["task", "lane", "p50 ms", "turn Δ", "provider rounds", "calls/reads", "evidence", "correct"],
       latencyRows,
     ),
   );
@@ -233,7 +203,7 @@ export async function buildReadOnlyReductionReport(
     }
   }
   out.push(
-    markdownTable(
+    table(
       ["task", "lane", "input tok", "cache R/W", "result tok", "result B", "input Δ", "result Δ"],
       contextRows,
     ),
@@ -241,25 +211,8 @@ export async function buildReadOnlyReductionReport(
   out.push("");
   out.push("## Selective parallelism, isolated from model rounds");
   out.push("");
-  const parallelRows: string[][] = [];
-  for (const taskId of TASK_IDS) {
-    const serial = laneSummary(summaries, taskId, "safe-batch-serial");
-    const parallel = laneSummary(summaries, taskId, "safe-batch-parallel");
-    parallelRows.push([
-      taskId,
-      serial.elapsedMs.toFixed(1),
-      parallel.elapsedMs.toFixed(1),
-      (serial.elapsedMs - parallel.elapsedMs).toFixed(1),
-      percentSaved(serial.elapsedMs, parallel.elapsedMs),
-      String(serial.providerRounds === parallel.providerRounds),
-      String(
-        serial.inputTokens === parallel.inputTokens && serial.resultBytes === parallel.resultBytes,
-      ),
-      String(parallel.maxConcurrency),
-    ]);
-  }
   out.push(
-    markdownTable(
+    table(
       [
         "task",
         "serial batch ms",
@@ -270,17 +223,37 @@ export async function buildReadOnlyReductionReport(
         "same data",
         "peak reads",
       ],
-      parallelRows,
+      TASK_IDS.map((taskId) => {
+        const serial = laneSummary(summaries, taskId, "safe-batch-serial");
+        const parallel = laneSummary(summaries, taskId, "safe-batch-parallel");
+        return [
+          taskId,
+          serial.elapsedMs.toFixed(1),
+          parallel.elapsedMs.toFixed(1),
+          (serial.elapsedMs - parallel.elapsedMs).toFixed(1),
+          percentSaved(serial.elapsedMs, parallel.elapsedMs),
+          String(serial.providerRounds === parallel.providerRounds),
+          String(
+            serial.inputTokens === parallel.inputTokens &&
+              serial.resultBytes === parallel.resultBytes,
+          ),
+          String(parallel.maxConcurrency),
+        ];
+      }),
     ),
   );
   out.push("");
   out.push("## Per-lane schema setup overhead");
   out.push("");
-  const schemaRows = READ_ONLY_REDUCTION_LANES.map((lane) => {
-    const row = summaries.find((summary) => summary.lane === lane)!;
-    return [lane, String(row.schemaTokens), row.schemaBuildP50Us.toFixed(2)];
-  });
-  out.push(markdownTable(["lane", "schema tok", "build + JSON p50 µs"], schemaRows));
+  out.push(
+    table(
+      ["lane", "schema tok", "build + JSON p50 µs"],
+      READ_ONLY_REDUCTION_LANES.map((lane) => {
+        const row = summaries.find((summary) => summary.lane === lane)!;
+        return [lane, String(row.schemaTokens), row.schemaBuildP50Us.toFixed(2)];
+      }),
+    ),
+  );
   out.push("");
   out.push(
     "All answers are produced by a deterministic evidence oracle over retained fixture tool results, not by a model.",
@@ -292,82 +265,56 @@ export async function buildReadOnlyReductionReport(
     "The serial-vs-parallel rows use the same direct read calls and provider rounds; they isolate only fixture read scheduling.",
   );
   out.push("");
+  out.push("## Mock MCP-like latency sweep, measured (timers only; no transport or model)");
+  out.push("");
   out.push(
-    "## Mock read-only remote/MCP-like latency sensitivity (not a provider or transport run)",
+    `${SWEEP_CALLS} independent calls returning fixed values; batch = calls per assistant reply. Earlier calls in a reply wait 2 ms longer, so parallel replies finish out of call order. ${SCRIPTED_PROVIDER_ROUND_MS} ms scripted rounds.`,
   );
   out.push("");
   out.push(
-    "Four independent fixed in-memory replies; only the delayed read latency varies. Two scripted provider rounds in both modes.",
-  );
-  out.push("");
-  out.push(
-    markdownTable(
+    table(
       [
-        "declared read ms",
-        "seq turn ms",
-        "parallel turn ms",
+        "call wait ms",
+        "batch",
+        "rounds",
+        "seq ms",
+        "seq model",
+        "parallel ms",
+        "parallel model",
         "saved ms",
         "turn Δ",
-        "provider rounds",
-        "peak reads",
-        "same data",
+        "peak",
+        "ordered commit",
+        "out-of-order finish",
       ],
-      latencySensitivity.map((row) => [
+      measuredLatency.map((row) => [
         String(row.latencyMs),
+        String(row.batchSize),
+        String(row.providerRounds),
         row.sequentialMs.toFixed(1),
+        String(row.modelSequentialMs),
         row.parallelMs.toFixed(1),
+        String(row.modelParallelMs),
         row.savedMs.toFixed(1),
         `${row.turnSavedPercent.toFixed(1)}%`,
-        String(row.providerRounds),
         String(row.maxConcurrency),
-        row.sameResults ? "yes" : "no",
+        row.orderedResults ? "yes" : "no",
+        row.completionDiffered ? "yes" : "no",
       ]),
     ),
   );
   out.push("");
-  out.push(
-    "This sensitivity arm creates no MCP client, network request, credential access or model inference; it only shows how selective read-only overlap scales with latency.",
-  );
-  out.push("");
-  out.push("Measured vs closed-form model (all four calls in one reply, 35 ms scripted rounds):");
+  out.push("## MCP-like decision sweep (closed form; declared inputs)");
   out.push("");
   out.push(
-    markdownTable(
-      ["declared read ms", "seq measured", "seq model", "parallel measured", "parallel model"],
-      latencySensitivity.map((row) => [
-        String(row.latencyMs),
-        row.sequentialMs.toFixed(1),
-        modelledAllInOneMs(row.latencyMs, row.reads, 35, false).toFixed(1),
-        row.parallelMs.toFixed(1),
-        modelledAllInOneMs(row.latencyMs, row.reads, 35, true).toFixed(1),
-      ]),
-    ),
-  );
-
-  const mcpDecision = buildMcpDecisionSweep();
-  out.push("");
-  out.push("## MCP-like decision sweep (closed-form; declared inputs, no transport or model)");
-  out.push("");
-  out.push(
-    `${SWEEP_CALLS} independent read-only calls. batch = calls the model puts in one reply (4 = always batches, 1 = never; VC-245 measured a 17% batch rate on legacy Sessions). The 2000 ms provider round is a declared assumption, not a measurement.`,
+    `Same turn model as the measured sweep, uniform waits. The ${SWEEP_CALLS}-call batch-4/2/1 rows at ${SCRIPTED_PROVIDER_ROUND_MS} ms are checked against measurement above; the 2000 ms provider round is a declared assumption, not a measurement. VC-245 measured a 17% batch rate on legacy Sessions.`,
   );
   out.push("");
   out.push("### Wall time: network wait x batching propensity x provider round");
   out.push("");
-  const timeRows = mcpDecision
-    .filter((row) => row.outputBytesPerCall === mcpDecision[0]!.outputBytesPerCall)
-    .map((row) => [
-      String(row.providerRoundMs),
-      String(row.latencyMs),
-      String(row.batchSize),
-      String(row.providerRounds),
-      String(row.sequentialMs),
-      String(row.selectiveParallelMs),
-      String(row.savedMs),
-      `${row.savedPercent.toFixed(1)}%`,
-    ]);
+  const firstBytes = mcpDecision[0]!.outputBytesPerCall;
   out.push(
-    markdownTable(
+    table(
       [
         "provider round ms",
         "call wait ms",
@@ -378,38 +325,56 @@ export async function buildReadOnlyReductionReport(
         "saved ms",
         "turn Δ",
       ],
-      timeRows,
+      mcpDecision
+        .filter((row) => row.outputBytesPerCall === firstBytes)
+        .map((row) => [
+          String(row.providerRoundMs),
+          String(row.latencyMs),
+          String(row.batchSize),
+          String(row.providerRounds),
+          String(row.sequentialMs),
+          String(row.selectiveParallelMs),
+          String(row.savedMs),
+          `${row.savedPercent.toFixed(1)}%`,
+        ]),
     ),
   );
   out.push("");
   out.push("### Context: output volume x batching propensity (same under both dispatch modes)");
   out.push("");
-  const tokenRows = mcpDecision
-    .filter(
-      (row) =>
-        row.latencyMs === SWEEP_LATENCIES_MS[0] &&
-        row.providerRoundMs === mcpDecision[0]!.providerRoundMs,
-    )
-    .map((row) => [
-      String(row.outputBytesPerCall),
-      String(row.resultTokensPerCall),
-      String(row.batchSize),
-      String(row.providerRounds),
-      String(row.inputTokens),
-    ]);
   out.push(
-    markdownTable(
+    table(
       ["result B/call", "result tok/call", "batch", "rounds", "turn input tok"],
-      tokenRows,
+      mcpDecision
+        .filter(
+          (row) =>
+            row.latencyMs === MOCK_CALL_LATENCIES_MS[0] &&
+            row.providerRoundMs === SCRIPTED_PROVIDER_ROUND_MS,
+        )
+        .map((row) => [
+          String(row.outputBytesPerCall),
+          String(row.resultTokensPerCall),
+          String(row.batchSize),
+          String(row.providerRounds),
+          String(row.inputTokens),
+        ]),
     ),
   );
   out.push("");
-  out.push("### Correctness: one write/approval-gated call in a reply of four");
+  out.push(
+    "### Correctness: one write/approval-gated call in a reply of four (formula; network ms)",
+  );
   out.push("");
   out.push(
-    markdownTable(
-      ["call wait ms", "all sequential", "barrier at 2nd", "barrier last", "all parallel (unsafe)"],
-      SWEEP_LATENCIES_MS.map((latencyMs) => [
+    table(
+      [
+        "call wait ms",
+        "Pi today (whole reply sequential)",
+        "custom barrier, 2nd",
+        "custom barrier, last",
+        "all parallel (unsafe)",
+      ],
+      MOCK_CALL_LATENCIES_MS.map((latencyMs) => [
         String(latencyMs),
         String(SWEEP_CALLS * latencyMs),
         String(barrierNetworkMs(latencyMs, 1)),
@@ -420,8 +385,18 @@ export async function buildReadOnlyReductionReport(
   );
   out.push("");
   out.push(
-    "Network-wait ms only. A barrier keeps writes and approvals in reply order; reads either side still overlap.",
+    "Pi runs a whole reply sequentially when any call in it is sequential-mode. The barrier columns describe a hypothetical Volli dispatcher, not measured behaviour.",
   );
+  return out.join("\n");
+}
 
-  return { repeats, summaries, latencySensitivity, mcpDecision, text: out.join("\n") };
+export async function buildReadOnlyReductionReport(
+  options: { repeats?: number } = {},
+): Promise<ReadOnlyReductionReport> {
+  const repeats = options.repeats ?? DEFAULT_REPEATS;
+  if (!Number.isInteger(repeats) || repeats < 1 || repeats > MAX_REPEATS) {
+    throw new Error(`benchmark repeats must be an integer from 1 to ${MAX_REPEATS}.`);
+  }
+  const data = await measure(repeats);
+  return { ...data, text: render(data) };
 }
