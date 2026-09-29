@@ -51,7 +51,9 @@ import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } fr
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
+import type { PresentedScheduledResume } from "./scheduled-resume";
 import {
+  SCHEDULED_RESUME_SKIP_REASONS,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
@@ -62,6 +64,7 @@ import type { SessionUsage } from "./session-usage";
 import type {
   CommandReceipt,
   CommandReceiptResult,
+  ScheduledResumeOutcome,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -914,6 +917,12 @@ export interface SessionPresentationProjection extends Pick<
    * about which one is live.
    */
   authority: RendererSessionAuthority | null;
+  /**
+   * The resume this Session is waiting to run at a quota reset, or `null`.
+   * Derived from its commands by `presentedScheduledResume` — only one that
+   * is still going to run is drawn, never one the Session already overtook.
+   */
+  scheduledResume: PresentedScheduledResume | null;
 }
 
 /**
@@ -1034,6 +1043,21 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         interactionId: readString(row.interactionId, `${context}.interactionId`),
         resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
         reference: decodeTranscriptReference(row.reference, `${context}.reference`),
+      };
+    case "resume.schedule":
+      return {
+        kind,
+        attentionId: readString(row.attentionId, `${context}.attentionId`),
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        resumeAt: readInteger(row.resumeAt, `${context}.resumeAt`),
+      };
+    case "resume.cancel":
+      return { kind, scheduleId: readString(row.scheduleId, `${context}.scheduleId`) };
+    case "resume.settle":
+      return {
+        kind,
+        scheduleId: readString(row.scheduleId, `${context}.scheduleId`),
+        outcome: decodeScheduledResumeOutcome(row.outcome, `${context}.outcome`),
       };
     default:
       throw new Error(`${context}.kind is not a known Session command`);
@@ -1193,6 +1217,18 @@ function decodeSessionStopActor(value: unknown, context: string): SessionStopAct
     : { kind };
 }
 
+function decodeScheduledResumeOutcome(value: unknown, context: string): ScheduledResumeOutcome {
+  const row = asRecord(value, context);
+  const kind = enumValue(row.kind, ["resumed", "skipped"], `${context}.kind`);
+  return kind === "resumed"
+    ? { kind, retryCommandId: readString(row.retryCommandId, `${context}.retryCommandId`) }
+    : {
+        kind,
+        reason: enumValue(row.reason, SCHEDULED_RESUME_SKIP_REASONS, `${context}.reason`),
+        detail: readNullableString(row.detail, `${context}.detail`),
+      };
+}
+
 function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
   const row = asRecord(value, context);
   const kind = enumValue(
@@ -1211,6 +1247,9 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "context.compacted",
       "message.submitted",
       "interaction.resolved",
+      "resume.scheduled",
+      "resume.cancelled",
+      "resume.settled",
     ],
     `${context}.kind`,
   );
@@ -1265,9 +1304,14 @@ function decodeToolSurfaceInput(
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
+  mcpManagementNames?: "server";
   mcpTools?: readonly McpToolDefinition[];
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  const mcpManagementNames =
+    input.mcpManagementNames === undefined
+      ? undefined
+      : enumValue(input.mcpManagementNames, ["server"], `${context}.mcpManagementNames`);
   const mcpTools =
     input.mcpTools === undefined
       ? undefined
@@ -1277,7 +1321,12 @@ function decodeToolSurfaceInput(
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
-  return mcpTools === undefined ? { kind, tools } : { kind, tools, mcpTools };
+  return {
+    kind,
+    tools,
+    ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+  };
 }
 
 /**
@@ -1454,6 +1503,15 @@ function decodeAttention(value: unknown, context: string): SessionAttention {
   }
   if (kind === "quota_exhausted") {
     return { ...base, kind, resetAt: readNullableInteger(row.resetAt, `${context}.resetAt`) };
+  }
+  if (kind === "adapter_unrecoverable") {
+    // Absent is an Attention written before the field existed, and reads as
+    // "no reset stated" — the same thing the explicit null says.
+    return {
+      ...base,
+      kind,
+      resetsAt: readAbsentableInteger(row.resetsAt, `${context}.resetsAt`),
+    };
   }
   return { ...base, kind };
 }
@@ -1672,6 +1730,11 @@ function readArray<T>(
 
 function readNullableInteger(value: unknown, context: string): number | null {
   return value === null ? null : readInteger(value, context);
+}
+
+/** Absent either way — an explicit `null` or a key an older event never wrote. */
+function readAbsentableInteger(value: unknown, context: string): number | null {
+  return value === undefined ? null : readNullableInteger(value, context);
 }
 
 /**

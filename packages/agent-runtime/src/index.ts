@@ -16,6 +16,7 @@ export {
   type PiSignInSteps,
 } from "./pi/sign-in";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export { ALWAYS_ONLINE, type ConnectivityPort } from "./pi/connectivity";
 export { supersededModelId } from "./pi/model-catalog";
 export {
   promptBaseline,

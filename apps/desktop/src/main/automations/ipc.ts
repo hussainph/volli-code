@@ -113,6 +113,12 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
     "volli:automation-runs-for-project": (input): AutomationRunsResult =>
       service.runsForProject(input.projectId),
 
+    "volli:automation-runs-for-automation": (input): AutomationRunsResult =>
+      service.runsForAutomation(input),
+
+    "volli:automation-skips-for-automation": (input): AutomationSkipsResult =>
+      service.skipsForAutomation(input),
+
     "volli:automation-enablement": async (): Promise<AutomationEnablementResult> => ({
       ok: true,
       enabledAutomationIds: await service.enabledAutomationIds(),

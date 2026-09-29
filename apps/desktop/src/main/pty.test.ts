@@ -2187,6 +2187,7 @@ describe("worktree ticket sessions", () => {
       value: {
         identity: { worktreePath: null, branch: wtBranch, baseBranch: "main" },
         created: true,
+        restamped: true,
       },
     });
     const result = await invokeCreate(makeWebContents(), {
@@ -2206,6 +2207,7 @@ describe("worktree ticket sessions", () => {
       value: {
         identity: { worktreePath: outside, branch: wtBranch, baseBranch: "main" },
         created: true,
+        restamped: true,
       },
     });
     const result = await invokeCreate(makeWebContents(), {
@@ -2331,6 +2333,7 @@ describe("worktree ticket sessions", () => {
       value: {
         identity: { worktreePath: wtCwd(), branch: null, baseBranch: "main" },
         created: false,
+        restamped: false,
       },
     });
     const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
@@ -2367,6 +2370,7 @@ describe("worktree ticket sessions", () => {
       value: {
         identity: { worktreePath: wt2Cwd, branch: "volli/WQ-1-x", baseBranch: "main" },
         created: true,
+        restamped: true,
       },
     });
 

@@ -341,6 +341,15 @@ export default defineConfig(({ mode }) => ({
         // chosen as the headline, is a person told they have room they do not
         // have — and neither shows up as an error anywhere.
         "src/components/usage-limits/accounts.ts",
+        // And what the window-bar GLYPH says about all that (VC-376). In the
+        // gate on the same argument, only harder to catch: the icon and the
+        // popover are never on screen at the same moment, so if this module
+        // ever reached a different verdict from the bars below it — a different
+        // window reported, a figure rounded another way, a failed account drawn
+        // as empty rather than dropped — nobody would be looking at the two
+        // together to see it. The spoken name is here too, because it is the
+        // whole reading for anyone who cannot use the drawing.
+        "src/components/usage-limits/icon-reading.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -483,6 +492,13 @@ export default defineConfig(({ mode }) => ({
         // shape as its two neighbours here, and gated for the same reason: it
         // decides whether a keystroke may write a PERSISTED preference.
         "src/lib/rail-toggle.ts",
+        // Which card the keyboard's place comes back to when a ticket closes
+        // (VC-419). In the gate on `escape-guard.ts`'s argument, one surface
+        // over: the origin of a journey is frequently GONE by the time it ends
+        // — filtered out, archived, deleted, or simply never mounted by a
+        // windowed column — and every one of those is a branch whose wrong
+        // answer is focus on BODY, which is precisely what no screenshot shows.
+        "src/lib/ticket-focus-origin.ts",
         "src/lib/relative-time.ts",
         "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",
@@ -611,6 +627,14 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
+        // Relinking a project to the folder it moved to (VC-430). In the gate
+        // because every branch of it is a rule about a filesystem nobody is
+        // watching: the refusal that stops two projects tracking one checkout,
+        // and the container move that keeps a renamed project's worktrees
+        // inside the set this database recognises as its own. Both are silent
+        // when wrong — one duplicates a project, the other strands checkouts
+        // that no cleanup surface will ever list again.
+        "**/src/main/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",

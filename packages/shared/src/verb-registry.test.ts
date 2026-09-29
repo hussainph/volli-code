@@ -13,6 +13,7 @@ import {
   VERB_TOOLS,
   verbEntry,
   verbTier,
+  verbToolWireName,
 } from "./verb-registry";
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
@@ -697,6 +698,44 @@ describe("the registry table", () => {
     ]);
   });
 
+  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
+  // gave — "it gives a working session an anchor to the user's preferences for
+  // models and effort". A delegation that names neither a tier nor a model is
+  // anchored to its parent's own, which is why `model` no longer speaks of a
+  // utility default: nothing on a chat path resolves that row.
+  it("lets session_delegate name the same model tiers, and never the Utility row", () => {
+    const tool = verbEntry("session.delegate")?.tool;
+    const tier = tool?.input.find((field) => field.name === "tier");
+    expect(tier).toBeDefined();
+    expect(tier?.required).toBeUndefined();
+    // Written out rather than compared against `AGENT_MODEL_TIERS`, which is
+    // the constant the schema is BUILT from: that comparison holds however the
+    // constant changes, so it could never fail on the one thing this test is
+    // named for. The literal is what refuses `utility` here.
+    expect(tier?.type === "enum" ? tier.values : []).toEqual([
+      "fast",
+      "deep",
+      "visual",
+      "ticket",
+      "global",
+    ]);
+    for (const name of AGENT_MODEL_TIERS) {
+      expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
+    }
+    expect(tier?.description).not.toMatch(/utility/i);
+    expect(tier?.description).toMatch(/instead of `model`/);
+    expect(tool?.input.find((field) => field.name === "model")?.description).not.toMatch(
+      /utility/i,
+    );
+    expect(tool?.input.map((field) => field.name)).toEqual([
+      "task",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
+  });
+
   // Documentation parity only: `session.start` has had no shell door since
   // VC-163, so the option table is what the reference prints beside the tool
   // schema, never argv the shell would parse.
@@ -846,10 +885,19 @@ describe("the MCP management verbs (VC-380)", () => {
     }
   });
 
+  it("freezes management wire names separately from the durable dot-keys", () => {
+    expect(verbToolWireName("mcp.list")).toBe("mcp_list");
+    expect(verbToolWireName("mcp.list", "server")).toBe("server_list");
+    expect(verbToolWireName("session.start")).toBe("session_start");
+    expect(verbToolWireName("mcp.unknown" as never)).toBeUndefined();
+  });
+
   it("projects a wire name a provider accepts, with no caller field in any schema", () => {
     for (const key of MCP_VERBS) {
       const tool = verbEntry(key)!.tool;
-      expect(tool?.name, key).toBe(key.replace(".", "_"));
+      // Management is a native Volli verb, not an MCP-discovered tool. The
+      // single-underscore mcp_ prefix routes Anthropic OAuth to extra usage.
+      expect(tool?.name, key).toBe(key.replace("mcp.", "server_"));
       expect(tool!.description.length, key).toBeGreaterThan(0);
       for (const field of tool!.input) {
         expect(field.name, `${key}.${field.name}`).not.toMatch(/^-/);
@@ -888,7 +936,7 @@ describe("the MCP management verbs (VC-380)", () => {
 
     const remove = verbEntry("mcp.remove")!.tool!.description;
     expect(remove).toMatch(/reattach/i);
-    expect(remove).toContain("mcp_disable");
+    expect(remove).toContain("server_disable");
   });
 
   it("spells args as the array the whole MCP ecosystem spells it as", () => {

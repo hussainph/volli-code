@@ -577,6 +577,33 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid project base branch",
   },
+  "volli:project-relink": {
+    /**
+     * Shape and ABSOLUTENESS only — whether the folder exists, is a directory,
+     * and is free is `relinkProject`'s judgement, where a refusal can say which
+     * of those it was. Absoluteness is checked HERE rather than there because
+     * it is the one property a guard can settle without touching the disk, and
+     * a relative path is not a bad choice a person made: the handler resolves
+     * against main's own cwd, so it would re-home the project somewhere nobody
+     * named.
+     */
+    guard: (args): args is IpcArgs<"volli:project-relink"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["id"] === "string" &&
+        typeof input["path"] === "string" &&
+        input["path"].startsWith("/")
+      );
+    },
+    invalidError: "Invalid project folder",
+  },
+  "volli:project-folder-check": {
+    guard: (args): args is IpcArgs<"volli:project-folder-check"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid project id",
+  },
   "volli:project-remove": {
     guard: (args): args is IpcArgs<"volli:project-remove"> =>
       args.length === 1 && typeof args[0] === "string",
@@ -1687,6 +1714,25 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
     invalidError: "Invalid automation runs request",
+  },
+  // BOTH ids required (VC-297): the project is what main guards the read by,
+  // and the Automation is what narrows it. A caller that sent only one would
+  // be asking a different question than the one this door answers.
+  "volli:automation-runs-for-automation": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-automation"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-skips-for-automation": {
+    guard: (args): args is IpcArgs<"volli:automation-skips-for-automation"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation skips request",
   },
   "volli:automation-enablement": {
     guard: (args): args is IpcArgs<"volli:automation-enablement"> => args.length === 0,

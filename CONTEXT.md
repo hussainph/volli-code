@@ -643,6 +643,18 @@ whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
+**Scheduled Resume**:
+A person's choice, made on a run a spent provider allowance stopped, to retry
+that run when the allowance's stated reset arrives. It is three Session
+Commands — schedule, cancel, and the host's settle — whose receipts are the
+whole of its state. A minute after the stated reset (a fast local clock must
+not retry into the spent window) the host resumes through the ordinary retry,
+or skips it with a reason when the Session was continued, ended, or overtaken by
+a person's work in another Session on its Ticket — another Session's own
+scheduled resume does not count. Never scheduled without being chosen, and never
+re-scheduled on its own.
+_Avoid_: auto-retry, auto-resume, Automation
+
 **SessionInteraction**:
 A decision a Session is waiting on — a permission or a question — held in Volli
 terms: a title, optional detail, declared options, and an opaque runtime
@@ -787,7 +799,7 @@ A tracked codebase folder: name, path, ticket prefix, rail position. Removing on
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
 
 **Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes.
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
 _Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:

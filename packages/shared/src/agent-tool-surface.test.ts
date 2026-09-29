@@ -298,8 +298,28 @@ describe("session.delegate is the working Roles' verb, and never the helper's (V
       "task",
       "title",
       "model",
+      "tier",
       "reasoning",
     ]);
+  });
+
+  it("offers the same tier list session_start does, and never Utility (VC-431)", () => {
+    const input = verbEntry("session.delegate")?.tool?.input ?? [];
+    const tier = input.find((field) => field.name === "tier");
+    const startTier = verbEntry("session.start")?.tool?.input.find(
+      (field) => field.name === "tier",
+    );
+    // Against `session_start`'s OWN list, which is what "the same tier list"
+    // means, and against a literal for the row neither may name. Comparing
+    // both to `AGENT_MODEL_TIERS` would only restate how each is built.
+    expect(tier?.type === "enum" ? tier.values : []).toEqual(
+      startTier?.type === "enum" ? startTier.values : [],
+    );
+    expect(tier?.type === "enum" ? tier.values : []).not.toContain("utility");
+    // A delegation that names neither a tier nor a model is anchored to its
+    // parent's own model, which is what `model`'s description now says it
+    // replaces — the Utility row is named by no door.
+    expect(input.find((field) => field.name === "model")?.description).not.toContain("utility");
   });
 
   it("is in both working bundles and absent from the subagent's", () => {

@@ -241,6 +241,8 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
+  mcpManagementNames?: "server";
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /**
@@ -379,6 +381,13 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The machine's network and sleep, over Electron's `net` and `powerMonitor`
+   * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
+   * instead of spending its retry budget on it (VC-443). Absent, the runtime
+   * treats the host as always online.
+   */
+  connectivity?: PiRuntimeHostOptions["connectivity"];
   /**
    * The web ports this profile can honestly bind now, resolved once per
    * attachment. Membership comes from the Session's durable tool surface, not
@@ -671,6 +680,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
   });
 
@@ -1079,6 +1089,9 @@ class PiBinding implements BindingHandle {
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
         ...(verbs.length === 0 ? {} : { verbs }),
+        ...(context.mcpManagementNames === undefined
+          ? {}
+          : { mcpManagementNames: context.mcpManagementNames }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),

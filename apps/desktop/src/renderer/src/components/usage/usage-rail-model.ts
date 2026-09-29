@@ -17,11 +17,12 @@ import {
   shortSessionId,
   EMPTY_SESSION_USAGE_SUMMARY,
   type ChatSessionRecord,
+  type ModelAccessSnapshot,
   type SessionListingIdentity,
   type SessionUsageReport,
 } from "@volli/shared";
 
-import type { UsageGroupRow } from "@renderer/usage/usage-format";
+import type { UsageGroupRow, UsageModelIdentity } from "@renderer/usage/usage-format";
 
 /**
  * Every Session on this Ticket, metered or not — the union of the roster and
@@ -128,30 +129,76 @@ function parentBySession(
   return parents;
 }
 
-/** A report's groups as display rows, already ordered by known cost. */
-export function groupRows(
+/**
+ * The catalogue a model row is named against.
+ *
+ * THE WHOLE OF IT, never the offerable slice the composers read (signed-in,
+ * unhidden). A breakdown is history: the money was spent by a model that may
+ * since have been hidden, or whose provider has been signed out, and a row that
+ * fell back to a wire id because of a preference set afterwards would make one
+ * ledger read two ways.
+ */
+export type UsageModelCatalogue = Pick<ModelAccessSnapshot, "models" | "providers">;
+
+/**
+ * A report's model groups as display rows, in the report's own cost order.
+ *
+ * `null` for the catalogue is not an error state to draw: it is the read still
+ * being out, or one that failed, and the rows then say the ids the ledger
+ * holds. See {@link modelName}.
+ */
+export function modelRows(
   report: SessionUsageReport,
-  label: (key: string | null) => string,
+  catalogue: UsageModelCatalogue | null,
 ): readonly UsageGroupRow[] {
   return report.groups.map((group) => ({
     key: group.key ?? "\u0000none",
-    label: label(group.key),
+    ...modelName(group.key, catalogue),
     usage: group.usage,
   }));
 }
 
 /**
- * `anthropic/claude-opus-4-1` → `claude-opus-4-1`.
+ * What a model group key is called, and what its mark is drawn from:
+ * `anthropic/claude-opus-4-1` → `Claude Opus 4.1`, with the existing provider mark.
  *
- * The provider prefix is dropped rather than prettified: at a rail's width the
- * model is the part that distinguishes two rows, and a catalogue of display
- * names would be a second copy of something that moves with every provider
- * release. The full id stays available in the ledger.
+ * A MODEL IS DRAWN, NEVER SPELLED (`docs/DESIGN.md`) — and this was the last
+ * surface still printing the wire id. The name comes from the catalogue rather
+ * than from any prettifying of the id, because the id is not a name that was
+ * ever proof-read and a local map of product names would be a second copy of
+ * something that moves with every provider release.
+ *
+ * WHAT AN UNRESOLVED ROW SAYS. The model id, which is what the ledger holds:
+ * a provider signed out from under a Session, a model retired from the
+ * catalogue, a read that has not landed or failed. It still wears a mark,
+ * because the mark is read off the provider and model ids the ledger recorded
+ * — the fact stays true whether or not this build can name the model — so a row
+ * does not move sideways as the catalogue arrives.
+ *
+ * ONLY THE FIRST SLASH IS THE SEAM. `reportSessionUsage` builds the key as
+ * `providerId/modelId`, and a gateway's model id carries slashes of its own
+ * (`openrouter/anthropic/claude-sonnet-4.5`). A key with no slash at all is not
+ * a model reference this build can read, so it keeps the key and no mark.
  */
-export function modelLabel(key: string | null): string {
-  if (key === null) return "Unknown model";
+export function modelName(
+  key: string | null,
+  catalogue: UsageModelCatalogue | null,
+): Pick<UsageGroupRow, "label" | "model"> {
+  if (key === null) return { label: "Unknown model", model: null };
   const slash = key.indexOf("/");
-  return slash === -1 ? key : key.slice(slash + 1);
+  if (slash === -1) return { label: key, model: null };
+  const providerId = key.slice(0, slash);
+  const modelId = key.slice(slash + 1);
+  const listed = catalogue?.models.find(
+    (candidate) => candidate.providerId === providerId && candidate.modelId === modelId,
+  );
+  const label = listed?.label ?? modelId;
+  // `providerLabelOf`'s rule, spelled here rather than imported: this module is
+  // pure and `models/model-identity.tsx` is a drawing.
+  const providerLabel =
+    catalogue?.providers.find((provider) => provider.id === providerId)?.label ?? providerId;
+  const model: UsageModelIdentity = { model: { providerId, modelId, label }, providerLabel };
+  return { label, model };
 }
 
 /**

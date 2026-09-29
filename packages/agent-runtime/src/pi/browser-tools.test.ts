@@ -5,6 +5,7 @@ import {
   type RuntimeBrowserPort,
   type RuntimeBrowserSnapshot,
 } from "@volli/shared";
+import sharp from "sharp";
 import { describe, expect, it } from "vite-plus/test";
 import { BrowserRefusal } from "../browser/refusal";
 import { createBrowserHoldTool, createBrowserTool, BROWSER_TOOL_NAMES } from "./browser-tools";
@@ -365,6 +366,39 @@ describe("browser tools", () => {
     // The description stays honest with what ships: the person sees the
     // picture in the transcript card, not in the tool row's raw payload.
     expect(tool.description).toContain("in the chat");
+  });
+
+  it("sends the model a bounded copy of a Retina screenshot and leaves the kept picture alone", async () => {
+    // A 1834×948 CSS-pixel tab at 2× DPR: what a browser-driving Session
+    // captured on every step, and what the provider refused once twenty of
+    // them were in one request.
+    const retina = (
+      await sharp({ create: { width: 3_668, height: 1_896, channels: 3, background: "#f4f4f4" } })
+        .png()
+        .toBuffer()
+    ).toString("base64");
+    const port = unusedPort();
+    port.screenshot = async () => ({
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: null,
+      error: null,
+      base64Png: retina,
+      picture: "picture-4",
+      width: 3_668,
+      height: 1_896,
+    });
+    const tool = createBrowserTool("browser_screenshot", port);
+
+    const result = await tool.execute("call-4", { tabId: "tab-1" });
+
+    const image = result.content.find((entry) => entry.type === "image")!;
+    const sent = await sharp(Buffer.from(image.data, "base64")).metadata();
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(Math.max(sent.width, sent.height)).toBe(2_000);
+    expect(resultText(result)).toContain(`3668×1896, sent as ${sent.width}×${sent.height}.`);
+    expect(result.details).toMatchObject({ picture: "picture-4" });
   });
 
   it("lists tabs with their titles enveloped, naming each owner, and says plainly when none are open", async () => {

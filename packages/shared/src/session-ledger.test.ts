@@ -1817,7 +1817,8 @@ describe("projectSession usage", () => {
 function raised(
   kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">,
 ): SessionAttention {
-  return { id: `attention-${kind}`, kind, attachmentId: null, detail: null, diagnostic: null };
+  const base = { id: `attention-${kind}`, attachmentId: null, detail: null, diagnostic: null };
+  return kind === "adapter_unrecoverable" ? { ...base, kind, resetsAt: null } : { ...base, kind };
 }
 
 describe("sessionAwaitsUser", () => {

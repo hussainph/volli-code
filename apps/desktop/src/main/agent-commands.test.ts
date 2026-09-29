@@ -2429,6 +2429,7 @@ describe("agent command service", () => {
         attachmentId: "attachment-interrupted",
         detail: null,
         diagnostic: null,
+        resetsAt: null,
       },
     });
     await sessionEngine.observe({

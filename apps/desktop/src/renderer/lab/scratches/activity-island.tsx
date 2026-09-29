@@ -30,6 +30,7 @@ import {
   type ActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
+  type ModelSelection,
 } from "@volli/shared";
 import type { DynamicToolUIPart } from "ai";
 
@@ -75,6 +76,20 @@ const TAB_HOSTS = [
 ] as const;
 
 const AGENT_LABELS = ["Audit icon weights", "Grep theme tokens", "Draft smoke plan"] as const;
+
+/**
+ * The policies a spawned subagent cycles through (VC-416) — the row's own
+ * second line.
+ *
+ * Three, and deliberately uneven: a long id beside a short one is what shows
+ * the model truncating while the effort keeps its width, and `xhigh` is the
+ * one wire level whose drawn word (`Extra high`) is not its own spelling.
+ */
+const AGENT_MODELS: readonly ModelSelection[] = [
+  { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+  { providerId: "openai", modelId: "gpt-5.6-luna-preview-2026-03-11", reasoningLevel: "xhigh" },
+  { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+];
 
 const SHELL_COMMANDS = [
   "pnpm lab",
@@ -210,7 +225,14 @@ function simReducer(sim: Sim, action: SimAction): Sim {
         ...next,
         agents: [
           ...sim.agents,
-          { id: `agent-${next.seq}`, label, progress: 0.08, state: "working", promoted: false },
+          {
+            id: `agent-${next.seq}`,
+            label,
+            progress: 0.08,
+            state: "working",
+            promoted: false,
+            model: AGENT_MODELS[sim.agents.length % AGENT_MODELS.length] ?? null,
+          },
         ],
         seq: next.seq + 1,
       };

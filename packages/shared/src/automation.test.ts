@@ -122,6 +122,22 @@ describe("the tier Runtime (VC-259)", () => {
     });
   });
 
+  it("reads a stored Utility tier as INVALID, so an old record cannot still run there", () => {
+    // VC-431. `utility` is the slot for work nobody asked for, and a Run
+    // starts a Session, so no Run may resolve that row. The save door refuses
+    // it now — but an older build's save door admitted it, and narrowing only
+    // the save would have left every record already written still running on
+    // Utility. The READ is what makes the guarantee hold for rows that exist.
+    expect(parseAutomationRuntime({ kind: "tier", tier: "utility" })).toEqual({
+      kind: "invalid",
+      raw: { kind: "tier", tier: "utility" },
+    });
+    // And the invalid row is not another spelling of inherit, which RUNS.
+    expect(
+      isValidAutomationRuntime(parseAutomationRuntime({ kind: "tier", tier: "utility" })),
+    ).toBe(false);
+  });
+
   it("keeps the invalid answer for everything a pin parser already refused", () => {
     expect(parseAutomationRuntime({ providerId: "anthropic" })).toEqual({
       kind: "invalid",

@@ -170,6 +170,7 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
@@ -255,6 +256,9 @@ export interface ChatPlaneProps {
    * stands the rest of the plane down, so it has to be told. Default true.
    */
   visible?: boolean;
+  /** Modal previews cannot let a tall question/composer grow past their header.
+   * Cap and scroll the dock there, keeping part of the transcript visible. */
+  constrainComposer?: boolean;
   /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
@@ -284,6 +288,7 @@ export function ChatPlane({
   onOpenSession,
   store,
   visible: surfaceVisible = true,
+  constrainComposer = false,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
@@ -351,6 +356,8 @@ export function ChatPlane({
     selectModel,
     submit,
     dismissError,
+    scheduleResume,
+    cancelScheduledResume,
   } = controller;
   const session = controller.session;
 
@@ -1438,9 +1445,39 @@ export function ChatPlane({
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
+      scheduleResume: (request) => void scheduleResume(request),
+      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
     }),
-    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [
+      cancelScheduledResume,
+      dismissBlocker,
+      dismissError,
+      liveExecutorId,
+      recover,
+      retryRuntime,
+      scheduleResume,
+      setSettingsOpen,
+    ],
   );
+  // The clock the resume offer is read against. It only has to move when an
+  // offered reset passes — then "Resume at" gives way to the plain Retry — so
+  // it wakes once, at the nearest reset, rather than ticking.
+  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
+  const nearestReset = React.useMemo(() => {
+    let nearest: number | null = null;
+    for (const item of activeAttention) {
+      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
+      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
+    }
+    return nearest;
+  }, [activeAttention]);
+  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setResumeNow(Date.now());
+    if (nearestReset === null) return;
+    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
+    return () => window.clearTimeout(timer);
+  }, [nearestReset]);
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
   const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
@@ -1462,6 +1499,8 @@ export function ChatPlane({
       catalogError,
       sessionModel,
       signInProviders,
+      scheduledResume: projection?.scheduledResume ?? null,
+      now: resumeNow,
     },
     blockerActs,
     interactions.length > 0,
@@ -1575,7 +1614,11 @@ export function ChatPlane({
           transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
+        data-slot="chat-composer-dock"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
+        )}
       >
         <ContentColumn>
           {/* Above whatever the slot holds, card included. A card answers the
@@ -1662,6 +1705,9 @@ export function ChatPlane({
       )}
       <SubagentPeekDialog
         agent={peekedAgent}
+        projectId={projectId}
+        ticketId={ticketId}
+        onOpenFile={onOpenFile}
         onClose={closePeek}
         returnFocus={peekReturnFocus}
         {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}

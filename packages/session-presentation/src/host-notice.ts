@@ -236,7 +236,7 @@ const STATE_WORD: Record<SubagentNoticeState, string> = {
 };
 
 const STATE_NOTE: Record<SubagentNoticeState, string> = {
-  completed: "Finished its task; its answer is in its own Session.",
+  completed: "",
   interrupted: "Its turn ended before it answered.",
   stopped: "It was stopped before it answered.",
   failed: "Its executor failed before it answered.",

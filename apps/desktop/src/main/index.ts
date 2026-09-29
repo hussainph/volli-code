@@ -7,6 +7,7 @@ import {
   ipcMain,
   nativeTheme,
   net,
+  powerMonitor,
   protocol,
   session,
   shell,
@@ -104,6 +105,7 @@ import {
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
 import {
@@ -140,9 +142,13 @@ import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
+  createScheduledResumeHost,
   createSessionWatchdog,
+  createSuspendClock,
   watchSessionActivity,
+  type ScheduledResumeHost,
 } from "./session-control";
+import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
@@ -169,6 +175,7 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
@@ -340,6 +347,7 @@ import { BrowserPictureStore } from "./browser/picture-store";
 import { browserTraceDisk, browserTracesRoot } from "./browser/trace-disk";
 import { BrowserTraceStore } from "./browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -495,6 +503,19 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+/** The MCP-management wire spelling frozen beside the canonical verb keys. */
+function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
 }
 
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
@@ -885,6 +906,10 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
+  // The scheduled-resume host needs the runtime, which is composed from the
+  // watched engine below — so the watch closes over this indirection and the
+  // host is installed once the runtime exists.
+  let scheduledResumeHost: ScheduledResumeHost | null = null;
   // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
   // watch: a write returns from the engine, the bus fans the committed event
   // out to whichever `session_await` is parked on it, and only then does the
@@ -904,7 +929,11 @@ app.whenReady().then(async () => {
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
           listOpenNativeBindings: () => listOpenNativeBindings(),
-          observe: (projection) => runAttention?.observe(projection),
+          observe: (projection) => {
+            runAttention?.observe(projection);
+            // A schedule made (or settled) anywhere reaches the timer here.
+            scheduledResumeHost?.observe(projection);
+          },
           // The baseline for the rule above: a Session minted in this process
           // began with no need, which is what makes its first fold an edge
           // rather than a first sighting (VC-133).
@@ -1107,6 +1136,9 @@ app.whenReady().then(async () => {
               input: {
                 kind: "tool-surface",
                 tools,
+                // At birth, freeze the wire spelling too. The old mcp_* names
+                // remain available only to Sessions whose record predates this marker.
+                mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
               },
               provenance: {
@@ -1253,6 +1285,10 @@ app.whenReady().then(async () => {
           // after it. Absent when the database never opened, which leaves the
           // runtime on its own no-op default.
           ...(agentObservability === null ? {} : { observability: agentObservability }),
+          // A closed lid or a missing Wi-Fi is waited out rather than charged
+          // to a turn's retry budget, and a request open across a sleep is
+          // re-sent instead of hanging on a dead socket (VC-443).
+          connectivity: createConnectivityPort({ net, powerMonitor }),
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -1398,7 +1434,9 @@ app.whenReady().then(async () => {
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
             let mcpTools = recordedMcpTools(events);
+            let mcpManagementNames = recordedMcpManagementNames(events);
             if (toolSurface === null) {
+              mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
@@ -1413,6 +1451,7 @@ app.whenReady().then(async () => {
                   input: {
                     kind: "tool-surface",
                     tools: sessionToolSurface.resolve(attaching.role, []),
+                    mcpManagementNames: "server",
                   },
                   provenance,
                 }),
@@ -1426,6 +1465,7 @@ app.whenReady().then(async () => {
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
@@ -1571,6 +1611,8 @@ app.whenReady().then(async () => {
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
+          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
+          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
@@ -1715,8 +1757,10 @@ app.whenReady().then(async () => {
           // (migration 024, NULL = inherit) — then the app-wide tier ladder
           // from the named rung down (VC-53, VC-9, VC-259). The facade maps a
           // Role onto its rung before it asks: a Ticket Session's default
-          // reads `ticket`, a Board chat's `global`, a Subagent's `utility`,
-          // and a `session_start` tier reads its own row — stated by
+          // reads `ticket`, a Board chat's `global`, a Subagent's `global`
+          // (VC-431: a subagent normally runs on its parent's own anchor, and
+          // no Role reads `utility`), and a named tier reads
+          // its own row — stated by
           // `resolveDefaultModel`, never substituted. One closure so every
           // door — renderer chat, the tool door, an Automation Run — walks
           // the same rungs.
@@ -1742,8 +1786,10 @@ app.whenReady().then(async () => {
           },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
+          readModelAnchor: async (sessionId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            return { selection: projection.modelSelection, tier: projection.modelTier };
+          },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,
@@ -2099,11 +2145,13 @@ app.whenReady().then(async () => {
   // and the silence, one notification for the person. Observe posture:
   // self-termination exists behind the watchdog's optional port and is
   // deliberately unwired here, so a false positive costs a notification,
-  // never the work.
+  // never the work. The suspend clock is what keeps a laptop opened after a
+  // night asleep from reporting the night as silence.
   const sessionWatchdog =
     sessionRuntime !== null && sessionEngine !== null
       ? createSessionWatchdog({
           listBindings: () => sessionRuntime.openNativeBindings(),
+          suspendedMsWithin: createSuspendClock(powerMonitor).suspendedMsWithin,
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
@@ -2111,6 +2159,23 @@ app.whenReady().then(async () => {
         })
       : null;
   sessionWatchdog?.start();
+  // Resumes a person scheduled for a provider's quota reset. Built here, beside
+  // the watchdog, so the quit coordinator below can stop it; STARTED only after
+  // boot recovery, because a schedule that fell due while the app was closed
+  // fires on the first pass and its retry must not race the reconcile of the
+  // very turn it resumes.
+  scheduledResumeHost =
+    sessionRuntime !== null && sessionEngine !== null && dbHandle.ok
+      ? createScheduledResumeHost({
+          candidates: async () => listScheduledResumeSessionIds(dbHandle.db),
+          projection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection,
+          ticketSessions: ({ projectId, ticketId }) =>
+            sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
+          command: (request) => sessionRuntime.command(request),
+          notify: (request) => notifications.deliver(request),
+        })
+      : null;
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -2120,6 +2185,7 @@ app.whenReady().then(async () => {
     lifecycle: app,
     shutdownNativeSessions: async () => {
       sessionWatchdog?.stop();
+      scheduledResumeHost?.stop();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
@@ -2255,6 +2321,14 @@ app.whenReady().then(async () => {
         console.error("[volli] failed to recover delegations:", errorMessage(error));
       }
     }
+  }
+  // After recovery (see the host's construction above). Not awaited: the first
+  // pass may fire a resume whose run takes minutes, and boot does not wait on
+  // it. A wake from sleep looks again at once rather than on the next tick.
+  if (scheduledResumeHost !== null) {
+    const host = scheduledResumeHost;
+    void host.start();
+    powerMonitor.on("resume", () => void host.pass());
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
@@ -3013,6 +3087,19 @@ app.whenReady().then(async () => {
       if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
     });
     window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    // A committed page reset strands any Browser plane the old page had put on
+    // screen (VC-424): a native view is the window's child, not the page's, so
+    // it goes on compositing over a fresh app UI that cannot hide a tab it has
+    // never heard of. Its own events, not the two above — a plane must not come
+    // off for a navigation that never commits. Parking is per window, and the
+    // tabs, their holds and their engines all survive it: a pane in the new
+    // page shows them again.
+    parkBrowserPlanesOnRendererReset({
+      host: browserTabs,
+      window,
+      contents: window.webContents,
+      log: (message) => console.error(message),
+    });
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps

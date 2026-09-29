@@ -237,7 +237,7 @@ export interface AttachmentEvent {
 export interface AttentionEvent {
   kind: "attention";
   phase: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   runId?: string;
 }
 

@@ -77,6 +77,9 @@ import type {
   PendingArmedRun,
   PendingArmedRunFailure,
   Project,
+  ProjectFolderState,
+  ProjectRelinkAftermath,
+  ProjectRelinkRefusal,
   ProjectThemeOverride,
   PromptTemplate,
   ResolvedAppearance,
@@ -130,6 +133,20 @@ export interface ProjectUpdateInput {
   baseBranch: string | null;
   /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
   setupCommand?: string | null;
+}
+
+/**
+ * Point an existing project at the folder it moved to (VC-430).
+ *
+ * Deliberately NOT part of {@link ProjectUpdateInput}: every other field there
+ * is a preference, and this one re-homes the project. It is judged against the
+ * disk before it is saved, it can be refused, and it is the only write that
+ * can move `projects.path` after creation.
+ */
+export interface ProjectRelinkInput {
+  id: string;
+  /** The replacement folder, absolute. */
+  path: string;
 }
 
 /**
@@ -727,6 +744,21 @@ export interface VolliDataIpcContract {
   "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
   "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
   "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
+  /**
+   * Points an existing project at the folder it moved to (VC-430).
+   *
+   * App-only, and note WHERE that comes from: no data channel is reachable from
+   * the agent socket at all — the socket dispatches verbs from
+   * `verb-registry.ts`, and this has none. So unlike
+   * `volli:project-authority-policy`, which argues for a boundary that must
+   * never be crossed, this is simply the ordinary state of a renderer channel.
+   * It stays that way on the same grounds: re-homing a project changes where
+   * every Session it starts will run, so no agent verb may ever be added behind
+   * it. The folder is validated here before it is saved.
+   */
+  "volli:project-relink": { args: [input: ProjectRelinkInput]; result: ProjectRelinkResult };
+  /** Whether one project's registered folder is still on disk (VC-430). */
+  "volli:project-folder-check": { args: [input: ProjectIdInput]; result: ProjectFolderResult };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -2150,6 +2182,19 @@ export type AutomationResult = Result<{
   receipt: AutomationCommandReceipt;
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
+/**
+ * One Automation's history inside one project (VC-297).
+ *
+ * Both ids, because neither answers alone: a global Automation is listable in
+ * every project but each Run it produced happened in ONE, so the pair is the
+ * whole question. A read, so it carries no `commandId` — unlike
+ * {@link AutomationIdInput}, which is a command's.
+ */
+export interface AutomationHistoryScopeInput {
+  projectId: string;
+  automationId: string;
+}
+
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
 /** One project's Skipped occurrences — the other half of its Run history (VC-130). */
 export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
@@ -2270,6 +2315,24 @@ export interface VolliAutomationIpcContract {
   "volli:automation-runs-for-project": {
     args: [input: ProjectIdInput];
     result: AutomationRunsResult;
+  };
+  /**
+   * ONE Automation's Runs in one project, newest first — what the editor's
+   * history shows (VC-297).
+   *
+   * Narrower than the project read above it, and a separate door rather than a
+   * filter the client applies: a caller that is not this process should ask for
+   * the list it draws, not download a project's whole history to find it. Main
+   * has the index for both questions (`idx_automation_runs_automation`).
+   */
+  "volli:automation-runs-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationRunsResult;
+  };
+  /** The same Automation's Skipped occurrences, read beside its Runs (VC-297). */
+  "volli:automation-skips-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationSkipsResult;
   };
   /** Which Automations are switched on on this machine. */
   "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
@@ -3026,6 +3089,24 @@ export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: numb
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;
+
+/**
+ * A committed relink, plus what the move could not take with it (VC-430).
+ *
+ * The AFTERMATH travels, not the sentences derived from it: the renderer turns
+ * it into notices through `@volli/shared`'s `projectRelinkNotices`, so the
+ * facts main measured and the words a person reads cannot drift apart. A
+ * refusal carries the shared `ProjectRelinkRefusal` id beside its sentence, so
+ * a surface may react to WHICH refusal it was without matching on prose.
+ */
+export type ProjectRelinkResult =
+  | { ok: true; project: Project; aftermath: ProjectRelinkAftermath }
+  | { ok: false; error: string; refusal?: ProjectRelinkRefusal };
+
+/** Whether a project's registered folder is still on disk (VC-430). */
+export type ProjectFolderResult =
+  | { ok: true; path: string; state: ProjectFolderState }
+  | { ok: false; error: string };
 
 export type ProjectMutationResult = Result;
 
