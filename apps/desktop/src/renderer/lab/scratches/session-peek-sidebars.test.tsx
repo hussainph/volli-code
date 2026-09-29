@@ -3,11 +3,14 @@
  * The wiring of the sidebar-integration scratch — the claims its notes make,
  * driven through the DOM with fake timers.
  *
- * `session-peek/sidebar-model.test.ts` owns the rules (who peeks, what a
- * folder shows, who may be answered). This owns that the surface actually
- * obeys them: a folder's card opens, drills and steps back; expanding a folder
- * closes its card; the keys a tree needs work; the brief's scenario — answering
- * a question from the rail — leaves the work in front where it was.
+ * `session-peek/sidebar-model.test.ts` and `sidebar-live.test.ts` own the
+ * rules (who peeks, what a folder shows, who may be answered; what unread is
+ * and when a held row may move). This owns that the surface actually obeys
+ * them: a folder's card opens, drills and steps back; the keys a tree needs
+ * work; a peek held for a second reads its Session; a played afternoon moves
+ * the held band once and the live one constantly; nothing moves while the
+ * pointer is in a sidebar; the brief's scenario — answering from the rail —
+ * leaves the work in front where it was.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -90,6 +93,37 @@ async function press(node: Element, key: string): Promise<void> {
   });
 }
 
+/** Enter or leave a sidebar the way React hears it: an over/out pair across its edge. */
+async function pointInto(node: Element): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(
+      new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body }),
+    );
+  });
+}
+
+async function pointOutOf(node: Element): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    );
+  });
+}
+
+function activeOrder(): string[] {
+  return [
+    ...host.querySelectorAll<HTMLElement>('[data-session-band="active"] [data-peek-surface="nav"]'),
+  ].map((node) => node.dataset.peekRow ?? "");
+}
+
+function unreadDot(rowId: string, surface: "nav" | "rail" = "nav"): Element | null {
+  return row(rowId, surface).querySelector("[data-unread-dot]");
+}
+
+async function playSteps(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) await click(control("Step"));
+}
+
 async function setControl(text: string): Promise<void> {
   await click(control(text, host.querySelector("[data-lab-controls]")!));
   // A mode change closes whatever card was up; let its dismissal guard lapse.
@@ -106,7 +140,7 @@ describe("the scratch's contract", () => {
     expect(scratch.api).toBeDefined();
   });
 
-  it("draws the shipped bands: five Active rows, then six folders and one bare Session", () => {
+  it("draws the shipped bands, keeping the unread six-hour-old Session in Active", () => {
     const nav = [...host.querySelectorAll<HTMLElement>('[data-peek-surface="nav"]')];
     expect(nav.map((node) => node.dataset.peekRow)).toEqual([
       "chat:chat-a1",
@@ -114,10 +148,10 @@ describe("the scratch's contract", () => {
       "chat:chat-a3",
       "chat:chat-a4",
       "chat:chat-a5",
+      "chat:chat-p8",
       "folder:tkt-11",
       "folder:tkt-14",
       "folder:tkt-10",
-      "chat:chat-p8",
       "folder:tkt-12",
       "folder:tkt-9",
       "folder:tkt-7",
@@ -159,34 +193,131 @@ describe("the scratch's contract", () => {
   });
 });
 
-describe("the marks, side by side", () => {
-  const specimens = () => host.querySelector<HTMLElement>('[aria-label="Row mark, side by side"]')!;
-
-  it("draws the same rows as status ink and as logo + badge, inert, outside the peek", () => {
-    const columns = [...specimens().querySelectorAll<HTMLElement>("[data-mark-specimen]")];
-    expect(columns.map((column) => column.dataset.markSpecimen)).toEqual(["ink", "badge"]);
-    expect(columns[0]?.closest("[inert]")).not.toBeNull();
-    expect(specimens().querySelector("[data-peek-row], [data-peek-surface]")).toBeNull();
-    for (const column of columns) {
-      const marks = [...column.querySelectorAll<HTMLElement>('[role="img"][data-row-mark]')];
-      // Five Active rows and three Previous ones, each in its column's style.
-      expect(marks).toHaveLength(8);
-      expect(new Set(marks.map((mark) => mark.dataset.rowMark))).toEqual(
-        new Set([column.dataset.markSpecimen]),
-      );
-    }
+describe("unread (VC-108)", () => {
+  it("draws unread as a blue dot and a heavier title, in both sidebars", () => {
+    expect(unreadDot("chat:chat-a4")?.textContent).toBe("Unread");
+    expect(unreadDot("chat:chat-p8")).not.toBeNull();
+    expect(unreadDot("chat:chat-a1")).toBeNull();
+    expect(row("chat:chat-a4").querySelector(".font-semibold")?.textContent).toBe("Chat");
+    // The corpus's rail ticket has nothing unread; mark one to see it there too.
+    expect(row("chat:chat-a1", "rail").hasAttribute("data-unread")).toBe(false);
   });
 
-  it("follows the live rows: an answer delivered from a peek flips both columns", async () => {
+  it("reads a Session once its peek has been up for a second, not on the way past", async () => {
+    await hover(row("chat:chat-a4"));
+    expect(card()?.querySelector("[data-peek-unread]")?.textContent).toBe("Unread");
+    await advance(500);
+    expect(unreadDot("chat:chat-a4")).not.toBeNull();
+    await advance(600);
+    expect(unreadDot("chat:chat-a4")).toBeNull();
+    expect(card()?.querySelector("[data-peek-unread]")).toBeNull();
+  });
+
+  it("leaves reading to opening when a peek is told never to read", async () => {
+    await setControl("Never — only opening does");
+    await hover(row("chat:chat-a4"));
+    await advance(3000);
+    expect(unreadDot("chat:chat-a4")).not.toBeNull();
+    await click(button(row("chat:chat-a4")));
+    expect(unreadDot("chat:chat-a4")).toBeNull();
+  });
+
+  it("toggles read and unread with U, in either sidebar", async () => {
+    const a1 = button(row("chat:chat-a1", "rail"));
+    await act(async () => a1.focus());
+    await press(a1, "u");
+    expect(unreadDot("chat:chat-a1", "rail")).not.toBeNull();
+    expect(unreadDot("chat:chat-a1")).not.toBeNull();
+    await press(a1, "u");
+    expect(unreadDot("chat:chat-a1")).toBeNull();
+  });
+
+  it("brings a Previous Session marked unread back to Active", async () => {
+    await click(row("folder:tkt-14"));
+    const p1 = button(row("chat:chat-p1"));
+    await act(async () => p1.focus());
+    await press(p1, "u");
+    expect(activeOrder()[0]).toBe("chat:chat-p1");
+    expect(unreadDot("chat:chat-p1")).not.toBeNull();
+  });
+
+  it("marks what a turn leaves behind out of sight as unread, and reads what you answer", async () => {
+    await playSteps(3);
+    expect(unreadDot("chat:chat-a3")).not.toBeNull();
     await hover(row("chat:chat-a1", "rail"));
     await click(control("Answer", card()!));
     await act(async () => card()!.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
     await click(control("Send", card()!));
     await advance(500);
-    const names = [...specimens().querySelectorAll<HTMLElement>("[data-mark-specimen]")].map(
-      (column) => column.querySelector('[role="img"]')?.getAttribute("aria-label"),
-    );
-    expect(names).toEqual(["Anthropic · Working", "Anthropic · Working"]);
+    expect(unreadDot("chat:chat-a1")).toBeNull();
+  });
+});
+
+describe("the held order", () => {
+  const START = [
+    "chat:chat-a1",
+    "chat:chat-a2",
+    "chat:chat-a3",
+    "chat:chat-a4",
+    "chat:chat-a5",
+    "chat:chat-p8",
+  ];
+
+  it("holds every row through tool calls and a finished turn, and lifts a new turn to the top", async () => {
+    await playSteps(4);
+    expect(activeOrder()).toEqual(START);
+    await playSteps(1);
+    expect(activeOrder()).toEqual([
+      "chat:chat-a5",
+      "chat:chat-a1",
+      "chat:chat-a2",
+      "chat:chat-a3",
+      "chat:chat-a4",
+      "chat:chat-p8",
+    ]);
+  });
+
+  it("lets the shipped order re-sort on a tool call, for comparison", async () => {
+    await setControl("Live recency (shipped)");
+    await playSteps(1);
+    expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a1", "chat:chat-a3", "chat:chat-a2"]);
+  });
+
+  it("holds a new question in place, or floats it when asked to", async () => {
+    await playSteps(8);
+    expect(activeOrder().indexOf("chat:chat-a2")).toBe(2);
+    await setControl("Floats to the top");
+    expect(activeOrder()[0]).toBe("chat:chat-a1");
+    await click(control("Reset"));
+    await playSteps(8);
+    expect(activeOrder()[0]).toBe("chat:chat-a2");
+  });
+
+  it("moves nothing while the pointer is in a sidebar, and lands the move when it leaves", async () => {
+    const nav = host.querySelector('[data-testid="peek-nav"]')!;
+    await pointInto(nav);
+    await playSteps(5);
+    expect(activeOrder()).toEqual(START);
+    expect(host.querySelector("[data-waiting-moves]")).not.toBeNull();
+    await pointOutOf(nav);
+    expect(activeOrder()[0]).toBe("chat:chat-a5");
+    expect(host.querySelector("[data-waiting-moves]")).toBeNull();
+  });
+
+  it("keeps a read Session in Active while its peek is open, and retires it after", async () => {
+    await hover(row("chat:chat-p8"));
+    await advance(1100);
+    expect(unreadDot("chat:chat-p8")).toBeNull();
+    expect(activeOrder()).toContain("chat:chat-p8");
+    await press(card()!, "Escape");
+    expect(activeOrder()).not.toContain("chat:chat-p8");
+  });
+
+  it("starts the afternoon over on Reset", async () => {
+    await playSteps(5);
+    await click(control("Reset"));
+    expect(activeOrder()).toEqual(START);
+    expect(unreadDot("chat:chat-a3")).toBeNull();
   });
 });
 

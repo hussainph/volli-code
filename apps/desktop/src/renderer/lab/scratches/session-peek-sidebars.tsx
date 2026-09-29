@@ -25,12 +25,25 @@
  *   • Summaries, sends and Undo are fixtures, as in v2. Opening a Session
  *     changes what is "in front" here and nothing else.
  *
- * THE QUESTIONS IT PUTS, as controls: what hovering a FOLDER shows (the ticket,
- * its newest Session, or nothing); what the folder row carries at rest (the
- * shipped count, or who worked on it); and which mark leads every row (the
- * VC-402 status ink, the v2 logo-and-badge, or today's dot). The two marks
- * still in contention are also drawn side by side, on the live rows, so they
- * can be judged without flipping a switch and remembering the other.
+ * DECIDED (owner, 2026-09-29), and still switchable only to compare: a folder
+ * peeks its TICKET; a folder row keeps the shipped COUNT; every row leads with
+ * the v2 LOGO + BADGE (the badge's icons read as state where a tinted logo
+ * blended into its own brand colour); the peek opens after 350 ms at rest,
+ * and the next row after 150 ms once one is open.
+ *
+ * NOW IN MOTION (VC-108 folded in). The sidebar is played forward through a
+ * short script (`session-peek/sidebar-live.ts`) — tool calls, finished turns,
+ * a question — and rebuilt through the shipped builder on every step, so two
+ * new questions can be judged as they happen rather than described:
+ *
+ *   • UNREAD. A turn that ends out of sight leaves its Session unread: a blue
+ *     dot and a heavier title, and the clock cannot retire it to Previous
+ *     until it is read. Peeking is the incentive — when does a look count as
+ *     reading it?
+ *   • A HELD ORDER. Active no longer re-sorts on every tool call. A row moves
+ *     only when a new turn starts (or it first appears), and nothing moves
+ *     while the pointer is in a sidebar or a peek is open. Whether a question
+ *     may still float to the top is the open half.
  */
 import * as React from "react";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -65,18 +78,36 @@ import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
-import { NOW, project, tickets } from "../fixtures";
+import { project, tickets } from "../fixtures";
 import { appApi, seedApp } from "../seed";
 import { SessionPeekCard } from "../session-peek/card";
 import { PeekConversation } from "../session-peek/conversation";
 import { RowMark, type MarkSize, type MarkStyle, type MarkSurface } from "../session-peek/row-mark";
 import {
   CORPUS,
-  LISTING_INPUT,
   RAIL_TICKET_ID,
   VENDOR_LABEL,
   type CorpusSession,
 } from "../session-peek/sidebar-corpus";
+import {
+  activeMembers,
+  applyWorld,
+  asActiveRow,
+  commitOf,
+  frozenOrder,
+  heldTarget,
+  listingInputOf,
+  liveOf,
+  sameOrder,
+  SCRIPT,
+  scriptEvents,
+  WORLD_START,
+  type HeldOrder,
+  type LiveOverlay,
+  type QuestionRule,
+  type World,
+  type WorldEvent,
+} from "../session-peek/sidebar-live";
 import {
   canPeekRow,
   canPinRow,
@@ -106,13 +137,7 @@ import {
 } from "../session-peek/sidebar-rows";
 import { FolderStrip, TicketPeekCard } from "../session-peek/ticket-card";
 import { usePeekController } from "../session-peek/use-peek-controller";
-import {
-  DEFAULT_DWELL,
-  DWELL_CHOICES,
-  type DwellMs,
-  type PeekTarget,
-  type SendOutcome,
-} from "./session-peek-wireframe-model";
+import { type PeekTarget, type SendOutcome } from "./session-peek-wireframe-model";
 
 export const title = "Session peek · both sidebars, with ticket folders";
 export const note =
@@ -127,23 +152,20 @@ const WARM_DWELL_MS = 150;
 const PREFIX = project.ticketPrefix;
 const TICKETS = new Map(tickets.map((ticket) => [ticket.id, ticket]));
 
-/** Previous rows the side-by-side draws: a bare Session, a dead turn, a terminal. */
-const SPECIMEN_PREVIOUS = new Set(["chat-p8", "chat-p6", "term-p2"]);
-const SPECIMEN_STYLES = [
-  ["ink", "Status ink (VC-402)"],
-  ["badge", "Logo + badge (v2)"],
-] as const satisfies readonly (readonly [MarkStyle, string])[];
+/** The decided dwell is 350 ms; its neighbours stay for comparison. */
+const DWELL_CHOICES = [300, 350, 400, 500] as const;
+type DwellMs = (typeof DWELL_CHOICES)[number];
+const DEFAULT_DWELL: DwellMs = 350;
 
-/** The listing never changes here: the corpus is fixed and the clock is frozen. */
-const LISTING = buildActiveSessionListing({ ...LISTING_INPUT, now: NOW });
-const ENTRIES = groupPreviousByTicket(LISTING.previous);
-const FOLDERS = folderSessions(ENTRIES);
-const ACTIVE_BY_ID = new Map(LISTING.active.map((row) => [row.id, row]));
-const PREVIOUS_BY_ID = new Map(LISTING.previous.map((row) => [row.id, row]));
-/** The folder each Previous Session sits in, so opening one can reveal it (the shipped rule). */
-const FOLDER_OF = new Map(
-  [...FOLDERS].flatMap(([ticketId, rowIds]) => rowIds.map((rowId) => [rowId, ticketId] as const)),
-);
+/** How long a peek must be on screen before it counts as reading its Session. */
+const PEEK_READ_MS = 1000;
+/** How fast the script plays: slow enough to watch one row move. */
+const PLAY_STEP_MS = 1600;
+const FIRST_IN_FRONT = "chat:chat-a2";
+
+/** When looking at a peek clears its Session's unread dot. */
+type PeekReads = "look" | "never" | "open";
+type OrderMode = "held" | "live";
 
 function corpusOf(rowId: string): CorpusSession | undefined {
   return CORPUS.get(corpusIdOf(rowId));
@@ -219,7 +241,10 @@ function Bullets({ heading, items }: { heading: string; items: readonly string[]
 }
 
 const PROPOSED: readonly string[] = [
-  "One mark per row, everywhere: the vendor's mark carries the state in Active, Previous, inside folders and in the rail — as status ink (VC-402) or as v2's corner badge, compared below.",
+  "Unread is its own mark: a blue dot and a heavier title. A turn that ends while its Session is not in front leaves it unread; opening it, sending to it, or a peek held for a second reads it. Right-click (or U) toggles it.",
+  "Unread Sessions stay in Active past the 30-minute window, however old — Previous means seen or nothing to see, never merely old. Marking a Previous Session unread brings it back.",
+  "A held Active order: tool calls, finished turns, answers and reads move nothing. A row moves only when a new turn starts or it first appears — to the top. While the pointer is in a sidebar or a peek is open, even that waits, and lands when you leave.",
+  "One mark per row, everywhere: the vendor's logo with v2's state badge, in Active, Previous, inside folders and in the rail.",
   "One two-line row in both sidebars: Active is drawn as the rail's row, the mark centred on the row. The second line says where and when (VLT-14 · 2m ago) and never how — the mark already says it.",
   "A folder peeks its TICKET: status, title, and each Session with one line on what it did. Three Sessions called “Chat” become three different sentences. Pressing one drills into its own peek; ← goes back.",
   "Folder peeks are read-only. Nothing behind a folder can be waiting on you (attention pins a Session to Active), and an answer needs one recipient — so Answer and Send live on Session rows only.",
@@ -229,6 +254,7 @@ const PROPOSED: readonly string[] = [
 ];
 
 const KEYS: readonly string[] = [
+  "U on a Session row marks it read or unread (right-click offers the same)",
   "↑/↓ or J/K step every visible row — folders and their open Sessions in one order",
   "→ opens a folder, ← closes it; ← on a Session inside a folder returns to the folder",
   "Space peeks the focused row; Space again pins a Session (to answer) or moves into a folder's card",
@@ -236,6 +262,8 @@ const KEYS: readonly string[] = [
 ];
 
 const OPEN: readonly string[] = [
+  "Whether a held row's move, when it lands, should animate from where it was — the eye loses a row that teleports",
+  "The rest of VC-108's surfaces: tab strips, the board card's unread count, the project rail's aggregate, and the durable read receipt behind all of them",
   "Ticket peek on the BOARD's cards — the same card, so the brief's “other surfaces” is one component",
   "Whether the rail's fold eyebrow (“Sessions ›”) should peek its record while folded",
   "Summary freshness, question identity and send/undo guarantees stay runtime contracts (see the v2 README)",
@@ -248,17 +276,56 @@ type FolderViewState = FolderView & { readonly key: string | null };
 export default function SessionPeekSidebarsScratch() {
   const [folderPeek, setFolderPeek] = React.useState<FolderPeek>("ticket");
   const [folderFace, setFolderFace] = React.useState<FolderFace>("count");
-  const [markStyle, setMarkStyle] = React.useState<MarkStyle>("ink");
+  const [markStyle, setMarkStyle] = React.useState<MarkStyle>("badge");
   const [switchMode, setSwitchMode] = React.useState<"warm" | "full">("warm");
   const [dwell, setDwell] = React.useState<DwellMs>(DEFAULT_DWELL);
   const [hoverEnabled, setHoverEnabled] = React.useState(true);
   const [outcome, setOutcome] = React.useState<SendOutcome>("success");
+  const [orderMode, setOrderMode] = React.useState<OrderMode>("held");
+  const [questions, setQuestions] = React.useState<QuestionRule>("hold");
+  const [peekReads, setPeekReads] = React.useState<PeekReads>("look");
+  const [holdWhilePointing, setHoldWhilePointing] = React.useState(true);
+
+  /* ------------------------------------------------------------ the world */
+
+  const [world, setWorld] = React.useState<World>(WORLD_START);
+  const act = React.useCallback(
+    (...events: readonly WorldEvent[]) => setWorld((current) => events.reduce(applyWorld, current)),
+    [],
+  );
+  const [scriptAt, setScriptAt] = React.useState(0);
+  const [playing, setPlaying] = React.useState(false);
+  const [lastNote, setLastNote] = React.useState<string | null>(null);
+  /** What the held band last committed to (see `sidebar-live.ts`). */
+  const [committed, setCommitted] = React.useState<HeldOrder | null>(null);
+  /** Whether the pointer is in either sidebar — one of the two things that hold the band still. */
+  const [pointing, setPointing] = React.useState(false);
 
   /** What the person is focused on — what a peek must never take them away from. */
-  const [inFront, setInFront] = React.useState<string>("chat:chat-a2");
+  const [inFront, setInFront] = React.useState<string>(FIRST_IN_FRONT);
   const [railTicketId, setRailTicketId] = React.useState(RAIL_TICKET_ID);
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set());
   const [recordOpen, setRecordOpen] = React.useState(false);
+
+  // The shipped builder, over this moment of the world: the band membership
+  // and the order it would draw.
+  const listing = React.useMemo(
+    () => buildActiveSessionListing({ ...listingInputOf(world), now: world.now }),
+    // The unread map cannot change a listing; only time and the live fields can.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [world.now, world.sessions],
+  );
+  const members = React.useMemo(
+    () => activeMembers(listing, world.unread),
+    [listing, world.unread],
+  );
+  const orderTarget = React.useMemo(
+    () =>
+      orderMode === "live"
+        ? members.map((row) => row.id)
+        : heldTarget(committed, members, questions),
+    [committed, members, orderMode, questions],
+  );
 
   const canPeek = React.useCallback(
     (target: PeekTarget) => canPeekRow(target.rowId, folderPeek),
@@ -303,7 +370,9 @@ export default function SessionPeekSidebarsScratch() {
     onRowKey,
     // The raw view, not the derived one below: a swap of the card's content
     // (drill, back, page) is what has to re-measure it; a new target already does.
-    layoutKey: `${folderPeek}|${markStyle}|${folderViewState.drill}|${folderViewState.page}`,
+    // A row that moves takes its card with it (the live order does that
+    // mid-read; the held order never moves a row while a card is open).
+    layoutKey: `${folderPeek}|${markStyle}|${folderViewState.drill}|${folderViewState.page}|${orderTarget.join()}|${committed?.order.join() ?? ""}`,
   });
   const { state, dispatch } = peek;
   const shown = state.shown;
@@ -317,12 +386,82 @@ export default function SessionPeekSidebarsScratch() {
       return { ...base, ...update(base), key: shownKey };
     });
 
-  const delivered = (rowId: string) => state.delivered[rowId] !== undefined;
+  /* ------------------------------------------------------------- the bands */
+
+  /**
+   * Held still: the pointer is in a sidebar, or a peek is open — the two
+   * moments a person is aiming at a row. The live (shipped) order never holds.
+   */
+  const frozen = orderMode === "held" && holdWhilePointing && (pointing || shown !== null);
+  const displayIds =
+    frozen && committed !== null
+      ? frozenOrder(
+          committed,
+          members.map((row) => row.id),
+        )
+      : orderTarget;
+  const waitingMoves = frozen && committed !== null && displayIds.join() !== orderTarget.join();
+
+  // Commit whatever the band may now draw. Live commits every build, so a
+  // switch to held starts from the order on screen.
+  React.useEffect(() => {
+    if (frozen) return;
+    const next = commitOf(orderTarget, members);
+    setCommitted((current) => (sameOrder(current, next) ? current : next));
+  }, [frozen, members, orderTarget]);
+
+  const bands = React.useMemo(() => {
+    const byId = new Map<string, ActiveSessionRow>(members.map((row) => [row.id, row]));
+    // A frozen band still draws a row the clock or a read has retired: it
+    // leaves when the person does, not from under the pointer.
+    for (const row of listing.previous) if (!byId.has(row.id)) byId.set(row.id, asActiveRow(row));
+    const active = displayIds.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [row];
+    });
+    const inActive = new Set(active.map((row) => row.id));
+    const previous = listing.previous.filter((row) => !inActive.has(row.id));
+    const entries = groupPreviousByTicket(previous);
+    const folders = folderSessions(entries);
+    return {
+      active,
+      previous,
+      entries,
+      folders,
+      activeById: new Map(active.map((row) => [row.id, row])),
+      previousById: new Map(previous.map((row) => [row.id, row])),
+      /** The folder each Previous Session sits in, so opening one can reveal it (the shipped rule). */
+      folderOf: new Map(
+        [...folders].flatMap(([ticketId, rowIds]) =>
+          rowIds.map((rowId) => [rowId, ticketId] as const),
+        ),
+      ),
+    };
+  }, [displayIds, listing.previous, members]);
+
+  const isUnread = (rowId: string) => world.unread[corpusIdOf(rowId)] !== undefined;
+  const toggleUnread = React.useCallback(
+    (rowId: string) => {
+      const id = corpusIdOf(rowId);
+      act({ kind: world.unread[id] === undefined ? "unread" : "read", id });
+    },
+    [act, world.unread],
+  );
+
+  /**
+   * Whether this row's answer landed. The world is the truth for the row's
+   * state; this only tells the card to stop offering the question — and only
+   * while the world agrees, so a Reset that restores the question restores it.
+   */
+  const delivered = (rowId: string) =>
+    state.delivered[rowId] !== undefined &&
+    liveOf(world, corpusIdOf(rowId))?.activity !== "waiting";
 
   const listed = (rowId: string): ListedSession | null => {
-    const active = ACTIVE_BY_ID.get(rowId);
-    if (active !== undefined) return listedActive(active, delivered(rowId));
-    const previous = PREVIOUS_BY_ID.get(rowId);
+    const active = bands.activeById.get(rowId);
+    // The world already says what a delivered answer did to the row.
+    if (active !== undefined) return listedActive(active, false);
+    const previous = bands.previousById.get(rowId);
     return previous === undefined ? null : listedPrevious(previous);
   };
 
@@ -348,19 +487,23 @@ export default function SessionPeekSidebarsScratch() {
     );
   };
 
-  /** Opening: the one gesture that changes what is in front. The peek closes behind it. */
+  /**
+   * Opening: the one gesture that changes what is in front, and the plainest
+   * way to read a Session. The peek closes behind it.
+   */
   const activate = React.useCallback(
     (rowId: string) => {
       setInFront(rowId);
-      const row = ACTIVE_BY_ID.get(rowId) ?? PREVIOUS_BY_ID.get(rowId);
+      act({ kind: "read", id: corpusIdOf(rowId) });
+      const row = bands.activeById.get(rowId) ?? bands.previousById.get(rowId);
       if (row?.ticket) setRailTicketId(row.ticket.id);
       // The shipped band reveals the folder a newly selected Session sits in.
-      const folder = FOLDER_OF.get(rowId);
+      const folder = bands.folderOf.get(rowId);
       if (folder !== undefined) setExpanded((current) => new Set(current).add(folder));
       if (state.pinned !== null) dispatch({ type: "unpin" });
       dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
     },
-    [dispatch, state.pinned],
+    [act, bands, dispatch, state.pinned],
   );
 
   const onToggleFolder = React.useCallback(
@@ -375,6 +518,12 @@ export default function SessionPeekSidebarsScratch() {
   );
 
   keyRef.current = (event, target) => {
+    // U: read or unread, from the keyboard, on any Session row in either sidebar.
+    if ((event.key === "u" || event.key === "U") && folderTicketId(target.rowId) === null) {
+      event.preventDefault();
+      toggleUnread(target.rowId);
+      return true;
+    }
     if (target.surface !== "nav") return false;
     const ticketId = folderTicketId(target.rowId);
     if (ticketId !== null) {
@@ -432,7 +581,8 @@ export default function SessionPeekSidebarsScratch() {
 
   /* ------------------------------------------------------------- the card */
 
-  const subject = shown === null ? null : peekSubject(shown.rowId, folderPeek, FOLDERS, folderView);
+  const subject =
+    shown === null ? null : peekSubject(shown.rowId, folderPeek, bands.folders, folderView);
 
   const onCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     // The drilled card's first rung of the Esc ladder is the ticket it came from.
@@ -464,7 +614,7 @@ export default function SessionPeekSidebarsScratch() {
                   rowId,
                   title: row.title,
                   mark: mark(rowId, "two-line", "popover"),
-                  age: row.at > 0 ? compactAge(row.at, NOW) : "",
+                  age: row.at > 0 ? compactAge(row.at, world.now) : "",
                   summary: session.summary,
                 },
               ];
@@ -489,7 +639,8 @@ export default function SessionPeekSidebarsScratch() {
           <div onKeyDown={onCardKeyDown} className="contents">
             <SessionPeekCard
               ref={peek.cardRef}
-              fixture={sessionFixture(row, session, PREFIX, NOW)}
+              fixture={sessionFixture(row, session, PREFIX, world.now)}
+              unread={isUnread(subject.rowId)}
               state={state}
               position={peek.position}
               width={PEEK_WIDTH}
@@ -515,7 +666,11 @@ export default function SessionPeekSidebarsScratch() {
               showTicket={via.kind === "row"}
               onPin={() => peek.pin(shown)}
               onOpen={() => activate(subject.rowId)}
-              onLook={() => peek.look(subject.rowId)}
+              onLook={() => {
+                // The transcript is the Session itself: looking at it reads it.
+                act({ kind: "read", id: corpusIdOf(subject.rowId) });
+                peek.look(subject.rowId);
+              }}
               onClose={() => dispatch({ type: "escape", now: Date.now() })}
               {...peek.cardProps}
             />
@@ -525,36 +680,124 @@ export default function SessionPeekSidebarsScratch() {
     }
   }
 
+  /* --------------------------------------------------- what reads a Session */
+
+  /** The Session whose card is on screen, if the card is about one. */
+  const peekedRowId =
+    card !== null && subject?.kind === "session" && peek.looking === null ? subject.rowId : null;
+  const peekedUnread = peekedRowId !== null && isUnread(peekedRowId);
+  React.useEffect(() => {
+    if (peekedRowId === null || !peekedUnread || peekReads === "never") return;
+    const read = () => act({ kind: "read", id: corpusIdOf(peekedRowId) });
+    if (peekReads === "open") {
+      read();
+      return;
+    }
+    // A look, not a pass: the card has to stay up long enough to be read.
+    const timer = window.setTimeout(read, PEEK_READ_MS);
+    return () => window.clearTimeout(timer);
+  }, [act, peekReads, peekedRowId, peekedUnread]);
+
+  /**
+   * A delivered reply is the world's news too: an answer resumes the turn, a
+   * message to a quiet Session starts one, and either way the person has
+   * read it. Undo within the window puts the Session back as it was.
+   */
+  const applied = React.useRef(new Map<string, number>());
+  const beforeSend = React.useRef(new Map<string, LiveOverlay | null>());
+  React.useEffect(() => {
+    for (const [rowId, entry] of Object.entries(state.delivered)) {
+      if (applied.current.get(rowId) === entry.at) continue;
+      applied.current.set(rowId, entry.at);
+      const id = corpusIdOf(rowId);
+      beforeSend.current.set(rowId, world.sessions[id] ?? null);
+      const activity = liveOf(world, id)?.activity;
+      act(
+        activity === "waiting"
+          ? { kind: "answer", id }
+          : activity === "working"
+            ? { kind: "tool-call", id }
+            : { kind: "turn-start", id },
+        { kind: "read", id },
+      );
+    }
+    for (const rowId of applied.current.keys()) {
+      if (state.delivered[rowId] !== undefined) continue;
+      applied.current.delete(rowId);
+      act({
+        kind: "restore",
+        id: corpusIdOf(rowId),
+        overlay: beforeSend.current.get(rowId) ?? null,
+      });
+    }
+    // Only a change in what was delivered is news; the world it reads is current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.delivered]);
+
+  /* ------------------------------------------------------------- playback */
+
+  const stepOnce = React.useCallback(() => {
+    const next = SCRIPT[scriptAt];
+    if (next === undefined) return;
+    act(...scriptEvents(next, corpusIdOf(inFront)));
+    setLastNote(next.note);
+    setScriptAt(scriptAt + 1);
+  }, [act, inFront, scriptAt]);
+
+  React.useEffect(() => {
+    if (!playing) return;
+    if (scriptAt >= SCRIPT.length) {
+      setPlaying(false);
+      return;
+    }
+    const timer = window.setTimeout(stepOnce, PLAY_STEP_MS);
+    return () => window.clearTimeout(timer);
+  }, [playing, scriptAt, stepOnce]);
+
+  const reset = () => {
+    setPlaying(false);
+    // Forget the sends first, so clearing them below is not read as an Undo.
+    applied.current.clear();
+    beforeSend.current.clear();
+    for (const rowId of Object.keys(state.delivered)) dispatch({ type: "undo", rowId });
+    dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
+    setWorld(WORLD_START);
+    setScriptAt(0);
+    setLastNote(null);
+    setCommitted(null);
+    setInFront(FIRST_IN_FRONT);
+    setRailTicketId(RAIL_TICKET_ID);
+  };
+
   const lookingRow = peek.looking === null ? null : listed(peek.looking);
   const lookingSession = peek.looking === null ? undefined : corpusOf(peek.looking);
   const lookingFixture =
     lookingRow === null || lookingSession === undefined
       ? null
-      : sessionFixture(lookingRow, lookingSession, PREFIX, NOW);
+      : sessionFixture(lookingRow, lookingSession, PREFIX, world.now);
 
   /* ------------------------------------------------------------ the bands */
 
-  const selectedFolder = FOLDER_OF.get(inFront) ?? null;
+  const selectedFolder = bands.folderOf.get(inFront) ?? null;
 
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
-      <SessionBandHeader label="Active" count={LISTING.active.length} />
+      <SessionBandHeader label="Active" count={bands.active.length} />
       <SidebarMenu>
-        {LISTING.active.map((row: ActiveSessionRow) => {
-          const listedRow = listedActive(row, delivered(row.id));
-          return (
-            <ActiveRow
-              key={row.id}
-              row={row}
-              ticketPrefix={PREFIX}
-              now={NOW}
-              selected={row.id === inFront}
-              working={listedRow.state === "working"}
-              mark={mark(row.id, "two-line")}
-              onActivate={activate}
-            />
-          );
-        })}
+        {bands.active.map((row: ActiveSessionRow) => (
+          <ActiveRow
+            key={row.id}
+            row={row}
+            ticketPrefix={PREFIX}
+            now={world.now}
+            selected={row.id === inFront}
+            working={listedActive(row, false).state === "working"}
+            unread={isUnread(row.id)}
+            mark={mark(row.id, "two-line")}
+            onActivate={activate}
+            onToggleUnread={toggleUnread}
+          />
+        ))}
       </SidebarMenu>
     </SidebarGroup>
   );
@@ -564,19 +807,20 @@ export default function SessionPeekSidebarsScratch() {
       key={row.id}
       row={row}
       ticketPrefix={PREFIX}
-      now={NOW}
+      now={world.now}
       selected={row.id === inFront}
       mark={mark(row.id)}
       showIdentity={showIdentity}
       onActivate={activate}
+      onMarkUnread={toggleUnread}
     />
   );
 
   const previousBand = (
     <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
-      <SessionBandHeader label="Previous" count={LISTING.previous.length} />
+      <SessionBandHeader label="Previous" count={bands.previous.length} />
       <SidebarMenu>
-        {ENTRIES.map((entry) =>
+        {bands.entries.map((entry) =>
           entry.kind === "session" ? (
             previousRow(entry.row, true)
           ) : (
@@ -586,7 +830,7 @@ export default function SessionPeekSidebarsScratch() {
                 ticketPrefix={PREFIX}
                 count={entry.rows.length}
                 newestAt={entry.newestAt}
-                now={NOW}
+                now={world.now}
                 open={expanded.has(entry.id)}
                 selected={entry.id === selectedFolder}
                 vendors={
@@ -614,7 +858,9 @@ export default function SessionPeekSidebarsScratch() {
   /* -------------------------------------------------------------- the rail */
 
   const railTicket = TICKETS.get(railTicketId);
-  const roster = railRoster(LISTING, railTicketId);
+  // The rail lists the ticket's Sessions in the band's own order, so a held
+  // row holds in both sidebars at once.
+  const roster = railRoster(bands, railTicketId);
   const railRow = (rowId: string, rowTitle: string) => {
     const row = listed(rowId);
     return (
@@ -624,10 +870,12 @@ export default function SessionPeekSidebarsScratch() {
         title={rowTitle}
         mark={mark(rowId, "two-line")}
         at={row === null || row.at <= 0 ? null : row.at}
-        now={NOW}
+        now={world.now}
         working={row?.state === "working"}
+        unread={isUnread(rowId)}
         selected={rowId === inFront}
         onActivate={activate}
+        onToggleUnread={toggleUnread}
       />
     );
   };
@@ -645,6 +893,8 @@ export default function SessionPeekSidebarsScratch() {
         <Sidebar
           collapsible="none"
           className="h-svh w-(--sidebar-width) border-r border-sidebar-border"
+          onPointerEnter={() => setPointing(true)}
+          onPointerLeave={() => setPointing(false)}
         >
           <SidebarContent
             data-testid="peek-nav"
@@ -682,162 +932,191 @@ export default function SessionPeekSidebarsScratch() {
           ) : null}
         </section>
 
-        <div
-          data-lab-controls=""
-          className="flex max-w-[720px] flex-col gap-3 rounded-xl border border-border p-4"
-        >
-          <h2 className="text-ui font-medium">The questions</h2>
-          <Choice<FolderPeek>
-            label="Folder hover"
-            value={folderPeek}
-            options={[
-              ["ticket", "Ticket (proposed)"],
-              ["newest", "Newest session"],
-              ["off", "Nothing"],
-            ]}
-            onChange={(next) => {
-              // The card on screen may be one the new mode would not open.
-              dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
-              setFolderPeek(next);
-            }}
-          />
-          <Choice<FolderFace>
-            label="Folder face"
-            value={folderFace}
-            options={[
-              ["count", "Count (shipped)"],
-              ["marks", "Who worked on it"],
-            ]}
-            onChange={setFolderFace}
-          />
-          <Choice<MarkStyle>
-            label="Row mark"
-            value={markStyle}
-            options={[
-              ["ink", "Status ink (VC-402)"],
-              ["badge", "Logo + badge (v2)"],
-              ["dot", "Dot (shipped)"],
-            ]}
-            onChange={setMarkStyle}
-          />
-          <h2 className="pt-2 text-ui font-medium">Tuning</h2>
-          <Choice<"warm" | "full">
-            label="Next row"
-            value={switchMode}
-            options={[
-              ["warm", `Warm · ${WARM_DWELL_MS}ms`],
-              ["full", "Full dwell"],
-            ]}
-            onChange={setSwitchMode}
-          />
-          <Choice<`${DwellMs}`>
-            label="Dwell"
-            value={`${dwell}`}
-            options={DWELL_CHOICES.map((ms) => [`${ms}`, `${ms}ms`] as const)}
-            onChange={(next) => setDwell(Number(next) as DwellMs)}
-          />
-          <Choice<"on" | "off">
-            label="Hover"
-            value={hoverEnabled ? "on" : "off"}
-            options={[
-              ["on", "on"],
-              ["off", "off (keyboard)"],
-            ]}
-            onChange={(next) => {
-              peek.clearDwell();
-              setHoverEnabled(next === "on");
-              if (next === "off") peek.disableHover();
-            }}
-          />
-          <Choice<SendOutcome>
-            label="Send"
-            value={outcome}
-            options={[
-              ["success", "succeeds"],
-              ["failure", "fails"],
-            ]}
-            onChange={setOutcome}
-          />
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              onClick={() => setExpanded(new Set(FOLDERS.keys()))}
-            >
-              Open every folder
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              onClick={() => setExpanded(new Set())}
-            >
-              Close every folder
-            </Button>
-          </div>
-        </div>
-
-        <section
-          aria-label="Row mark, side by side"
-          className="flex max-w-[720px] flex-col gap-3 rounded-xl border border-border p-4"
-        >
-          <div className="flex flex-col gap-1">
-            <h2 className="text-ui font-medium">Status ink or logo + badge</h2>
-            <p className="text-ui text-muted-foreground">
-              The same live rows both ways — an answer sent from a peek flips both columns. They are
-              specimens: they neither peek nor open.
-            </p>
-          </div>
-          <SidebarProvider className="min-h-0 w-full">
-            <div inert className="grid w-full grid-cols-2 gap-3">
-              {SPECIMEN_STYLES.map(([style, label]) => (
-                <figure
-                  key={style}
-                  data-mark-specimen={style}
-                  className="flex min-w-0 flex-col gap-2"
+        <div data-lab-controls="" className="flex max-w-[720px] flex-col gap-4">
+          <section
+            aria-label="Play the afternoon"
+            className="flex flex-col gap-3 rounded-xl border border-border p-4"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-ui font-medium">Play the afternoon</h2>
+              <span className="text-ui text-muted-foreground tabular-nums">
+                {scriptAt} / {SCRIPT.length} · +{Math.round((world.now - WORLD_START.now) / 1000)}s
+              </span>
+              <div className="ml-auto flex gap-1">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="secondary"
+                  disabled={scriptAt >= SCRIPT.length}
+                  onClick={() => setPlaying((on) => !on)}
                 >
-                  <figcaption className="text-label text-muted-foreground uppercase">
-                    {label}
-                  </figcaption>
-                  <div className="flex flex-col gap-2 rounded-xl border border-sidebar-border bg-sidebar p-2 text-sidebar-foreground">
-                    <ul className="flex flex-col gap-1">
-                      {LISTING.active.map((row) => (
-                        <ActiveRow
-                          key={row.id}
-                          row={row}
-                          ticketPrefix={PREFIX}
-                          now={NOW}
-                          selected={row.id === inFront}
-                          working={listed(row.id)?.state === "working"}
-                          mark={mark(row.id, "two-line", "sidebar", style)}
-                          surface={null}
-                          onActivate={activate}
-                        />
-                      ))}
-                    </ul>
-                    <SidebarMenu>
-                      {LISTING.previous
-                        .filter((row) => SPECIMEN_PREVIOUS.has(corpusIdOf(row.id)))
-                        .map((row) => (
-                          <PreviousRow
-                            key={row.id}
-                            row={row}
-                            ticketPrefix={PREFIX}
-                            now={NOW}
-                            selected={false}
-                            mark={mark(row.id, "row", "sidebar", style)}
-                            surface={null}
-                            onActivate={activate}
-                          />
-                        ))}
-                    </SidebarMenu>
-                  </div>
-                </figure>
-              ))}
+                  {playing ? "Pause" : "Play"}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={playing || scriptAt >= SCRIPT.length}
+                  onClick={stepOnce}
+                >
+                  Step
+                </Button>
+                <Button type="button" size="xs" variant="ghost" onClick={reset}>
+                  Reset
+                </Button>
+              </div>
             </div>
-          </SidebarProvider>
-        </section>
+            <p className="text-ui text-muted-foreground" aria-live="polite">
+              {lastNote ??
+                "Two working Sessions trade tool calls, one finishes out of sight, a quiet one starts a turn, one asks a question. Play it once held and once live."}
+            </p>
+            {waitingMoves ? (
+              <p data-waiting-moves="" className="text-ui text-info">
+                Held while you point — the band catches up when the pointer leaves the sidebars and
+                no peek is open.
+              </p>
+            ) : null}
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
+            <h2 className="text-ui font-medium">The questions</h2>
+            <Choice<OrderMode>
+              label="Active order"
+              value={orderMode}
+              options={[
+                ["held", "Held (proposed)"],
+                ["live", "Live recency (shipped)"],
+              ]}
+              onChange={setOrderMode}
+            />
+            <Choice<QuestionRule>
+              label="A question"
+              value={questions}
+              options={[
+                ["hold", "Holds its place"],
+                ["float", "Floats to the top"],
+              ]}
+              onChange={setQuestions}
+            />
+            <Choice<PeekReads>
+              label="Peek reads"
+              value={peekReads}
+              options={[
+                ["look", "After a 1s look (proposed)"],
+                ["open", "As soon as it opens"],
+                ["never", "Never — only opening does"],
+              ]}
+              onChange={setPeekReads}
+            />
+            <Choice<"hold" | "land">
+              label="While pointing"
+              value={holdWhilePointing ? "hold" : "land"}
+              options={[
+                ["hold", "Moves wait (proposed)"],
+                ["land", "Moves land at once"],
+              ]}
+              onChange={(next) => setHoldWhilePointing(next === "hold")}
+            />
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-xl border border-dashed border-border p-4">
+            <h2 className="text-ui font-medium">Decided — switchable only to compare</h2>
+            <Choice<FolderPeek>
+              label="Folder hover"
+              value={folderPeek}
+              options={[
+                ["ticket", "Ticket ✓"],
+                ["newest", "Newest session"],
+                ["off", "Nothing"],
+              ]}
+              onChange={(next) => {
+                // The card on screen may be one the new mode would not open.
+                dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
+                setFolderPeek(next);
+              }}
+            />
+            <Choice<FolderFace>
+              label="Folder face"
+              value={folderFace}
+              options={[
+                ["count", "Count ✓"],
+                ["marks", "Who worked on it"],
+              ]}
+              onChange={setFolderFace}
+            />
+            <Choice<MarkStyle>
+              label="Row mark"
+              value={markStyle}
+              options={[
+                ["badge", "Logo + badge ✓"],
+                ["ink", "Status ink (VC-402)"],
+                ["dot", "Dot (shipped)"],
+              ]}
+              onChange={setMarkStyle}
+            />
+            <Choice<`${DwellMs}`>
+              label="Dwell"
+              value={`${dwell}`}
+              options={DWELL_CHOICES.map(
+                (ms) => [`${ms}`, ms === DEFAULT_DWELL ? `${ms}ms ✓` : `${ms}ms`] as const,
+              )}
+              onChange={(next) => setDwell(Number(next) as DwellMs)}
+            />
+            <Choice<"warm" | "full">
+              label="Next row"
+              value={switchMode}
+              options={[
+                ["warm", `Warm · ${WARM_DWELL_MS}ms ✓`],
+                ["full", "Full dwell"],
+              ]}
+              onChange={setSwitchMode}
+            />
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
+            <h2 className="text-ui font-medium">Tuning</h2>
+            <Choice<"on" | "off">
+              label="Hover"
+              value={hoverEnabled ? "on" : "off"}
+              options={[
+                ["on", "on"],
+                ["off", "off (keyboard)"],
+              ]}
+              onChange={(next) => {
+                peek.clearDwell();
+                setHoverEnabled(next === "on");
+                if (next === "off") peek.disableHover();
+              }}
+            />
+            <Choice<SendOutcome>
+              label="Send"
+              value={outcome}
+              options={[
+                ["success", "succeeds"],
+                ["failure", "fails"],
+              ]}
+              onChange={setOutcome}
+            />
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button
+                type="button"
+                size="xs"
+                variant="secondary"
+                onClick={() => setExpanded(new Set(bands.folders.keys()))}
+              >
+                Open every folder
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="secondary"
+                onClick={() => setExpanded(new Set())}
+              >
+                Close every folder
+              </Button>
+            </div>
+          </section>
+        </div>
 
         <div className="flex max-w-[720px] flex-col gap-2">
           <Bullets heading="What this proposes" items={PROPOSED} />
@@ -851,6 +1130,8 @@ export default function SessionPeekSidebarsScratch() {
         aria-label="Ticket rail"
         className="group/rail flex h-svh w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
         data-narrow="false"
+        onPointerEnter={() => setPointing(true)}
+        onPointerLeave={() => setPointing(false)}
       >
         {railTicket === undefined ? null : (
           <header className={cn("flex flex-col gap-1 pt-4 pb-3", RAIL_PANEL_INSET)}>

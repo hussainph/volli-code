@@ -134,6 +134,7 @@ function Identity({
   fixture,
   state,
   glyph,
+  unread,
   pinned,
   onClose,
   onOpen,
@@ -141,6 +142,7 @@ function Identity({
   fixture: SessionFixture;
   state: FixtureState;
   glyph?: React.ReactNode;
+  unread: boolean;
   pinned: boolean;
   onClose(): void;
   onOpen(): void;
@@ -156,8 +158,17 @@ function Identity({
         >
           {fixture.sessionTitle}
         </p>
-        <span className="whitespace-nowrap text-ui text-muted-foreground tabular-nums">
-          {fixture.recency}
+        <span className="flex items-center gap-1.5 whitespace-nowrap text-ui text-muted-foreground tabular-nums">
+          {unread ? (
+            <>
+              <span data-peek-unread="" className="inline-flex items-center gap-1.5 text-info">
+                <span aria-hidden className="size-1.5 rounded-full bg-info" />
+                Unread
+              </span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
+          <span>{fixture.recency}</span>
         </span>
       </div>
       <Button size="icon-sm" variant="ghost" aria-label="Open session" onClick={onOpen}>
@@ -422,6 +433,8 @@ export const SessionPeekCard = React.forwardRef<
     canViewConversation?: boolean;
     /** `false` where the ticket is already named above — a card reached through its folder. */
     showTicket?: boolean;
+    /** Says "Unread" beside the age, in the row's own unread blue (VC-108). */
+    unread?: boolean;
     onPin(): void;
     onOpen(): void;
     onLook(): void;
@@ -443,6 +456,7 @@ export const SessionPeekCard = React.forwardRef<
     canReply = true,
     canViewConversation = true,
     showTicket = true,
+    unread = false,
     onPin,
     onOpen,
     onLook,
@@ -498,6 +512,7 @@ export const SessionPeekCard = React.forwardRef<
         fixture={fixture}
         state={fixtureState}
         glyph={glyph}
+        unread={unread}
         pinned={pinned}
         onClose={onClose}
         onOpen={onOpen}

@@ -228,7 +228,9 @@ export function sessionFixture(
     },
     messages: session.messages,
     lastActivity: session.summary,
-    question: session.question,
+    // A question is on the card only while it is being asked: the corpus
+    // carries one a Session will ask later, and an answered one is gone.
+    question: listed.state === "waiting" ? session.question : null,
   };
 }
 

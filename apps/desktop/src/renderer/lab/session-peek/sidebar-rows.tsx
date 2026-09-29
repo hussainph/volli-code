@@ -25,7 +25,12 @@
  *      an ungrouped Session and a child inside an open folder all share one
  *      left axis — the folder reads as part of the list's system rather than
  *      as a control bolted onto it.
- *   5. NO NATIVE `title` TOOLTIP on a peekable row. The shipped rows use it
+ *   5. UNREAD IS ITS OWN MARK (VC-108), never the badge: the badge says what a
+ *      Session is doing, and a result can be unread while a new turn runs. A
+ *      blue dot at the row's end and a heavier title — blue because it is
+ *      the one hue no state and no vendor logo already wears, so it cannot
+ *      blend into either. Right-click marks a row read or unread.
+ *   6. NO NATIVE `title` TOOLTIP on a peekable row. The shipped rows use it
  *      for the untruncated title and the harness; the peek now says both, and
  *      a browser tooltip would open on top of it at almost the same instant.
  *
@@ -36,6 +41,8 @@
  */
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
+import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { displayTicketId, type Ticket } from "@volli/shared";
 
@@ -44,6 +51,12 @@ import type {
   PreviousSessionRow,
 } from "@renderer/components/sidebar/active-session-listing";
 import { providerMark } from "@renderer/components/models/model-identity";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { compactAge, relativeTime } from "@renderer/lib/relative-time";
@@ -77,6 +90,45 @@ function Identity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefi
 /** Where a Session's peek listens: a sidebar, or nowhere (a specimen). */
 export type RowSurface = "nav" | "rail" | null;
 
+/** The unread dot, in the row's trailing slot. Says its word to a screen reader. */
+function UnreadDot() {
+  return (
+    <span data-unread-dot="" className="flex size-4 shrink-0 items-center justify-center">
+      <span aria-hidden className="size-2 rounded-full bg-info" />
+      <span className="sr-only">Unread</span>
+    </span>
+  );
+}
+
+/**
+ * Right-click on a Session: read it without opening it, or keep it for later.
+ * `null` draws the row without a menu — a specimen, which does nothing.
+ */
+function ReadMenu({
+  unread,
+  onToggle,
+  children,
+}: {
+  unread: boolean;
+  onToggle: (() => void) | null;
+  children: React.ReactElement;
+}) {
+  if (onToggle === null) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
+          onSelect={onToggle}
+        >
+          {unread ? "Mark as read" : "Mark as unread"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 /**
  * The two-line Session row both sidebars draw: the shipped `ListRow` at its
  * 52px density, the mark centred in a 24px slot, the title over one quiet
@@ -89,8 +141,10 @@ function TwoLineSessionRow({
   subtitle,
   mark,
   working,
+  unread,
   selected,
   onActivate,
+  onToggleUnread,
 }: {
   rowId: string;
   surface: RowSurface;
@@ -98,33 +152,41 @@ function TwoLineSessionRow({
   subtitle: string;
   mark: React.ReactNode;
   working: boolean;
+  unread: boolean;
   selected: boolean;
   onActivate(rowId: string): void;
+  onToggleUnread: (() => void) | null;
 }) {
+  // Unread outranks read by weight alone; the colour stays the row's own.
+  const weight = unread ? "font-semibold text-sidebar-foreground" : "font-medium";
   return (
     <li
       data-peek-row={surface === null ? undefined : rowId}
       data-peek-surface={surface ?? undefined}
+      data-unread={unread ? "" : undefined}
     >
-      <ListRow
-        density="two-line"
-        selected={selected}
-        onActivate={surface === null ? null : () => onActivate(rowId)}
-        leading={mark}
-        primary={
-          working ? (
-            <span className="session-title-sweep min-w-0 flex-1 text-ui font-medium">
-              {title}
-              <span className="session-title-peak" aria-hidden>
+      <ReadMenu unread={unread} onToggle={surface === null ? null : onToggleUnread}>
+        <ListRow
+          density="two-line"
+          selected={selected}
+          onActivate={surface === null ? null : () => onActivate(rowId)}
+          leading={mark}
+          primary={
+            working ? (
+              <span className={cn("session-title-sweep min-w-0 flex-1 text-ui", weight)}>
                 {title}
+                <span className="session-title-peak" aria-hidden>
+                  {title}
+                </span>
               </span>
-            </span>
-          ) : (
-            title
-          )
-        }
-        secondary={subtitle}
-      />
+            ) : (
+              <span className={cn("min-w-0 truncate text-ui", weight)}>{title}</span>
+            )
+          }
+          secondary={subtitle}
+          trailing={unread ? <UnreadDot /> : undefined}
+        />
+      </ReadMenu>
     </li>
   );
 }
@@ -145,18 +207,22 @@ export const ActiveRow = React.memo(function ActiveRow({
   now,
   selected,
   working,
+  unread = false,
   mark,
   surface = "nav",
   onActivate,
+  onToggleUnread = null,
 }: {
   row: ActiveSessionRow;
   ticketPrefix: string;
   now: number;
   selected: boolean;
   working: boolean;
+  unread?: boolean;
   mark: React.ReactNode;
   surface?: RowSurface;
   onActivate(rowId: string): void;
+  onToggleUnread?: ((rowId: string) => void) | null;
 }) {
   return (
     <TwoLineSessionRow
@@ -166,8 +232,10 @@ export const ActiveRow = React.memo(function ActiveRow({
       subtitle={activeSubtitle(row, ticketPrefix, now)}
       mark={mark}
       working={working}
+      unread={unread}
       selected={selected}
       onActivate={onActivate}
+      onToggleUnread={onToggleUnread === null ? null : () => onToggleUnread(row.id)}
     />
   );
 });
@@ -182,6 +250,7 @@ export const PreviousRow = React.memo(function PreviousRow({
   showIdentity = true,
   surface = "nav",
   onActivate,
+  onMarkUnread = null,
 }: {
   row: PreviousSessionRow;
   ticketPrefix: string;
@@ -191,27 +260,34 @@ export const PreviousRow = React.memo(function PreviousRow({
   showIdentity?: boolean;
   surface?: Exclude<RowSurface, "rail">;
   onActivate(rowId: string): void;
+  /** A Previous row is read by definition; marking it unread brings it back to Active. */
+  onMarkUnread?: ((rowId: string) => void) | null;
 }) {
   return (
     <SidebarMenuItem
       data-peek-row={surface === null ? undefined : row.id}
       data-peek-surface={surface ?? undefined}
     >
-      <SidebarMenuButton
-        size="sm"
-        isActive={selected}
-        onClick={surface === null ? undefined : () => onActivate(row.id)}
-        className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+      <ReadMenu
+        unread={false}
+        onToggle={surface === null || onMarkUnread === null ? null : () => onMarkUnread(row.id)}
       >
-        {mark}
-        {showIdentity ? <Identity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
-        <span className="min-w-0 flex-1 truncate">{row.title}</span>
-        {row.endedOrQuietAt > 0 ? (
-          <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
-            {compactAge(row.endedOrQuietAt, now)}
-          </span>
-        ) : null}
-      </SidebarMenuButton>
+        <SidebarMenuButton
+          size="sm"
+          isActive={selected}
+          onClick={surface === null ? undefined : () => onActivate(row.id)}
+          className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+        >
+          {mark}
+          {showIdentity ? <Identity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
+          <span className="min-w-0 flex-1 truncate">{row.title}</span>
+          {row.endedOrQuietAt > 0 ? (
+            <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
+              {compactAge(row.endedOrQuietAt, now)}
+            </span>
+          ) : null}
+        </SidebarMenuButton>
+      </ReadMenu>
     </SidebarMenuItem>
   );
 });
@@ -312,8 +388,10 @@ export function RailRow({
   at,
   now,
   working,
+  unread,
   selected,
   onActivate,
+  onToggleUnread,
 }: {
   rowId: string;
   title: string;
@@ -322,8 +400,10 @@ export function RailRow({
   at: number | null;
   now: number;
   working: boolean;
+  unread: boolean;
   selected: boolean;
   onActivate(rowId: string): void;
+  onToggleUnread(rowId: string): void;
 }) {
   return (
     <TwoLineSessionRow
@@ -333,8 +413,10 @@ export function RailRow({
       subtitle={at === null ? "" : relativeTime(at, now)}
       mark={mark}
       working={working}
+      unread={unread}
       selected={selected}
       onActivate={onActivate}
+      onToggleUnread={() => onToggleUnread(rowId)}
     />
   );
 }

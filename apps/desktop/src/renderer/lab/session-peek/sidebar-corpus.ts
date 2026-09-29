@@ -110,6 +110,27 @@ const GUTTER_QUESTION: SessionInteractionPrompt = {
   custom: true,
 };
 
+/** What the replay-test Session asks when the scratch's script reaches it. */
+const REPLAY_QUESTION: SessionInteractionPrompt = {
+  id: "replay-home",
+  label: "Where should the scroll-replay test live?",
+  detail: null,
+  options: [
+    {
+      id: "beside",
+      label: "Beside the gutter",
+      description: "Fast, runs with the unit suite; replays recorded frames",
+    },
+    {
+      id: "e2e",
+      label: "In the end-to-end suite",
+      description: "Real scrolling in a window; slower and only in CI",
+    },
+  ],
+  multiple: false,
+  custom: true,
+};
+
 interface Seed {
   readonly id: string;
   readonly ticketId: string | null;
@@ -162,6 +183,8 @@ const CHAT_SEEDS: readonly Seed[] = [
     ask: "Write a test that reproduces the gutter drop so the fix has something to pass.",
     summary:
       "Writing a scroll-replay test for the gutter: it records a 40-line flick and asserts every visible hunk keeps its marker. The first run reproduces the drop on 3 of 40 frames.",
+    // Working at load; the scratch's script has it ask this part-way through.
+    question: REPLAY_QUESTION,
   },
   {
     id: "chat-a3",
