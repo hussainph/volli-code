@@ -50,15 +50,26 @@ export function installMainProbe() {
   return { installed: true, pid: process.pid };
 }
 
-/** Two full collections a beat apart, so finalizers and weak callbacks settle. */
+/**
+ * Two full collections a beat apart, so finalizers and weak callbacks settle.
+ *
+ * Each `gc()` is a synchronous, non-incremental full mark-compact, so its
+ * wall time is the stop-the-world pause a full collection of THIS live heap
+ * costs main. The second one runs over an already-collected heap and is the
+ * one the report quotes: it is the pause attributable to what is still live.
+ */
 export async function forceGc() {
   const { gc } = globalThis.VOLLI_VC445_PROBE;
+  const perf = process.getBuiltinModule("node:perf_hooks");
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  gc();
-  await wait(150);
-  gc();
-  await wait(150);
-  return true;
+  const pausesMs = [];
+  for (let index = 0; index < 2; index += 1) {
+    const started = perf.performance.now();
+    gc();
+    pausesMs.push(Math.round((perf.performance.now() - started) * 1000) / 1000);
+    await wait(150);
+  }
+  return { pausesMs };
 }
 
 /** Main's own memory, and every process's working set as Electron reports it. */
@@ -122,6 +133,7 @@ export function startWindow(_electron, name) {
     ticks,
     startedEpochMs: origin + perf.performance.now(),
     cpu: process.cpuUsage(),
+    elu: perf.performance.eventLoopUtilization(),
     gcFrom: state.gcEntries.length,
   };
   return { name, startedEpochMs: state.window.startedEpochMs };
@@ -150,6 +162,10 @@ export function stopWindow() {
     endedEpochMs,
     wallMs: endedEpochMs - window.startedEpochMs,
     mainCpuMs: (cpu.user + cpu.system) / 1000,
+    // Fraction of the window main's loop spent running JavaScript and I/O
+    // callbacks rather than waiting — the busy share any IPC request queues
+    // behind.
+    eventLoopUtilization: perf.performance.eventLoopUtilization(window.elu).utilization,
     eventLoopDelay: {
       count: window.histogram.count,
       minMs: ms(window.histogram.min),

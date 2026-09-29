@@ -26,8 +26,8 @@ export function markdownTables(aggregate) {
   const lines = [];
   lines.push("### Main memory after forced GC (MiB; median [min–max] across launches)", "");
   lines.push(
-    "| bound | entries | launches | main working set pre → Δ | main RSS Δ | main heapUsed pre → Δ | heapUsed Δ per context | heapTotal Δ | renderer working set Δ |",
-    "|---:|---:|---:|---|---|---|---:|---|---|",
+    "| bound | entries | launches | main heapUsed pre → Δ | heapUsed Δ per context | main heapTotal Δ | main footprint pre → Δ | main working set pre → Δ | main RSS Δ | renderer footprint Δ | renderer working set Δ |",
+    "|---:|---:|---:|---|---:|---|---|---|---|---|---|",
   );
   for (const arm of arms) {
     const m = arm.memory;
@@ -36,8 +36,24 @@ export function markdownTables(aggregate) {
         ? "—"
         : fixed((m.mainHeapUsedMiB.delta?.median ?? Number.NaN) / arm.attached, 2);
     lines.push(
-      `| ${label(arm)} | ${history(arm)} | ${arm.launches} | ${fixed(m.mainWorkingSetMiB.pre?.median)} → ${spread(m.mainWorkingSetMiB.delta)} | ${spread(m.mainRssMiB.delta)} | ${fixed(m.mainHeapUsedMiB.pre?.median)} → ${spread(m.mainHeapUsedMiB.delta, 2)} | ${perContext} | ${spread(m.mainHeapTotalMiB.delta)} | ${spread(m.rendererWorkingSetMiB.delta)} |`,
+      `| ${label(arm)} | ${history(arm)} | ${arm.launches} | ${fixed(m.mainHeapUsedMiB.pre?.median)} → ${spread(m.mainHeapUsedMiB.delta, 2)} | ${perContext} | ${spread(m.mainHeapTotalMiB.delta)} | ${fixed(m.mainFootprintMiB.pre?.median)} → ${spread(m.mainFootprintMiB.delta)} | ${fixed(m.mainWorkingSetMiB.pre?.median)} → ${spread(m.mainWorkingSetMiB.delta)} | ${spread(m.mainRssMiB.delta)} | ${spread(m.rendererFootprintMiB.delta)} | ${spread(m.rendererWorkingSetMiB.delta)} |`,
     );
+  }
+  if (
+    arms.some((arm) => arm.fullGcPauseMs?.post !== null && arm.fullGcPauseMs?.post !== undefined)
+  ) {
+    lines.push(
+      "",
+      "### Forced full GC pause over the live heap (ms; median [min–max] across launches)",
+      "",
+      "| bound | entries | before hydration | after hydration |",
+      "|---:|---:|---|---|",
+    );
+    for (const arm of arms) {
+      lines.push(
+        `| ${label(arm)} | ${history(arm)} | ${spread(arm.fullGcPauseMs.pre, 1)} | ${spread(arm.fullGcPauseMs.post, 1)} |`,
+      );
+    }
   }
   for (const windowName of ["idle", "hydration", "steady"]) {
     lines.push(
@@ -46,14 +62,14 @@ export function markdownTables(aggregate) {
       "",
       "Loop-delay histogram columns are median [min–max] across launches of each launch's own percentile; pooled columns are `p50 / p95 / max (samples)` over every launch's raw samples.",
       "",
-      "| bound | entries | window ms | ELD p50 | ELD p95 | ELD max | 10 ms tick gap (pooled) | IPC echo (pooled) | Session RPC (pooled) | GCs / launch | GC ms / launch | GC pause (pooled) | r(loop, echo) |",
-      "|---:|---:|---|---|---|---|---|---|---|---|---|---|---:|",
+      "| bound | entries | window ms | loop utilization | ELD p50 | ELD p95 | ELD max | 10 ms tick gap (pooled) | IPC echo (pooled) | Session RPC (pooled) | GCs / launch | GC ms / launch | GC pause (pooled) | r(loop, echo) |",
+      "|---:|---:|---|---|---|---|---|---|---|---|---|---|---|---:|",
     );
     for (const arm of arms) {
       const w = arm.windows[windowName];
       if (w === null) continue;
       lines.push(
-        `| ${label(arm)} | ${history(arm)} | ${spread(w.wallMs, 0)} | ${spread(w.eventLoopDelay.p50Ms, 2)} | ${spread(w.eventLoopDelay.p95Ms, 2)} | ${spread(w.eventLoopDelay.maxMs, 1)} | ${pooled(w.tickGapMs, 1)} | ${pooled(w.ipcEchoMs)} | ${pooled(w.sessionRpcMs)} | ${spread(w.gc.countPerLaunch, 0)} | ${spread(w.gc.totalMsPerLaunch, 1)} | ${pooled(w.gc.pauseMs, 2)} | ${w.loopVsEcho.pearson === null ? "—" : `${fixed(w.loopVsEcho.pearson, 2)} (${w.loopVsEcho.bins})`} |`,
+        `| ${label(arm)} | ${history(arm)} | ${spread(w.wallMs, 0)} | ${spread(w.eventLoopUtilization, 3)} | ${spread(w.eventLoopDelay.p50Ms, 2)} | ${spread(w.eventLoopDelay.p95Ms, 2)} | ${spread(w.eventLoopDelay.maxMs, 1)} | ${pooled(w.tickGapMs, 1)} | ${pooled(w.ipcEchoMs)} | ${pooled(w.sessionRpcMs)} | ${spread(w.gc.countPerLaunch, 0)} | ${spread(w.gc.totalMsPerLaunch, 1)} | ${pooled(w.gc.pauseMs, 2)} | ${w.loopVsEcho.pearson === null ? "—" : `${fixed(w.loopVsEcho.pearson, 2)} (${w.loopVsEcho.bins})`} |`,
       );
     }
   }
@@ -61,26 +77,26 @@ export function markdownTables(aggregate) {
     "",
     "### Hydration: one `model.select` that rebinds one Session (ms)",
     "",
-    "| bound | entries | per Session p50 / p95 / max (n) | whole window median [min–max] |",
-    "|---:|---:|---|---|",
+    "| bound | entries | every bind p50 / p95 / max (n) | first bind after boot | later binds | whole window median [min–max] |",
+    "|---:|---:|---|---|---|---|",
   );
   for (const arm of arms.filter((candidate) => candidate.attached > 0)) {
     lines.push(
-      `| ${label(arm)} | ${history(arm)} | ${pooled(arm.hydrationPerSessionMs, 1)} | ${spread(arm.hydrationTotalMs, 0)} |`,
+      `| ${label(arm)} | ${history(arm)} | ${pooled(arm.hydrationPerSessionMs, 1)} | ${pooled(arm.hydrationFirstMs, 1)} | ${pooled(arm.hydrationLaterMs, 1)} | ${spread(arm.hydrationTotalMs, 0)} |`,
     );
   }
   lines.push(
     "",
     "### Per-context slope of the post-GC delta (MiB per bound context; control arm as N = 0)",
     "",
-    "| entries | heapUsed slope (r²) | main working set slope (r²) | main RSS slope (r²) |",
-    "|---:|---|---|---|",
+    "| entries | heapUsed slope (r²) | main footprint slope (r²) | main working set slope (r²) | main RSS slope (r²) |",
+    "|---:|---|---|---|---|",
   );
   const fits = aggregate.fits;
   for (const [index, row] of fits.mainHeapUsedMiB.entries()) {
     const cell = (fit) => (fit === null ? "—" : `${fixed(fit.slope, 3)} (${fixed(fit.r2, 2)})`);
     lines.push(
-      `| ${row.historyEntries} | ${cell(row.fit)} | ${cell(fits.mainWorkingSetMiB[index].fit)} | ${cell(fits.mainRssMiB[index].fit)} |`,
+      `| ${row.historyEntries} | ${cell(row.fit)} | ${cell(fits.mainFootprintMiB[index].fit)} | ${cell(fits.mainWorkingSetMiB[index].fit)} | ${cell(fits.mainRssMiB[index].fit)} |`,
     );
   }
   lines.push("");

@@ -29,8 +29,10 @@
  * absolute paths stay identical), launches the app, and in ONE process:
  *
  *   1. census: every fixture Session is durably open, and NONE is bound;
- *   2. warm: an IPC burst, two forced GCs, a pre-hydration memory snapshot;
- *   3. idle window: main loop delay + GC while the renderer samples IPC;
+ *   2. warm: an IPC burst, then an idle window (main loop delay, loop
+ *      utilization and GC while the renderer samples IPC echo and Session RPC
+ *      round trips concurrently);
+ *   3. two forced full GCs (each timed) and the pre-hydration memory snapshot;
  *   4. hydration window: the same instruments while N Sessions are bound, one
  *      after another, by re-selecting their own model (`model.select`), which
  *      makes the Session runtime rehydrate the Pi binding from its sidecar
@@ -38,7 +40,7 @@
  *   5. census: exactly those N Sessions are now bound (the listing's `live`
  *      flag, computed from the runtime's in-memory binding map);
  *   6. steady window: the instruments again while N contexts are merely held;
- *   7. two forced GCs, a post-hydration memory snapshot, the tripwire record.
+ *   7. two forced full GCs, the post-hydration snapshot, the tripwire record.
  *
  * Arms are {1, 5, 10, 20} bound contexts × {10, 100, 500, 1,500} entries, plus
  * a control arm that binds nothing (the noise floor of every delta). Each
@@ -281,6 +283,35 @@ async function openWindow(app, paths) {
 }
 
 // ---- host and build facts --------------------------------------------------
+
+const FOOTPRINT_UNITS = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+
+/**
+ * macOS's physical footprint of one process (`footprint -p`), in bytes.
+ *
+ * Recorded beside Electron's working set because the two answer different
+ * questions on a machine under memory pressure: working set is what is
+ * resident right now, and the OS compressing or purging pages moves it by tens
+ * of MiB with no change in what the process holds. The footprint counts
+ * compressed dirty memory too, which is what Activity Monitor's Memory column
+ * shows and what a process actually costs the machine.
+ */
+async function footprintBytes(pid) {
+  const output = await sh("footprint", ["-p", String(pid)]);
+  const match = output?.match(/Footprint:\s+([\d.]+)\s+(B|KB|MB|GB)/);
+  return match ? Math.round(Number(match[1]) * FOOTPRINT_UNITS[match[2]]) : null;
+}
+
+async function withFootprints(snapshot) {
+  const renderers = snapshot.metrics.filter((metric) => metric.type === "Tab");
+  return {
+    ...snapshot,
+    footprint: {
+      mainBytes: await footprintBytes(snapshot.pid),
+      rendererBytes: await Promise.all(renderers.map((metric) => footprintBytes(metric.pid))),
+    },
+  };
+}
 
 async function sh(command, args) {
   try {
@@ -607,12 +638,14 @@ async function runLaunch(options, paths, fixture, arm, meta) {
     }
     const before = await page.evaluate(bindingCensus, { projectId: fixture.projectId });
 
+    // Warm, then an idle window that doubles as the last of the settle, then
+    // the baseline snapshot — so "pre" is taken seconds, not a boot, before
+    // hydration and the OS's post-boot working-set drift is mostly spent.
     await page.evaluate(warmIpc, { count: 100 });
-    await app.evaluate(forceGc);
-    await sleep(500);
-    const pre = await app.evaluate(memorySnapshot);
-
     const idle = await measuredWindow(app, page, "idle", options, () => sleep(options.windowMs));
+    const preGc = await app.evaluate(forceGc);
+    await sleep(500);
+    const pre = await withFootprints(await app.evaluate(memorySnapshot));
 
     const sessionIds =
       arm.attached === 0 ? [] : fixture.groups[arm.historyEntries].slice(0, arm.attached);
@@ -633,9 +666,9 @@ async function runLaunch(options, paths, fixture, arm, meta) {
       sleep(options.windowMs),
     );
 
-    await app.evaluate(forceGc);
+    const postGc = await app.evaluate(forceGc);
     await sleep(500);
-    const post = await app.evaluate(memorySnapshot);
+    const post = await withFootprints(await app.evaluate(memorySnapshot));
     const tripwire = await app.evaluate(tripwireState);
     const hostAfter = await hostState();
     const sidecars = sessionIds.map((id) => fixture.sidecars[id]);
@@ -651,6 +684,7 @@ async function runLaunch(options, paths, fixture, arm, meta) {
       sidecarEntries: sidecars.map((sidecar) => sidecar.entries),
       sidecarBytes: sidecars.map((sidecar) => sidecar.bytes),
       memory: { pre, post },
+      fullGcPauseMs: { pre: preGc.pausesMs, post: postGc.pausesMs },
       windows: { idle, hydration, steady },
       tripwire,
     };

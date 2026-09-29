@@ -60,6 +60,11 @@ export function memoryFigures(snapshot) {
     mainHeapTotalMiB: snapshot.processMemory.heapTotal / MIB,
     mainExternalMiB: snapshot.processMemory.external / MIB,
     rendererWorkingSetMiB: (rendererWorkingSetKiB(snapshot) ?? Number.NaN) / 1024,
+    mainFootprintMiB: (snapshot.footprint?.mainBytes ?? Number.NaN) / MIB,
+    rendererFootprintMiB:
+      snapshot.footprint === undefined || snapshot.footprint.rendererBytes.includes(null)
+        ? Number.NaN
+        : snapshot.footprint.rendererBytes.reduce((sum, bytes) => sum + bytes, 0) / MIB,
   };
 }
 
@@ -122,6 +127,9 @@ function aggregateWindow(launches, name) {
     launches: windows.length,
     wallMs: acrossLaunches(windows.map((window) => window.main.wallMs)),
     mainCpuMs: acrossLaunches(windows.map((window) => window.main.mainCpuMs)),
+    eventLoopUtilization: acrossLaunches(
+      windows.map((window) => window.main.eventLoopUtilization ?? Number.NaN),
+    ),
     eventLoopDelay: {
       samples: windows.reduce((sum, window) => sum + window.main.eventLoopDelay.count, 0),
       p50Ms: acrossLaunches(windows.map((window) => window.main.eventLoopDelay.p50Ms)),
@@ -180,10 +188,28 @@ export function aggregateArm(arm, launches) {
       bytesPerSession: acrossLaunches(launches.flatMap((launch) => launch.sidecarBytes ?? [])),
     },
     hydrationPerSessionMs: summarize(hydrations.map((entry) => entry.ms)),
+    // The first bind after boot also pays one-time lazy costs (tool and
+    // environment setup shared by every later bind); the rest are the
+    // per-context cost.
+    hydrationFirstMs: summarize(
+      launches.map((launch) => launch.windows.hydration?.perSession?.[0]?.ms ?? Number.NaN),
+    ),
+    hydrationLaterMs: summarize(
+      launches.flatMap((launch) =>
+        (launch.windows.hydration?.perSession ?? []).slice(1).map((entry) => entry.ms),
+      ),
+    ),
     hydrationTotalMs: acrossLaunches(
       launches.map((launch) => launch.windows.hydration?.main.wallMs ?? Number.NaN),
     ),
     memory: aggregateMemory(launches),
+    // The second forced full GC of each pair: a stop-the-world mark-compact of
+    // what is live, before hydration and after it. Absent from runs taken
+    // before the probe timed it.
+    fullGcPauseMs: {
+      pre: acrossLaunches(launches.map((launch) => launch.fullGcPauseMs?.pre?.[1] ?? Number.NaN)),
+      post: acrossLaunches(launches.map((launch) => launch.fullGcPauseMs?.post?.[1] ?? Number.NaN)),
+    },
     windows: Object.fromEntries(
       WINDOW_NAMES.map((name) => [name, aggregateWindow(launches, name)]),
     ),
@@ -249,6 +275,7 @@ export function aggregateRun(launches) {
       mainHeapUsedMiB: contextCostFits(arms, "mainHeapUsedMiB"),
       mainWorkingSetMiB: contextCostFits(arms, "mainWorkingSetMiB"),
       mainRssMiB: contextCostFits(arms, "mainRssMiB"),
+      mainFootprintMiB: contextCostFits(arms, "mainFootprintMiB"),
     },
     tripwire: {
       blocked: launches.flatMap((launch) => launch.tripwire?.blocked ?? []),

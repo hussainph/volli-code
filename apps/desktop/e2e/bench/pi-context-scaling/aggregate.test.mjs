@@ -27,6 +27,7 @@ function snapshot({ heapUsedMiB, mainKiB, rendererKiB }) {
       { pid: 2, type: "Tab", workingSetKiB: rendererKiB },
       { pid: 3, type: "GPU", workingSetKiB: 999_999 },
     ],
+    footprint: { mainBytes: mainKiB * 1024 * 2, rendererBytes: [rendererKiB * 1024] },
   };
 }
 
@@ -99,6 +100,8 @@ describe("VC-445 aggregation", () => {
     expect(figures.mainWorkingSetMiB).toBe(2);
     expect(figures.rendererWorkingSetMiB).toBe(1);
     expect(figures.mainHeapUsedMiB).toBe(64);
+    expect(figures.mainFootprintMiB).toBe(4);
+    expect(figures.rendererFootprintMiB).toBe(1);
   });
 
   it("correlates the worst loop gap with the worst echo that started in the same bin", () => {
