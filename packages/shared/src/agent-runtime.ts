@@ -549,6 +549,14 @@ export interface RuntimeWebDocument {
   text: string;
   /** Whether the boundary cut the text short of the document's end. */
   truncated: boolean;
+  /**
+   * How a GitHub page URL was read instead of as a page, when it was: a `blob`
+   * URL as the raw file it shows, a `tree` URL as the listing GitHub's git
+   * trees API gives for that directory. Set only when the answer came from the
+   * host the rewrite expected; absent for every other read. A fixed vocabulary
+   * rather than prose, so the runtime states it in its own words.
+   */
+  via?: "github-raw-file" | "github-directory-listing";
 }
 
 /**
