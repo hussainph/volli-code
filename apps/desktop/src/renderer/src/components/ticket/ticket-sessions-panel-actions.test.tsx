@@ -19,12 +19,32 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { TicketSessionsPanel } from "./ticket-sessions-panel";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
+
+/**
+ * The resident chat client a send from the card goes through. The delivery
+ * path itself is the shipped one (`client.submit`) and is tested where it
+ * lives; what these cases are about is what the RAIL does around its answer.
+ */
+const peekClient = vi.hoisted(() => ({
+  submit: vi.fn(async (): Promise<"delivered" | "refused"> => "delivered"),
+}));
+
+vi.mock("@volli/session-presentation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/session-presentation")>();
+  return {
+    ...actual,
+    // The rail's own resume/source rules still come from the real module; only
+    // the client a peek send reaches for is a fixture.
+    getChatClient: () => peekClient as unknown as ReturnType<typeof actual.getChatClient>,
+  };
+});
 
 const noop = (): void => {};
 
@@ -170,6 +190,46 @@ async function openMenu(rowId: string): Promise<void> {
   });
 }
 
+/**
+ * The whole path a message takes from a rail row: dwell on the row until its
+ * card opens, press `Send` to pin it, type, submit. Driven through the shipped
+ * card rather than through the port, because what is being pinned here is that
+ * the RAIL reads the Session when the card's send lands — and a test that
+ * called the port directly would keep passing if the card stopped reaching it.
+ */
+async function sendFromCard(text: string): Promise<void> {
+  vi.useFakeTimers();
+  try {
+    // Focus is the cheap door into the same dwell the pointer takes.
+    const target = rowElement("chat:chat-1").querySelector<HTMLElement>("button");
+    await act(async () => target?.focus());
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    const pin = [...document.querySelectorAll<HTMLElement>("[data-peek-card] button")].find(
+      (button) => button.textContent === "Send",
+    );
+    await act(async () => pin?.click());
+
+    const box = document.querySelector<HTMLTextAreaElement>("[data-peek-card] textarea");
+    // React reads the value off the node, so the native setter is what makes a
+    // controlled field see typed text.
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    await act(async () => {
+      setValue?.call(box, text);
+      box?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const form = document.querySelector<HTMLFormElement>("#peek-reply-form");
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function menuItems(): string[] {
   return [...document.querySelectorAll('[data-slot="context-menu-item"]')].map(
     (item) => item.textContent ?? "",
@@ -191,6 +251,10 @@ describe("a rail row's acts", () => {
         },
       },
     });
+    peekClient.submit.mockClear();
+    peekClient.submit.mockImplementation(async () => "delivered");
+    // Adoption is an attach, and these cases are not about the transport.
+    useChatSessionsStore.setState({ adoptChatSession: vi.fn() });
     useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
     useUiStore.setState({ railFolds: { sessionsRecord: true, worktree: false, usage: false } });
     useTicketSessionRecordsStore.setState({
@@ -290,6 +354,35 @@ describe("a rail row's acts", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads the Session when the ROW itself is clicked (plan §3.4)", async () => {
+    // Opening reads, wherever the open starts. The card's `Open session` did
+    // this and the row's own click did not, so clicking a row left the dot on
+    // a Session that was now in front of the person.
+    const target = rowElement("chat:chat-1").querySelector<HTMLElement>("button");
+    await act(async () => target?.click());
+
+    expect(activated).toEqual(["chat-1"]);
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: false });
+  });
+
+  it("reads the Session when a message is sent from the card (plan §3.4)", async () => {
+    await sendFromCard("ship it");
+
+    expect(peekClient.submit).toHaveBeenCalledTimes(1);
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: false });
+  });
+
+  it("does not read when the send was refused", async () => {
+    // A message the client could not take is not a turn anybody has seen, so
+    // the dot stays where it is.
+    peekClient.submit.mockImplementation(async () => "refused");
+
+    await sendFromCard("ship it");
+
+    expect(peekClient.submit).toHaveBeenCalledTimes(1);
+    expect(setRead).not.toHaveBeenCalled();
   });
 
   it("toggles read with U on the focused row", async () => {

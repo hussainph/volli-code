@@ -14,15 +14,16 @@ import {
   type SessionProvenance,
   type SessionRecord,
 } from "@volli/shared";
-import { getChatClient, type InteractionSubmission } from "@volli/session-presentation";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { answerInteraction } from "@renderer/components/chat/chat-plane-model";
 import { PeekConversation } from "@renderer/components/session-peek/peek-conversation";
-import { peekSessionId } from "@renderer/components/session-peek/peek-subject";
+import {
+  createSidebarPeekPorts,
+  UnreadDot,
+  usePeekHold,
+} from "@renderer/components/session-peek/sidebar-peek";
 import {
   useSessionPeek,
-  type SessionPeekPorts,
   type SessionPeekRow,
 } from "@renderer/components/session-peek/use-session-peek";
 import { harnessVendorId, SessionGlyph } from "@renderer/components/sessions/session-glyph";
@@ -62,6 +63,7 @@ import {
   canResumeSession,
   filterChatSessionHistory,
   filterSessionHistory,
+  groupChatSessionRows,
   groupSessionRows,
   mergeSessionRailRows,
   nextSessionRailAgeChangeAt,
@@ -84,9 +86,8 @@ import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useHeldSessionOrder, useSessionOrderStore } from "@renderer/stores/session-order";
+import { ticketRailOrderKey, useHeldSessionOrder } from "@renderer/stores/session-order";
 import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import {
   ticketSessionListingStateOf,
@@ -150,51 +151,36 @@ function railRowActivation(entry: SessionRailRow, scope: RailActivationScope): (
   };
 }
 
-/** Opening, replying to or viewing a Session reads it (D6, plan §3.4). */
-function markRead(ticketId: string, sessionId: string): void {
-  void useTicketSessionRecordsStore.getState().setSessionRead(ticketId, sessionId, false);
-}
-
-/** A message id for a send that starts from a card rather than from a composer. */
-function peekMessageId(): string {
-  return crypto.randomUUID();
+/**
+ * What a ROW's own click does: take the same door the card's `Open session`
+ * takes (`ports.openSession`), so opening from the list reads the Session
+ * exactly as opening from the card does (plan §3.4, D6). The rail used to read
+ * on the card's press and not on the row's, so clicking a row left the dot on
+ * a Session that was now in front of the person.
+ *
+ * {@link railRowActivation} still decides whether the row is a door at all — a
+ * live-but-closed terminal record is not one — and remains the single
+ * definition of where that door leads.
+ */
+function railRowOpen(
+  entry: SessionRailRow,
+  scope: RailActivationScope,
+  openRow: (rowId: string) => void,
+): (() => void) | null {
+  if (railRowActivation(entry, scope) === null) return null;
+  const rowId = sessionRailRowId(entry);
+  return () => openRow(rowId);
 }
 
 /**
- * Answering a question from the card: adopt the Session, then take the shipped
- * path a chat plane takes (`answerInteraction` → the resident client), so the
- * decision and the words that could not ride it happen in the one order the
- * chat surface already proved (plan §0.6, §3.3).
+ * WHAT READS A SESSION lives in `session-peek/sidebar-peek.ts` now, not here:
+ * opening a row, a delivered answer or message, and viewing the conversation
+ * all read (plan §3.4, D6), and both sidebars get that from one module rather
+ * than from two copies that had already drifted. This file answers only the
+ * four questions that are genuinely the rail's — what a row opens, where the
+ * conversation overlay lives, which ticket's store holds the receipts, and
+ * that there is no ticket to navigate to.
  */
-async function answerFromPeek(
-  sessionId: string,
-  interactionId: string,
-  submission: InteractionSubmission,
-): Promise<boolean> {
-  useChatSessionsStore.getState().adoptChatSession(sessionId);
-  const client = getChatClient(sessionId);
-  // A Session this window cannot hold a client for — a Draft, or one closed
-  // between the pull and the press — is refused rather than silently dropped.
-  if (client === undefined) return false;
-  return answerInteraction(interactionId, submission, {
-    resolve: (id, resolution) => client.resolveInteraction(id, resolution),
-    deliver: (message) => {
-      void client.submit({ id: peekMessageId(), text: message }, "queue");
-    },
-    // The card owns its own submission latch (`interaction-ui.tsx`); there is
-    // no second in-flight set to keep here.
-    resolving: () => {},
-  });
-}
-
-/** Sending from the card: the same adopt-then-client path, as an ordinary message. */
-async function sendFromPeek(sessionId: string, text: string): Promise<boolean> {
-  useChatSessionsStore.getState().adoptChatSession(sessionId);
-  const client = getChatClient(sessionId);
-  if (client === undefined) return false;
-  const delivery = await client.submit({ id: peekMessageId(), text }, "queue");
-  return delivery !== "refused";
-}
 
 /** The earlier of two boundary instants, either of which may be "never". */
 function soonest(left: number | null, right: number | null): number | null {
@@ -244,18 +230,6 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
     <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
       <StatusDot state={state} />
       <span className="min-w-0 truncate">{children}</span>
-    </span>
-  );
-}
-
-/** The unread mark, in the row's trailing slot. Says its word to a screen reader. */
-function UnreadDot() {
-  return (
-    <span data-unread-dot="" className="flex size-4 shrink-0 items-center justify-center">
-      {/* Blue, because it is the one hue neither a state badge nor a vendor
-          logo already wears — unread is its own axis (D6). */}
-      <span aria-hidden className="size-2 rounded-full bg-info" />
-      <span className="sr-only">Unread</span>
     </span>
   );
 }
@@ -475,6 +449,15 @@ function rowGlyph(entry: SessionRailRow, status: TicketSessionStatus): React.Rea
       // The row no longer prints the state word in its live half, so the mark's
       // name is where both facts are said (`SessionGlyph` writes no word of its
       // own — composing them is the row's job).
+      //
+      // NOT `sidebar-peek.ts`'s `sessionGlyphName` (VC-30, F2b), deliberately.
+      // That rule rests every ended state on one word, `Idle`, on the premise
+      // that "no row PRINTS the state any more" — which is true of the live
+      // half and false of the record fold, where the row's own second line
+      // says `Stopped · …` beside an `exited` dot. Naming a finished Session
+      // `Claude Code · Idle` there would contradict the line under it and tell
+      // a screen reader a dead Session is merely quiet. This stays on the
+      // rail's exact word until that map names the ended states.
       name={`${label} · ${sessionStatusLabel(status)}`}
     />
   );
@@ -498,6 +481,7 @@ function SessionList({
   onCommitChatRename,
   onResumeSession,
   onToggleRead,
+  onOpenRow,
 }: {
   rows: readonly SessionRailRow[];
   /**
@@ -530,6 +514,8 @@ function SessionList({
   onResumeSession(record: SessionRecord): void;
   /** Marks one chat Session read or unread — the row's menu and `U` (D6). */
   onToggleRead(sessionId: string, next: boolean): void;
+  /** The one door into a Session: the peek's `openSession`, which also reads it. */
+  onOpenRow(rowId: string): void;
 }) {
   const scope = { projectId, ticketId, onActivateSession, onActivateChat, setActivePane };
   return (
@@ -586,7 +572,7 @@ function SessionList({
                 kind: "chat",
                 sessionId,
               }}
-              onActivate={railRowActivation(entry, scope)}
+              onActivate={railRowOpen(entry, scope, onOpenRow)}
               onStartRename={() => setEditingId(sessionId)}
               onCommitRename={(next) => onCommitChatRename(sessionId, next)}
               onCancelRename={() => setEditingId(null)}
@@ -630,7 +616,7 @@ function SessionList({
                     sessionId: tabId,
                   }
             }
-            onActivate={railRowActivation(entry, scope)}
+            onActivate={railRowOpen(entry, scope, onOpenRow)}
             onStartRename={() => setEditingId(record.id)}
             onCommitRename={(next) => onCommitRename(record, isRoot, next)}
             onCancelRename={() => setEditingId(null)}
@@ -879,9 +865,12 @@ export function TicketSessionsPanel({
   // a Session is durable and outlives every attachment it has ever had, so
   // closing its tab ends nothing. `isLive` is the record's own answer, and it
   // is what keeps a Session that is BLOCKED on a person out of the fold.
+  //
+  // Unread is the second fact the split reads (D6): work nobody has seen is
+  // never retired for going quiet, so an unread Session stays in the live half
+  // whatever its lifecycle says — `groupChatSessionRows` owns both rules.
   const chatRows = buildTicketChatSessionRows(chatSessions);
-  const chatCurrent = chatRows.filter((row) => row.isLive);
-  const chatHistory = chatRows.filter((row) => !row.isLive);
+  const { current: chatCurrent, history: chatHistory } = groupChatSessionRows(chatRows, unread);
 
   // The live rows in the HELD order (VC-30, D7): whatever asks for a person is
   // lifted on the event that made it ask, and then nothing moves while a person
@@ -893,7 +882,10 @@ export function TicketSessionsPanel({
     filterSessionHistory(terminalCurrent, rosterQuery),
     filterChatSessionHistory(chatCurrent, rosterQuery),
   );
-  const heldOrder = useHeldSessionOrder(`ticket:${ticketId}`, sessionRailOrderMembers(liveRows));
+  const heldOrder = useHeldSessionOrder(
+    ticketRailOrderKey(ticketId),
+    sessionRailOrderMembers(liveRows),
+  );
   const current = orderSessionRailRowsByHold(liveRows, heldOrder);
   const history = mergeSessionRailRows(terminalHistory, chatHistory);
   const filteredHistory = mergeSessionRailRows(
@@ -1002,36 +994,27 @@ export function TicketSessionsPanel({
     activationsRef.current = activations;
   });
 
-  const ports = React.useMemo<SessionPeekPorts>(
-    () => ({
-      // One pull, no subscription and no adoption — the whole point of a peek
-      // being cheaper than opening the Session (plan §1.1).
-      readContent: async (sessionId) => {
-        const result = await window.api.sessions.peekContent({ sessionId });
-        return result.ok ? result.content : null;
-      },
-      // Acting IS an explicit intent, so these two adopt and then use the
-      // shipped client path a tab uses — no second delivery implementation.
-      answer: (sessionId, interactionId, submission) =>
-        answerFromPeek(sessionId, interactionId, submission),
-      sendMessage: (sessionId, text) => sendFromPeek(sessionId, text),
-      openSession: (rowId) => {
-        activationsRef.current.get(rowId)?.();
-        const sessionId = peekSessionId(rowId);
-        if (sessionId !== null) markRead(ticketId, sessionId);
-      },
-      // The rail is already inside its ticket; there is nowhere else to go.
-      openTicket: () => {},
-      viewConversation: (sessionId) => {
-        setConversationId(sessionId);
-        markRead(ticketId, sessionId);
-      },
-      setRead: (sessionId, unreadNext) => {
-        void useTicketSessionRecordsStore
-          .getState()
-          .setSessionRead(ticketId, sessionId, unreadNext);
-      },
-    }),
+  // The pull, the answer and send paths, and every read the plan lists are the
+  // SHARED ones (`session-peek/sidebar-peek.ts`): the left band and this rail
+  // used to carry two copies of them, and the copies had drifted. What stays
+  // here is only what is genuinely the rail's.
+  const ports = React.useMemo(
+    () =>
+      createSidebarPeekPorts({
+        // The row's own activation, so the card's `Open session` and a click on
+        // the row are one route into a Session rather than two that can
+        // disagree about which pane a split's row belongs to. The read that
+        // goes with opening is the shared module's (plan §3.4).
+        openRow: (rowId) => activationsRef.current.get(rowId)?.(),
+        // The rail is already inside its ticket; there is nowhere else to go.
+        openTicket: () => {},
+        showConversation: setConversationId,
+        setRead: (sessionId, unreadNext) => {
+          void useTicketSessionRecordsStore
+            .getState()
+            .setSessionRead(ticketId, sessionId, unreadNext);
+        },
+      }),
     [ticketId],
   );
 
@@ -1049,13 +1032,10 @@ export function TicketSessionsPanel({
   });
 
   // The hold (D7), taken for as long as this surface is being pointed at or
-  // shows a card. It is GLOBAL: the left sidebar must not re-order under a
-  // person reading a card that opened out of this rail, and the reverse.
-  const holding = peek.holding;
-  React.useEffect(() => {
-    if (!holding) return;
-    return useSessionOrderStore.getState().hold();
-  }, [holding]);
+  // shows a card. It is GLOBAL, and it is the shared one (`sidebar-peek.ts`):
+  // the left sidebar must not re-order under a person reading a card that
+  // opened out of this rail, and the reverse.
+  usePeekHold(peek.holding);
 
   const listProps = {
     projectId,
@@ -1077,6 +1057,9 @@ export function TicketSessionsPanel({
     onCommitRename: commitRename,
     onCommitChatRename: commitChatRename,
     onResumeSession: handleResume,
+    // One door into a Session for the row and for the card alike — the shared
+    // port, which navigates and then reads (plan §3.4).
+    onOpenRow: ports.openSession,
   };
 
   return (

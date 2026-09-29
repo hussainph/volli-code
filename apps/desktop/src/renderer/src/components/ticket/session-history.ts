@@ -3,8 +3,8 @@ import {
   applyHeldOrder,
   isListableSession,
   isSessionUnread,
+  sessionOrderPhaseOf,
   type SessionOrderMember,
-  type SessionOrderPhase,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -363,6 +363,36 @@ export function buildTicketChatSessionRows(
     }));
 }
 
+/**
+ * A ticket's chat rows split into the live half and the folded record — the
+ * chat counterpart of {@link groupSessionRows}, and the one place the rail
+ * decides which half a chat Session belongs to.
+ *
+ * TWO FACTS DECIDE IT, not one. `isLive` is the Session's own lifecycle
+ * (VC-406), and UNREAD is its own axis on top of that (VC-30, D6): work nobody
+ * has seen is never retired for being old or idle. The rail used to split on
+ * `isLive` alone, so a Session that left a question or a finished turn behind
+ * and then went quiet dropped into the collapsed record — taking its unread dot
+ * with it, behind a caret, which is precisely the state the dot exists to
+ * announce. A row is in the live half while it is live OR unread; only a read,
+ * finished Session becomes a record.
+ *
+ * `unread` is the ticket's set from {@link ticketSessionUnreadIds}, keyed by
+ * Session id — the same read the rows and the peek draw from, so a row cannot
+ * be folded and dotted by two different answers to one question.
+ */
+export function groupChatSessionRows(
+  rows: readonly TicketChatSessionRow[],
+  unread: ReadonlySet<string>,
+): { current: TicketChatSessionRow[]; history: TicketChatSessionRow[] } {
+  const current: TicketChatSessionRow[] = [];
+  const history: TicketChatSessionRow[] = [];
+  for (const chatRow of rows) {
+    (chatRow.isLive || unread.has(chatRow.record.sessionId) ? current : history).push(chatRow);
+  }
+  return { current, history };
+}
+
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
 export function filterChatSessionHistory(
   rows: readonly TicketChatSessionRow[],
@@ -477,23 +507,20 @@ export function sessionRailRowSessionId(row: SessionRailRow): string {
 }
 
 /**
- * What a rail row is doing, in the held order's three-word vocabulary (D7):
- * asking for a person, working, or neither.
+ * The rail's membership for `stores/session-order.ts`, in its current order.
  *
- * Derived from {@link sessionRailRowDotState} rather than from a second read of
- * the record, so the order lifts a row on exactly the state its own mark is
- * drawing.
+ * The PHASE is `sessionOrderPhaseOf` in `@volli/shared` — the one reading both
+ * sidebars share (D7). The rail used to spell its own, and the two disagreed
+ * about `setup` and `starting`, so one event lifted a Session's rail row and
+ * left its band row where it was. It is read off {@link sessionRailRowDotState}
+ * rather than off a second look at the record, so the order lifts a row on
+ * exactly the state its own mark is drawing.
  */
-export function sessionRailRowPhase(row: SessionRailRow): SessionOrderPhase {
-  const state = sessionRailRowDotState(row);
-  if (state === "waiting") return "waiting";
-  if (state === "working" || state === "setup" || state === "starting") return "working";
-  return "resting";
-}
-
-/** The rail's membership for `stores/session-order.ts`, in its current order. */
 export function sessionRailOrderMembers(rows: readonly SessionRailRow[]): SessionOrderMember[] {
-  return rows.map((row) => ({ id: sessionRailRowId(row), phase: sessionRailRowPhase(row) }));
+  return rows.map((row) => ({
+    id: sessionRailRowId(row),
+    phase: sessionOrderPhaseOf(sessionRailRowDotState(row)),
+  }));
 }
 
 /**

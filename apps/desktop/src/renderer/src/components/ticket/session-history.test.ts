@@ -17,6 +17,7 @@ import {
   canResumeSession,
   filterChatSessionHistory,
   filterSessionHistory,
+  groupChatSessionRows,
   groupSessionRows,
   latestResumableSession,
   mergeSessionRailRows,
@@ -28,7 +29,6 @@ import {
   sessionRailRowActivityAt,
   sessionRailRowDotState,
   sessionRailRowId,
-  sessionRailRowPhase,
   sessionRailRowSessionId,
   sessionRailRowStampAt,
   SESSION_ROSTER_FILTER_THRESHOLD,
@@ -487,6 +487,40 @@ describe("buildTicketChatSessionRows", () => {
   });
 });
 
+describe("groupChatSessionRows", () => {
+  const live = buildTicketChatSessionRows([chatRecord({ sessionId: "live", activity: "idle" })])[0];
+  const finished = buildTicketChatSessionRows([
+    chatRecord({ sessionId: "finished", activity: "stopped" }),
+  ])[0];
+
+  it("folds a finished Session and keeps a live one on the page", () => {
+    expect(groupChatSessionRows([live, finished], new Set())).toEqual({
+      current: [live],
+      history: [finished],
+    });
+  });
+
+  // D6: unread is its own axis. A Session that left work behind and then went
+  // quiet used to drop into the collapsed record, which hid the very dot that
+  // says it is waiting to be read.
+  it("keeps an UNREAD finished Session in the live half (VC-30, D6)", () => {
+    expect(groupChatSessionRows([live, finished], new Set(["finished"]))).toEqual({
+      current: [live, finished],
+      history: [],
+    });
+  });
+
+  it("retires a Session only once it is both finished and read", () => {
+    const read = groupChatSessionRows([finished], new Set(["someone-else"]));
+
+    expect(read).toEqual({ current: [], history: [finished] });
+  });
+
+  it("is two empty halves for a ticket with no chat Sessions", () => {
+    expect(groupChatSessionRows([], new Set())).toEqual({ current: [], history: [] });
+  });
+});
+
 describe("filterChatSessionHistory", () => {
   const chatRows = buildTicketChatSessionRows([
     chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
@@ -814,24 +848,6 @@ describe("sessionRailRowSessionId", () => {
   });
 });
 
-describe("sessionRailRowPhase", () => {
-  it("calls a row that is asking for a person waiting", () => {
-    expect(sessionRailRowPhase(chatRail("asking", "waiting"))).toBe("waiting");
-  });
-
-  it("calls both spellings of running work working", () => {
-    // The rail's own `setup` word is work too — the order lifts on what the
-    // row's mark is drawing, and the mark draws a spinner for both.
-    expect(sessionRailRowPhase(terminalRail("running", "working"))).toBe("working");
-    expect(sessionRailRowPhase(terminalRail("booting", "setup"))).toBe("working");
-  });
-
-  it("calls everything else resting", () => {
-    expect(sessionRailRowPhase(chatRail("quiet", "idle"))).toBe("resting");
-    expect(sessionRailRowPhase(chatRail("cut-off", "interrupted"))).toBe("resting");
-  });
-});
-
 describe("sessionRailOrderMembers", () => {
   it("names the rail's membership in the held order's vocabulary, in place order", () => {
     expect(
@@ -844,6 +860,22 @@ describe("sessionRailOrderMembers", () => {
       { id: "chat:asking", phase: "waiting" },
       { id: "session:running", phase: "working" },
       { id: "chat:quiet", phase: "resting" },
+    ]);
+  });
+
+  it("phases a row through the reading both sidebars share (VC-30, D7)", () => {
+    // The rail used to spell its own phase rule, and it disagreed with the left
+    // band about a Session coming up — so one event lifted the rail row and
+    // left the band row where it was. `sessionOrderPhaseOf` is now the only
+    // reading; `setup` is work, and a died turn is over rather than lifting.
+    expect(
+      sessionRailOrderMembers([
+        terminalRail("booting", "setup"),
+        chatRail("cut-off", "interrupted"),
+      ]),
+    ).toEqual([
+      { id: "session:booting", phase: "working" },
+      { id: "chat:cut-off", phase: "resting" },
     ]);
   });
 });

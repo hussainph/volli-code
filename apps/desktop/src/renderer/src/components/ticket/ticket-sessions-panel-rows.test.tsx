@@ -85,6 +85,18 @@ const fixture = vi.hoisted(() => {
     waitingOn: null,
     outcome: null,
   };
+  // Finished AND unread (VC-30, D6): the Session left a turn behind and then
+  // went quiet. Its lifecycle says record, its receipt says nobody has seen it
+  // — and unread wins, or the dot would be folded away behind the caret.
+  const unreadFinished: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-unseen",
+    title: "Finished while nobody watched",
+    live: false,
+    activity: "stopped",
+    waitingOn: null,
+    outcome: null,
+  };
   // VC-324: `interrupted` is durable — a relaunch does not end the fact that
   // the last turn died, so a History row for one must keep saying so.
   const interrupted: ChatSessionRecord = {
@@ -138,6 +150,13 @@ const fixture = vi.hoisted(() => {
       read: { unreadSince: 5 },
     },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
+    {
+      kind: "chat",
+      record: unreadFinished,
+      usage: unmetered,
+      provenance: personStarted,
+      read: { unreadSince: 7 },
+    },
     { kind: "chat", record: interrupted, usage: unmetered, provenance: personStarted },
     {
       kind: "chat",
@@ -156,7 +175,17 @@ const fixture = vi.hoisted(() => {
       },
     },
   ];
-  return { record, ended, interrupted, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
+  return {
+    record,
+    ended,
+    unreadFinished,
+    interrupted,
+    byRun,
+    byAgent,
+    closedTerminal,
+    recoveringTerminal,
+    rows,
+  };
 });
 
 // Partial: the STORE is a fixture, but `ticketSessionListingStateOf` is kept
@@ -263,9 +292,29 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain('data-unread=""');
     expect(html).toContain("Unread");
     expect(html).toContain("bg-info");
-    // Only the row that carries a receipt: one dot in the whole roster.
-    expect(html.match(/data-unread-dot/g)).toHaveLength(1);
+    // Only the rows that carry a receipt: the live unread one and the
+    // finished-but-unseen one, and nothing else in the roster.
+    expect(html.match(/data-unread-dot/g)).toHaveLength(2);
     expect(html.slice(html.lastIndexOf("<span", at), at)).toContain("font-semibold");
+  });
+
+  it("keeps an unread Session out of the fold after it goes quiet (VC-30, D6)", () => {
+    // The defect: the live half was `chatRows.filter((row) => row.isLive)`, so
+    // a Session that finished with work nobody had seen dropped into the
+    // collapsed record and took its dot with it. Unread is never retired for
+    // being old or idle — the row stays above the record fold.
+    const html = panel();
+    const unseen = html.indexOf(fixture.unreadFinished.title);
+    const folded = html.indexOf('data-testid="session-history"');
+
+    expect(unseen).toBeGreaterThan(-1);
+    expect(folded).toBeGreaterThan(-1);
+    expect(unseen).toBeLessThan(folded);
+    // Its dot is on the page, in the live half, rather than behind the caret.
+    expect(html.slice(0, folded)).toContain("data-unread-dot");
+    // …and the READ finished Session is still in the record, which is what
+    // says the rule is unread and not "every chat row stays up top".
+    expect(html.slice(folded)).toContain(fixture.ended.title);
   });
 
   it("addresses every row for the peek, live rows and record alike", () => {
