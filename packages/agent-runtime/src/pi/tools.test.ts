@@ -801,7 +801,7 @@ describe("web_fetch tool", () => {
     const tool = createWebFetchTool(async () =>
       document({
         requestedUrl: "https://github.com/acme/widgets/tree/main/src",
-        finalUrl: "https://api.github.com/repos/acme/widgets/contents/src?ref=main",
+        finalUrl: "https://api.github.com/repos/acme/widgets/git/trees/main:src",
         origin: "https://api.github.com",
         contentType: "text",
         text: "1 entry:\nfile       index.ts  (12 bytes)",
@@ -815,9 +815,11 @@ describe("web_fetch tool", () => {
     const provenance = text.slice(0, text.indexOf(marker("begin")));
 
     expect(provenance).toContain(
-      "You asked for the GitHub directory https://github.com/acme/widgets/tree/main/src; Volli listed it through GitHub's contents API",
+      "You asked for the GitHub directory https://github.com/acme/widgets/tree/main/src; Volli listed it through GitHub's git trees API",
     );
     expect(provenance).toContain("use its blob URL");
+    expect(provenance).toContain("returned its entries as a directory listing");
+    expect(provenance).not.toContain("exactly as it was served");
     expect(enveloped(text)).toBe("1 entry:\nfile       index.ts  (12 bytes)");
   });
 

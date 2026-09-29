@@ -36,7 +36,14 @@ import {
 } from "@volli/shared";
 
 import { extractReadableMarkdown } from "./extract";
-import { GITHUB_API_HOST, githubDirectoryFor, githubListing, githubRead } from "./github";
+import {
+  GITHUB_API_HOST,
+  githubDirectoryFor,
+  githubHostFor,
+  githubListing,
+  githubRead,
+  type GithubRead,
+} from "./github";
 
 /** Every rule this module can cite, beyond the ones admission already owns. */
 export const WEB_FETCH_RULE_IDS = [
@@ -340,6 +347,18 @@ function declaredKind(media: string): ServedKind | undefined {
   return undefined;
 }
 
+/** The stretch of body each control-byte count covers. */
+const SNIFF_WINDOW = 1024;
+
+/**
+ * The bytes text does not carry, as a lookup table: every C0 control and DEL,
+ * except tab, line feed, vertical tab, form feed, carriage return and escape,
+ * which text files genuinely hold.
+ */
+const CONTROL_BYTES = Uint8Array.from({ length: 256 }, (_, byte) =>
+  (byte < 0x20 && ![0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1b].includes(byte)) || byte === 0x7f ? 1 : 0,
+);
+
 /**
  * What the bytes look like, when the server would not say.
  *
@@ -353,23 +372,28 @@ function declaredKind(media: string): ServedKind | undefined {
  * It is what CDNs and object stores label any file whose extension they do not
  * map — which for code research is most source files — and the bytes settle
  * whether it is a release archive or a `.rs` file far better than the label.
- * Beside the NUL check, a head that is more than a tenth control bytes is
- * binary too: some formats go a long way before their first zero.
  *
- * Deliberately shallow. It looks at the head of the body, matches the two
- * openings that mean HTML, and otherwise says text; a sniffer that tried to be
- * clever here would be a second content-type parser with its own disagreements.
+ * The whole body is judged, not its head: it is already bounded, and a file
+ * that opens with a page of text and carries binary after it — a script with a
+ * payload appended, an archive behind a text preamble — is binary. A NUL byte
+ * anywhere settles it; so does any 1 KiB stretch that is more than a tenth
+ * control bytes, because some formats go a long way before their first zero
+ * and a ratio over the whole file would let a small binary segment hide in a
+ * large text one.
+ *
+ * Deliberately shallow about the rest. It matches the openings that mean
+ * markup and otherwise says text; a sniffer that tried to be clever here would
+ * be a second content-type parser with its own disagreements.
  */
 function sniffKind(body: Buffer): ServedKind | undefined {
-  const head = body.subarray(0, 1024);
-  if (head.includes(0)) return undefined;
-  // Tab, line feed, vertical tab, form feed, carriage return and escape are
-  // what text files actually carry; every other C0 byte, and DEL, is not.
-  const control = head.filter(
-    (byte) =>
-      (byte < 0x20 && ![0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1b].includes(byte)) || byte === 0x7f,
-  ).length;
-  if (control * 10 > head.length) return undefined;
+  if (body.includes(0)) return undefined;
+  for (let at = 0; at < body.length; at += SNIFF_WINDOW) {
+    const window = body.subarray(at, at + SNIFF_WINDOW);
+    let control = 0;
+    for (const byte of window) if (CONTROL_BYTES[byte] === 1) control += 1;
+    if (control * 10 > window.length) return undefined;
+  }
+  const head = body.subarray(0, SNIFF_WINDOW);
   const start = head.toString("latin1").trimStart().toLowerCase();
   if (
     start.startsWith("<!doctype html") ||
@@ -547,7 +571,9 @@ function pinAddresses(
       throw new WebFetchRefusal(
         "fetch.address",
         `${named(hostname)} resolves to ${candidate.address}, which is not on the public Internet: ${verdict.reason}${
-          verdict.class === "benchmarking" ? FAKE_IP_NOTE : ""
+          // IPv4 only: fake-IP proxies hand out 198.18.0.0/15, and the IPv6
+          // benchmarking block, 2001:2::/48, is no proxy's answer.
+          verdict.class === "benchmarking" && candidate.family === 4 ? FAKE_IP_NOTE : ""
         }`,
       );
     }
@@ -676,8 +702,15 @@ function document(
   response: IncomingMessage,
   body: Buffer,
   limits: WebFetchLimits,
-  read: GithubReadKind | undefined,
+  rewrite: GithubRead | undefined,
 ): SafeWebFetchResult {
+  // A rewrite speaks for GitHub only when GitHub is what answered. If the
+  // rewritten URL redirected to some other public host, that host's bytes are
+  // its own — a JSON array from anywhere else is not a listing "through
+  // GitHub's API" — so they are returned as served and the redirect is
+  // reported like any other.
+  const read =
+    rewrite !== undefined && target.hostname === githubHostFor(rewrite) ? rewrite : undefined;
   const { media, charset } = contentType(response);
   // A type this module knows, or failing that whatever the bytes say they are.
   // Asked before the unreadable families, because `image/svg+xml` is the one
@@ -699,12 +732,16 @@ function document(
       `${named(target.hostname)} served binary data rather than text. ${TEXT_ONLY}`,
     );
   }
-  let decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
-  // Read from the whole body, before any bound: the contents API spends around
-  // five hundred characters of JSON on each entry, so cutting the JSON first
-  // would list a fiftieth of a large directory and then fail to parse it.
-  const listing = read === "directory" ? githubListing(decoded) : undefined;
-  if (listing !== undefined) decoded = listing;
+  const decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
+  // Read from the whole body, before any bound: the trees API spends a few
+  // hundred characters of JSON on each entry, so cutting the JSON first would
+  // list a fraction of a large directory and then fail to parse it. The
+  // listing keeps itself inside the bound, cutting on an entry and naming the
+  // URL that continues it.
+  const listing =
+    read?.kind === "directory"
+      ? githubListing(decoded, { page: read.page, after: read.after, budget: limits.textChars })
+      : undefined;
 
   let text: string;
   let truncated: boolean;
@@ -730,6 +767,10 @@ function document(
     text = extracted.text;
     truncated = extracted.truncated || extracted.text.length > limits.textChars;
     returned = "markdown";
+  } else if (listing !== undefined) {
+    text = listing.text;
+    truncated = listing.cut;
+    returned = "text";
   } else {
     text = decoded;
     truncated = decoded.length > limits.textChars;
@@ -755,7 +796,7 @@ function document(
     contentType: returned,
     text: truncated ? text.slice(0, limits.textChars) : text,
     truncated,
-    ...(read === "raw-file" ? { via: "github-raw-file" as const } : {}),
+    ...(read?.kind === "raw-file" ? { via: "github-raw-file" as const } : {}),
     ...(listing === undefined ? {} : { via: "github-directory-listing" as const }),
   };
 }
@@ -763,8 +804,6 @@ function document(
 /** What a type refusal says Volli does read, so the next URL can be a better one. */
 const TEXT_ONLY =
   "Volli reads text: web pages, Markdown, plain text, JSON, XML and source files, not images, audio, video, fonts, PDFs or archives.";
-
-type GithubReadKind = NonNullable<ReturnType<typeof githubRead>>["kind"];
 
 /**
  * A number of seconds a header states, read only if it is one.
@@ -879,7 +918,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     href: string,
     signal: AbortSignal,
     started: number,
-    read: GithubReadKind | undefined,
+    rewrite: GithubRead | undefined,
   ): Promise<HopResult> {
     const admission = admitWebTarget(href);
     if (admission.outcome === "refuse") {
@@ -1087,7 +1126,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
                 response,
                 Buffer.concat(chunks),
                 limits,
-                read,
+                rewrite,
               ),
             });
           } catch (error) {
@@ -1130,7 +1169,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
       let scheme = admission.target.scheme;
 
       for (let followed = 0; ; followed += 1) {
-        const result = await hop(requestedUrl, href, input.signal, started, github?.kind);
+        const result = await hop(requestedUrl, href, input.signal, started, github);
         if (result.outcome === "document") return result.document;
         if (followed >= limits.maxRedirects) {
           throw new WebFetchRefusal(

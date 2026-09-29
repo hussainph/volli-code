@@ -42,7 +42,22 @@ describe("web address classification", () => {
     // would leave the upper one admitted.
     ["198.19.255.254", "benchmarking"],
     ["224.0.0.1", "multicast"],
-    ["255.255.255.255", "multicast"],
+    ["239.255.255.255", "multicast"],
+    // 240.0.0.0/4 is reserved rather than multicast, broadcast at its top.
+    ["240.0.0.1", "reserved"],
+    ["255.255.255.255", "reserved"],
+    ["192.88.99.1", "reserved"],
+    // Each range's first and last address, so an off-by-one at either end of
+    // a block is a failing case rather than an unexercised one.
+    ["0.255.255.255", "unspecified"],
+    ["10.255.255.255", "private-use"],
+    ["100.127.255.255", "carrier-grade-nat"],
+    ["127.255.255.255", "loopback"],
+    ["169.254.255.255", "link-local"],
+    ["192.168.255.255", "private-use"],
+    ["192.0.2.255", "documentation"],
+    ["198.51.100.0", "documentation"],
+    ["203.0.113.0", "documentation"],
   ])("refuses %s as %s", (address, cls) => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
   });
@@ -60,6 +75,26 @@ describe("web address classification", () => {
     "192.0.78.9",
     "198.51.101.1",
     "203.0.114.1",
+    "9.255.255.255",
+    "11.0.0.0",
+    "100.63.255.255",
+    "126.255.255.255",
+    "128.0.0.0",
+    "169.253.255.255",
+    "169.255.0.0",
+    "172.15.255.255",
+    "192.167.255.255",
+    "192.88.98.255",
+    "192.88.100.0",
+    "198.17.255.255",
+    "198.20.0.0",
+    "198.51.99.255",
+    "203.0.112.255",
+    "223.255.255.255",
+    // Registry entries marked globally reachable: AS112 and AMT.
+    "192.31.196.1",
+    "192.52.193.1",
+    "192.175.48.1",
   ])("admits %s, which neighbours a blocked range without being in it", (address) => {
     // Off-by-one guards. `172.32.0.1` and `100.128.0.1` sit one step outside
     // 172.16/12 and 100.64/10; refusing them would be a policy that quietly
@@ -93,6 +128,48 @@ describe("web address classification", () => {
     // and not an address anything should be dialling either.
     ["::2", "reserved"],
     ["::ffff", "reserved"],
+    // The IANA IPv6 special-purpose registry, one case per non-reachable entry
+    // and each block's edges.
+    ["100::", "reserved"],
+    ["100::ffff:ffff:ffff:ffff", "reserved"],
+    ["100:0:0:1::1", "reserved"],
+    ["2001:2::", "benchmarking"],
+    ["2001:2:0:ffff:ffff:ffff:ffff:ffff", "benchmarking"],
+    ["2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", "documentation"],
+    ["3fff::", "documentation"],
+    ["3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff", "documentation"],
+    ["5f00::1", "reserved"],
+    ["5f00:ffff::1", "reserved"],
+    ["febf:ffff::1", "link-local"],
+    ["fdff:ffff::1", "unique-local"],
+    // The rest of 2001::/23 is IETF protocol assignment space: deprecated
+    // ORCHID 2001:10::/28, unassigned 2001:5::/32, the rest of 2001:1::/32
+    // and 2001:4::/32, and the /23's last address.
+    ["2001:10::1", "protocol-assignment"],
+    ["2001:1f::1", "protocol-assignment"],
+    ["2001:5::1", "protocol-assignment"],
+    ["2001:1::4", "protocol-assignment"],
+    ["2001:1::1:1", "protocol-assignment"],
+    ["2001:1:1::1", "protocol-assignment"],
+    ["2001:1:0:1::1", "protocol-assignment"],
+    ["2001:1:0:0:1::1", "protocol-assignment"],
+    ["2001:1:0:0:0:1::1", "protocol-assignment"],
+    ["2001:1::1:0", "protocol-assignment"],
+    ["2001:4:113::1", "protocol-assignment"],
+    ["2001:40::1", "protocol-assignment"],
+    ["2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff", "protocol-assignment"],
+    // Everything outside 2000::/3 that the registry does not name is
+    // unallocated, including the rest of 64:ff9b::/32 beside its two
+    // translation prefixes.
+    ["64:ff9b:2::1", "reserved"],
+    ["64:ff9b:0:1::1", "reserved"],
+    ["64:ff9b:0:0:1::1", "reserved"],
+    ["64:ff9b::1:0:1", "reserved"],
+    ["1::1", "reserved"],
+    ["1fff:ffff::1", "reserved"],
+    ["4000::1", "reserved"],
+    ["e000::1", "reserved"],
+    ["fec0::1", "reserved"],
   ])("refuses IPv6 %s as %s", (address, cls) => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
   });
@@ -104,6 +181,25 @@ describe("web address classification", () => {
     // compression, so without this one the uncompressed path is never walked.
     "2606:4700:4700:0000:0000:0000:0000:1111",
     "2a00:1450:4009:0815:0000:0000:0000:200e",
+    // The edges of 2000::/3, and of the special blocks inside it.
+    "2000::1",
+    "3fff:1000::1",
+    "3ffe:ffff::1",
+    "2001:200::1",
+    "2001:db7:ffff::1",
+    "2001:db9::1",
+    // Registry entries inside 2001::/23 marked globally reachable.
+    "2001:1::1",
+    "2001:1::2",
+    "2001:1::3",
+    "2001:3::1",
+    "2001:3:ffff::1",
+    "2001:4:112::1",
+    "2001:20::1",
+    "2001:2f:ffff::1",
+    "2001:30::1",
+    "2001:3f:ffff::1",
+    "2620:4f:8000::1",
   ])("admits public IPv6 %s", (address) => {
     expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
   });
@@ -156,6 +252,18 @@ describe("web address classification", () => {
     ["2002:7f00:0001::", "loopback", "6to4 carrying 127.0.0.1"],
     ["2002:a9fe:a9fe::", "link-local", "6to4 carrying the metadata address"],
     ["2002:c0a8:0001::", "private-use", "6to4 carrying 192.168.0.1"],
+    ["64:ff9b::c612:1", "benchmarking", "NAT64 carrying 198.18.0.1"],
+    ["::ffff:192.0.2.1", "documentation", "mapped form of TEST-NET-1"],
+    ["::ffff:255.255.255.255", "reserved", "mapped form of broadcast"],
+    ["::a00:1", "private-use", "compatible form of 10.0.0.1"],
+    // Teredo: 2001:0:<server v4>:<flags>:<port>:<client v4, bit-inverted>.
+    // The client is where a relay delivers the packet, so it is judged, and
+    // so is the server.
+    ["2001:0:5db8:d822:0:0:80ff:fffe", "loopback", "Teredo to client 127.0.0.1"],
+    ["2001:0:5db8:d822:0:0:5601:5601", "link-local", "Teredo to client 169.254.169.254"],
+    ["2001:0:5db8:d822:0:0:f5ff:fffe", "private-use", "Teredo to client 10.0.0.1"],
+    ["2001:0:a00:1:0:0:a247:27dd", "private-use", "Teredo via server 10.0.0.1"],
+    ["2001::", "unspecified", "Teredo with server 0.0.0.0"],
   ])("refuses %s as %s: %s", (address, cls) => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
   });
@@ -168,14 +276,9 @@ describe("web address classification", () => {
   it.each([
     ["64:ff9b::5db8:d822", "NAT64 carrying 93.184.216.34"],
     ["2002:5db8:d822::", "6to4 carrying 93.184.216.34"],
-    // The rest of 64:ff9b::/32 is neither the well-known /96 nor the local-use
-    // /48, so none of it carries an embedded address to unpack. One case per
-    // group that separates them, because the check reads all four and a test
-    // that only varies the first would leave the other three unexercised.
-    ["64:ff9b:2::1", "a 64:ff9b: address that is neither prefix"],
-    ["64:ff9b:0:1::1", "the same, differing in the fourth group"],
-    ["64:ff9b:0:0:1::1", "the same, differing in the fifth"],
-    ["64:ff9b::1:0:1", "the same, differing in the sixth"],
+    ["::ffff:93.184.216.34", "mapped form of 93.184.216.34"],
+    // Server 93.184.216.34, client 162.184.216.34 (bit-inverted as 5d47:27dd).
+    ["2001:0:5db8:d822:0:0:5d47:27dd", "Teredo between two public addresses"],
   ])("admits %s: %s", (address) => {
     expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
   });

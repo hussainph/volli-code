@@ -9,11 +9,13 @@
  * main reasons models reached for `curl` and `urllib` instead of `web_fetch`.
  *
  * So both are read from where GitHub keeps the same content as text: a blob
- * from `raw.githubusercontent.com`, a tree from the contents API. This is a
+ * from `raw.githubusercontent.com`, a tree from the git trees API. This is a
  * rewrite of *which public URL is read*, never a relaxation of how: the
  * rewritten URL goes through admission, address classification and pinning
  * exactly like any other, and the result names both the URL that was asked for
- * and the one that answered.
+ * and the one that answered. Only an answer from the host a rewrite expected is
+ * treated as GitHub's: if the rewritten URL redirects somewhere else, what comes
+ * back is reported as an ordinary redirect and returned as it was served.
  *
  * Pure: nothing here opens a socket.
  */
@@ -22,14 +24,27 @@
 export type GithubRead =
   /** A `blob` page, read as the raw file it shows. */
   | { kind: "raw-file"; href: string }
-  /** A `tree` page, read as the contents API's listing of that directory. */
-  | { kind: "directory"; href: string };
+  /**
+   * A `tree` page, read as the git trees API's listing of that directory.
+   * `page` is the tree URL without its query, which a listing too long for one
+   * read names again to continue; `after` is the entry a continuation resumes
+   * past.
+   */
+  | { kind: "directory"; href: string; page: string; after: string | undefined };
 
 /** The hosts that serve github.com's pages. */
 const GITHUB_PAGE_HOSTS: ReadonlySet<string> = new Set(["github.com", "www.github.com"]);
 
 /** The one host whose JSON answers are GitHub's REST API. */
 export const GITHUB_API_HOST = "api.github.com";
+
+/** The one host that serves a repository's files as they are. */
+export const GITHUB_RAW_HOST = "raw.githubusercontent.com";
+
+/** The host a rewrite expects its answer from; anything else is not GitHub's. */
+export function githubHostFor(read: GithubRead): string {
+  return read.kind === "raw-file" ? GITHUB_RAW_HOST : GITHUB_API_HOST;
+}
 
 /**
  * The owner, repository, view, ref and path a github.com URL spells, if it
@@ -64,9 +79,16 @@ function githubParts(
  *
  * A ref containing a slash (`feature/x`) is ambiguous in both URL shapes, and
  * the two readers settle it differently: `raw.githubusercontent.com` resolves
- * `<ref>/<path>` itself, so a blob keeps the whole remainder; the contents API
- * takes the ref as a query parameter, so a tree reads its first segment as the
- * ref — which is every branch and tag name without a slash in it.
+ * `<ref>/<path>` itself, so a blob keeps the whole remainder; the trees API is
+ * asked for `<ref>:<path>`, so a tree reads its first segment as the ref —
+ * which is every branch and tag name without a slash in it.
+ *
+ * The git trees API rather than the contents API because the contents API
+ * stops at 1,000 entries without saying so, and spends about five hundred
+ * characters of JSON on each; the trees API lists up to 100,000 entries, says
+ * when it stopped, and is a third of the size. `?after=<name>` on a tree URL is
+ * Volli's continuation, which GitHub's own page ignores: it lists the entries
+ * past that one, for a directory whose listing did not fit in one read.
  */
 export function githubRead(url: URL): GithubRead | undefined {
   const parts = githubParts(url);
@@ -75,14 +97,17 @@ export function githubRead(url: URL): GithubRead | undefined {
   if (view === "blob" && path.length > 0) {
     return {
       kind: "raw-file",
-      href: `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path.join("/")}`,
+      href: `https://${GITHUB_RAW_HOST}/${owner}/${repo}/${ref}/${path.join("/")}`,
     };
   }
   if (view === "tree") {
+    const tree = path.length === 0 ? ref : `${ref}:${path.join("/")}`;
     const directory = path.length === 0 ? "" : `/${path.join("/")}`;
     return {
       kind: "directory",
-      href: `https://${GITHUB_API_HOST}/repos/${owner}/${repo}/contents${directory}?ref=${ref}`,
+      href: `https://${GITHUB_API_HOST}/repos/${owner}/${repo}/git/trees/${tree}`,
+      page: `https://github.com/${owner}/${repo}/tree/${ref}${directory}`,
+      after: url.searchParams.get("after") ?? undefined,
     };
   }
   return undefined;
@@ -100,7 +125,7 @@ export function githubDirectoryFor(url: URL): string | undefined {
   let repo: string | undefined;
   let ref: string | undefined;
   let path: string[];
-  if (url.hostname === "raw.githubusercontent.com") {
+  if (url.hostname === GITHUB_RAW_HOST) {
     [owner, repo, ref, ...path] = url.pathname.split("/").slice(1);
   } else {
     const parts = githubParts(url);
@@ -115,9 +140,10 @@ export function githubDirectoryFor(url: URL): string | undefined {
   return `https://github.com/${owner}/${repo}/tree/${ref}${directory}`;
 }
 
-/** One entry of a contents API directory listing, as far as this reads it. */
-interface ContentsEntry {
+/** One entry of a git tree, as far as a listing reads it. */
+interface TreeEntry {
   name: string;
+  /** `dir`, `file`, `symlink`, `submodule`, or git's own word for anything newer. */
   type: string;
   size: number | undefined;
 }
@@ -138,58 +164,137 @@ function oneLine(name: string): string {
     .join("");
 }
 
-function entryOf(value: unknown): ContentsEntry | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const { name, type, size } = value as Record<string, unknown>;
-  if (typeof name !== "string" || typeof type !== "string") return undefined;
-  return { name, type, size: typeof size === "number" ? size : undefined };
+/** git's object type and mode, in the words a directory listing uses. */
+function entryType(type: string, mode: unknown): string {
+  if (type === "tree") return "dir";
+  if (type === "commit") return "submodule";
+  if (type === "blob") return mode === "120000" ? "symlink" : "file";
+  return type;
 }
 
-function rank(entry: ContentsEntry): number {
+function entryOf(value: unknown): TreeEntry | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { path, type, mode, size } = value as Record<string, unknown>;
+  if (typeof path !== "string" || typeof type !== "string") return undefined;
+  return {
+    name: path,
+    type: entryType(type, mode),
+    size: typeof size === "number" ? size : undefined,
+  };
+}
+
+function rank(entry: TreeEntry): number {
   return entry.type === "dir" ? 0 : 1;
 }
 
 /** Directories first, then files, each alphabetical — the order a person scans. */
-function listingOrder(a: ContentsEntry, b: ContentsEntry): number {
+function listingOrder(a: TreeEntry, b: TreeEntry): number {
   return rank(a) - rank(b) || a.name.localeCompare(b.name);
 }
 
-function entryLine(entry: ContentsEntry): string {
+function entryLine(entry: TreeEntry): string {
   const name = oneLine(entry.name);
   switch (entry.type) {
     case "dir":
       return `dir        ${name}/`;
     case "file":
       return `file       ${name}${entry.size === undefined ? "" : `  (${entry.size} bytes)`}`;
-    case "symlink":
-      return `symlink    ${name}`;
-    case "submodule":
-      return `submodule  ${name}`;
     default:
       return `${oneLine(entry.type).slice(0, 10).padEnd(10)} ${name}`;
   }
 }
 
 /**
- * The contents API's JSON for one directory, as a listing a reader can scan.
- *
- * The API's answer is an array of objects, each carrying half a dozen URLs a
- * reader never needs — around five hundred characters an entry — so a
- * directory of fifty files is past the character bound as JSON and a page of
- * text as a listing. `undefined` when the JSON is not a directory listing at
- * all (a tree URL that names a file, say), and the caller then returns what
- * GitHub sent as it was.
+ * Room kept for the lines that close a listing, so they always fit: the
+ * continuation line names the tree URL and one filename, and a filename is at
+ * most 255 bytes in every filesystem git runs on.
  */
-export function githubListing(json: string): string | undefined {
+const CLOSING_CHARS = 1_024;
+
+/** What a listing is read against: where to continue it, where it resumes, and its bound. */
+export interface GithubListingOptions {
+  /** The tree URL, without a query, that a continuation names. */
+  page: string;
+  /** The entry this read resumes past, from `?after=`. */
+  after: string | undefined;
+  /** The most characters the listing may hold, closing lines included. */
+  budget: number;
+}
+
+/**
+ * The trees API's JSON for one directory, as a listing a reader can scan.
+ *
+ * Complete or saying exactly how it is not. Entries are cut on a line
+ * boundary before the character bound rather than mid-name, and a cut listing
+ * ends with the tree URL that continues it; a tree GitHub's own API returned
+ * only part of says so, and `cut` says whether either happened, so the caller
+ * can state it in its own voice as well. `undefined` when the JSON is not a
+ * tree at all, and the caller then returns what GitHub sent as it was.
+ */
+export function githubListing(
+  json: string,
+  options: GithubListingOptions,
+): { text: string; cut: boolean } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
     return undefined;
   }
-  if (!Array.isArray(parsed)) return undefined;
-  const entries = parsed.map(entryOf).filter((entry) => entry !== undefined);
-  if (entries.length === 0) return "This directory is empty.";
-  const counted = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}:`;
-  return [counted, ...entries.toSorted(listingOrder).map(entryLine)].join("\n");
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { tree, truncated } = parsed as Record<string, unknown>;
+  if (!Array.isArray(tree)) return undefined;
+
+  const entries = tree
+    .map(entryOf)
+    .filter((entry) => entry !== undefined)
+    .toSorted(listingOrder);
+  const total = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+  const incomplete =
+    truncated === true
+      ? [
+          "GitHub's API returned only part of this directory, because the whole tree is larger than it will send; entries past the last one here are missing.",
+        ]
+      : [];
+  if (entries.length === 0) {
+    return {
+      text: ["This directory is empty.", ...incomplete].join("\n"),
+      cut: truncated === true,
+    };
+  }
+
+  const { page, after, budget } = options;
+  let start = 0;
+  let heading = `${total}:`;
+  if (after !== undefined) {
+    const at = entries.findIndex((entry) => entry.name === after);
+    start = at + 1;
+    heading =
+      at === -1
+        ? `${total}; none is named ${oneLine(after)}, so this lists from the start:`
+        : `${total}; continuing after ${oneLine(after)}:`;
+  }
+
+  const lines = [heading];
+  let used = heading.length;
+  let shown = 0;
+  for (const entry of entries.slice(start)) {
+    const line = entryLine(entry);
+    if (used + 1 + line.length > budget - CLOSING_CHARS) break;
+    lines.push(line);
+    used += 1 + line.length;
+    shown += 1;
+  }
+  const remaining = entries.length - start;
+  const bounded = shown < remaining;
+  if (bounded) {
+    const last = entries[start + shown - 1];
+    const resume = last === undefined ? after : last.name;
+    lines.push(
+      `Listed ${shown} of the ${remaining} entries from here; Volli's character bound cut the rest. Continue with ${page}${
+        resume === undefined ? "" : `?after=${encodeURIComponent(resume)}`
+      }`,
+    );
+  }
+  return { text: [...lines, ...incomplete].join("\n"), cut: bounded || truncated === true };
 }

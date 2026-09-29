@@ -898,9 +898,12 @@ function envelope(page: RuntimeWebDocument): string {
     // Markdown is what extraction produces, so only there is it true that
     // markup was taken away; a source file, JSON or an SVG arrives as served,
     // and saying its markup was removed would misdescribe the text below.
-    page.contentType === "markdown"
-      ? `Volli read ${shownUrl(page.finalUrl)} and returned it as markdown, after taking the page down to the text a reader can use; markup and anything hidden inside it are gone.`
-      : `Volli read ${shownUrl(page.finalUrl)} and returned it as text, exactly as it was served.`,
+    // A directory listing is neither: Volli built it from the API's JSON.
+    page.via === "github-directory-listing"
+      ? `Volli read ${shownUrl(page.finalUrl)} and returned its entries as a directory listing, one per line, built from the JSON it served.`
+      : page.contentType === "markdown"
+        ? `Volli read ${shownUrl(page.finalUrl)} and returned it as markdown, after taking the page down to the text a reader can use; markup and anything hidden inside it are gone.`
+        : `Volli read ${shownUrl(page.finalUrl)} and returned it as text, exactly as it was served.`,
     // Only when it happened, and stated as Volli's own fact rather than the
     // page's: a document that arrived from somewhere other than the URL the
     // model named is the one piece of provenance it cannot recover from the
@@ -940,7 +943,7 @@ function viaLines(page: RuntimeWebDocument): string[] {
       ];
     case "github-directory-listing":
       return [
-        `You asked for the GitHub directory ${asked}; Volli listed it through GitHub's contents API at ${read}, under the same policy.`,
+        `You asked for the GitHub directory ${asked}; Volli listed it through GitHub's git trees API at ${read}, under the same policy.`,
         "To read a file in it, use its blob URL (https://github.com/<owner>/<repo>/blob/<ref>/<path>); to open a subdirectory, use its tree URL.",
       ];
     case undefined:

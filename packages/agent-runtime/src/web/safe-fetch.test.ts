@@ -715,6 +715,18 @@ describe("safe web fetch", () => {
   });
 
   it.each([
+    [
+      "text with a binary segment after its first kilobytes",
+      Buffer.concat([Buffer.from("#!/bin/sh\necho installing\n".repeat(200)), Buffer.from([0x00])]),
+    ],
+    [
+      "text with a NUL-free control-byte stretch far into it",
+      Buffer.concat([
+        Buffer.from("plain text line\n".repeat(500)),
+        Buffer.alloc(2_048, 0x01),
+        Buffer.from("more text\n"),
+      ]),
+    ],
     ["a zip archive", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x08, 0x00])],
     // No NUL anywhere, so only the control-byte count catches it.
     ["control bytes without a NUL", Buffer.from([0x01, 0x02, 0x03, 0x41, 0x42, 0x04, 0x05, 0x06])],
@@ -1258,6 +1270,16 @@ describe("a name that resolves into benchmarking space", () => {
     expect(refused.message).toContain("real-IP DNS");
   });
 
+  it("does not blame a proxy for IPv6 benchmarking space, which no proxy answers with", async () => {
+    const fetcher = createSafeWebFetch({
+      resolve: async () => [{ address: "2001:2::1", family: 6 }],
+    });
+
+    const refused = await failure(fetcher, "https://bench.example.com/");
+    expect(refused.message).toContain("2001:2::/48 is benchmarking space.");
+    expect(refused.message).not.toContain("fake-IP");
+  });
+
   it("does not blame a proxy for an ordinary private address", async () => {
     const fetcher = createSafeWebFetch({
       resolve: async () => [{ address: "10.1.2.3", family: 4 }],
@@ -1304,14 +1326,14 @@ describe("a GitHub URL", () => {
     });
   });
 
-  it("lists a tree page through the contents API, in GitHub's own media type", async () => {
-    const entries = [
-      { name: "index.ts", path: "src/index.ts", type: "file", size: 120, url: "x".repeat(400) },
-      { name: "lib", path: "src/lib", type: "dir", size: 0, url: "x".repeat(400) },
+  it("lists a tree page through the git trees API, in GitHub's own media type", async () => {
+    const tree = [
+      { path: "index.ts", mode: "100644", type: "blob", size: 120, url: "x".repeat(200) },
+      { path: "lib", mode: "040000", type: "tree", url: "x".repeat(200) },
     ];
     const { fetcher, sent } = await fetcherFor((_request, response) => {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify(entries));
+      response.end(JSON.stringify({ sha: "abc", tree, truncated: false }));
     });
 
     const listed = await fetcher.fetch({
@@ -1321,15 +1343,16 @@ describe("a GitHub URL", () => {
 
     expect(sent[0]).toMatchObject({
       hostname: "api.github.com",
-      path: "/repos/acme/widgets/contents/src?ref=main",
+      path: "/repos/acme/widgets/git/trees/main:src",
     });
     expect(sent[0]?.headers).toMatchObject({
       accept: "application/vnd.github+json, application/json;q=0.9, */*;q=0.1",
     });
     expect(listed).toMatchObject({
       requestedUrl: "https://github.com/acme/widgets/tree/main/src",
-      finalUrl: "https://api.github.com/repos/acme/widgets/contents/src?ref=main",
+      finalUrl: "https://api.github.com/repos/acme/widgets/git/trees/main:src",
       contentType: "text",
+      truncated: false,
       via: "github-directory-listing",
     });
     expect(listed.text).toBe(
@@ -1337,46 +1360,92 @@ describe("a GitHub URL", () => {
     );
   });
 
-  it("lists a directory too long to fit as JSON, because it is parsed before the bound", async () => {
-    const entries = Array.from({ length: 200 }, (_, index) => ({
-      name: `file-${String(index).padStart(3, "0")}.ts`,
-      type: "file",
+  /**
+   * A listing that does not fit says so twice: inside, with the tree URL that
+   * continues it, and outside as Volli's own `truncated`. It is parsed from
+   * the whole body first — the JSON for these entries is several times the
+   * bound, so cutting it first would list a fraction and fail to parse.
+   */
+  it("lists a directory past the bound in pages, and says the first page is one", async () => {
+    const tree = Array.from({ length: 1_000 }, (_, index) => ({
+      path: `file-${String(index).padStart(4, "0")}.ts`,
+      mode: "100644",
+      type: "blob",
       size: index,
-      git_url: "x".repeat(500),
+      url: "x".repeat(200),
     }));
     const { fetcher } = await fetcherFor((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(entries));
+      response.end(JSON.stringify({ tree, truncated: false }));
     });
 
-    const listed = await fetcher.fetch({
+    const first = await fetcher.fetch({
       url: "https://github.com/acme/widgets/tree/main",
       signal: new AbortController().signal,
     });
 
-    expect(listed.truncated).toBe(false);
-    expect(listed.text).toContain("200 entries:");
-    expect(listed.text).toContain("file-199.ts");
+    expect(first.truncated).toBe(true);
+    expect(first.text.length).toBeLessThanOrEqual(WEB_FETCH_LIMITS.textChars);
+    expect(first.text).toContain("1000 entries:");
+    const next = /Continue with (\S+)$/.exec(first.text)?.[1] ?? "";
+    expect(next).toMatch(
+      /^https:\/\/github\.com\/acme\/widgets\/tree\/main\?after=file-\d{4}\.ts$/,
+    );
+
+    const second = await fetcher.fetch({ url: next, signal: new AbortController().signal });
+    expect(second.text.split("\n")[0]).toBe(
+      `1000 entries; continuing after ${new URL(next).searchParams.get("after")}:`,
+    );
+    expect(second.text).toContain("file-0999.ts");
+    expect(second.truncated).toBe(false);
   });
 
-  it("returns what the API sent as it was when it is not a directory listing", async () => {
+  it("returns what the API sent as it was when it is not a tree", async () => {
     const { fetcher } = await fetcherFor((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"type":"file","name":"README.md"}');
+      response.end('{"message":"Not a tree"}');
     });
 
-    await expect(
-      fetcher.fetch({
-        url: "https://github.com/acme/widgets/tree/main/README.md",
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toMatchObject({ text: '{"type":"file","name":"README.md"}' });
-    await expect(
-      fetcher.fetch({
-        url: "https://github.com/acme/widgets/tree/main/README.md",
-        signal: new AbortController().signal,
-      }),
-    ).resolves.not.toHaveProperty("via");
+    const read = await fetcher.fetch({
+      url: "https://github.com/acme/widgets/tree/main/README.md",
+      signal: new AbortController().signal,
+    });
+
+    expect(read).toMatchObject({ text: '{"message":"Not a tree"}' });
+    expect(read).not.toHaveProperty("via");
+  });
+
+  /**
+   * A rewrite speaks for GitHub only while GitHub is answering. The rewritten
+   * URL is an ordinary URL once it is sent, and if it redirects to another
+   * public host, what that host serves is that host's — a tree-shaped JSON
+   * from anywhere else must not come back labelled as GitHub's listing.
+   */
+  it.each([
+    ["https://github.com/acme/widgets/tree/main/src", "a tree"],
+    ["https://github.com/acme/widgets/blob/main/src/a.ts", "a blob"],
+  ])("returns another host's answer as served when %s redirects off GitHub (%s)", async (url) => {
+    const { fetcher, sent } = await fetcherFor((request, response) => {
+      if (request.headers.host?.startsWith("elsewhere.example") === true) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ tree: [{ path: "forged.ts", type: "blob", size: 1 }] }));
+        return;
+      }
+      response.writeHead(302, { location: "https://elsewhere.example/listing" });
+      response.end();
+    });
+
+    const read = await fetcher.fetch({ url, signal: new AbortController().signal });
+
+    expect(sent.map((one) => one.hostname)).toHaveLength(2);
+    expect(sent[1]?.hostname).toBe("elsewhere.example");
+    expect(read).toMatchObject({
+      requestedUrl: url,
+      finalUrl: "https://elsewhere.example/listing",
+      text: expect.stringContaining('"forged.ts"'),
+    });
+    expect(read).not.toHaveProperty("via");
+    expect(read.text).not.toContain("1 entry:");
   });
 
   it("reads the API's JSON as served when asked for it directly", async () => {
