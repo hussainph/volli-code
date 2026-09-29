@@ -410,15 +410,14 @@ across Sessions and overlap the breakdown's categories (`ask_user` is most of
 
 ## What changed because of this
 
-- **Session watchdog, tool-aware and sleep-aware** — in this branch
-  (`b6cd02c8`). 150 of the 166 silences it tripped on resumed on their own. A
+- **Session watchdog, tool-aware and sleep-aware** — in the same change. 150 of the 166 silences it tripped on resumed on their own. A
   wait on another Session or the user (`ticket_await`, `session_await`,
   `ask_user`) now never trips it; bash trips past its own declared timeout plus
   two minutes; any other tool past a one-hour ceiling; with no tool in flight
   the ten-minute rule is unchanged. Time the machine spent asleep no longer
   counts as silence.
-- **Transient failures retried, across sleep and lost networks** — in this
-  branch (`6a7273e1`). The 96.5 h of transient-network blocking was failures
+- **Transient failures retried, across sleep and lost networks** — in the same
+  change. The 96.5 h of transient-network blocking was failures
   nothing retried: `Request timed out.`, `Connection error.`, a bare
   `terminated`, `Overloaded`, gateway 5xx pages and throttling 429s were not
   recognised as transport, and a ten-attempt budget assumed the network returned
@@ -426,18 +425,17 @@ across Sessions and overlap the breakdown's categories (`ask_user` is most of
   without spending its budget, and a provider stream silent for nine minutes, or
   fifteen seconds after wake, is cut and retried rather than hung. The wait shows
   as "Reconnecting" and the watchdog stands down on it.
-- **Every outgoing image made legal for its model** — in this branch
-  (`a8dd1e8d`). The image-dimension and request-size rejections in the 12.5 h of
+- **Every outgoing image made legal for its model** — in the same change. The image-dimension and request-size rejections in the 12.5 h of
   rejected requests came from browser screenshots, MCP images and attachments
   reaching the provider unbounded. One send-time guard now fits each image to the
   model's catalog limits and keeps the request's image bytes in budget, oldest
   images first to go. The client-version gate in the same bucket was already
   fixed on `main` by the Pi 0.87.1 upgrade.
-- **Worktree adopts a same-ticket branch** — in this branch (`1963e03f`). The
+- **Worktree adopts a same-ticket branch** — in the same change. The
   4.9 h of worktree-preparation failures were one refusal: an agent had cut a
   narrower branch inside its own ticket's worktree, and every later Session start
   failed. A branch at the ticket's path with the same display id is now adopted.
-- **Resume at a quota reset, on request** — in this branch. The 49.9 h of
+- **Resume at a quota reset, on request** — in the same change. The 49.9 h of
   quota blocking waited for someone to notice the reset had passed. When a turn
   stops on a spent allowance whose reset can be read without guessing, the stop
   row offers **Resume at <time>** beside Retry; nothing is scheduled unless the
