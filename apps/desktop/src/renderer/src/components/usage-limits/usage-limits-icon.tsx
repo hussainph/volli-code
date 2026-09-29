@@ -379,7 +379,12 @@ const STACK_SCALE = 0.8;
  * THE GAPS ARE THE SAME SIZE WHATEVER STANDS IN THEM. They are cut from the
  * span each bar maps 0–100% onto, so a gap that closed when a window went
  * missing would silently re-scale both bars — the same 40% drawing a different
- * length for a one-window account than for a two-window one.
+ * length depending on what happened to be printed beside it.
+ *
+ * The lone-window {@link Ring} keeps the TOP gap at the same size for the same
+ * reason, and closes only the bottom one, where nothing stands. It is a
+ * different gauge rather than a re-scaled pair: one bar all the way round, so
+ * its 0–100 is the whole ring and nobody reads it against a half.
  */
 function stackGeometry(): {
   size: number;
@@ -388,6 +393,8 @@ function stackGeometry(): {
   mark: number;
   from: number;
   span: number;
+  ringFrom: number;
+  ringSpan: number;
 } {
   const size = FIGURE.size * STACK_SCALE;
   const cap = size * CAP_HEIGHT;
@@ -401,6 +408,11 @@ function stackGeometry(): {
     // Six o'clock plus half a gap, sweeping clockwise up the left-hand side.
     from: 180 + gapHalf,
     span: 180 - 2 * gapHalf,
+    // Just clockwise of the top figure, and all the way round to its other
+    // side: the conventional start of a progress ring, and the figure keeps
+    // the top slot it holds in the pair.
+    ringFrom: gapHalf,
+    ringSpan: 360 - 2 * gapHalf,
   };
 }
 
@@ -445,16 +457,33 @@ function SideGauge({ window: reading, mirror }: { window: UsageWindowReading; mi
   return mirror ? <g transform={`translate(${BOX} 0) scale(-1 1)`}>{side}</g> : side;
 }
 
+/**
+ * ONE WINDOW, ONE BAR (VC-452).
+ *
+ * A one-window account (Copilot, xAI), or a single pinned window, used to be
+ * drawn as the same reading mirrored onto both sides. That is two bars saying
+ * one thing, and a pair of bars is a claim that there are two facts. So a lone
+ * window gets the whole ring instead: one track from just past the figure at
+ * the top, clockwise all the way round to its other side.
+ */
+function Ring({ window: reading }: { window: UsageWindowReading }) {
+  return (
+    <>
+      <Track from={STACK.ringFrom} span={STACK.ringSpan} />
+      <Arc
+        from={STACK.ringFrom}
+        span={STACK.ringSpan}
+        fill={reading.remaining / 100}
+        className={cn("stroke-current", TONE_STROKE[reading.tone], MOTION)}
+      />
+    </>
+  );
+}
+
 export function UsageLimitsIcon({ reading }: { reading: UsageIconReading }) {
   const windows = usageIconWindows(reading);
-  const top = windows[0];
-  // A single window has no partner, so it carries BOTH sides and the glyph is
-  // symmetric. The alternatives are worse: an empty right-hand track reads as
-  // a second window at zero, and closing the gap instead would re-scale the
-  // span, so the same 40% would draw one length for Copilot's single meter and
-  // another for Claude's pair.
-  const bottom = windows[1] ?? top;
-  if (top === undefined || bottom === undefined) {
+  const [top, bottom] = windows;
+  if (top === undefined) {
     return (
       <Glyph>
         <QuietRing dashed={reading.kind === "unread"} />
@@ -463,8 +492,14 @@ export function UsageLimitsIcon({ reading }: { reading: UsageIconReading }) {
   }
   return (
     <Glyph>
-      <SideGauge window={top} mirror={false} />
-      <SideGauge window={bottom} mirror />
+      {bottom === undefined ? (
+        <Ring window={top} />
+      ) : (
+        <>
+          <SideGauge window={top} mirror={false} />
+          <SideGauge window={bottom} mirror />
+        </>
+      )}
       <AccountMark account={reading.lead} />
       {windows.map((window, index) => (
         <GlyphNumber

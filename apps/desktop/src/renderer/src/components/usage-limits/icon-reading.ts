@@ -26,7 +26,7 @@ import { paceOf, remainingPercent, usageTone } from "@volli/shared";
 import type { UsagePace, UsageTone, UsageWindow, UsageWindowKind } from "@volli/shared";
 
 import type { UsageLimitAccount } from "@renderer/components/usage-limits/accounts";
-import type { UsagePin } from "@renderer/components/usage-limits/usage-pin";
+import { MAX_PINNED_WINDOWS, type UsagePin } from "@renderer/components/usage-limits/usage-pin";
 
 /** One window, with the things a drawing needs and nothing else. */
 export interface UsageWindowReading {
@@ -132,10 +132,12 @@ export function usageIconReading(
   // A pin that names no account or window this snapshot reports — signed out,
   // or a window the provider stopped sending — falls back to the sort rather
   // than blanking the glyph. Half a pin that still resolves is still honoured.
-  const pinnedIds = pin?.windowIds ?? [];
+  // Capped here as well as where pins are made, so the glyph can never be
+  // handed more windows than it has sides for.
+  const pinnedIds = new Set((pin?.windowIds ?? []).slice(-MAX_PINNED_WINDOWS));
   const pinnedAccount = readings.findIndex((reading) => reading.providerId === pin?.providerId);
   const pinned =
-    readings[pinnedAccount]?.windows.filter((window) => pinnedIds.includes(window.id)) ?? [];
+    readings[pinnedAccount]?.windows.filter((window) => pinnedIds.has(window.id)) ?? [];
   const leadIndex = pinned.length === 0 ? 0 : pinnedAccount;
   const lead = readings[leadIndex];
   if (lead === undefined) return { ...EMPTY, kind: "read" };
@@ -191,22 +193,23 @@ function hasBinding(
 }
 
 /**
- * The two windows the glyph prints, in family order.
+ * The one or two windows the glyph prints, in family order.
  *
- * Pinned windows are ALWAYS among them, and so is the reported window: a
- * glyph whose bars report a window neither figure names would be arguing with
- * itself. Two pins fill both slots; otherwise the free slot goes to the next
- * window by family order, so an account reporting three (OpenCode Go) loses
- * its third rather than reshuffling the two that stayed.
+ * A PIN IS EXACTLY WHAT IS DRAWN. One pinned window is one window, drawn as a
+ * single ring; two are the pair. Nothing is added beside a pin, because a
+ * window the person did not choose standing next to the one they did would
+ * make the pin look like it had not taken.
  *
- * One window fills the top slot and lends its reading to both bars — see
- * `usage-limits-icon.tsx` for why an empty second bar is worse than a
- * mirrored one.
+ * Unpinned, the reported window is ALWAYS among them: a glyph whose bars
+ * report a window neither figure names would be arguing with itself. The free
+ * slot goes to the next window by family order, so an account reporting three
+ * (OpenCode Go) loses its third rather than reshuffling the two that stayed.
  */
 export function usageIconWindows(reading: UsageIconReading): readonly UsageWindowReading[] {
+  if (reading.pinned.length > 0) return reading.pinned;
   const windows = reading.lead?.windows ?? [];
   if (windows.length <= 2) return windows;
-  const kept = new Set(reading.pinned.map((window) => window.id));
+  const kept = new Set<string>();
   if (reading.reported !== null) kept.add(reading.reported.id);
   for (const window of windows) {
     if (kept.size >= 2) break;

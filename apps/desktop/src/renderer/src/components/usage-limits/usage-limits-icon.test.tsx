@@ -21,6 +21,7 @@ import type { ModelAccessProvider, UsageLimits, UsageWindow, UsageWindowKind } f
 
 import { usageLimitAccounts } from "./accounts";
 import { usageIconReading, type UsageIconInput } from "./icon-reading";
+import type { UsagePin } from "./usage-pin";
 import { UsageLimitsIcon } from "./usage-limits-icon";
 
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -112,7 +113,7 @@ afterEach(async () => {
  * One reading, drawn. A test that draws twice gets a fresh root each time —
  * these assert what one state LOOKS like, not what moving between two does.
  */
-async function draw(input: UsageIconInput): Promise<HTMLElement> {
+async function draw(input: UsageIconInput, pin: UsagePin | null = null): Promise<HTMLElement> {
   if (root !== null) {
     await act(async () => root?.unmount());
     container?.remove();
@@ -123,7 +124,7 @@ async function draw(input: UsageIconInput): Promise<HTMLElement> {
   await act(async () => {
     root?.render(
       <StrictMode>
-        <UsageLimitsIcon reading={usageIconReading(input)} />
+        <UsageLimitsIcon reading={usageIconReading(input, pin)} />
       </StrictMode>,
     );
   });
@@ -214,18 +215,36 @@ describe("UsageLimitsIcon", () => {
     expect(host.querySelector("g.text-muted-foreground path")).not.toBeNull();
   });
 
-  it("gives each window its own bar, and mirrors a lone window onto both", async () => {
+  it("gives each window its own bar, and a lone window one bar all the way round", async () => {
     // Two windows: the left bar is the top figure, the right bar the bottom
     // one. 63 and 96 are different, so the pair is deliberately asymmetric.
     const [left = 0, right = 0] = bars(await read(anthropic(37, 4)));
     expect(left).toBeCloseTo(0.63, 2);
     expect(right).toBeCloseTo(0.96, 2);
 
-    // One window has no partner, so it carries both sides: an empty second
-    // bar would read as a second window at zero.
-    const [soloLeft = 0, soloRight = 0] = bars(await read(copilot(69)));
-    expect(soloLeft).toBeCloseTo(0.31, 2);
-    expect(soloRight).toBeCloseTo(0.31, 2);
+    // One window is one bar: two mirrored bars would claim two facts.
+    const solo = bars(await read(copilot(69)));
+    expect(solo).toHaveLength(1);
+    expect(solo[0]).toBeCloseTo(0.31, 2);
+  });
+
+  it("draws a single pinned window as one ring, and two pins as the pair", async () => {
+    const accounts = usageLimitAccounts([anthropic(37, 4)]);
+    const one = await draw(
+      { kind: "read", accounts, now: NOW },
+      { providerId: "anthropic", windowIds: ["seven_day"] },
+    );
+    expect(figures(one)).toEqual(["96"]);
+    const ring = bars(one);
+    expect(ring).toHaveLength(1);
+    expect(ring[0]).toBeCloseTo(0.96, 2);
+
+    const two = await draw(
+      { kind: "read", accounts, now: NOW },
+      { providerId: "anthropic", windowIds: ["seven_day", "five_hour"] },
+    );
+    expect(figures(two)).toEqual(["63", "96"]);
+    expect(bars(two)).toHaveLength(2);
   });
 
   it("draws a stub rather than nothing at the bottom of the scale", async () => {
@@ -258,7 +277,8 @@ describe("UsageLimitsIcon", () => {
     // reading and the others are spoken in the name instead.
     const host = await read(anthropic(37, 4), copilot(69), opencode(53));
     expect(figures(host)).toEqual(["31"]);
-    expect(bars(host)).toHaveLength(2);
+    // Copilot meters one window, so it is one ring.
+    expect(bars(host)).toHaveLength(1);
   });
 
   it("keeps the reported window when an account meters three", async () => {

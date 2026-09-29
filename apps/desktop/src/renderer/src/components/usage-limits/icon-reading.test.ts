@@ -272,13 +272,26 @@ describe("usageIconWindows", () => {
     ).toEqual(["session", "weekly"]);
   });
 
-  it("gives one pin a slot and the next window by family order the other", () => {
+  it("prints one pinned window alone, with nothing added beside it", () => {
     const pin = { providerId: "opencode-go", windowIds: ["monthly"] };
-    // Session binds here; the pinned monthly still shows, beside the reported
-    // window — which is now the pinned one — and the first by family order.
+    // Session binds here, and would have taken the other slot unpinned.
     expect(
       usageIconWindows(readPinned(pin, openCodeGo(95, 10, 5))).map((window) => window.id),
-    ).toEqual(["session", "monthly"]);
+    ).toEqual(["monthly"]);
+    // Two windows of a two-window account are no different: a pin is exactly
+    // what is drawn.
+    expect(
+      usageIconWindows(
+        readPinned({ providerId: "anthropic", windowIds: ["seven_day"] }, anthropic(37, 4)),
+      ).map((window) => window.id),
+    ).toEqual(["seven_day"]);
+  });
+
+  it("never draws more pinned windows than the glyph has sides", () => {
+    const pin = { providerId: "opencode-go", windowIds: ["session", "weekly", "monthly"] };
+    expect(
+      usageIconWindows(readPinned(pin, openCodeGo(22, 47, 58))).map((window) => window.id),
+    ).toEqual(["weekly", "monthly"]);
   });
 });
 
