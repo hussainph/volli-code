@@ -14,7 +14,7 @@ The prototype is off by default and lives entirely in `packages/agent-runtime/be
 
 ## Scope and reproduction
 
-Run `pnpm -C packages/agent-runtime run bench:reduction`. It uses `vite.bench.config.ts` (one worker, `bench/**` only). The default `test` lane includes only `src/**/*.test.ts`, so this bench never runs in it or in CI. The figures below come from a run on the branch after syncing with `main`. Three repeats per task/lane, medians reported. Wall times are observational and vary with host scheduling. Token, evidence and closed-form figures are deterministic.
+Run `pnpm -C packages/agent-runtime run bench:reduction`. It uses `vite.bench.config.ts` (one worker, `bench/**` only). The default `test` lane includes only `src/**/*.test.ts`, so this bench never runs in it or in CI. The figures below come from a run on the branch after syncing with `main` (`e9a74349`). Three repeats per task/lane, medians reported. Wall times are observational and vary with host scheduling. Token, evidence and closed-form figures are deterministic.
 
 All inputs are fixed in-memory fixtures. The run makes no provider or model calls and uses no MCP client, network, credentials, filesystem, process or shell. It reads no user or Session data, and there were **no paid provider calls**. Scripted provider rounds take 35 ms and fixture reads 8 ms. Tokens are cl100k BPE over the serialized requests and results. Cache read/write counts cover only the fixed system+tool prefix and make no claim about billing.
 
@@ -28,33 +28,33 @@ p50 ms is from the benchmark run. Rounds are scripted provider rounds. Calls/rea
 
 | Task | Lane | p50 ms | Rounds | Calls/reads | Evidence | Input/result tok | Cache R/W tok | Result bytes |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| single-call | direct-sequential | 82.0 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
-| single-call | safe-batch-serial | 81.9 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
-| single-call | safe-batch-parallel | 81.4 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
-| single-call | fixed-read-many | 81.5 | 2 | 1/1 | 1/1 | 591/29 | 249/249 | 126 |
-| single-call | filter-program | 81.3 | 2 | 1/1 | 1/1 | 787/26 | 338/338 | 105 |
-| independent-multi-read | direct-sequential | 172.2 | 4 | 3/3 | 3/3 | 845/58 | 360/120 | 259 |
-| independent-multi-read | safe-batch-serial | 100.0 | 2 | 3/3 | 3/3 | 407/58 | 120/120 | 259 |
-| independent-multi-read | safe-batch-parallel | 80.7 | 2 | 3/3 | 3/3 | 407/58 | 120/120 | 259 |
-| independent-multi-read | fixed-read-many | 98.9 | 2 | 1/3 | 3/3 | 653/79 | 249/249 | 344 |
-| independent-multi-read | filter-program | 99.4 | 2 | 1/3 | 3/3 | 857/73 | 338/338 | 293 |
-| dependent-loop-filter | direct-sequential | 217.2 | 5 | 4/4 | 2/2 | 1308/107 | 480/120 | 392 |
-| dependent-loop-filter | safe-batch-serial | 144.9 | 3 | 4/4 | 2/2 | 707/107 | 240/120 | 392 |
-| dependent-loop-filter | safe-batch-parallel | 126.1 | 3 | 4/4 | 2/2 | 707/107 | 240/120 | 392 |
-| dependent-loop-filter | fixed-read-many | 143.7 | 3 | 2/4 | 2/2 | 1086/133 | 498/249 | 484 |
-| dependent-loop-filter | filter-program | 144.4 | 3 | 2/4 | 2/2 | 1351/109 | 676/338 | 393 |
-| noisy-large-output | direct-sequential | 86.4 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
-| noisy-large-output | safe-batch-serial | 87.3 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
-| noisy-large-output | safe-batch-parallel | 86.3 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
-| noisy-large-output | fixed-read-many | 86.9 | 2 | 1/1 | 3/3 | 15547/14986 | 249/249 | 61886 |
-| noisy-large-output | filter-program | 81.3 | 2 | 1/1 | 3/3 | 878/117 | 338/338 | 420 |
+| single-call | direct-sequential | 82.9 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
+| single-call | safe-batch-serial | 82.0 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
+| single-call | safe-batch-parallel | 81.7 | 2 | 1/1 | 1/1 | 323/23 | 120/120 | 100 |
+| single-call | fixed-read-many | 82.1 | 2 | 1/1 | 1/1 | 591/29 | 249/249 | 126 |
+| single-call | filter-program | 82.6 | 2 | 1/1 | 1/1 | 787/26 | 338/338 | 105 |
+| independent-multi-read | direct-sequential | 172.4 | 4 | 3/3 | 3/3 | 845/58 | 360/120 | 259 |
+| independent-multi-read | safe-batch-serial | 100.3 | 2 | 3/3 | 3/3 | 407/58 | 120/120 | 259 |
+| independent-multi-read | safe-batch-parallel | 81.7 | 2 | 3/3 | 3/3 | 407/58 | 120/120 | 259 |
+| independent-multi-read | fixed-read-many | 100.0 | 2 | 1/3 | 3/3 | 653/79 | 249/249 | 344 |
+| independent-multi-read | filter-program | 100.7 | 2 | 1/3 | 3/3 | 857/73 | 338/338 | 293 |
+| dependent-loop-filter | direct-sequential | 218.9 | 5 | 4/4 | 2/2 | 1308/107 | 480/120 | 392 |
+| dependent-loop-filter | safe-batch-serial | 146.6 | 3 | 4/4 | 2/2 | 707/107 | 240/120 | 392 |
+| dependent-loop-filter | safe-batch-parallel | 127.2 | 3 | 4/4 | 2/2 | 707/107 | 240/120 | 392 |
+| dependent-loop-filter | fixed-read-many | 145.9 | 3 | 2/4 | 2/2 | 1086/133 | 498/249 | 484 |
+| dependent-loop-filter | filter-program | 145.1 | 3 | 2/4 | 2/2 | 1351/109 | 676/338 | 393 |
+| noisy-large-output | direct-sequential | 85.6 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
+| noisy-large-output | safe-batch-serial | 84.5 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
+| noisy-large-output | safe-batch-parallel | 85.5 | 2 | 1/1 | 3/3 | 15278/14979 | 120/120 | 61859 |
+| noisy-large-output | fixed-read-many | 87.0 | 2 | 1/1 | 3/3 | 15547/14986 | 249/249 | 61886 |
+| noisy-large-output | filter-program | 82.2 | 2 | 1/1 | 3/3 | 878/117 | 338/338 | 420 |
 
 Schema tokens per lane were 100 / 100 / 100 / 229 / 318, and schema build+JSON p50 was 1–3 µs, which is negligible. The token cost of a larger schema is re-sent on every round.
 
 ### Interpretation
 
-- **Rounds are the main latency lever in this harness.** Batching three independent reads into one reply takes four rounds down to two, a 41.9% turn saving even with serial dispatch. Parallel dispatch of the same batch saves another 19.3 ms (100.0 → 80.7) with identical rounds, data and order. The saving comes from overlapping 8 ms fixture reads, so it scales with read latency, not with this harness.
-- **Dependencies cap both levers.** On the shard loop the index must be read before the shard paths are known. Batching and parallelism help only the later reads (144.9 → 126.1 ms).
+- **Rounds are the main latency lever in this harness.** Batching three independent reads into one reply takes four rounds down to two, a 41.8% turn saving even with serial dispatch. Parallel dispatch of the same batch saves another 18.6 ms (100.3 → 81.7) with identical rounds, data and order. The saving comes from overlapping 8 ms fixture reads, so it scales with read latency, not with this harness.
+- **Dependencies cap both levers.** On the shard loop the index must be read before the shard paths are known. Batching and parallelism help only the later reads (146.6 → 127.2 ms).
 - **Fewer calls is not less context.** `read_many` and the filter add schema and request overhead. On the three small tasks their input tokens are equal or worse than batching direct reads, and `read_many` returns more bytes.
 - **The filter wins only where output is noisy and the terms are literal and known.** On the noisy log, result bytes fell from 61,859 to 420 and input tokens from 15,278 to 878, and all three evidence lines were kept. The task was designed for that shape. A model choosing the terms is the untested part.
 - Full tool-result history is kept and re-serialized on every later request. No compaction, truncation or context overflow is simulated.
@@ -75,9 +75,9 @@ VC-245's 1.2% figure describes legacy `bash`/`read` sessions and is **not** used
 
 | Declared call wait | Sequential p50 | Parallel p50 | Saved | Reduction | Peak concurrent | Same ordered results |
 |---:|---:|---:|---:|---:|---:|---|
-| 50 ms | 274.4 ms | 123.2 ms | 151.2 ms | 55.1% | 4 | yes |
-| 250 ms | 1075.5 ms | 323.1 ms | 752.5 ms | 70.0% | 4 | yes |
-| 900 ms | 3675.4 ms | 972.8 ms | 2702.6 ms | 73.5% | 4 | yes |
+| 50 ms | 276.7 ms | 123.3 ms | 153.3 ms | 55.4% | 4 | yes |
+| 250 ms | 1076.2 ms | 323.3 ms | 752.9 ms | 70.0% | 4 | yes |
+| 900 ms | 3676.5 ms | 973.3 ms | 2703.1 ms | 73.5% | 4 | yes |
 
 The closed-form model `(replies + 1) × round + (parallel ? replies : calls) × wait` predicts 270/120, 1070/320 and 3670/970 ms. The test asserts that every measured row falls within timer-overshoot tolerance of it, so the wider sweep below is computed from that validated model.
 
