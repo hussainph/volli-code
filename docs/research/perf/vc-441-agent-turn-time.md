@@ -1,18 +1,32 @@
-# Agent turn critical path under 1 / 5 / 15 / 20 concurrent Sessions (VC-441)
+# Agent turn critical path under 1 / 5 / 15 / 20 concurrent turns (VC-441)
 
-**Finding: this measurement found no runtime-layer bottleneck, so VC-441 opens
-no follow-up ticket.** A scripted turn takes the same time (±2%) whether one
-synthetic Session is running or twenty. The only part that grows with
-concurrency is a ~2 ms wait behind other Sessions' synchronous work on the
-shared event loop. That is about 1.5% of a 142 ms turn, and far below anything
-worth changing the scheduler for. Contention in the real Electron main
-process, with attached Pi contexts, IPC, SQLite and renderer traffic, is
-outside this fixture and belongs to **VC-445**.
+**Finding: no runtime-layer bottleneck showed up, and this fixture could not
+have shown one.** A scripted turn run through Volli's VC-119 instrumentation
+takes about the same time whether 1 or 20 turns are in flight: first message →
+completion p50 went from 141.0 to 143.9 ms. The one component that grows with
+concurrency is the authority wait, by about 2 ms at p50. The cause is its timer
+firing late while other turns' synchronous tool work runs on the same event
+loop.
+
+That is head-of-line blocking. It is small here because the fixture's tools are
+tiny CPU loops. The fixture never runs the Session runtime, its input queue, the
+Pi agent loop, the authority gate, or the ledger, so a queue in any of those is
+absent by construction, not measured as absent. VC-441 therefore names no
+bottleneck. It files the two measurement gaps as follow-ups:
+
+- **VC-455** adds compaction duration and submit → turn-start time to VC-119.
+- **VC-456** runs this workload through the real runtime path.
+
+Contention in the Electron main process is **VC-445**'s scope.
 
 Generated artifacts beside this file, in `vc-441-agent-turn-time/`:
-`benchmark.md` (per-arm table plus method and limits), `benchmark.json` (raw
-aggregates, parameters, environment) and `run-manifest.json`. The generator
-rewrites that directory, so this report is kept outside it.
+
+- `benchmark.md` has the per-arm table plus method and limits.
+- `benchmark.json` has the raw aggregates, including signed timer lateness per
+  timer kind, the parameters, and the environment.
+- `run-manifest.json`.
+
+The generator rewrites that directory, so this report is kept outside it.
 
 ## Reproduction
 
@@ -22,157 +36,198 @@ pnpm -C packages/agent-runtime bench:turn-to-completion -- \
   --repetitions 20 --concurrencies 1,5,15,20
 ```
 
-The tests run in the bench lane, not the default one (`include: ["src/**/*.test.ts"]`):
+Tests (bench lane):
 
 ```sh
 pnpm -C packages/agent-runtime exec vp test run --config vite.bench.config.ts bench/turn-to-completion/
 ```
 
-Fixture `vc441-turn-critical-path-v1`. The recorded run used source commit
-`80f0fb7a` (clean tree), Node v24.18.0, macOS (darwin 25.5.0), an Apple M1 with 8
-logical cores and 16 GiB of RAM. That machine was shared and busy: the 1-minute load
-average was about 9.5–10 on 8 cores for the whole run. Since then the branch
-has been synced with `main`. The only change on `main` that touches the measured
-path (`instrumentStreamFn`, `ObservabilityReducer`, `teeObservationsToSink`) added
-one `AttentionEvent` reason, `transport`, which the fixture never emits. The
-published numbers were not regenerated. A post-sync smoke run at 1 and 20
-Sessions (20 waves each) matched them: first message → done p50/p95 was
-141.8/143.3 ms and 145.0/149.7 ms, and authority wait p50 was 11.7 ms and
-15.0 ms.
+Fixture `vc441-turn-critical-path-v2`.
+
+- **Source:** commit `94359da1` (clean tree), synced with `main` at `e9a74349`.
+- **Machine:** Node v24.18.0, macOS (darwin 25.5.0), Apple M1, 8 logical cores, 16 GiB.
+- **Load:** the machine was shared and busy. The 1-minute load average was
+  about 8.9–9.4 on 8 cores for the whole run. An earlier v1 run on the same host
+  gave the same turn times to within about 1 ms.
 
 ## What the fixture measures
 
-Each synthetic Session runs one scripted turn through Volli's real VC-119
-metadata-only instrumentation. A local in-process stream stands in for the
-provider, so the run opens no socket, makes no provider call, enables no OTLP
-exporter and reads no profile. One turn contains:
+Each scripted turn runs through the real VC-119 `instrumentStreamFn`,
+`ObservabilityReducer` and `teeObservationsToSink`, with a local in-process stream
+standing in for the provider. The run opens no socket, makes no provider call,
+enables no OTLP exporter and reads no profile or Session database. A turn is:
 
-- 3 model attempts: tool use, then a synthetic invalid-request error, then success.
-- One tool round with `read`, `bash`, and an MCP-like batch of 3 concurrent timers
-  at 18, 26 and 34 ms.
-- 1 authority wait of 12 ms.
-- 1 overflow compaction.
-- 1 retry.
+- 3 model attempts: `toolUse`, a synthetic invalid-request `error`, then `stop`.
+- One tool round with a CPU-fixture `read`, a CPU-fixture `bash`, and an
+  MCP-like batch of 3 concurrent 18 / 26 / 34 ms timers.
+- A 12 ms authority wait.
+- One overflow compaction.
+- One retry, with 6 ms of backoff.
 
-Every turn is checked against those counts. Any drift, an event out of order,
-or a missing span fails the run.
+Every turn is checked against those counts and against its causal order. Any
+drift fails the run. All timers record signed lateness: a negative value means
+Node fired the timer before its `performance.now()` target. Up to about 2 ms
+early is normal, because libuv caches its loop clock.
 
-| Sessions | Turns (n) | First message → done p50 / p95 | Submit → turn start p50 / p95 | Authority wait p50 / p95 | Unaccounted gap p50 / p95 | Loop delay p95 / max | Runner CPU (% one core) |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 20 | 141.9 / 143.6 ms | 1.19 / 1.30 ms | 11.9 / 12.7 ms | 8.55 / 9.77 ms | 1.35 / 3.1 ms | 2.2 |
-| 5 | 100 | 141.9 / 144.7 ms | 1.19 / 1.53 ms | 12.3 / 13.7 ms | 8.46 / 9.51 ms | 1.29 / 3.5 ms | 3.6 |
-| 15 | 300 | 143.9 / 149.4 ms | 1.20 / 1.85 ms | 14.1 / 17.3 ms | 8.57 / 9.51 ms | 1.33 / 22.9 ms | 6.5 |
-| 20 | 400 | 144.1 / 146.4 ms | 1.21 / 1.32 ms | 14.2 / 16.6 ms | 8.56 / 9.08 ms | 1.31 / 6.6 ms | 6.4 |
+| Concurrent turns | Turns (n) | First message → done p50 / p95 | Submit → turn start p50 / p95 | Authority wait p50 / p95 | Authority timer lateness p50 / p95 | Unaccounted gap p50 / p95 | Loop delay p95 / max | Runner CPU (% one core) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 20 | 141.0 / 143.2 ms | 1.18 / 2.29 ms | 11.4 / 12.1 ms | −0.62 / 0.04 ms | 8.46 / 9.54 ms | 1.36 / 5.1 ms | 2.4 |
+| 5 | 100 | 142.0 / 145.2 ms | 1.23 / 2.25 ms | 11.7 / 12.8 ms | −0.30 / 0.79 ms | 8.59 / 9.64 ms | 1.38 / 9.7 ms | 4.0 |
+| 15 | 300 | 143.7 / 150.4 ms | 1.26 / 2.34 ms | 12.9 / 16.0 ms | +0.89 / 3.97 ms | 8.64 / 10.07 ms | 1.66 / 10.1 ms | 7.3 |
+| 20 | 400 | 143.9 / 147.5 ms | 1.24 / 1.44 ms | 13.6 / 16.7 ms | +1.60 / 4.74 ms | 8.65 / 9.84 ms | 1.42 / 7.5 ms | 7.5 |
 
-All 820 turns had complete accounting and none had an ordering violation. Provider
-attempt duration (p50 ≈ 30.4 ms) and TTFT (p50 ≈ 9.2–9.3 ms) do not move
-with concurrency. Neither does the MCP-like batch (p50 ≈ 33.1–33.2 ms, which is
-its longest child, so the children really overlapped). The full columns are in
-`benchmark.md`.
+Other results:
+
+- All 820 turns had complete accounting, exactly one tool round, and no ordering
+  violations.
+- These did not move with concurrency:
+  - provider attempt duration, p50 about 30.3–30.8 ms;
+  - TTFT, p50 about 9.3 ms;
+  - the MCP-like batch, p50 about 33.1–33.3 ms. That is its longest child, so
+    the three children really did overlap.
+- The full columns are in `benchmark.md`.
 
 ## Bottlenecks (the ticket allows at most two)
 
-**None qualifies in the runtime layer.** The candidates, and why each was ruled out:
+**None is named.** What the data does show:
 
-1. **Queueing behind other Sessions on one event loop.** This is the only
-   signal that grows with concurrency. Authority wait p50 rises from 11.9 ms to
-   14.2 ms between 1 and 20 Sessions, and p95 from 12.7 ms to 16.6 ms. Timer
-   lateness measured inside the timer callbacks stays at 0 (p95). So the extra
-   time comes after the timer fires, while the continuation waits behind other
-   Sessions' synchronous tool and compaction work. The effect is real but only
-   ~2 ms per wait. It does not justify a scheduler change.
-2. **Dispatch (submit → turn start)** holds flat at ~1.2 ms p50 at every
-   concurrency level, so there is no queue in front of the turn.
-3. **The unaccounted gap** holds flat at ~8.5 ms p50. That is the scripted 6 ms
-   retry backoff, the fixture's compaction CPU work, and orchestration. The
-   VC-119 compaction event has no duration, so compaction time cannot be
-   separated from the gap. See "Missing data" below.
+1. **Head-of-line blocking on the shared loop.** This is the only effect that
+   grows with concurrency. The authority timer's lateness moves from p50
+   −0.6 ms / p95 0.0 ms at 1 turn to +1.6 / 4.7 ms at 20, which accounts for the
+   authority wait growing from 11.4 to 13.6 ms p50. Every turn in a wave reaches
+   its authority wait at about the same moment. Each turn's callback then runs
+   that turn's synchronous `read` / `bash` CPU work (about 0.2 ms) before the
+   next turn's callback can fire. At 20 turns that stacks to the ~4–5 ms seen at
+   p95. The other timers (TTFT, completion, batch) fire at staggered moments and
+   stay near zero.
 
-The single 22.9 ms event-loop-delay maximum in the 15-Session arm is one
-sample on a machine at load ~9.5. It does not show up in any turn p95, and I
-treat it as host noise, not a trend.
+   At this size the effect is about 1.5% of a turn and not a bottleneck. With
+   real synchronous work on the loop (token counting, compaction, parsing large
+   tool results) it would scale with that work. Measuring that needs VC-456 in
+   this runtime layer and VC-445 in Electron main.
+2. **Submit → turn start stays flat at about 1.2 ms p50.** This only times the
+   fixture's own 2 ms dispatch timer; libuv fires it early, which is why the p50
+   is under 2 ms. It is not evidence about any real queue in front of a turn,
+   because the fixture has no such queue. VC-455 adds the real measurement.
+3. **The unaccounted gap stays flat at about 8.5 ms p50.** It contains the 6 ms
+   retry backoff, the fixture's compaction CPU work, and orchestration. VC-119's
+   compaction event has no duration, so compaction can't be separated out. That
+   missing measurement is also VC-455.
 
-**Where contention would actually appear: VC-445.** This fixture runs all
-Sessions in one Node process doing very little else. Volli binds Pi contexts
-in Electron main, next to IPC, SQLite, the browser host, and renderer
-coordination. VC-445 measures loop delay, IPC round trip, heap/GC and RSS for 1 / 5 / 10 / 20
-bound Pi contexts in that process. VC-441 deliberately measures none of it.
+The runtime-layer measurement the ticket asked for ("the minimal missing
+measurement necessary to distinguish queues/host delays") therefore splits in
+two:
+
+- **Local host delay** is now measured, in signed form, per timer kind. That is
+  what exposed the effect in point 1.
+- **The real queue and compaction spans** need VC-119 fields that don't exist
+  yet. They are filed as VC-455 rather than added in a measurement ticket.
 
 ## Real provider and tool time: VC-443 answers most of it
 
-The ticket's optional real-metadata breakdown was **not run here**. Doing it
-would mean enabling the VC-119 OTLP exporter or reading a person's local
-Session data, and neither was consented to for this ticket. VC-443 (Done,
-[`merged-ticket-time-to-merge.md`](merged-ticket-time-to-merge.md)) already
-analysed real local metadata read-only, without exporting content. This report
-does not repeat that work. What it covers and what it leaves open:
+The ticket's optional real-metadata breakdown was **not run here**. It would
+mean enabling the VC-119 OTLP exporter or reading a person's local Session data,
+and neither was consented to for this ticket. VC-443 (Done,
+[`merged-ticket-time-to-merge.md`](merged-ticket-time-to-merge.md)) already did a
+read-only, content-free analysis of real local metadata, so this report
+cross-references it rather than repeating it.
 
 - **Answered by VC-443, for real data:**
-  - Where a ticket's time goes. 9% is an agent producing, 4% is an agent silent
-    inside a turn, 5% is failure-blocked, and 82% is waiting on people, review
-    or the queue.
-  - Real tool-call durations, by tool and by bash category, from 106,758 Pi
-    tool calls. Waiting tools (`ask_user`, sleep polling, `ticket_await`, CI
-    watching) are 60% of tool hours. Tests, coverage, e2e and typecheck are 28%.
-  - Provider-side external failures: 96.5 h of transient-network blocking and
-    49.9 h of quota blocking. Changes for both shipped with that ticket.
-- **Still unanswered:** real per-attempt provider inference duration and TTFT,
-  and real authority-wait durations inside a turn. VC-443 works at ticket
-  scale from ledger write gaps, not from VC-119 spans. Answering this needs a
-  person to opt in to local VC-119 metadata collection. The instrumentation
-  this fixture exercises is the same code that would record it, so no new
-  measurement is needed, only consent and a collection window.
+  - **Where a ticket's time goes.** This comes from Session ledger events: 9% an
+    agent producing, 4% an agent silent inside a turn, 5% failure-blocked, and
+    82% waiting on people, review or the queue.
+  - **Real tool-call durations.** These come from Pi session files: 106,758
+    calls. Waiting tools (`ask_user`, sleep polling, `ticket_await`, CI watching)
+    are 60% of tool hours. Tests, coverage, e2e and typecheck are 28%.
+  - **Provider-side external failures.** 96.5 h of transient-network blocking
+    and 49.9 h of quota blocking. VC-443 shipped changes for both.
+- **Still unanswered:**
+  - Real per-attempt provider inference duration and TTFT.
+  - Real authority-wait durations inside a turn.
+  - Real queue time before a turn starts.
+
+  VC-443's categories come from gaps between ledger writes, and its tool times
+  from Pi's session files. Neither source carries VC-119's per-attempt spans. The
+  first two need a person to opt in to a local VC-119 collection window, using
+  the same instrumentation this fixture exercises. The third needs VC-455 first.
+
+This fixture reads no Session ledger events. VC-456 adds that, cross-checking
+ledger order against VC-119 envelopes on the real runtime path.
 
 ## What synthetic timing cannot prove
 
-The provider stand-in is a set of fixed local timers. It says nothing about:
+The provider stand-in is fixed local timers. It says nothing about:
 
-- real inference time,
-- provider-side queueing,
-- per-account or per-organization quotas and rate limits,
-- 429 or overload behaviour under 20 real parallel requests,
-- network variance,
+- real inference time;
+- provider-side queueing;
+- per-account or per-organization quotas and rate limits;
+- 429 or overload behaviour under 20 real parallel requests;
+- network variance;
 - how real tool commands (tests, builds, browser, remote MCP or serverless)
   scale when they share CPU and disk.
 
-The fixture tools are tiny CPU loops (`read` about 0.06 ms, `bash` about 0.15 ms),
-so the fixture cannot show CPU contention between heavy real tools. Running 20
-real provider calls was out of scope and was not done.
+The fixture tools are tiny CPU loops: `read` about 0.06 ms, `bash` about 0.15 ms.
+No run with 20 real provider calls was made.
 
 ## Uncertainty and missing data
 
 - Turns in one wave share a host interval, so they are not independent samples.
-  Percentiles are nearest-rank, and no confidence interval is claimed.
-- The host was heavily loaded (load ~9.5–10 on 8 cores) during the run. That
-  adds noise but makes an understated contention effect less likely.
-- CPU, RSS and heap figures are for the benchmark runner process, not for
-  Electron or a production Session.
-- VC-119's compaction event has no duration, so compaction and retry backoff
-  fall into the unaccounted gap. A missing span keeps that span's value `null`
-  and marks the gap incomplete. It is never counted as zero (covered by tests).
+- Percentiles are nearest-rank, with rank ceil(q·n). No confidence interval is
+  claimed.
+- The host was heavily loaded, which adds noise.
+- The early-firing timers mean small lateness values sit within about ±2 ms of
+  the clock-cache artifact. The authority trend is visible because it rises
+  above that floor, and it is consistent across the 15- and 20-turn arms.
+- CPU, RSS and heap figures are for the benchmark runner process, not Electron
+  or a production Session.
+- A missing span keeps its value `null` and marks the gap incomplete. It is
+  never counted as zero.
 
 ## Tests
 
 `packages/agent-runtime/bench/turn-to-completion/analysis.bench.test.ts` runs in
-the bench lane only. It covers:
+the bench lane only. The default `src/**/*.test.ts` lane, and so
+`vp run -r test` and CI, does not run it.
 
-- **Ordering and missing spans.** An out-of-order turn envelope is flagged, and
-  absent provider, tool, authority and retry spans stay `null`, with the gap
-  marked incomplete.
-- **Privacy, per sample.** A fixture turn whose prompt, stream deltas, tool
-  subject, input and output all carry a canary string produces a sample
-  without the canary or the native MCP tool name.
-- **Privacy, published artifacts.** A full benchmark run is written to a temp
-  directory, and all three published files are checked to be free of the canary,
-  the native tool name, and tool call ids.
-- **Statistics.** The p50/p95 are nearest-rank.
+- **Missing spans.** A tool with no duration, an authority envelope with no wait,
+  missing provider attempts, and a turn with no terminal envelope each stay
+  `null` and mark the gap incomplete.
+- **Event ordering.** The check uses the sink's emission order and the turn's
+  causal shape, so it can fail even when every timestamp increases. It fails
+  when:
+  - a timestamp goes backwards;
+  - the turn completes before its final attempt;
+  - a tool runs before any `toolUse` attempt, or after the final attempt;
+  - an event follows the terminal envelope.
+
+  Tool rounds are derived from that shape, not assumed.
+- **Privacy.** The canary is in the system prompt, the user message, the stream
+  deltas, the provider error message, and the tool subject, input and output.
+  The tests check three places:
+  - the raw envelopes VC-119's own reducer and stream instrument emitted (not
+    the bench's field allow-list). Forcing the error message into
+    `providerErrorClass` in `src/pi/observability.ts` fails this test;
+  - the per-turn sample;
+  - all three published artifact files.
+
+  None of them may contain the canary, the native MCP tool name, or tool call ids.
+- **Guards.** The limit checks on repetitions and concurrency, and the
+  output-directory checks, are tested. The output directory is validated before
+  the run starts, so a bad destination fails fast.
+- **Statistics.** Nearest-rank p50/p95 at n = 10, 11 and 20, where ceil and floor
+  rank rules give different answers. Signed mode is tested too.
+
+Known limit: because these tests are bench-lane only, CI would not catch a
+regression in them.
 
 ## Coordination
 
 - **VC-318** owns the broad 1/4/10 resource matrix and the eviction policy.
-- **VC-366** and its follow-up **VC-445** own process topology and Electron-main
+- **VC-366**, and its follow-up **VC-445**, own process topology and Electron-main
   contention.
 - **VC-245** (Done) owns the parallel-tool baseline in `bench/parallel-tools/`.
-  This fixture shares no code with it beyond the bench vitest config.
+  This fixture only reuses its bench vitest config and its esbuild-runner
+  pattern.
 - **VC-442** and **VC-444** report task latency for their own prototypes. This
-  fixture is not a baseline for them.
+  fixture is not their baseline.
+- **VC-455** and **VC-456** are the follow-ups filed from this ticket.

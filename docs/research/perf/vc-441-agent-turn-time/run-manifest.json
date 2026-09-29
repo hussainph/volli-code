@@ -1,5 +1,5 @@
 {
-  "fixtureVersion": "vc441-turn-critical-path-v1",
+  "fixtureVersion": "vc441-turn-critical-path-v2",
   "artifacts": [
     "benchmark.json",
     "benchmark.md",
