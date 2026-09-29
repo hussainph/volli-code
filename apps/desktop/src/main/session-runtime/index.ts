@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import type { ObservabilitySink } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
@@ -26,6 +27,12 @@ export interface DesktopSessionRuntimeOptions {
   artifacts?: TranscriptArtifactStore;
   now?: () => number;
   nextId?: () => string;
+  /**
+   * The same opt-in VC-119 sink the Pi runtime holds, for the one measurement
+   * only the Session runtime can make: time a message queued before its turn
+   * opened (VC-455). Absent records nothing.
+   */
+  observability?: ObservabilitySink;
 }
 
 /** Composes the transport-neutral Session runtime with the desktop's durable executor. */
@@ -48,6 +55,7 @@ export function createDesktopSessionRuntime(
     clock: { now },
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure,
+    ...(options.observability === undefined ? {} : { observability: options.observability }),
   });
 }
 

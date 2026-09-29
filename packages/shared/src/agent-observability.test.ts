@@ -7,6 +7,7 @@ import {
   PROVIDER_ERROR_CLASSES,
   ObservabilityReducer,
   observedToolId,
+  turnQueueEvent,
   type ObservabilityEvent,
 } from "./agent-observability";
 import type {
@@ -425,6 +426,138 @@ describe("ObservabilityReducer lifecycle facts", () => {
   });
 });
 
+describe("ObservabilityReducer compaction duration (VC-455)", () => {
+  it("times a landed compaction from its first progress to its outcome", () => {
+    let tick = 1_000;
+    const reducer = new ObservabilityReducer(() => tick);
+    expect(
+      reducer.reduce({ kind: "compaction-progress", state: "started", reason: "threshold" }),
+    ).toBeNull();
+    tick = 1_100;
+    // A repeated start is not a new compaction: the first reading stands.
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "threshold" });
+    tick = 1_750;
+    const event = reducer.reduce({
+      kind: "compaction",
+      state: "compacted",
+      reason: "threshold",
+      entryId: SENSITIVE,
+      tokensBefore: 90_000,
+      tokensAfter: 12_000,
+    });
+    expect(event).toEqual({
+      kind: "compaction",
+      outcome: "compacted",
+      reason: "threshold",
+      tokensBefore: 90_000,
+      tokensAfter: 12_000,
+      durationMs: 750,
+    });
+    expect(leaks(event)).toBe(false);
+  });
+
+  it("times a failed compaction and still drops its diagnostic prose", () => {
+    let tick = 0;
+    const reducer = new ObservabilityReducer(() => tick);
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "overflow" });
+    tick = 40;
+    const event = reducer.reduce({
+      kind: "compaction",
+      state: "failed",
+      reason: "overflow",
+      message: SENSITIVE,
+    });
+    expect(event).toEqual({
+      kind: "compaction",
+      outcome: "failed",
+      reason: "overflow",
+      durationMs: 40,
+    });
+    expect(leaks(event)).toBe(false);
+  });
+
+  it("omits the duration when it never saw the compaction start", () => {
+    const reducer = new ObservabilityReducer(() => 50);
+    // A checkpoint failure runs no work and has no progress at all.
+    const checkpoint = reducer.reduce({
+      kind: "compaction",
+      state: "failed",
+      reason: "checkpoint",
+      message: SENSITIVE,
+    });
+    expect(checkpoint).toEqual({ kind: "compaction", outcome: "failed", reason: "checkpoint" });
+    expect(checkpoint).not.toHaveProperty("durationMs");
+    // Progress for another reason is not this compaction's start.
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "manual" });
+    expect(
+      reducer.reduce({
+        kind: "compaction",
+        state: "compacted",
+        reason: "threshold",
+        entryId: "e",
+        tokensBefore: 2,
+        tokensAfter: 1,
+      }),
+    ).not.toHaveProperty("durationMs");
+  });
+
+  it("forgets a start that finished with no outcome, and one that was consumed", () => {
+    let tick = 0;
+    const reducer = new ObservabilityReducer(() => tick);
+    const compacted = {
+      kind: "compaction" as const,
+      state: "compacted" as const,
+      reason: "manual" as const,
+      entryId: "e",
+      tokensBefore: 2,
+      tokensAfter: 1,
+    };
+    // Pi found nothing to compact: progress finished, no outcome followed.
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "manual" });
+    tick = 10;
+    expect(
+      reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "manual" }),
+    ).toBeNull();
+    tick = 500;
+    expect(reducer.reduce(compacted)).not.toHaveProperty("durationMs");
+    // A measured outcome consumes its start, so a replay has no duration.
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "manual" });
+    tick = 530;
+    expect(reducer.reduce(compacted)).toMatchObject({ durationMs: 30 });
+    expect(reducer.reduce(compacted)).not.toHaveProperty("durationMs");
+  });
+
+  it("refuses a duration from a clock that stepped backwards", () => {
+    let tick = 100;
+    const reducer = new ObservabilityReducer(() => tick);
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "overflow" });
+    tick = 90;
+    expect(
+      reducer.reduce({ kind: "compaction", state: "failed", reason: "overflow", message: "x" }),
+    ).not.toHaveProperty("durationMs");
+  });
+});
+
+describe("turnQueueEvent (VC-455)", () => {
+  it("measures acceptance to turn start as a bare duration", () => {
+    expect(turnQueueEvent({ acceptedAt: 1_000, turnStartedAt: 1_240 })).toEqual({
+      kind: "turn-queue",
+      queuedMs: 240,
+    });
+    // A turn that opened in the same tick waited zero, which is a measurement.
+    expect(turnQueueEvent({ acceptedAt: 5, turnStartedAt: 5 })).toEqual({
+      kind: "turn-queue",
+      queuedMs: 0,
+    });
+  });
+
+  it("reports nothing, never zero, when the clock cannot be trusted", () => {
+    expect(turnQueueEvent({ acceptedAt: 1_000, turnStartedAt: 999 })).toBeNull();
+    expect(turnQueueEvent({ acceptedAt: Number.NaN, turnStartedAt: 1 })).toBeNull();
+    expect(turnQueueEvent({ acceptedAt: 0, turnStartedAt: Number.POSITIVE_INFINITY })).toBeNull();
+  });
+});
+
 describe("ObservabilityReducer content carriers", () => {
   it("reduces every content-bearing observation kind to null", () => {
     const reducer = new ObservabilityReducer(() => 0);
@@ -432,6 +565,7 @@ describe("ObservabilityReducer content carriers", () => {
       { kind: "delta", turnId: "t1", channel: "text", text: SENSITIVE },
       { kind: "message-settled", turnId: "t1", message: settledMessage() },
       { kind: "compaction-progress", state: "started", reason: "manual" },
+      { kind: "compaction-progress", state: "finished", reason: "manual" },
       {
         kind: "interaction",
         state: "cancelled",

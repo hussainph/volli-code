@@ -153,6 +153,19 @@ describe("observabilitySpan — product events", () => {
     expect(interrupted.failed).toBe(false);
   });
 
+  it("times the queue in front of a turn as its own span (VC-455)", () => {
+    expect(observabilitySpan({ kind: "turn-queue", queuedMs: 120 })).toEqual({
+      name: "volli.agent.turn.queue",
+      kind: "internal",
+      durationMs: 120,
+      failed: false,
+      attributes: {},
+    });
+    expect(observabilitySpan({ kind: "turn-queue", queuedMs: 5, runId: "run-1" })).toMatchObject({
+      attributes: { "volli.run.id": "run-1" },
+    });
+  });
+
   it("names a tool span after Volli's own tool id when it has one", () => {
     const span = observabilitySpan({
       kind: "tool",
@@ -253,6 +266,20 @@ describe("observabilitySpan — product events", () => {
     expect(failed.failed).toBe(true);
     expect(failed.attributes["error.type"]).toBe("compaction_failed");
     expect(failed.attributes).not.toHaveProperty("volli.compaction.tokens_before");
+  });
+
+  it("times a compaction only when the reducer measured it (VC-455)", () => {
+    expect(
+      observabilitySpan({
+        kind: "compaction",
+        outcome: "compacted",
+        reason: "threshold",
+        durationMs: 2_400,
+      }).durationMs,
+    ).toBe(2_400);
+    expect(
+      observabilitySpan({ kind: "compaction", outcome: "failed", reason: "checkpoint" }).durationMs,
+    ).toBe(0);
   });
 
   it("records provider reasoning recovery as successful metadata", () => {
@@ -465,6 +492,44 @@ describe("observabilityMetrics", () => {
         },
       },
     ]);
+    const compactionLabels = {
+      "volli.compaction.outcome": "failed",
+      "volli.compaction.reason": "overflow",
+    };
+    expect(
+      observabilityMetrics({
+        kind: "compaction",
+        outcome: "failed",
+        reason: "overflow",
+        durationMs: 1_500,
+      }),
+    ).toEqual([
+      {
+        name: "volli.agent.compaction.count",
+        instrument: "counter",
+        unit: "{compaction}",
+        value: 1,
+        attributes: compactionLabels,
+      },
+      {
+        name: "volli.agent.compaction.duration",
+        instrument: "histogram",
+        unit: "s",
+        value: 1.5,
+        attributes: compactionLabels,
+        buckets: expect.any(Array),
+      },
+    ]);
+    expect(observabilityMetrics({ kind: "turn-queue", queuedMs: 250, runId: "run-1" })).toEqual([
+      {
+        name: "volli.agent.turn.queue.duration",
+        instrument: "histogram",
+        unit: "s",
+        value: 0.25,
+        attributes: {},
+        buckets: expect.any(Array),
+      },
+    ]);
     expect(observabilityMetrics({ kind: "dropped", reason: "queue-full", count: 3 })).toEqual([
       {
         name: "volli.observability.dropped.count",
@@ -513,6 +578,8 @@ describe("observabilitySpan — the export boundary", () => {
       { kind: "tool", activityKind: "search", outcome: "failed", durationMs: 2 },
       { kind: "authority", outcome: "denied", cause: "call.unreadable" },
       { kind: "compaction", outcome: "compacted", reason: "threshold", tokensBefore: 5 },
+      { kind: "compaction", outcome: "failed", reason: "overflow", durationMs: 7 },
+      { kind: "turn-queue", queuedMs: 3, runId: "run-1" },
       { kind: "attachment", phase: "failed", failureReason: "aborted" },
       { kind: "attention", phase: "cleared", reason: "context" },
       { kind: "dropped", reason: "sink-error", count: 3 },

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
   AuthoritySnapshot,
+  ObservabilityEvent,
+  ObservabilitySink,
   RuntimeObservation,
   SessionEvent,
   SessionLedgerIds,
@@ -194,6 +196,7 @@ function composition(
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
+    observability?: ObservabilitySink;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -220,6 +223,7 @@ function composition(
       ...(options.onProjectionCheckpointFailure
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
+      ...(options.observability ? { observability: options.observability } : {}),
     }),
   };
 }
@@ -5156,5 +5160,188 @@ describe("SessionRuntime transient transcript overlay", () => {
     // The baseline reached the chain before the subscriber left; the append
     // queued behind it never reaches a listener that is no longer listening.
     expect(seen).toEqual(["overlay", "command.recorded"]);
+  });
+});
+
+function recordingSink(): { events: ObservabilityEvent[]; sink: ObservabilitySink } {
+  const events: ObservabilityEvent[] = [];
+  return { events, sink: { record: (event) => void events.push(event) } };
+}
+
+/** One clock the test moves by hand, shared by engine and runtime. */
+function manualClock(at = 1_000): { at: number; now: () => number } {
+  const clock = { at, now: () => clock.at };
+  return clock;
+}
+
+function submit(runtime: SessionRuntime, sessionId: string, id: string, text = "Hello") {
+  return runtime.command({
+    commandId: `command-${id}`,
+    sessionId,
+    command: { kind: "message.submit", message: userMessage(id, text) },
+  });
+}
+
+describe("SessionRuntime turn queue time (VC-455)", () => {
+  it("measures acceptance, the wait behind a busy Session, and dispatch, up to the turn's start", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatches = [new Gate(), new Gate()];
+    let dispatchCount = 0;
+    adapter.dispatchStarted = () => dispatches[dispatchCount++]?.resolve();
+    const releaseDispatch = new Gate();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    clock.at = 1_000;
+    const first = submit(runtime, sessionId, "first", "PRIVATE-first-message");
+    await dispatches[0]!.promise;
+    // Accepted now, then held behind the first message's admission.
+    clock.at = 1_010;
+    const second = submit(runtime, sessionId, "second", "PRIVATE-second-message");
+    clock.at = 1_040;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-first" });
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-first" });
+    await dispatches[1]!.promise;
+    clock.at = 1_100;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-second" });
+    releaseDispatch.resolve();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual([
+      { kind: "turn-queue", queuedMs: 40 },
+      { kind: "turn-queue", queuedMs: 90 },
+    ]);
+    // Metadata only: no Session, command, turn or message identity.
+    const exported = JSON.stringify(events);
+    for (const secret of ["PRIVATE", sessionId, "command-", "turn-first", "turn-second"]) {
+      expect(exported).not.toContain(secret);
+    }
+  });
+
+  it("measures nothing for a turn that opened before the message reached the executor", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const store = createInMemoryTranscriptArtifactStore();
+    const writeStarted = new Gate();
+    const releaseWrite = new Gate();
+    let holdWrites = false;
+    const { runtime, adapter } = composition({
+      clock,
+      observability: sink,
+      artifacts: {
+        write: async (artifact) => {
+          if (holdWrites) {
+            holdWrites = false;
+            writeStarted.resolve();
+            await releaseWrite.promise;
+          }
+          return store.write(artifact);
+        },
+        read: (reference) => store.read(reference),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+
+    holdWrites = true;
+    const message = submit(runtime, sessionId, "early");
+    await writeStarted.promise;
+    // Some other turn opens while this message is still being recorded: it
+    // releases the admission, but it is not this message's turn.
+    clock.at = 1_020;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-unrelated" });
+    releaseWrite.resolve();
+    await message;
+    // Its own start then has no admission left to be measured against.
+    clock.at = 1_050;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-late" });
+
+    expect(adapter.dispatches).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  it("measures nothing for a message that joined a running turn, or for a replayed start", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    // Delivered into a turn already running: the executor opens no turn for it.
+    await submit(runtime, sessionId, "joined");
+    expect(adapter.dispatches).toBe(1);
+
+    // A start recovered by reconciliation is history, not a clock reading.
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+    const held = submit(runtime, sessionId, "held");
+    await dispatchStarted.promise;
+    adapter.reconcileObservations = [
+      { kind: "turn", state: "started", turnId: "turn-replayed", occurredAt: 1 },
+    ];
+    clock.at = 9_000;
+    await runtime.reconcile({ sessionId, attachmentId });
+    releaseDispatch.resolve();
+    await held;
+
+    expect(events).toEqual([]);
+  });
+
+  it("reports a clock that ran backwards as unmeasured rather than as zero", async () => {
+    const clock = manualClock(5_000);
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = submit(runtime, sessionId, "stepped");
+    await dispatchStarted.promise;
+    clock.at = 4_000;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-stepped" });
+    releaseDispatch.resolve();
+    await message;
+
+    expect(events).toEqual([]);
+  });
+
+  it("costs a throwing sink the measurement and nothing else", async () => {
+    const clock = manualClock();
+    let attempts = 0;
+    const { runtime, adapter } = composition({
+      clock,
+      observability: {
+        record: () => {
+          attempts += 1;
+          throw new Error("collector down");
+        },
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = submit(runtime, sessionId, "sink-throws");
+    await dispatchStarted.promise;
+    clock.at = 1_030;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-sink-throws" });
+    releaseDispatch.resolve();
+
+    await expect(message).resolves.toMatchObject({ receipt: { status: "accepted" } });
+    expect(attempts).toBe(1);
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames.some(
+        ({ event }) =>
+          event.payload.kind === "turn.started" && event.payload.turnId === "turn-sink-throws",
+      ),
+    ).toBe(true);
   });
 });

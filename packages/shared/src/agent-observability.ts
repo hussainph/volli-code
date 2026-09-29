@@ -112,6 +112,50 @@ export interface TurnEvent {
 }
 
 /**
+ * How long one submitted message waited before the turn it started opened
+ * (VC-455).
+ *
+ * {@link TurnEvent.durationMs} starts when the executor opens the turn, so
+ * everything in front of that — waiting behind the Session's previous message,
+ * a Session attach, the executor's own pre-turn work — was invisible. The
+ * Session runtime is the one layer that sees both ends on one clock: it accepts
+ * the message into its per-Session admission queue, and it records the
+ * executor's `turn.started` fact that releases that admission. So it, not the
+ * executor, emits this.
+ *
+ * A separate envelope rather than a field on {@link TurnEvent} because the two
+ * are measured by different layers: the executor's reducer never sees input
+ * acceptance, and the Session runtime never sees the executor's run id. That
+ * is also why `runId` is normally absent here — the envelope is an aggregate
+ * measurement, not a span of a specific run.
+ *
+ * Emitted only when the runtime measured it: a message that joined a turn
+ * already running, a turn replayed from recovery, or a turn nobody's admission
+ * was waiting on produces no event at all. Absent means unknown, never zero.
+ */
+export interface TurnQueueEvent {
+  kind: "turn-queue";
+  /** Input accepted by the Session runtime → the turn it started opened. */
+  queuedMs: number;
+  runId?: string;
+}
+
+/**
+ * The queue envelope for one measured admission, or nothing.
+ *
+ * Both readings come from one caller's clock; this function exists so the rule
+ * — a backwards clock or a non-finite reading is unmeasured, not zero — has one
+ * definition that the Session runtime and the VC-441 fixture share.
+ */
+export function turnQueueEvent(input: {
+  acceptedAt: number;
+  turnStartedAt: number;
+}): TurnQueueEvent | null {
+  const queuedMs = measuredDuration(input.turnStartedAt - input.acceptedAt);
+  return queuedMs === undefined ? null : { kind: "turn-queue", queuedMs };
+}
+
+/**
  * The tools Volli is willing to name, as a closed vocabulary.
  *
  * `ActivityKind` answers "what capability class" but not "which tool" — it
@@ -204,6 +248,14 @@ export interface CompactionEvent {
   /** Only the compacted arm measured anything. */
   tokensBefore?: number;
   tokensAfter?: number;
+  /**
+   * The reducer's first `compaction-progress` for this reason → this outcome
+   * (VC-455). Compaction is synchronous-heavy work on the same event loop as
+   * every other Session's turn, so it is worth seeing apart from the turn it
+   * sits inside. Absent when no progress was seen — a `checkpoint` failure runs
+   * no work, and a reducer attached after the work began saw only its end.
+   */
+  durationMs?: number;
   runId?: string;
 }
 
@@ -255,6 +307,7 @@ export interface DroppedEvent {
 export type ObservabilityEvent =
   | ProviderAttemptEvent
   | TurnEvent
+  | TurnQueueEvent
   | ToolEvent
   | AuthorityEvent
   | CompactionEvent
@@ -295,6 +348,13 @@ export class ObservabilityReducer {
    * never leave this reducer.
    */
   #authorityWaitByActivityId = new Map<string, number>();
+  /**
+   * When the first `compaction-progress` for each reason arrived. Keyed by
+   * reason because that is all a progress observation carries, and the runtime
+   * runs at most one compaction at a time; a `finished` progress with no
+   * outcome (Pi found nothing to compact, or the work threw) forgets it.
+   */
+  #compactionStartedAt = new Map<CompactionReason, number>();
 
   /**
    * An explicit field, not a constructor parameter property.
@@ -371,8 +431,13 @@ export class ObservabilityReducer {
             };
       }
       case "compaction": {
+        const startedAt = this.#compactionStartedAt.get(observation.reason);
+        this.#compactionStartedAt.delete(observation.reason);
+        const durationMs =
+          startedAt === undefined ? undefined : measuredDuration(this.#now() - startedAt);
+        const measured = durationMs === undefined ? {} : { durationMs };
         if (observation.state === "failed") {
-          return { kind: "compaction", outcome: "failed", reason: observation.reason };
+          return { kind: "compaction", outcome: "failed", reason: observation.reason, ...measured };
         }
         return {
           kind: "compaction",
@@ -380,8 +445,20 @@ export class ObservabilityReducer {
           reason: observation.reason,
           tokensBefore: observation.tokensBefore,
           tokensAfter: observation.tokensAfter,
+          ...measured,
         };
       }
+      // Transient progress is timed, never exported: the duration rides on the
+      // compaction outcome it belongs to.
+      case "compaction-progress":
+        if (observation.state === "started") {
+          if (!this.#compactionStartedAt.has(observation.reason)) {
+            this.#compactionStartedAt.set(observation.reason, this.#now());
+          }
+        } else {
+          this.#compactionStartedAt.delete(observation.reason);
+        }
+        return null;
       case "attachment":
         return {
           kind: "attachment",
@@ -406,7 +483,6 @@ export class ObservabilityReducer {
         return { kind: "attention", phase: observation.state, reason: observation.reason };
       case "delta":
       case "message-settled":
-      case "compaction-progress":
       case "interaction":
         return null;
       // Usage is a Session Semantic Fact and reaches the ledger on its own

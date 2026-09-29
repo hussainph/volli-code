@@ -8448,6 +8448,52 @@ describe("compacting because somebody asked", () => {
     await handle.close();
   });
 
+  it("exports how long a compaction's work took, from its progress to its outcome (VC-455)", async () => {
+    const attachment = fixture();
+    const events: ObservabilityEvent[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let clock = 1_000;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      now: () => clock,
+      observability: { record: (event) => void events.push(event) },
+      models: modelsWithStream(
+        conversation([], async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    const compacting = handle.compact();
+    await summarizing.promise;
+    clock = 3_500;
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
+    await handle.close();
+
+    expect(events.filter((event) => event.kind === "compaction")).toEqual([
+      {
+        kind: "compaction",
+        outcome: "compacted",
+        reason: "manual",
+        tokensBefore: expect.any(Number),
+        tokensAfter: expect.any(Number),
+        durationMs: 2_500,
+        runId: expect.any(String),
+      },
+    ]);
+    // Metadata only: neither the summary nor the conversation it replaced.
+    expect(JSON.stringify(events)).not.toContain("summarized");
+    expect(JSON.stringify(events)).not.toContain("remember the marker");
+  });
+
   it("hands the requester's own words to the summarizer", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];

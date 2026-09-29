@@ -1589,6 +1589,7 @@ app.whenReady().then(async () => {
           executor: piRuntimeHost.adapter,
           sessionEngine,
           artifacts: transcriptArtifacts,
+          ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
   listOpenNativeBindings =

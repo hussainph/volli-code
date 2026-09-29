@@ -234,6 +234,17 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
         failed: false,
         attributes: present({ ...runId, [`${VOLLI}.turn.outcome`]: event.outcome }),
       };
+    // The wait in front of a turn, measured by the Session runtime rather than
+    // the executor (VC-455) — its own span, because it ends where the turn
+    // span begins and belongs to neither the turn nor the provider.
+    case "turn-queue":
+      return {
+        name: "volli.agent.turn.queue",
+        kind: "internal",
+        durationMs: safeDurationMs(event.queuedMs),
+        failed: false,
+        attributes: present({ ...runId }),
+      };
     case "tool":
       return {
         // The convention's recipe again: `execute_tool {tool name}`. The name is
@@ -275,7 +286,7 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
       return {
         name: "volli.agent.compaction",
         kind: "internal",
-        durationMs: 0,
+        durationMs: safeDurationMs(event.durationMs),
         failed: event.outcome === "failed",
         attributes: present({
           ...runId,
@@ -364,6 +375,8 @@ const METRIC = {
   toolWaitDuration: "volli.agent.tool.wait.duration",
   authorityDecisions: "volli.agent.authority.decision.count",
   compactions: "volli.agent.compaction.count",
+  compactionDuration: "volli.agent.compaction.duration",
+  turnQueueDuration: "volli.agent.turn.queue.duration",
   reasoningDropped: "volli.agent.reasoning_dropped.count",
   dropped: "volli.observability.dropped.count",
 } as const;
@@ -542,16 +555,33 @@ export function observabilityMetrics(event: ObservabilityEvent): readonly Observ
           ...(event.outcome === "denied" ? { [`${VOLLI}.authority.cause`]: event.cause } : {}),
         }),
       );
-    case "compaction":
+    case "compaction": {
+      const attributes = present({
+        [`${VOLLI}.compaction.outcome`]: event.outcome,
+        [`${VOLLI}.compaction.reason`]: event.reason,
+      });
+      return [
+        ...metric(METRIC.compactions, "counter", "{compaction}", 1, attributes),
+        // Absent when the reducer never saw the work start, so a histogram
+        // never records an unmeasured compaction as an instant one.
+        ...metric(
+          METRIC.compactionDuration,
+          "histogram",
+          "s",
+          seconds(event.durationMs),
+          attributes,
+          DURATION_BUCKETS,
+        ),
+      ];
+    }
+    case "turn-queue":
       return metric(
-        METRIC.compactions,
-        "counter",
-        "{compaction}",
-        1,
-        present({
-          [`${VOLLI}.compaction.outcome`]: event.outcome,
-          [`${VOLLI}.compaction.reason`]: event.reason,
-        }),
+        METRIC.turnQueueDuration,
+        "histogram",
+        "s",
+        seconds(event.queuedMs),
+        {},
+        DURATION_BUCKETS,
       );
     case "provider-reasoning-dropped":
       return metric(
