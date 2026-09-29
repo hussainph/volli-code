@@ -1034,12 +1034,26 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
 
     const attachmentId = this.#id("attachment");
+    const carryFrom =
+      request.command.continuity === "context_replay"
+        ? priorAttachmentContext(projection, adapter.id)
+        : undefined;
+    // What this attachment actually is, as distinct from what was asked: a
+    // `context_replay` with no earlier conversation to carry is a fresh
+    // attachment, and the attachment record says so (the command keeps the
+    // request). Reattach doors ask for a replay without first reading history,
+    // so a Session's first attach through one lands here.
+    const continuity: SessionAttachmentContinuity =
+      request.command.continuity === "context_replay" && carryFrom === undefined
+        ? "fresh"
+        : request.command.continuity;
     const spec: NativeAttachmentSpec = {
       sessionId: request.sessionId,
       attachmentId,
       directory: site.directory,
-      continuity: request.command.continuity,
+      continuity,
       native: null,
+      ...(carryFrom === undefined ? {} : { carryFrom }),
     };
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
@@ -1073,7 +1087,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         sessionId: request.sessionId,
         adapterId: adapter.id,
         venue: location.venue,
-        continuity: request.command.continuity,
+        continuity,
         // The directory that was PREPARED, never the one that was resolved. On a
         // worktree ticket with no stamp yet the two differ, and `resolve` names
         // the main checkout — writing that down would hand every later resume
@@ -3301,6 +3315,30 @@ function adapterProvenance(
 /** Names an adapter this runtime does not host — a historical attachment's own id. */
 function adapterIdentity(adapterId: string): AdapterIdentity {
   return { id: adapterId, adapterVersion: "unavailable" };
+}
+
+/**
+ * The newest closed attachment of this executor whose native binding can be
+ * read, for a `context_replay` attach (VC-457). Undefined when there is none —
+ * a Session that never bound a native identity has no conversation to carry,
+ * and the attach then opens exactly as a fresh one would.
+ */
+function priorAttachmentContext(
+  projection: SessionProjection,
+  adapterId: string,
+): NativeAttachmentSpec["carryFrom"] {
+  for (const attachment of projection.attachments.toReversed()) {
+    if (attachment.adapterId !== adapterId || attachment.status === "open") continue;
+    if (attachment.native === null) continue;
+    try {
+      const binding = unwrapNativeBinding(attachment.native);
+      return { attachmentId: attachment.id, directory: binding.directory, native: binding.native };
+    } catch {
+      // An envelope this build cannot read carries nothing; an older one may.
+      continue;
+    }
+  }
+  return undefined;
 }
 
 function wrapNativeBinding(

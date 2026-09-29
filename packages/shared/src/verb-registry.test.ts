@@ -178,6 +178,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // — tool-only, Role-gated, never on the socket, because a CLI verb must
   // never wait.
   "session.await": "control",
+  // What replaced both awaits (VC-457): tool-only and Role-gated for the
+  // reason they were — it reaches into its caller's own ledger later, so the
+  // caller must be the bound attachment, never a socket request.
+  watch: "control",
   // MCP management (VC-380). Control tier for the reason the whole family is
   // tool-only: an install starts a process as the user or opens a network
   // relationship on the project's behalf, which is exactly the misuse a
@@ -517,9 +521,10 @@ describe("the registry table", () => {
     // schema itself. `automation.run` used to sit beside it, but VC-329 moved
     // it to listed (with the session.start precedent): an agent that could not
     // discover it substituted a hand-written session_start kickoff for the
-    // person's saved Automation. `session.await` remains unlisted because its
-    // cursor contract is discovered through the tool schema that supplies it.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await"]);
+    // person's saved Automation. `session.await` stays unlisted beside it;
+    // both are retired (VC-457). `watch`, which replaced them, is discovered
+    // through its tool schema the same way.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await", "watch"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -932,9 +937,11 @@ describe("the MCP management verbs (VC-380)", () => {
 
   it("appends the family after every previously frozen tool position", () => {
     const keys = VERB_TOOLS.map((entry) => entry.key);
-    expect(keys.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // `watch` (VC-457) is appended after the family, for the same reason.
+    expect(keys.slice(-(MCP_VERBS.length + 1), -1)).toEqual([...MCP_VERBS]);
+    expect(keys.at(-1)).toBe("watch");
     // `session.await` was the last tool before this family; nothing may be
     // inserted ahead of it, because declaration order IS the frozen tool order.
-    expect(keys.at(-(MCP_VERBS.length + 1))).toBe("session.await");
+    expect(keys.at(-(MCP_VERBS.length + 2))).toBe("session.await");
   });
 });

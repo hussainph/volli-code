@@ -579,6 +579,44 @@ describe("Pi native adapter authority snapshot", () => {
     expect("authority" in runtime.spec).toBe(false);
   });
 
+  it("hands a context_replay attach the earlier attachment's sidecar to carry, and nothing for anything else (VC-457)", async () => {
+    const opened = await attached();
+    const { runtime } = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: "/earlier",
+          native: opened.binding.native,
+        },
+      }),
+    );
+    expect(runtime.spec.carry).toEqual({
+      runtime: "pi",
+      sessionId: "pi-session-9",
+      sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
+      attachmentId: "attachment-0",
+      workspacePath: "/earlier",
+    });
+    expect(runtime.spec).not.toHaveProperty("recovery");
+
+    // A binding this build cannot read is carried as nothing: the attach
+    // opens fresh rather than failing.
+    const unreadable = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: { id: "x", detail: { runtime: "other" } },
+        },
+      }),
+    );
+    expect(unreadable.runtime.spec).not.toHaveProperty("carry");
+  });
+
   it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {
     // `null` is a real answer, distinct from absence: the attachment opened
     // under `off` (or predates VC-44), and a policy edit made afterwards must

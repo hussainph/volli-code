@@ -35,10 +35,8 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
       "session.start",
       "session.stop",
       "session.send",
-      "ticket.await",
       "automation.run",
       "session.delegate",
-      "session.await",
       "mcp.list",
       "mcp.preview",
       "mcp.install",
@@ -47,15 +45,16 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
       "mcp.disable",
       "mcp.tools",
       "mcp.remove",
+      "watch",
     ]);
     // The default-bundle property is asserted as absence rather than prose. An
     // injected instruction telling a Ticket Session to start ten Sessions has
     // nothing to call, and a durable birth grant is the explicit exception
-    // (VC-183), never a bundle edit. Neither `ticket.await` nor
-    // `session.delegate` is part of the agent-control family — waiting
-    // controls nobody (VC-85/VC-92), and a subagent answers back here and can
-    // act on nothing else (VC-9).
-    expect(roleVerbBundle("ticket")).toEqual(["ticket.await", "session.delegate", "session.await"]);
+    // (VC-183), never a bundle edit. Neither `watch` nor `session.delegate`
+    // is part of the agent-control family — being told controls nobody
+    // (VC-85/VC-92, VC-457), and a subagent answers back here and can act on
+    // nothing else (VC-9). The retired awaits are in no bundle (VC-457).
+    expect(roleVerbBundle("ticket")).toEqual(["session.delegate", "watch"]);
     // A helper's bundle is the whole of its authority: nothing (VC-9).
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
@@ -73,8 +72,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
   it("resolves capability tools, then the Role's verbs, in canonical order", () => {
     // Verb order is REGISTRY DECLARATION order, not bundle order: stop and
     // send were appended after `automation.run` (VC-86), so they follow it —
-    // that is what keeps `ticket.await`'s and `automation.run`'s positions
-    // stable inside every tool-surface record frozen before they existed.
+    // that is what keeps `automation.run`'s position stable inside every
+    // tool-surface record frozen before they existed. The retired awaits are
+    // in no bundle, so a new Session's surface simply lacks them (VC-457).
     expect(resolveAgentToolSurface(capabilities())).toEqual([
       "read",
       "edit",
@@ -96,12 +96,10 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_output",
       "shell_kill",
       "session.start",
-      "ticket.await",
       "automation.run",
       "session.stop",
       "session.send",
       "session.delegate",
-      "session.await",
       "mcp.list",
       "mcp.preview",
       "mcp.install",
@@ -110,6 +108,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "mcp.disable",
       "mcp.tools",
       "mcp.remove",
+      "watch",
     ]);
   });
 
@@ -121,10 +120,10 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // Role that orchestrates. A Ticket Session's room does not hold it, and
     // that is why no inheritance or capping rule is needed to keep it out.
     expect(surface).not.toContain("automation.run");
-    // The await tool is deliberately in this room too (VC-92's ruling on
-    // VC-85): blocking is a runtime property, not a privilege, and what may
-    // be awaited is policy data judged at call time.
-    expect(verbToolsOf(surface)).toEqual(["ticket.await", "session.delegate", "session.await"]);
+    // The watch tool is deliberately in this room too (VC-92's ruling on
+    // VC-85, carried to VC-457): being told is a runtime property, not a
+    // privilege, and what may wake it is policy data judged when armed.
+    expect(verbToolsOf(surface)).toEqual(["session.delegate", "watch"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -147,9 +146,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_start",
       "shell_output",
       "shell_kill",
-      "ticket.await",
       "session.delegate",
-      "session.await",
+      "watch",
     ]);
   });
 
@@ -232,12 +230,10 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "execute",
       "ask_user",
       "session.start",
-      "ticket.await",
       "automation.run",
       "session.stop",
       "session.send",
       "session.delegate",
-      "session.await",
       "mcp.list",
       "mcp.preview",
       "mcp.install",
@@ -246,6 +242,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "mcp.disable",
       "mcp.tools",
       "mcp.remove",
+      "watch",
     ]);
   });
 
@@ -267,12 +264,10 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "ask_user",
       "web_search",
       "session.start",
-      "ticket.await",
       "automation.run",
       "session.stop",
       "session.send",
       "session.delegate",
-      "session.await",
       "mcp.list",
       "mcp.preview",
       "mcp.install",
@@ -281,6 +276,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "mcp.disable",
       "mcp.tools",
       "mcp.remove",
+      "watch",
     ]);
   });
 });
@@ -315,35 +311,39 @@ describe("session.delegate is the working Roles' verb, and never the helper's (V
   });
 });
 
-describe("session.await is the working Roles' wait over Sessions (VC-324 item 3)", () => {
-  it("is a control-tier tool named for the model, off the socket", () => {
-    const entry = verbEntry("session.await");
-    expect(entry?.accessModes).toEqual(["tool"]);
-    expect(entry?.actor).toBe("role");
-    expect(entry?.tool?.name).toBe("session_await");
-  });
-
-  it("is in both working bundles and absent from the subagent's", () => {
-    // The same two rooms as `ticket.await`, for the same reason (VC-92):
-    // waiting controls nobody. A helper whose answer is its last message
-    // must not park (VC-9), so its room stays empty.
-    expect(roleVerbBundle("project")).toContain("session.await");
-    expect(roleVerbBundle("ticket")).toContain("session.await");
-    expect(roleVerbBundle("subagent")).not.toContain("session.await");
-  });
-
-  it("keeps its position, so no frozen surface shifted under it", () => {
-    // Registry declaration order is the frozen tool order. VC-324 appended
-    // this key last; VC-380's MCP family appended after it, which is the same
-    // discipline seen from the other side — what matters is that nothing was
-    // INSERTED before it, so every already-born Session's array is unchanged
-    // (Cache Prefix).
+describe("the await tools are retired, and watch replaced them (VC-457)", () => {
+  it("keeps both awaits declared in place for frozen surfaces, in no bundle", () => {
+    for (const key of ["ticket.await", "session.await"] as const) {
+      const entry = verbEntry(key);
+      expect(entry?.retired).toBe("watch");
+      expect(entry?.accessModes).toEqual(["tool"]);
+      expect(isSessionToolId(key)).toBe(true);
+      for (const role of ["project", "ticket", "subagent"] as const) {
+        expect(roleVerbBundle(role)).not.toContain(key);
+      }
+    }
+    // Declaration order is the frozen tool order: neither moved.
     expect(VERB_TOOL_KEYS.indexOf("session.await")).toBe(
       VERB_TOOL_KEYS.indexOf("session.delegate") + 1,
     );
-    expect(VERB_TOOL_KEYS.slice(0, VERB_TOOL_KEYS.indexOf("session.await") + 1).at(-1)).toBe(
-      "session.await",
-    );
+  });
+
+  it("refuses to grant a retired verb", () => {
+    expect(() =>
+      resolveAgentToolSurface(capabilities({ role: "ticket", grants: ["session.await"] })),
+    ).toThrow(/session.await is retired and cannot be granted; watch replaced it/);
+  });
+
+  it("puts watch in both working bundles, last, and never in a subagent's", () => {
+    const entry = verbEntry("watch");
+    expect(entry?.accessModes).toEqual(["tool"]);
+    expect(entry?.actor).toBe("role");
+    expect(verbTier(entry!)).toBe("control");
+    expect(entry?.tool?.name).toBe("watch");
+    expect(roleVerbBundle("project")).toContain("watch");
+    expect(roleVerbBundle("ticket")).toContain("watch");
+    expect(roleVerbBundle("subagent")).not.toContain("watch");
+    expect(VERB_TOOL_KEYS.at(-1)).toBe("watch");
   });
 });
 
@@ -629,7 +629,8 @@ describe("the MCP management verbs live in the Board Role's bundle (VC-380)", ()
     });
     const verbs = verbToolsOf(surface);
 
-    expect(verbs.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // `watch` (VC-457) is appended after the family.
+    expect(verbs.slice(-(MCP_VERBS.length + 1), -1)).toEqual([...MCP_VERBS]);
     // The family is appended, so a Board Session born before VC-380 has every
     // tool it had, in the order it had them, with the new ones after.
     expect(verbs.indexOf("session.start")).toBe(0);

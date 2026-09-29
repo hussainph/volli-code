@@ -12,6 +12,7 @@ import {
   HostNoticeRow,
   SubagentNoticeRow,
   UnknownHostNoticeRow,
+  WatchNoticeRow,
 } from "./host-notice-ui";
 
 const completed: SubagentNotice = {
@@ -138,5 +139,39 @@ describe("other host-notice rows", () => {
     expect(
       renderToStaticMarkup(<HostNoticeRow notice={{ kind: "unknown", text: "Future fact" }} />),
     ).toContain("Future fact");
+  });
+});
+
+describe("a watch notice row (VC-457)", () => {
+  const moved = {
+    subject: "ticket",
+    id: "t-1",
+    label: "VC-12",
+    fact: "ticket-moved",
+    detail: "Done",
+  } as const;
+
+  it("draws one change as its headline, with no second line", () => {
+    const html = renderToStaticMarkup(
+      <WatchNoticeRow notice={{ kind: "watch", events: [moved] }} />,
+    );
+    expect(html).toContain("VC-12 moved (Done)");
+    expect(html).not.toContain("<p ");
+  });
+
+  it("counts several changes and lists them underneath", () => {
+    const html = renderToStaticMarkup(
+      <HostNoticeRow
+        notice={{
+          kind: "watch",
+          events: [
+            moved,
+            { subject: "session", id: "s-1", label: "ab12cd34", fact: "stopped", detail: null },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("2 watched changes");
+    expect(html).toContain("VC-12 moved (Done) · ab12cd34 was stopped");
   });
 });

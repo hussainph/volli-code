@@ -161,6 +161,7 @@ export const VOLLI_ORCHESTRATION = `# Volli orchestration
 6. Use exact body edits for existing prose so stale reads fail instead of clobbering changes.
 7. Peek a session (terminal or chat) to learn whether it is alive, what it is doing, and when it last moved; keep peeks narrow, because their output consumes the caller's context.
 8. Write ticket comments a human can scan: a little context, then short plain sentences in the project's domain words — never a wall of raw output.
+9. Never wait or poll for work you handed off. A subagent's answer, and the turn end, verdict or stop of a Session you started or steered, arrive by themselves as a notice from Volli — mid-turn if you are working, opening a new turn if you have ended yours. Use the \`watch\` tool for anything else you need to hear about, such as another ticket's moves and comments.
 `;
 
 /**

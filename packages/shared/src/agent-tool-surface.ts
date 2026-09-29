@@ -57,7 +57,7 @@ import type { CodingToolId, NonCodingToolId, SessionToolId } from "./authority";
 import type { SessionRole } from "./agent-runtime";
 import { errorMessage } from "./errors";
 import { isMcpToolId, validateMcpToolDefinitions, type McpToolDefinition } from "./mcp";
-import { VERB_TOOL_KEYS, isVerbToolKey } from "./verb-registry";
+import { VERB_TOOL_KEYS, isVerbToolKey, verbEntry } from "./verb-registry";
 import type { VerbToolKey } from "./verb-registry";
 
 /**
@@ -77,11 +77,10 @@ import type { VerbToolKey } from "./verb-registry";
  *   not spawn" structural rather than kickoff prose. It also makes delegation
  *   depth a bundle fact: with no `session.delegate` in the room there is no
  *   grandchild to count, so no depth counter exists anywhere.
- * - No `ticket.await`, and no `session.await` (VC-324). A subagent is a
- *   bounded helper whose answer is its last message; a helper parked on a
- *   Ticket gate — or on another Session's turn — is a helper that never
- *   answers. It also has nothing legitimate to await: it holds no verb that
- *   could have started the work.
+ * - No `watch` (VC-457). A subagent is a bounded helper whose answer is its
+ *   last message; it holds no verb that could have started work worth
+ *   watching, and a notice arriving into a helper mid-task would be work it
+ *   was never given.
  *
  * What it does hold is decided by {@link ROLE_CAPABILITY_POLICY}, which is the
  * capability half of the same decision.
@@ -92,20 +91,20 @@ import type { VerbToolKey } from "./verb-registry";
  * the `grants` parameter below and never edits this bundle map — a Ticket with
  * no such record still has nothing an injected instruction can call.
  *
- * `ticket.await` sits in BOTH working bundles, by VC-92's ruling on VC-85:
- * blocking is a runtime property, not a privilege, so an executor waiting on
- * its own gate is as legitimate as an orchestrator waiting on a fleet. What a
- * given Session may await is per-actor policy data
- * (`AuthorityActorPolicy.awaitable`), judged at call time — bundle membership
- * is deliberately not the control.
+ * `watch` (VC-457) sits in BOTH working bundles, on VC-92's ruling on VC-85
+ * that being told about work is a runtime property, not a privilege: an
+ * executor watching its own review Ticket is as legitimate as an orchestrator
+ * watching a fleet. What a given Session may be woken by is per-actor policy
+ * data (`AuthorityActorPolicy.awaitable` / `awaitableSessions`, durable names
+ * kept from the await tools), and which Sessions it may watch is the
+ * HANDLER's bound — a Board Session any in its project, a Ticket Session only
+ * the subagents it delegated — because that is a fact about the target, not
+ * about the Role.
  *
- * `session.await` (VC-324) sits in the same two bundles on the same ruling,
- * with its own policy list (`awaitableSessions`) and its own per-call bound:
- * a Board Session may await any Session in its project, while a Ticket Session
- * may await only itself and the subagents it delegated. That bound is the
- * HANDLER's, not this map's, because it is a fact about the target rather than
- * about the Role — the same reason `session.delegate` needs no second entry
- * here to keep a child from spawning.
+ * `ticket.await` and `session.await` are in NO bundle (VC-457): both parked
+ * the caller's turn until a fact arrived, which left the person driving a
+ * chat they could not use, and `watch` replaced them. Their registry entries
+ * stay, marked `retired`, only so Sessions frozen holding them still bind.
  *
  * `automation.run` sits in the `project` bundle ALONE (VC-134, filed by
  * VC-112). Starting an Automation Run is agent control — it spends model budget
@@ -134,10 +133,8 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "session.start",
     "session.stop",
     "session.send",
-    "ticket.await",
     "automation.run",
     "session.delegate",
-    "session.await",
     // The MCP management family (VC-380), in the `project` bundle ALONE.
     //
     // The decision is about blast radius, not about danger. Installing an MCP
@@ -163,6 +160,8 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "mcp.disable",
     "mcp.tools",
     "mcp.remove",
+    // What replaced the two await tools (VC-457); see the module comment.
+    "watch",
   ]) as readonly VerbToolKey[],
   // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
   // needs "go look at this and tell me" as much as an orchestrator does, and
@@ -170,11 +169,7 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
   // not the agent-control family — a subagent answers back here and cannot
   // act on anything else — so VC-92's pairing rule does not pull the rest of
   // that family in with it.
-  ticket: Object.freeze([
-    "ticket.await",
-    "session.delegate",
-    "session.await",
-  ]) as readonly VerbToolKey[],
+  ticket: Object.freeze(["session.delegate", "watch"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });
 
@@ -339,6 +334,14 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
       // mistake — a name that cannot become a tool in this build.
       throw new AgentToolSurfaceError(
         `${grant} is not a verb this build can offer as a tool, so it cannot be granted`,
+      );
+    }
+    const replacement = verbEntry(grant)?.retired;
+    if (replacement !== undefined) {
+      // A retired verb survives only inside surfaces frozen before it retired;
+      // a grant would hand it to a Session born after (VC-457).
+      throw new AgentToolSurfaceError(
+        `${grant} is retired and cannot be granted; ${replacement} replaced it`,
       );
     }
     granted.add(grant);

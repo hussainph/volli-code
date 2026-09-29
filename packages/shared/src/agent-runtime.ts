@@ -325,6 +325,25 @@ export interface RuntimeRecoveryRef {
 }
 
 /**
+ * An earlier, closed attachment whose conversation a fresh one continues
+ * (VC-457, `context_replay` continuity).
+ *
+ * A stopped Session that a person sends a message to gets a new attachment,
+ * and a new attachment gets a new Pi sidecar — which, until this existed,
+ * meant a model that had never heard of the work it was doing. This names
+ * the sidecar the previous attachment wrote, so the new one can seed its
+ * context from it. Read, never reopened: the new attachment keeps its own
+ * sidecar and its own identity, and the earlier one's durable Session facts
+ * are already in the ledger and are not replayed.
+ */
+export interface RuntimeContextCarry extends RuntimeRecoveryRef {
+  /** The attachment that wrote that sidecar, which its identity must name. */
+  attachmentId: string;
+  /** The directory that attachment ran in; sidecars are listed per workspace. */
+  workspacePath: string;
+}
+
+/**
  * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
  * `budget`, the fact that no denial accrued at all.
  *
@@ -1017,6 +1036,12 @@ export interface SessionRuntimeSpec {
   tools: RuntimeToolBundle;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
+  /**
+   * The earlier attachment a fresh one continues (VC-457). Ignored when
+   * {@link recovery} is present: a resumed attachment already holds its own
+   * conversation, carried context included.
+   */
+  carry?: RuntimeContextCarry;
   signal?: AbortSignal;
   /**
    * Refusals this Session already accrued, before this attachment existed.

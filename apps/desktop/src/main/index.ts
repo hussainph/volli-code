@@ -240,6 +240,9 @@ import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
+import { createWatches } from "./watches";
+import type { Watches } from "./watches";
+import { getComment } from "./db/comments-repo";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -885,7 +888,8 @@ app.whenReady().then(async () => {
   let listOpenNativeBindings = noOpenNativeBindings;
   // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
   // watch: a write returns from the engine, the bus fans the committed event
-  // out to whichever `session_await` is parked on it, and only then does the
+  // out to its listeners (the Watch registry, the resumed-subagent re-arm —
+  // VC-457), and only then does the
   // watch mark the row dirty. Same construction-site rule as the watch — this
   // is the only place the engine is made, so no caller can hold an unwatched
   // one. See `session-wake.ts`.
@@ -1370,9 +1374,9 @@ app.whenReady().then(async () => {
               throw new Error("This launch has no Volli verb handlers.");
             }
             signal.throwIfAborted();
-            // Forwarded, not just read: `ticket.await` parks on it, and the
-            // signal firing is the only notice a suspended wait ever gets
-            // that its turn was interrupted (VC-85). `budgetAsk` rides along
+            // Forwarded, not just read: `session_send` races it, and the
+            // signal firing is the only notice a call still in flight gets
+            // that its turn was interrupted. `budgetAsk` rides along
             // for the one question a verb may raise mid-call — a spent
             // delegation allowance asking the person driving for one more
             // (VC-204) — answered through the binding that lent it.
@@ -1949,15 +1953,64 @@ app.whenReady().then(async () => {
     ) {
       return null;
     }
-    delegations = createDelegations({
+    const created = createDelegations({
       sessions,
       submitSessionMessage: submitKickoffMessage,
       runtime: sessionRuntime,
       sessionEngine,
+      // The child's answer rides its notice (VC-457), read through the same
+      // artifact store `volli session answer` reads.
+      readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
       onMutation: (change) => broadcastDataChanged(change),
       now: () => Date.now(),
     });
+    delegations = created;
+    // A child a person resumes after its delegation settled reports to its
+    // parent again (VC-457): the first turn it runs unwatched re-arms the
+    // notice. Keyed off the post-commit bus so it sees every door a turn can
+    // open through — the app's composer, a steer, a retry.
+    if (sessionWakeBus !== null && sessionDelegation !== null) {
+      const store = sessionDelegation;
+      sessionWakeBus.subscribe((wake) => {
+        const payload = wake.event.payload;
+        if (payload.kind !== "turn.started" || created.watching(wake.event.sessionId)) return;
+        const entry = store.subagentDelegation(wake.event.sessionId);
+        if (entry === null) return;
+        void created
+          .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
+          .catch((error: unknown) => {
+            console.error(
+              `[volli] could not re-arm the notice for resumed subagent ${entry.childSessionId}:`,
+              errorMessage(error),
+            );
+          });
+      });
+    }
     return delegations;
+  };
+  // The watch registry (VC-457): one per launch, over the two post-commit
+  // buses, composed on first use for the reason the delegation host is.
+  let watches: Watches | null = null;
+  const watchesFor = (): Watches | null => {
+    if (watches !== null) return watches;
+    if (
+      sessionWakeBus === null ||
+      sessionRuntime === null ||
+      sessionEngine === null ||
+      sessionDb === null
+    ) {
+      return null;
+    }
+    const db = sessionDb;
+    watches = createWatches({
+      subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
+      subscribeTicketWake,
+      runtime: sessionRuntime,
+      sessionEngine,
+      readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
+      readComment: (commentId) => getComment(db, commentId)?.body ?? null,
+    });
+    return watches;
   };
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
@@ -1983,16 +2036,12 @@ app.whenReady().then(async () => {
                   list: (projectId) => listAutomationsForProject(sessionDb, projectId),
                   run: (input) => automationRunner!.run(input),
                 },
-          // `ticket.await`'s two ports (VC-85): the wait is judged against the
-          // caller's project policy when it starts, and parks on the
-          // post-commit wake bus until a planner fact matches.
+          // The caller's project policy: budgets, and what a watch may be
+          // woken by (VC-457, read when the watch is armed).
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
-          subscribeTicketWake,
-          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
-          // read through a closure because the bus and the door are composed
-          // under different null-guards in this same function.
-          subscribeSessionWake: (listener) =>
-            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
+          // The watch registry (VC-457) that replaced the await tools, read
+          // through a closure because it is composed lazily below.
+          watches: watchesFor,
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>
@@ -2231,9 +2280,13 @@ app.whenReady().then(async () => {
     // otherwise read as running.
     if (sessionDelegation !== null) {
       try {
+        // Composed here even with nothing to recover: composing it arms the
+        // resumed-subagent watch (VC-457), which must hear a child a person
+        // reopens this launch whether or not anything delegated yet.
+        const host = delegationsFor();
         const unanswered = sessionDelegation.listUnansweredSubagents();
         if (unanswered.length > 0) {
-          const recovered = await delegationsFor()?.recover(unanswered);
+          const recovered = await host?.recover(unanswered);
           if (recovered !== undefined) {
             console.log(
               `[volli] recovered ${unanswered.length} delegation(s): ${recovered.answered} answered, ${recovered.reported} reported, ${recovered.skipped} skipped`,

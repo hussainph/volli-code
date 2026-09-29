@@ -58,6 +58,7 @@ import {
   type ProviderReasoningDroppedObservation,
   type ReasoningDropCause,
   type RuntimeAttachmentHandle,
+  type RuntimeContextCarry,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
   type RuntimeFailure,
@@ -78,6 +79,7 @@ import {
   compactionDue,
   compactionPathForModel,
   compactSession,
+  contextEntries,
   contextMessages,
   contextWindowOf,
   conversationPath,
@@ -745,6 +747,104 @@ function reasoningElisionRecordedAfter(
 }
 
 /**
+ * The context marker a fresh attachment writes when it continues an earlier
+ * one's conversation (VC-457). Its entries are that conversation as the model
+ * last saw it — from the newest compaction on, reasoning dropped — so the
+ * marker is the whole of what the new sidecar needs and the old one is never
+ * read again.
+ */
+interface ContextCarriedMarker {
+  kind: "context-carried";
+  fromAttachmentId: string;
+  entries: JsonValue;
+}
+
+const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
+  "message",
+  "compaction",
+  "branch_summary",
+]);
+
+/** The entries a `context-carried` marker holds, or undefined for any other entry. */
+function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
+  if (entry.customType !== VOLLI_CONTEXT_MARKER) return undefined;
+  const data = entry.data;
+  if (!isRecord(data) || data["kind"] !== "context-carried") return undefined;
+  const entries = data["entries"];
+  // A marker that no longer validates carries nothing rather than failing the
+  // Session: the conversation it held is lost to the model, which is what a
+  // fresh attachment was anyway, and never worse.
+  if (!Array.isArray(entries)) return [];
+  return (entries as readonly unknown[]).filter(
+    (candidate): candidate is Entry =>
+      isRecord(candidate) &&
+      typeof candidate["type"] === "string" &&
+      CARRIED_ENTRY_TYPES.has(candidate["type"]) &&
+      typeof candidate["id"] === "string",
+  );
+}
+
+/**
+ * An earlier attachment's conversation, read the way that attachment would
+ * have replayed it, ready to be carried into a fresh one.
+ *
+ * The same three reads a resume makes — acceptance markers become user
+ * messages, a settled reply history disagrees about is withheld, recorded
+ * reasoning drops are applied — then cut to what the model last saw (the
+ * newest compaction onward). Reasoning is dropped from all of it: a fresh
+ * attachment is a new request chain, and "every thinking block before some
+ * point" is the one removal every provider accepts.
+ */
+function carriedConversation(entries: readonly Entry[]): Entry[] {
+  const markers = entries
+    .filter((entry): entry is CustomEntry => entry.type === "custom")
+    .map(recoveredObservation)
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
+  const settledMarkers = new Map<string, number>();
+  for (const marker of markers) {
+    if (marker.kind !== "message-settled") continue;
+    settledMarkers.set(
+      marker.message.entryId,
+      (settledMarkers.get(marker.message.entryId) ?? 0) + 1,
+    );
+  }
+  const settled = new Set(
+    entries.flatMap((entry) =>
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      classifyAssistantMessage(entry.id, entry.message as AssistantMessage).kind === "settled"
+        ? [entry.id]
+        : [],
+    ),
+  );
+  const withheld = new Set([
+    ...[...settled].filter((entryId) => settledMarkers.get(entryId) !== 1),
+    ...[...settledMarkers.keys()].filter((entryId) => !settled.has(entryId)),
+  ]);
+  const reader: ConversationReader = {
+    acceptedMessage: (entry) => {
+      const marker = recoveredObservation(entry);
+      return marker !== null &&
+        marker.kind === "command-accepted" &&
+        marker.operation === "message.submit"
+        ? marker.message
+        : undefined;
+    },
+    replayable: (entry) => recoverableMessage(entry) && !withheld.has(entry.id),
+    carriedEntries: carriedEntriesOf,
+  };
+  const carried: Entry[] = [];
+  for (const entry of contextEntries(conversationPath(withDroppedReasoning(entries), reader))) {
+    carried.push(
+      entry.type === "message"
+        ? Object.assign({}, entry, { message: withoutReasoning(entry.message) })
+        : entry,
+    );
+  }
+  return carried;
+}
+
+/**
  * The observations a restart can be told about again.
  *
  * {@link CompactionObservation} joins them, and the case for it is not that the
@@ -1099,6 +1199,47 @@ async function assertOwnedRecoveryPath(root: string, candidate: string): Promise
 }
 
 /**
+ * Read the conversation an earlier attachment's sidecar holds (VC-457).
+ *
+ * The same guards a resume applies before it touches a sidecar — listed under
+ * the workspace it ran in, owned by this runtime's data directory, identity
+ * naming THIS Session and the attachment that wrote it — because a carry is a
+ * read of another file into this Session's context, and "cannot tell whose
+ * this is" must never resolve to "then it is yours". Opened, read, and closed:
+ * the earlier sidecar is never written.
+ */
+async function readCarriedConversation(
+  sidecars: JsonlSessionRepo,
+  sessionDataDir: string,
+  carry: RuntimeContextCarry,
+  expected: SidecarIdentity,
+  context: Context,
+): Promise<Entry[]> {
+  // No legacy-sidecar migration here, unlike a resume: a closed attachment's
+  // sidecar was migrated by the attach that last opened it, or predates this
+  // build's whole Pi line and is not worth reopening a conversation from.
+  const candidates = (await sidecars.list({ cwd: carry.workspacePath }, context)).filter(
+    (candidate) => candidate.id === carry.sessionId,
+  );
+  const candidate = candidates.length === 1 ? candidates[0]! : undefined;
+  if (candidate === undefined || resolve(candidate.path) !== resolve(carry.sessionFilePath)) {
+    throw new Error("the earlier attachment's Pi sidecar is not where its record says.");
+  }
+  await assertOwnedRecoveryPath(sessionDataDir, candidate.path);
+  const opened = await sidecars.open(candidate, context);
+  try {
+    await assertSidecarIdentity(opened, expected, context);
+    const branch = await sidecarBranch(opened, context);
+    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context));
+  } finally {
+    await opened.close(piContext()).catch(
+      /* v8 ignore next -- closing a sidecar we only read is best effort. */
+      () => undefined,
+    );
+  }
+}
+
+/**
  * The sidecar identity now lives in the shared sidecar-storage contract.
  *
  * Until Pi 0.85.0 this was the JSONL session's `metadata` field. The replacement
@@ -1348,6 +1489,40 @@ async function attachSession(
     // read, and every append and scan below goes through this one.
     const mainBranch = await sidecarBranch(sidecar, attachContext);
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
+    // A fresh attachment that continues an earlier one's conversation
+    // (VC-457): the earlier sidecar is read once, and what the model last saw
+    // there is written into this one as a single context marker before
+    // anything else, so every later read of THIS sidecar — this attach's
+    // replay, a compaction, a resume after a relaunch — finds it in place. A
+    // carry that cannot be read is not a failed attach: the Session opens
+    // without it, as it always did, and says so below.
+    let carryFailure: string | undefined;
+    let carried = false;
+    if (inputRecovery === undefined && spec.carry !== undefined) {
+      try {
+        const entries = await readCarriedConversation(
+          sidecars,
+          host.sessionDataDir,
+          spec.carry,
+          { ...expectedIdentity, volliAttachmentId: spec.carry.attachmentId },
+          attachContext,
+        );
+        if (entries.length > 0) {
+          await mainBranch.appendCustomEntry(
+            VOLLI_CONTEXT_MARKER,
+            {
+              kind: "context-carried",
+              fromAttachmentId: spec.carry.attachmentId,
+              entries: JSON.parse(JSON.stringify(entries)) as JsonValue,
+            } satisfies ContextCarriedMarker,
+            attachContext,
+          );
+          carried = true;
+        }
+      } catch (error) {
+        carryFailure = errorMessage(error);
+      }
+    }
     // The BRANCH, not the file. Today these are the same entries — this runtime
     // writes one lane and never forks — but they stop being the same the moment
     // anything does, and what reads this now is the elision rule, which takes
@@ -1356,9 +1531,10 @@ async function attachSession(
     // same question the live path asks (`conversationBranch`) is what keeps a
     // future sibling branch from quietly resurrecting elided history — the one
     // failure this ticket exists to prevent.
-    const recoveredEntries = inputRecovery
-      ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
-      : [];
+    const recoveredEntries =
+      inputRecovery !== undefined || carried
+        ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
+        : [];
     const customEntries = recoveredEntries.filter(
       (entry): entry is CustomEntry => entry.type === "custom",
     );
@@ -1396,6 +1572,15 @@ async function attachSession(
         continue;
       }
       if (entry.type !== "custom") continue;
+      const carriedEntries = carriedEntriesOf(entry);
+      if (carriedEntries !== undefined) {
+        for (const carriedEntry of carriedEntries) {
+          if (carriedEntry.type === "message" && carriedEntry.message.role === "user") {
+            rememberResources(readPromptResourceBlocks(userMessageText(carriedEntry.message)));
+          }
+        }
+        continue;
+      }
       const marker = markersByCursor.get(entry.id);
       if (marker?.kind !== "command-accepted" || marker.operation !== "message.submit") {
         continue;
@@ -1476,6 +1661,7 @@ async function attachSession(
           : undefined;
       },
       replayable: (entry) => recoverableMessage(entry) && !disagreedSettledEntryIds.has(entry.id),
+      carriedEntries: carriedEntriesOf,
     };
     /**
      * The elided context, not the whole history — this is the landmine.
@@ -1593,6 +1779,19 @@ async function attachSession(
         state: "raised",
         reason: "runtime-failure",
         message: `Skipped ${unreadableMarkerCount} unreadable Pi recovery ${unreadableMarkerCount === 1 ? "marker" : "markers"}; this Session's history may be missing activity or attention it once recorded.`,
+      });
+      activeAttentionReasons.add("runtime-failure");
+    }
+    // Durable like the recovery notices above, and ALSO told live once the
+    // attachment has started: a fresh attachment is never reconciled from its
+    // own sidecar, so a marker alone would reach no one until a relaunch.
+    let carryAttention: Awaited<ReturnType<typeof persistObservation>> | undefined;
+    if (carryFailure !== undefined) {
+      carryAttention = await persistObservation({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: `This attachment could not carry the Session's earlier conversation forward, so the model starts without it: ${carryFailure}`,
       });
       activeAttentionReasons.add("runtime-failure");
     }
@@ -3115,6 +3314,7 @@ async function attachSession(
       state: spec.recovery === undefined ? "started" : "recovered",
       recovery,
     });
+    if (carryAttention !== undefined) await commitObservation(carryAttention);
     return handle;
   } catch (error) {
     if (abortListener !== undefined) {

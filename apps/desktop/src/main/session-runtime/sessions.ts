@@ -672,7 +672,18 @@ export function createSessions(options: SessionsOptions): Sessions {
           model,
         });
       }
-      return attachStructuredSession(options.runtime, input.operationId, input.sessionId);
+      // A reattach continues the conversation the Session already had
+      // (VC-457). A stopped Session's attachment is closed, so this attach
+      // mints a new executor binding — and without a replay, a new Pi
+      // transcript that had never heard of the work. The runtime carries the
+      // newest closed attachment's context forward, and records a plain fresh
+      // attachment when there is none (a Session's first attach through here).
+      return attachStructuredSession(
+        options.runtime,
+        input.operationId,
+        input.sessionId,
+        "context_replay",
+      );
     },
   };
 }
@@ -694,11 +705,12 @@ async function attachStructuredSession(
   runtime: StructuredSessionCommands,
   operationId: string,
   sessionId: string,
+  continuity: "fresh" | "context_replay" = "fresh",
 ): Promise<SessionStartResult> {
   const attached = await runtime.command({
     commandId: `${operationId}:start`,
     sessionId,
-    command: { kind: "adapter.attach", continuity: "fresh" },
+    command: { kind: "adapter.attach", continuity },
   });
   return {
     sessionId,

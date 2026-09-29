@@ -20,7 +20,8 @@
  * ## What deliberately does not count
  *
  * - **No open turn** — a quiet Session between turns is idle, and idleness is
- *   the orchestrator's business (`ticket.await` timeouts), not a malfunction.
+ *   the orchestrator's business (it hears about the Sessions it watches
+ *   through notices, VC-457), not a malfunction.
  * - **Stopped** — its work was ended on purpose; there is nothing to rescue.
  * - **Awaiting a person** — a permission prompt or question can sit for an
  *   hour legitimately, and it already self-reports through Attention. Calling

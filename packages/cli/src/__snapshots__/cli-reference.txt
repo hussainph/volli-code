@@ -546,6 +546,7 @@ Effects:
 - Human sees: The app raises an actionable in-app toast with Open session for an agent-originated start.
 - Does not: The Ticket does not move.
 - Does not: The app does not steal focus or navigate until the person uses Open session.
+- Does not: The calling Session is not paused: it is told about the started Session through later notices, not by waiting.
 
 Notes:
 - Runs in the app: attended-only, never headless; the board does not move.
@@ -597,7 +598,7 @@ Input:
 Effects:
 - Durable write: Append a message.submit command carrying the marked steering message to the target Session's ledger.
 - Human sees: The steering message appears in the target Session's transcript, marked with the sending Session.
-- Does not: It does not wait for the target's turn to finish and nothing reports back into the calling Session.
+- Does not: It does not wait for the target's turn to finish; the calling Session watches the target and is told when that turn ends, through a later notice.
 - Does not: No Ticket moves, no Session stops, and no new Session starts.
 
 Notes:
@@ -626,14 +627,14 @@ Input:
 
 Effects:
 - Durable write: Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.
-- Durable write: When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state; its final message stays in the subagent's own ledger, read through `session answer`.
+- Durable write: When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state and quoting its final message as the subagent's prose; a long message is cut, with `session answer` naming the rest.
 - Human sees: The subagent appears in the session list as a child of this Session, with its own transcript.
 - Does not: No Ticket moves, and the person driving is not asked anything.
 - Does not: This Session is not paused: the call returns at once and the answer arrives later.
 
 Notes:
 - Runs as a named tool in the project and ticket Role bundles; the shell never executes it.
-- Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session naming it; `volli session answer <handle>` reads its final message.
+- Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session carrying its final message; `volli session answer <handle>` prints it again in full.
 - The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.
 
 ============================================================================
@@ -905,7 +906,7 @@ Effects:
 - Durable write: Create one Automation Run with its resolved model and reasoning, open the fresh Session it names with the `automation` Actor, and deliver the Automation's Instructions as that Session's first message.
 - Human sees: The Run appears in the Ticket's Run history and its Session is marked with the `automation` Actor — the same record a person's Run by hand writes, with nothing naming the agent that asked for it.
 - Does not: The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.
-- Does not: It does not wait for the Run to finish, and the Run does not report back into the calling Session.
+- Does not: It does not wait for the Run to finish; the calling Session watches the Run's Session and hears about it through later notices.
 - Does not: No Automation is created, edited or armed — this verb runs a saved one and authors nothing.
 
 Notes:
@@ -1265,6 +1266,18 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
+VC-457 (after VC-324)
+Added
+- watch, a named tool in the Board and Ticket bundles that arms notices on Sessions and tickets and returns at once. A watched Session reports its next turn ending (with what it said last), its done or blocked signal, and its stop; a watched ticket reports moves, comments and signals made by anyone but the watcher, until action unwatch ends it. Changes that land together arrive as one notice, read mid-turn or opening a new turn.
+Changed
+- A subagent's completion notice now carries its final message, quoted as the subagent's own prose inside an untrusted-prose envelope; a very long answer is cut, and volli session answer prints all of it. The notice is read mid-turn if the parent is working and opens a turn if it is idle.
+- session_start, automation_run and session_send watch the Session they open or steer: a notice arrives when its next turn ends, when it signals done or blocked, or if it is stopped. Their receipts no longer carry a Session cursor.
+- A stopped Session that a person sends a message to continues its conversation: the new attachment carries the earlier one's context forward instead of starting blank. A subagent resumed that way notifies its parent again when it finishes.
+Fixed
+- A subagent is no longer stopped after 20 minutes. Delegated work has no time limit; it ends when the subagent answers or someone stops it, and a notice about a stop names who made it.
+Removed
+- session_await and ticket_await left every Role bundle: waiting inside a tool call left the person's chat unusable until it resolved. Sessions created before this build keep the tools, and calling one now arms the equivalent watch and returns at once.
+
 VC-324 (after VC-6)
 Added
 - session_await, the named Agent Tool Surface tool that parks a Session until a watched Session finishes a turn (for: turn), signals done or blocked (verdict), or is stopped (stopped); any is the union. It takes one or many short session ids, the same timeoutSeconds, and the same opaque cursor discipline as ticket_await: begin with the cursor returned by session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed. A Board Session may await any Session in its project; a ticket Session only itself and the subagents it delegated. It replaces polling session list.
@@ -1485,7 +1498,7 @@ A signal never moves the board. A deliberate ticket move is what changes a colum
 ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.
 volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.
 volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
-No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command. Two exist: ticket_await parks on a ticket's signals, comments and moves; session_await parks on a Session's turn ending (completed or interrupted), its done/blocked signal, or its stop. Begin Session Await with the cursor from session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed.
+Nothing waits, and nothing needs to. Sleeping in a shell to poll is how sessions wedge, and a tool call that parks holds the person's chat hostage, so work you are not doing yourself reports to you as a notice from Volli: read mid-turn if you are working, or opening a new turn if you have ended yours. session_delegate's notice carries the subagent's answer. session_start, automation_run and session_send watch the Session they open or steer — its next turn ending, its done/blocked signal, its stop. The watch tool covers the rest: other Sessions, and tickets' moves, comments and signals. Changes that land together arrive as one notice.
 Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.
 Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
 

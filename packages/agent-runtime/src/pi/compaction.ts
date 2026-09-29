@@ -79,6 +79,13 @@ export interface ConversationReader {
   acceptedMessage: (entry: CustomEntry) => AgentMessage | undefined;
   /** Whether a persisted message entry may re-enter the live context. */
   replayable: (entry: MessageEntry) => boolean;
+  /**
+   * The conversation an earlier attachment's sidecar held, when this custom
+   * entry is the marker that carried it into this one (VC-457). Expanded in
+   * place, so compaction, the elision rule and recovery all read a carried
+   * conversation exactly as if this sidecar had written it.
+   */
+  carriedEntries?: (entry: CustomEntry) => readonly Entry[] | undefined;
 }
 
 /**
@@ -97,6 +104,8 @@ export interface ConversationReader {
 export function conversationPath(entries: readonly Entry[], reader: ConversationReader): Entry[] {
   return entries.flatMap<Entry>((entry) => {
     if (entry.type === "custom") {
+      const carried = reader.carriedEntries?.(entry);
+      if (carried !== undefined) return [...carried];
       const accepted = reader.acceptedMessage(entry);
       if (accepted === undefined) return [];
       return [
@@ -232,7 +241,7 @@ export function contextMessages(path: readonly Entry[]): AgentMessage[] {
  * message entries by the time they reach here — {@link conversationPath} does
  * that — which is why dropping them at this step loses no user turn.
  */
-function contextEntries(path: readonly Entry[]): Entry[] {
+export function contextEntries(path: readonly Entry[]): Entry[] {
   for (let index = path.length - 1; index >= 0; index--) {
     const entry = path[index];
     if (entry?.type === "compaction") return [entry, ...path.slice(index + 1)];

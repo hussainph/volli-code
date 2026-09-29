@@ -107,6 +107,7 @@ import {
   type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
+  type RuntimeContextCarry,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -631,6 +632,36 @@ function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefin
   };
 }
 
+/**
+ * The earlier attachment a `context_replay` attach continues (VC-457), read
+ * with the same checks a resume applies to its own binding. Undefined — the
+ * attach then opens fresh, exactly as before this existed — for anything that
+ * is not a readable Pi binding; a carry is an improvement to a fresh attach,
+ * never a new way for one to fail.
+ */
+function piContextCarry(spec: NativeAttachmentSpec): RuntimeContextCarry | undefined {
+  if (spec.continuity !== "context_replay" || spec.carryFrom === undefined) return undefined;
+  const { native, attachmentId, directory } = spec.carryFrom;
+  const detail = native.detail;
+  if (detail === null || Array.isArray(detail) || typeof detail !== "object") return undefined;
+  const record = detail as { readonly [key: string]: SessionNativeDetail };
+  if (
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    native.id !== record["sessionId"]
+  ) {
+    return undefined;
+  }
+  return {
+    runtime: "pi",
+    sessionId: record["sessionId"],
+    sessionFilePath: record["sessionFilePath"],
+    attachmentId,
+    workspacePath: directory ?? spec.directory,
+  };
+}
+
 function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   if (cursor === null || Array.isArray(cursor) || typeof cursor !== "object") return null;
   const entryId = (cursor as { readonly [key: string]: SessionNativeDetail })["entryId"];
@@ -726,6 +757,7 @@ function piNativeAdapter(
         sink,
         context,
         recovery,
+        carry: recovery === undefined ? piContextCarry(spec) : undefined,
         now,
         web: options.resolveWebPorts?.() ?? {},
         browser: options.resolveBrowserPort?.({
@@ -830,6 +862,8 @@ interface PiBindingOptions {
   sink: ObservationSink;
   context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
+  /** The earlier attachment a fresh one continues (VC-457); undefined otherwise. */
+  carry: RuntimeContextCarry | undefined;
   now: () => number;
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
@@ -850,6 +884,7 @@ class PiBinding implements BindingHandle {
   readonly #sink: ObservationSink;
   readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
+  readonly #carry: RuntimeContextCarry | undefined;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
@@ -885,6 +920,7 @@ class PiBinding implements BindingHandle {
     this.#sink = options.sink;
     this.#context = options.context;
     this.#recovery = options.recovery;
+    this.#carry = options.carry;
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
@@ -1082,6 +1118,7 @@ class PiBinding implements BindingHandle {
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
+      ...(this.#carry === undefined ? {} : { carry: this.#carry }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),

@@ -3806,6 +3806,303 @@ describe("startSession", () => {
     await secondHandle.close();
   });
 
+  it("carries a closed attachment's conversation into a fresh one, and keeps it across that one's own resume (VC-457)", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("the refresh lives in auth/refresh.ts");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const first = await firstRuntime.startSession(attachment.spec);
+    // Through a durable command, so the question lives in its acceptance
+    // marker rather than as a message entry — the carry reads both.
+    await first.submitUserMessage("find where the token is refreshed", "queue", "command-1");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const seen: Context[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("continuing");
+            emit.finish();
+          },
+          (emit, context) => {
+            seen.push(context);
+            emit.text("still continuing");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondSpec = {
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+    };
+    const second = await secondRuntime.startSession({
+      ...secondSpec,
+      carry: {
+        ...earlier,
+        attachmentId: "attachment-1",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    // A new sidecar of its own, and nothing the earlier one recorded is
+    // replayed as a fact of this attachment.
+    expect(second.recovery?.sessionId).not.toBe(earlier.sessionId);
+    expect((await second.reconcile(null)).observations).toEqual([]);
+    await second.submitUserMessage("cont");
+    const carriedWire = JSON.stringify(seen[0]?.messages);
+    expect(carriedWire).toContain("find where the token is refreshed");
+    expect(carriedWire).toContain("the refresh lives in auth/refresh.ts");
+    // The Brief rode the earlier first message and is not composed again.
+    expect(carriedWire.match(/BEGIN TICKET BRIEF/gu)).toHaveLength(1);
+    const resumeRef = second.recovery;
+    await second.close();
+
+    const resumed = await secondRuntime.startSession({ ...secondSpec, recovery: resumeRef });
+    await resumed.submitUserMessage("again");
+    const resumedWire = JSON.stringify(seen[1]?.messages);
+    expect(resumedWire).toContain("the refresh lives in auth/refresh.ts");
+    expect(resumedWire).toContain("continuing");
+    expect(resumedWire).toContain("cont");
+    await resumed.close();
+    expect(attachment.observations.some((o) => o.kind === "attention")).toBe(false);
+  });
+
+  it("writes no carry for an earlier attachment that said nothing (VC-457)", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const silent = await runtime.startSession(attachment.spec);
+    const earlier = silent.recovery!;
+    await silent.close();
+    const second = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const own = second.recovery!;
+    await second.close();
+    expect(
+      entryRecords(own.sessionFilePath).some((entry) => entry["customType"] === "volli.context.v1"),
+    ).toBe(false);
+    expect(attachment.observations.some((o) => o.kind === "attention")).toBe(false);
+  });
+
+  it("opens fresh, and says so, when the earlier conversation cannot be read (VC-457)", async () => {
+    const attachment = fixture();
+    const seen: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      carry: {
+        runtime: "pi",
+        sessionId: "gone",
+        sessionFilePath: join(attachment.sessionDataDir, "gone.jsonl"),
+        attachmentId: "attachment-0",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    await handle.submitUserMessage("hello");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("BEGIN TICKET BRIEF");
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: expect.stringContaining("could not carry the Session's earlier conversation"),
+      }),
+    );
+  });
+
+  it("refuses to carry a sidecar another attachment wrote (VC-457)", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("secret");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const first = await firstRuntime.startSession(attachment.spec);
+    await first.submitUserMessage("hello");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const seen: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      // Names a different writer than the one the sidecar's identity records.
+      carry: { ...earlier, attachmentId: "attachment-9", workspacePath: attachment.worktreePath },
+    });
+    await handle.submitUserMessage("hi");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("secret");
+    // The right writer, recorded at the wrong path, is refused too.
+    const misplaced = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-3" },
+      carry: {
+        ...earlier,
+        sessionFilePath: join(attachment.sessionDataDir, "elsewhere.jsonl"),
+        attachmentId: "attachment-1",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    await misplaced.close();
+    expect(
+      attachment.observations.filter(
+        (observation) =>
+          observation.kind === "attention" &&
+          observation.state === "raised" &&
+          observation.message.includes("is not where its record says"),
+      ),
+    ).toHaveLength(1);
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({ kind: "attention", reason: "runtime-failure" }),
+    );
+  });
+
+  it("carries only what a resume would replay, and expands a carried carry (VC-457)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("withheld answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("original question");
+    const earlier = first.recovery!;
+    await first.close();
+    const records = readJsonl(earlier.sessionFilePath);
+    const marker = records.find((record) => {
+      const data = record["data"] as { kind?: string } | undefined;
+      return data?.kind === "message-settled";
+    })!;
+    const data = marker["data"] as { message: Record<string, unknown> };
+    records.push(
+      // History disagrees about the reply: it is withheld from the carry.
+      { ...marker, id: "duplicate-marker" },
+      // A settled marker for an entry that is not there.
+      {
+        ...marker,
+        id: "ghost-marker",
+        data: { ...data, message: { ...data.message, entryId: "ghost" } },
+      },
+      // A carried marker that no longer validates carries nothing.
+      {
+        ...marker,
+        id: "junk-carry",
+        customType: "volli.context.v1",
+        data: { kind: "context-carried", fromAttachmentId: "x", entries: "junk" },
+      },
+      // An earlier carry, expanded in place; its compaction cuts what came before.
+      {
+        ...marker,
+        id: "nested-carry",
+        customType: "volli.context.v1",
+        data: {
+          kind: "context-carried",
+          fromAttachmentId: "attachment-0",
+          entries: [
+            {
+              type: "compaction",
+              id: "c-0",
+              parentId: null,
+              seq: 1,
+              timestamp: 1,
+              summary: "earlier summary",
+              retainedTail: [],
+              tokensBefore: 10,
+              fromHook: false,
+            },
+            7,
+            {
+              type: "message",
+              id: "m-0",
+              parentId: "c-0",
+              seq: 2,
+              timestamp: 2,
+              message: { role: "user", content: "nested memory", timestamp: 2 },
+            },
+          ],
+        },
+      },
+    );
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const seen: Context[] = [];
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("next");
+    await second.close();
+    const wire = JSON.stringify(seen[0]?.messages);
+    expect(wire).toContain("earlier summary");
+    expect(wire).toContain("nested memory");
+    expect(wire).not.toContain("withheld answer");
+    expect(wire).not.toContain("original question");
+  });
+
   it("recovers accepted prompt and retry receipts independently of the observation cursor", async () => {
     const attachment = fixture();
     const firstRuntime = createPiAgentRuntime({
