@@ -10,9 +10,9 @@
  * one failure the redesign is not allowed to have.
  *
  * SO NOTHING NEW IS COMPUTED HERE. Everything below is a rearrangement of
- * `UsageLimitAccount` into the shapes a 14px box can draw: one lead arc, a
- * short list of windows for a segmented ring, and a count of the other metered
- * accounts for the dots.
+ * `UsageLimitAccount` into what the picker can compare at the old 14px rung
+ * and the chosen 26px box: one lead reading, windows in a stable order for
+ * the stacked figures or segmented ring, and other accounts for the dots.
  *
  * THE PIN IS THE ONE ADDITION, and it is deliberately a lens rather than a
  * fact: pinning changes which window the glyph reports, never which window is
@@ -106,8 +106,6 @@ export interface IconReading {
   /** Whether {@link reported} came from a pin rather than from the sort. */
   pinned: boolean;
   others: readonly AccountReading[];
-  /** The worst tone anywhere in `others` — what tints the dots, if anything. */
-  othersTone: UsageTone | null;
 }
 
 /**
@@ -123,8 +121,6 @@ const KIND_ORDER: Record<UsageWindowKind, number> = {
   other: 3,
 };
 
-const TONE_RANK: Record<UsageTone, number> = { normal: 0, attention: 1, critical: 2 };
-
 export function iconReading(
   kind: ReadingKind,
   accounts: readonly UsageLimitAccount[],
@@ -132,14 +128,14 @@ export function iconReading(
   pin: PinnedWindow | null = null,
 ): IconReading {
   if (kind !== "read") {
-    return { kind, lead: null, reported: null, pinned: false, others: [], othersTone: null };
+    return { kind, lead: null, reported: null, pinned: false, others: [] };
   }
   // An account whose own read failed has no window to report and no tone to
   // contribute. It stays in the popover, where a line can explain it; it is
   // nothing to a glyph, so it is dropped before the dots are counted.
   const readings = accounts.map((account) => accountReading(account, now)).filter(hasBinding);
   if (readings.length === 0) {
-    return { kind, lead: null, reported: null, pinned: false, others: [], othersTone: null };
+    return { kind, lead: null, reported: null, pinned: false, others: [] };
   }
 
   const pinnedIndex =
@@ -161,7 +157,6 @@ export function iconReading(
     reported: pinnedWindow ?? lead?.binding ?? null,
     pinned: pinnedWindow !== undefined,
     others,
-    othersTone: worstTone(others),
   };
 }
 
@@ -201,16 +196,6 @@ function hasBinding(
   account: AccountReading,
 ): account is AccountReading & { binding: WindowReading } {
   return account.binding !== null;
-}
-
-function worstTone(accounts: readonly AccountReading[]): UsageTone | null {
-  let worst: UsageTone | null = null;
-  for (const account of accounts) {
-    const tone = account.binding?.tone;
-    if (tone === undefined) continue;
-    if (worst === null || TONE_RANK[tone] > TONE_RANK[worst]) worst = tone;
-  }
-  return worst;
 }
 
 /**

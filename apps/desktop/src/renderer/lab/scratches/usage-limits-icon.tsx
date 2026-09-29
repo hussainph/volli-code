@@ -14,21 +14,23 @@
  * instrument: nine shapes times fourteen states is a hundred and twenty-six
  * drawings, and a page that shows all of them at once is a page on which no
  * single decision is easier to make. So the controls at the top hold one
- * combination and the stage below shows only that, at the size that ships.
- * Each view answers ONE question:
+ * combination and the stage below shows only that, initially at the chosen
+ * 26px size. The controls retain every comparison rung. Each view asks ONE
+ * question:
  *
  *   • Shapes   — at this state, which drawing wins?
  *   • States   — this drawing, does it survive everything the button can be in?
  *   • Motion   — does it get BETWEEN those states without flickering?
  *   • Pinning  — with six accounts and one arc, who chooses what it reports?
  *
- * WHAT IS BEING JUDGED, in the order it decides whether this is worth building:
+ * WHAT WAS JUDGED, in the order that decided whether this was worth building:
  *
- *  1. DOES THE NUMBER FIT? The glyph box is 14px and the ring's inner diameter
- *     is about ten device pixels, so two digits live in less space than the
- *     `⌘K` keycap's letter. Only the band strip can answer this; every loupe
- *     on this page flatters the figure. The Type controls exist because that
- *     answer is a judgement about size and weight, not a yes or no.
+ *  1. DOES THE NUMBER FIT? The old 14px glyph left about ten pixels inside
+ *     its ring, less than two digits of the system's smallest type need. That
+ *     failure justified growing the box, but did not settle the type: the
+ *     chosen 26px stack gives some of that room back to a provider mark and
+ *     sets its figures at 11/500. Only the band strip can answer whether this
+ *     compromise reads; every loupe on this page flatters the figure.
  *
  *     Note what the centre costs and buys, because the reference goes the
  *     other way. Apple's figure sits in a gap at the TOP of its ring — it must,
@@ -52,16 +54,15 @@
  *     readings low at once and the icon becomes a smudge. `Everything
  *     critical` reproduces it with six accounts under a tenth.
  *
- * WHAT THIS SCRATCH DELIBERATELY DOES NOT DO is fetch anything. Where fresh
- * numbers come from is the ticket's open question and its own decision; the
- * drawing has to be settled first, because an icon nobody would want is not
- * worth plumbing. Every fixture is a fixed snapshot at a fixed `now`, and the
- * states that stand in for staleness — `unread`, `failed` — are drawn, not
- * simulated.
+ * WHAT THIS SCRATCH DELIBERATELY DOES NOT DO is fetch anything. It settled
+ * the drawing before the app's data path was wired, because an icon nobody
+ * would want was not worth plumbing. The picker remains a comparison of fixed
+ * snapshots at one fixed `now`; `unread` and `failed` are drawn, not simulated.
  *
  * THE POPOVER IS NOT REDESIGNED HERE. It stays the full breakdown, the way the
- * phone shows three separate icons once unfolded. The only thing the Pinning
- * view proposes adding to it is a pin at the end of each window row.
+ * phone shows three separate icons once unfolded. The Pinning view remains a
+ * proposal for a pin at the end of each window row, not part of the chosen
+ * glyph or a claim that the app now offers pinning.
  */
 
 import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
@@ -84,11 +85,12 @@ import {
   TYPE_FLOOR_PX,
   figureFit,
   type Candidate,
+  type FigureFit,
   type NumberStyle,
 } from "../usage-icon/variants";
 
 export const title = "Usage limits icon (VC-376)";
-export const note = "Pick a shape and a state — the band shows it at the size that ships";
+export const note = "Opens on the chosen 26px stack — compare shapes and states in the band";
 
 /**
  * The glyph size this design is now drawn at, and why it is not 14.
@@ -98,14 +100,15 @@ export const note = "Pick a shape and a state — the band shows it at the size 
  * ring's middle is a fixed fraction of its box, so at 14px two digits of the
  * system's SMALLEST type are wider than the space that exists.
  *
- * 22px is the size at which the figure lands exactly on `--text-label` with no
- * compensation — and, not by coincidence, the size at which the ring's outer
- * diameter equals the ⌘K pill's height to the pixel. The two chrome elements
- * stop being a small mark beside a big control and become a matched pair.
+ * 22px was an important comparison: a centred 12-unit figure landed exactly
+ * on `--text-label`, and the ring's outer diameter met the ⌘K pill's 22px
+ * height. But the chosen two-figure stack gives up 20% of its type setting to
+ * make room for the mark. At 26px with an 11-unit setting and medium weight,
+ * both figures get more room while a 32px target still clears the 36px band.
  */
-const REAL = 22;
-/** `icon` — 3px of padding around a 22px glyph, 4px clear of a 36px band. */
-const REAL_BUTTON = 28;
+const REAL = 26;
+/** Three pixels of padding on each side, matching the app's icon button. */
+const BUTTON_PADDING = 6;
 /** What shipped before, kept for the comparison in the Size view. */
 const LEGACY = 14;
 /** Big enough to judge geometry. Never big enough to judge legibility. */
@@ -122,7 +125,7 @@ const VIEWS: readonly { id: View; label: string; asks: string }[] = [
 ];
 
 export default function UsageLimitsIconScratch() {
-  const [shapeId, setShapeId] = React.useState("centre-windows");
+  const [shapeId, setShapeId] = React.useState("two-figures-mark");
   const [stateId, setStateId] = React.useState("six-accounts");
   const [view, setView] = React.useState<View>("size");
   const [numberStyle, setNumberStyle] = React.useState<NumberStyle>(DEFAULT_NUMBER);
@@ -150,9 +153,10 @@ export default function UsageLimitsIconScratch() {
         onNumberStyle={setNumberStyle}
       />
 
-      {/* The stage is the same in every view, and it is the only place a
-          decision may be made: one shape, one state, in a real 24px button,
-          beside a real ⌘K pill. Everything below it is supporting evidence. */}
+      {/* The stage is the same in every view: one shape, one state, at the
+          selected glyph size in a button with the app's 3px padding, beside
+          the ⌘K pill. The comparisons below preserve why this combination
+          won rather than replacing the real-size judgement with a loupe. */}
       <Stage shape={shape} state={state} glyph={glyph} />
 
       <ViewSwitcher value={view} onChange={setView} />
@@ -172,15 +176,21 @@ export default function UsageLimitsIconScratch() {
 interface GlyphArgs {
   reading: IconReading;
   numberStyle: NumberStyle;
-  /** The chosen shipping size. Panels that draw at another size pass it in. */
+  /** The selected glyph size. Panels that draw at another size pass it in. */
   glyphPx: number;
   optical: boolean;
   /** So a ladder rung can be adopted by clicking the thing itself. */
   onGlyphPx(next: number): void;
 }
 
-function draw(shape: Candidate, args: GlyphArgs, size: number, animate = false) {
-  const label = iconLabel(args.reading);
+/**
+ * `label: ""` marks the drawing decorative, which is the right default HERE:
+ * almost every glyph on this page sits inside a card that already says what it
+ * is, and a glyph that names itself makes those cards announce the same
+ * reading two and three times over. Only the band strip — where the glyph IS
+ * the control, as it will be in the app — passes a real name.
+ */
+function draw(shape: Candidate, args: GlyphArgs, size: number, animate = false, label = "") {
   return shape.render({
     reading: args.reading,
     size,
@@ -191,9 +201,9 @@ function draw(shape: Candidate, args: GlyphArgs, size: number, animate = false) 
   });
 }
 
-/** The button that holds a glyph of this size, keeping `icon-sm`'s proportion. */
+/** Keep the app's three pixels of padding per side at every ladder rung. */
 function buttonFor(glyphPx: number): number {
-  return Math.round(glyphPx * (REAL_BUTTON / REAL));
+  return glyphPx + BUTTON_PADDING;
 }
 
 /**
@@ -318,7 +328,7 @@ function Stage({ shape, state, glyph }: { shape: Candidate; state: IconState; gl
     <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-raised">
       {/* A stand-in for `CommandCluster`: same gap-1, same 22px pill, same
           ghost icon button, on a band-coloured strip. The old Gauge sits
-          beside it so the replacement is judged against what it replaces. */}
+          beside it so the larger replacement is judged against its predecessor. */}
       <div
         data-testid="band-strip"
         className="flex h-9 items-center justify-center gap-1 rounded-md border border-border/50 bg-background"
@@ -375,8 +385,8 @@ function MockCommandPill() {
 /**
  * One candidate as the band would actually mount it.
  *
- * A `pill` candidate is not a glyph in the standard icon button — it IS the
- * control, wider than 24px — so wrapping it in `size-icon-sm` would hide the
+ * A `pill` candidate is not a glyph in the square icon button — it IS the
+ * control, wider than that button — so wrapping it in `size-icon-sm` would hide the
  * exact thing it is here to show. It gets a ghost button sized to its content
  * instead, which is what adopting it would really mean.
  */
@@ -384,15 +394,41 @@ function InBand({
   shape,
   glyph,
   size,
+  live = true,
 }: {
   shape: Candidate;
   glyph: GlyphArgs;
   /** Override the chosen size, for the ladder that draws every rung. */
   size?: number;
+  /**
+   * False inside a card that is ITSELF a button.
+   *
+   * A button inside a button is invalid HTML, and browsers do not render it as
+   * anything sane: the inner control steals the click and the tab stop, and a
+   * screen reader reads a control whose name contains another control's name.
+   * Every ladder rung and every alternative below is a clickable card holding
+   * a band mock, so those get the same drawing in a plain span. At rest a
+   * ghost button paints nothing anyway, so the two are pixel-identical until
+   * hovered — which is why the 26px drawing can be judged against the pill.
+   */
+  live?: boolean;
 }) {
   const label = iconLabel(glyph.reading);
   const px = size ?? glyph.glyphPx;
-  if (shape.chrome === "pill") {
+  const pill = shape.chrome === "pill";
+  const box = pill ? undefined : { width: buttonFor(px), height: buttonFor(px) };
+
+  if (!live) {
+    return (
+      <span
+        className={cn("inline-flex shrink-0 items-center justify-center", pill && "h-6 px-0.5")}
+        style={box}
+      >
+        {draw(shape, glyph, px)}
+      </span>
+    );
+  }
+  if (pill) {
     return (
       <Button variant="ghost" size="sm" className="h-6 px-0.5" aria-label={label} title={label}>
         {draw(shape, glyph, px)}
@@ -404,7 +440,7 @@ function InBand({
       variant="ghost"
       size="icon-sm"
       className="shrink-0"
-      style={{ width: buttonFor(px), height: buttonFor(px) }}
+      style={box}
       aria-label={label}
       title={label}
     >
@@ -450,10 +486,19 @@ const BAND_NEIGHBOURS: readonly { px: number; what: string }[] = [
 const LADDER: readonly { glyph: number; note: string }[] = [
   { glyph: 14, note: "What shipped: `size-3.5`, a Phosphor default, never a decision." },
   { glyph: 18, note: "Free — the glyph grows into padding `icon-sm` already has." },
-  { glyph: 20, note: "Legible, but 2px short of the pill: a near-miss reads as a mistake." },
-  { glyph: 22, note: "Figure on `--text-label`. Outer diameter = the pill's height, exactly." },
-  { glyph: 24, note: "Over the pill now, and the button starts crowding a 36px band." },
-  { glyph: 26, note: "Figure reaches `--text-ui`, but the button is 33px in a 36px band." },
+  {
+    glyph: 20,
+    note: "Still 2px short of the pill; the earlier centred figure looked like a near-miss.",
+  },
+  {
+    glyph: 22,
+    note: "Earlier 12-unit centre figure reached `--text-label`; the ring matches the pill.",
+  },
+  { glyph: 24, note: "Over the pill now, but the stack still pays for the middle mark." },
+  {
+    glyph: 26,
+    note: "Chosen: two figures + mark, 11/500 in the box, 32px target in a 36px band.",
+  },
 ];
 
 /**
@@ -472,25 +517,26 @@ const LADDER: readonly { glyph: number; note: string }[] = [
  * Phosphor default the old Gauge came with — a size inherited from an icon
  * that carried no information, now asked to carry a number.
  *
- * WHY 22 IS A STOPPING POINT AND NOT MERELY A BIGGER NUMBER. Two independent
- * things land there at once:
- *
- *   • The figure reaches `--text-label` exactly, with no compensation. Below
- *     it the figure is under the system's floor; above it, the figure becomes
- *     the only text in the chrome set larger than the chrome's own label rung.
- *   • The ring's outer diameter equals the ⌘K pill's height — 22px and 22px.
- *     A ghost button paints nothing at rest, so what the eye sees is a circle
- *     exactly as tall as the control beside it. 20px misses by two, and a
- *     near-miss reads as a mistake where a match reads as a decision.
+ * WHY 22 WAS A STOPPING POINT FOR THE CENTRED FIGURE, BUT NOT THE CHOICE.
+ * With the earlier 12-unit setting the figure reached `--text-label` exactly,
+ * while the ring's outer diameter met the ⌘K pill's 22px height. A ghost
+ * button paints nothing at rest, so that pair looked deliberate rather than
+ * like a 20px near-miss. But the chosen shape prints TWO windows and puts a
+ * provider mark between them. Its stack takes a fifth off both figures to
+ * make the mark legible, and 22px no longer gives them enough room. The 26px
+ * glyph with an 11-unit dial and medium weight is the chosen compromise:
+ * its figures remain below the 11px type floor after stacking, but the mark
+ * survives and its 32px button still fits a 36px band. The ladder retains
+ * the earlier centred-figure result as evidence, not as the verdict.
  *
  * WHAT KEEPS IT FROM LOOKING LIKE A BADGE is the other half of the work, and
  * it is not the size — see `opticalStroke`. A stroke written in box units
- * scales WITH the glyph, so growing the glyph 57% grows the ink 57%: the mark
- * gets heavier exactly as it stops needing to be. Optical scaling grows the
- * stroke as the square root instead, and the Stroke control switches it off so
- * the difference is checkable rather than claimed. The figure's weight drops
- * from 700 to 500 for the same reason — standing on the ladder, it has nothing
- * left to shout over.
+ * scales WITH the glyph, so growing it from 14px to 26px grows the ink by
+ * 86%: the mark gets heavier exactly as it stops needing to be. Optical
+ * scaling grows the stroke as the square root instead, and the Stroke control
+ * switches it off so the difference is checkable rather than claimed. The
+ * figure's weight drops from 700 to 500 for the same reason: weight cannot
+ * buy room for two numbers and a mark.
  *
  * The two rejected answers stay at the foot of the view rather than being
  * deleted: "we grew the icon" is only a defensible answer next to the two that
@@ -505,43 +551,71 @@ function SizeView({
   glyph: GlyphArgs;
   onPick(id: string): void;
 }) {
-  const chosen = figureFit(glyph.glyphPx, glyph.numberStyle, glyph.optical);
-  const legacy = figureFit(LEGACY, glyph.numberStyle, glyph.optical);
+  // The type this SHAPE sets, not the type the dial holds: a stacked variant
+  // sets its figures smaller, and a panel that measured the dial would be
+  // describing a drawing that is not on screen.
+  const style: NumberStyle = {
+    ...glyph.numberStyle,
+    size: glyph.numberStyle.size * (shape.figureScale ?? 1),
+  };
+  const chosen = figureFit(glyph.glyphPx, style, glyph.optical);
+  const legacy = figureFit(LEGACY, style, glyph.optical);
   const onRung = Math.abs(chosen.fromFloor) < 0.05;
   return (
     <div className="flex flex-col gap-4">
       <Panel>
         <p className="pb-2 text-ui font-medium">
           {onRung
-            ? `At ${glyph.glyphPx}px the figure stands on the ladder`
-            : `At ${glyph.glyphPx}px the figure is off the ladder`}
+            ? `At ${glyph.glyphPx}px the figure stands on the type ladder`
+            : `At ${glyph.glyphPx}px the figure is off the type floor`}
         </p>
-        <p className="max-w-[72ch] text-label leading-relaxed text-muted-foreground">
-          The ring leaves <Num>{chosen.clear}</Num>px of clear middle here, and two digits want{" "}
-          <Num>{chosen.digits}</Num>px of it — they render at <Num>{chosen.px}</Num>px, which is{" "}
-          <span className={onRung ? "text-primary" : "text-destructive"}>
-            {chosen.fromFloor >= 0 ? "+" : "−"}
-            {Math.abs(Math.round(chosen.fromFloor * 100))}%
-          </span>{" "}
-          against <code className="text-foreground">--text-label</code> ({TYPE_FLOOR_PX}px), the
-          smallest type in the system. At the old {LEGACY}px it was{" "}
-          <span className="text-destructive">{Math.round(legacy.fromFloor * 100)}%</span> — the
-          app&rsquo;s smallest type did not fit inside the app&rsquo;s icon, and weight cannot buy
-          space. That is the whole reason it read as a badge.
-        </p>
+        {shape.stacked === true ? (
+          // A stacked shape is capped by the BOX's height rather than by the
+          // ring's middle, and the two facts are not interchangeable: the
+          // sentence below would report a constraint this drawing does not have.
+          <p className="max-w-[72ch] text-label leading-relaxed text-muted-foreground">
+            This shape sets <span className="text-foreground">two</span> figures, one above the
+            other, so what caps them is the box&rsquo;s height and not the ring&rsquo;s middle: two
+            cap heights, plus whatever stands between them.{" "}
+            {shape.figureScale === undefined ? (
+              <>They keep the full setting and render at </>
+            ) : (
+              <>
+                Room for a mark between them costs {Math.round((1 - shape.figureScale) * 100)}% off
+                both, so they render at{" "}
+              </>
+            )}
+            <Num>{chosen.px}</Num>px, which is <FromFloor fit={chosen} /> against{" "}
+            <code className="text-foreground">--text-label</code> ({TYPE_FLOOR_PX}px). That is the
+            price of the second number, and of the mark if it is there — paid twice, once by each
+            figure.
+          </p>
+        ) : (
+          <p className="max-w-[72ch] text-label leading-relaxed text-muted-foreground">
+            The ring leaves <Num>{chosen.clear}</Num>px of clear middle here, and two digits want{" "}
+            <Num>{chosen.digits}</Num>px of it — they render at <Num>{chosen.px}</Num>px, which is{" "}
+            <FromFloor fit={chosen} /> against <code className="text-foreground">--text-label</code>{" "}
+            ({TYPE_FLOOR_PX}px), the smallest type in the system. At the old {LEGACY}px it was{" "}
+            <span className="text-destructive">{Math.round(legacy.fromFloor * 100)}%</span> — the
+            app&rsquo;s smallest type did not fit inside the app&rsquo;s icon, and weight cannot buy
+            space. That is the whole reason it read as a badge.
+          </p>
+        )}
       </Panel>
 
       <Panel>
-        <p className="pb-1 text-ui font-medium">Where it stops</p>
+        <p className="pb-1 text-ui font-medium">Why the 22px stop became 26px</p>
         <p className="max-w-[72ch] pb-3 text-label leading-relaxed text-muted-foreground">
-          Every rung in a real 36px band, against a real 22px pill. Two things meet at 22: the
-          figure lands on <code className="text-foreground">--text-label</code>, and the
-          ring&rsquo;s outer diameter equals the pill&rsquo;s height to the pixel — so at rest, when
-          the ghost button paints nothing, the circle is exactly as tall as the control beside it.
+          Every rung in a real 36px band, against a real 22px pill. At 22px, the earlier centred
+          12-unit figure reached <code className="text-foreground">--text-label</code> and the ring
+          matched the pill&rsquo;s height. The chosen stack instead spends room on a second figure
+          and a mark: at 26px its 11-unit, medium-weight setting survives the trade, with a 32px
+          button still inside the band. The figures remain below the type floor, so the band, not
+          the metric alone, is the final test.
         </p>
         <div data-testid="size-ladder" className="flex flex-col gap-2">
           {LADDER.map((rung) => {
-            const fit = figureFit(rung.glyph, glyph.numberStyle, glyph.optical);
+            const fit = figureFit(rung.glyph, style, glyph.optical);
             const rungOnLadder = Math.abs(fit.fromFloor) < 0.05;
             const matchesPill = rung.glyph === 22;
             return (
@@ -559,7 +633,7 @@ function SizeView({
                     because the whole claim is about how these two compare. */}
                 <span className="flex h-9 shrink-0 items-center gap-1 rounded-md border border-border/50 px-2">
                   <span className="h-[22px] w-16 rounded-md border border-border/50 bg-foreground/10" />
-                  <InBand shape={shape} glyph={glyph} size={rung.glyph} />
+                  <InBand shape={shape} glyph={glyph} size={rung.glyph} live={false} />
                 </span>
                 <span className="w-20 shrink-0 font-mono text-label text-foreground">
                   {rung.glyph}px
@@ -668,10 +742,10 @@ function WayOut({
     >
       <span className="flex h-9 shrink-0 items-center gap-1 rounded-md border border-border/50 px-2">
         <span className="h-[22px] w-16 rounded-md border border-border/50 bg-foreground/10" />
-        <InBand shape={candidate} glyph={glyph} size={LEGACY} />
+        <InBand shape={candidate} glyph={glyph} size={LEGACY} live={false} />
       </span>
       <span className="min-w-0 flex-1 text-label leading-snug text-muted-foreground">
-        <span className="text-foreground">{candidate.name}</span> — click to make it the shape
+        <span className="text-foreground">{candidate.name}</span> — click to compare at the old size
       </span>
     </button>
   );
@@ -680,6 +754,16 @@ function WayOut({
 /** A measured quantity, rounded once, so prose and drawing cannot disagree. */
 function Num({ children }: { children: number }) {
   return <span className="font-mono text-foreground">{children.toFixed(1)}</span>;
+}
+
+/** How far a figure sits from the type floor, coloured by whether it is on it. */
+function FromFloor({ fit }: { fit: FigureFit }) {
+  return (
+    <span className={Math.abs(fit.fromFloor) < 0.05 ? "text-primary" : "text-destructive"}>
+      {fit.fromFloor >= 0 ? "+" : "−"}
+      {Math.abs(Math.round(fit.fromFloor * 100))}%
+    </span>
+  );
 }
 
 /** Every shape at the chosen state — the comparison, one row, click to adopt. */
@@ -710,8 +794,11 @@ function ShapesView({
             <span className="flex size-10 shrink-0 items-center justify-center">
               {draw(candidate, glyph, 30)}
             </span>
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-border/70">
-              {draw(candidate, glyph, REAL)}
+            <span
+              className="flex shrink-0 items-center justify-center rounded-md border border-dashed border-border/70"
+              style={{ width: buttonFor(glyph.glyphPx), height: buttonFor(glyph.glyphPx) }}
+            >
+              {draw(candidate, glyph, glyph.glyphPx)}
             </span>
             <span className="min-w-0 flex-1 text-ui">{candidate.name}</span>
           </button>
@@ -761,8 +848,11 @@ function StatesView({
               <span className="flex size-10 shrink-0 items-center justify-center">
                 {draw(shape, args, 30)}
               </span>
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-border/70">
-                {draw(shape, args, REAL)}
+              <span
+                className="flex shrink-0 items-center justify-center rounded-md border border-dashed border-border/70"
+                style={{ width: buttonFor(glyph.glyphPx), height: buttonFor(glyph.glyphPx) }}
+              >
+                {draw(shape, args, glyph.glyphPx)}
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-ui">{entry.name}</span>
@@ -834,8 +924,11 @@ function MotionView({ shape, glyph }: { shape: Candidate; glyph: GlyphArgs }) {
       </div>
       <div className="flex items-center gap-6 rounded-md border border-border bg-background p-4">
         {draw(shape, args, 72, true)}
-        <span className="flex size-6 items-center justify-center rounded-md border border-dashed border-border/70">
-          {draw(shape, args, REAL, true)}
+        <span
+          className="flex items-center justify-center rounded-md border border-dashed border-border/70"
+          style={{ width: buttonFor(glyph.glyphPx), height: buttonFor(glyph.glyphPx) }}
+        >
+          {draw(shape, args, glyph.glyphPx, true)}
         </span>
         <span className="text-ui text-muted-foreground">{entry.name}</span>
       </div>

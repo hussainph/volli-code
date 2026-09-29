@@ -1,36 +1,49 @@
 /**
- * Six candidate glyphs for the usage-limits button (VC-376), drawn from the
- * same reading so they can be compared rather than admired one at a time.
+ * Every candidate glyph for the usage-limits button (VC-376), drawn from one
+ * shared reading so they can be compared rather than admired one at a time.
+ * `CANDIDATES` at the foot of the file is the list the picker walks.
  *
- * THE BOX IS THE ARGUMENT. Every button in the chrome band's command cluster
- * is `size-6` with a `size-3.5` glyph — 24px of target around 14px of drawing.
- * Each variant below renders at whatever size it is handed, but the only size
- * that decides anything is 14, and the stage puts every one of them in a mock
- * band at exactly that size for precisely this reason. A shape that needs 28px
- * to be read has not solved this problem; it has changed it.
+ * THE BOX IS THE ARGUMENT. The old Gauge inherited `size-6` with a
+ * `size-3.5` glyph — 24px of target around 14px of drawing. The 14px rung
+ * exposed why that box could not carry a figure, and 22px made a centred
+ * figure match the ⌘K pill. Neither settled the two-figure stack with a mark:
+ * it needs the chosen 26px glyph, with 11-unit medium figures in its 24-unit
+ * coordinate space, in a 32px target. The stage and ladder keep the 14px
+ * comparison visible so growing the drawing remains an explicit cost.
  *
  * WHAT THE VARIANTS DISAGREE ABOUT is the second channel — the one Apple's
  * combined icon gets from using three different SHAPES for three different
  * kinds of fact. We have one kind of fact (a percentage left) repeated up to
  * six times, so the second channel has to be invented rather than borrowed:
  *
- *   • `Ring`        — no second channel. The control against which the other
- *                     five have to justify their extra ink.
- *   • `RingDots`    — Apple's literal answer: a row of dots inside the bottom
- *                     of the ring. `dotsMean` switches what a dot counts —
- *                     other ACCOUNTS, or the lead account's own WINDOWS.
- *   • `RingNumber`  — the number in the middle, which is the only variant that
- *                     answers "how much exactly" without a click, and the only
- *                     one whose legibility is in genuine doubt at 14px.
+ *   • `Ring`        — no second channel. The control against which every other
+ *                     shape here has to justify its extra ink.
+ *   • `RingCentre`  — the figure in the middle, `dots` adding Apple's literal
+ *                     answer in a notch at the bottom: beads that count either
+ *                     the other ACCOUNTS or the lead account's own WINDOWS.
+ *   • `RingBeads`   — the same ring and beads with the figure dropped.
+ *   • `MarkCentre` / `MarkNotch` — the second channel as an IDENTITY instead of
+ *                     a count: the lead account's own mark, in the middle or
+ *                     standing where the beads stood. In the earlier 22px
+ *                     comparison a bead was 1.6px; a mark was far easier to
+ *                     recognise at real size.
+ *   • `StackedFigures` — the opposite bet: print BOTH windows as figures, one
+ *                     above the other, and demote the ring to the tone and a
+ *                     rough amount. Exactness instead of shape, and the one
+ *                     variant where the second channel is a second number.
  *   • `SplitRing`   — the ring itself is the second channel: one arc per
  *                     window, cut by gaps. One window fills the circle, three
  *                     make three thirds. Position is by window FAMILY, never
  *                     by value, so a segment means the same thing tomorrow.
  *   • `NestedArcs`  — the ticket's named alternative: one ring per account,
  *                     nearest to running out on the outside.
- *   • `RingNumberDots` — the whole proposal at once: arc, number and dots,
- *                     which needs a taller box than 14 square and therefore
- *                     has to prove it still belongs in the row.
+ *   • `AppleRing`   — the reference's own geometry, measured off it: two gaps,
+ *                     figure riding the top one, dots in the bottom one, and
+ *                     optionally the account's mark in the middle where its
+ *                     Wi-Fi fan goes.
+ *   • `RingNumberDots` / `RingPill` — the two that break the box on purpose,
+ *                     kept so "we grew the icon" can still be compared with
+ *                     answers that did not require growing it.
  *
  * COLOUR IS NEVER ALONE. Every variant's primary signal is arc LENGTH, which
  * survives any colour vision; `TONE_STROKE` below is the same three tokens
@@ -41,6 +54,7 @@
 import * as React from "react";
 import type { UsageTone } from "@volli/shared";
 
+import { providerMark } from "@renderer/components/models/model-identity";
 import { cn } from "@renderer/lib/utils";
 import type { AccountReading, IconReading, WindowReading } from "./reading";
 
@@ -141,8 +155,9 @@ function Arc({
  * gauge into a floating crescent with nothing to be a share OF. The token is
  * still derived — `--muted-foreground` is solved for contrast in both
  * appearances — so this stays legible on any canvas rather than only on this
- * one. If the ring is adopted, the bars and the ring should be reconciled
- * deliberately rather than left to drift.
+ * one. The chosen stacked glyph uses this track too; its contrast against
+ * the bars remains a deliberate optical difference rather than an accidental
+ * token drift.
  */
 function Track({
   r,
@@ -208,6 +223,23 @@ function Track({
  * independent: there is nothing to paint, only something not drawn. A gap can
  * be made as wide as it needs to be to read, where a line cannot be made
  * thinner than a pixel.
+ *
+ * A MARK THAT CANNOT BE FLANKED BY TRACK IS NOT A MARK. The notch only says
+ * anything by standing BETWEEN two runs of track: that is what makes it a
+ * position rather than an end. Near either end of the sweep it stops being
+ * that. `paceOf` calls a window ahead the moment it is more than five points
+ * past an even burn, and a weekly that reset an hour ago is 99% unspent by the
+ * clock — so the mark lands hard against the end of the span, and what gets
+ * drawn is a crumb of track a third of a pixel long, cut off from the rest.
+ * That is indistinguishable from the track simply stopping short, which is to
+ * say it reads as a rendering fault rather than as notation, and it was the
+ * "random hole" in the stacked glyphs.
+ *
+ * So the mark withdraws rather than degrade: unless a full notch-width of
+ * track survives on BOTH sides of it, the track is drawn whole and the state
+ * falls back to tone alone. Nothing is lost by this that was being read —
+ * a mark at 99% says only that a window which has barely started is not yet
+ * spent, which is true of every window that has barely started.
  */
 function TrackWithPaceMark({
   r,
@@ -227,11 +259,15 @@ function TrackWithPaceMark({
   // shape relative to the band it interrupts at every glyph size.
   const gapDegrees = (Math.max(1.6, sw * 1.2) / circumference(r)) * 360;
   const at = span * Math.min(1, Math.max(0, onPace / 100));
-  // Clamped so a mark near either end degrades into a shortened track rather
-  // than a negative span. `paceOf`'s own band keeps it clear of the arc's tip;
-  // this only guards the ends of the sweep.
-  const before = Math.max(0, at - gapDegrees / 2);
-  const afterFrom = Math.min(span, at + gapDegrees / 2);
+  // The clearance rule above: a notch-width of track either side, or no notch.
+  // Measured from the notch's centre, that is one and a half widths from each
+  // end of the sweep.
+  const clear = gapDegrees * 1.5;
+  if (at < clear || at > span - clear) {
+    return <Track r={r} sw={sw} from={from} span={span} />;
+  }
+  const before = at - gapDegrees / 2;
+  const afterFrom = at + gapDegrees / 2;
   return (
     <>
       <Track r={r} sw={sw} from={from} span={before} cap="butt" />
@@ -280,13 +316,18 @@ function Glyph({
   children: React.ReactNode;
 }) {
   const height = tall ?? BOX;
+  // An EMPTY label means the drawing is decorative here — it sits inside a
+  // control that already carries the same words, and repeating them makes the
+  // control announce its reading two or three times over. In the app the
+  // button owns the name and this svg must be silent; the lab has the same
+  // problem wherever a card holds a glyph beside its own caption.
+  const decorative = label === "";
   return (
     <svg
       width={size}
       height={(size * height) / BOX}
       viewBox={`0 0 ${BOX} ${height}`}
-      role="img"
-      aria-label={label}
+      {...(decorative ? { "aria-hidden": true } : { role: "img", "aria-label": label })}
       // `overflow-visible`: round caps on a 2.4 stroke at r=9.8 graze the
       // viewBox edge, and a clipped cap reads as a flat one.
       //
@@ -311,7 +352,7 @@ export interface GlyphProps {
   size: number;
   label: string;
   animate?: boolean;
-  /** How the figure in the middle is set. See {@link NumberStyle}. */
+  /** How the figures are set before any variant-specific scaling. See {@link NumberStyle}. */
   numberStyle?: NumberStyle;
   /** Thin the stroke as the glyph grows. See {@link opticalStroke}. */
   optical?: boolean;
@@ -320,42 +361,39 @@ export interface GlyphProps {
 /**
  * How the figure is set, in the glyph's own 24-unit coordinates.
  *
- * WHY THIS IS A DIAL AND NOT A CONSTANT. A number inside a 14px glyph is not
- * body copy and cannot be set like it: at the size that fits, a digit is about
- * seven device pixels tall, and at the app's text weights its stems land under
- * one physical pixel and grey out into the ring behind them. So it wants more
- * weight than anything else in the app — and "more" is exactly the judgement
- * that should be made by eye at real size rather than picked once by whoever
- * drew it first.
+ * WHY THIS IS A DIAL AND NOT A CONSTANT. At the old 14px glyph, a digit was
+ * about seven device pixels tall; at the app's text weights its stems fell
+ * under one physical pixel and greyed out into the ring behind them. That
+ * demanded extra weight merely to be read. The picker varies size and weight
+ * independently so the cost of growing the box and the cost of bold type
+ * can be judged at real size rather than decided by the first drawing.
  *
- * The first pass here was 13/700, which is a shout. It reads, but it reads as
- * a badge rather than as chrome, and next to the ⌘K pill's `text-label` it is
- * the loudest thing in the band. 12/600 is the default now; the picker moves
- * both so the floor can be found rather than argued about.
+ * The first pass was 13/700, which read as a badge rather than as chrome
+ * beside the ⌘K pill. A centred figure then tried 12/500 at 22px; the chosen
+ * two-figure stack instead starts at 11/500 in a 26px glyph. Its mark takes
+ * room from both figures, so the ladder remains evidence rather than a rule
+ * that every variant's numbers must reach `--text-label`.
  */
 export interface NumberStyle {
-  /** Font size in the 24-unit box. 14px glyph ⇒ device px ≈ size × 0.58. */
+  /** Font size in the 24-unit box; CSS px = size × glyphPx / 24 before stacking. */
   size: number;
   weight: number;
 }
 
 /**
- * 12 box units, and the weight is the finding rather than a taste.
+ * The picker opens with the chosen 11-unit, medium-weight setting.
  *
- * At the glyph size this is now drawn at, 12 units renders at 11 CSS px —
- * `--text-label` exactly, the system's smallest rung. A figure standing ON the
- * ladder does not need to compensate for anything, so it is set at the weight
- * the rest of the chrome uses instead of the 700 it wanted at 14px. That drop,
- * from bold to medium, is most of the rest of the difference between a badge
- * and an instrument: the earlier weight was never style, it was a figure 36%
- * under the floor shouting to stay legible.
+ * The centred 12-unit figure once met `--text-label` at a 22px glyph, but
+ * the winning stack has to make room for a provider mark between TWO figures.
+ * It reduces each by a fifth, and at 26px even an 11-unit setting remains
+ * below the system's 11px floor. Medium is still the right weight beside the
+ * other chrome: the earlier 13/700 bought apparent legibility by shouting
+ * over the lost space, turning an instrument into a badge.
  */
-export const DEFAULT_NUMBER: NumberStyle = { size: 12, weight: 500 };
+export const DEFAULT_NUMBER: NumberStyle = { size: 11, weight: 500 };
 
 /** `--text-label`, 0.6875rem. The smallest type this design system admits. */
 export const TYPE_FLOOR_PX = 11;
-/** `--text-ui`, 0.8125rem — what the ⌘K pill beside the glyph sets its own text in. */
-export const TYPE_UI_PX = 13;
 
 export interface FigureFit {
   /** What the figure actually renders at, in CSS px. */
@@ -443,7 +481,7 @@ function share(window: WindowReading | null): number {
  *
  * Everything the other five add has to beat this, because this is already a
  * complete answer to the question the button is for — "am I about to hit a
- * wall" — and it is the only variant with no legibility risk at all at 14px.
+ * wall" — and it was the only variant with no legibility risk at the old 14px.
  */
 export function Ring({ reading, size, label, animate }: GlyphProps) {
   const reported = reading.reported;
@@ -475,7 +513,7 @@ export function Ring({ reading, size, label, animate }: GlyphProps) {
  * from the reference — a second channel whose shape is different enough that
  * the eye does not try to compare it to the arc.
  *
- * The choice the stage exists to settle is what is being counted. Other
+ * The comparison asks what is being counted. Other
  * ACCOUNTS answers "is the number I am looking at the only one that matters".
  * The lead account's own WINDOWS answers "is this its five-hour limit or its
  * weekly one", which is the question people actually ask out loud — and it
@@ -584,7 +622,8 @@ function DotRow({
  * stroke thins as the glyph grows ({@link opticalStroke}) and the radius takes
  * up the slack, so the ring's OUTER edge stays where it is while its middle
  * opens up. Both of those are load-bearing: the outer edge is what meets the
- * ⌘K pill's height at 22px, and the middle is what the figure is spending.
+ * ⌘K pill's height at the earlier 22px rung, and the middle is what the
+ * figure spends.
  *
  * At 100% the number is dropped: three digits will not fit, and a ring drawn
  * full already says the only thing "100" would add.
@@ -645,8 +684,8 @@ export function RingCentre({
   const reported = reading.reported;
   // Geometry is a function of the rendered size, not a set of constants: see
   // {@link opticalStroke}. The radius takes up the slack so the ring's OUTER
-  // edge stays put as the stroke thins — at 22px that outer diameter is 22px,
-  // which is the ⌘K pill's height to the pixel.
+  // edge stays put as the stroke thins. At the earlier 22px rung its outer
+  // diameter matched the ⌘K pill; at the chosen 26px it deliberately exceeds it.
   const sw = optical ? opticalStroke(size) : CENTRE_SW;
   const r = EDGE - sw / 2;
   const dotD = Math.min(1.7, sw * 0.85);
@@ -707,6 +746,518 @@ export function RingCentre({
             y={MID + 0.2}
             style={numberStyle}
           />
+        </>
+      )}
+    </Glyph>
+  );
+}
+
+/* ------------------------------------------ the account's own mark (VC-376) */
+
+/**
+ * THE SECOND CHANNEL AS AN IDENTITY RATHER THAN A COUNT.
+ *
+ * The beads were the smallest thing in the earlier 22px comparison: a bead
+ * was 1.6 CSS px across, against a ring of 22 and a centred figure of 11.
+ * They were sized that way for a good reason — a bead may not be fatter than
+ * the stroke it stands in — but the consequence is that the one channel meant
+ * to be noticed second is the one channel nobody notices at all.
+ *
+ * So: put the lead account's own mark where the beads stood. It is a strictly
+ * bigger shape in the same box, and it is closer to the reference than the
+ * beads ever were — Apple's middle holds the Wi-Fi FAN, a symbol for the thing
+ * the other two facts are about, and that is exactly what a provider mark is.
+ * The comment above {@link AppleRing} calls our empty middle the one thing we
+ * do not have from the reference; this is the answer to it.
+ *
+ * WHAT IS GAINED AND WHAT IS PAID, because they are not the same fact:
+ *
+ *   • GAINED. "Whose quota is this?" — which the glyph could not answer at all
+ *     before, and which is the first thing anyone asks of a single reading
+ *     drawn from up to six accounts. It also survives colour blindness and
+ *     small sizes better than a bead: a silhouette is recognised, not read.
+ *   • PAID. The count goes. Nothing says "three more accounts are metered",
+ *     which the beads did say. And the glyph's own silhouette now CHANGES with
+ *     the lead account — Anthropic's A one hour, Copilot's goggles the next.
+ *     Apple's centre symbol is invariant; ours would not be. That is the real
+ *     argument against, and it is a judgement about a button people locate by
+ *     shape, not an arithmetic one — which is why it is drawn here rather than
+ *     settled in prose.
+ *
+ * COLOUR STAYS THE VERDICT'S. The mark is `text-muted-foreground` in every
+ * state, never the vendor's tint and never the tone: brand colour inside this
+ * glyph would be a second colour language competing with the only one that
+ * means anything here, and a mark that turned red with the arc would be more
+ * red ink in exactly the state — everything critical — that Apple's own icon
+ * is recorded as failing.
+ */
+
+/** What fraction of the clear space a mark is allowed to fill. */
+const MARK_SHARE = 0.62;
+
+/**
+ * The mark's box where it replaces the beads, in glyph units.
+ *
+ * Sized to the notch rather than the other way round: 7 units is the widest
+ * mark that leaves a bead's worth of clearance either side of the arc ends, and
+ * {@link MARK_NOTCH} is then derived from it so the two cannot drift apart.
+ */
+const NOTCH_MARK_BOX = 7;
+
+/**
+ * The gap the notch mark stands in — computed, and CONSTANT like the bead
+ * notch, for the same reason: the notch is subtracted from the span the gauge
+ * maps 0–100% onto, so a notch that changed size would silently re-scale the
+ * arc. One mark is always one mark, so this is a module constant; it is written
+ * as arithmetic only so that changing the mark's size cannot leave the gap it
+ * needs behind. `r = EDGE - 1` is the ring at the reference stroke; the notch
+ * is fixed across sizes, and a tenth of a degree either way is invisible.
+ */
+const MARK_NOTCH =
+  2 * Math.asin(Math.min(1, (NOTCH_MARK_BOX / 2 + 1.5) / (EDGE - 1))) * (180 / Math.PI);
+
+/** A mark's own viewBox, parsed once, tolerant of anything malformed. */
+function markBox(viewBox: string): { x: number; y: number; w: number; h: number } {
+  const parts = viewBox.split(/[\s,]+/).map(Number);
+  const [x = 0, y = 0, w = 24, h = 24] =
+    parts.length === 4 && parts.every(Number.isFinite) ? parts : [0, 0, 24, 24];
+  return { x, y, w, h };
+}
+
+/**
+ * The lead account's mark, centred on a point, scaled into `box` glyph units.
+ *
+ * Half the providers that report usage today have no mark of their own — see
+ * `providerMark` — so the fallback is not an edge case to note and move past:
+ * Kimi, xAI and OpenCode Go all land on it, and any judgement about this
+ * direction has to be made on the letter as much as on the logo. It is drawn
+ * as a bare letter rather than `ModelMark`'s muted rounded square, because a
+ * filled square inside a ring reads as a second ring.
+ */
+function AccountMark({
+  account,
+  box,
+  cy = MID,
+  animate,
+}: {
+  account: AccountReading | null;
+  box: number;
+  cy?: number;
+  animate?: boolean;
+}) {
+  if (account === null) return null;
+  const mark = providerMark(account.providerId);
+  const quiet = cn("text-muted-foreground", animate === true && MOTION);
+  if (mark === null) {
+    return (
+      <text
+        x={MID}
+        y={cy}
+        textAnchor="middle"
+        dominantBaseline="central"
+        // A letter is measured by its cap height, a logo by its full box, so
+        // the same visual mass needs the larger number here. 1.35 puts a cap
+        // at roughly the box a mark would have filled.
+        fontSize={box * 1.35}
+        fontWeight={600}
+        className={cn("fill-current", quiet)}
+      >
+        {account.label.trim().charAt(0).toUpperCase()}
+      </text>
+    );
+  }
+  const { x, y, w, h } = markBox(mark.viewBox);
+  const scale = box / Math.max(w, h);
+  return (
+    <g
+      // Centre, then scale, then bring the mark's own centre to the origin —
+      // right to left, as SVG applies them.
+      transform={`translate(${MID} ${cy}) scale(${scale}) translate(${-(x + w / 2)} ${-(y + h / 2)})`}
+      className={quiet}
+    >
+      {mark.paths.map((path) => (
+        <path key={path.slice(0, 24)} d={path} fill="currentColor" />
+      ))}
+    </g>
+  );
+}
+
+/**
+ * MARK IN THE MIDDLE, no figure — the reference's own arrangement.
+ *
+ * The ring closes over the top and keeps the whole 360° for the amount, and
+ * the middle says whose amount it is. This is the variant that answers the
+ * complaint most directly: in the earlier 22px comparison the second channel
+ * went from 1.6px of bead to about 11px of mark, roughly seven times the width.
+ *
+ * What it gives up is the exact number, which the popover still carries and
+ * which the button's accessible name still says. Worth reading on the Size
+ * ladder as well as in the band: a mark is a silhouette, so it degrades more
+ * gracefully than digits, but at the old 14px it is about 6px across and the
+ * denser marks (Copilot's goggles) are a blob there too.
+ */
+export function MarkCentre({ reading, size, label, animate, optical = true }: GlyphProps) {
+  const reported = reading.reported;
+  const sw = optical ? opticalStroke(size) : CENTRE_SW;
+  const r = EDGE - sw / 2;
+  return (
+    <Glyph size={size} label={label}>
+      {reported === null ? (
+        <QuietRing dashed={reading.kind === "unread"} />
+      ) : (
+        <>
+          {reported.pace === "ahead" && reported.onPace !== null ? (
+            <TrackWithPaceMark r={r} sw={sw} from={0} span={360} onPace={reported.onPace} />
+          ) : (
+            <Track r={r} sw={sw} />
+          )}
+          <Arc
+            r={r}
+            sw={sw}
+            fill={share(reported)}
+            animate={animate}
+            className={cn("stroke-current", TONE_STROKE[reported.tone])}
+          />
+          <AccountMark
+            account={reading.lead}
+            box={centreClear(size, optical) * MARK_SHARE}
+            animate={animate}
+          />
+        </>
+      )}
+    </Glyph>
+  );
+}
+
+/**
+ * THE LITERAL SWAP: the figure keeps the middle, the mark takes the notch.
+ *
+ * Everything {@link RingCentre} decided stays decided — the arc, the pace mark,
+ * the figure's central position — and only the beads are replaced. In the
+ * earlier 22px comparison the mark was about 6.4px: four times a bead, a
+ * quarter of the middle mark. It keeps the exact number.
+ *
+ * The figure rides a shade higher here than in {@link RingCentre}. A mark in
+ * the notch reaches further into the circle than a bead does, and a digit's
+ * baseline sitting on the mark's top edge makes the two read as one smudged
+ * object — which is the whole failure this redesign is trying to avoid.
+ */
+export function MarkNotch({
+  reading,
+  size,
+  label,
+  animate,
+  numberStyle,
+  optical = true,
+}: GlyphProps) {
+  const reported = reading.reported;
+  const sw = optical ? opticalStroke(size) : CENTRE_SW;
+  const r = EDGE - sw / 2;
+  const from = 180 + MARK_NOTCH / 2;
+  const span = 360 - MARK_NOTCH;
+  return (
+    <Glyph size={size} label={label}>
+      {reported === null ? (
+        <QuietRing dashed={reading.kind === "unread"} />
+      ) : (
+        <>
+          {reported.pace === "ahead" && reported.onPace !== null ? (
+            <TrackWithPaceMark r={r} sw={sw} from={from} span={span} onPace={reported.onPace} />
+          ) : (
+            <Track r={r} sw={sw} from={from} span={span} />
+          )}
+          <Arc
+            r={r}
+            sw={sw}
+            from={from}
+            span={span}
+            fill={share(reported)}
+            animate={animate}
+            className={cn("stroke-current", TONE_STROKE[reported.tone])}
+          />
+          <AccountMark
+            account={reading.lead}
+            box={NOTCH_MARK_BOX}
+            // Sat so the mark's box ends on the ring's own outer edge, which is
+            // the outermost ink any variant here may touch.
+            cy={MID + EDGE - NOTCH_MARK_BOX / 2}
+            animate={animate}
+          />
+          <GlyphNumber
+            value={reported.remaining}
+            tone={reported.tone}
+            y={MID - 0.9}
+            style={numberStyle}
+          />
+        </>
+      )}
+    </Glyph>
+  );
+}
+
+/* ------------------------------------------ two figures, stacked (VC-376) */
+
+/**
+ * BOTH WINDOWS AS FIGURES: the short span on top, the long one underneath,
+ * and the ring reduced to two arcs down the sides.
+ *
+ * Every variant above answers "am I about to hit a wall" with a SHAPE and
+ * leaves the exact numbers to the popover. This one takes the opposite bet:
+ * the two numbers people actually say out loud — "I have a third of my session
+ * and most of my week" — are printed, and the ring becomes two independent
+ * bars, one per figure. Position carries the meaning, so it is fixed by window
+ * FAMILY and never by value (`KIND_ORDER` in `reading.ts`): the top figure is
+ * always the shorter span. A stack that re-ordered itself as numbers moved
+ * would be unlearnable.
+ *
+ * EACH SIDE IS A COMPLETE GAUGE FOR ITS OWN FIGURE — left for the top number,
+ * right for the bottom — and {@link SideGauge} is where that decision and its
+ * geometry live. It is the one thing this shape may not get wrong: two figures
+ * beside two arcs that do not correspond to them is a drawing that has to be
+ * decoded rather than read.
+ *
+ * WHICH TWO, when an account reports three (OpenCode Go):
+ *   • the window the ring is reporting — the pinned one if a pin resolves,
+ *     otherwise the binding one — is always one of them, because a glyph whose
+ *     arc reports a window neither figure names is a glyph arguing with
+ *     itself;
+ *   • the other slot goes to the next window by family order.
+ * Two explicit pins would say this better than a rule does, and that is the
+ * honest version of "show the two pinned" — but the pin model here holds one
+ * window, so this rule guarantees the same outcome without inventing a second
+ * pin before anyone has asked the Pinning view for one.
+ *
+ * WITH ONE WINDOW there is nothing to order. The figure takes the top slot
+ * when the mark holds the middle, and the middle itself when it does not,
+ * where it is both bigger and better placed.
+ *
+ * THE GAPS ARE THE SAME SIZE WHATEVER STANDS IN THEM. They are cut from the
+ * span each side maps 0–100% onto, so a gap that closed when a window went
+ * missing would silently re-scale both arcs — the same 40% drawing a different
+ * length for a one-window account than for a two-window one.
+ *
+ * WHAT IT COSTS, which is the whole reason both versions below exist. The box
+ * is 24 units tall and a figure eats {@link CAP_HEIGHT} of its own size in
+ * that budget, twice over. Empty in the middle, both figures stand at the full
+ * setting; at the chosen 26px and 11-unit dial they render just under 12px.
+ * Put the mark between them and {@link stackGeometry} takes a fifth off both
+ * figures AND hands the mark room of its own. The selected pair therefore
+ * lands near 9.5px, below `--text-label`: the price of identity is paid twice,
+ * once by each number. The Size view keeps that cost visible.
+ */
+
+/** Inter's cap height and tabular digit advance, as fractions of font size. */
+const CAP_HEIGHT = 0.72;
+const DIGIT_ADVANCE = 0.56;
+/** What the outermost figure keeps clear of the glyph box, in box units. */
+const STACK_MARGIN = 0.8;
+/** And what it keeps clear of whatever stands between the two figures. */
+const STACK_CLEAR = 1;
+/**
+ * The figures' setting when a mark shares the stack, as a fraction of the
+ * setting they take when it does not.
+ *
+ * Not a taste: it is the largest scale at which the mark left over by
+ * {@link stackGeometry} is still worth drawing. At the full setting the middle
+ * that survives two figures is under four units — a mark smaller than a
+ * Phosphor dot — so either the figures give something back or the mark is not
+ * really there. A fifth off both is what buys a mark the size of the one
+ * {@link MarkNotch} puts in the notch.
+ */
+const STACK_SCALE = 0.8;
+
+interface StackGeometry {
+  /** Font size for both figures, in box units. */
+  size: number;
+  /** Centre lines of the top and bottom slots. */
+  top: number;
+  bottom: number;
+  /** The box left for a mark between them; 0 when there is none worth drawing. */
+  mark: number;
+  /** Half-width of each gap, in degrees either side of top and bottom. */
+  gapHalf: number;
+}
+
+/**
+ * The stack, solved rather than positioned by eye.
+ *
+ * The gap is sized from the figure it has to clear: the arc's end must sit
+ * further out than the figure's own half-width plus a unit, or the digits
+ * collide with the stroke. Everything else follows from the cap height.
+ */
+function stackGeometry(style: NumberStyle, withMark: boolean, r: number): StackGeometry {
+  const size = style.size * (withMark ? STACK_SCALE : 1);
+  const cap = size * CAP_HEIGHT;
+  const halfWidth = size * DIGIT_ADVANCE + 1;
+  return {
+    size,
+    top: STACK_MARGIN + cap / 2,
+    bottom: BOX - STACK_MARGIN - cap / 2,
+    mark: withMark ? Math.max(0, 2 * (MID - STACK_MARGIN - cap - STACK_CLEAR)) : 0,
+    gapHalf: (Math.asin(Math.min(1, halfWidth / r)) * 180) / Math.PI,
+  };
+}
+
+/**
+ * The one or two windows the stack draws, in family order.
+ *
+ * See the rule above: the reported window is always one of them.
+ */
+function stackedWindows(reading: IconReading): readonly WindowReading[] {
+  const windows = reading.lead?.windows ?? [];
+  if (windows.length <= 2) return windows;
+  const reportedIndex = windows.findIndex((window) => window.id === reading.reported?.id);
+  const kept = reportedIndex === -1 ? 0 : reportedIndex;
+  const other = kept === 0 ? 1 : 0;
+  return [Math.min(kept, other), Math.max(kept, other)].flatMap((index) => {
+    const window = windows[index];
+    return window === undefined ? [] : [window];
+  });
+}
+
+/**
+ * ONE SIDE, ONE WINDOW, A COMPLETE GAUGE.
+ *
+ * The first pass ran a SINGLE reading across both arcs the way the reference
+ * does — left side first, right side picking up whatever was over half — and
+ * that is wrong the moment there are two figures to explain. With a number at
+ * the top and another at the bottom, the eye pairs each figure with an arc and
+ * finds that neither arc is either figure: at 39% the left side is four
+ * fifths full and the right side is empty, which looks like two windows in
+ * wildly different health when it is one window drawn round a corner.
+ *
+ * So each side is its own 0–100: the LEFT arc is the top figure's window, the
+ * RIGHT arc is the bottom figure's, each measured over the same span, each
+ * carrying its own tone. Two facts, two bars, nothing shared but the geometry.
+ *
+ * THE RIGHT SIDE IS THE LEFT SIDE MIRRORED, drawn inside a flip rather than
+ * computed from its own angles. Both then fill UPWARD from the bottom —
+ * fullness, the way any tank reads — and the pair is symmetric when the two
+ * windows agree, which makes a difference between them visible as a lack of
+ * symmetry before either number is read. Mirroring rather than re-deriving
+ * also keeps the arc's own start fixed, so its length still animates as a
+ * dash: an arc whose origin moved with its value would appear to travel around
+ * the ring instead of growing from its end.
+ *
+ * THERE IS NO PACE MARK ON THESE SIDES, and the reason is arithmetic rather
+ * than taste. {@link TrackWithPaceMark} needs room: the notch has to be wide
+ * enough to read as a gap AND still leave visible track between itself and the
+ * arc's tip, or the two merge and it reads as the arc having ended early.
+ * Splitting the circle in two takes that room away. A side spans about 103° at
+ * the earlier 22px rung — 18 units of arc — where the notch is 1.9 units
+ * wide, a tenth of the whole side, while `USAGE_PACE_BAND_POINTS` guarantees only 5% of the
+ * span between tip and mark: 0.9 units, under a CSS pixel, less than half the
+ * notch's own width. They touch in the guaranteed case. Sizing the notch down
+ * to fit inside that band would make it thinner than the band it interrupts,
+ * which is the hairline the technique exists to avoid.
+ *
+ * So the mark belongs to the shapes that give it a whole circle, and PACE IS
+ * TONE ALONE HERE. That is a real cost and it belongs in the comparison: this
+ * shape buys two exact figures by giving up the one state the ring can draw
+ * that a number cannot. Judge it on `Ahead of pace` against `Same 39%, under
+ * pace` — if those two are indistinguishable to you here, that is the price,
+ * stated honestly rather than hidden behind a notch too small to see.
+ */
+function SideGauge({
+  r,
+  sw,
+  from,
+  span,
+  window: reading,
+  mirror,
+  animate,
+}: {
+  r: number;
+  sw: number;
+  from: number;
+  span: number;
+  window: WindowReading;
+  /** True for the right-hand side: the same drawing, flipped about the middle. */
+  mirror: boolean;
+  animate?: boolean;
+}) {
+  const side = (
+    <>
+      <Track r={r} sw={sw} from={from} span={span} />
+      <Arc
+        r={r}
+        sw={sw}
+        from={from}
+        span={span}
+        fill={reading.remaining / 100}
+        animate={animate}
+        className={cn("stroke-current", TONE_STROKE[reading.tone])}
+      />
+    </>
+  );
+  // x → BOX - x, which is the vertical axis through the glyph's middle.
+  return mirror ? <g transform={`translate(${BOX} 0) scale(-1 1)`}>{side}</g> : side;
+}
+
+export function StackedFigures({
+  reading,
+  size,
+  label,
+  animate,
+  numberStyle,
+  optical = true,
+  centre = "none",
+}: GlyphProps & { centre?: "none" | "mark" }) {
+  const reported = reading.reported;
+  const sw = optical ? opticalStroke(size) : CENTRE_SW;
+  const r = EDGE - sw / 2;
+  const style = numberStyle ?? DEFAULT_NUMBER;
+  const withMark = centre === "mark";
+  const geometry = stackGeometry(style, withMark, r);
+  const windows = stackedWindows(reading);
+  // One window and no mark: the figure takes the middle, where it is bigger
+  // and better placed than in a slot with an empty one facing it.
+  const solo = windows.length <= 1 && !withMark;
+  const from = 180 + geometry.gapHalf;
+  const span = 180 - 2 * geometry.gapHalf;
+  const top = windows[0] ?? null;
+  // A single window has no partner, so it carries BOTH sides and the glyph is
+  // symmetric. The alternatives are worse: an empty right-hand track reads as
+  // a second window at zero, and closing the gap instead would re-scale the
+  // span, so the same 40% would draw one length for Copilot's single meter and
+  // another for Claude's pair.
+  const bottom = windows[1] ?? top;
+  return (
+    <Glyph size={size} label={label}>
+      {reported === null || top === null || bottom === null ? (
+        <QuietRing dashed={reading.kind === "unread"} />
+      ) : (
+        <>
+          <SideGauge
+            r={r}
+            sw={sw}
+            from={from}
+            span={span}
+            window={top}
+            mirror={false}
+            animate={animate}
+          />
+          <SideGauge
+            r={r}
+            sw={sw}
+            from={from}
+            span={span}
+            window={bottom}
+            mirror
+            animate={animate}
+          />
+          {withMark && geometry.mark > 0 ? (
+            <AccountMark account={reading.lead} box={geometry.mark} animate={animate} />
+          ) : null}
+          {windows.map((window, index) => (
+            <GlyphNumber
+              key={window.id}
+              value={window.remaining}
+              tone={window.tone}
+              y={solo ? MID : index === 0 ? geometry.top : geometry.bottom}
+              style={{ size: geometry.size, weight: style.weight }}
+            />
+          ))}
         </>
       )}
     </Glyph>
@@ -783,9 +1334,9 @@ export function SplitRing({ reading, size, label, animate }: GlyphProps) {
  * THE TICKET'S NAMED ALTERNATIVE: one ring per account, nearest to running out
  * on the outside.
  *
- * Three concentric arcs at 14px put roughly 1.2 device pixels of stroke and
- * 0.7 of gap between neighbours, so this is included to be measured, not
- * because it is expected to survive. The specific thing to check is whether
+ * Three concentric arcs at the old 14px rung put roughly 1.2 device pixels
+ * of stroke and 0.7 of gap between neighbours, so this remains a comparison,
+ * not a claim that the old target could support it. The specific thing to check is whether
  * the inner ring is distinguishable from the middle one at all when both are
  * part-full — if it is not, six accounts of the same kind of fact was always
  * going to be a chart rather than an icon, and the ticket's own reasoning
@@ -830,11 +1381,11 @@ export function NestedArcs({ reading, size, label, animate }: GlyphProps) {
  * THE WHOLE PROPOSAL AT ONCE: arc around, number inside, dots underneath.
  *
  * The dots move OUT of the ring so they stop competing with the number for the
- * same ten pixels, which costs the glyph its square box — it is 24×30, so at a
- * 14px width it stands 17.5px tall inside a 24px button. It still fits the
- * target, but it no longer matches the optical height of the ⌘K pill and the
- * sidebar toggle beside it, and that is the thing to judge in the mock band
- * rather than here.
+ * same ten pixels at the old 14px rung, which costs the glyph its square box:
+ * it is 24×30 units, so at 14px wide it stands 17.5px tall inside its target.
+ * At 26px wide it stands 32.5px tall even before padding, taller than the
+ * 32px square button. This variant stays as evidence of what dots underneath
+ * cost, not as a shape that fits the chosen box.
  */
 export function RingNumberDots({
   reading,
@@ -902,7 +1453,7 @@ const BEAD_PITCH_DEG = ((BEAD_D + 1.3) / circumference(RING_R)) * 360;
  * sharing a box. Transposed here that buys something the inside-the-circle
  * version cannot have at this size: a bead can be as fat as the ring's own
  * stroke, because it is standing where the stroke would have been. The dots
- * drawn inside the ring are a fifth of that and vanish at 14px.
+ * drawn inside the ring were a fifth of that and vanished at the old 14px rung.
  *
  * The gauge therefore runs 0–100% over `360 − NOTCH_DEG` and starts at the
  * notch's far edge, which puts its origin at the lower left and fills
@@ -982,7 +1533,7 @@ export function RingBeads({
  *     answer to the problem every centre-number variant on this page has:
  *     inside the ring a figure is capped by the inner diameter, which at a
  *     14px glyph is about ten device pixels. In the top gap it is capped by
- *     the glyph box instead, so it can be half again as tall.
+ *     the glyph box instead, so it can be half again as tall at that rung.
  *
  * THE FILL RUNS LEFT ARC THEN RIGHT ARC, from the bottom-left end, clockwise.
  * The reference confirms it twice over: at 50 the left arc is exactly full and
@@ -996,6 +1547,12 @@ export function RingBeads({
  * three channels are all about one account. An empty middle is the honest
  * thing to look at here — whether the glyph still reads as one object, or as a
  * bracket with a number balanced on top.
+ *
+ * …unless the middle holds the ACCOUNT's mark, which is the one thing we have
+ * that is a symbol for a thing rather than another percentage. `centre:
+ * "mark"` fills it in, and that version is the closest this page gets to the
+ * reference: number in the top gap, symbol in the middle, dots along the
+ * bottom, arc down both sides. See {@link AccountMark}.
  */
 const APPLE_CY = 13.6;
 const APPLE_R = 8.3;
@@ -1022,7 +1579,7 @@ const APPLE_BOTTOM_HALF = 42;
  * rather than 360°. Every percentage point is half the arc it would be on a
  * plain ring. Apple can afford that because the number is doing the precise
  * work and the arc is only a shape; if our number turns out not to survive
- * 14px, this layout loses half its resolution for nothing.
+ * the old 14px rung, this layout loses half its resolution for nothing.
  */
 const APPLE_ARC_SPAN = 180 - APPLE_TOP_HALF - APPLE_BOTTOM_HALF;
 
@@ -1034,7 +1591,13 @@ export function AppleRing({
   numberStyle,
   dotsMean = "accounts",
   showNumber = true,
-}: GlyphProps & { dotsMean?: "accounts" | "windows"; showNumber?: boolean }) {
+  centre = "none",
+}: GlyphProps & {
+  dotsMean?: "accounts" | "windows";
+  showNumber?: boolean;
+  /** What stands in the ring's middle. See the note above. */
+  centre?: "none" | "mark";
+}) {
   const reported = reading.reported;
   const dots = dotsMean === "accounts" ? accountDots(reading, 4) : windowDots(reading);
   // Left arc first, then the right one picks up whatever is left over.
@@ -1096,6 +1659,17 @@ export function AppleRing({
               />
             );
           })}
+          {centre === "mark" ? (
+            <AccountMark
+              account={reading.lead}
+              // Apple's ring is smaller than ours and sits lower, so the mark
+              // is measured against ITS inner clear rather than the box: the
+              // same fraction of a smaller middle, on the ring's own centre.
+              box={2 * (APPLE_R - APPLE_SW / 2) * MARK_SHARE}
+              cy={APPLE_CY}
+              animate={animate}
+            />
+          ) : null}
           {showNumber ? (
             // Sat so its cap height starts just below the glyph box's top edge
             // and its baseline lands a shade into the ring's top gap, which is
@@ -1133,15 +1707,14 @@ const APPLE_DOT_PITCH = ((APPLE_DOT_D + 0.85) / circumference(APPLE_DOT_R)) * 36
 /**
  * THE HONEST ESCAPE HATCH, if the number turns out not to fit.
  *
- * Every variant above obeys the rule the ticket sets — 24px button, 14px
- * glyph, the same box as every neighbour in the command cluster. This one
- * breaks it on purpose, and it is here so the choice is made with both options
- * visible rather than by discovering halfway through that two digits never had
- * a chance inside a ten-pixel circle.
+ * This was the escape hatch when the experiment still assumed the Gauge's
+ * 24px button and 14px glyph were fixed. It puts the figure BESIDE the ring
+ * at the label size instead of squeezing it into the ten-pixel circle at that
+ * rung. The chosen stack solves a different problem by growing the target,
+ * but this alternative stays visible so that decision has a comparison.
  *
- * It keeps the ring at exactly 14px and puts the figure BESIDE it at the
- * label size the rest of the app uses, which is the only arrangement on this
- * page where the number is unambiguously readable. What it costs is the row:
+ * It is the arrangement where a figure is unambiguously readable even at
+ * the old glyph size. What it costs is the row:
  * the cluster stops being a run of equal squares, the control's width now
  * changes with its own content (8% is narrower than 88%), and a button that
  * changes width is a button whose position the ⌘K pill inherits. `tabular-nums`
@@ -1152,8 +1725,9 @@ export function RingPill({ reading, size, label, animate }: GlyphProps) {
   const reported = reading.reported;
   return (
     <span
-      role="img"
-      aria-label={label}
+      // Same convention as {@link Glyph}: an empty label means the control
+      // around this already carries the words.
+      {...(label === "" ? { "aria-hidden": true } : { role: "img", "aria-label": label })}
       className="flex h-6 items-center gap-1 rounded-md px-1 text-muted-foreground"
     >
       <Ring reading={reading} size={size} label="" animate={animate} />
@@ -1180,18 +1754,28 @@ export interface Candidate {
   /** What this variant is betting on, in one line. */
   bet: string;
   render(props: GlyphProps): React.ReactElement;
-  /** True when the drawing is taller than it is wide. */
-  tall?: boolean;
+  /**
+   * What this shape multiplies {@link NumberStyle.size} by, when it sets its
+   * figures smaller than the dial says — so the Size view measures the type
+   * this shape actually draws rather than the type it was handed.
+   */
+  figureScale?: number;
+  /**
+   * True when the figures are STACKED rather than centred. What caps them is
+   * then the box's height, not the ring's clear middle, and the Size view has
+   * to say so or its arithmetic describes a different drawing.
+   */
+  stacked?: boolean;
   /**
    * `"pill"` marks a candidate that is its own control rather than a glyph
-   * inside the standard 24px icon button — i.e. one that breaks the row.
+   * inside a square icon button — i.e. one that breaks the row.
    */
   chrome?: "icon" | "pill";
 }
 
 export const CANDIDATES: readonly Candidate[] = [
-  // The three the brief actually asks for come first: bar around, number in
-  // the middle, dots below. They differ only in what a dot counts.
+  // The brief's original three come first in the comparison order: bar around,
+  // number in the middle, dots below. They differ only in what a dot counts.
   {
     id: "centre-windows",
     name: "Centre + beads (windows)",
@@ -1210,6 +1794,44 @@ export const CANDIDATES: readonly Candidate[] = [
     bet: "Number in the middle and nothing else — the closed ring keeps the full 360° for the amount.",
     render: (props) => <RingCentre {...props} dots="none" />,
   },
+  // The beads' successor: the same second channel, drawn as an identity rather
+  // than a count, because in the earlier 22px comparison a bead was 1.6px
+  // and a mark was four to seven times that. Three placements show the cost.
+  {
+    id: "mark-centre",
+    name: "Mark in the middle",
+    bet: "Apple's own arrangement: the ring is the amount, the middle says whose. No figure — the popover keeps it.",
+    render: (props) => <MarkCentre {...props} />,
+  },
+  {
+    id: "mark-notch",
+    name: "Number + mark in the notch",
+    bet: "The literal swap: beads out, the account's mark in, and the figure keeps the middle.",
+    render: (props) => <MarkNotch {...props} />,
+  },
+  {
+    id: "apple-mark",
+    name: "Apple, transposed + mark",
+    bet: "All three channels where the reference stacks them: figure in the top gap, mark in the middle, dots below.",
+    render: (props) => <AppleRing {...props} dotsMean="accounts" centre="mark" />,
+  },
+  // The other bet entirely: print both windows and demote the ring. The pair
+  // exists because the mark's whole cost is visible only by comparing them.
+  {
+    id: "two-figures-mark",
+    name: "Two figures + mark",
+    bet: "Both windows as numbers — short span on top, long one below — each with its own bar on its own side, and the mark between them.",
+    render: (props) => <StackedFigures {...props} centre="mark" />,
+    figureScale: STACK_SCALE,
+    stacked: true,
+  },
+  {
+    id: "two-figures",
+    name: "Two figures",
+    bet: "The same pair of bars with the middle empty: at the chosen size both figures are larger, showing what the mark costs.",
+    render: (props) => <StackedFigures {...props} />,
+    stacked: true,
+  },
   {
     id: "ring",
     name: "Ring",
@@ -1225,13 +1847,13 @@ export const CANDIDATES: readonly Candidate[] = [
   {
     id: "apple-no-number",
     name: "Apple, no number",
-    bet: "The same two-gap ring with the top gap left empty — what it looks like if the figure does not survive 14px.",
+    bet: "The same two-gap ring with the top gap left empty — the old 14px test if its figure did not survive.",
     render: (props) => <AppleRing {...props} dotsMean="accounts" showNumber={false} />,
   },
   {
     id: "ring-beads-windows",
     name: "Beads, no number",
-    bet: "The centre variant's ring without the figure — what it looks like if two digits do not survive 14px.",
+    bet: "The centre variant's ring without the figure — the old 14px test if two digits did not survive.",
     render: (props) => <RingBeads {...props} dotsMean="windows" />,
   },
   {
@@ -1251,12 +1873,11 @@ export const CANDIDATES: readonly Candidate[] = [
     name: "Ring + number + dots",
     bet: "The full proposal, at the price of a 24×30 box in a row of square glyphs.",
     render: (props) => <RingNumberDots {...props} />,
-    tall: true,
   },
   {
     id: "ring-pill",
     name: "Ring + number beside it",
-    bet: "Breaks the 24px rule on purpose — the only arrangement here where two digits are certainly legible.",
+    bet: "Breaks the square-button rule on purpose — two digits beside the ring are legible even at the old 14px rung.",
     render: (props) => <RingPill {...props} />,
     chrome: "pill",
   },

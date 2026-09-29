@@ -5,8 +5,8 @@
  * thing as a state it "usually" is not in — a cold launch, an account that
  * signed out, six accounts at once and a provider answering 429 are all
  * on-screen states, and each one has to look deliberate rather than broken.
- * This file is that list, and the stage renders every candidate against all of
- * it rather than against a happy path.
+ * This file is that list. The stage shows one selected combination; the States
+ * and Motion views let that candidate face the rest, not just a happy path.
  *
  * THE FIXTURES GO THROUGH THE REAL SORTER. Each state is a list of
  * `ModelAccessProvider` rows, exactly as a snapshot carries them, and is run
@@ -274,13 +274,13 @@ export const STATES: readonly IconState[] = [
   state(
     "ahead-of-pace",
     "Ahead of pace",
-    "39% left, but 44% of the window still to run — amber from PACE, not from the amount. The notch in the track is where the arc would end if spending had matched the clock; the gap to the arc's tip is the deficit. Read this one against `Same 39%, under pace`.",
+    "39% left, but 44% of the window still to run — amber from PACE, not from the amount. Shapes with a whole circle to spend draw a notch in the track where the arc would end if the burn had matched the clock, and the gap to the arc's tip is the deficit. The stacked shapes have no room for one, so for them this pair is colour alone — which is the cost of the second figure. Read this one against `Same 39%, under pace`.",
     [anthropicAheadOfPace()],
   ),
   state(
     "under-pace",
     "Same 39%, under pace",
-    "The control for the state above: an identical 39% arc, four fifths through its window instead of two thirds, so it is normal rather than amber. No notch. If these two are only distinguishable by hue, the drawing has failed.",
+    "The control for the state above: an identical 39% arc, four fifths through its window instead of two thirds, so it is normal rather than amber. No notch. Whole-ring candidates should show a second channel; the chosen stack cannot fit one, so tone alone is its known cost.",
     [anthropicUnderPace()],
   ),
   state(
@@ -329,8 +329,8 @@ export const WALK: readonly string[] = [
   "two-accounts",
   "six-accounts",
   // The pace pair, adjacent on purpose: the arc holds still at 39% across this
-  // step and only the notch changes, which is the clearest possible proof that
-  // the mark is carrying the state rather than the colour.
+  // step and a whole-ring candidate changes its notch; the chosen stack has
+  // no room for one, exposing the state it leaves to colour alone.
   "under-pace",
   "ahead-of-pace",
   "attention",
