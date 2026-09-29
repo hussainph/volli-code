@@ -977,7 +977,7 @@ describe("Browser port concurrent calls and teardown", () => {
     return { port: browser, ready, disposed, createTransport, send, host };
   }
 
-  it("serializes one tab's snapshots without duplicating controllers or reusing refs", async () => {
+  it("serializes one tab's snapshots through one controller and one ref ledger", async () => {
     const h = harness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const second = h.port.snapshot({ tabId: "one", signal });
@@ -985,7 +985,8 @@ describe("Browser port concurrent calls and teardown", () => {
     h.ready.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(h.createTransport).toHaveBeenCalledTimes(1);
-    expect(refIn(a.snapshotText)).not.toBe(refIn(b.snapshotText));
+    // One ledger (VC-364): the same element reads under the same ref.
+    expect(refIn(a.snapshotText)).toBe(refIn(b.snapshotText));
     h.port.dispose();
     expect(h.disposed).toHaveBeenCalledTimes(1);
   });
@@ -1012,7 +1013,7 @@ describe("Browser port concurrent calls and teardown", () => {
     h.ready.resolve();
     const [a, c] = await Promise.all([first, third]);
     expect(h.createTransport).toHaveBeenCalledTimes(1);
-    expect(refIn(a.snapshotText)).not.toBe(refIn(c.snapshotText));
+    expect(refIn(a.snapshotText)).toBe(refIn(c.snapshotText));
     expect(
       h.send.mock.calls.filter(([method]) => method === "Accessibility.getFullAXTree"),
     ).toHaveLength(2);
