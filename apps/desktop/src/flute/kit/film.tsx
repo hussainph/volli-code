@@ -19,6 +19,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useSceneTime } from "@webprodigies/flute";
+import { frameData, MotionGlobalConfig } from "motion/react";
 
 import { installFakeApi, type ApiOverrides } from "../../renderer/lab/fake-api";
 import { ease, progress } from "./clock";
@@ -39,6 +40,14 @@ const firstSeen = new WeakMap<Animation, number>();
  */
 export function useFilm(): number {
   const t = useSceneTime();
+  // Components animated with `motion` (the Activity Island's springs, the
+  // board's drag overlay) run on motion's own frame loop. Manual timing makes
+  // that loop read `frameData.timestamp` instead of `performance.now()`, so
+  // their springs advance on the scene clock too. Set during render, before
+  // the children commit, so an animation a child starts this frame starts at
+  // this frame's time.
+  MotionGlobalConfig.useManualTiming = true;
+  frameData.timestamp = t;
   React.useLayoutEffect(() => {
     for (const animation of document.getAnimations()) {
       let start = firstSeen.get(animation);

@@ -109,8 +109,37 @@ async function settleAt(timeMs) {
   }, timeMs);
 }
 
+// Public-safety audit (VC-464: "check every frame"). Every frame's text — the
+// capture viewport's rendered text plus form values and titles — is scanned
+// for the things that must never be in frame. Conservative: it reads text the
+// camera may not show, so a hit is a reason to look, not proof of a leak.
+const PRIVATE = [
+  ["path under /Users", /\/Users\/[^\s"')]*/g],
+  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?!example\b|test\b|invalid\b)[A-Za-z]{2,}\b/g],
+  ["token", /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g],
+];
+const findings = new Map();
+async function audit(timeMs) {
+  const text = await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    if (root === null) return "";
+    const values = [...root.querySelectorAll("input, textarea")].map((el) => el.value);
+    const titles = [...root.querySelectorAll("[title], [aria-label]")].map(
+      (el) => `${el.getAttribute("title") ?? ""} ${el.getAttribute("aria-label") ?? ""}`,
+    );
+    return [root.innerText, ...values, ...titles].join("\n");
+  }, manifest.selector);
+  for (const [kind, pattern] of PRIVATE) {
+    for (const match of text.matchAll(pattern)) {
+      const key = `${kind}: ${match[0]}`;
+      if (!findings.has(key)) findings.set(key, timeMs);
+    }
+  }
+}
+
 async function frameAt(timeMs) {
   await settleAt(timeMs);
+  await audit(timeMs);
   const { data } = await client.send("Page.captureScreenshot", {
     format: "png",
     optimizeForSpeed: true,
@@ -171,5 +200,10 @@ if (stills !== null) {
   ffmpeg.stdin.end();
   await done;
   console.log("wrote", out, `${frames} frames @ ${fps}fps, ${rect.width * dsf}x${rect.height * dsf}`);
+}
+if (findings.size === 0) console.log("privacy audit: clean (every captured frame's text)");
+else {
+  console.warn("privacy audit: LOOK AT THESE");
+  for (const [key, at] of findings) console.warn(`  ${key}  (first at ${at} ms)`);
 }
 await browser.close();
