@@ -1,5 +1,9 @@
 import {
   Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
   StreamableHTTPClientTransport,
   type CallToolResult,
   type Transport,
@@ -12,7 +16,12 @@ import {
   type McpServerDraft,
 } from "@volli/shared";
 
-import type { McpProtocolClient, McpProtocolTool, OpenMcpProtocolClient } from "./discovery";
+import {
+  McpTransportFailure,
+  type McpProtocolClient,
+  type McpProtocolTool,
+  type OpenMcpProtocolClient,
+} from "./discovery";
 
 const MCP_STDIO_BUFFER_MAX_BYTES = 1 * 1_024 * 1_024;
 const LAUNCH_ENVIRONMENT_KEYS = [
@@ -54,6 +63,32 @@ export interface CloseableMcpClient {
   close(): Promise<void>;
 }
 
+/** The SDK's own codes for a connection that is gone or never carried the request. */
+const TRANSPORT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  SdkErrorCode.ConnectionClosed,
+  SdkErrorCode.NotConnected,
+  SdkErrorCode.SendFailed,
+]);
+
+/**
+ * Whether a rejected call means the connection is unusable (VC-454).
+ *
+ * Decided here because this is the one module that may name the SDK's error
+ * types; the host above sees only {@link McpTransportFailure}. A JSON-RPC
+ * error is the server answering, so the connection is fine. A local timeout
+ * or a result that failed validation leaves it fine too — retiring the client
+ * for either would abort every other call sharing it for one slow or malformed
+ * answer. An HTTP status the transport refused (an expired protocol session, a
+ * 5xx) and anything that is not an SDK error at all (a socket, a spawn, a
+ * fetch that never reached the server) are the connection failing.
+ */
+export function isMcpTransportFailure(error: unknown): boolean {
+  if (ProtocolError.isInstance(error)) return false;
+  if (SdkHttpError.isInstance(error)) return true;
+  if (SdkError.isInstance(error)) return TRANSPORT_FAILURE_CODES.has(error.code);
+  return true;
+}
+
 /** SDK object narrowed behind the port consumed by the rest of Electron main. */
 export function protocolClientForConnectedClient(
   client: CloseableMcpClient,
@@ -69,11 +104,19 @@ export function protocolClientForConnectedClient(
       });
       return result.tools;
     },
-    callTool: ({ name, arguments: arguments_, signal }) =>
-      client.callTool(
-        { name, arguments: arguments_ },
-        { signal, timeout: MCP_CALL_TIMEOUT_MS, maxTotalTimeout: MCP_CALL_TIMEOUT_MS },
-      ),
+    async callTool({ name, arguments: arguments_, signal }) {
+      try {
+        return await client.callTool(
+          { name, arguments: arguments_ },
+          { signal, timeout: MCP_CALL_TIMEOUT_MS, maxTotalTimeout: MCP_CALL_TIMEOUT_MS },
+        );
+      } catch (error) {
+        // The caller's own abort is never the transport failing, whatever the
+        // SDK dressed it as (it reports an abort as a request timeout).
+        if (signal.aborted || !isMcpTransportFailure(error)) throw error;
+        throw new McpTransportFailure({ cause: error });
+      }
+    },
     async close() {
       if (closed) return;
       closed = true;
