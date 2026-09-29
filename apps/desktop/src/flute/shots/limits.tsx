@@ -102,7 +102,6 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 500,
       until: 2050,
-      eyebrow: "VC-263 · VC-350 · VC-376",
       lines: ["See your limits", "coming."],
       place: "lower",
     },
@@ -111,7 +110,6 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 500,
       until: 2050,
-      eyebrow: "VC-263 · VC-350 · VC-376",
       lines: ["See your limits", "coming."],
       place: "upper",
     },

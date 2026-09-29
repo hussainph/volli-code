@@ -110,7 +110,6 @@ function applySplit(t: number): void {
 const CUE: Cue = {
   at: 120,
   until: 1150,
-  eyebrow: "VC-202 · VC-333",
   lines: ["Split view."],
 };
 

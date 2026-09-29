@@ -161,7 +161,6 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2300,
       until: 3650,
-      eyebrow: "VC-238 · VC-239",
       lines: ["Agents drive", "the browser."],
       sub: "You see every click.",
       accent: "browser.",
@@ -173,7 +172,6 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2300,
       until: 3650,
-      eyebrow: "VC-238 · VC-239",
       lines: ["Agents drive", "the browser."],
       sub: "You see every click.",
       accent: "browser.",

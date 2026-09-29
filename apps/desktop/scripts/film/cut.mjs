@@ -3,16 +3,17 @@
  *
  *   node scripts/film/cut.mjs [--formats wide,tall] [--render [key,key]] [--only key,key] [--preview]
  *
- * --preview: a quick look at the whole edit — 1080p (DSF 1) at 30fps into
+ * --preview: a rougher, faster look at the whole edit (DSF 1/2) into
  * .film-out/preview/, never mixed with the masters.
  *
- * 1. Masters: every shot in ORDER, per format, rendered by capture.mjs at 4K
- *    (DSF 2) 60fps into .film-out/masters/<key>-<format>.mp4. Existing masters
- *    are reused unless --render names them (or --render alone: all).
- * 2. The cut: masters joined on hard cuts, downscaled (lanczos) to 1920×1080 /
- *    1080×1920, H.264 High, yuv420p, 60fps, +faststart:
- *      .film-out/volli-0.2-16x9-1080p60.mp4
- *      .film-out/volli-0.2-9x16-1080p60.mp4
+ * 1. Masters: every shot in ORDER, per format, rendered by capture.mjs at
+ *    720p30 (DSF 2/3) into .film-out/masters-720p30/<key>-<format>.mp4.
+ *    Existing masters are reused unless --render names them (or --render
+ *    alone: all). The owner's call: 720p30 is plenty, and 4K clogs the machine.
+ * 2. The cut: masters joined on hard cuts at 1280×720 / 720×1280, H.264 High,
+ *    yuv420p, 30fps, +faststart:
+ *      .film-out/volli-0.2-16x9-720p30.mp4
+ *      .film-out/volli-0.2-9x16-720p30.mp4
  * 3. The cut sheet (.film-out/CUT-SHEET.md): every cut and beat, with timecodes
  *    for laying music under it later, and the supers with the tickets behind
  *    them. The contact sheets (.film-out/contact-sheet-{16x9,9x16}.png): the
@@ -32,10 +33,12 @@ import { SHOTS } from "./shots.mjs";
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const preview = process.argv.includes("--preview");
+// Masters are only valid for the DSF/FPS they were rendered at: keep them apart.
 const outDir = preview ? join(desktop, ".film-out", "preview") : join(desktop, ".film-out");
-const masters = join(outDir, "masters");
-const FPS = preview ? 30 : 60;
-const DSF = preview ? 1 : 2;
+const masters = join(outDir, preview ? "masters" : "masters-720p30");
+// 720p30 by default: light on a shared machine, plenty for social. `--dsf 2`
+// with `--fps 60` and FORMAT scales of 1920/1080 is the 4K-master path.
+const FPS = 30;
 
 /** The edit. Beats and supers are the cut sheet's; keep them in step with the shots. */
 const ORDER = [
@@ -118,8 +121,8 @@ const ORDER = [
 ];
 
 const FORMAT = {
-  wide: { scale: "1920:1080", label: "16x9", tile: "4x3", tileWidth: 480 },
-  tall: { scale: "1080:1920", label: "9x16", tile: "6x2", tileWidth: 270 },
+  wide: { scale: "1280:720", label: "16x9", tile: "4x3", tileWidth: 480 },
+  tall: { scale: "720:1280", label: "9x16", tile: "6x2", tileWidth: 270 },
 };
 
 const args = process.argv.slice(2);
@@ -127,6 +130,9 @@ const option = (name, fallback) => {
   const at = args.indexOf(name);
   return at === -1 ? fallback : args[at + 1];
 };
+// Masters at DSF 2 are true 4K; `--dsf 1` renders them at the cut's own 1080p
+// (about 3× faster) when 4K sources are not needed.
+const DSF = preview ? 0.5 : Number(option("--dsf", String(2 / 3)));
 const formats = option("--formats", "wide,tall").split(",");
 const renderValue = args.includes("--render") ? (option("--render", undefined) ?? "") : null;
 const renderAll = renderValue !== null && (renderValue === "" || renderValue.startsWith("--"));
@@ -182,7 +188,7 @@ for (const format of formats) {
     (_, i) => `[${i}:v]scale=${scale}:flags=lanczos,fps=${FPS},setsar=1,format=yuv420p[v${i}]`,
   );
   const concat = `${edit.map((_, i) => `[v${i}]`).join("")}concat=n=${edit.length}:v=1:a=0[out]`;
-  const output = join(outDir, `volli-0.2-${label}-1080p60.mp4`);
+  const output = join(outDir, `volli-0.2-${label}-720p30.mp4`);
   execFileSync(
     "ffmpeg",
     [
@@ -270,7 +276,7 @@ for (const format of formats) {
       "-loglevel",
       "error",
       "-i",
-      outputs[format] ?? join(outDir, `volli-0.2-${label}-1080p60.mp4`),
+      outputs[format] ?? join(outDir, `volli-0.2-${label}-720p30.mp4`),
       "-vf",
       `select='${select}',scale=${tileWidth}:-1,tile=${tile}:padding=6:margin=6:color=0x222222`,
       "-frames:v",

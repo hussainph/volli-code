@@ -184,7 +184,6 @@ export function PickerShot({ format }: { format: Format }) {
     {
       at: 220,
       until: 2480,
-      eyebrow: "VC-132 · VC-184",
       lines: ["Drop tickets in.", "Pick what runs."],
       size: "large",
       ...(format === "portrait" ? { place: "upper" as const } : {}),
@@ -370,7 +369,6 @@ export function ArmedShot({ format }: { format: Format }) {
     {
       at: 180,
       until: 2680,
-      eyebrow: "VC-127 · VC-128 · VC-241",
       lines: ["Save how", "work starts."],
       size: "large",
       ...(format === "portrait" ? { place: "upper" as const } : {}),

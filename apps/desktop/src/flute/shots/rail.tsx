@@ -80,7 +80,7 @@ function seed(): void {
   useUiStore.setState({ railMode: "now", railWidth: RAIL.width });
 }
 
-const CUE: Cue = { at: 120, until: 1150, eyebrow: "VC-406", lines: ["The Now rail."] };
+const CUE: Cue = { at: 120, until: 1150, lines: ["The Now rail."] };
 const CUES: Record<Format, Cue[]> = {
   landscape: [CUE],
   portrait: [{ ...CUE, place: "upper" }],

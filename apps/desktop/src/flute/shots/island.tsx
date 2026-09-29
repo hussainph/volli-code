@@ -467,7 +467,6 @@ function CardLayer({ cluster, model }: { cluster: IslandCluster; model: Activity
 const CUE = {
   at: 900,
   until: 3050,
-  eyebrow: "VC-246 · VC-268 · VC-269 · VC-270",
   lines: ["Everything your", "agent is doing."],
   sub: "Plans, subagents, shells — one island.",
 } as const;

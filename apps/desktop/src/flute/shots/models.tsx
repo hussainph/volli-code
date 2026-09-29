@@ -175,7 +175,6 @@ export const TREE = { width: PANE.width * ZOOM, height: PANE.height * ZOOM };
 const CUE: Omit<Cue, "place"> = {
   at: 250,
   until: 1650,
-  eyebrow: "VC-259",
   lines: ["A model for", "every job."],
 };
 

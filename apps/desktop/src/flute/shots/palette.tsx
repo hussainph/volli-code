@@ -118,7 +118,6 @@ function TypedPalette({ text }: { text: string }) {
 const CUE: Cue = {
   at: 110,
   until: 1150,
-  eyebrow: "VC-205",
   lines: ["⌘K, then @sessions."],
   accent: "@sessions.",
   accentColor: "var(--primary)",
