@@ -12,8 +12,9 @@
  *
  * `VC456_REPETITIONS` (default 20), `VC456_CONCURRENCIES` (default 1,5,15,20),
  * `VC456_CONTROL` (`memory-artifacts` or `none`), `VC456_DELTAS` (text deltas
- * per stand-in reply, default 8), `VC456_WATCH` (`all`, `none`, or both,
- * default both) and `VC456_CLIFF=0` (skip the overlay-cache sweep) tune it.
+ * per stand-in reply, default 8), `VC456_SUBSCRIBERS` (`all`, `none`, or
+ * both, default both) and `VC456_CLIFF=0` (skip the overlay-cache sweep) tune
+ * it.
  */
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,7 +31,13 @@ import {
   type RawTurn,
   type RecordedEnvelope,
 } from "./harness";
-import { formatMarkdown, integrityFailures, runArm, runBenchmark } from "./measurement";
+import {
+  formatMarkdown,
+  integrityFailures,
+  runArm,
+  runBenchmark,
+  type ArmReport,
+} from "./measurement";
 
 const COMMAND = "command-1";
 
@@ -186,13 +193,21 @@ describe("VC-456 ledger cross-check", () => {
     turn.frames.splice(3, 1);
     expect(crossCheckLedger({ commandId: COMMAND, ...turn }).streamMatchesLedger).toBe(false);
   });
+
+  it("flags a live stream that never delivered the turn's end, however well its prefix matches", () => {
+    const turn = consistentTurn();
+    turn.frames = turn.frames.filter(
+      ({ kind }) => kind !== "turn.completed" && kind !== "command.receipt.recorded",
+    );
+    expect(crossCheckLedger({ commandId: COMMAND, ...turn }).streamMatchesLedger).toBe(false);
+  });
 });
 
 describe("VC-456 real-path smoke", () => {
   it.each(["all", "none"] as const)(
-    "runs scripted turns through the real path with complete, ordered, content-free accounting (watch %s)",
-    async (watch) => {
-      const composition = await createRealPathComposition({ watch });
+    "runs scripted turns through the real path with complete, ordered, content-free accounting (subscribers %s)",
+    async (subscribers) => {
+      const composition = await createRealPathComposition({ subscribers });
       let turns: RawTurn[];
       try {
         ({ turns } = await composition.runWave({ concurrency: 3, wave: 0 }));
@@ -226,7 +241,7 @@ describe("VC-456 real-path smoke", () => {
         expect(sample.crossCheck.orderInversions).toBe(0);
         expect(sample.crossCheck.causalityViolations).toEqual([]);
         expect(sample.crossCheck.commitsMatchLedger).toBe(true);
-        expect(sample.crossCheck.streamMatchesLedger).toBe(watch === "all" ? true : null);
+        expect(sample.crossCheck.streamMatchesLedger).toBe(subscribers === "all" ? true : null);
         expect(sample.artifactWriteCount).toBeGreaterThan(0);
         expect(sample.ledgerTransactionCount).toBeGreaterThan(0);
       }
@@ -247,20 +262,104 @@ describe("VC-456 real-path smoke", () => {
     },
   );
 
-  it("publishes nothing from an arm whose harness could not vouch for it", async () => {
+  it("marks a turn incomplete when its message or its answer did not land", async () => {
+    const composition = await createRealPathComposition();
+    let turn: RawTurn;
+    try {
+      [turn] = (await composition.runWave({ concurrency: 1, wave: 0 })).turns as [RawTurn];
+    } finally {
+      await composition.close();
+    }
+    expect(analyzeRealTurn(turn, "as-run").complete).toBe(true);
+    expect(analyzeRealTurn({ ...turn, receiptStatus: "rejected" }, "rejected").complete).toBe(
+      false,
+    );
+    expect(analyzeRealTurn({ ...turn, answers: [] }, "unanswered").complete).toBe(false);
+    expect(
+      analyzeRealTurn({ ...turn, answers: [turn.answers[0]!, turn.answers[0]!] }, "twice").complete,
+    ).toBe(false);
+    expect(
+      analyzeRealTurn({ ...turn, commits: turn.commits.slice(0, -2) }, "commit lost").complete,
+    ).toBe(false);
+  });
+
+  it("counts a network call, and gives the real fetch back when it closes", async () => {
+    const realFetch = globalThis.fetch;
+    const composition = await createRealPathComposition();
+    try {
+      await expect(globalThis.fetch("https://example.invalid/")).rejects.toThrow(/refused/);
+      expect(composition.networkAttempts()).toBe(1);
+    } finally {
+      await composition.close();
+    }
+    expect(globalThis.fetch).toBe(realFetch);
+  });
+
+  it("publishes nothing from an arm whose harness or cross-check could not vouch for it", async () => {
     const arm = await runArm({ artifactStore: "memory", concurrency: 1, repetitions: 1 });
     expect(integrityFailures(arm)).toEqual([]);
-    const tampered = { ...arm, integrity: { ...arm.integrity, networkAttempts: 1 } };
-    expect(integrityFailures(tampered)).toEqual(["memory/all/8d@1: network was attempted"]);
+    const tamper = (change: (copy: ArmReport) => void): string[] => {
+      const copy = structuredClone(arm);
+      change(copy);
+      return integrityFailures(copy);
+    };
+    const label = "memory/all/8d@1";
+    expect(tamper((copy) => (copy.integrity.networkAttempts = 1))).toEqual([
+      `${label}: network was attempted`,
+    ]);
+    expect(tamper((copy) => (copy.integrity.unscopedEnvelopes = 1))).toEqual([
+      `${label}: an envelope escaped every Session scope`,
+    ]);
+    expect(tamper((copy) => (copy.integrity.runIdConflicts = 1))).toEqual([
+      `${label}: a runId crossed Sessions`,
+    ]);
+    expect(tamper((copy) => (copy.integrity.providerRequests["summary"] = 0))).toEqual([
+      `${label}: 0 summary requests for 1 turns`,
+    ]);
+    expect(tamper((copy) => (copy.summary.completeTurnCount = 0))).toEqual([
+      `${label}: 1 incomplete turns`,
+    ]);
+    expect(tamper((copy) => (copy.summary.vc119OrderViolations = 2))).toEqual([
+      `${label}: 2 VC-119 order violations`,
+    ]);
+    expect(tamper((copy) => (copy.summary.crossCheck.orderInversions = 1))).toEqual([
+      `${label}: 1 envelope/ledger inversions`,
+    ]);
+    expect(tamper((copy) => (copy.summary.crossCheck.causalityViolations = 1))).toEqual([
+      `${label}: 1 causality violations`,
+    ]);
+    expect(tamper((copy) => (copy.summary.crossCheck.commitMismatches = 1))).toEqual([
+      `${label}: 1 commit/read-back mismatches`,
+    ]);
+    expect(tamper((copy) => (copy.summary.crossCheck.streamMismatches = 1))).toEqual([
+      `${label}: 1 stream/read-back mismatches`,
+    ]);
+    expect(
+      tamper((copy) => copy.summary.ledgerShapes.push({ shape: "another", turns: 1 })),
+    ).toEqual([`${label}: 2 different ledger shapes`]);
     const markdown = formatMarkdown({
       generatedAt: "now",
-      environment: {},
+      environment: {
+        nodeVersion: process.version,
+        platform: "test",
+        osRelease: "test",
+        architecture: "test",
+        cpuModel: "test",
+        logicalCores: 1,
+        availableParallelism: 1,
+        totalMemoryBytes: 1,
+        uvThreadpoolSize: "4",
+        gitSha: "test",
+        dirty: false,
+        initialLoadAverage: null,
+        fileSyncProbes: [],
+      },
       parameters: {
         concurrencies: [1],
         repetitions: 1,
         control: "none",
         deltasPerReply: 8,
-        watch: ["all"],
+        subscribers: ["all"],
         cliff: false,
       },
       arms: [arm],
@@ -307,7 +406,7 @@ describe.runIf(output !== undefined)("VC-456 full matrix", () => {
     const repetitions = process.env["VC456_REPETITIONS"];
     const control = process.env["VC456_CONTROL"];
     const deltas = process.env["VC456_DELTAS"];
-    const watch = process.env["VC456_WATCH"]?.split(",");
+    const subscribers = process.env["VC456_SUBSCRIBERS"]?.split(",");
     const cliff = process.env["VC456_CLIFF"];
     const { failures } = await runBenchmark({
       output: output!,
@@ -316,7 +415,7 @@ describe.runIf(output !== undefined)("VC-456 full matrix", () => {
         ...(repetitions === undefined ? {} : { repetitions: Number(repetitions) }),
         ...(control === "none" || control === "memory-artifacts" ? { control } : {}),
         ...(deltas === undefined ? {} : { deltasPerReply: Number(deltas) }),
-        ...(watch === undefined ? {} : { watch: watch as Array<"all" | "none"> }),
+        ...(subscribers === undefined ? {} : { subscribers: subscribers as Array<"all" | "none"> }),
         ...(cliff === undefined ? {} : { cliff: cliff !== "0" }),
       },
     });

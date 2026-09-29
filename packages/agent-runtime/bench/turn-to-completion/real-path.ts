@@ -44,7 +44,8 @@ export {
   type TurnSample,
 } from "./measurement";
 
-const DEFAULT_DELTAS_PER_REPLY = 8;
+/** Text deltas per stand-in reply unless a caller says otherwise. */
+export const DEFAULT_DELTAS_PER_REPLY = 8;
 
 export const REAL_PATH_PROVIDER_ID = "vc456-fixture-local";
 export const REAL_PATH_MODEL_ID = "vc456-fixture-model";

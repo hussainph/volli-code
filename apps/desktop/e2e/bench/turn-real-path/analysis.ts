@@ -18,13 +18,8 @@ import {
 } from "@volli/agent-runtime/bench/turn-to-completion";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import {
-  AUTHORITY_THINK_MS,
-  type LedgerCommit,
-  type LedgerFrame,
-  type RawTurn,
-  type RecordedEnvelope,
-} from "./harness";
+import { AUTHORITY_THINK_MS } from "./constants";
+import type { LedgerCommit, LedgerFrame, RawTurn, RecordedEnvelope } from "./harness";
 
 /**
  * What one scripted turn must produce in VC-119 terms: VC-441's shape on the
@@ -82,7 +77,7 @@ export interface LedgerCrossCheck {
   commitsMatchLedger: boolean;
   /**
    * The live frames list the same facts as the SQLite read-back, in the same
-   * order. Null when nobody subscribed.
+   * order, through the turn's `turn.completed`. Null when nobody subscribed.
    */
   streamMatchesLedger: boolean | null;
 }
@@ -124,6 +119,16 @@ function ledgerWindow(
     (entry) => entry.kind === "turn.completed" && entry.sequence > started,
   )?.sequence;
   return { accepted, started, ...(completed === undefined ? {} : { completed }) };
+}
+
+/** The entries whose sequence lies in the turn's window, inclusive; none when it is open-ended. */
+function inWindow<T extends { sequence: number }>(
+  entries: readonly T[],
+  from: number | undefined,
+  to: number | undefined,
+): T[] {
+  if (from === undefined || to === undefined) return [];
+  return entries.filter((entry) => entry.sequence >= from && entry.sequence <= to);
 }
 
 export function crossCheckLedger(input: {
@@ -206,22 +211,10 @@ export function crossCheckLedger(input: {
     }
   }
 
-  const window = input.ledger.filter(
-    (entry) =>
-      accepted !== undefined &&
-      completed !== undefined &&
-      entry.sequence >= accepted &&
-      entry.sequence <= completed,
+  const window = inWindow(input.ledger, accepted, completed);
+  const commitsInWindow = inWindow(input.commits, accepted, completed).toSorted(
+    (left, right) => left.sequence - right.sequence,
   );
-  const commitsInWindow = input.commits
-    .filter(
-      (commit) =>
-        accepted !== undefined &&
-        completed !== undefined &&
-        commit.sequence >= accepted &&
-        commit.sequence <= completed,
-    )
-    .toSorted((left, right) => left.sequence - right.sequence);
   const commitsMatchLedger =
     window.length > 0 &&
     commitsInWindow.length === window.length &&
@@ -231,6 +224,9 @@ export function crossCheckLedger(input: {
         commitsInWindow[index]?.kind === entry.kind,
     );
 
+  // Contiguous, the same kinds as the read-back, and covering the whole turn
+  // from its `command.recorded` to its `turn.completed`: a stream that never
+  // delivered the turn's end does not match, however well its prefix does.
   const bySequence = new Map(input.ledger.map((entry) => [entry.sequence, entry.kind]));
   const frameSequences = input.frames.map((frame) => frame.sequence);
   const first = frameSequences[0];
@@ -240,6 +236,10 @@ export function crossCheckLedger(input: {
       ? null
       : first !== undefined &&
         last !== undefined &&
+        accepted !== undefined &&
+        completed !== undefined &&
+        first <= accepted &&
+        last >= completed &&
         frameSequences.length === last - first + 1 &&
         frameSequences.every((sequence, index) => sequence === first + index) &&
         input.frames.every((frame) => bySequence.get(frame.sequence) === frame.kind);
@@ -293,7 +293,7 @@ export interface RealTurnSample extends TurnSample {
   complete: boolean;
 }
 
-const round = (value: number): number => Number(value.toFixed(3));
+export const round = (value: number): number => Number(value.toFixed(3));
 const gap = (from: number | undefined | null, to: number | undefined | null): number | null =>
   from === undefined || from === null || to === undefined || to === null ? null : round(to - from);
 
@@ -335,14 +335,7 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
   const writes = raw.artifactCalls.filter((call) => call.op === "write");
   const reads = raw.artifactCalls.filter((call) => call.op === "read");
   const crossCheck = crossCheckLedger(raw);
-  const shape = raw.ledger
-    .filter(
-      (entry) =>
-        accepted !== undefined &&
-        completed !== undefined &&
-        entry.sequence >= accepted &&
-        entry.sequence <= completed,
-    )
+  const shape = inWindow(raw.ledger, accepted, completed)
     .map((entry) => entry.kind)
     .join(">");
   const complete =
@@ -387,7 +380,7 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
 }
 
 /** The per-arm aggregate; every distribution uses individual turns as samples. */
-export function summarizeTurns(samples: readonly RealTurnSample[]): Record<string, unknown> {
+export function summarizeTurns(samples: readonly RealTurnSample[]) {
   const pick = (read: (sample: RealTurnSample) => number | null) => summarize(samples.map(read));
   const timers = (kind: string) =>
     summarize(
@@ -462,5 +455,7 @@ export function summarizeTurns(samples: readonly RealTurnSample[]): Record<strin
     ledgerShapes: [...shapes.entries()].map(([shape, turns]) => ({ shape, turns })),
   };
 }
+
+export type TurnSummary = ReturnType<typeof summarizeTurns>;
 
 export type { Distribution };

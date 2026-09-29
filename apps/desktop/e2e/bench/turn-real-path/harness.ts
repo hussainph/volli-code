@@ -50,6 +50,7 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
+  sessionRootThreadId,
   type SessionLocationResolver,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
@@ -73,15 +74,9 @@ import {
 } from "../../../src/main/session-runtime/pi-adapter";
 import { createFileTranscriptArtifactStore } from "../../../src/main/session-runtime/transcript-artifacts";
 
-/** A private-looking marker the privacy test proves never leaves the path's outputs. */
-export const PRIVATE_CONTENT_CANARY = "vc456-private-prompt-and-tool-output-canary";
+import { AUTHORITY_THINK_MS, PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
-/**
- * The stand-in person's think time before answering, kept at VC-441's
- * authority wait so both fixtures script the same 12 ms. Everything the
- * measured wait holds beyond it is the real path's own round trip.
- */
-export const AUTHORITY_THINK_MS = 12;
+export { AUTHORITY_THINK_MS, PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
 /** The option id the auto-answerer picks: allow this one call. */
 const ALLOW_ONCE_OPTION_ID = "once";
@@ -117,10 +112,8 @@ export interface RealPathOptions {
    * stand-in answers when the question is durably recorded, as a notification
    * would reach them.
    */
-  watch?: WatchMode;
+  subscribers?: SubscriberMode;
 }
-
-export type WatchMode = "all" | "none";
 
 /** One durable fact as the Session Engine committed it. */
 export interface LedgerCommit {
@@ -181,7 +174,7 @@ export interface LedgerTransaction {
 export interface AnswerRecord {
   /**
    * `performance.now()` when the question reached it: the `interaction.opened`
-   * frame when it watches, the fact's commit when it does not.
+   * frame when it subscribes, the fact's commit when it does not.
    */
   seenAt: number;
   /** When it sent `interaction.resolve`, after its think time. */
@@ -205,7 +198,7 @@ export interface RawTurn {
   envelopes: RecordedEnvelope[];
   /** Every durable fact written for the turn, when its engine call resolved. */
   commits: LedgerCommit[];
-  /** The Session's live frames from the submit on; empty when nobody watched. */
+  /** The Session's live frames from the submit on; empty without a subscriber. */
   frames: LedgerFrame[];
   /** The same Session's ledger, read back from SQLite after the wave settled. */
   ledger: Array<{ sequence: number; kind: string; commandId: string | null }>;
@@ -233,7 +226,7 @@ export interface WaveResult {
 
 export interface RealPathComposition {
   readonly artifactStore: ArtifactStoreKind;
-  readonly watch: WatchMode;
+  readonly subscribers: SubscriberMode;
   /**
    * `around` wraps only the measured phase (every submit, until every turn and
    * answer settled), so a diagnostic can profile it without setup or teardown.
@@ -326,9 +319,29 @@ function interactionIdOf(payload: Record<string, unknown>): string | null {
 export async function createRealPathComposition(
   options: RealPathOptions = {},
 ): Promise<RealPathComposition> {
-  const artifactStore = options.artifactStore ?? "file";
-  const watch = options.watch ?? "all";
   const profile = mkdtempSync(join(tmpdir(), "volli-vc456-profile-"));
+  const realFetch = globalThis.fetch;
+  const opened: { db?: { close(): unknown } } = {};
+  try {
+    return await compose(profile, realFetch, opened, options);
+  } catch (error) {
+    // A composition that failed to build leaves nothing behind: not the
+    // refusing `fetch`, not the database handle, not the profile.
+    opened.db?.close();
+    globalThis.fetch = realFetch;
+    rmSync(profile, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function compose(
+  profile: string,
+  realFetch: typeof fetch,
+  opened: { db?: { close(): unknown } },
+  options: RealPathOptions,
+): Promise<RealPathComposition> {
+  const artifactStore = options.artifactStore ?? "file";
+  const subscribers = options.subscribers ?? "all";
   const workspace = join(profile, "workspace");
   const outside = join(profile, "outside");
   const sessionDataDir = join(profile, "pi-sessions");
@@ -343,7 +356,6 @@ export async function createRealPathComposition(
 
   // Nothing on this path may reach a network; a call here fails the run.
   let networkAttempts = 0;
-  const realFetch = globalThis.fetch;
   const refusingFetch = (async () => {
     networkAttempts += 1;
     throw new Error("VC-456 bench: network access is refused");
@@ -391,6 +403,7 @@ export async function createRealPathComposition(
   });
 
   const db = openVolliDb(join(profile, "volli.db"));
+  opened.db = db;
   const projectId = "vc456-project";
   insertProject(db, {
     id: projectId,
@@ -411,7 +424,7 @@ export async function createRealPathComposition(
     role: "project",
     ticketId: null,
     projectId,
-    rootThreadId: `thread:${sessionId}`,
+    rootThreadId: sessionRootThreadId(sessionId),
     brief: "VC-456 fixture Session. Run the scripted turn.",
     model: { providerId: provider.providerId, modelId: provider.modelId, reasoningLevel: "off" },
     toolSurface: [...FIXTURE_TOOL_SURFACE],
@@ -557,8 +570,8 @@ export async function createRealPathComposition(
     around?: (measure: () => Promise<void>) => Promise<void>;
   }): Promise<WaveResult> {
     const { concurrency, wave } = input;
-    // Setup, untimed: N fresh Sessions, each attached (and watched, when the
-    // composition watches), so every measured turn is the first turn of an
+    // Setup, untimed: N fresh Sessions, each attached (and subscribed, when the
+    // composition subscribes), so every measured turn is the first turn of an
     // identical Session.
     const sessions = await Promise.all(
       Array.from({ length: concurrency }, async (_value, index) => {
@@ -598,13 +611,13 @@ export async function createRealPathComposition(
         if (receipt?.status !== "accepted" && receipt?.status !== "completed") {
           throw new Error(`VC-456 bench: attach was not accepted (${receipt?.status ?? "none"})`);
         }
-        const opened = (await engine.listEvents({ sessionId })).findLast(
+        const attachment = (await engine.listEvents({ sessionId })).findLast(
           (event) => event.payload.kind === "attachment.opened",
         );
-        if (opened?.payload.kind !== "attachment.opened") {
+        if (attachment?.payload.kind !== "attachment.opened") {
           throw new Error("VC-456 bench: the attach recorded no opened attachment");
         }
-        const attachmentId = opened.payload.attachment.id;
+        const attachmentId = attachment.payload.attachment.id;
         // The stand-in person: sees the question, thinks for a fixed moment,
         // allows the one call.
         const answer = (interactionId: string, seenAt: number): void => {
@@ -633,7 +646,7 @@ export async function createRealPathComposition(
           );
         };
         let unsubscribe = doNothing;
-        if (watch === "all") {
+        if (subscribers === "all") {
           unsubscribe = await runtime.subscribe(
             { sessionId, afterSequence: attached.throughSequence },
             (emission) => {
@@ -772,7 +785,7 @@ export async function createRealPathComposition(
 
   return {
     artifactStore,
-    watch,
+    subscribers,
     runWave,
     unscopedEnvelopeCount: () => unscoped,
     runIdConflictCount: () => runIdConflicts,
