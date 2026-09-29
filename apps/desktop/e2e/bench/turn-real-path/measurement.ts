@@ -553,8 +553,9 @@ export async function runBenchmark(input: {
       `${JSON.stringify({ fixtureVersion: FIXTURE_VERSION, artifacts: ARTIFACTS }, null, 2)}\n`,
     ],
   ] as const;
+  // `wx`: a staged name is never written through something already there.
   for (const [temporary, , contents] of staged)
-    await writeFile(join(directory, temporary), contents);
+    await writeFile(join(directory, temporary), contents, { flag: "wx", mode: 0o644 });
   for (const [temporary, final] of staged)
     await rename(join(directory, temporary), join(directory, final));
   return { report, failures };

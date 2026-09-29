@@ -271,15 +271,19 @@ describe("VC-456 real-path smoke", () => {
 
 describe("VC-456 runner guards", () => {
   it("refuses too few repetitions and out-of-range concurrency before running", async () => {
-    await expect(
-      runBenchmark({ output: join(tmpdir(), "vc456-never"), parameters: { repetitions: 5 } }),
-    ).rejects.toThrow(/repetitions/);
-    await expect(
-      runBenchmark({
-        output: join(tmpdir(), "vc456-never"),
-        parameters: { concurrencies: [0, 21] },
-      }),
-    ).rejects.toThrow(/concurrencies/);
+    const directory = await mkdtemp(join(tmpdir(), "vc456-guard-"));
+    try {
+      await expect(
+        runBenchmark({ output: directory, parameters: { repetitions: 5 } }),
+      ).rejects.toThrow(/repetitions/);
+      await expect(
+        runBenchmark({ output: directory, parameters: { concurrencies: [0, 21] } }),
+      ).rejects.toThrow(/concurrencies/);
+      // Refused before the output directory was touched.
+      expect(await readdir(directory)).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("refuses an output directory holding files it does not own", async () => {
