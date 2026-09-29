@@ -21,8 +21,27 @@ export interface McpProtocolCallResult {
   isError?: boolean;
 }
 
+/**
+ * The connection to an MCP server failed, as opposed to the server answering.
+ *
+ * `callTool` rejects with this only when the transport itself is gone or
+ * refused the exchange: a closed stdio pipe, a dropped socket, an HTTP status
+ * that ends the protocol session. A JSON-RPC error the server sent, a local
+ * timeout, a result that failed validation and the caller's own abort all
+ * reject with something else, because each of them leaves the connection
+ * usable for every other call sharing it. The host retires a client on this
+ * error and on nothing else (VC-454).
+ */
+export class McpTransportFailure extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("MCP transport failed", options);
+    this.name = "McpTransportFailure";
+  }
+}
+
 export interface McpProtocolClient {
   listTools(signal: AbortSignal): Promise<readonly McpProtocolTool[]>;
+  /** Rejects with {@link McpTransportFailure} when the connection itself failed. */
   callTool(input: {
     name: string;
     arguments: Readonly<Record<string, unknown>>;
