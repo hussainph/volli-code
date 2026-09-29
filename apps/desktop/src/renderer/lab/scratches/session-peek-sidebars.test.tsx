@@ -30,6 +30,15 @@ let root: Root;
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The conversation overlay pins its transcript to the bottom with one.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    },
+  );
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -203,23 +212,30 @@ describe("unread (VC-108)", () => {
     expect(row("chat:chat-a1", "rail").hasAttribute("data-unread")).toBe(false);
   });
 
-  it("reads a Session once its peek has been up for a second, not on the way past", async () => {
+  it("never reads a Session by peeking it: the card says so, and opening it reads it", async () => {
     await hover(row("chat:chat-a4"));
     expect(card()?.querySelector("[data-peek-unread]")?.textContent).toBe("Unread");
+    await advance(3000);
+    expect(unreadDot("chat:chat-a4")).not.toBeNull();
+    expect(card()?.querySelector("[data-peek-unread]")).not.toBeNull();
+    await click(button(row("chat:chat-a4")));
+    expect(unreadDot("chat:chat-a4")).toBeNull();
+  });
+
+  it("reads a Session by viewing its conversation from the peek", async () => {
+    await hover(row("chat:chat-a4"));
+    await click(control("View conversation", card()!));
+    expect(unreadDot("chat:chat-a4")).toBeNull();
+  });
+
+  it("can still read on a 1s look, for comparison — not on the way past", async () => {
+    await setControl("After a 1s look");
+    await hover(row("chat:chat-a4"));
     await advance(500);
     expect(unreadDot("chat:chat-a4")).not.toBeNull();
     await advance(600);
     expect(unreadDot("chat:chat-a4")).toBeNull();
     expect(card()?.querySelector("[data-peek-unread]")).toBeNull();
-  });
-
-  it("leaves reading to opening when a peek is told never to read", async () => {
-    await setControl("Never — only opening does");
-    await hover(row("chat:chat-a4"));
-    await advance(3000);
-    expect(unreadDot("chat:chat-a4")).not.toBeNull();
-    await click(button(row("chat:chat-a4")));
-    expect(unreadDot("chat:chat-a4")).toBeNull();
   });
 
   it("toggles read and unread with U, in either sidebar", async () => {
@@ -237,7 +253,8 @@ describe("unread (VC-108)", () => {
     const p1 = button(row("chat:chat-p1"));
     await act(async () => p1.focus());
     await press(p1, "u");
-    expect(activeOrder()[0]).toBe("chat:chat-p1");
+    // New to the band, so it goes to the top — under the question already asked.
+    expect(activeOrder().slice(0, 2)).toEqual(["chat:chat-a1", "chat:chat-p1"]);
     expect(unreadDot("chat:chat-p1")).not.toBeNull();
   });
 
@@ -263,13 +280,13 @@ describe("the held order", () => {
     "chat:chat-p8",
   ];
 
-  it("holds every row through tool calls and a finished turn, and lifts a new turn to the top", async () => {
+  it("holds every row through tool calls and a finished turn, and lifts a new turn under the question", async () => {
     await playSteps(4);
     expect(activeOrder()).toEqual(START);
     await playSteps(1);
     expect(activeOrder()).toEqual([
-      "chat:chat-a5",
       "chat:chat-a1",
+      "chat:chat-a5",
       "chat:chat-a2",
       "chat:chat-a3",
       "chat:chat-a4",
@@ -283,14 +300,16 @@ describe("the held order", () => {
     expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a1", "chat:chat-a3", "chat:chat-a2"]);
   });
 
-  it("holds a new question in place, or floats it when asked to", async () => {
-    await playSteps(8);
+  it("floats a new question to the top, or holds it in place for comparison", async () => {
+    await playSteps(7);
     expect(activeOrder().indexOf("chat:chat-a2")).toBe(2);
-    await setControl("Floats to the top");
-    expect(activeOrder()[0]).toBe("chat:chat-a1");
+    await playSteps(1);
+    expect(activeOrder().slice(0, 3)).toEqual(["chat:chat-a2", "chat:chat-a1", "chat:chat-a5"]);
+    await setControl("Holds its place");
     await click(control("Reset"));
     await playSteps(8);
-    expect(activeOrder()[0]).toBe("chat:chat-a2");
+    expect(activeOrder().indexOf("chat:chat-a2")).toBe(2);
+    expect(activeOrder()[0]).toBe("chat:chat-a5");
   });
 
   it("moves nothing while the pointer is in a sidebar, and lands the move when it leaves", async () => {
@@ -300,11 +319,13 @@ describe("the held order", () => {
     expect(activeOrder()).toEqual(START);
     expect(host.querySelector("[data-waiting-moves]")).not.toBeNull();
     await pointOutOf(nav);
-    expect(activeOrder()[0]).toBe("chat:chat-a5");
+    expect(activeOrder().slice(0, 2)).toEqual(["chat:chat-a1", "chat:chat-a5"]);
     expect(host.querySelector("[data-waiting-moves]")).toBeNull();
   });
 
   it("keeps a read Session in Active while its peek is open, and retires it after", async () => {
+    // A peek never reads by default; the 1s look is the quickest way to read under one.
+    await setControl("After a 1s look");
     await hover(row("chat:chat-p8"));
     await advance(1100);
     expect(unreadDot("chat:chat-p8")).toBeNull();

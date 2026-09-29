@@ -31,19 +31,21 @@
  * blended into its own brand colour); the peek opens after 350 ms at rest,
  * and the next row after 150 ms once one is open.
  *
- * NOW IN MOTION (VC-108 folded in). The sidebar is played forward through a
+ * IN MOTION (VC-108 folded in). The sidebar is played forward through a
  * short script (`session-peek/sidebar-live.ts`) — tool calls, finished turns,
- * a question — and rebuilt through the shipped builder on every step, so two
- * new questions can be judged as they happen rather than described:
+ * a question — and rebuilt through the shipped builder on every step, so the
+ * rules below can be watched rather than described. DECIDED (owner,
+ * 2026-09-30), and still switchable only to compare:
  *
  *   • UNREAD. A turn that ends out of sight leaves its Session unread: a blue
  *     dot and a heavier title, and the clock cannot retire it to Previous
- *     until it is read. Peeking is the incentive — when does a look count as
- *     reading it?
+ *     until it is read. A peek NEVER reads it — its card says "Unread", and
+ *     only opening the Session, replying to it, viewing its conversation or
+ *     marking it (right-click, U) clears the dot.
  *   • A HELD ORDER. Active no longer re-sorts on every tool call. A row moves
- *     only when a new turn starts (or it first appears), and nothing moves
- *     while the pointer is in a sidebar or a peek is open. Whether a question
- *     may still float to the top is the open half.
+ *     only when a new turn starts (or it first appears), and a new QUESTION
+ *     FLOATS to the top, above everything. Nothing moves while the pointer is
+ *     in a sidebar or a peek is open; the moves land when it leaves.
  */
 import * as React from "react";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -163,7 +165,7 @@ const PEEK_READ_MS = 1000;
 const PLAY_STEP_MS = 1600;
 const FIRST_IN_FRONT = "chat:chat-a2";
 
-/** When looking at a peek clears its Session's unread dot. */
+/** When looking at a peek clears its Session's unread dot. Decided: never. */
 type PeekReads = "look" | "never" | "open";
 type OrderMode = "held" | "live";
 
@@ -241,9 +243,9 @@ function Bullets({ heading, items }: { heading: string; items: readonly string[]
 }
 
 const PROPOSED: readonly string[] = [
-  "Unread is its own mark: a blue dot and a heavier title. A turn that ends while its Session is not in front leaves it unread; opening it, sending to it, or a peek held for a second reads it. Right-click (or U) toggles it.",
+  "Unread is its own mark: a blue dot and a heavier title. A turn that ends while its Session is not in front leaves it unread; opening it, replying to it, or viewing its conversation reads it. A peek never does — the card says “Unread” instead, so a glance cannot clear what you have not read. Right-click (or U) toggles it.",
   "Unread Sessions stay in Active past the 30-minute window, however old — Previous means seen or nothing to see, never merely old. Marking a Previous Session unread brings it back.",
-  "A held Active order: tool calls, finished turns, answers and reads move nothing. A row moves only when a new turn starts or it first appears — to the top. While the pointer is in a sidebar or a peek is open, even that waits, and lands when you leave.",
+  "A held Active order: tool calls, finished turns, answers and reads move nothing. A row moves only when a new turn starts or it first appears — to the top — and a new question floats above everything, so what needs you is always first. While the pointer is in a sidebar or a peek is open, even that waits, and lands when you leave.",
   "One mark per row, everywhere: the vendor's logo with v2's state badge, in Active, Previous, inside folders and in the rail.",
   "One two-line row in both sidebars: Active is drawn as the rail's row, the mark centred on the row. The second line says where and when (VLT-14 · 2m ago) and never how — the mark already says it.",
   "A folder peeks its TICKET: status, title, and each Session with one line on what it did. Three Sessions called “Chat” become three different sentences. Pressing one drills into its own peek; ← goes back.",
@@ -282,8 +284,8 @@ export default function SessionPeekSidebarsScratch() {
   const [hoverEnabled, setHoverEnabled] = React.useState(true);
   const [outcome, setOutcome] = React.useState<SendOutcome>("success");
   const [orderMode, setOrderMode] = React.useState<OrderMode>("held");
-  const [questions, setQuestions] = React.useState<QuestionRule>("hold");
-  const [peekReads, setPeekReads] = React.useState<PeekReads>("look");
+  const [questions, setQuestions] = React.useState<QuestionRule>("float");
+  const [peekReads, setPeekReads] = React.useState<PeekReads>("never");
   const [holdWhilePointing, setHoldWhilePointing] = React.useState(true);
 
   /* ------------------------------------------------------------ the world */
@@ -978,13 +980,13 @@ export default function SessionPeekSidebarsScratch() {
             ) : null}
           </section>
 
-          <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
-            <h2 className="text-ui font-medium">The questions</h2>
+          <section className="flex flex-col gap-3 rounded-xl border border-dashed border-border p-4">
+            <h2 className="text-ui font-medium">Decided — switchable only to compare</h2>
             <Choice<OrderMode>
               label="Active order"
               value={orderMode}
               options={[
-                ["held", "Held (proposed)"],
+                ["held", "Held ✓"],
                 ["live", "Live recency (shipped)"],
               ]}
               onChange={setOrderMode}
@@ -993,8 +995,8 @@ export default function SessionPeekSidebarsScratch() {
               label="A question"
               value={questions}
               options={[
+                ["float", "Floats to the top ✓"],
                 ["hold", "Holds its place"],
-                ["float", "Floats to the top"],
               ]}
               onChange={setQuestions}
             />
@@ -1002,9 +1004,9 @@ export default function SessionPeekSidebarsScratch() {
               label="Peek reads"
               value={peekReads}
               options={[
-                ["look", "After a 1s look (proposed)"],
+                ["never", "Never — only opening does ✓"],
+                ["look", "After a 1s look"],
                 ["open", "As soon as it opens"],
-                ["never", "Never — only opening does"],
               ]}
               onChange={setPeekReads}
             />
@@ -1012,15 +1014,11 @@ export default function SessionPeekSidebarsScratch() {
               label="While pointing"
               value={holdWhilePointing ? "hold" : "land"}
               options={[
-                ["hold", "Moves wait (proposed)"],
+                ["hold", "Moves wait ✓"],
                 ["land", "Moves land at once"],
               ]}
               onChange={(next) => setHoldWhilePointing(next === "hold")}
             />
-          </section>
-
-          <section className="flex flex-col gap-3 rounded-xl border border-dashed border-border p-4">
-            <h2 className="text-ui font-medium">Decided — switchable only to compare</h2>
             <Choice<FolderPeek>
               label="Folder hover"
               value={folderPeek}

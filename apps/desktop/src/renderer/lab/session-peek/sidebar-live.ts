@@ -11,8 +11,10 @@
  * UNREAD IS ITS OWN AXIS, not another activity state (the VC-108 audit's core
  * finding, kept). A Session becomes unread when a turn ends while it is not in
  * front, or when a person says so; it becomes read when it is opened, when a
- * reply is sent to it, or — the new question — when its peek has been looked
- * at. Nothing about reading changes a Session's activity or its recency: a
+ * reply is sent to it, or when its conversation is viewed. A peek alone never
+ * reads it (decided 2026-09-30: a glance must not clear what was not read; the
+ * scratch keeps the alternatives only to compare). Nothing about reading
+ * changes a Session's activity or its recency: a
  * read receipt is not work.
  *
  * WHAT UNREAD DOES TO THE BANDS: an unread Session is not done with you, so the
@@ -26,10 +28,12 @@
  * where it is. A row moves only when a new TURN STARTS (idle → working, which
  * a person usually caused) or when it first appears; both go to the top.
  * Everything else — tool calls, a finished turn, a question, an answer, a read
- * — leaves it in place. Whether a new QUESTION may still float to the top is a
- * control, because "hold" is the rule's literal reading and "float" is what
- * shipped. And while a person is pointing into the sidebar or has a peek open,
- * nothing moves at all: moves wait, and land when they leave.
+ * — leaves it in place, with one exception (decided 2026-09-30): a new
+ * QUESTION floats to the top, above everything, because a Session waiting on
+ * the person is the one row they must not have to hunt for. "hold" stays as
+ * the rule's literal reading, to compare. And while a person is pointing into
+ * the sidebar or has a peek open, nothing moves at all: moves wait, and land
+ * when they leave.
  */
 import type { ChatSessionRecord, ChatWaitingReason } from "@volli/shared";
 
@@ -199,8 +203,8 @@ export interface ScriptStep {
  * Two and a half minutes of an ordinary afternoon, chosen so that every rule
  * gets exercised: two working Sessions trading tool calls (the shipped band
  * swaps them each time), a turn finishing out of sight (unread, and in the
- * shipped band a drop), a quiet Session starting a new turn (the one move the
- * held order makes), and a working Session asking a question (the control).
+ * shipped band a drop), a quiet Session starting a new turn, and a working
+ * Session asking a question — the only two moves the held order makes.
  */
 export const SCRIPT: readonly ScriptStep[] = [
   {
@@ -226,7 +230,7 @@ export const SCRIPT: readonly ScriptStep[] = [
   {
     after: 20 * SECOND,
     event: { kind: "turn-start", id: "chat-a5" },
-    note: "Backlog scan started a new turn — the one move the held order makes",
+    note: "Backlog scan started a new turn — held, it moves up, under the question",
   },
   {
     after: 10 * SECOND,
@@ -241,7 +245,7 @@ export const SCRIPT: readonly ScriptStep[] = [
   {
     after: 20 * SECOND,
     event: { kind: "ask", id: "chat-a2" },
-    note: "Chat (VLT-14) asked a question",
+    note: "Chat (VLT-14) asked a question — held, it floats to the top",
   },
   {
     after: 15 * SECOND,

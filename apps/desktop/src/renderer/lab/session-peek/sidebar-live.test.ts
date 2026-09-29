@@ -20,6 +20,7 @@ import {
   scriptEvents,
   WORLD_START,
   type HeldOrder,
+  type QuestionRule,
   type World,
   type WorldEvent,
 } from "./sidebar-live";
@@ -157,6 +158,19 @@ describe("the held order", () => {
     ]);
   });
 
+  it("floated, questions stay first: an answered one steps under the question still asked", () => {
+    const asked = play(WORLD_START, { kind: "ask", id: "chat-a3" });
+    const order = heldTarget(held, membersOf(asked), "float");
+    expect(order.slice(0, 2)).toEqual(["chat:chat-a3", "chat:chat-a1"]);
+    const answered = play(asked, { kind: "answer", id: "chat-a3" });
+    const committed = commitOf([...order], membersOf(asked));
+    expect(heldTarget(committed, membersOf(answered), "float")).toEqual([
+      "chat:chat-a1",
+      "chat:chat-a3",
+      ...order.slice(2),
+    ]);
+  });
+
   it("while frozen, draws exactly what it committed, a retired row included, and adds at the bottom", () => {
     expect(frozenOrder(held, ["chat:chat-a1", "chat:chat-a2", "chat:chat-new"])).toEqual([
       ...held.order,
@@ -179,25 +193,41 @@ function movesIn(orders: readonly string[][]): number {
 }
 
 describe("the script", () => {
-  function run(order: "held" | "live"): { orders: string[][]; world: World } {
+  function run(
+    order: "held" | "live",
+    questions: QuestionRule = "float",
+  ): { orders: string[][]; world: World } {
     let world = WORLD_START;
     let committed: HeldOrder | null = null;
     const orders: string[][] = [];
     for (const step of SCRIPT) {
       world = play(world, ...scriptEvents(step, "chat-a2"));
       const members = membersOf(world);
-      const target = order === "live" ? ids(members) : [...heldTarget(committed, members, "hold")];
+      const target =
+        order === "live" ? ids(members) : [...heldTarget(committed, members, questions)];
       committed = commitOf(target, members);
       orders.push(target);
     }
     return { orders, world };
   }
 
-  it("moves the shipped band on most steps, and the held band on exactly one", () => {
+  it("moves the shipped band on most steps, and the held band only for a new turn and a question", () => {
     const live = run("live");
     const held = run("held");
     expect(movesIn(live.orders)).toBeGreaterThanOrEqual(4);
-    // The only move a held band makes is Backlog scan's new turn.
+    expect(movesIn(held.orders)).toBe(2);
+    // Backlog scan's new turn lands under the question already asked…
+    expect(held.orders[4]?.slice(0, 2)).toEqual(["chat:chat-a1", "chat:chat-a5"]);
+    // …and Chat's new question tops them both, where it stays.
+    expect(held.orders.at(-1)?.slice(0, 3)).toEqual([
+      "chat:chat-a2",
+      "chat:chat-a1",
+      "chat:chat-a5",
+    ]);
+  });
+
+  it("with questions held too, moves only for the new turn", () => {
+    const held = run("held", "hold");
     expect(movesIn(held.orders)).toBe(1);
     expect(held.orders.at(-1)?.[0]).toBe("chat:chat-a5");
   });
