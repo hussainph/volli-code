@@ -1298,6 +1298,7 @@ export const KNOWN_TOOL_NAMES = new Set([
   "browser_act",
   "browser_acquire",
   "browser_console",
+  "browser_find",
   "browser_navigate",
   "browser_release",
   "browser_screenshot",
