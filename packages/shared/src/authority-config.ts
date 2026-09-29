@@ -5,7 +5,7 @@
  * executes under, pinned for the life of one attachment. This module holds the
  * thing a Snapshot is *made from*: a per-project document with built-in
  * defaults, resolved at attach. Slice 7 of
- * `docs/plans/authority-two-axis-rearchitecture.md` calls this "policy as data",
+ * the two-axis authority rearchitecture calls this "policy as data",
  * and the point is that changing what a Session may do stops requiring a build.
  *
  * **Where this may be stored is a security property, not a convenience.** The

@@ -930,8 +930,7 @@ export const CHECKPOINT_REFRESH_EVENTS = 64;
  * so the worst case per chunk is this many folds of that tail — not a function
  * of how many Sessions the project has.
  *
- * Eight is measured, not guessed, and the measurement is in
- * `docs/research/perf/session-listing-vc388.md`. Two results shaped it. Total
+ * Eight is measured, not guessed (VC-388). Two results shaped it. Total
  * time is nearly FLAT across chunk sizes — a 60-Session roster costs about the
  * same whether it is folded in one transaction or sixty — so a fine chunk buys
  * its shorter block almost for free. But the yield primitive is not free: a
@@ -975,8 +974,8 @@ const defaultYieldToHost = (): Promise<void> =>
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
  * receipts — so this ceiling is about 1.4 MB in the shape a real roster has
- * and about 20 MB in a shape that would need 256 such Sessions to reach. See
- * `docs/research/perf/session-listing-vc388.md`.
+ * and about 20 MB in a shape that would need 256 such Sessions to reach
+ * (VC-388).
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 
@@ -1035,7 +1034,7 @@ interface ListingFold {
  * The copy costs one extra walk of a graph the fold has just built, paid once
  * per fold and never on the cache-hit path, which is where listings spend
  * their time. Priced by `listing-cache-cost.bench.test.ts` against the entry
- * weights in `docs/research/perf/session-listing-vc388.md`, per row:
+ * weights VC-388 measured, per row:
  *
  * |                  | ordinary (5.6 KB) | extreme (79.8 KB) |
  * |------------------|-------------------|-------------------|

@@ -1,6 +1,6 @@
 /**
  * Blobs: the bytes behind every user-supplied file, wherever it was attached
- * (VC-50, `docs/plans/attachments.md`). A Blob is content-addressed — its
+ * (VC-50). A Blob is content-addressed — its
  * sha256 IS its identity — and stored once under Electron `userData`, so the
  * same screenshot pasted into a Ticket and into a chat is one Blob with two
  * links rather than two copies. Deduplication is not an optimization here:

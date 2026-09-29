@@ -1,5 +1,5 @@
 /**
- * Find across files (docs/plans/file-editor-improvements.md §4.7) — the
+ * Find across files — the
  * main-process half.
  *
  * The engine is `@vscode/ripgrep`: the rg binary VS Code ships (MIT), which

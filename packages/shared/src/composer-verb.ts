@@ -10,8 +10,7 @@
  * one. The rest of the registry answers the question a `/`-typing reader
  * arriving from another harness asks next — "and the commands that DO
  * things?" — with Volli's own expression of the jobs Pi's built-in commands
- * do (see `docs/research/pi-slash-command-survey.md` for the full mapping and
- * the deliberate omissions): `/copy` puts the last reply on the clipboard,
+ * do: `/copy` puts the last reply on the clipboard,
  * `/model` opens the model picker the footer already carries, `/reload`
  * re-reads the commands and skills directories, `/settings` and `/login` open
  * the app surfaces that own those words. A verb is offered where its surface

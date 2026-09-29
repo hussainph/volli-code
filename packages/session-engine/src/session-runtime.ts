@@ -711,8 +711,7 @@ export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
  *
  * A Session's events are held for as long as its entry lives, so this is the
  * bound on that memory: a measured entry is 17.4 KB for an ordinary Session
- * and 272.5 KB for a 450-event one
- * (`docs/research/perf/session-listing-vc388.md`).
+ * and 272.5 KB for a 450-event one (VC-388).
  *
  * It used to read "the desktop reads one or two Sessions at a time", which
  * stopped being true once a person could keep dozens of tabs open, and the

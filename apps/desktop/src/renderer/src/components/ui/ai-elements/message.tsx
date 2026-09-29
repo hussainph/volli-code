@@ -101,8 +101,7 @@ export type MessageResponseProps = Omit<
  * 96 / 8.1s under two busy cores; after, both arms report zero long tasks and
  * zero dropped frames but for one. Settled transcripts — every Turn a reader
  * scrolls back through — are unaffected, and so is reasoning. The numbers and
- * what the move to settle costs are in
- * `docs/research/perf/chat-streaming-scroll-vc357.md`.
+ * what the move to settle costs were measured in VC-357.
  *
  * With no code plugin, Streamdown keeps the same code frame, actions and plain
  * token fallback; only Shiki is absent. CJK, Mermaid, images and the sanitizer
@@ -162,7 +161,7 @@ export const MessageResponse = memo(
     // message and mounts a replacement, which restarts each block at its
     // unhighlighted fallback before Shiki's cache puts the tokens back. On a
     // streaming answer that is every closed fence re-highlighting per chunk —
-    // measured at 33k DOM mutations for a 4KB message (docs/plans/delta-frames.md).
+    // measured at 33k DOM mutations for a 4KB message.
     // A literal spread here recreated the object on every token.
     const merged = useMemo(
       () => (components ? { ...chatMarkdownComponents, ...components } : chatMarkdownComponents),

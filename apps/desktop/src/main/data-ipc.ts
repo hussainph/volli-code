@@ -1674,7 +1674,7 @@ export function registerDataIpcHandlers(
       return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
-    // ---- Done flow (docs/plans/done-flow.md) --------------------------------
+    // ---- Done flow ----------------------------------------------------------
     // The Details-rail diff/commit/push-PR affordances. `status`/`diff` are
     // read-only (no broadcast); `commit` records an event and `push-pr` writes
     // `pr_url`, so both broadcast to re-hydrate every board.

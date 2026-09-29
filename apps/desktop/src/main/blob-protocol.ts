@@ -1,6 +1,6 @@
 /**
  * Serving Blob bytes back to the renderer over the `volli-blob:` scheme
- * (VC-50, `docs/plans/attachments.md`).
+ * (VC-50).
  *
  * This is the half of the pipeline that makes an attachment survivable. The
  * transcript and the Ticket body hold `volli-blob:<hash>` and nothing else, so

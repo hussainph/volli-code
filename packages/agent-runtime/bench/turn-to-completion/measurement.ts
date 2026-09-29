@@ -879,8 +879,8 @@ function formatMarkdown(report: {
   const env = report.environment;
   return (
     `# Agent turn critical path under concurrent scripted turns (VC-441)\n\n` +
-    `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}. Findings and interpretation: \`../vc-441-agent-turn-time.md\`.\n\n` +
-    `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../docs/research/perf/vc-441-agent-turn-time --repetitions ${repetitions} --concurrencies ${concurrencies.join(",")}\`.\n\n` +
+    `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}.\n\n` +
+    `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../performance-results/vc-441-agent-turn-time --repetitions ${repetitions} --concurrencies ${concurrencies.join(",")}\`.\n\n` +
     `"Concurrent" is the number of scripted turns in flight at once in one Node process, each standing in for one working Session. No Volli Session, Session runtime queue, ledger, or agent loop is created. The runner starts ${repetitions} measured waves after ${WARMUP_WAVES} discarded warm-up wave(s) at each concurrency. Summary values use individual completed turns as samples; turns in a wave share one host interval and are not independent. Percentiles are nearest-rank, using rank ceil(0.95 × n) for p95.\n\n` +
     `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Submission → turn start p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Unaccounted gap p50 / p95 | Event-loop delay p95 / max (ms) | Authority timer lateness min / p50 / p95 (ms, signed) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
     `## Method and limits\n\n` +

@@ -1,6 +1,6 @@
 /**
  * E2e smoke for the Done flow — the Details-rail commit / push+draft-PR
- * affordances (docs/plans/done-flow.md "Testing"). Sibling of worktree-smoke.mjs
+ * affordances. Sibling of worktree-smoke.mjs
  * (same launch/DB/event assertion style) but exercising the LATER half of a
  * ticket's life: a materialized worktree gets dirtied, then squared away and
  * published entirely from the rail.

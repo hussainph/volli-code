@@ -4,8 +4,8 @@
  *
  * The dialect is Playwright MCP's — `- role "name" [ref=eN]` lines, children
  * indented under a trailing colon — adopted as a format spec rather than
- * vendored code (see docs/research/browser-tooling-vc-110.md and the VC-110
- * decision comment). The hard half of a snapshot, computing roles and
+ * vendored code (see the VC-110 decision comment). The hard half of a
+ * snapshot, computing roles and
  * accessible names, is not done here at all: Chromium already resolved both
  * before the tree crossed the debugger, so this module only decides what is
  * worth a line, what earns a ref, and where the bound falls.

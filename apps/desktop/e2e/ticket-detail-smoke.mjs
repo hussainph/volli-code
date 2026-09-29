@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance smoke for Volli's ticket-detail view, reconciled with
- * the ROUND-2 UX (docs/plans/ticket-detail-mvp.md §29–39). Drives the REAL
+ * the ROUND-2 UX. Drives the REAL
  * packaged renderer through Playwright against a scratch SQLite database
  * (`VOLLI_DB_PATH`) + isolated user-data dir, exercising the reworked surface:
  *

@@ -1,5 +1,5 @@
 /**
- * One-time localStorage → SQLite import (docs/CONCEPT.md decision #29): the pre-SQLite
+ * One-time localStorage → SQLite import: the pre-SQLite
  * `Project` shape (no `sortOrder`/`updatedAt`, as it lived in the
  * zustand-persisted `volli:projects` store) and a defensive validator for
  * the value read back out of localStorage. Mirrors the board store's

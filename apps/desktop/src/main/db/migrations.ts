@@ -41,7 +41,7 @@ export interface Migration {
 }
 
 /**
- * Migration 001: the v1 schema — see docs/CONCEPT.md decisions #28–#30. A
+ * Migration 001: the v1 schema. A
  * SNAPSHOT, not the current schema: applied migrations are immutable, so later
  * evolution lives in the migrations below it (002 adds `tickets.archived_at`
  * and replaces `tickets_project_status` with the two partial indexes).
@@ -132,8 +132,8 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
 `;
 
 /**
- * Migration 003: the ticket-detail MVP (docs/plans/ticket-detail-mvp.md,
- * decisions #14/#18/#22). Three additions, all additive/nullable — no
+ * Migration 003: the ticket-detail MVP (decisions #14/#18/#22). Three
+ * additions, all additive/nullable — no
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
@@ -355,7 +355,7 @@ ALTER TABLE projects ADD COLUMN theme_seed TEXT;
 `;
 
 /**
- * Migration 014: per-project canvas + appearance (docs/plans/arc-theming-migration.md).
+ * Migration 014: per-project canvas + appearance (the arc theming migration).
  * Two nullable columns, replacing what 013's four columns meant rather than
  * what they held: a project now overrides the CANVAS (the authored gradient)
  * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
@@ -639,7 +639,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
 `;
 
 /**
- * Migration 020: Blobs (VC-50, `docs/plans/attachments.md`) — the bytes behind
+ * Migration 020: Blobs (VC-50) — the bytes behind
  * every user-supplied file, and the links naming where each one is attached.
  * Replaces migration 011's `ticket_attachments`, which owned both at once:
  * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
@@ -957,8 +957,8 @@ CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, oc
 `;
 
 /**
- * Migration 025: the durable authority policy store (VC-44, slice 7 of
- * `docs/plans/authority-two-axis-rearchitecture.md`).
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of the
+ * two-axis authority rearchitecture).
  *
  * One nullable JSON column, `NULL` = inherit every built-in default, taking
  * 019's shape for 019's reason: the payload is a variable-shaped document, no
