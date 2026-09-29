@@ -18,7 +18,12 @@
  */
 
 import { lookup as resolveHostname } from "node:dns/promises";
-import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
+import {
+  STATUS_CODES,
+  request as httpRequest,
+  type ClientRequest,
+  type IncomingMessage,
+} from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 
 import {
@@ -31,6 +36,7 @@ import {
 } from "@volli/shared";
 
 import { extractReadableMarkdown } from "./extract";
+import { GITHUB_API_HOST, githubDirectoryFor, githubListing, githubRead } from "./github";
 
 /** Every rule this module can cite, beyond the ones admission already owns. */
 export const WEB_FETCH_RULE_IDS = [
@@ -40,9 +46,11 @@ export const WEB_FETCH_RULE_IDS = [
   "fetch.unresolvable",
   /** The connection failed, or the server spoke something this client could not read. */
   "fetch.transport",
-  /** The server answered with a redirect, which this slice reports rather than follows. */
+  /** A redirect chain that ended without a document: a loop, no destination, or too many hops. */
   "fetch.redirect",
-  /** The server answered, but not with a document. */
+  /** A redirect that would have moved a secure read onto plain http. */
+  "fetch.downgrade",
+  /** The server answered with an HTTP error status instead of the document. */
   "fetch.status",
   /** The response was not a media type Volli reads as text. */
   "fetch.type",
@@ -64,23 +72,74 @@ export const WEB_FETCH_RULE_IDS = [
 export type WebFetchRuleId = (typeof WEB_FETCH_RULE_IDS)[number] | WebTargetRuleId;
 
 /**
- * A refusal, thrown rather than returned because the contract's success value
- * is a document. The rule is carried beside the message so a caller can count
- * and record refusals without reading English.
+ * The rules that report what happened to a read rather than a policy that
+ * stopped one.
+ *
+ * The line this draws is the one a model acts on. A 404, a timeout or a host
+ * that does not resolve is a fact about the URL or the network — the same fact
+ * any client would have met — and the useful response is a better URL or a
+ * later retry. A non-public address, a disallowed scheme or a type Volli does
+ * not read is Volli's policy, and there the useful response is to stop. Telling
+ * a model that a 404 was "refused" and "must not be attempted another way" was
+ * measured doing the opposite of both: in the owner's transcripts a plain HTTP
+ * status was the most common web refusal by far — more than every other rule
+ * put together — and the models that met one read a policy wall and gave up or
+ * went to `curl`.
+ */
+const OUTCOME_RULES: ReadonlySet<WebFetchRuleId> = new Set([
+  "fetch.status",
+  "fetch.unresolvable",
+  "fetch.transport",
+  "fetch.redirect",
+  "fetch.unreadable",
+  "fetch.timeout",
+  "fetch.cancelled",
+]);
+
+/**
+ * Whether a read stopped at Volli's policy or at what the world answered.
+ *
+ * `policy`: Volli judged the request and declined it; the request is not the
+ * caller's to adjust. `outcome`: the request was allowed and made (or was being
+ * made), and the server or the network is what said no.
+ */
+export type WebFetchRefusalKind = "policy" | "outcome";
+
+/**
+ * A read that did not produce a document, thrown rather than returned because
+ * the contract's success value is a document. The rule is carried beside the
+ * message so a caller can count and record these without reading English, and
+ * {@link kind} says whether it was a policy or an outcome.
+ *
+ * The name predates that split and is kept because every caller already names
+ * it: a `fetch.status` "refusal" is an HTTP error reported as the fact it is,
+ * and the tool that renders it says so in those words.
  *
  * Reasons are written by Volli and never quote the server. A refusal is
  * destined for a ledger and for a model's context, and a remote host that could
  * choose its wording would have found a way to put text there without serving a
- * document Volli would accept.
+ * document Volli would accept. {@link status} is a number, and the phrase shown
+ * beside it is Node's, not the server's.
  */
 export class WebFetchRefusal extends Error {
   readonly rule: WebFetchRuleId;
+  readonly kind: WebFetchRefusalKind;
+  /** The HTTP status a server answered with, for `fetch.status` alone. */
+  readonly status: number | undefined;
 
-  constructor(rule: WebFetchRuleId, reason: string) {
+  constructor(rule: WebFetchRuleId, reason: string, status?: number) {
     super(reason);
     this.name = "WebFetchRefusal";
     this.rule = rule;
+    this.kind = OUTCOME_RULES.has(rule) ? "outcome" : "policy";
+    this.status = status;
   }
+}
+
+/** `404 Not Found`: the number the server sent, and the standard phrase for it. */
+export function httpStatusLine(status: number): string {
+  const phrase = STATUS_CODES[status];
+  return phrase === undefined ? `HTTP ${status}` : `${status} ${phrase}`;
 }
 
 /**
@@ -192,6 +251,17 @@ const READABLE_TYPES: ReadonlyMap<string, ServedKind> = new Map([
  * a decoder's worth of replacement characters.
  */
 const UNREADABLE_FAMILIES = ["image/", "audio/", "video/", "font/"];
+/**
+ * Where an unreadable type's refusal says what it was, in words a model can
+ * act on rather than a media type it has to decode.
+ */
+const UNREADABLE_NOUNS: ReadonlyMap<string, string> = new Map([
+  ["image/", "an image"],
+  ["audio/", "audio"],
+  ["video/", "video"],
+  ["font/", "a font"],
+  ["application/pdf", "a PDF"],
+]);
 const UNREADABLE_TYPES: ReadonlySet<string> = new Set([
   "application/pdf",
   "application/zip",
@@ -203,8 +273,44 @@ const UNREADABLE_TYPES: ReadonlySet<string> = new Set([
   "application/vnd.ms-powerpoint",
   "application/msword",
   "application/wasm",
-  "application/octet-stream",
 ]);
+
+/**
+ * Types that are text by any reading but whose names say so in no suffix.
+ *
+ * Source files are the point: a CDN serving `lib/index.ts` as
+ * `application/typescript`, or a shell script as `application/x-sh`, is
+ * serving exactly the text a model reading code wants. SVG is here rather than
+ * under `image/` because an SVG *is* its source — XML a reader can use — where
+ * every other image is bytes.
+ */
+const TEXT_TYPES: ReadonlySet<string> = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/ecmascript",
+  "application/typescript",
+  "application/x-typescript",
+  "application/x-sh",
+  "application/x-shellscript",
+  "application/toml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/sql",
+  "application/graphql",
+  "application/x-ndjson",
+  "application/jsonl",
+  "application/x-python",
+  "application/x-ruby",
+  "application/x-httpd-php",
+  "image/svg+xml",
+]);
+
+/** The words a refusal uses for a type Volli does not read. */
+function unreadableNoun(media: string): string {
+  for (const [prefix, noun] of UNREADABLE_NOUNS) if (media.startsWith(prefix)) return noun;
+  return "a binary file";
+}
 
 /**
  * How the served media type maps to the way this slice will read it.
@@ -224,9 +330,9 @@ const UNREADABLE_TYPES: ReadonlySet<string> = new Set([
 function declaredKind(media: string): ServedKind | undefined {
   const exact = READABLE_TYPES.get(media);
   if (exact !== undefined) return exact;
+  if (TEXT_TYPES.has(media)) return "text";
   if (media.endsWith("+xml")) return "text";
   if (media.endsWith("+json")) return "text";
-  if (media === "application/json" || media === "application/xml") return "text";
   // Everything else under `text/` is text by the registry's own definition:
   // `text/csv`, `text/tab-separated-values`, `text/x-rst`, and whatever is
   // registered next.
@@ -243,6 +349,13 @@ function declaredKind(media: string): ServedKind | undefined {
  * is the check standing between an unlabelled response and a decoder asked to
  * read a PNG as prose.
  *
+ * `application/octet-stream` lands here too rather than being refused by name.
+ * It is what CDNs and object stores label any file whose extension they do not
+ * map — which for code research is most source files — and the bytes settle
+ * whether it is a release archive or a `.rs` file far better than the label.
+ * Beside the NUL check, a head that is more than a tenth control bytes is
+ * binary too: some formats go a long way before their first zero.
+ *
  * Deliberately shallow. It looks at the head of the body, matches the two
  * openings that mean HTML, and otherwise says text; a sniffer that tried to be
  * clever here would be a second content-type parser with its own disagreements.
@@ -250,6 +363,13 @@ function declaredKind(media: string): ServedKind | undefined {
 function sniffKind(body: Buffer): ServedKind | undefined {
   const head = body.subarray(0, 1024);
   if (head.includes(0)) return undefined;
+  // Tab, line feed, vertical tab, form feed, carriage return and escape are
+  // what text files actually carry; every other C0 byte, and DEL, is not.
+  const control = head.filter(
+    (byte) =>
+      (byte < 0x20 && ![0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1b].includes(byte)) || byte === 0x7f,
+  ).length;
+  if (control * 10 > head.length) return undefined;
   const start = head.toString("latin1").trimStart().toLowerCase();
   if (
     start.startsWith("<!doctype html") ||
@@ -381,6 +501,23 @@ export interface SafeWebFetchOptions {
 }
 
 /**
+ * What a refusal adds when a name resolved into benchmarking space.
+ *
+ * No public site lives in 198.18.0.0/15, but a great many machines resolve
+ * every name into it: proxy and VPN clients running "fake-IP" DNS (Clash,
+ * Surge, Stash, sing-box and their kin) hand out addresses from exactly this
+ * range and map each one back to a hostname inside the tunnel. The refusal is
+ * still right — from here, a fake-IP answer and a hostile DNS record pointing
+ * at a range nobody routes are the same answer, and the proxy that would
+ * receive the connection can reach whatever it was configured to, private
+ * networks included. What changes is what the reader should do about it, which
+ * is nothing a model can: the person running the machine can switch the proxy
+ * to real-IP DNS, or exclude the host from its fake-IP range.
+ */
+const FAKE_IP_NOTE =
+  " On this machine that usually means a local proxy or VPN is answering DNS in fake-IP mode; the person running it can switch that proxy to real-IP DNS, or exempt this host from fake-IP, for Volli to read it.";
+
+/**
  * The addresses this fetch is allowed to reach, or a refusal.
  *
  * Every answer is judged, not just the one a client would have picked: a
@@ -409,7 +546,9 @@ function pinAddresses(
     if (verdict.outcome === "refuse") {
       throw new WebFetchRefusal(
         "fetch.address",
-        `${named(hostname)} resolves to ${candidate.address}, which is not on the public Internet: ${verdict.reason}`,
+        `${named(hostname)} resolves to ${candidate.address}, which is not on the public Internet: ${verdict.reason}${
+          verdict.class === "benchmarking" ? FAKE_IP_NOTE : ""
+        }`,
       );
     }
   }
@@ -476,7 +615,14 @@ function requestOptions(
       // `Accept` strictly and serves something outside this list — XHTML, an
       // API's JSON, `text/x-rst` — answers 406 without it, which is a document
       // Volli can read refused over a header Volli sent.
-      accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1",
+      //
+      // GitHub's API is asked in its own media type, which is what its
+      // documentation says every client should send and what keeps its
+      // answers in the stable JSON shape the directory listing reads.
+      accept:
+        target.hostname === GITHUB_API_HOST
+          ? "application/vnd.github+json, application/json;q=0.9, */*;q=0.1"
+          : "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1",
       // Identity only. A compressed body is a decompression bound this slice
       // has not written, and asking for one Volli cannot police is careless.
       "accept-encoding": "identity",
@@ -530,23 +676,35 @@ function document(
   response: IncomingMessage,
   body: Buffer,
   limits: WebFetchLimits,
+  read: GithubReadKind | undefined,
 ): SafeWebFetchResult {
   const { media, charset } = contentType(response);
-  if (UNREADABLE_TYPES.has(media) || UNREADABLE_FAMILIES.some((one) => media.startsWith(one))) {
+  // A type this module knows, or failing that whatever the bytes say they are.
+  // Asked before the unreadable families, because `image/svg+xml` is the one
+  // `image/` type that is text.
+  const declared = declaredKind(media);
+  if (
+    declared === undefined &&
+    (UNREADABLE_TYPES.has(media) || UNREADABLE_FAMILIES.some((one) => media.startsWith(one)))
+  ) {
     throw new WebFetchRefusal(
       "fetch.type",
-      `${named(target.hostname)} served ${media}, which is not a document Volli reads as text.`,
+      `${named(target.hostname)} served ${media}, which is ${unreadableNoun(media)}. ${TEXT_ONLY}`,
     );
   }
-  // A type this module knows, or failing that whatever the bytes say they are.
-  const kind = declaredKind(media) ?? sniffKind(body);
+  const kind = declared ?? sniffKind(body);
   if (kind === undefined) {
     throw new WebFetchRefusal(
       "fetch.type",
-      `${named(target.hostname)} served a document Volli does not read as text.`,
+      `${named(target.hostname)} served binary data rather than text. ${TEXT_ONLY}`,
     );
   }
-  const decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
+  let decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
+  // Read from the whole body, before any bound: the contents API spends around
+  // five hundred characters of JSON on each entry, so cutting the JSON first
+  // would list a fiftieth of a large directory and then fail to parse it.
+  const listing = read === "directory" ? githubListing(decoded) : undefined;
+  if (listing !== undefined) decoded = listing;
 
   let text: string;
   let truncated: boolean;
@@ -597,7 +755,97 @@ function document(
     contentType: returned,
     text: truncated ? text.slice(0, limits.textChars) : text,
     truncated,
+    ...(read === "raw-file" ? { via: "github-raw-file" as const } : {}),
+    ...(listing === undefined ? {} : { via: "github-directory-listing" as const }),
   };
+}
+
+/** What a type refusal says Volli does read, so the next URL can be a better one. */
+const TEXT_ONLY =
+  "Volli reads text: web pages, Markdown, plain text, JSON, XML and source files, not images, audio, video, fonts, PDFs or archives.";
+
+type GithubReadKind = NonNullable<ReturnType<typeof githubRead>>["kind"];
+
+/**
+ * A number of seconds a header states, read only if it is one.
+ *
+ * `Retry-After` may be a count of seconds or an HTTP date, and
+ * `X-RateLimit-Reset` is a Unix time; anything else is ignored rather than
+ * quoted, which is what keeps these headers from being a way for a server to
+ * put words in Volli's sentence. Capped at a day, past which "later" is the
+ * more honest thing to say.
+ */
+function secondsFrom(value: string | undefined, epoch: boolean): number | undefined {
+  const trimmed = value?.trim() ?? "";
+  let seconds: number;
+  if (/^\d{1,12}$/.test(trimmed)) {
+    seconds = epoch ? Number(trimmed) - Math.floor(Date.now() / 1000) : Number(trimmed);
+  } else if (!epoch && trimmed.length <= 64 && !Number.isNaN(Date.parse(trimmed))) {
+    seconds = Math.round((Date.parse(trimmed) - Date.now()) / 1000);
+  } else {
+    return undefined;
+  }
+  if (seconds > 86_400) return undefined;
+  return Math.max(0, seconds);
+}
+
+/** "in 42 seconds", "in about 7 minutes": a wait a reader can plan around. */
+function waitPhrase(seconds: number): string {
+  if (seconds < 120) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  return `about ${Math.ceil(seconds / 60)} minutes`;
+}
+
+/**
+ * What an HTTP error status means for the caller's next step.
+ *
+ * Every sentence is Volli's: the status is a number, the phrase is Node's
+ * table, and the only headers read are the ones that are numbers. The GitHub
+ * cases are named because they were the bulk of the measured failures — 404s
+ * on guessed `raw.githubusercontent.com` paths, and the API's hourly limit for
+ * callers without a token — and both have a concrete better move.
+ */
+function statusRefusal(
+  status: number,
+  response: IncomingMessage,
+  target: AdmittedWebTarget,
+  requestedUrl: string,
+): WebFetchRefusal {
+  const host = named(target.hostname);
+  const retry = secondsFrom(header(response, "retry-after"), false);
+  let reason: string;
+  if (
+    target.hostname === GITHUB_API_HOST &&
+    (status === 403 || status === 429) &&
+    header(response, "x-ratelimit-remaining")?.trim() === "0"
+  ) {
+    const reset = secondsFrom(header(response, "x-ratelimit-reset"), true);
+    reason = [
+      "GitHub's API rate limit for requests without a token is used up for this machine's address",
+      reset === undefined ? "; it resets within the hour." : `; it resets in ${waitPhrase(reset)}.`,
+      " Until then, read files through their github.com blob URLs or raw.githubusercontent.com, which do not count against it; directory listings (tree URLs) and api.github.com do.",
+    ].join("");
+  } else if (status === 429) {
+    reason = `${host} is rate limiting requests${
+      retry === undefined ? "" : ` and asked for a retry after ${waitPhrase(retry)}`
+    }. Wait before reading from it again, or read the same content from another source.`;
+  } else if (status === 404 || status === 410) {
+    // Built from the URL the caller asked for, so it points at their own
+    // repository rather than anywhere a redirect chose.
+    const directory = githubDirectoryFor(new URL(requestedUrl));
+    reason =
+      directory === undefined
+        ? `${host} has no document at that URL. Check the path, or use web_search to find where it lives.`
+        : `GitHub has no file at that path and ref. The ref or the path is probably wrong (a default branch may be main or master, and files move); list the directory at ${named(directory)} to see which files exist.`;
+  } else if (status === 401 || status === 403 || status === 407) {
+    reason = `${host} would not serve it without access Volli does not have; Volli sends no cookies or credentials. Look for a public copy of the same content.`;
+  } else if (status >= 500) {
+    reason = `${host} failed to serve it${
+      retry === undefined ? "" : ` and asked for a retry after ${waitPhrase(retry)}`
+    }. This is the server's error; reading it again later may work.`;
+  } else {
+    reason = `${host} rejected the request. Check the URL, or read the same content from another source.`;
+  }
+  return new WebFetchRefusal("fetch.status", reason, status);
 }
 
 /**
@@ -609,7 +857,7 @@ function document(
  */
 type HopResult =
   | { outcome: "document"; document: SafeWebFetchResult }
-  | { outcome: "redirect"; location: string; status: number };
+  | { outcome: "redirect"; location: string };
 
 /** Build the fetcher. */
 export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFetch {
@@ -631,6 +879,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     href: string,
     signal: AbortSignal,
     started: number,
+    read: GithubReadKind | undefined,
   ): Promise<HopResult> {
     const admission = admitWebTarget(href);
     if (admission.outcome === "refuse") {
@@ -766,21 +1015,18 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
             );
             return;
           }
-          settle({ outcome: "redirect", location: next, status });
+          settle({ outcome: "redirect", location: next });
           return;
         }
         // An error page is a page. It is written by the same host, arrives
         // with the same content type, and saying "404" is more use to a
         // caller than handing its body onward as though it were the document
-        // that was asked for.
+        // that was asked for. It is an outcome rather than a policy, and the
+        // reason says what to do next in Volli's words, from the status and
+        // the few headers that are numbers.
         if (status < 200 || status > 299) {
           request.destroy();
-          refuse(
-            new WebFetchRefusal(
-              "fetch.status",
-              `${named(target.hostname)} answered ${status} rather than serving the document.`,
-            ),
-          );
+          refuse(statusRefusal(status, response, target, requestedUrl));
           return;
         }
         // Volli asked for `identity`. A server that compresses anyway has
@@ -841,6 +1087,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
                 response,
                 Buffer.concat(chunks),
                 limits,
+                read,
               ),
             });
           } catch (error) {
@@ -870,16 +1117,20 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         throw new WebFetchRefusal(admission.rule, admission.reason);
       }
       const requestedUrl = admission.target.url;
+      // A GitHub page whose content lives somewhere readable is read there.
+      // The rewritten URL is only a starting point: the first hop admits,
+      // resolves and pins it like any URL a caller could have named.
+      const github = githubRead(new URL(requestedUrl));
 
       // Every URL this read has already been sent to. A redirect back to one of
       // them is a loop, and a loop that is merely bounded by the hop count
       // spends the whole budget discovering what the first repeat already said.
-      const seen = new Set<string>([requestedUrl]);
-      let href = requestedUrl;
+      let href = github?.href ?? requestedUrl;
+      const seen = new Set<string>([requestedUrl, href]);
       let scheme = admission.target.scheme;
 
       for (let followed = 0; ; followed += 1) {
-        const result = await hop(requestedUrl, href, input.signal, started);
+        const result = await hop(requestedUrl, href, input.signal, started, github?.kind);
         if (result.outcome === "document") return result.document;
         if (followed >= limits.maxRedirects) {
           throw new WebFetchRefusal(
@@ -895,7 +1146,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         const destination = new URL(result.location);
         if (scheme === "https" && destination.protocol === "http:") {
           throw new WebFetchRefusal(
-            "fetch.redirect",
+            "fetch.downgrade",
             `Reading ${requestedUrl} was redirected from https onto plain http at ${named(
               destination.hostname,
             )}, which Volli does not follow.`,

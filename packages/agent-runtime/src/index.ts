@@ -63,6 +63,7 @@ export {
   type WebAddressResolver,
   type WebFetchAddress,
   type WebFetchLimits,
+  type WebFetchRefusalKind,
   type WebFetchRuleId,
 } from "./web/safe-fetch";
 export {

@@ -69,7 +69,7 @@ function ipv4Octets(address: string): Ipv4Octets | undefined {
 
 /** Classify a dotted-quad IPv4 address against the IANA special-purpose registry. */
 function classifyIpv4(octets: Ipv4Octets): WebAddressVerdict {
-  const [a, b] = octets;
+  const [a, b, c] = octets;
   if (a === 0) return refuse("unspecified", "0.0.0.0/8 is not a routable destination.");
   if (a === 127) return refuse("loopback", "127.0.0.0/8 is this machine.");
   if (a === 10) return refuse("private-use", "10.0.0.0/8 is a private network.");
@@ -80,7 +80,19 @@ function classifyIpv4(octets: Ipv4Octets): WebAddressVerdict {
     return refuse("link-local", "169.254.0.0/16 is link-local, and hosts cloud metadata.");
   if (a === 100 && b >= 64 && b <= 127)
     return refuse("carrier-grade-nat", "100.64.0.0/10 is carrier-grade NAT space.");
-  if (a === 192 && b === 0) return refuse("protocol-assignment", "192.0.0.0/24 is not public.");
+  // Three octets, not two. 192.0.0.0/24 is the protocol-assignment slice and
+  // 192.0.2.0/24 is documentation, but the rest of 192.0.0.0/16 is ordinary
+  // public space: Automattic serves WordPress VIP from 192.0.64.0/18, so
+  // matching on `192.0` alone refused github.blog, slack.engineering and
+  // every other site hosted there as "not public".
+  if (a === 192 && b === 0 && c === 0)
+    return refuse("protocol-assignment", "192.0.0.0/24 is not public.");
+  if (a === 192 && b === 0 && c === 2)
+    return refuse("documentation", "192.0.2.0/24 is reserved for documentation.");
+  if (a === 198 && b === 51 && c === 100)
+    return refuse("documentation", "198.51.100.0/24 is reserved for documentation.");
+  if (a === 203 && b === 0 && c === 113)
+    return refuse("documentation", "203.0.113.0/24 is reserved for documentation.");
   if (a === 198 && (b === 18 || b === 19))
     return refuse("benchmarking", "198.18.0.0/15 is benchmarking space.");
   if (a >= 224) return refuse("multicast", "224.0.0.0/4 and above are not unicast destinations.");

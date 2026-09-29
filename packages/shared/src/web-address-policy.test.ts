@@ -33,6 +33,10 @@ describe("web address classification", () => {
     ["169.254.169.254", "link-local"],
     ["100.64.0.1", "carrier-grade-nat"],
     ["192.0.0.1", "protocol-assignment"],
+    ["192.0.0.255", "protocol-assignment"],
+    ["192.0.2.1", "documentation"],
+    ["198.51.100.7", "documentation"],
+    ["203.0.113.254", "documentation"],
     ["198.18.0.1", "benchmarking"],
     // 198.18.0.0/15 spans both 198.18 and 198.19; only testing the first half
     // would leave the upper one admitted.
@@ -43,15 +47,27 @@ describe("web address classification", () => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
   });
 
-  it.each(["8.8.8.8", "1.1.1.1", "172.32.0.1", "192.169.0.1", "100.128.0.1", "199.18.0.1"])(
-    "admits %s, which neighbours a blocked range without being in it",
-    (address) => {
-      // Off-by-one guards. `172.32.0.1` and `100.128.0.1` sit one step outside
-      // 172.16/12 and 100.64/10; refusing them would be a policy that quietly
-      // breaks ordinary sites.
-      expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
-    },
-  );
+  it.each([
+    "8.8.8.8",
+    "1.1.1.1",
+    "172.32.0.1",
+    "192.169.0.1",
+    "100.128.0.1",
+    "199.18.0.1",
+    "192.0.1.1",
+    "192.0.3.1",
+    "192.0.66.2",
+    "192.0.78.9",
+    "198.51.101.1",
+    "203.0.114.1",
+  ])("admits %s, which neighbours a blocked range without being in it", (address) => {
+    // Off-by-one guards. `172.32.0.1` and `100.128.0.1` sit one step outside
+    // 172.16/12 and 100.64/10; refusing them would be a policy that quietly
+    // breaks ordinary sites. `192.0.66.2` is github.blog and `192.0.78.9` is
+    // wordpress.com — Automattic's public 192.0.64.0/18, which a check on
+    // `192.0` alone used to refuse as the /24 beside it.
+    expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
+  });
 
   /**
    * IPv6 is not an afterthought here. A hostname with only an AAAA record is
