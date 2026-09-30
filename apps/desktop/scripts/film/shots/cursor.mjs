@@ -33,28 +33,27 @@ function cursorRig(format) {
   const wide = format === "wide";
   return (t) => {
     const cursor = CURSOR.follow(t);
-    // Macro on the cursor first; then the frame opens to show the page it is
-    // driving, leaving void for the super (right in 16:9, above in 9:16).
-    const open = ease.inOutCubic(Math.min(1, Math.max(0, (t - 1850) / 1950)));
+    // Starts close on the cursor, already off to one side, and opens fast so
+    // the page floats in the cobalt world with the super beside it (right in
+    // 16:9, above in 9:16) from ~500ms on.
+    const open = ease.outCubic(Math.min(1, Math.max(0, t / 1500)));
     const wideView = CURSOR.page(600, 330, 0);
-    const target = [0, 1, 2].map((i) => mix(cursor[i], mix(cursor[i], wideView[i], 0.55), open));
+    const target = [0, 1, 2].map((i) => mix(cursor[i], mix(cursor[i], wideView[i], 0.6), open));
     return {
       rotation: wide
         ? {
-            rotateX: mix(16, 9, open) - t / 900,
-            rotateY: mix(30, 42, open),
+            rotateX: mix(14, 9, open) - t / 900,
+            rotateY: mix(34, 40, open),
             rotateZ: mix(-3, -1, open),
           }
         : {
-            rotateX: mix(22, 30, open),
-            rotateY: mix(22, 16, open),
+            rotateX: mix(26, 30, open),
+            rotateY: mix(20, 16, open),
             rotateZ: mix(-4, -2, open),
           },
       target,
-      near: (wide ? mix(760, -260, open) : mix(700, -120, open)) + 40 * Math.min(1, t / 1850),
-      offset: wide
-        ? [mix(-160, -520, open), mix(-40, -40, open)]
-        : [mix(0, 20, open), mix(80, 380, open)],
+      near: (wide ? mix(300, -420, open) : mix(260, -260, open)) + 30 * Math.min(1, t / 3800),
+      offset: wide ? [mix(-420, -600, open), -30] : [mix(10, 20, open), mix(300, 420, open)],
       focus: mix(0, 40, open),
       fStop: mix(4, 6, open),
       focalLength: 60,

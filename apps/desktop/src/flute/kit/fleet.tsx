@@ -6,8 +6,9 @@
  * person (the ring standing still) — seeded through the same stores and bridge
  * answer the real sidebar reads (`useProjectSessionsStore`, `sessions.list`,
  * `useChatSessionsStore`), the way the lab's `sidebar-performance` scratch
- * seeds them. Every row is project-scoped (no ticket), so nothing here names a
- * ticket, and every path goes through `rehome`.
+ * seeds them. Most live rows sit on an invented ticket (`fleetTickets`, seeded
+ * into the board store, VLT-2xx) so their subtitle reads "VLT-212 · just now";
+ * every path goes through `rehome`.
  */
 import * as React from "react";
 import {
@@ -15,15 +16,25 @@ import {
   PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
+  type Ticket,
 } from "@volli/shared";
 import { seedSlice } from "@volli/session-presentation";
 
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 
 import type { ApiOverrides } from "../../renderer/lab/fake-api";
 import { NOW } from "../../renderer/lab/fixtures";
-import { projects, rehome, seedShell, shellApi, sessionRows } from "./split-shell";
+import {
+  project,
+  projects,
+  rehome,
+  seedShell,
+  shellApi,
+  sessionRows,
+  tickets,
+} from "./split-shell";
 
 const MINUTE = 60_000;
 
@@ -85,6 +96,37 @@ const HARBOR: readonly (readonly [string, State])[] = [
   ["Canary rollout script", "working"],
 ];
 
+/**
+ * An invented ticket per live Voltaic Session (every fourth left ticketless, so
+ * the band stays honest), numbered VLT-201 up — the sidebar shows the selected
+ * project's tickets, so only Voltaic's rows can carry one.
+ */
+const ticketFor = (prefix: string, index: number, state: State): Ticket | null => {
+  if (prefix !== "v" || !(state === "working" || state === "waiting") || index % 4 === 3) {
+    return null;
+  }
+  const base = tickets[0]!;
+  return {
+    ...base,
+    id: `fleet-tkt-${index + 1}`,
+    projectId: project.id,
+    ticketNumber: 201 + index * 3,
+    title: VOLTAIC[index]![0],
+    body: "",
+    status: "doing",
+    priority: "medium",
+    labels: [],
+    order: 100 + index,
+    worktreePath: null,
+    branch: null,
+    baseBranch: null,
+  };
+};
+
+export const fleetTickets: Ticket[] = VOLTAIC.map((row, i) => ticketFor("v", i, row[1])).filter(
+  (value): value is Ticket => value !== null,
+);
+
 function fleetRecord(
   projectId: string,
   prefix: string,
@@ -92,6 +134,7 @@ function fleetRecord(
   [title, state]: readonly [string, State],
 ): ChatSessionRecord {
   const live = state === "working" || state === "waiting";
+  const ticket = ticketFor(prefix, index, state);
   const lastActivityAt =
     state === "done"
       ? NOW - (50 + index * 7) * MINUTE
@@ -101,7 +144,7 @@ function fleetRecord(
   return {
     sessionId: `fleet-${prefix}-${index + 1}`,
     projectId,
-    ticketId: null,
+    ticketId: ticket?.id ?? null,
     title,
     createdAt: lastActivityAt - 40 * MINUTE,
     adapterId: "claude-code",
@@ -109,8 +152,8 @@ function fleetRecord(
     activity: state === "working" ? "working" : state === "waiting" ? "waiting" : "idle",
     waitingOn: state === "waiting" ? (index % 2 === 0 ? "question" : "permission") : null,
     outcome: null,
-    bornTicketless: true,
-    role: "project",
+    bornTicketless: ticket === null,
+    role: ticket === null ? "project" : "ticket",
     parentSessionId: null,
     model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "medium" },
     lastActivityAt,
@@ -157,6 +200,12 @@ export function fleetApi(overrides: ApiOverrides = {}): ApiOverrides {
 /** `seedShell`, then the sidebar's stores filled with the fleet. */
 export function seedFleet(): void {
   seedShell();
+  useBoardStore.setState((state) => ({
+    ticketsByProject: {
+      ...state.ticketsByProject,
+      [project.id]: [...(state.ticketsByProject[project.id] ?? tickets), ...fleetTickets],
+    },
+  }));
   const byProject: Record<
     string,
     { terminal: never[]; chat: ChatSessionRecord[]; provenance: {} }

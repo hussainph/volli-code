@@ -160,7 +160,7 @@ function BrowserWindow({ t, holder }: { t: number; holder: BrowserTabHolder | nu
 const CUES: Record<Format, Cue[]> = {
   landscape: [
     {
-      at: 2300,
+      at: 500,
       until: 3650,
       lines: ["Share a browser", "with your agent."],
       weights: [800, 320],
@@ -170,7 +170,7 @@ const CUES: Record<Format, Cue[]> = {
   ],
   portrait: [
     {
-      at: 2300,
+      at: 500,
       until: 3650,
       lines: ["Share a browser", "with your agent."],
       weights: [800, 320],

@@ -363,7 +363,7 @@ function ChatOverlays({ t }: { t: number }) {
 /* ---------------------------------------------------------------- shot */
 
 const CUE: Cue = {
-  at: 200,
+  at: 650,
   until: 3300,
   eyebrow: "Multitasking",
   lines: ["Chats, browsers, terminals.", "Side by side."],

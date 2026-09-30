@@ -12,7 +12,6 @@
 import { ease, mix, progress, track } from "../lib.mjs";
 
 const CARD = { left: -482, width: 1274 };
-const TAB_BAR_Y = -417;
 /** Mirrors OUTER / INNER in split.tsx. */
 const OUTER = [
   [250, 0.5],
@@ -41,16 +40,33 @@ function splitRig(format) {
     const push = progress(t, 0, 1300, ease.outCubic);
     const pull = progress(t, 2700, 3500, ease.inOutCubic);
     const p = progress(t, 0, 3500, ease.linear);
-    const near = wide ? mix(mix(80, 800, push), 420, pull) : mix(mix(-500, 760, push), 250, pull);
-    const ty = mix(0, TAB_BAR_Y + 180, push) * (1 - pull * 0.6);
-    const tx = mix(0, seam - 60, push) * (1 - pull * 0.5);
+    if (wide) {
+      // The window rides the LEFT of frame, its right edge held short of the
+      // lower-right super, so the rose world stays open where the words land.
+      // The camera still leans after the seam, at a third of its travel.
+      const near = mix(mix(-160, 380, push), 280, pull);
+      const tx = mix(80, 230 + 0.35 * (seam - 200), push);
+      const ty = mix(0, -170, push);
+      return {
+        rotation: { rotateX: mix(12, 6, p), rotateY: mix(28, 18, p), rotateZ: mix(-6, -3, p) },
+        target: [tx, ty, 0],
+        near,
+        offset: [mix(-220, -620, push), mix(-40, -150, push)],
+        focus: 0,
+        fStop: 3.2,
+        focalLength: 60,
+        maxBlur: 6,
+      };
+    }
+    // 9:16: the window lives in the upper half; the super owns the lower.
+    const near = mix(mix(-260, 150, push), 60, pull);
+    const tx = mix(0, seam - 40, push) * (1 - pull * 0.5);
+    const ty = mix(0, -80, push);
     return {
-      rotation: wide
-        ? { rotateX: mix(10, 5, p), rotateY: mix(26, 16, p), rotateZ: mix(-6, -3, p) }
-        : { rotateX: mix(16, 10, p), rotateY: mix(10, 4, p), rotateZ: mix(-5, -2, p) },
+      rotation: { rotateX: mix(16, 10, p), rotateY: mix(10, 4, p), rotateZ: mix(-5, -2, p) },
       target: [tx, ty, 0],
       near,
-      offset: wide ? [-40, -60] : [0, -120],
+      offset: [0, mix(-300, -470, push)],
       focus: 0,
       fStop: 3.2,
       focalLength: 60,

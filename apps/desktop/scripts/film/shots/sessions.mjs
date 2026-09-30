@@ -13,11 +13,11 @@ function sessionsRig(format) {
     const p = progress(t, 0, 1400, ease.inOutSine);
     return {
       rotation: wide
-        ? { rotateX: mix(12, 8, p), rotateY: mix(34, 28, p), rotateZ: mix(-6, -4, p) }
+        ? { rotateX: mix(12, 8, p), rotateY: mix(68, 62, p), rotateZ: mix(-6, -4, p) }
         : { rotateX: mix(20, 16, p), rotateY: mix(22, 18, p), rotateZ: mix(-6, -4, p) },
       target: [-600, mix(-160, 160, p), 0],
       near: wide ? mix(420, 520, p) : mix(360, 460, p),
-      offset: wide ? [-620, -40] : [-40, -460],
+      offset: wide ? [-660, -120] : [-40, -640],
       focus: 0,
       fStop: 3.2,
       focalLength: 60,

@@ -133,24 +133,37 @@ const DEFAULTS: ModelAccessDefaults = {
   visual: { providerId: "google", modelId: "gemini-3.8-flash", reasoningLevel: "high" },
 };
 
-/** What "Refresh models" brings in: the newest releases, invented. */
+/**
+ * What "Refresh models" brings in: real releases the repo's lab fixtures
+ * already know (home-rail-now, usage-surfaces), newer than the list above.
+ */
 const NEWEST: ModelAccessSnapshot["models"] = [
   {
-    providerId: "anthropic",
-    modelId: "claude-opus-5",
-    label: "Claude Opus 5",
+    providerId: "openai-codex",
+    modelId: "gpt-5.3-codex",
+    label: "GPT-5.3 Codex",
     state: "available",
     acceptsImageInput: true,
-    reasoningLevels: ["low", "medium", "high", "max"],
+    reasoningLevels: ["low", "medium", "high", "xhigh"],
+    contextWindow: 400_000,
+  },
+  {
+    providerId: "openai-codex",
+    modelId: "gpt-5.1-codex-mini",
+    label: "GPT-5.1 Codex Mini",
+    state: "available",
+    acceptsImageInput: true,
+    reasoningLevels: ["low", "medium", "high"],
     contextWindow: 400_000,
   },
   {
     providerId: "google",
-    modelId: "gemini-4-flash",
-    label: "Gemini 4 Flash",
+    modelId: "gemini-3-pro",
+    label: "Gemini 3 Pro",
     state: "available",
     acceptsImageInput: true,
-    reasoningLevels: ["off", "low", "high"],
+    reasoningLevels: ["low", "high"],
+    contextWindow: 1_000_000,
   },
 ];
 
@@ -164,12 +177,12 @@ const REFRESHED: ModelAccessSnapshot = {
 /** After the refresh, Ticket picks up the newest model. */
 const DEFAULTS_REFRESHED: ModelAccessDefaults = {
   ...DEFAULTS,
-  ticket: { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "high" },
+  ticket: { providerId: "openai-codex", modelId: "gpt-5.3-codex", reasoningLevel: "high" },
 };
-/** Then Fast — what quick subagents run on — moves to the new Flash. */
+/** Then Fast — what quick subagents run on — moves to the new Codex Mini. */
 const DEFAULTS_FAST: ModelAccessDefaults = {
   ...DEFAULTS_REFRESHED,
-  fast: { providerId: "google", modelId: "gemini-4-flash", reasoningLevel: "low" },
+  fast: { providerId: "openai-codex", modelId: "gpt-5.1-codex-mini", reasoningLevel: "low" },
 };
 
 /** A client with no main process behind it; state lives for the render only. */
@@ -240,7 +253,7 @@ const CUES: Record<Format, Cue[]> = {
   landscape: [
     // Medium, bottom-left: the card lives in the right ~55% of the frame.
     { ...CUE1, place: "lower", size: "medium" },
-    { ...CUE2, place: "lower", size: "medium" },
+    { ...CUE2, place: "upper", size: "medium" },
   ],
   portrait: [
     { ...CUE1, place: "upper" },

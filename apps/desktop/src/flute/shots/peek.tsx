@@ -16,7 +16,9 @@ import * as React from "react";
 import { Surface } from "@webprodigies/flute";
 import { PERSON_STARTED, type SessionPeekContent, type SessionPeekEntry } from "@volli/shared";
 
+import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { SessionPeekDialog } from "@renderer/components/chat/session-peek-dialog";
+import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { SessionPeekCard } from "@renderer/components/session-peek/session-peek-card";
 import type { SessionPeekRow } from "@renderer/components/session-peek/use-session-peek";
 
@@ -36,7 +38,7 @@ import { seedShell, shellApi, ShellWindow } from "../kit/split-shell";
 import { Backdrop, useFilmTheme } from "../kit/world";
 
 /** The window, in lab CSS px. Mirrored by scripts/film/shots/peek.mjs. */
-export const WINDOW = { width: 1600, height: 960 };
+export const WINDOW = { width: 1280, height: 800 };
 /** How far above the window the overlay layer floats. */
 export const LIFT = 80;
 
@@ -295,7 +297,7 @@ function useRehomePortals(host: React.RefObject<HTMLDivElement | null>): void {
     const adopt = () => {
       for (const node of document.body.querySelectorAll<HTMLElement>(`:scope > ${PORTAL_ROOTS}`)) {
         // Radix positions both roots `fixed` to the viewport; inside the
-        // lifted layer they must resolve against the 1600×960 host instead.
+        // lifted layer they must resolve against the window-sized host instead.
         node.style.position = "absolute";
         target.append(node);
       }
@@ -312,19 +314,37 @@ function useRehomePortals(host: React.RefObject<HTMLDivElement | null>): void {
   }, [host]);
 }
 
-function Bubble({ role, text }: { role: "user" | "assistant"; text: string }) {
-  return role === "user" ? (
-    <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-xl bg-muted px-3 py-2 text-ui text-foreground">
-        {text}
-      </div>
-    </div>
-  ) : (
-    <div className="max-w-[92%] text-ui leading-relaxed text-foreground">{text}</div>
+/** The overlay's thread: invented work on the split-pane resume seed. */
+const THREAD: { from: "user" | "assistant"; text: string }[] = [
+  { from: "user", text: "When a split pane reopens, which chat should it resume?" },
+  {
+    from: "assistant",
+    text: "Two candidates: the newest chat in the pane, or the one you last focused. I traced both through `restorePane`. The focused one is already stored per pane, so it survives a reload.",
+  },
+  { from: "user", text: "Show me the change for the focused-pane seed." },
+  {
+    from: "assistant",
+    text: "```diff\n- const seed = pane.chats.at(-1);\n+ const seed = pane.lastFocused ?? pane.chats.at(-1);\n  resumeChat(pane.id, seed);\n```\nPanes that were never focused fall back to the newest chat.",
+  },
+  {
+    from: "assistant",
+    text: "A pane closed mid-run keeps its chat attached, so it picks up where it left off. The last focused one reads best. Should I ship the focused-pane seed?",
+  },
+];
+
+function Turn({ from, text }: { from: "user" | "assistant"; text: string }) {
+  return (
+    <Message from={from} className="relative max-w-full">
+      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+        <GuardedResponse>{text}</GuardedResponse>
+      </MessageContent>
+    </Message>
   );
 }
 
-function Overlay({ t }: { t: number }) {
+function Overlay({ t, format }: { t: number; format: Format }) {
+  // 9:16 gets a narrower, taller dialog so its thread reads at phone width.
+  const box = format === "portrait" ? { width: 640, height: 760 } : { width: 980, height: 640 };
   const host = React.useRef<HTMLDivElement | null>(null);
   useRehomePortals(host);
   React.useLayoutEffect(() => {
@@ -361,18 +381,18 @@ function Overlay({ t }: { t: number }) {
           top: "50%",
           // The chrome already centres itself with `-translate-1/2`.
           transform: `scale(${scale})`,
-          width: 900,
-          maxWidth: 900,
-          height: 520,
+          width: box.width,
+          maxWidth: box.width,
+          height: box.height,
         }}
       >
-        <div className="flex min-h-0 flex-1 flex-col justify-end gap-4 overflow-hidden px-6 py-5">
-          {peek.entries.map((e) => (
-            <Bubble key={e.text} role={e.role === "user" ? "user" : "assistant"} text={e.text} />
+        <div className="flex min-h-0 flex-1 flex-col justify-end gap-5 overflow-hidden px-7 py-5">
+          {THREAD.map((turn) => (
+            <Turn key={turn.text} from={turn.from} text={turn.text} />
           ))}
           {sent ? (
             <div style={{ opacity: landed, transform: `translateY(${(1 - landed) * 10}px)` }}>
-              <Bubble role="user" text={REPLY} />
+              <Turn from="user" text={REPLY} />
             </div>
           ) : null}
         </div>
@@ -408,16 +428,16 @@ const CUES: Record<Format, Cue[]> = {
   landscape: [
     {
       at: 150,
-      until: 2300,
+      until: 2000,
       eyebrow: "Context switching",
       lines: ["Hover to peek."],
       sub: "Any session, right from the sidebar.",
-      place: "lower-right",
+      place: "lower",
       size: "medium",
     },
     {
       at: 2500,
-      until: 4800,
+      until: 4250,
       lines: ["Reply without", "losing your place."],
       weights: [800, 320],
       place: "lower-right",
@@ -427,7 +447,7 @@ const CUES: Record<Format, Cue[]> = {
   portrait: [
     {
       at: 150,
-      until: 2300,
+      until: 2000,
       eyebrow: "Context switching",
       lines: ["Hover to peek."],
       sub: "Any session, right from the sidebar.",
@@ -435,7 +455,7 @@ const CUES: Record<Format, Cue[]> = {
     },
     {
       at: 2500,
-      until: 4800,
+      until: 4250,
       lines: ["Reply without", "losing your place."],
       weights: [800, 320],
       place: "upper",
@@ -478,7 +498,7 @@ export function PeekShot({ format }: { format: Format }) {
             width: WINDOW.width,
             height: WINDOW.height,
           }}
-          content={overlayOn ? <Overlay t={t} /> : <div className="size-full" />}
+          content={overlayOn ? <Overlay t={t} format={format} /> : <div className="size-full" />}
         />
       </Surface>
       <Backdrop t={t} theme="paper" focus={[0.3, 0.45]} />

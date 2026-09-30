@@ -3,23 +3,28 @@
  * on the origin; its sidebar's session rows sit in x ∈ [-790, -490], running
  * from y ≈ -380 down the window.
  *
- * Frame 1: a tight oblique on the sidebar's live rows, already sweeping fast
- * down the list. From ~900ms the camera pulls back and squares up to reveal
- * the whole window floating in the aurora world, settled by ~2200ms, then
- * drifts.
+ * Frame 1: a steep oblique on the sidebar's live rows, already sweeping fast
+ * down the list, the window framed to one side (left in wide, top in tall) so
+ * the super's corner is aurora world from its 250ms entrance. From ~800ms the
+ * camera pulls back and squares up to reveal the whole window floating in the
+ * world, settled by ~2250ms, then drifts.
  */
 import { ease, mix, progress } from "../lib.mjs";
 
 const RIGS = {
+  // The window sits left and up; the lower-right quadrant — where the super
+  // lands at 250ms — is aurora world from frame 1 (the window's far side
+  // recedes steeply away from it), and stays world through the pull-back.
   wide: {
-    start: { rot: [26, 30, -9], target: [-620, -170, 0], near: 800, offset: [0, 0] },
-    sweepY: 260,
-    end: { rot: [10, 16, -4], target: [60, 0, 0], near: -560, offset: [-300, -110] },
+    start: { rot: [16, 64, -7], target: [-640, -170, 0], near: 640, offset: [-540, -170] },
+    sweepY: 220,
+    end: { rot: [8, 24, -4], target: [60, 0, 0], near: -900, offset: [-420, -150] },
   },
+  // Portrait: the window rides the top half, the super sits in the lower band.
   tall: {
-    start: { rot: [30, 22, -8], target: [-620, -170, 0], near: 800, offset: [0, 0] },
-    sweepY: 300,
-    end: { rot: [14, 12, -4], target: [0, 0, 0], near: -1000, offset: [0, -330] },
+    start: { rot: [34, 44, -8], target: [-640, -170, 0], near: 480, offset: [-60, -640] },
+    sweepY: 220,
+    end: { rot: [16, 16, -4], target: [0, 0, 0], near: -1500, offset: [0, -470] },
   },
 };
 

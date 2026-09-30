@@ -1,7 +1,7 @@
 /**
  * Chapter · context switching: hover peek → conversation overlay (paper).
- * Component: src/flute/shots/peek.tsx. Layout: a 1600×960 AppShell window
- * centred on the origin; the sidebar's session rows sit near x ≈ -680,
+ * Component: src/flute/shots/peek.tsx. Layout: a 1280×800 AppShell window
+ * centred on the origin; the sidebar's session rows sit near x ≈ -560,
  * the peek card opens just right of them; the overlay layer floats 80px up.
  *
  * Camera: a close oblique on the sidebar and card, which opens up (pulls back,
@@ -19,12 +19,15 @@ function peekRig(format) {
     const back = progress(t, 4200, 5000, ease.inOutCubic);
     const drift = progress(t, 0, 5000, ease.linear);
     const o = open * (1 - 0.55 * back);
+    // Wide: the window's left edge sits right of centre during the peek (the
+    // world is open on the left, under the lower-left super); the overlay
+    // then swings to the left of frame, the world open on the right.
     return {
       rotation: wide
         ? {
-            rotateX: mix(mix(14, 11, drift), 8, o),
-            rotateY: mix(mix(26, 20, drift), 10, o),
-            rotateZ: mix(-4, -1.5, o),
+            rotateX: mix(mix(12, 10, drift), 6, o),
+            rotateY: mix(mix(24, 19, drift), 14, o),
+            rotateZ: mix(-3, -1, o),
           }
         : {
             rotateX: mix(mix(16, 13, drift), 8, o),
@@ -32,12 +35,12 @@ function peekRig(format) {
             rotateZ: mix(-3, -1, o),
           },
       target: wide
-        ? [mix(mix(-470, -440, drift), -40, o), mix(-190, 0, o), mix(0, 80, o)]
-        : [mix(mix(-500, -470, drift), -40, o), mix(-170, 0, o), mix(0, 80, o)],
+        ? [mix(mix(-420, -400, drift), 0, o), mix(-60, 0, o), mix(0, 80, o)]
+        : [mix(mix(-400, -380, drift), 0, o), mix(-90, 0, o), mix(0, 80, o)],
       near: wide
-        ? magnify(mix(mix(1.9, 2.1, drift), 1.3, o))
-        : magnify(mix(mix(2.3, 2.5, drift), 1.0, o)),
-      offset: wide ? [mix(-300, -300, o), mix(-40, -20, o)] : [0, mix(260, 200, o)],
+        ? magnify(mix(mix(1.55, 1.7, drift), 1.12, o))
+        : magnify(mix(mix(2.0, 2.2, drift), 1.5, o)),
+      offset: wide ? [mix(300, -290, o), mix(-20, -30, o)] : [0, mix(280, 290, o)],
       focus: 0,
       fStop: 3.2,
       focalLength: 60,
@@ -55,11 +58,11 @@ export const shot = {
   nodes: [{ id: "window" }, { id: "overlay", parentId: "window", transform: { z: 80 } }],
   rig: peekRig,
   guard: [
-    [-800, -480, 0],
-    [800, -480, 0],
-    [-800, 480, 0],
-    [800, 480, 0],
-    [-400, -300, 80],
-    [400, 300, 80],
+    [-640, -400, 0],
+    [640, -400, 0],
+    [-640, 400, 0],
+    [640, 400, 0],
+    [-490, -320, 80],
+    [490, 320, 80],
   ],
 };

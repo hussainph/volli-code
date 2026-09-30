@@ -24,10 +24,10 @@ function limitsRig(format) {
         ? { rotateX: mix(22, 14, travel) - 2 * drift, rotateY: mix(-20, -12, travel), rotateZ: 3 }
         : { rotateX: mix(20, 12, travel) - 2 * drift, rotateY: mix(-14, -8, travel), rotateZ: 2 },
       target: [at(0) - 20 * drift, at(1), at(2)],
-      near: wide ? mix(980, 1040, travel) + 20 * drift : mix(980, 1000, travel) + 30 * drift,
+      near: wide ? mix(980, 720, travel) + 20 * drift : mix(980, 820, travel) + 30 * drift,
       // 9:16 keeps the panel low so the gold world above the window sits behind
       // the upper super.
-      offset: wide ? [0, mix(-40, -120, travel)] : [0, mix(260, 180, travel)],
+      offset: wide ? [mix(120, 220, travel), mix(160, 250, travel)] : [0, mix(300, 330, travel)],
       focus: 0,
       fStop: 3.6,
       focalLength: 60,
@@ -42,7 +42,7 @@ export const shot = {
   description: "The usage-limits icon beside ⌘K opens onto Session and Weekly windows.",
   durationMs: 1600,
   perspective: 1400,
-  nodes: [{ id: "window" }],
+  nodes: [{ id: "window" }, { id: "popover", parentId: "window", transform: { z: 60 } }],
   rig: limitsRig,
   guard: [
     [-720, -450, 0],

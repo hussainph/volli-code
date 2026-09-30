@@ -3,23 +3,21 @@
  *
  * Real: the whole `AppShell` (ShellWindow), whose chrome band draws the real
  * `UsageLimitsPopover` trigger beside ⌘K, reading the invented snapshot below
- * through a fixture `ModelAccessProvider`. The popover's own content portals to
- * `document.body` (outside any Surface), so the open state is drawn in-window:
- * the popover's chrome mirrored from usage-limits-popover.tsx around the real
- * `AccountUsage` rows, with the bars filling from scene time.
+ * through a fixture `ModelAccessProvider`. The popover is the REAL open
+ * `UsageLimitsPopover`: its body portal is re-homed into a Surface lifted
+ * above the window (see `PopoverLayer`), and `open` is driven from scene time
+ * by clicking the real trigger. The wall clock is pinned to the fixture's NOW.
  *
  * Usage numbers are invented; no account labels or emails.
  */
 import { Surface } from "@webprodigies/flute";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import * as React from "react";
 import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
   type UsageLimits,
 } from "@volli/shared";
 
-import { AccountUsage } from "@renderer/components/usage-limits/account-usage";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
 import { ease, mix, progress } from "../kit/clock";
@@ -27,6 +25,7 @@ import {
   FrameLayer,
   Supers,
   useFilm,
+  useFilmWallClock,
   useFixtures,
   Vignette,
   type Cue,
@@ -41,7 +40,9 @@ export const WINDOW = { width: 1440, height: 900 };
 export const POPOVER = { width: 320, left: WINDOW.width / 2 + 206 - 160, top: 38 };
 
 /** Beats (scene ms). */
-const T = { press: 220, open: 280, fillFrom: 360, fillTo: 1050 };
+const T = { press: 220, open: 280 };
+/** How far the popover's layer floats above the window. */
+export const LIFT = 60;
 
 const NOW = Date.parse("2026-03-01T12:00:00Z");
 const HOUR = 3_600_000;
@@ -126,68 +127,70 @@ const CLIENT: ModelAccessClient = {
 
 const API = shellApi();
 
-/** Bars (which draw what is LEFT) fill from empty up to their real reading. */
-function animatedLimits(t: number): UsageLimits {
-  const fill = progress(t, T.fillFrom, T.fillTo, ease.outCubic);
-  return {
-    ...CODEX_LIMITS,
-    // oxlint-disable-next-line no-map-spread -- a two-window fixture, per frame
-    windows: CODEX_LIMITS.windows.map((window) => ({
-      ...window,
-      usedPercent: mix(100, window.usedPercent, fill),
-    })),
-  };
-}
+/** Radix's popper wrapper: where the popover's portal content lands in body. */
+const POPPER = "[data-radix-popper-content-wrapper]";
 
-const left = (limits: UsageLimits): number =>
-  Math.min(...limits.windows.map((window) => Math.round(100 - window.usedPercent)));
-
-/** The open popover, drawn in-window (see header). */
-function OpenPopover({ t }: { t: number }) {
-  const open = progress(t, T.open, T.open + 160, ease.outCubic);
-  if (open <= 0) return null;
-  const limits = animatedLimits(t);
+/**
+ * The REAL `UsageLimitsPopover` (drawn by the shell's chrome bar) portals its
+ * content into `<body>`. This layer adopts that portal root into a Surface
+ * lifted above the window, pins it under the icon in window coordinates
+ * (floating-ui measures the projected trigger, which is meaningless inside a
+ * 3D stage), and drives `open` from scene time by clicking the real trigger.
+ */
+function PopoverLayer({ t }: { t: number }) {
+  const host = React.useRef<HTMLDivElement | null>(null);
+  const open = t >= T.open;
+  React.useLayoutEffect(() => {
+    const target = host.current;
+    if (target === null) return;
+    const adopt = () => {
+      for (const node of document.body.querySelectorAll<HTMLElement>(`:scope > ${POPPER}`)) {
+        target.append(node);
+      }
+    };
+    adopt();
+    const observer = new MutationObserver(adopt);
+    observer.observe(document.body, { childList: true });
+    return () => {
+      observer.disconnect();
+      for (const node of target.querySelectorAll<HTMLElement>(`:scope > ${POPPER}`)) {
+        document.body.append(node);
+      }
+    };
+  }, []);
+  React.useLayoutEffect(() => {
+    const shown = host.current?.querySelector(POPPER) ?? document.body.querySelector(POPPER);
+    if (open && shown === null) {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        'button[aria-label^="Usage limits"]',
+      );
+      trigger?.click();
+    } else if (!open && shown !== null) {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  });
+  // Opening focuses the content, which scrolls every overflow-hidden ancestor
+  // to reveal it and would slide the stage sideways. Undo it every frame.
+  React.useLayoutEffect(() => {
+    for (let node = host.current?.parentElement; node; node = node.parentElement) {
+      if (node.scrollLeft !== 0) node.scrollLeft = 0;
+      if (node.scrollTop !== 0) node.scrollTop = 0;
+    }
+    if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+  });
   return (
     <div
-      className="absolute z-50 rounded-container border bg-popover text-foreground shadow-overlay"
-      style={{
-        left: POPOVER.left,
-        top: POPOVER.top,
-        width: POPOVER.width,
-        opacity: open,
-        transform: `translateY(${mix(-8, 0, open)}px) scale(${mix(0.95, 1, open)})`,
-        transformOrigin: "50% 0",
-      }}
+      ref={host}
+      data-film-limits=""
+      style={{ position: "relative", width: WINDOW.width, height: WINDOW.height }}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-2 py-1">
-        <span className="text-ui font-medium">Usage limits</span>
-        <span className="flex size-6 items-center justify-center text-muted-foreground">
-          <ArrowClockwiseIcon />
-        </span>
-      </div>
-      <div className="p-1">
-        <div className="border-b border-border/40">
-          <div className="flex items-center justify-between gap-2 px-2 py-2">
-            <span className="truncate text-ui font-medium">OpenAI Codex</span>
-            <span className="flex shrink-0 items-center gap-1">
-              <span className="text-ui tabular-nums text-muted-foreground">
-                {left(limits)}% left
-              </span>
-              <CaretDownIcon className="size-3 rotate-180 text-muted-foreground" />
-            </span>
-          </div>
-          <div className="px-2 pb-3">
-            <AccountUsage limits={limits} now={NOW} />
-          </div>
-        </div>
-        <div className="flex items-center justify-between gap-2 px-2 py-2">
-          <span className="truncate text-ui font-medium">Anthropic</span>
-          <span className="flex shrink-0 items-center gap-1">
-            <span className="text-ui tabular-nums text-muted-foreground">78% left</span>
-            <CaretDownIcon className="size-3 text-muted-foreground" />
-          </span>
-        </div>
-      </div>
+      <style>{`[data-film-limits] > ${POPPER} {
+        position: absolute !important;
+        left: ${POPOVER.left}px !important;
+        top: ${POPOVER.top}px !important;
+        transform: none !important;
+        min-width: 0 !important;
+      }`}</style>
     </div>
   );
 }
@@ -220,13 +223,14 @@ const CUE: Cue = {
 };
 
 const CUES: Record<Format, Cue[]> = {
-  landscape: [{ ...CUE, place: "lower" }],
+  landscape: [{ ...CUE, place: "upper" }],
   portrait: [{ ...CUE, place: "upper" }],
 };
 
 export function LimitsShot({ format }: { format: Format }) {
   const t = useFilm();
   useFilmTheme("gold");
+  useFilmWallClock(t, NOW);
   useFixtures({ api: API, seed: seedShell });
 
   return (
@@ -243,10 +247,22 @@ export function LimitsShot({ format }: { format: Format }) {
         content={
           <ShellWindow width={WINDOW.width} height={WINDOW.height}>
             <Press t={t} />
-            <OpenPopover t={t} />
           </ShellWindow>
         }
-      />
+      >
+        <Surface
+          id="popover"
+          transform={{ z: LIFT }}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: -WINDOW.height,
+            width: WINDOW.width,
+            height: WINDOW.height,
+          }}
+          content={<PopoverLayer t={t} />}
+        />
+      </Surface>
       <Backdrop t={t} theme="gold" focus={format === "landscape" ? [0.6, 0.3] : [0.5, 0.3]} />
       <FrameLayer format={format}>
         <Vignette strength={0.4} />
