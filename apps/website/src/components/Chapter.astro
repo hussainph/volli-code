@@ -11,6 +11,10 @@
  * out — no supers, no grade, no backdrop — captured with a transparent
  * background by `apps/desktop/scripts/film/web-stills.mjs`. Wide screens get
  * the 16:9 composition, narrow ones the film's 9:16 recomposition.
+ *
+ * A card may bring its own Window in the `window` slot instead of a still
+ * (the activity feed, `Feed.astro`); it takes the still's place and floats in
+ * the same light.
  */
 import type { Still } from "../data/stills";
 import type { WorldName } from "../data/worlds";
@@ -25,9 +29,10 @@ interface Beat {
 
 interface Props {
   world: WorldName;
-  /** Undefined while the still has not been captured: the chapter is left out. */
-  still: Still | undefined;
-  alt: string;
+  /** Undefined while the still has not been captured: the chapter is left out
+      (unless the card brings its own Window in the `window` slot). */
+  still?: Still | undefined;
+  alt?: string;
   beats: readonly Beat[];
   /** What the picture shows, in a sentence or three. */
   body?: string;
@@ -60,10 +65,11 @@ const titleId = `${id ?? world}-title`;
 const landscape = span >= 5;
 const primary = still && (landscape ? still.wide : still.tall);
 const tall = still?.tall;
+const hasWindow = Astro.slots.has("window");
 ---
 
 {
-  primary && tall && (
+  (hasWindow || (primary && tall)) && (
 
 <World
   as="section"
@@ -88,6 +94,11 @@ const tall = still?.tall;
   </div>
   {/* A soft light that follows the pointer across the card (Base.astro). */}
   <div class="chapter-glow" aria-hidden="true"></div>
+  {hasWindow ? (
+  <div class="chapter-still chapter-still--window">
+    <slot name="window" />
+  </div>
+  ) : primary && tall && (
   <picture class="chapter-still" data-tilt style={`--still-position: ${position}`}>
     {
       landscape && (
@@ -108,6 +119,7 @@ const tall = still?.tall;
       decoding="async"
     />
   </picture>
+  )}
 </World>
   )
 }

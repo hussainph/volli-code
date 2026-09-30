@@ -74,6 +74,15 @@ main:focus {
   outline: none;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 p,
 h1,
 h2,
@@ -224,6 +233,58 @@ main > section,
   transform: scale(0.97);
 }
 
+/* The primary button's light: on hover or keyboard focus, one soft band of
+   warm light crosses the pill and is gone — never an idle loop. It sits under
+   the label (z-index -1 inside the button's own stacking context). Adapted
+   from Magic UI's Shimmer Button (MIT, Copyright (c) Magic UI) as a single
+   pass. */
+.button:not(.button--ghost) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.button:not(.button--ghost)::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(255 226 200 / 0.5) 48%,
+    rgb(255 246 236 / 0.62) 50%,
+    rgb(255 226 200 / 0.5) 52%,
+    transparent 70%
+  );
+  opacity: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+
+@keyframes button-shine {
+  from {
+    opacity: 1;
+    transform: translateX(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .button:not(.button--ghost):focus-visible::before {
+    animation: button-shine 1000ms var(--ease-in-out) 1;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .button:not(.button--ghost):hover::before {
+    animation: button-shine 1000ms var(--ease-in-out) 1;
+  }
+}
+
 /* The quiet partner to the ember button: glass on the night, never a second
    colour. */
 .button--ghost {
@@ -319,11 +380,22 @@ main > section,
   --super-size: clamp(26px, 2.4vw, 36px);
 }
 
-/* The one entrance: each beat rises through its own clip, a beat apart. */
+/* The one entrance: each beat rises through its own clip, a beat apart, and
+   the bold beat lands a beat later still (BRAND.md §8). Inside a card the
+   words wait for the card's own lift (`--stagger`). */
 .reveal-ready [data-reveal] .super-beat > span {
+  --super-delay: 0ms;
   transform: translateY(105%);
-  transition: transform 900ms var(--ease-out);
-  transition-delay: calc(var(--beat) * 110ms);
+  transition: transform 380ms var(--ease-out);
+  transition-delay: calc(var(--super-delay) + var(--beat) * 90ms);
+}
+
+.reveal-ready [data-reveal] .super-beat--bold > span {
+  transition-delay: calc(var(--super-delay) + var(--beat) * 90ms + 90ms);
+}
+
+.reveal-ready .chapter [data-reveal] .super-beat > span {
+  --super-delay: calc(160ms + var(--stagger, 0) * 110ms);
 }
 
 .reveal-ready [data-reveal] .super-sub,
@@ -383,16 +455,17 @@ main > section,
   gap: 10px;
 }
 
-/* The hero arrives in order on load: the headline's beats rise (Super), then
-   the words, the buttons, and the product, each a beat behind. */
+/* The hero arrives in order on load: the headline's beats rise (Super, done
+   by ~560ms), then the words, the buttons, and the product, each a beat
+   behind. */
 .reveal-ready .hero-rise {
-  animation: hero-rise 1000ms var(--ease-out) both;
+  animation: hero-rise 700ms var(--ease-out) both;
   animation-delay: calc(160ms + var(--rise) * 90ms);
 }
 
 .reveal-ready .hero-film.hero-rise {
   animation-name: hero-film-rise;
-  animation-duration: 1400ms;
+  animation-duration: 1200ms;
 }
 
 @keyframes hero-rise {
@@ -735,6 +808,144 @@ main > section,
   object-position: var(--still-position);
 }
 
+/* ─── Feed ────────────────────────────────────────────────────────────── */
+
+/* A card's own Window (Feed.astro): the sidebar's session rows on a strip of
+   dark glass, anchored where a still's window would start, the world's light
+   open beside it, running off the card's bottom edge. */
+.chapter-still--window {
+  mask-image: linear-gradient(transparent, #000 10%);
+}
+
+.feed {
+  position: absolute;
+  top: clamp(28px, 3vw, 44px);
+  bottom: 0;
+  left: clamp(20px, 2.6vw, 40px);
+  display: flex;
+  width: min(100% - 2 * clamp(20px, 2.6vw, 40px), 30rem);
+  margin: 0;
+  padding: clamp(14px, 1.4vw, 20px) clamp(12px, 1.2vw, 18px);
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 16px 16px 0 0;
+  background: rgb(9 10 16 / 0.62);
+  box-shadow:
+    0 0 0 1px rgb(245 242 238 / 0.08) inset,
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 40px 90px -30px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(20px) saturate(1.2);
+  list-style: none;
+}
+
+.feed-row {
+  display: flex;
+  padding: 10px 12px;
+  align-items: center;
+  gap: 14px;
+  border-radius: 10px;
+}
+
+/* The first row is the one in view in the app. */
+.feed-row:first-child {
+  background: rgb(245 242 238 / 0.05);
+}
+
+.feed-glyph {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  background: rgb(245 242 238 / 0.1);
+  color: var(--ink);
+}
+
+/* The working ring: an arc that turns slowly, as a live session's does. */
+.feed-ring {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgb(245 242 238 / 0.28);
+  border-top-color: var(--ink);
+  border-right-color: var(--ink);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px rgb(14 15 24);
+  background: rgb(14 15 24);
+  animation: feed-ring 2400ms linear infinite;
+}
+
+@keyframes feed-ring {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.feed-text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.feed-title {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: clamp(15px, 1.15vw, 16.5px);
+  font-weight: 540;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-meta {
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+/* Arrival: the pane lifts with the card; the rows come in one by one, then
+   every ring appears at once — started in turn, all running together. */
+.reveal-ready .chapter[data-reveal] .feed {
+  opacity: 0;
+  translate: 0 48px;
+  transition:
+    opacity 700ms var(--ease-out),
+    translate 1100ms var(--ease-out);
+  transition-delay: calc(140ms + var(--stagger, 0) * 110ms);
+}
+
+.reveal-ready .chapter[data-reveal] .feed-row {
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+  transition:
+    opacity 360ms var(--ease-out),
+    transform 420ms var(--ease-out);
+  transition-delay: calc(520ms + var(--row) * 100ms);
+}
+
+.reveal-ready .chapter[data-reveal] .feed-ring {
+  opacity: 0;
+  transition: opacity 400ms var(--ease-out);
+  transition-delay: calc(560ms + var(--feed-count) * 100ms + 200ms);
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed {
+  opacity: 1;
+  translate: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed-row {
+  opacity: 1;
+  transform: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed-ring {
+  opacity: 1;
+}
+
 /* ─── Card motion ─────────────────────────────────────────────────────── */
 
 /* A row of cards arrives as a stagger: each card lifts in, and the app inside
@@ -838,23 +1049,15 @@ main > section,
 
 .why-item {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   padding: 26px 0;
-  gap: 6px 16px;
+  align-items: baseline;
+  gap: 6px 32px;
   border-top: 1px solid var(--hairline);
 }
 
 .why-item:last-child {
   border-bottom: 1px solid var(--hairline);
-}
-
-.why-index {
-  grid-row: span 2;
-  padding-top: 5px;
-  color: var(--ember-hi);
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
 }
 
 .why-item h3 {
@@ -872,11 +1075,11 @@ main > section,
 
 .reveal-ready .why-item[data-reveal] {
   opacity: 0;
-  translate: 0 20px;
+  translate: 0 8px;
   transition:
-    opacity 800ms var(--ease-out),
-    translate 900ms var(--ease-out);
-  transition-delay: calc(var(--stagger, 0) * 80ms);
+    opacity 380ms var(--ease-out),
+    translate 420ms var(--ease-out);
+  transition-delay: calc(var(--stagger, 0) * 70ms);
 }
 
 .reveal-ready .why-item[data-reveal].is-revealed {
@@ -1099,6 +1302,10 @@ main > section,
     position: static;
   }
 
+  .why-item {
+    grid-template-columns: 1fr;
+  }
+
   .hero-buttons {
     justify-content: flex-start;
   }
@@ -1149,6 +1356,11 @@ main > section,
   .chapter--small .chapter-still {
     aspect-ratio: 1 / 1;
   }
+
+  .chapter-still.chapter-still--window {
+    min-height: 400px;
+    aspect-ratio: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1158,7 +1370,8 @@ main > section,
 
   .world-canvas,
   .world-pool,
-  .chapter-still img {
+  .chapter-still img,
+  .feed-ring {
     animation: none;
   }
 }

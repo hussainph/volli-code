@@ -13,6 +13,7 @@ import loopMp4 from "../assets/hero/loop.mp4";
 import loopWebm from "../assets/hero/loop.webm";
 import heroPoster from "../assets/hero/poster.webp";
 import Chapter from "../components/Chapter.astro";
+import Feed from "../components/Feed.astro";
 import Mark from "../components/Mark.astro";
 import Super from "../components/Super.astro";
 import World from "../components/World.astro";
@@ -27,6 +28,15 @@ const WHY = [
   { title: "Agents that plan", body: "They write tickets and start each other." },
   { title: "Walk away", body: "A week later, every task is where you left it." },
   { title: "Your own plans", body: "Use the coding subscriptions you already pay for." },
+] as const;
+
+// Invented, public-safe work in the register of the film's sidebar.
+const AGENTS = [
+  "Split the billing service",
+  "Profile slow search query",
+  "Migrate auth to passkeys",
+  "Draft release notes",
+  "Cache avatar thumbnails",
 ] as const;
 
 const description =
@@ -152,16 +162,18 @@ const description =
         body="Your agent drives a real browser tab. Follow its cursor, or take the wheel."
       />
 
+      {/* No still here: five of the sidebar's rows arrive and start working
+          together (Feed.astro). */}
       <Chapter
         id="activity"
         order={0}
         span={7}
         world="cobalt"
-        still={still("island")}
-        alt="A chat's activity opened into layers: the agent's plan, the agents it started, background commands and browser tabs."
         beats={[{ text: "Agents that" }, { text: "split up the work", bold: true }]}
-        body="Agents plan tickets and start other agents. You see every step, command and tab they open."
-      />
+        body="Agents write tickets and start other agents. Watch them all work at once."
+      >
+        <Feed slot="window" rows={AGENTS} label="Five agents, all working" />
+      </Chapter>
 
       <Chapter
         id="models"
@@ -215,17 +227,16 @@ const description =
           beats={[{ text: "Built for" }, { text: "many agents,", bold: true }, { text: "not one." }]}
         />
       </div>
-      <ol class="why-list">
+      <ul class="why-list">
         {
           WHY.map((item, index) => (
             <li class="why-item" data-reveal style={`--stagger: ${index}`}>
-              <span class="why-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
             </li>
           ))
         }
-      </ol>
+      </ul>
     </section>
 
     <World

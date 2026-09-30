@@ -120,6 +120,12 @@ A page is built from these and nothing else. A new need is argued here first.
 5. **Button** — *primary* (ember pill, one per view) and *quiet* (text with an
    arrow). No outlined pills, no icon soup.
 6. **Header / Footer** — the mark and name; four links; the download.
+7. **Feed** — a Window drawn in the page's own type: a few of the sidebar's
+   session rows on dark glass (glyph, title, "No ticket · just now", a working
+   ring). Used once, where a still can't show many agents at once. The rows
+   arrive in turn when the card is revealed, then run together; the ring turns
+   slowly, as it does in the app, and is still under reduced motion. Invented,
+   public-safe titles only.
 
 There are no cards, icon grids, numbered feature lists, badges, pills, glyph
 illustrations or accordions.
