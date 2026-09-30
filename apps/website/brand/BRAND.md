@@ -41,8 +41,15 @@ of light and grain behind the window, at the scale of the page.
 
 ## 3. Voice
 
-Marketing speaks outcomes; the docs speak nouns.
+Marketing speaks outcomes; the docs speak nouns. Copy follows the
+`developer-copy` rules (`.agents/skills/developer-copy`, drafted in VC-472):
+plain words, short sentences, active voice, facts a skeptic can check.
 
+- **Nothing above a headline.** No eyebrows, kickers, section labels or mono
+  tag lines — anywhere on the site. A section is a headline, then its words.
+- **Product first, release last.** A first-time visitor wants to know what
+  Volli is, what it does, and why they would use it over the agent app they
+  already have. The release number appears at most once, quietly.
 - **Two beats per line.** A light clause, then a bold one: *Hand off work*
   **in one drag.** This is the super, and it is the only headline shape.
 - **Short, declarative, second person.** No exclamation marks, no "supercharge",
@@ -79,7 +86,6 @@ variable file so the width axis is available.
 | Super, bold beat | wght 780 · wdth 110 · tracking −0.04em |
 | Essay | wght 380 · 1.25rem/1.6 · measure ≤ 36em |
 | UI (buttons, nav) | wght 520 · 0.9375rem |
-| Eyebrow | Geist Mono 500 · 0.75rem · tracking 0.02em · lower case |
 
 The two-weight line is the brand's signature, shared with the film's supers.
 
@@ -90,7 +96,7 @@ The two-weight line is the brand's signature, shared with the film's supers.
 | `--night` | `#07070a` | The page. |
 | `--ink` | `#f5f2ee` | Headlines and body — warm, like the mark's bone. |
 | `--ink-2` | `rgb(245 242 238 / 0.62)` | Secondary copy. |
-| `--ink-3` | `rgb(245 242 238 / 0.4)` | Eyebrows, footer. |
+| `--ink-3` | `rgb(245 242 238 / 0.4)` | The note under a button, footer. |
 | `--hairline` | `rgb(245 242 238 / 0.1)` | The only border. |
 | `--ember` | `#e8652a` | The primary button and the mark's card. Nowhere else. |
 
@@ -105,8 +111,8 @@ A page is built from these and nothing else. A new need is argued here first.
    motion.
 2. **Window** — the product, floating in a World: the live demo or a still of
    the real app captured from the UI lab's real components.
-3. **Super** — optional mono eyebrow, one two-beat headline, optional one-line
-   sub.
+3. **Super** — one two-beat headline and an optional one-line sub. Nothing
+   above it.
 4. **Essay** — the mark and name on the left, prose on the right.
 5. **Button** — *primary* (ember pill, one per view) and *quiet* (text with an
    arrow). No outlined pills, no icon soup.
@@ -128,10 +134,11 @@ Slow and physical, never decorative for its own sake.
 
 ## 9. Page shapes
 
-**Home.** World (ember) with the live product → Essay → one Chapter per headline
-of the current release, each its own World → Close (ember, the mark, the
-download) → Footer. The release is told as chapters, the way the film tells it,
-so the next release replaces the chapters and nothing else.
+**Home.** Hero (what Volli is, the download, the live product) → Essay (the
+problem it solves, in one paragraph) → one Chapter per core feature, each its
+own World: the headline and a few plain sentences at the top, a still of the
+real app below them → a short, fair comparison with Claude Code and Codex →
+Close (ember, the mark, the download) → Footer.
 
 **Download.** One World (ember), one Window-sized panel with the build, the
 requirements, and the alpha note.

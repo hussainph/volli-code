@@ -339,6 +339,9 @@ importers:
       '@fontsource-variable/mona-sans':
         specifier: 5.3.0
         version: 5.3.0
+      '@paper-design/shaders':
+        specifier: 0.0.81
+        version: 0.0.81
       '@volli/font-notices':
         specifier: workspace:*
         version: link:../../packages/font-notices
@@ -2401,6 +2404,9 @@ packages:
     resolution: {integrity: sha512-Fa2Iyw7kaDRzGMfNYNUXNW2zbL5FQVDgSOcbDHdzBrDEdpqOqg8TcZ68F22ol6NJ9IGzvUdmeyZypLW5dyhqsg==}
     cpu: [x64]
     os: [win32]
+
+  '@paper-design/shaders@0.0.81':
+    resolution: {integrity: sha512-jeGdyjMscZ2bxmQdo8lhwUufHUf4iq3s1ayjh8PXU7Go42Rw8E3I0It1FZdc3HuWt5J82m//DRWaxsRqRfA4Gg==}
 
   '@peculiar/asn1-schema@2.8.0':
     resolution: {integrity: sha512-7YT0U/ze0tF2QOBbE15gKZwy5tvgGyLRiRHLzhlbOpf7BT032oBSd0haZqXn5W6l26WLlu3dyxzjM+2638/z2Q==}
@@ -9575,6 +9581,8 @@ snapshots:
 
   '@pagefind/windows-x64@1.5.2':
     optional: true
+
+  '@paper-design/shaders@0.0.81': {}
 
   '@peculiar/asn1-schema@2.8.0':
     dependencies:

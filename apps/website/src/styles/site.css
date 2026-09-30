@@ -224,6 +224,27 @@ main > section,
   transform: scale(0.97);
 }
 
+/* The quiet partner to the ember button: glass on the night, never a second
+   colour. */
+.button--ghost {
+  gap: 10px;
+  padding: 0 20px;
+  background: rgb(245 242 238 / 0.07);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px rgb(245 242 238 / 0.12) inset,
+    0 1px 0 rgb(255 255 255 / 0.06) inset;
+  backdrop-filter: blur(12px);
+}
+
+.button--ghost:hover {
+  background: rgb(245 242 238 / 0.12);
+}
+
+.button--ghost .github-icon {
+  opacity: 0.9;
+}
+
 .link-quiet {
   display: inline-flex;
   min-height: 44px;
@@ -249,15 +270,6 @@ main > section,
 }
 
 /* ─── Super ───────────────────────────────────────────────────────────── */
-
-.super-eyebrow {
-  margin-bottom: 0.9em;
-  color: var(--ink-2);
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
 
 .super-title {
   font-size: var(--super-size);
@@ -314,8 +326,8 @@ main > section,
   transition-delay: calc(var(--beat) * 110ms);
 }
 
-.reveal-ready [data-reveal] .super-eyebrow,
-.reveal-ready [data-reveal] .super-sub {
+.reveal-ready [data-reveal] .super-sub,
+.reveal-ready [data-reveal] .chapter-body {
   opacity: 0;
   transition: opacity 700ms ease 260ms;
 }
@@ -324,8 +336,8 @@ main > section,
   transform: none;
 }
 
-.reveal-ready [data-reveal].is-revealed .super-eyebrow,
-.reveal-ready [data-reveal].is-revealed .super-sub {
+.reveal-ready [data-reveal].is-revealed .super-sub,
+.reveal-ready [data-reveal].is-revealed .chapter-body {
   opacity: 1;
 }
 
@@ -351,12 +363,59 @@ main > section,
   flex-shrink: 0;
 }
 
-.hero-note,
-.hero-caption {
+.hero-words {
+  display: grid;
+  gap: clamp(16px, 1.6vw, 22px);
+}
+
+.hero-lede {
+  max-width: 34em;
+  color: rgb(245 242 238 / 0.78);
+  font-size: clamp(17px, 1.45vw, 20px);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* The hero arrives in order on load: the headline's beats rise (Super), then
+   the words, the buttons, and the product, each a beat behind. */
+.reveal-ready .hero-rise {
+  animation: hero-rise 1000ms var(--ease-out) both;
+  animation-delay: calc(160ms + var(--rise) * 90ms);
+}
+
+.reveal-ready .hero-demo.hero-rise {
+  animation-name: hero-demo-rise;
+  animation-duration: 1400ms;
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    translate: 0 18px;
+  }
+}
+
+@keyframes hero-demo-rise {
+  from {
+    opacity: 0;
+    translate: 0 64px;
+    scale: 0.97;
+  }
+}
+
+.hero-note {
+  max-width: 22em;
   color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  letter-spacing: 0.01em;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: right;
 }
 
 .hero-demo {
@@ -368,11 +427,6 @@ main > section,
   border: 0;
   border-radius: var(--radius-world);
   box-shadow: none;
-}
-
-.hero-caption {
-  margin-top: 14px;
-  text-align: center;
 }
 
 /* ─── Essay ───────────────────────────────────────────────────────────── */
@@ -401,10 +455,17 @@ main > section,
   letter-spacing: -0.05em;
 }
 
-.essay-version {
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 13px;
+.essay-heading {
+  font-size: clamp(30px, 3.4vw, 48px);
+  font-weight: 760;
+  font-stretch: 106%;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.essay--compare {
+  padding-block: clamp(80px, 11vw, 160px);
 }
 
 .essay-body {
@@ -416,6 +477,30 @@ main > section,
   line-height: 1.55;
   letter-spacing: -0.008em;
   text-wrap: pretty;
+}
+
+/* Reading light: each sentence brightens as it crosses into the reading line,
+   on the scroll timeline (off the main thread). Without scroll timelines the
+   paragraph is simply lit. */
+@supports (animation-timeline: view()) {
+  .reveal-ready .essay-read .read {
+    animation: read-in linear both;
+    animation-timeline: view();
+    animation-range: entry 40% cover 42%;
+  }
+}
+
+@keyframes read-in {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.essay-read .read {
+  display: inline;
 }
 
 .essay-body > p:first-child {
@@ -503,120 +588,305 @@ main > section,
 
 /* ─── Release chapters ────────────────────────────────────────────────── */
 
-.release {
+/* The features are a bento: cards of different widths in a twelve-column
+   grid, so no single picture takes the whole screen. */
+.features {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--reel-gap);
   scroll-margin-top: 24px;
-}
-
-.release-head {
-  display: flex;
-  margin-bottom: var(--reel-gap);
-  padding-bottom: 14px;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.release-head h2 {
-  color: var(--ink-2);
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.release-head .link-quiet {
-  min-height: 0;
-  font-size: 14px;
 }
 
 .chapter {
-  aspect-ratio: 16 / 9;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   scroll-margin-top: 24px;
 }
 
-.chapter + .chapter,
-.release .montage {
-  margin-top: var(--reel-gap);
+.chapter--span-7 {
+  grid-column: span 7;
 }
 
-.chapter-still,
-.chapter-still img {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
+.chapter--span-6 {
+  grid-column: span 6;
 }
 
-.chapter-still img {
-  object-fit: cover;
+.chapter--span-5 {
+  grid-column: span 5;
 }
 
-.chapter-super {
-  position: absolute;
+.chapter--span-3 {
+  grid-column: span 3;
+}
+
+/* The words sit at the top of the world, where its light is quietest: a
+   headline, then a few plain sentences about the picture. */
+.chapter-text {
+  position: relative;
   z-index: 1;
-  text-shadow: 0 1px 24px rgb(0 0 0 / 0.35);
-  max-width: min(48%, 640px);
-  padding: clamp(24px, 4.2vw, 64px);
+  display: grid;
+  padding: clamp(24px, 3vw, 44px) clamp(24px, 3vw, 44px) 0;
+  gap: clamp(12px, 1.2vw, 18px);
+  text-shadow: 0 1px 20px rgb(0 0 0 / 0.28);
 }
 
-/* The film's scrim: a pool of dark behind the words, never a box. */
-.chapter-super::before {
+.chapter .super--chapter {
+  --super-size: clamp(28px, 2.9vw, 44px);
+}
+
+.chapter .super--small {
+  --super-size: clamp(22px, 1.9vw, 28px);
+}
+
+.chapter-body {
+  max-width: 34em;
+  color: rgb(245 242 238 / 0.82);
+  font-size: clamp(15px, 1.15vw, 17px);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.chapter--small .chapter-body {
+  font-size: 15px;
+}
+
+/* A shade from the top edge, so white words hold on the brightest worlds. */
+.chapter::before {
   position: absolute;
-  z-index: -1;
-  inset: -30% -40%;
+  z-index: 0;
+  inset: 0 0 auto;
+  height: 46%;
   content: "";
-  background: radial-gradient(closest-side, rgb(4 4 8 / 0.62), rgb(4 4 8 / 0.3) 60%, transparent);
+  background: linear-gradient(rgb(4 4 8 / 0.42), transparent);
   pointer-events: none;
 }
 
-.chapter--top-left .chapter-super {
+/* The still fills the rest of the card and runs off its bottom edge: the app
+   floats up out of the world rather than sitting in a frame. */
+.chapter-still {
+  position: relative;
+  display: block;
+  min-height: clamp(300px, 30vw, 460px);
+  margin-top: 4px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  /* The crop never shows as an edge: the top of the picture fades into the
+     world under the words. */
+  mask-image: linear-gradient(transparent, #000 14%);
+}
+
+.chapter--small .chapter-still {
+  min-height: clamp(240px, 22vw, 320px);
+}
+
+/* Anchored top-left with a margin, so every app window starts inside its card
+   and runs off the right and bottom edges. */
+.chapter-still img {
+  position: absolute;
+  inset: clamp(20px, 2.2vw, 32px) 0 0 clamp(20px, 2.6vw, 40px);
+  display: block;
+  width: calc(100% - clamp(20px, 2.6vw, 40px));
+  height: calc(100% - clamp(20px, 2.2vw, 32px));
+  border-top-left-radius: 14px;
+  object-fit: cover;
+  object-position: var(--still-position);
+}
+
+/* ─── Card motion ─────────────────────────────────────────────────────── */
+
+/* A row of cards arrives as a stagger: each card lifts in, and the app inside
+   it rises a beat later and further, so the picture floats up out of its
+   world. */
+.reveal-ready .chapter[data-reveal] {
+  opacity: 0;
+  translate: 0 56px;
+  transition:
+    opacity 900ms var(--ease-out),
+    translate 1100ms var(--ease-out),
+    transform 600ms var(--ease-out);
+  transition-delay:
+    calc(var(--stagger, 0) * 110ms),
+    calc(var(--stagger, 0) * 110ms),
+    0ms;
+}
+
+.reveal-ready .chapter[data-reveal] .chapter-still img {
+  translate: 0 80px;
+  transition: translate 1500ms var(--ease-out);
+  transition-delay: calc(140ms + var(--stagger, 0) * 110ms);
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .chapter-still img {
+  translate: none;
+}
+
+/* Depth while scrolling: the app drifts a little slower than its card. */
+@supports (animation-timeline: view()) {
+  .reveal-ready .chapter-still img {
+    animation: still-drift linear both;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+  }
+}
+
+@keyframes still-drift {
+  from {
+    transform: translateY(-3%);
+  }
+  to {
+    transform: translateY(5%);
+  }
+}
+
+/* The pointer's light: a soft glow that follows it across a card (Base.astro
+   moves it; only on devices that hover). */
+.chapter-glow {
+  position: absolute;
+  z-index: 2;
   top: 0;
   left: 0;
+  width: 560px;
+  height: 560px;
+  margin: -280px 0 0 -280px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(255 244 232 / 0.16), transparent);
+  mix-blend-mode: plus-lighter;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
 }
 
-.chapter--bottom-left .chapter-super {
-  bottom: 0;
-  left: 0;
+@media (hover: hover) and (pointer: fine) {
+  .chapter:hover .chapter-glow {
+    opacity: 1;
+  }
 }
 
-.chapter--top-right .chapter-super {
-  top: 0;
-  right: 0;
-  text-align: right;
-}
+/* ─── Why ─────────────────────────────────────────────────────────────── */
 
-.chapter--bottom-right .chapter-super {
-  right: 0;
-  bottom: 0;
-  text-align: right;
-}
-
-.chapter--top-right .super-sub,
-.chapter--bottom-right .super-sub {
-  margin-left: auto;
-}
-
-/* The small chapters: portrait cards, words above the picture. */
-.montage {
+.why {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--reel-gap);
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 48px clamp(40px, 6vw, 96px);
+  padding-block: clamp(96px, 13vw, 190px) clamp(64px, 8vw, 120px);
 }
 
-.montage .chapter {
-  margin-top: 0;
-  aspect-ratio: 4 / 5;
+.why-head {
+  position: sticky;
+  top: 48px;
+  align-self: start;
 }
 
-.montage .chapter-still img {
-  object-position: 50% 62%;
+.why .super--chapter {
+  --super-size: clamp(38px, 4.6vw, 68px);
 }
 
-.montage .chapter-super {
-  max-width: none;
-  padding: clamp(20px, 2.4vw, 32px);
+.why-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.why-item {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  padding: 26px 0;
+  gap: 6px 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.why-item:last-child {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.why-index {
+  grid-row: span 2;
+  padding-top: 5px;
+  color: var(--ember-hi);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.why-item h3 {
+  font-size: clamp(20px, 1.7vw, 24px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.why-item p {
+  max-width: 36em;
+  color: var(--ink-2);
+  font-size: clamp(16px, 1.25vw, 18px);
+  line-height: 1.5;
+}
+
+.reveal-ready .why-item[data-reveal] {
+  opacity: 0;
+  translate: 0 20px;
+  transition:
+    opacity 800ms var(--ease-out),
+    translate 900ms var(--ease-out);
+  transition-delay: calc(var(--stagger, 0) * 80ms);
+}
+
+.reveal-ready .why-item[data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
+}
+
+.why-quote {
+  grid-column: 2;
+  margin: clamp(24px, 3vw, 40px) 0 0;
+}
+
+.why-quote blockquote {
+  margin: 0;
+}
+
+.why-quote p {
+  font-size: clamp(22px, 2.2vw, 32px);
+  font-weight: 380;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  text-wrap: pretty;
+}
+
+.why-quote p::before {
+  content: "“";
+  margin-left: -0.45em;
+  color: var(--ember);
+}
+
+.why-quote p::after {
+  content: "”";
+  color: var(--ember);
+}
+
+.why-quote figcaption {
+  margin-top: 16px;
+  color: var(--ink-3);
+  font-size: 14px;
+}
+
+.reveal-ready .why-quote[data-reveal] {
+  opacity: 0;
+  translate: 0 24px;
+  transition:
+    opacity 900ms var(--ease-out),
+    translate 1000ms var(--ease-out);
+}
+
+.reveal-ready .why-quote[data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
 }
 
 /* ─── Close ───────────────────────────────────────────────────────────── */
@@ -821,29 +1091,45 @@ main > section,
     align-items: flex-start;
   }
 
-  .essay {
+  .hero-note {
+    text-align: left;
+  }
+
+  .essay,
+  .why {
     grid-template-columns: 1fr;
+  }
+
+  .why-head {
+    position: static;
+  }
+
+  .why-quote {
+    grid-column: 1;
+  }
+
+  .hero-buttons {
+    justify-content: flex-start;
   }
 
   .essay-lockup {
     position: static;
   }
 
-  .montage {
-    grid-template-columns: 1fr;
+  .chapter--span-7,
+  .chapter--span-6,
+  .chapter--span-5 {
+    grid-column: 1 / -1;
+  }
+
+  .chapter--span-3 {
+    grid-column: span 6;
   }
 
   .terms {
     grid-template-columns: 1fr;
   }
 
-  .montage .chapter {
-    aspect-ratio: 4 / 3;
-  }
-
-  .montage .chapter-still img {
-    object-position: 50% 58%;
-  }
 }
 
 @media (max-width: 720px) {
@@ -860,38 +1146,20 @@ main > section,
     gap: 4px;
   }
 
-  /* Words above the picture, in the world: the film's vertical recomposition
-     leaves no corner for a super at this width. */
-  .chapter {
-    display: flex;
-    aspect-ratio: auto;
-    flex-direction: column;
+  .chapter--span-3 {
+    grid-column: 1 / -1;
   }
 
-  .chapter .chapter-super {
-    position: relative;
-    order: -1;
-    max-width: none;
-    padding: 28px 24px 0;
-    text-align: left;
-  }
-
-  .chapter--top-right .super-sub,
-  .chapter--bottom-right .super-sub {
-    margin-left: 0;
+  .chapter-text {
+    padding: 26px 22px 0;
   }
 
   .chapter-still {
-    position: relative;
+    min-height: 0;
     aspect-ratio: 4 / 5;
-    height: auto;
   }
 
-  .montage .chapter {
-    aspect-ratio: auto;
-  }
-
-  .montage .chapter-still {
+  .chapter--small .chapter-still {
     aspect-ratio: 1 / 1;
   }
 }
@@ -902,7 +1170,8 @@ main > section,
   }
 
   .world-canvas,
-  .world-pool {
+  .world-pool,
+  .chapter-still img {
     animation: none;
   }
 }

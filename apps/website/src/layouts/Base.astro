@@ -66,11 +66,12 @@ const url = new URL(path, "https://volli.app").href;
     <slot />
     <SiteFooter />
     <script>
-      // The site's one observer: a super rises into place once, the first time
-      // it is on screen. Without JavaScript, or under reduced motion, the CSS
-      // leaves every super where it belongs.
+      // The site's one observer: anything marked `data-reveal` rises into place
+      // once, the first time it comes on screen. Without JavaScript, or under
+      // reduced motion, the CSS leaves everything where it belongs.
+      const root = document.documentElement;
       const targets = document.querySelectorAll<HTMLElement>("[data-reveal]");
-      if (document.documentElement.classList.contains("reveal-ready")) {
+      if (root.classList.contains("reveal-ready")) {
         const observer = new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
@@ -79,9 +80,36 @@ const url = new URL(path, "https://volli.app").href;
               observer.unobserve(entry.target);
             }
           },
-          { threshold: 0.35 },
+          { rootMargin: "0px 0px -14% 0px" },
         );
         for (const target of targets) observer.observe(target);
+      }
+
+      // The cards lean toward the pointer, and a soft light follows it across
+      // them. Marketing-page delight: only where there is a real pointer, never
+      // under reduced motion, and written straight to each element's transform.
+      const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
+      const still = window.matchMedia("(prefers-reduced-motion: reduce)");
+      if (fine.matches && !still.matches) {
+        for (const card of document.querySelectorAll<HTMLElement>(".chapter")) {
+          const glow = card.querySelector<HTMLElement>(".chapter-glow");
+          let frame = 0;
+          card.addEventListener("pointermove", (event) => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(() => {
+              const box = card.getBoundingClientRect();
+              const x = (event.clientX - box.left) / box.width;
+              const y = (event.clientY - box.top) / box.height;
+              card.style.transform = `perspective(1400px) rotateX(${(0.5 - y) * 3}deg) rotateY(${(x - 0.5) * 4}deg)`;
+              if (glow !== null)
+                glow.style.transform = `translate(${event.clientX - box.left}px, ${event.clientY - box.top}px)`;
+            });
+          });
+          card.addEventListener("pointerleave", () => {
+            cancelAnimationFrame(frame);
+            card.style.transform = "";
+          });
+        }
       }
     </script>
   </body>

@@ -23,6 +23,7 @@
     "@astrojs/react": "^6.0.4",
     "@fontsource-variable/geist-mono": "5.3.0",
     "@fontsource-variable/mona-sans": "5.3.0",
+    "@paper-design/shaders": "0.0.81",
     "@volli/font-notices": "workspace:*",
     "@volli/shared": "workspace:*",
     "astro": "7.2.8",

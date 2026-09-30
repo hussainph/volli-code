@@ -1,15 +1,20 @@
 ---
 /**
- * One chapter of a release (BRAND.md §9): a World, a still of the real app
- * floating in it, and a Super set where the film left room for one.
+ * One feature card in the bento (BRAND.md §9): a World with the words at the
+ * top — a headline and a few plain sentences saying what the picture shows —
+ * and a still of the real app floating in the light below them, running off
+ * the bottom edge. `span` is its width in the bento's twelve columns; a card
+ * of five or more wears the 16:9 still, a small one the 9:16 one; on a phone
+ * every card wears the 9:16 one.
  *
  * The stills are the release film's frames with the film's own frame taken
  * out — no supers, no grade, no backdrop — captured with a transparent
  * background by `apps/desktop/scripts/film/web-stills.mjs`. Wide screens get
  * the 16:9 composition, narrow ones the film's 9:16 recomposition.
  */
-import type { ImageMetadata } from "astro";
+import type { Still } from "../data/stills";
 import type { WorldName } from "../data/worlds";
+import type { WorldShaderVariant } from "./WorldShader";
 import Super from "./Super.astro";
 import World from "./World.astro";
 
@@ -20,49 +25,71 @@ interface Beat {
 
 interface Props {
   world: WorldName;
-  wide: ImageMetadata;
-  tall: ImageMetadata;
+  /** Undefined while the still has not been captured: the chapter is left out. */
+  still: Still | undefined;
   alt: string;
   beats: readonly Beat[];
-  eyebrow?: string;
-  sub?: string;
-  /** Which corner the super sits in on wide screens. */
-  place?: "top-left" | "bottom-left" | "top-right" | "bottom-right";
+  /** What the picture shows, in a sentence or three. */
+  body?: string;
+  /** Where the still's subject sits, as a CSS object-position. */
+  position?: string;
   focus?: readonly [number, number];
-  size?: "chapter" | "small";
+  /** Columns of the bento's twelve this card spans on wide screens. */
+  span?: 3 | 5 | 6 | 7;
+  /** The world's living light; unset paints the static world. */
+  shader?: WorldShaderVariant;
+  /** Its place in its bento row (0, 1, 2), so a row arrives as a stagger. */
+  order?: number;
   id?: string;
 }
 
 const {
   world,
-  wide,
-  tall,
+  still,
   alt,
   beats,
-  eyebrow,
-  sub,
-  place = "bottom-left",
-  focus,
-  size = "chapter",
+  body,
+  position = "0% 0%",
+  focus = [0.5, 0.7],
+  span = 7,
+  shader = "glsl",
+  order = 0,
   id,
 } = Astro.props;
 const titleId = `${id ?? world}-title`;
-// A small chapter is a portrait card at every width, so it always wears the
-// film's vertical composition.
-const primary = size === "small" ? tall : wide;
+const landscape = span >= 5;
+const primary = still && (landscape ? still.wide : still.tall);
+const tall = still?.tall;
 ---
+
+{
+  primary && tall && (
 
 <World
   as="section"
   world={world}
   focus={focus}
-  class:list={["chapter", `chapter--${place}`, `chapter--${size}`]}
+  shader={shader}
+  reveal={order}
+  class:list={["chapter", `chapter--span-${span}`, { "chapter--small": span === 3 }]}
   id={id}
   aria-labelledby={titleId}
 >
-  <picture class="chapter-still">
+  <div class="chapter-text" data-reveal>
+    <Super
+      class="chapter-super"
+      beats={beats}
+      id={titleId}
+      size={span === 3 ? "small" : "chapter"}
+      level={3}
+    />
+    {body && <p class="chapter-body">{body}</p>}
+  </div>
+  {/* A soft light that follows the pointer across the card (Base.astro). */}
+  <div class="chapter-glow" aria-hidden="true"></div>
+  <picture class="chapter-still" data-tilt style={`--still-position: ${position}`}>
     {
-      size === "chapter" && (
+      landscape && (
         <source
           media="(max-width: 720px)"
           srcset={tall.src}
@@ -80,13 +107,6 @@ const primary = size === "small" ? tall : wide;
       decoding="async"
     />
   </picture>
-  <Super
-    class="chapter-super"
-    beats={beats}
-    eyebrow={eyebrow}
-    sub={sub}
-    id={titleId}
-    size={size === "small" ? "small" : "chapter"}
-    level={3}
-  />
 </World>
+  )
+}

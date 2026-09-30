@@ -1,210 +1,248 @@
 ---
 /**
- * volli.app (BRAND.md §9): the product in its world, an essay, the current
- * release told as chapters, and the close.
+ * volli.app (BRAND.md §9): what Volli is, why you would use it, and its core
+ * features — each one a picture of the real app in its own world, with the
+ * words above it.
  *
- * The release lives in the chapters and nowhere else, so the next release
- * replaces them and leaves the rest of the page alone.
+ * The copy is Option A from the copy review (`.scratch/copy/OPTIONS.md`), a
+ * working draft until the owner picks.
  */
-import armedTall from "../assets/stills/armed-tall.webp";
-import armedWide from "../assets/stills/armed-wide.webp";
-import cursorTall from "../assets/stills/cursor-tall.webp";
-import cursorWide from "../assets/stills/cursor-wide.webp";
-import islandTall from "../assets/stills/island-tall.webp";
-import islandWide from "../assets/stills/island-wide.webp";
-import limitsTall from "../assets/stills/limits-tall.webp";
-import limitsWide from "../assets/stills/limits-wide.webp";
-import mcpTall from "../assets/stills/mcp-tall.webp";
-import mcpWide from "../assets/stills/mcp-wide.webp";
-import modelsTall from "../assets/stills/models-tall.webp";
-import modelsWide from "../assets/stills/models-wide.webp";
-import splitTall from "../assets/stills/split-tall.webp";
-import splitWide from "../assets/stills/split-wide.webp";
 import Chapter from "../components/Chapter.astro";
 import Mark from "../components/Mark.astro";
 import Super from "../components/Super.astro";
 import VolliDemo from "../components/VolliDemo";
 import World from "../components/World.astro";
 import { DOCS_URL, REPOSITORY_URL } from "../data/links";
+import { still } from "../data/stills";
+import GitHubIcon from "../components/GitHubIcon.astro";
 import Base from "../layouts/Base.astro";
 
+const WHY = [
+  {
+    title: "Each task has one home",
+    body: "A ticket holds its chats, branch and changes, so you never match a chat window to an issue by hand.",
+  },
+  {
+    title: "Switching is the point",
+    body: "Peek at any chat from the sidebar and reply without leaving the task you're in.",
+  },
+  {
+    title: "Agents plan with you",
+    body: "Agents can create tickets and start chats, so the board grows with the work.",
+  },
+  {
+    title: "Come back to it later",
+    body: "Leave for a week. Every task still has its full history when you return.",
+  },
+  {
+    title: "Use what you pay for",
+    body: "Sign in with your coding subscriptions and choose a model for each task.",
+  },
+] as const;
+
 const description =
-  "Volli is a local-first Mac workspace for running coding agents in parallel: plan on a board, hand each ticket to an agent in its own worktree, and review every change.";
+  "Run coding agents in parallel on your Mac. Volli keeps each ticket with its chats, branch and changes so you can return to the work after time away.";
 ---
 
 <Base
-  title="Volli | The workspace for parallel coding agents"
+  title="Volli | A Mac workspace for parallel coding agents"
   description={description}
   path="/"
 >
   {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
   <main id="main" tabindex="-1">
-    {/* The promise, one line, and the one thing to press. Left-set, beside
-        the picture rather than stacked over it. */}
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-head">
-        <Super
-          size="hero"
-          level={1}
-          id="hero-title"
-          beats={[{ text: "The workspace for" }, { text: "parallel coding agents.", bold: true }]}
-        />
-        <div class="hero-action">
-          <a class="button" href="/download/">Download for Mac</a>
-          <p class="hero-note">Alpha · Apple silicon</p>
+        <div class="hero-words">
+          <Super
+            size="hero"
+            level={1}
+            id="hero-title"
+            beats={[{ text: "A workspace for" }, { text: "parallel coding agents", bold: true }]}
+          />
+          <p class="hero-lede hero-rise" style="--rise: 3">
+            Volli brings your tickets and agent chats into one Mac app. Run tasks in parallel and
+            return to each task's history when you come back.
+          </p>
+        </div>
+        <div class="hero-action hero-rise" style="--rise: 4">
+          <div class="hero-buttons">
+            <a class="button" href="/download/">Download for Mac</a>
+            <a class="button button--ghost" href={REPOSITORY_URL}>
+              <GitHubIcon />
+              <span>Star on GitHub</span>
+            </a>
+          </div>
+          <p class="hero-note">Free and open source under Apache-2.0. Alpha for Apple silicon Macs.</p>
         </div>
       </div>
 
-      {/* The product in its world: the same interactive board the first site
-          opened on. Drag a ticket and its chat opens. */}
-      <div class="hero-demo">
+      <div class="hero-demo hero-rise" style="--rise: 5">
         <VolliDemo client:load />
       </div>
-      <p class="hero-caption">It’s live — drag a ticket, or open one.</p>
     </section>
 
-    {/* The essay (BRAND.md §3): the one place the page talks at length. */}
     <section class="essay" aria-labelledby="essay-title">
       <div class="essay-lockup">
         <Mark size={72} />
         <h2 class="essay-name" id="essay-title">Volli</h2>
-        <p class="essay-version">0.2 · alpha</p>
       </div>
       <div class="essay-body">
-        <p>
-          Coding agents got good. Good enough that the hard part is no longer one agent. It’s six of
-          them, each halfway through something, each wanting you at a different moment.
+        {/* Each sentence lights up as it scrolls into the reading line. */}
+        <p class="essay-read">
+          <span class="read">On a long-running project, you can lose track of which ticket belongs to which chat window or terminal pane.</span>{" "}
+          <span class="read">Volli keeps the ticket and its agent chats together.</span>{" "}
+          <span class="read">Plan tasks on the board, run them in parallel, and check the sidebar to see which agents need you.</span>{" "}
+          <span class="read">When you return, each task still has its history.</span>
         </p>
-        <p>
-          Volli is a workspace for that. Plan on a board. Hand a ticket to an agent, and it works in
-          its own Git worktree on its own branch, out of your checkout and out of the others’ way.
-          You can see which agents are working and which are waiting on you. When one is done, you
-          review the change and decide what ships.
-        </p>
-        <p>
-          Bring the models and accounts you already pay for. And when you would rather drive
-          yourself, Claude Code, Codex, or any terminal tool runs right beside the chat, in the same
-          worktree.
-        </p>
-        <p>
-          It stays yours. Your projects and history live on your Mac, there is no Volli account,
-          and the source is open under Apache-2.0.
-        </p>
-        <p>0.2 is the release where agents start on their own.</p>
-        <div class="essay-actions">
-          <a class="button" href="/download/">Download for Mac</a>
-          <a class="link-quiet" href={DOCS_URL}>Read the docs <span aria-hidden="true">→</span></a>
-          <a class="link-quiet" href={REPOSITORY_URL}
-            >Source on GitHub <span aria-hidden="true">→</span></a
-          >
-        </div>
       </div>
     </section>
 
-    {/* The release, as the film tells it: one chapter per headline, each in
-        its own world. */}
-    <section class="release" id="new" aria-labelledby="release-title">
-      <header class="release-head">
-        <h2 id="release-title">New in 0.2</h2>
-        <a class="link-quiet" href={`${DOCS_URL}/releases/whats-new-0-2/`}
-          >Everything in 0.2 <span aria-hidden="true">→</span></a
-        >
-      </header>
-
+    <section class="features" aria-label="Features">
       <Chapter
-        id="automations"
-        world="lagoon"
-        wide={armedWide}
-        tall={armedTall}
-        alt="Three tickets land in an armed Doing column; each shows an Implement countdown with a Cancel button."
-        eyebrow="Automations"
-        beats={[{ text: "Agents start", bold: true }, { text: "on their own." }]}
-        sub="Save how work starts. Run it by hand, when a ticket enters a column, or on a schedule."
-        place="bottom-left"
-        focus={[0.7, 0.45]}
+        id="tickets"
+        order={0}
+        span={7}
+        world="ember"
+        still={still("rail")}
+        alt="A ticket's sidebar: its status, priority and labels, its two chats, and its branch."
+        beats={[{ text: "Keep each task's" }, { text: "work together", bold: true }]}
+        body="A ticket is a task in Volli. It keeps your brief, chats, branch and changes together. Close a chat or quit the app, then return to the same history a week later."
       />
 
       <Chapter
-        id="activity"
-        world="cobalt"
-        wide={islandWide}
-        tall={islandTall}
-        alt="The activity island opened into layers: the agent's plan, its subagents, background shells and browser tabs."
-        eyebrow="Activity"
-        beats={[{ text: "See everything", bold: true }, { text: "your agent does." }]}
-        sub="Its plan, subagents, shells and browser tabs, one glance above the composer."
-        place="bottom-left"
-        focus={[0.72, 0.4]}
-      />
-
-      <Chapter
-        id="browser"
+        id="peek"
+        order={1}
+        span={5}
         world="aurora"
-        wide={cursorWide}
-        tall={cursorTall}
-        alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
-        eyebrow="Browser tabs"
-        beats={[{ text: "Share a browser", bold: true }, { text: "with your agent." }]}
-        sub="Watch every click it makes, and take the tab back whenever you like."
-        place="bottom-right"
-        focus={[0.3, 0.45]}
+        still={still("peek")}
+        alt="The sidebar's active chats; hovering one opens a card with its latest message and a reply box."
+        beats={[{ text: "Reply without" }, { text: "leaving your place", bold: true }]}
+        body="The sidebar shows which agents are working and which need you. Hover a chat to peek at it, then reply from an overlay while keeping your current task open."
       />
 
       <Chapter
         id="split"
+        order={0}
+        span={5}
         world="rose"
-        wide={splitWide}
-        tall={splitTall}
-        alt="A split view: a terminal running tests beside a chat and its sessions."
-        eyebrow="Split view"
-        beats={[{ text: "Chats, browsers, terminals.", bold: true }, { text: "Side by side." }]}
-        place="bottom-right"
-        focus={[0.4, 0.4]}
+        still={still("split")}
+        alt="A split view: a terminal running tests beside a chat."
+        beats={[{ text: "Put a terminal" }, { text: "beside your chat", bold: true }]}
+        body="Open a chat and a terminal side by side. Run commands or your own command-line agent in the task's branch while its conversation stays in view."
       />
 
-      <div class="montage">
-        <Chapter
-          id="limits"
-          size="small"
-          world="gold"
-          wide={limitsWide}
-          tall={limitsTall}
-          alt="The usage limits popover: session and weekly windows with time left until they reset."
-          beats={[{ text: "Your limits," }, { text: "always in view.", bold: true }]}
-          place="top-left"
-        />
-        <Chapter
-          id="models"
-          size="small"
-          world="lime"
-          wide={modelsWide}
-          tall={modelsTall}
-          alt="Default models for board chats, ticket sessions, and the Fast, Deep and Visual tiers."
-          beats={[{ text: "A model for" }, { text: "every subagent.", bold: true }]}
-          place="top-left"
-        />
-        <Chapter
-          id="mcp"
-          size="small"
-          world="cobalt"
-          wide={mcpWide}
-          tall={mcpTall}
-          alt="Settings, MCP servers: four servers, their tools, and their status."
-          beats={[{ text: "Plug in" }, { text: "any MCP server.", bold: true }]}
-          place="top-left"
-        />
-      </div>
+      <Chapter
+        id="browser"
+        order={1}
+        span={7}
+        world="lagoon"
+        still={still("cursor")}
+        alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
+        beats={[{ text: "Share a browser" }, { text: "with your agent", bold: true }]}
+        body="Watch the agent's cursor as it checks a page. Take over the browser tab when you want to try something yourself, then hand it back."
+      />
+
+      <Chapter
+        id="activity"
+        order={0}
+        span={7}
+        world="cobalt"
+        still={still("island")}
+        alt="A chat's activity opened into layers: the agent's plan, the agents it started, background commands and browser tabs."
+        beats={[{ text: "Let agents help" }, { text: "start the work", bold: true }]}
+        body="Ask an agent to create tickets and start chats for them. In each chat, follow its plan, the agents it starts, background commands and browser tabs."
+      />
+
+      <Chapter
+        id="models"
+        order={1}
+        span={5}
+        world="lime"
+        still={still("models")}
+        alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
+        beats={[{ text: "Use subscriptions" }, { text: "you already pay for", bold: true }]}
+        body="Sign in with the coding subscriptions you already have. Choose a model for each task, and set defaults for the agents it starts."
+      />
+
+      <Chapter
+        id="automations"
+        order={0}
+        span={6}
+        world="gold"
+        still={still("armed")}
+        alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
+        beats={[{ text: "Choose when" }, { text: "agents start", bold: true }]}
+        body="Save instructions for repeated work. Choose them while dragging a ticket, or enable an automation on a column so it runs when a ticket enters."
+      />
+
+      <Chapter
+        id="limits"
+        order={1}
+        span={3}
+        world="ember"
+        still={still("limits")}
+        alt="The usage limits popover: session and weekly windows with time left until they reset."
+        beats={[{ text: "See your usage", bold: true }, { text: "and reset times." }]}
+      />
+
+      <Chapter
+        id="mcp"
+        order={2}
+        span={3}
+        world="cobalt"
+        still={still("mcp")}
+        alt="Settings, MCP servers: four servers, their tools, and their status."
+        beats={[{ text: "Add tools", bold: true }, { text: "with MCP servers." }]}
+      />
+
     </section>
 
-    {/* The close: the film's end card, as a page. */}
-    <World as="section" world="ember" class="close" focus={[0.5, 0.42]} aria-labelledby="close-title">
+    {/* What makes Volli different, said about Volli alone. */}
+    <section class="why" aria-labelledby="why-title">
+      <div class="why-head" data-reveal>
+        <Super
+          id="why-title"
+          beats={[{ text: "Made for many agents" }, { text: "at once", bold: true }]}
+        />
+      </div>
+      <ol class="why-list">
+        {
+          WHY.map((item, index) => (
+            <li class="why-item" data-reveal style={`--stagger: ${index}`}>
+              <span class="why-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </li>
+          ))
+        }
+      </ol>
+      <figure class="why-quote" data-reveal>
+        <blockquote>
+          <p>
+            Before Volli, I could keep four to six agents going at once. Now I regularly run fifteen
+            to twenty, and I can leave for a week and pick up where I left off.
+          </p>
+        </blockquote>
+        <figcaption>Hussain Phalasiya, who builds Volli</figcaption>
+      </figure>
+    </section>
+
+    <World
+      as="section"
+      world="ember"
+      class="close"
+      shader="mesh"
+      focus={[0.5, 0.42]}
+      aria-labelledby="close-title"
+    >
       <div class="close-inner" data-reveal>
         <Mark size={132} build />
         <Super
           size="hero"
           id="close-title"
-          beats={[{ text: "Volli 0.2", bold: true }]}
-          sub="The workspace for parallel coding agents."
+          beats={[{ text: "Start a chat on" }, { text: "your first ticket", bold: true }]}
+          sub="Add your project, write a task, and choose the model you want to use."
         />
         <div class="close-actions">
           <a class="button" href="/download/">Download for Mac</a>

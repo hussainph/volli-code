@@ -110,3 +110,63 @@ export function paintWorld(name: WorldName): PaintedWorld {
     bloom: effectiveStopHexes(world, "dark")[world.primaryIndex]!,
   };
 }
+
+/**
+ * A world as numbers a shader can paint (the opt-in animated background,
+ * `WorldShader.tsx`). Everything is read back out of the same `canvasBackground`
+ * string the static world paints, so the shader starts from the exact light the
+ * build-time canvas shows and the fade between them is a change of motion, not
+ * of colour.
+ */
+export interface WorldShaderPool {
+  /** The pool as the canvas paints it (dark band, vibrancy applied). */
+  hex: string;
+  /** Centre, as fractions of the frame. */
+  x: number;
+  y: number;
+  /** Ellipse radii, as fractions of the frame. */
+  rx: number;
+  ry: number;
+  /** Where the pool has faded to transparent, as a fraction of its radius. */
+  fade: number;
+}
+
+export interface WorldShaderPalette {
+  /** The flat fill under every pool. */
+  base: string;
+  /** Canvas pools, bottom first (the primary, then the others). */
+  canvas: WorldShaderPool[];
+  /** The world's own light pools: the authored stops, unpulled. */
+  light: WorldPool[];
+  bloom: string;
+  grain: number;
+}
+
+const POOL_LAYER =
+  /radial-gradient\(ellipse ([\d.]+)% ([\d.]+)% at ([\d.]+)% ([\d.]+)%, (#[0-9a-f]{6}), transparent ([\d.]+)%\)/gi;
+
+export function shaderPalette(name: WorldName): WorldShaderPalette {
+  const painted = paintWorld(name);
+  const layers = [...painted.background.matchAll(POOL_LAYER)].map(
+    ([, rx, ry, x, y, hex, fade]): WorldShaderPool => ({
+      hex: hex!,
+      x: Number(x) / 100,
+      y: Number(y) / 100,
+      rx: Number(rx) / 100,
+      ry: Number(ry) / 100,
+      fade: Number(fade) / 100,
+    }),
+  );
+  const base = painted.background.split(", ").at(-1)!.trim();
+  if (layers.length === 0 || !/^#[0-9a-f]{6}$/i.test(base)) {
+    throw new Error(`worlds: cannot read the painted canvas of "${name}" back as shader data`);
+  }
+  return {
+    base,
+    // The CSS lists the topmost layer first; a shader paints bottom-up.
+    canvas: layers.reverse(),
+    light: painted.pools,
+    bloom: painted.bloom,
+    grain: WORLDS[name].grain,
+  };
+}

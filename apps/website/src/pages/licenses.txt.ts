@@ -4,6 +4,9 @@ import geistMonoLicense from "@fontsource-variable/geist-mono/LICENSE?raw";
 import geistMonoManifest from "@fontsource-variable/geist-mono/package.json";
 import monaSansLicense from "@fontsource-variable/mona-sans/LICENSE?raw";
 import monaSansManifest from "@fontsource-variable/mona-sans/package.json";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildFontNotice,
   renderFontNoticeDocument,
@@ -52,11 +55,35 @@ const REDISTRIBUTED_FONTS: readonly FontPackageSource[] = [
   },
 ];
 
+/** A bundled package's own files, read beside its entry (its exports map hides them). */
+function packageFile(name: string, file: string): string {
+  const entry = fileURLToPath(import.meta.resolve(name));
+  let dir = dirname(entry);
+  while (!existsSync(join(dir, "package.json"))) dir = dirname(dir);
+  return readFileSync(join(dir, file), "utf8");
+}
+
 export const GET: APIRoute = () => {
-  const body = renderFontNoticeDocument(REDISTRIBUTED_FONTS.map(buildFontNotice), {
+  const paperShadersManifest = JSON.parse(packageFile("@paper-design/shaders", "package.json")) as {
+    name: string;
+    version: string;
+    license: string;
+  };
+  const paperShadersNotice = packageFile("@paper-design/shaders", "NOTICE");
+  const fonts = renderFontNoticeDocument(REDISTRIBUTED_FONTS.map(buildFontNotice), {
     siteName: "volli.app",
     projectLicenseUrl: "https://github.com/hussainph/volli-code/blob/main/LICENSE",
   });
+  // Apache-2.0 §4(d): a bundled work's NOTICE travels with it. The closing
+  // world's living light is Paper Shaders.
+  const body = `${fonts.trimEnd()}
+
+${"=".repeat(72)}
+${paperShadersManifest.name} ${paperShadersManifest.version} — ${paperShadersManifest.license}
+${"=".repeat(72)}
+
+${paperShadersNotice.trim()}
+`;
 
   return new Response(body, {
     headers: { "Content-Type": "text/plain; charset=utf-8" },

@@ -1,8 +1,8 @@
 ---
 /**
  * The Super (BRAND.md §3, §7.3): the site's only headline shape, shared with
- * the release film. Two beats — one light, one bold, in either order — with an
- * optional mono eyebrow above and one quiet line below.
+ * the release film. Two beats — one light, one bold, in either order — and one
+ * optional quiet line below. Nothing ever sits above the headline.
  *
  * Each beat is its own line and rises into place once when the super enters
  * view (`data-reveal`, driven by the page's one observer). The heading reads as
@@ -15,7 +15,6 @@ interface Beat {
 
 interface Props {
   beats: readonly Beat[];
-  eyebrow?: string;
   sub?: string;
   level?: 1 | 2 | 3;
   id?: string;
@@ -23,12 +22,11 @@ interface Props {
   class?: string;
 }
 
-const { beats, eyebrow, sub, level = 2, id, size = "chapter", class: className } = Astro.props;
+const { beats, sub, level = 2, id, size = "chapter", class: className } = Astro.props;
 const Heading = `h${level}` as "h1" | "h2" | "h3";
 ---
 
 <div class:list={["super", `super--${size}`, className]} data-reveal>
-  {eyebrow && <p class="super-eyebrow">{eyebrow}</p>}
   <Heading class="super-title" id={id}>
     {
       beats.map((beat, index) => (
