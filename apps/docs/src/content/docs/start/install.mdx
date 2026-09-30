@@ -7,12 +7,12 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Install Volli on an Apple silicon Mac. Volli itself needs no account; its
-built-in chats use a model provider you connect.
+Install Volli on an Apple silicon Mac. Volli needs no account of its own, but
+its built-in chats use a model provider you connect.
 
 <Aside type="caution" title="Alpha">
-  Features and behavior can change between builds. Keep your own backups and
-  Git branches for work you cannot afford to lose.
+  Features and behavior change between builds. Keep backups and Git branches
+  for work you cannot lose.
 </Aside>
 
 ## Requirements
@@ -20,7 +20,7 @@ built-in chats use a model provider you connect.
 | Requirement | Supported setup |
 | --- | --- |
 | Mac | Apple silicon, M1 or later; no Intel build |
-| macOS | 12.0 Monterey or later |
+| macOS | 13.0 Ventura or later |
 | Git | Installed, with a repository on disk |
 | Model provider | An account or API key for a provider available in Volli |
 
@@ -30,19 +30,20 @@ built-in chats use a model provider you connect.
 2. Open the disk image and drag the Volli app to **Applications**.
 3. Open Volli from **Applications**.
 4. In **Settings → Models**, connect a provider and choose a default model.
-   See [Models and usage](/guides/models/) for the available account controls.
+   See [Models and usage](/guides/models/) for more on providers and models.
 
 Continue with [Run your first coding task](/start/quickstart/) to add a
 repository, create a ticket, and review an agent's change.
 
-If the app cannot open, record the exact macOS message and see
+If the app will not open, note the exact message macOS shows and see
 [Troubleshooting](/reference/troubleshooting/). Do not disable macOS security
-checks to work around an unexplained failure.
+checks to get past a failure you cannot explain.
 
 ## Updates
 
-**Settings → Updates** shows the installed version and update checks. Available
-updates download in the background and install when you quit.
+**Settings → Updates** shows your current version and has a **Check now**
+button. An available update downloads in the background and installs the next
+time you quit.
 
 You can also download a release's `.dmg` from
 [GitHub Releases](https://github.com/hussainph/volli-code/releases) and replace
@@ -50,9 +51,10 @@ the app in **Applications**.
 
 ## The volli CLI
 
-Terminal companions opened by Volli have `volli` on `PATH`. Check their context
-with `volli identify`. **Settings → About** checks and repairs the parts of the
-installation Volli owns. See [CLI setup and context](/reference/cli/).
+Terminal companions you open from Volli have `volli` on `PATH`. In one of
+them, run `volli identify` to check its context. **Settings → About** checks and
+repairs the parts of the installation that Volli owns. See
+[CLI setup and context](/reference/cli/).
 
 ## Where your data lives
 
@@ -60,21 +62,21 @@ Volli stores app data under `~/Library/Application Support/Volli Code/` and
 ticket worktrees under `~/.volli/worktrees/`. Removing a project from the app
 does not delete its repository folder.
 
-See [Local data and network access](/reference/data-and-privacy/) for storage
-and outbound requests, and [Storage and backups](/guides/storage/) before
-removing app data.
+See [Local data and network access](/reference/data-and-privacy/) for what
+Volli stores and what it sends out, and [Storage and backups](/guides/storage/)
+before you delete app data.
 
 ## Uninstall
 
 1. Quit Volli.
-2. Remove worktrees you no longer need through Git. Follow
-   [Clean up worktrees](/guides/clean-up-worktrees/) before deleting folders.
+2. Remove the worktrees you no longer need with Git. Follow
+   [Clean up worktrees](/guides/clean-up-worktrees/) before you delete a folder.
 3. Drag the Volli app from **Applications** to the Trash.
 
-App data remains on disk. Deleting
-`~/Library/Application Support/Volli Code/` removes local tickets, histories,
-and settings. Back it up first if you need to retain them. Uninstalling does
-not remove your project repositories.
+App data stays on disk. Deleting
+`~/Library/Application Support/Volli Code/` removes your local tickets,
+histories, and settings, so back it up first if you need them. Your project
+repositories stay where they are.
 
 ## Build from source
 

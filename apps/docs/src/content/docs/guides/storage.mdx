@@ -25,22 +25,22 @@ difference between removal and archiving.
    results.
 
 Some processes are listed without a removal action. **Reap under memory
-pressure** controls automatic cleanup of eligible leftover processes.
-Stopping a process and deleting its files are separate actions.
+pressure** controls automatic cleanup of eligible leftover processes. Stopping
+a process and deleting its files are separate actions.
 
 ## Remove build artifacts
 
 In **Build artifacts**, scan for ignored dependency folders, build output, and
 caches. Review the results before confirming a trim. Volli protects local
 configuration and active or dirty worktrees. A trim keeps the checkout and
-its branch; you may need to reinstall dependencies before working there again.
+its branch. You may need to reinstall dependencies before working there again.
 
 ## Remove orphaned logs and worktrees
 
-**Pi session logs** finds logs no longer referenced by a Session.
-**Orphaned worktrees** checks for checkout folders that no ticket owns.
-Review each scan before confirming cleanup. These scans cover the local
-installation, not only the selected project.
+**Pi session logs** finds logs no longer referenced by a Session. **Orphaned
+worktrees** checks for checkout folders that no ticket owns. Review each scan
+before confirming cleanup. These scans cover the local installation, not only
+the selected project.
 
 If you change retention or the folders change after a scan, scan again before
 acting on an outdated result.
@@ -57,9 +57,9 @@ location but does not copy or back it up.
 
 ## Back up local data
 
-Keep your repositories and Volli's application-data folder in your normal
-Mac backup plan. Quit Volli before making a manual copy of its app-data folder;
-copying only the SQLite file can miss recent writes and related files.
+Keep your repositories and Volli's application-data folder in your normal Mac
+backup plan. Quit Volli before making a manual copy of its app-data folder.
+Copying only the SQLite file can miss recent writes and related files.
 Worktrees live separately and may contain uncommitted work that a pushed branch
 does not include.
 

@@ -10,7 +10,7 @@ sidebar:
 In **Settings → Models**, connect a provider and choose an available default.
 See [Models and usage](/guides/models/) for account and tier setup.
 
-If an existing Session has stopped, keep its conversation and follow
+If an existing Session has stopped, its conversation is kept. Follow
 [Recover a Session](/guides/recover-session/). The status determines whether to
 retry, repair provider access, wait for a reset, or answer a question.
 
@@ -23,8 +23,8 @@ Check all of the conditions for the Trigger:
   **No Automation**.
 - The ticket must make a new **Deliberate move** into the column. Enabling or
   arming a column does not process tickets already there.
-- A different Automation can be armed in the column; only one can fire on its
-  own.
+- Another Automation may be the armed one in the column; only one Automation
+  can fire on its own.
 
 A switched-off Automation is still available for a manual Run. See
 [Run an Automation](/guides/automations/run/) and
@@ -32,17 +32,16 @@ A switched-off Automation is still available for a manual Run. See
 
 ## A scheduled Automation was skipped
 
-Volli must be open and awake enough to observe the due time. Open the
+Volli must be open and awake when the scheduled time arrives. Open the
 Automation's **Runs** history and read the **Skipped** reason. **Run now**
 starts one current Run; it does not replay every missed occurrence.
 
 ## A Run cannot use its Runtime
 
-An exact model pin can become unavailable after it was saved. Repair the
-Automation's Runtime in its editor or choose another model. Volli does not
-silently fall back to a different model. A Run already in flight can also
-block another Run on the same ticket; wait for it to finish or inspect the
-existing Session.
+A saved exact model pin can become unavailable. Repair the Automation's Runtime
+in its editor, or choose another model. Volli never silently falls back to a
+different model. A Run already in flight can also block another Run on the same
+ticket; wait for it to finish, or inspect the existing Session.
 
 ## `volli` exits with code 3
 
@@ -57,17 +56,17 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Open **Settings → About** for the install's CLI checks; they run when the pane
-opens, and a fault offers **Fix** to regenerate the parts Volli owns, with
-**Re-check** to run them again. To see the detected executable and shell
-integration, copy the support report from that pane. Terminal companions opened
-by the app already receive `volli` on `PATH`.
+Open **Settings → About**. Its CLI checks run when the pane opens; a fault
+offers **Fix**, which regenerates the parts Volli owns, and **Re-check** to run
+the checks again. To see the detected executable and shell integration, copy
+the support report from that pane. Terminal companions opened by the app
+already have `volli` on `PATH`.
 
 ## A source build cannot load the terminal module
 
 `node-pty` must match Electron's ABI after a dependency install. Follow
 [Build from source](/reference/build-from-source/#rebuild-the-terminal-module)
-to rebuild it. An install error itself needs the remedy named in its output.
+to rebuild it. An install error needs the fix its own output names.
 
 ## My ticket worktree is still on disk
 

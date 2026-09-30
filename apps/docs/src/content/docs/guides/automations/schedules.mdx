@@ -5,34 +5,36 @@ sidebar:
   label: Schedules
 ---
 
-Use a schedule when the same Automation should start at a recurring time. A
-scheduled Run targets its project and opens a project-level Board Session.
+Use a schedule to start the same Automation at a recurring time. A scheduled Run
+targets its project and opens a project-level Board Session.
 
 ## Set the schedule
 
 1. Open **Automations** in the app navigation, then select **New Automation**.
-2. Enter a **Name** and **Instructions**. Under **Trigger**, select **On a
-   schedule**. Scheduled Automations belong to **This project**.
-3. Select a cadence under **Schedule**:
+2. In **Name**, enter a name you can recognize in a run menu.
+3. In **Instructions**, write the first message the new Session should receive.
+4. Under **Trigger**, select **On a schedule**. Scheduled Automations belong to
+   **This project**.
+5. Select a cadence under **Schedule**:
    - **Hourly** runs at a chosen number of minutes past the hour.
    - **Every day** runs at a chosen time each day.
    - **Mon–Fri** runs at a chosen time on weekdays.
    - **Weekly** runs on a chosen day and time.
-4. Choose a **Time zone**. A new schedule starts with this Mac's current time
+6. Choose a **Time zone**. A new schedule starts with this Mac's current time
    zone. The saved zone stays in effect if you travel.
-5. Select **Create automation**, then turn on **Automatic triggers** in the
-   Automation's header on this Mac.
+7. Select **Create automation**.
+8. Turn on **Automatic triggers** in the Automation's header on this Mac.
 
-Schedules use these presets; they do not accept cron expressions. The app must
-be running and the Mac awake for a due Run to start on time.
+Schedules use these presets; they do not accept cron expressions. For a due Run
+to start on time, the app must be running and the Mac awake.
 
 ## Handle a missed occurrence
 
-If a due time passes while Volli is closed, or the Mac is asleep or too busy for
-the timer to reach it, history records a **Skipped** occurrence with its reason.
-Volli does not replay missed work. The next scheduled occurrence follows the
-saved cadence. If you want to start the work, select **Run now** on the skipped
-row. That starts one project Run, even if the row covers several missed times.
+If a due time passes while Volli is closed, or the Mac is asleep or too busy to
+wake in time, history records a **Skipped** occurrence with its reason.
+Volli does not replay missed work; the next occurrence follows the saved
+cadence. To start the work anyway, select **Run now** on the skipped row. That
+starts one project Run, even if the row covers several missed times.
 
 Read the Run and its Session in [Run history](/guides/automations/run/). For
 column-based automatic starts, see [Arm a column Automation](/guides/automations/columns/).

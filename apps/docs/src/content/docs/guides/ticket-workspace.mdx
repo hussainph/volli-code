@@ -1,6 +1,6 @@
 ---
 title: The ticket workspace
-description: "Work on one task: read its brief, return to its chats, inspect files and changes, and edit its properties."
+description: "Work on one task: read its brief, revisit its chats, inspect files and changes, and edit its properties."
 sidebar:
   label: Ticket workspace
 ---
@@ -18,38 +18,41 @@ keeps the documents and chats you open. The rail beside it has four pages:
 
 - **Properties**: status, priority, and labels. Changing status updates the
   board. Starting a chat or an Automation Run is a separate action.
-- **Sessions**: the ticket's chats and terminal sessions. Ended Sessions are
+- **Sessions**: the ticket's chats and terminal Sessions. Ended Sessions are
   folded under the section heading. Open one to return to its history.
 - **Automations**: the saved Automations this ticket can run.
 
-The ticket's cost is a row pinned at the bottom of **Now**. The worktree row is
-pinned under every page: it shows the branch and opens to the base branch,
+A row pinned at the bottom of **Now** shows the ticket's cost. The worktree row
+is pinned under every page: it shows the branch and opens to the base branch,
 worktree, changes, and pull-request state.
 
 A ticket chat carries the task's context and works from that ticket's worktree.
-Reconnecting it does not create a second chat history. What one chat is holding,
-such as its Browser Tabs, subagents, plan, and background shells, is shown in
-the Activity Island above that chat's composer, not in the rail.
+Reconnecting it does not create a second chat history. What a chat is holding
+(its Browser Tabs, subagents, plan, and background shells) appears in the
+Activity Island above that chat's composer, not in the rail.
 
-Use **Chat** in the **Sessions** heading to open a draft after configuring
-[Models](/guides/models/). Send the first message to start the Session. The
-**Chat** menu also opens a [terminal companion](/guides/terminal-companions/)
-or a [Browser Tab](/guides/browser-tabs/).
+Configure [Models](/guides/models/) first, then use **Chat** in the
+**Sessions** heading to open a draft. Send the first message to start the
+Session. The **Chat** menu also opens a
+[terminal companion](/guides/terminal-companions/) or a
+[Browser Tab](/guides/browser-tabs/).
 
 ### Run an Automation on this ticket
 
 The **Automations** section lists the Automations offered to this ticket. The
-one armed for the ticket's current column comes first and is marked. Select a
-row, or right-click it, to see its saved Instructions, choose the model for
-this Run under **Run on**, and select **Run**. Selecting a row never starts a
-Run by itself. A manual Run is available even when **Automatic triggers** is
-off for that Automation.
+one armed for the ticket's current column comes first and is marked.
 
-The Run opens a fresh Session, which appears in **Sessions** with a mark
-showing that a Run started it. The Automations section does not list Runs.
-Select **Open Automations** in the section heading to create or edit records;
-authoring lives only on that page. For one-off work that you don't want to
-save, start a chat instead.
+Select a row, or right-click it, to see its saved Instructions. Choose the
+model for this Run under **Run on**, then select **Run**. Selecting a row never
+starts a Run by itself. You can run an Automation by hand even when
+**Automatic triggers** is off for it.
+
+A Run opens a fresh Session. It appears in **Sessions** with a mark showing
+that a Run started it. The **Automations** section does not list Runs.
+
+Select **Open Automations** in the section heading to create or edit Automation
+records; authoring lives only on that page. For one-off work that you don't want
+to save, start a chat instead.
 
 ## Files and references
 
@@ -58,15 +61,15 @@ and the ticket worktree's directory tree. Use `@` in the Ticket Body to add a
 file reference. Selecting a file opens a preview tab; keeping it open pins the
 tab.
 
-Ticket files read from the worktree. The project-level **Files** navigator in
-**Home** reads from the main checkout, so the same path can contain different
-content in each place. Editing one does not edit the other.
+Ticket files come from the worktree. The project-level **Files** navigator in
+**Home** reads from the main checkout, so the same path can hold different
+content in each place, and editing one does not edit the other.
 
 ## Diffs
 
 The **Diffs** rail compares the ticket worktree with its base branch. Open a
-file to inspect its diff. The change set includes committed and uncommitted
-work, so it reflects the branch as it is on disk. See
+file to inspect its diff. The **Change Set** includes committed and
+uncommitted work, so it reflects the branch as it is on disk. See
 [Review and publish changes](/guides/review-changes/) for testing, commits,
 and pull requests.
 

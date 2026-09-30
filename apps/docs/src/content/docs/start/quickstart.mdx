@@ -5,12 +5,12 @@ sidebar:
   label: Quickstart
 ---
 
-By the end of this tutorial, you will have an agent's change on a separate Git
-branch and know where to review it.
+This tutorial puts an agent's change on a separate Git branch and shows you
+where to review it.
 
 You need Volli [installed](/start/install/), a Git repository on disk, and a
-[default model configured](/guides/models/). Choose a small task you can check,
-such as correcting a mistake in your project's README.
+[default model set](/guides/models/). Pick a small task you can check, such as
+fixing a mistake in your project's README.
 
 ## Add your repository
 
@@ -25,8 +25,8 @@ separate checkout, called a **worktree**, by default.
 ## Create a ticket
 
 1. On the Board, select **New ticket**.
-2. Enter a title and a brief that describes the change and how to check it.
-   For a README correction, name the incorrect text and its replacement.
+2. Enter a title and a brief: what to change, and how to check the result. For a
+   README fix, name the wrong text and its replacement.
 3. Select **Create ticket**.
 4. Open the ticket. Its **Ticket Body** holds the brief you wrote.
 
@@ -39,8 +39,8 @@ The ticket workspace keeps that brief, its Sessions, files, and changes together
    the result and tell me which files changed.”
 3. Read the agent's messages and tool results. Answer any question it asks.
 
-The first message creates the **Session**, the conversation's durable history,
-and prepares the ticket's worktree. Opening the draft alone starts no work.
+Your first message creates the **Session**, the record of the conversation, and
+prepares the ticket's worktree. Opening the draft starts no work.
 
 Moving a ticket to **Doing** records its status. It starts a Run only if an
 enabled Automation is armed for that column. You do not need an Automation for
@@ -49,17 +49,16 @@ this tutorial.
 ## Inspect the result
 
 1. In the ticket's **Diffs** rail, open each changed file and read its diff.
-2. In **Files**, open a file to inspect its full contents in the worktree.
+2. In **Files**, open a file to see its full contents in the worktree.
 3. Check the result against the brief. For code changes, run the project's
    relevant tests in a [terminal companion](/guides/terminal-companions/).
 
-Diffs includes committed and uncommitted changes against the ticket's base
-branch. Volli does not certify the change or run tests merely because you open
-this view.
+Diffs shows committed and uncommitted changes against the ticket's base branch.
+Opening this view runs no tests and does not check the change for you.
 
-To publish the result, follow [Review and publish changes](/guides/review-changes/).
-That guide covers the commit confirmation, pushing a branch, and creating a
-draft pull request.
+To publish the result, follow
+[Review and publish changes](/guides/review-changes/). It covers confirming the
+commit, pushing the branch, and opening a draft pull request.
 
 ## Return to the conversation
 
@@ -67,8 +66,8 @@ In the ticket's **Now → Sessions** section, open the chat to return to its
 history. Closing a tab does not delete the Session. See
 [Use a chat](/guides/sessions/) for interruption and crash recovery.
 
-For another independent task, create another ticket and repeat the process.
-Its worktree and branch keep the changes separate.
+For another independent task, create another ticket and repeat the process. Its
+worktree and branch keep the changes separate.
 
 ## Optional: Plan broader work
 

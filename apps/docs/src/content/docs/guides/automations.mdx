@@ -1,6 +1,6 @@
 ---
 title: Automations
-description: Learn what an Automation saves and choose how to create, run, or start it automatically.
+description: What an Automation saves, and how to run one by hand or start it automatically.
 sidebar:
   label: Automations
 ---
@@ -13,13 +13,13 @@ Session; it does not resume an existing Session.
 
 | Part | What it controls |
 | --- | --- |
-| **Name** | How you identify it in the Automations page and run menus. |
-| **Instructions** | The first message sent to the new Session. They support the chat composer's `/` template and Skill references and `@` file references. |
+| **Name** | How you pick it out on the Automations page and in run menus. |
+| **Instructions** | The first message the new Session receives. They support the chat composer's `/` references to Commands and Skills, and `@` file references. |
 | **Trigger** | What starts it besides you: **Only when I run it**, **Ticket enters**, or **On a schedule**. |
-| **Runtime** | The model selection for the Run, inherited from project defaults or pinned to a tier or model. |
+| **Runtime** | The model choice for the Run, inherited from project defaults or pinned to a tier or model. |
 
-A Run records which Automation it used and the model and reasoning that started
-the Session. Its history links back to that Session.
+Each Run records which Automation it used and the model and reasoning that
+started the Session. Its history links back to that Session.
 
 <span id="what-starts-a-run"></span>
 
@@ -30,26 +30,26 @@ saved Automation by hand, whatever its Trigger.
 
 ### Only when I run it
 
-This Trigger adds no automatic start. Use [Create a manual Automation](/guides/automations/create/)
-to save one you will start yourself.
+This Trigger adds no automatic start. To save an Automation you start yourself,
+see [Create a manual Automation](/guides/automations/create/).
 
 ### Ticket enters
 
-This Trigger offers the Automation in its selected board columns. A column can
+This Trigger offers the Automation in the board columns you select. A column can
 arm one of the Automations it offers. See [Arm a column Automation](/guides/automations/columns/).
 
 ### On a schedule
 
-This Trigger starts a project-level Board Session at its saved cadence. See
+This Trigger starts a project-level Board Session at the saved cadence. See
 [Schedule an Automation](/guides/automations/schedules/) for time zones and
 missed occurrences.
 
 ## Automatic trigger settings
 
-Turn on **Automatic triggers** on this Mac to let an Automation start from its
-Trigger. The switch is off by default and does not travel with the project. A
-column Trigger also needs an armed column. A manual Run still works while the
-switch is off.
+Turn on **Automatic triggers** to let an Automation start from its Trigger. The
+switch is off by default and stays on this Mac, so it does not travel with the
+project. A column Trigger also needs an armed column. You can still run an
+Automation by hand while the switch is off.
 
 ## Next steps
 

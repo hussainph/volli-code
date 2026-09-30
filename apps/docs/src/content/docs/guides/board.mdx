@@ -1,17 +1,19 @@
 ---
 title: The board
-description: Understand Volli's five ticket columns, board views, and how ticket moves work.
+description: Move tickets between five columns, switch views, filter, sort, and archive them.
 sidebar:
   label: The board
 ---
 
-The board organizes tickets across five fixed columns. Drag a ticket to change
-its status, or open its workspace to edit ticket details and review its
-activity. A move alone does not start a Session; an enabled, armed Automation
-can start a fresh Ticket Session when a deliberate move brings a ticket into
-its column.
+The board holds your tickets in five fixed columns. Drag a ticket between
+columns to change its status; open one to edit its details or read its
+activity.
 
-![The Home Board for voltaic with all five columns and 24 tickets visible; the navigation sidebar is hidden so the columns fit, and VLT-14 appears in Doing with composer and renderer labels.](../../../assets/screenshots/board.png)
+A move alone does not start a Session. One case does: when a deliberate move
+brings a ticket into a column with an enabled, armed Automation, that Automation
+can start a fresh Ticket Session.
+
+![The Home Board for voltaic: five columns holding 24 tickets, with the navigation sidebar hidden and VLT-14 in Doing with composer and renderer labels.](../../../assets/screenshots/board.png)
 
 ## The columns
 
@@ -25,33 +27,35 @@ its column.
 ## List view
 
 Use the view control beside the ticket count to switch between **Board** and
-**List**. Board shows cards in columns; List shows the same tickets as rows,
-grouped by column. Switching views keeps the current filters and sort order.
+**List**. Board shows cards in columns; List shows the tickets as rows, grouped
+by column. Switching views keeps the current filters and sort order.
 
 ## Filtering and sorting
 
-Use the board header's **Priority** filter, or **Label** when the project has
-labels, to narrow the visible tickets. Each filter accepts multiple values and
-matches any selected value. Select **Clear** to reset active filters.
+Use **Priority** in the board header, or **Label** when the project has labels,
+to narrow the visible tickets. Each filter accepts multiple values and matches
+any selected value. Select **Clear** to reset active filters.
 
 Choose **Manual**, **Priority**, **Created**, **Updated**, or **Title** to sort
-tickets within each column. **Manual** keeps the order you set by dragging;
-other sort fields let you choose ascending or descending order. Sorting by a
-field does not change the saved manual order.
+tickets within each column. **Manual** keeps the order you set by dragging.
+Other fields let you sort ascending or descending. Sorting by a field does not
+change the saved manual order.
 
 Use the command palette (`⌘K`) to search tickets and Sessions across projects.
 
 ## What moves a ticket
 
-Drag a card to another column, or choose **Move to** from its context menu.
-In a ticket workspace, changing **Status** under **Properties** also moves it.
-The `volli ticket move` command makes the same explicit move from a terminal.
+Drag a card to another column, or choose **Move to** from its context menu. In a
+ticket workspace, changing **Status** under **Properties** also moves it. The
+`volli ticket move` command makes the same move from a terminal.
 
-A Deliberate move records the destination you chose, whether you made it or a
-Ticket Session used `volli ticket move`. A Session's completion or blocked
-signal records its outcome; it does not change the ticket's status. Moving from
-**Doing** or **Needs Review** to **Backlog**, **Todo**, or **Done** interrupts the
-ticket's live Sessions. Moving between **Doing** and **Needs Review** does not.
+A Deliberate move records the destination you chose, whoever made it: you or a
+Ticket Session using `volli ticket move`. A Session's completion or blocked
+signal records its outcome; it does not change the ticket's status.
+
+Moving from **Doing** or **Needs Review** to **Backlog**, **Todo**, or **Done**
+interrupts the ticket's live Sessions. Moving between **Doing** and **Needs
+Review** does not.
 
 ### Manual moves win
 
@@ -60,26 +64,28 @@ move the ticket to another column.
 
 ## Automations on the board
 
-The lightning control in a column header chooses which offered Automation can
-start when a ticket enters that column. A column can offer several Automations
-but can arm only one. A manual Run remains available when automatic triggers
-are off. See [Arm a column Automation](/guides/automations/columns/) for
-machine-local enablement, column arming, and Option-drag choices.
+The bolt in a column header chooses which offered Automation can start when a
+ticket enters that column. A column can offer several Automations
+but arm only one. You can always start a Run by hand, even when automatic
+triggers are off. See [Arm a column Automation](/guides/automations/columns/)
+for enablement on your machine, column arming, and Option-drag choices.
 
 ## The ticket context menu
 
-Right-click a ticket to open its context menu. Use **Move to**, **Priority**, or
-**Labels** to update it; run an offered Automation from **Automations**; or use
-**Resume last session** when Volli offers it. **Archive** keeps the ticket for
-later restoration. **Remove worktree…** removes its checkout but keeps the
-branch. See [Manage tickets](/guides/manage-tickets/) for ticket activity and
-archiving, and [Clean up worktrees](/guides/clean-up-worktrees/) before you
-remove a checkout.
+Right-click a ticket to open its context menu. Update it with **Move to**,
+**Priority**, or **Labels**; run an offered Automation from **Automations**; or
+use **Resume last session** when Volli offers it. **Archive** keeps the ticket
+for later restoration. **Remove worktree…** removes its checkout but keeps the
+branch.
+
+See [Manage tickets](/guides/manage-tickets/) for ticket activity and archiving,
+and read [Clean up worktrees](/guides/clean-up-worktrees/) before you remove a
+checkout.
 
 ## Tickets
 
-Each card represents a ticket with a title and a Ticket Body that records its
-scope. These tasks have their own guides:
+Each card is a ticket with a title and a Ticket Body that records its scope.
+These tasks have their own guides:
 
 - <span id="comments"></span>[Add or edit comments](/guides/manage-tickets/#comments).
 - <span id="history"></span>[Read ticket history](/guides/manage-tickets/#history).

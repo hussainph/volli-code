@@ -8,9 +8,9 @@ sidebar:
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Use a **Board chat** to shape project-wide work before it has a ticket. Start a
-**ticket chat** when you know which task to work on. Ticket chats can use
-separate Git worktrees so changes stay on separate branches. See [Use a chat](/guides/sessions/)
-for how to start and reopen a chat.
+**ticket chat** when you know which task to work on. A ticket chat can work in
+its own Git worktree, so changes stay on separate branches. See
+[Use a chat](/guides/sessions/) to start and reopen a chat.
 
 ## Board chats and ticket chats
 
@@ -19,45 +19,50 @@ for how to start and reopen a chat.
 | **Board chat** | Project work that is not scoped to one ticket | The project's main checkout |
 | **Ticket chat** | One ticket and its brief | The ticket's worktree, or the main checkout if you choose **Project checkout** |
 
-Before starting a built-in chat, choose a default model in **Settings → Models**.
-A ticket's destination can be changed between **New worktree** and **Project
-checkout** until its first worktree is created. Moving a ticket to **Doing**
-records its status. It starts a Run only if an enabled Automation is armed for
-that column; you can start a chat separately.
+Choose a default model in **Settings → Models** before you start a built-in
+chat. A ticket's destination can be changed between **New worktree** and
+**Project checkout** until its first worktree is created.
+
+Moving a ticket to **Doing** records its status. It starts a Run only if an
+enabled Automation is armed for that column. Starting a chat is always a
+separate action.
 
 ## Ticket worktrees
 
-When a ticket uses a worktree, its first Session creates a separate Git
-worktree on a branch named `volli/<DISPLAY-ID>-<slug>`, such as
+When a ticket uses a worktree, its first Session creates a separate Git worktree
+on a branch named `volli/<DISPLAY-ID>-<slug>`, such as
 `volli/VC-12-mcp-server`. Volli stores ticket worktrees under
-`~/.volli/worktrees/`. The base branch comes from the ticket's setting, the
-project's **Configure → Worktrees** setting, or the branch Volli detects in the
-repository. Creating a worktree uses refs already present locally; it does not
-fetch first.
+`~/.volli/worktrees/`.
 
-In **Configure → Worktrees**, **Branch from** sets the default base branch and
-**Then run** sets a setup command, such as `pnpm install`. Setup runs in the
-new worktree before the agent starts. It does not run again when Volli reuses
-an existing worktree.
+The base branch comes from the ticket's setting, the project's
+**Configure → Worktrees** setting, or the branch Volli detects. Creating a
+worktree uses the refs already on your machine; it does not fetch first.
+
+In **Configure → Worktrees**, **Branch from** sets the default base branch.
+**Then run** sets a setup command, such as `pnpm install`. The setup runs in the
+new worktree before the agent starts, and it does not run again when Volli
+reuses an existing worktree.
 
 Git brings tracked files into a new worktree. Volli also copies selected local
-files from the main checkout when it creates the worktree. By default, these
-include `.env*` and `.claude/settings.local.json`. Add patterns in the
-repository-root `.worktreeinclude`; later patterns take precedence, and a
-`!pattern` line excludes a match. Existing destination files are not
-replaced. A copied file in an existing worktree is not refreshed on later
-Sessions. An agent can read copied local configuration, including credentials
-in an environment file. Review the copy set before starting work.
+files from the main checkout. By default, these are `.env*` and
+`.claude/settings.local.json`.
 
-For example, extend the defaults while excluding one local file:
+Add your own patterns to a `.worktreeinclude` file in the repository root.
+Later patterns take precedence, and a `!pattern` line excludes a match. Volli
+does not replace a file that already exists in the worktree, nor refresh a
+copied file on later Sessions.
+
+An agent can read the copied local configuration, including credentials in an
+environment file. Review which files get copied before you start work.
+
+For example, add a pattern and exclude a file the defaults would copy:
 
 ```text
 config/local.json
 !.env.production
 ```
 
-Save those patterns as `.worktreeinclude` in the repository root. The file
-extends the built-in defaults; it does not replace them.
+`.worktreeinclude` extends the built-in defaults; it does not replace them.
 
 You can inspect a ticket branch from a terminal companion:
 
@@ -67,9 +72,11 @@ volli worktree diff VC-12
 ```
 
 `worktree diff` compares the ticket branch with its base. With `--working-tree`,
-it shows uncommitted changes instead. To merge an available base ref into the ticket
-branch, run `volli worktree sync VC-12`. Sync does not fetch, wait for checks,
-or resolve conflicts for you. It leaves a conflicted merge in place;
+it shows uncommitted changes instead.
+
+To merge an available base ref into the ticket branch, run
+`volli worktree sync VC-12`. Sync does not fetch, wait for checks, or resolve
+conflicts for you. It leaves a conflicted merge in place;
 `volli worktree sync VC-12 --abort` undoes that merge. See [Review ticket
 changes](/guides/review-changes/) for the Diffs rail and repository actions.
 
@@ -94,7 +101,7 @@ A terminal companion is a manual shell workflow alongside built-in chat. See
 ## Change sets and retained worktrees
 
 A ticket's Change Set includes committed and uncommitted changes relative to
-its base branch. Archiving retains the worktree. A later cleanup can remove the
+its base branch. Archiving keeps the worktree. A later cleanup can remove the
 checkout while keeping the branch, ticket, and history.
 
 Follow [Review and publish changes](/guides/review-changes/) to land the work,

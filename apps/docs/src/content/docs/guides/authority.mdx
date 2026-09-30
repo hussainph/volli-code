@@ -5,11 +5,11 @@ sidebar:
   label: Authority
 ---
 
-**Configure → Authority** sets the policy for a project's Sessions. An
-**attachment** is the live connection a Session runs on. It pins the policy
-when it opens. A change in Configure applies to a later, newly created
-attachment, not to one already running. Relaunching the app replays an existing
-attachment's recorded policy. The policy is stored with Volli's project data,
+**Configure → Authority** sets the policy for a project’s Sessions. An
+**attachment** is the live connection a Session runs on, and it pins the policy
+when it opens. A change in Configure applies when a new attachment is created,
+not to one already running. Relaunching the app replays an existing
+attachment’s recorded policy. Volli stores the policy with its project data,
 not in a repository configuration file.
 
 ## Choose a rule-enforcement posture
@@ -22,20 +22,20 @@ The **Rule enforcement** setting has three postures:
 | **Observe** | The default. Saves the policy for the attachment and allows calls; it does not record individual allowed or refused calls. |
 | **Enforce** | Checks calls against Volli’s built-in rules and blocks calls those rules deny. |
 
-In **Enforce**, the default fallback asks you when a call would reach **3
-denials in a row** or **20 denials total**. You can change either threshold.
-Only denials from rules that allow an override can be allowed; other rule
-violations stay blocked.
+In **Enforce**, the default fallback asks you once a Session reaches **3 denials
+in a row** or **20 denials total**. You can change either threshold. Only denials
+from rules that allow an override can be allowed; other rule violations stay
+blocked.
 
 ## Understand the other controls
 
 **Decision mode — not active yet** stores whether the policy names **Ask me** or
-**Classifier** as the judge for calls the rules cannot settle. The current
-runtime does not use this setting to decide calls, and **Classifier** is
-unavailable until a classifier is configured.
+**Classifier** as the judge for calls the rules cannot settle. Volli does not
+use this setting yet to decide calls, and **Classifier** is unavailable until a
+classifier is configured.
 
-The **can read** rows control how much of a Session’s transcript each caller
-kind can read. The inherited choices are:
+The **can read** rows control how much of a Session’s transcript each kind of
+caller can read. The inherited choices are:
 
 | Caller | Default access |
 | --- | --- |
@@ -47,8 +47,8 @@ kind can read. The inherited choices are:
 
 **Enforce** is a rule gate, not a sandbox. A Session’s tools still run with the
 authority of the account running Volli, and the built-in rules do not isolate
-commands from every possible side effect. Do not treat Authority as operating-
-system containment.
+commands from every possible side effect. Do not treat Authority as
+operating-system containment.
 
 See [Settings and configuration](/guides/settings/) for the difference between
 app-wide Settings and project Configure options.

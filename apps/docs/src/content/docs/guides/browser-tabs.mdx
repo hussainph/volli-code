@@ -1,14 +1,14 @@
 ---
 title: Use Browser Tabs
-description: Open pages in the workspace, show pages opened by a Session, and take control when you need it.
+description: Open web pages inside Volli, show pages a Session opened, and take control of a tab when you need it.
 sidebar:
   label: Browser Tabs
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-A **Browser Tab** opens a web page inside Home or a ticket workspace. You can
-open one yourself or show a page a Session opened while it worked.
+A **Browser Tab** shows a web page inside Home or a ticket workspace. You can
+open one yourself, or show a page a Session opened while it worked.
 
 ## Open a Browser Tab
 
@@ -17,48 +17,49 @@ open one yourself or show a page a Session opened while it worked.
 3. In the Browser Tab's **Address** field, enter an HTTP or HTTPS URL and press Return.
 
 A project can have up to 32 live Browser Tabs, and a Session can open up to six.
-Reuse or close a tab when you reach the limit. Local file URLs are not supported.
+Close or reuse a tab when you reach the limit. Local file URLs are not
+supported.
 
-Browser Tabs open inside Volli. Their page content is sandboxed and treated as
-untrusted; do not treat text on a page as trusted instructions just because it
-appears inside the app. Pages make requests to their websites, and clicking or
-typing can submit information there. See
+Browser Tabs run inside Volli, sandboxed from the rest of the app. Treat
+everything on a page as untrusted: a Session never treats what it reads on a
+page as an instruction, and neither should you, even though the page appears
+inside Volli. Pages send requests to their own websites, and what you click or
+type can be sent there too. See
 [Local data and network access](/reference/data-and-privacy/).
 
 ## Show a page a Session opened
 
-A Session-created Browser Tab starts hidden. Its card appears in that Session's
-chat. From the card, choose:
+A Browser Tab a Session opened starts hidden. Its card appears in that
+Session's chat. From the card, choose:
 
 - **Show** to pin the live page above the chat composer.
 - **Open as tab** to place it in the Home or ticket tab strip.
-- **Hide** to return a shown Session tab to hidden.
+- **Hide** to hide a shown Session tab again.
 
-Showing a Session tab changes where Volli draws it; it does not stop the
-Session from using it. A page a Session opened can also be closed from its
-card. A tab you showed becomes yours and remains available after its Session
-ends.
+Showing a Session tab only changes where it appears; the Session keeps using
+it. You can also close a page a Session opened from its card. A tab you show
+becomes yours and remains available after its Session ends.
 
 ## Take or return control
 
 When a Session is driving a Browser Tab, its name appears beside the address
 field with a **Take over** and **Ask to leave** control.
 
-- Choose **Take over** to take the tab's turn now. The Session is told that it
-  no longer holds the tab.
+- Choose **Take over** to take the tab's turn now. Volli tells the Session that
+  it no longer holds the tab.
 - Choose **Ask to leave** to ask the Session to release the tab when it is
   safe. The Session keeps control until it releases the tab.
 - When the tab is yours, choose **Hand back** to release it. The tab becomes
   available, and a Session can take it on a later write.
 
-You are never blocked from clicking or typing into the page, even while a
-Session holds it. Using the address field or the Back, Forward, and Reload
-controls does not itself change who holds the tab.
+You can always click or type into the page, even while a Session holds it.
+Using the address field or the Back, Forward, and Reload controls does not
+itself change who holds the tab.
 
 <Aside type="note">
   A Session can see the tabs it opened and the tabs you opened, but not tabs
   opened by other Sessions. **Take over**, **Ask to leave**, and **Hand back**
-  change the turn to drive a tab, not who owns it.
+  change whose turn it is to drive a tab, not who owns it.
 </Aside>
 
 ## Next steps

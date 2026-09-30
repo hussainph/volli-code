@@ -7,8 +7,8 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Shortcuts are grouped by the surface they act on. Terminals claim shell
-keystrokes first, but Session and terminal-layout shortcuts still work there.
+Shortcuts are grouped by where they work. Terminals take shell keystrokes
+first, but Session and terminal-layout shortcuts still work inside them.
 
 ## Global
 
@@ -26,13 +26,13 @@ keystrokes first, but Session and terminal-layout shortcuts still work there.
 | `⌘]` | Forward |
 | `⌘+` / `⌘-` / `⌘0` | Zoom the app in, out, or back to actual size |
 
-The command palette searches tickets and sessions across every project.
-Selecting a session opens it; selecting a ticket opens its workspace, switching
-projects on the way if it belongs to another one.
+The command palette searches tickets and Sessions across every project.
+Selecting a Session opens it. Selecting a ticket opens its workspace, switching
+projects if the ticket belongs to another one.
 
-`C` is a bare keypress with no modifier, so Volli suppresses it while you're
-typing: in text fields, in the editor, in a terminal, or with a dialog already
-open. `⌘[` behaves the same way, since it means outdent inside an editor.
+`C` is a bare keypress with no modifier, so Volli suppresses it while you type:
+in text fields, the editor, a terminal, or an open dialog. Volli also suppresses
+`⌘[` while you type, because it means outdent inside an editor.
 
 <Aside type="note">
   `⌘K` does nothing while a terminal has focus. Terminals get first claim on
@@ -41,13 +41,14 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 
 ## Panes
 
-These shortcuts act on the tabbed surface in front of you (Home or a ticket).
+These shortcuts act on the tabbed view in front of you: Home or a ticket
+workspace.
 
 | Shortcut | Action |
 | --- | --- |
-| `⌘\` | Split the surface to the right |
-| `⇧⌘\` | Split the surface down |
-| `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between the surface panes |
+| `⌘\` | Split the view to the right |
+| `⇧⌘\` | Split the view down |
+| `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between panes |
 
 These shortcuts do nothing while **Settings** or the New ticket dialog is open,
 on the **Automations** or **Configure** page, or while a terminal has the whole
@@ -65,10 +66,10 @@ canvas.
 | `1`–`9` | Choose the matching offered Automation | A card is being dragged |
 | `0` | Choose **Move only** | A card is being dragged |
 
-During a drag, the board's compact Offered list can be used without holding
-Option. Holding it makes the rows larger landing targets. The enabled armed
-Automation is pinned to `1`; see [Automations](/guides/automations/) for the
-full move behavior.
+During a drag, you can use the board's compact Offered list without holding
+Option. Holding it makes the rows larger, so they are easier to hit. The
+enabled, armed Automation is pinned to `1`; see [Automations](/guides/automations/)
+for the full move behavior.
 
 ## New ticket dialog
 
@@ -134,16 +135,17 @@ Queued messages also have **Steer** and **Remove** controls. See
 | `⌃⇧M` (Control+Shift+M) | Toggle Tab focus navigation for this terminal pane |
 
 Tab normally goes to the shell for completion. To leave the terminal with Tab,
-press **Control+Shift+M**, then **Tab** or **Shift+Tab** to move forward or backward
-through the app's controls. Tab back into the terminal and press the chord again
-to restore shell completion. The mode survives hiding or moving the pane; each
-split pane has its own mode.
-The terminal input's accessible description and its hover text name the chord,
-and a notification confirms each mode change.
+press **Control+Shift+M**, then **Tab** or **Shift+Tab** to move forward or
+backward through the app's controls. Tab back into the terminal and press the
+chord again to restore shell completion. The mode survives hiding or moving the
+pane, and each split pane has its own mode. The terminal input's accessible
+description and its hover text name the chord, and a notification confirms each
+mode change.
 
-Terminal output is exposed as screen-reader rows, including scrollback navigation,
-with each region named for its tab and pane number. VoiceOver users can navigate
-the rows to read output rather than relying only on live announcements.
+Terminal output is exposed as screen-reader rows, including scrollback
+navigation, with each region named for its tab and pane number. VoiceOver users
+can navigate the rows to read output instead of relying only on live
+announcements.
 
 Font-size shortcuts change the focused terminal only. To scale the whole app,
 move focus out of the terminal first.

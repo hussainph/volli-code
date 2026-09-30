@@ -11,8 +11,8 @@ test the connection, and choose tools explicitly.
 
 ## Add a server
 
-Have the server's executable and arguments, or its Streamable HTTP endpoint,
-ready. **Test and discover** starts a local command as your macOS user or
+Have the server’s executable and arguments, or its Streamable HTTP endpoint,
+ready. **Test and discover** starts a local command as your macOS user, or
 connects to the remote endpoint. Review the command or endpoint before testing.
 
 1. In the project, open **Configure → MCP Servers** and select **Add server**.
@@ -29,17 +29,18 @@ to enable. Use **Refresh** to read its tool catalog again.
 
 The server’s **On** checkbox and each tool checkbox control what new Sessions
 for this project can use. A Session keeps the MCP tool definitions it received
-when it was created; changing the server or its tool selection does not replace
-those definitions in an existing Session.
+when it was created, so changing the server or its tool selection does not
+update an existing Session.
 
-Prefer switching a server off when you want new Sessions to stop receiving
-its tools. This keeps the configuration that older Sessions need and does not
-revoke their existing tools.
+Prefer switching a server off when you want new Sessions to stop receiving its
+tools. This keeps the configuration older Sessions need and does not revoke
+their existing tools.
 
 Removing a server can prevent older Sessions from reconnecting. Recovery needs
 the server configuration under its original ID; adding another server with the
 same display name does not restore that identity. If this happens, keep the
-Session history and [report the missing-server error](/reference/troubleshooting/#report-a-bug).
+Session history and [report the missing-server
+error](/reference/troubleshooting/#report-a-bug).
 
 ## Review the trust boundary
 
@@ -49,6 +50,6 @@ instructions. Review the discovered tool names and descriptions before enabling
 them.
 
 Volli supports standard input/output and Streamable HTTP, not legacy SSE-only
-endpoints. It does not support authenticated HTTP endpoints, custom headers,
-or secret environment fields. Use a server that needs none of those options.
-Do not put credentials in the endpoint URL.
+endpoints. It does not support authenticated HTTP endpoints, custom headers, or
+secret environment fields. Use a server that needs none of those options. Do
+not put credentials in the endpoint URL.

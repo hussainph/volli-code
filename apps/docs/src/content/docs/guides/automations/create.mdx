@@ -1,6 +1,6 @@
 ---
 title: Create a manual Automation
-description: Save reusable instructions that you can start by hand on a ticket.
+description: Save reusable instructions you can start by hand on a ticket.
 sidebar:
   label: Create
 ---
@@ -12,33 +12,35 @@ whether or not **Automatic triggers** is on.
 ## Create an Automation
 
 1. Open **Automations** in the app navigation, then select **New Automation**.
-2. In **Name**, enter a name you can recognize in a run menu. In **Instructions**,
-   write the first message the new Session should receive.
-3. Leave **Ownership** set to **This project** so this project lists the
-   Automation. Leave **Trigger** set to **Only when I run it**.
-4. Leave **Runtime** set to **Project default** to use the project's resolved
-   Session default when a Run starts.
-5. Select **Create automation**.
+2. In **Name**, enter a name you can recognize in a run menu.
+3. In **Instructions**, write the first message the new Session should receive.
+4. Leave **Ownership** set to **This project** so the Automation belongs to
+   this project.
+5. Leave **Trigger** set to **Only when I run it**.
+6. Leave **Runtime** set to **Project default** to use the project's Session
+   default when a Run starts.
+7. Select **Create automation**.
 
 ## Set a Runtime
 
 **Project default** uses the model override in **Configure → Sessions → Chat**.
-If the project inherits, it uses **Settings → Models → Ticket Sessions** for a
-ticket Run or **Board chats** for a project Run. Volli resolves this when the Run
-starts. See [Model defaults](/guides/models/#choose-a-default-model).
+If the project inherits, Volli uses **Settings → Models → Ticket Sessions** for
+a ticket Run or **Board chats** for a project Run, and chooses the model when the
+Run starts. See [Model defaults](/guides/models/#choose-a-default-model).
 
 To pin a different choice, select a named default tier or an exact model under
-**Runtime**. If the selected model offers multiple reasoning levels, choose one
-under **Reasoning effort**. Each Run's history records the model and reasoning
-that actually started its Session. A later change to project defaults affects
-future Runs, not the history of Runs that already started.
+**Runtime**. If the model you select offers more than one reasoning level,
+choose one under **Reasoning effort**. Each Run's history records the model and
+reasoning that actually started its Session. Changing project defaults later
+affects future Runs, not the history of Runs that already started.
 
-Instructions use the chat composer's references: enter `/` to choose a prompt
-template or Skill, or `@` to reference a file. The Run sends these Instructions
-as the first message in a fresh Session; it does not continue an existing one.
+In **Instructions**, enter `/` to choose a Command or Skill, or `@` to reference
+a file. See [Skills and commands](/guides/skills-and-commands/). The Run sends
+these Instructions as the first message in a fresh Session; it does not continue
+an existing one.
 
-The Automation appears in this project's Automations list. **Only when I run
-it** means it has no automatic start. You can still run it while **Automatic
+The Automation appears in this project's Automations list. **Only when I run it**
+means it has no automatic start, and you can still run it while **Automatic
 triggers** is off. See [Run an Automation and read Runs](/guides/automations/run/)
 to choose a ticket and open the Session it creates.
 

@@ -1,14 +1,14 @@
 ---
 title: CLI setup and context
-description: Check the volli CLI connection, resolve project and ticket context, and preview writes before applying them.
+description: Check the `volli` CLI connection, see how it resolves a project or ticket, and preview writes before you run them.
 sidebar:
   label: CLI setup and context
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-`volli` reads and updates the local plan through the running app. Terminals
-opened by Volli already have it on `PATH`.
+`volli` reads and updates the local plan through the running app. Terminal
+companions opened by Volli already have it on `PATH`.
 
 Check the connection and context from a terminal companion:
 
@@ -18,8 +18,8 @@ volli help
 ```
 
 Use **Settings → About** to check or repair the installation. A terminal outside
-Volli can read the plan, but naming a Session does not authenticate it for
-writes. Session authentication comes from the environment Volli supplies.
+Volli can read the plan, but naming a Session in it does not authenticate the
+terminal for writes. Write access comes from the environment Volli supplies.
 
 Every public command accepts `--json`. Full command syntax is in
 [CLI commands](/reference/cli-commands/); recovery codes are in
@@ -39,23 +39,23 @@ first answer:
    worktree.
 
 `volli` never guesses past that. If more than one project or ticket fits, the
-command fails with `AMBIGUOUS_PROJECT` or `AMBIGUOUS_TICKET` rather than
-picking one.
+command fails with `AMBIGUOUS_PROJECT` or `AMBIGUOUS_TICKET` instead of picking
+one.
 
 ## Preview writes
 
-A write whose command detail lists `--dry-run` can resolve and validate its
-target without mutating it. Plain output explains the intended durable writes,
-human-visible effects, and explicit non-effects. JSON returns the same versioned
-plan shape a registry-projected tool uses through its `dryRun` argument.
+A write whose command help lists `--dry-run` can resolve and validate its target
+without changing it. Plain output describes the durable writes, visible effects,
+and non-effects the real command would have. `--json` returns the same versioned
+plan that a registry-projected tool returns through its `dryRun` argument.
 
 A preview creates no durable ID, row, event, Session, model turn, notification,
 process, worktree, or file write. It still performs the reads the real call
 would, including `--body-file` and `--file`, so it validates the same input.
-A later real call repeats validation and can lose a race.
+A later real call validates again and can lose a race.
 
-A verb whose detail does not list `--dry-run` refuses a preview rather than
-ignoring it, so a preview request can never fall through to the real write.
+A verb whose help does not list `--dry-run` refuses a preview instead of
+ignoring it, so a preview request never falls through to the real write.
 
 ## Environment
 
@@ -65,9 +65,9 @@ ignoring it, so a preview request can never fall through to the real write.
 | `VOLLI_SESSION` | The current session. Set by Volli; `session done` and `session blocked` act on it. |
 | `VOLLI_TICKET` | The current ticket, used when you omit `<id>`. |
 
-Volli sets `VOLLI_SESSION` and `VOLLI_TICKET` in every session it starts —
-terminal and chat alike. `VOLLI_SOCKET` is exported into terminal sessions and
-baked into the bundled `volli` shim, so the CLI reaches the app either way.
+Volli sets `VOLLI_SESSION` and `VOLLI_TICKET` in every session it starts,
+terminal and chat alike. It exports `VOLLI_SOCKET` into terminal sessions and
+bakes it into the bundled `volli` shim, so the CLI reaches the app either way.
 
 ## Exit codes
 
@@ -125,7 +125,7 @@ These links retain the anchors used by earlier documentation.
 ## Human-visible effects and non-effects
 
 See [command effects](/reference/command-effects/) for the durable writes,
-visible outcomes, and independent actions of each command.
+visible outcomes, and non-effects of each command.
 
 ## Error codes and recovery
 

@@ -1,13 +1,13 @@
 ---
 title: What's new in 0.2
-description: Automations, Browser Tabs, the Activity Island, split view, MCP servers, model tiers, usage limits, and the other changes in Volli 0.2.
+description: "What changed in Volli 0.2: Automations, Browser Tabs, the Activity Island, split view, MCP servers, model tiers, and usage limits."
 sidebar:
   label: What's new in 0.2
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-**0.2.0, September 29, 2026.**
+**0.2.0, September 30, 2026.**
 
 0.2 adds **Automations**, lets agents drive **Browser Tabs** you can watch and
 take over, and shows what each chat is holding in the **Activity Island**. It
@@ -18,8 +18,8 @@ Update from **Settings → Updates**, or download the build from
 [volli.app/download](https://volli.app/download/).
 
 <Aside type="caution" title="Alpha">
-  Volli is in early alpha, for Apple silicon Macs. Features move between
-  builds.
+  Volli is in early alpha and runs on Apple silicon Macs. Features change
+  between builds.
 </Aside>
 
 ## Automations
@@ -29,40 +29,42 @@ An **Automation** is a saved, named way to start work. It keeps its
 same setup by hand, when a ticket enters a board column, or on a schedule.
 
 - **Instructions** are the first message of the fresh **Session** a Run opens.
-- **Trigger** is **Only when I run it**, **Ticket enters**, or **On a
-  schedule**. Every Automation can also be run by hand.
+- **Trigger** is what starts it besides you. The default, **Only when I run
+  it**, means nothing else does; the other choices are **Ticket enters** and
+  **On a schedule**.
 - **Runtime** is the model policy: a project default, a named default tier, or
   an exact model and reasoning level.
 
-Create and edit Automations on the **Automations** page. Run a saved one from
+Create and edit Automations on the **Automations** page. Run one by hand from
 that page, a ticket's **Automations** section, a board card's context menu, or
-the command palette. Automatic starts are off until you turn on **Automatic triggers** for
-this Mac and, for a column Trigger, arm the column. Only a **Deliberate move**
-into an armed column starts a Run, after a short delay you can **Cancel**.
-Schedules use presets and need Volli to be open; a missed due time is recorded
-as **Skipped**.
+the command palette. No Automation starts on its own until you turn on
+**Automatic triggers** for this Mac and, for a column Trigger, arm the column.
+Then only a **Deliberate move** into that column starts a Run, after a short
+delay you can **Cancel**. Schedules use presets, need Volli to be open, and
+record a missed due time as **Skipped**.
 
-Each Run opens a fresh Session and records the model and reasoning it resolved.
-See [Automations](/guides/automations/) for the full behavior.
+Each Run opens a fresh Session and records the model and reasoning it ended up
+using. See [Automations](/guides/automations/) for the full behavior.
 
 ## Browser Tabs
 
 A **Browser Tab** is a web page inside the workspace. Open one yourself from the
-**Chat** menu's **Browser** item, or let a chat open one to check the page it is
-building.
+**Browser** item in the menu beside **Chat**, or let a chat open one to check a
+page it is building.
 
-- A tab a Session opens starts hidden. It appears as a card in that chat, and
-  you choose whether to show it above the composer or open it as a tab.
+- A tab a Session opens stays off screen at first. It shows as a card in that
+  chat, and you choose whether to show it above the composer or open it as a
+  tab.
 - While a Session drives a tab, the **Session cursor** shows where its input
   goes, in that Session's colour and with its name.
 - Only one party drives a tab at a time. Use **Take over**, **Ask to leave**,
   or **Hand back** to change who has it. Your own input into the page always
   goes through.
-- A Session sees your tabs and its own, not the tabs of other Sessions.
+- A Session sees your tabs and its own, and cannot see another Session's tabs.
 
-What a page shows is treated as untrusted content, and tabs run apart from the
-app itself. See [Use Browser Tabs](/guides/browser-tabs/) for opening a page
-and changing who controls it.
+Volli treats whatever a page says as untrusted content, and tabs run apart from
+the app itself. See [Use Browser Tabs](/guides/browser-tabs/) to open a page and
+change who controls it.
 
 ## The Activity Island
 
@@ -76,9 +78,8 @@ Session is holding besides the conversation:
 - **Plan**: the checklist the agent keeps for multi-step work, shown as done
   over total.
 - **Background shells**: long-running commands such as a dev server or a watch
-  build, which run beside the turn instead of blocking it. Open one to read its
-  output. Background shells stop when the Session's connection ends and do not
-  survive a relaunch.
+  build, which keep running while the turn goes on. Open one to read its output.
+  They stop when the Session's connection ends and do not survive a relaunch.
 
 The island appears only when there is something to show. The ticket's **Now**
 rail keeps what is true of the whole ticket. See [Use a chat](/guides/sessions/)
@@ -90,14 +91,14 @@ for Session activity and returning to a conversation.
 Session, or file to the right or bottom edge of a pane to split there, or use
 `⌘\` to split right and `⇧⌘\` to split down. Each surface keeps its own
 split, and tabs do not move between the two. See
-[Arrange a split view](/guides/split-view/) for the steps and shortcuts.
+[Arrange a split view](/guides/split-view/) for steps and shortcuts.
 
 ## MCP servers
 
 **Configure → MCP Servers** adds Model Context Protocol servers to a project,
-over stdio or streamable HTTP, and chooses which of their tools chats may use.
-MCP tools run through Volli like its other tools and appear in Session history.
-A change applies to new Sessions; a running Session keeps the tools it started
+over stdio or streamable HTTP, and picks which of their tools chats may use. MCP
+tools run through Volli like any other tool and appear in Session history. A
+change applies to new Sessions; a running Session keeps the tools it started
 with. See [MCP servers](/guides/mcp-servers/) for discovery, tool selection,
 and transport limits.
 
@@ -105,35 +106,36 @@ and transport limits.
 
 **Settings → Models** adds three default tiers by kind of work: **Fast** for
 quick, low-cost tasks, **Deep** for complex reasoning, planning, and review, and
-**Visual** for images, screenshots, and pages. An unset tier uses the **Ticket
-Sessions** default. Model pickers list the defaults you set, and an agent that
-starts another Session or delegates to a subagent can ask for a tier by name.
-An Automation's Runtime can name a tier too.
+**Visual** for images, screenshots, and pages. Leave a tier unset and it uses
+the **Ticket Sessions** default. Model pickers list the defaults you set, and an
+agent that starts another Session or delegates to a subagent can ask for a tier
+by name. An Automation's Runtime can name a tier too.
 
 A subagent that names neither a model nor a tier runs on its parent's model.
-See [Models and usage](/guides/models/) for default resolution and model access.
+See [Models and usage](/guides/models/) for how defaults resolve and which
+models you can use.
 
 ## Usage limits
 
-The usage-limits icon beside the `⌘K` search opens a popover with how much of
-each subscription window you have used and when it resets. It covers supported
-provider subscriptions: Anthropic (Claude Pro/Max), OpenAI Codex, GitHub
+The usage-limits icon beside the `⌘K` search opens a popover that shows how
+much of each subscription window you have used and when it resets. It covers
+these provider subscriptions: Anthropic (Claude Pro/Max), OpenAI Codex, GitHub
 Copilot, Kimi Code, OpenCode Go, xAI, and Z.ai. Readings are live and are not
-stored in Session history.
+saved in Session history.
 
 ## Chat and terminal
 
 - **Peek at a Session from the sidebar.** Rest the pointer on a Session in
   the sidebar or a ticket's **Now → Sessions** to see its state, its latest
-  work, and any waiting question, then answer or message it from the card
+  work, and any question it is waiting on. Answer or message it from the card
   without leaving what you are doing. See
   [Peek at a Session](/guides/sessions/#peek-at-a-session-without-opening-it).
 - **Images render inline** in chats, ticket bodies, comments, and queued
   messages. Remote image URLs are not loaded; a refused image shows its reason
   instead of a blank space.
-- **The terminal uses xterm.js.** Terminals keep taking their appearance from
-  your Ghostty configuration. Output is readable by VoiceOver, and
-  **Control+Shift+M** lets **Tab** move focus out of a terminal. See
+- **The terminal uses xterm.js.** Its appearance still comes from your Ghostty
+  configuration. VoiceOver can read the output, and **Control+Shift+M** lets
+  **Tab** move focus out of a terminal. See
   [Keyboard shortcuts](/reference/keyboard-shortcuts/#terminal).
 - **Recovery after a crash.** A Session whose turn was running when Volli quit
   unexpectedly can be resumed, and a message you send to a disconnected
@@ -142,10 +144,10 @@ stored in Session history.
 
 ## Performance
 
-Board columns render only the cards near the visible area, long chat
-transcripts load earlier messages on request with **Show earlier**, and opening
-a ticket makes fewer reads. Large boards, long chats, and many concurrent
-Sessions stay more responsive.
+Board columns draw only the cards near the visible area, long chats load
+earlier messages when you select **Show earlier**, and opening a ticket does
+less work. Large boards, long chats, and many Sessions open at once stay
+responsive.
 
 ## Next steps
 

@@ -1,15 +1,16 @@
 ---
 title: Use terminal companions
-description: Open a shell in a project or ticket scope and run a terminal workflow yourself.
+description: Open a shell in Home or a ticket workspace and run your own commands there.
 sidebar:
   label: Terminal companions
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-A **terminal companion** is a shell you open in Volli for commands or an
-external terminal UI (TUI). You choose what to run there. It is a manual
-workflow alongside built-in chat, not a fallback when a chat cannot start.
+A **terminal companion** is a shell you open in Volli. Run your own commands
+there, or an external terminal UI (a TUI) such as Claude Code or Codex. It is a
+manual workflow alongside chat; Volli never opens one as a fallback when a chat
+fails.
 
 ## Open a terminal
 
@@ -19,27 +20,27 @@ workflow alongside built-in chat, not a fallback when a chat cannot start.
 A Home terminal starts in the project's main checkout. A ticket terminal uses
 the ticket's selected destination: its worktree, or the project's **Project
 checkout**. If the ticket needs a worktree, Volli creates it when the terminal
-starts. A configured **Then run** setup command runs first, when Volli has just
-created that worktree.
+starts. When Volli has just created that worktree, a configured **Then run**
+setup command runs first.
 
 The terminal opens as a Session with a shell. To use an external TUI, start it
-from that shell yourself. Volli does not silently launch an external harness
-when built-in chat fails. Choose **Chat** when you want Volli's built-in agent
-conversation and tools.
+from that shell yourself. Volli never starts one for you. Choose **Chat** when
+you want Volli's built-in agent conversation and tools.
 
 ## Use the `volli` CLI
 
-Supported terminal companions can call Volli's `volli` CLI through the local
-Unix socket. Use it to inspect tickets and worktree state or report progress to
-the app. See the [CLI reference](/reference/cli/) for commands, arguments, and
-the difference between read and write operations.
+A supported terminal companion can call Volli's `volli` CLI through the local
+Unix socket. Use it to inspect tickets and worktree state, or to report progress
+to the app. See the [CLI reference](/reference/cli/) for commands, arguments,
+and the difference between read and write operations.
 
 ## Understand terminal history
 
-A terminal has a durable Session record, but its shell output and commands are
-not saved. If Volli quits, the live terminal process and its scrollback do not
-resume when you reopen the app. The saved record can show its scope, start and
-end, and observed exit code; it does not reproduce the terminal screen.
+A terminal keeps a Session record, but Volli does not save its shell output or
+commands. If Volli quits, the live terminal process and its scrollback do not
+resume when you reopen the app. The saved record shows the terminal's scope,
+when it started and ended, and its exit code. It does not reproduce the
+terminal screen.
 
 A new terminal is a new Session. If a closed terminal record offers **Resume
 session**, that resumes a supported TUI's own history in a new terminal; it is
