@@ -413,6 +413,151 @@ main > section,
   opacity: 1;
 }
 
+/* The hero's bold beat arrives at speed: it slides in leaning forward, rocks
+   back as it brakes, and two blurred afterimages catch up behind it while a
+   few streaks blow past. Once, on load; static without JS or under reduced
+   motion (no `.reveal-ready`, so the ghosts and streaks never show). */
+.super-beat--speed {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+}
+
+.super-beat--speed > span[data-text] {
+  position: relative;
+  transform-origin: 50% 100%;
+}
+
+.super-beat--speed > span[data-text]::before,
+.super-beat--speed > span[data-text]::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: attr(data-text) / "";
+  opacity: 0;
+  pointer-events: none;
+}
+
+.super-beat--speed > span[data-text]::before {
+  filter: blur(4px);
+}
+
+.super-beat--speed > span[data-text]::after {
+  color: var(--ember);
+  filter: blur(10px);
+}
+
+.super-streaks {
+  position: absolute;
+  inset: 0 0 0 calc(-1 * var(--gutter));
+  z-index: -2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.super-streaks i {
+  position: absolute;
+  top: var(--at);
+  left: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent calc(100% - var(--len)),
+    rgb(245 242 238 / 0.55) 100%
+  );
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+.super-streaks i.super-streak--ember {
+  height: 3px;
+  background: linear-gradient(90deg, transparent calc(100% - var(--len)), var(--ember) 100%);
+}
+
+.reveal-ready [data-reveal] .super-beat--speed > span[data-text] {
+  opacity: 0;
+  transform: none;
+  transition: none;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text] {
+  animation: speed-in 760ms var(--ease-out) 240ms both;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text]::before {
+  animation: speed-ghost-near 760ms var(--ease-out) 240ms both;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text]::after {
+  animation: speed-ghost-far 900ms var(--ease-out) 240ms both;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-streaks i {
+  animation: speed-streak 640ms var(--ease-out) calc(160ms + var(--lag)) both;
+}
+
+@keyframes speed-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-32%) skewX(-18deg);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  68% {
+    transform: translateX(0.8%) skewX(4deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes speed-ghost-near {
+  0% {
+    opacity: 0.5;
+    transform: translateX(-14%);
+  }
+
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+@keyframes speed-ghost-far {
+  0% {
+    opacity: 0.55;
+    transform: translateX(-30%);
+  }
+
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+@keyframes speed-streak {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(60%);
+  }
+}
+
 /* ─── Hero ────────────────────────────────────────────────────────────── */
 
 .hero {

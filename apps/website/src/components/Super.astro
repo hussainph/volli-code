@@ -7,6 +7,11 @@
  * Each beat is its own line and rises into place once when the super enters
  * view (`data-reveal`, driven by the page's one observer). The heading reads as
  * one sentence to assistive technology.
+ *
+ * `speed` is the hero's alone: the bold beat whooshes in from the left instead
+ * of rising, trailing two afterimages and a few streaks (BRAND.md §8). The
+ * afterimages are generated content with empty alt text, and the streaks are
+ * aria-hidden, so the heading still reads once.
  */
 interface Beat {
   text: string;
@@ -19,10 +24,12 @@ interface Props {
   level?: 1 | 2 | 3;
   id?: string;
   size?: "hero" | "chapter" | "small";
+  speed?: boolean;
   class?: string;
 }
 
-const { beats, sub, level = 2, id, size = "chapter", class: className } = Astro.props;
+const { beats, sub, level = 2, id, size = "chapter", speed = false, class: className } =
+  Astro.props;
 const Heading = `h${level}` as "h1" | "h2" | "h3";
 ---
 
@@ -32,10 +39,21 @@ const Heading = `h${level}` as "h1" | "h2" | "h3";
       beats.map((beat, index) => (
         <>
           <span
-            class:list={["super-beat", { "super-beat--bold": beat.bold }]}
+            class:list={[
+              "super-beat",
+              { "super-beat--bold": beat.bold, "super-beat--speed": speed && beat.bold },
+            ]}
             style={`--beat: ${index}`}
           >
-            <span>{beat.text}</span>
+            <span data-text={speed && beat.bold ? beat.text : undefined}>{beat.text}</span>
+            {speed && beat.bold && (
+              <span class="super-streaks" aria-hidden="true">
+                <i style="--at: 24%; --len: 38%; --lag: 0ms" />
+                <i style="--at: 46%; --len: 62%; --lag: 50ms" />
+                <i class="super-streak--ember" style="--at: 64%; --len: 46%; --lag: 90ms" />
+                <i style="--at: 82%; --len: 30%; --lag: 150ms" />
+              </span>
+            )}
           </span>
           {index < beats.length - 1 ? " " : null}
         </>

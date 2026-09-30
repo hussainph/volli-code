@@ -137,6 +137,9 @@ Slow and physical, never decorative for its own sake.
 - The world drifts on long, incommensurate periods (tens of seconds).
 - A super rises into place once as it enters (240–400ms, ease-out). The bold
   beat lands a beat after the light one.
+- The hero's bold beat is the one exception: it arrives at speed from the left,
+  leaning forward, with two blurred afterimages (bone, then ember) and a few
+  streaks, then brakes into place (760ms). Once, on load, nowhere else.
 - The working-ring motif — the ring a live Session wears in the app — may
   ripple once behind a subject. It never loops forever on screen.
 - `prefers-reduced-motion`: the world is still, supers are simply there.
