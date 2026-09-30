@@ -8,10 +8,11 @@
  * view (`data-reveal`, driven by the page's one observer). The heading reads as
  * one sentence to assistive technology.
  *
- * `speed` is the hero's alone: the bold beat whooshes in from the left instead
- * of rising, trailing two afterimages and a few streaks (BRAND.md §8). The
- * afterimages are generated content with empty alt text, and the streaks are
- * aria-hidden, so the heading still reads once.
+ * `speed` is the hero's alone: the bold beat is set in italic, whooshes in
+ * from the left instead of rising, trailing two afterimages, and then speed
+ * lines race through its letters for as long as it is on screen (BRAND.md §8).
+ * The afterimages are generated content with empty alt text, so the heading
+ * still reads once.
  */
 interface Beat {
   text: string;
@@ -45,14 +46,12 @@ const Heading = `h${level}` as "h1" | "h2" | "h3";
             ]}
             style={`--beat: ${index}`}
           >
-            <span data-text={speed && beat.bold ? beat.text : undefined}>{beat.text}</span>
-            {speed && beat.bold && (
-              <span class="super-streaks" aria-hidden="true">
-                <i style="--at: 24%; --len: 38%; --lag: 0ms" />
-                <i style="--at: 46%; --len: 62%; --lag: 50ms" />
-                <i class="super-streak--ember" style="--at: 64%; --len: 46%; --lag: 90ms" />
-                <i style="--at: 82%; --len: 30%; --lag: 150ms" />
+            {speed && beat.bold ? (
+              <span data-text={beat.text}>
+                <span class="super-speed-fill">{beat.text}</span>
               </span>
+            ) : (
+              <span>{beat.text}</span>
             )}
           </span>
           {index < beats.length - 1 ? " " : null}
