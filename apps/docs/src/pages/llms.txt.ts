@@ -31,7 +31,7 @@ export const GET: APIRoute = async ({ site }) => {
     );
   }
 
-  const lines = ["# Volli Code"];
+  const lines = ["# Volli"];
 
   const home = byId.get("index");
   if (home?.data.description) lines.push("", `> ${home.data.description}`);

@@ -1,6 +1,6 @@
-# Volli Code — Agent Instructions
+# Volli — Agent Instructions
 
-Volli Code is a local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, Pi-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
+Volli is a local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, Pi-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
 
 ## Required context
 

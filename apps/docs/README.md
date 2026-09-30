@@ -1,6 +1,6 @@
 # @volli/docs
 
-The user-facing documentation site for Volli Code, published at
+The user-facing documentation site for Volli, published at
 [docs.volli.app](https://docs.volli.app).
 
 Built with [Astro Starlight](https://starlight.astro.build). It deploys to its

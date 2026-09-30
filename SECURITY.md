@@ -8,7 +8,7 @@ Include the affected commit, the expected impact, reproduction steps, and any kn
 
 ## Supported versions
 
-Volli Code is in early alpha. Only the **most recent published release** and the latest commit on `main` receive security fixes. Older alpha builds are not patched — fixes ship forward in the next build.
+Volli is in early alpha. Only the **most recent published release** and the latest commit on `main` receive security fixes. Older alpha builds are not patched — fixes ship forward in the next build.
 
 The app updates itself from [GitHub Releases](https://github.com/hussainph/volli-code/releases) and installs an available update when you quit, so staying current is the supported path. If you have pinned yourself to an older build, update before reporting an issue.
 
