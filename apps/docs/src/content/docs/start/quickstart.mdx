@@ -1,153 +1,80 @@
 ---
 title: Run your first coding task
-description: Turn a rough idea into focused tasks, run one task in an isolated worktree, and inspect the change it produces.
+description: Create a ticket, run an agent in its Git worktree, and review the change before opening a pull request.
 sidebar:
   label: Quickstart
 ---
 
-import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
+By the end of this tutorial, you will have an agent's change on a separate Git
+branch and know where to review it.
 
-By the end of this tutorial, you will turn a rough idea into focused tasks, run
-an agent on one task, and inspect the change before you deliver it.
+You need Volli [installed](/start/install/), a Git repository on disk, and a
+[default model configured](/guides/models/). Choose a small task you can check,
+such as correcting a mistake in your project's README.
 
-In Volli, a task is a **ticket**. You need Volli [installed](/start/install/), a
-git repository on disk, and about fifteen minutes.
+## Add your repository
 
-## Add a project
+1. In the project rail, select **+** and choose your repository folder.
+2. Open **Home → Board**. Each card is a **ticket**, Volli's name for a task.
 
-In the project rail, select **+**, then choose a git repository. That folder
-becomes the project's main checkout. Volli derives a ticket prefix from the
-folder name. A folder called `harbor` gets tickets such as `HB-1` and `HB-2`.
+The folder you added is the project's **main checkout**. A ticket chat uses a
+separate checkout, called a **worktree**, by default.
 
-The project opens on **Home**, a tabbed workspace. Its permanent **Board** tab
-organizes tasks. Board chats and files open as tabs beside it.
+![Home Board showing the five task columns and the Chat control.](../../../assets/screenshots/board.png)
 
-![The Home Board for voltaic with its five columns and 24 tickets fit on screen; the navigation sidebar is hidden, while the Chat control remains in the top bar.](../../../assets/screenshots/board.png)
+## Create a ticket
 
-## Turn an idea into tasks
+1. On the Board, select **New ticket**.
+2. Enter a title and a brief that describes the change and how to check it.
+   For a README correction, name the incorrect text and its replacement.
+3. Select **Create ticket**.
+4. Open the ticket. Its **Ticket Body** holds the brief you wrote.
 
-<Steps>
+The ticket workspace keeps that brief, its Sessions, files, and changes together.
 
-1. **On Home, select Chat.**
+## Start the agent
 
-   This starts a *Board chat* in your main checkout.
+1. In the ticket workspace, select **Chat**. This opens a draft composer.
+2. Send an instruction such as: “Make the change in the ticket brief. Check
+   the result and tell me which files changed.”
+3. Read the agent's messages and tool results. Answer any question it asks.
 
-2. **Describe the goal in broad terms.**
+The first message creates the **Session**, the conversation's durable history,
+and prepares the ticket's worktree. Opening the draft alone starts no work.
 
-   Use a Board chat when you want help shaping the work:
+Moving a ticket to **Doing** records its status. It starts a Run only if an
+enabled Automation is armed for that column. You do not need an Automation for
+this tutorial.
 
-   > We need to move billing off the nightly job and onto Stripe webhooks. Break
-   > this into tasks for me.
+## Inspect the result
 
-3. **Return to Board.**
+1. In the ticket's **Diffs** rail, open each changed file and read its diff.
+2. In **Files**, open a file to inspect its full contents in the worktree.
+3. Check the result against the brief. For code changes, run the project's
+   relevant tests in a [terminal companion](/guides/terminal-companions/).
 
-   A Board chat can create and edit tickets. Review the tasks it created and
-   adjust them before you start work.
+Diffs includes committed and uncommitted changes against the ticket's base
+branch. Volli does not certify the change or run tests merely because you open
+this view.
 
-</Steps>
+To publish the result, follow [Review and publish changes](/guides/review-changes/).
+That guide covers the commit confirmation, pushing a branch, and creating a
+draft pull request.
 
-A Board chat sees your main checkout and the whole board. Use it when the
-work is not shaped yet. A ticket chat works on one task in that task's isolated
-checkout.
+## Return to the conversation
 
-## Write a task brief
+In the ticket's **Now → Sessions** section, open the chat to return to its
+history. Closing a tab does not delete the Session. See
+[Use a chat](/guides/sessions/) for interruption and crash recovery.
 
-On the Board, open a task. It opens a ticket workspace.
+For another independent task, create another ticket and repeat the process.
+Its worktree and branch keep the changes separate.
 
-The first tab is its **Ticket Body**. Write what must change, what must not
-change, and how you will judge the result. This brief is the starting context
-for every chat on the ticket.
+## Optional: Plan broader work
 
-![The ticket workspace for VLT-14 with its body, expanded navigation sidebar, worktree and ticket properties, and the Automations rail showing Run once beside the Chat control.](../../../assets/screenshots/ticket-workspace.png)
+On **Home**, select **Chat** and send your broader goal. This creates a
+**Board Session** in the main checkout. Ask it to break the work into tickets,
+then review their briefs before starting ticket chats.
 
-## Run a task
-
-<Steps>
-
-1. **Inside the ticket, select Chat.**
-
-   Volli prepares the ticket's isolated git worktree and starts a chat with the
-   ticket body and resolved context.
-
-2. **Answer questions as the agent works.**
-
-   When the agent needs a decision, it asks. You can interrupt it at any time.
-
-3. **Return to the chat later.**
-
-   Close the tab or quit the app. Reopen the chat from the ticket's **Chats**
-   rail, the sidebar, or <kbd>⌘K</kbd>. Its history remains available.
-
-</Steps>
-
-For independent tasks, repeat this process from each ticket. Each task uses its
-own worktree and branch, so their changes stay separate while agents work in
-parallel.
-
-<Aside type="note" title="Moving a ticket does not start work">
-  Moving a ticket to **Doing** organizes the board. Start work by selecting
-  **Chat** inside the ticket.
-</Aside>
-
-## Review the change
-
-The task worked in its own git worktree and branch, separate from your main
-checkout.
-
-- **Changes** shows the change set against the base branch.
-- **Files** opens the task's files as they are in the worktree.
-
-Read the change yourself. Volli shows you what happened, but it does not certify
-that the work is correct or run your tests for you.
-
-## Deliver the task
-
-Commit, push, and open a pull request from the ticket's repository summary.
-Then move the ticket and clean up its worktree when you are done.
-
-## Optional: Reuse a workflow
-
-After you have run a task normally, you can save a repeated start from
-**Automations**. An Automation keeps its Instructions, Trigger, and Runtime.
-Run it by hand first; later, enable it on this Mac and arm a column or add a
-schedule when you want it to start automatically. See the [Automations
-guide](/guides/automations/) for the full workflow.
-
-This step is optional. Moving a ticket to **Doing** and selecting **Chat**
-remain the simplest way to start your first task.
-
-## Optional: Use a terminal
-
-To drive a CLI yourself, open the caret beside **Chat** and choose **Terminal**.
-You get a shell in the ticket's worktree for Claude Code, Codex, OpenCode, or
-your own TUI. Volli never opens one as a fallback.
-
-## Next steps
-
-<CardGrid>
-  <LinkCard
-    title="The board"
-    href="/guides/board/"
-    description="Columns, priorities, filtering, and what the board controls."
-  />
-  <LinkCard
-    title="Ticket workspace"
-    href="/guides/ticket-workspace/"
-    description="A task's brief, chats, files, and changes."
-  />
-  <LinkCard
-    title="Automations"
-    href="/guides/automations/"
-    description="Save a repeatable start after your first task."
-  />
-  <LinkCard
-    title="Chats and worktrees"
-    href="/guides/agents-and-worktrees/"
-    description="Run project and task chats while keeping their branches separate."
-  />
-  <LinkCard
-    title="Concepts"
-    href="/start/concepts/"
-    description="Look up the terms Volli uses in the app."
-  />
-</CardGrid>
+After you have a workflow worth repeating, [create an
+Automation](/guides/automations/create/) to save its starting instructions.

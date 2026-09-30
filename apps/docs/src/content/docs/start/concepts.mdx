@@ -6,7 +6,6 @@ sidebar:
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
-import AgentOperatingModel from "../../../components/AgentOperatingModel.astro";
 
 Use this page when a Volli label is unfamiliar. The table translates the common
 workflow into the terms you see in the app.
@@ -45,12 +44,15 @@ properties, and chats under Now, with separate Diffs and Files views.
 
 ## Chats
 
+**Chat Draft.** A composer you have opened without sending its first message.
+It has no Session history or running agent yet. Sending the first message
+creates the Session.
+
 **Session.** The durable record for a chat or terminal. It remains available
 after its live connection, turn, or run ends.
 
-**Chat.** Volli's built-in agent conversation. It uses the model you choose in
-Model Access and shows the agent's messages, tool steps, and questions in the
-app.
+**Chat.** Volli's built-in agent conversation. It uses the model you choose
+and shows the agent's messages, tool steps, and questions in the app.
 
 **Ticket chat.** A chat for one task. It carries the ticket's Body and resolved
 context, and works in the ticket's worktree.
@@ -87,23 +89,13 @@ against its base branch.
 
 ## History and control
 
-**Session Event.** An immutable fact in a Session's local history, such as a
-message, command outcome, interaction, attachment outcome, or recovery signal.
+A Session keeps its conversation after a turn ends or you close its tab.
+Reopening it returns to that history. Recovery reconnects the existing Session
+rather than creating a second conversation.
 
-**Command.** Explicit user intent recorded before the runtime is asked to act.
-
-**Receipt.** The recorded outcome of a Command: accepted, rejected, completed,
-or unreconciled.
-
-**Attention.** A reconstructed view that shows when a Session needs recovery or
-input. It is derived from Session history rather than a source of truth.
-
-## Agent-facing operating model
-
-The CLI and managed Volli skill pack use the following operating model. Run
-`volli help concepts` for the same facts without opening this site.
-
-<AgentOperatingModel />
+See [Use a chat](/guides/sessions/) for starting and recovering a Session. The
+[agent operating model](/reference/agent-operating-model/) explains roles,
+tools, and command effects for readers writing agent instructions.
 
 ## Automations
 
@@ -128,26 +120,9 @@ level. A Run records the resolved model and reasoning it used.
 Session it opened. Run history remains available even if the Automation is
 later deleted.
 
-**Unbound Run.** A one-time Run created by **Run once…**. It carries its own
-Instructions and names no saved Automation.
-
-**Enabled automation.** An Automation switched on for automatic triggering on
-this Mac. Enablement is off until someone turns it on here. It does not prevent
-a person from running the Automation by hand.
-
-**Armed automation.** The one Automation a column fires after a ticket makes a
-Deliberate move into it. A column can arm at most one, and arming is local to
-the machine and not retroactive.
-
-**Offered list.** The Automations a column presents during a Deliberate move.
-A column can offer several but fires at most one automatically. The list also
-has a **Move only** choice.
-
-**Option-drag picker.** The expanded Offered list shown while **Option (⌥)**
-is held during a card drag. Up to nine offered rows get digits **1**–**9**;
-**0** chooses **Move only**.
-
-See [Automations](/guides/automations/) for the authoring and running steps.
+See [Automations](/guides/automations/) for how Runs start. The
+[column-trigger guide](/guides/automations/columns/) explains enablement, arming,
+and choosing a Run while dragging a ticket.
 
 ## Next steps
 

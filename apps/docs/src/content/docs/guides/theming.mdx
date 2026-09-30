@@ -26,9 +26,8 @@ A canvas has four parts:
   most each mode allows.
 - **Grain.** A noise layer over the gradient. Zero turns it off.
 
-That's the whole of it. Panel elevation, card tint, shadow depth, and text
-weight aren't settings; Volli holds a fixed set of each for light and for dark,
-so one canvas covers both modes.
+Panel elevation, card tint, shadow depth, and text weight use fixed values for
+each mode. The same canvas works in light and dark.
 
 ## Edit the canvas
 
@@ -120,9 +119,8 @@ configuration takes precedence over Volli's.
   through Volli's terminal settings, that theme wins. A `theme = light:X,dark:Y`
   pair is re-read on every mode change, so you get the half that matches.
 
-The other fifteen ANSI colors are fixed per mode: a restrained set tuned for a
-near-black background in dark, and GitHub Light Default in light. Volli has no
-app color to derive them from.
+The other fifteen ANSI colors use Volli's own palette. The light-mode palette
+derives from its dark-mode hues with contrast adjusted for a light background.
 
 <Aside type="note">
   Volli never edits your Ghostty config. It writes overlay files layered on top

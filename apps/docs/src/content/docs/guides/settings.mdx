@@ -1,162 +1,65 @@
 ---
 title: Settings and configuration
-description: Configure models, integrations, storage, and project-specific agent behavior in Volli Code.
+description: Find app-wide preferences in Settings and project-specific agent and worktree controls in Configure.
 sidebar:
   label: Settings
 ---
 
-import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
-
-Volli separates app-wide **Settings** from project-specific **Configure**.
-Automation records, their Runtime choices, and their machine-local **Enabled**
-switches live on the [Automations](/guides/automations/) page, not in Settings.
-An Automation set to a project default reads the model policy described in
-**Settings → Models** and the project's **Configure → Sessions** settings.
+**Settings** applies across the app. **Configure** belongs to the selected
+project. Saved Automation records and their **Automatic triggers** switches live on the
+[Automations](/guides/automations/) page.
 
 ## Settings
 
-Open **Settings** from the gear icon in the sidebar footer.
+Open **Settings** from the sidebar's gear control.
 
-### General
+| Page | Controls |
+| --- | --- |
+| **General** | Project switcher and sidebar visibility |
+| **Appearance** | App, editor, and terminal appearance; display zoom and diff layout |
+| **Notifications** | Native notifications for input, pull requests, cleanup, and updates |
+| **Models** | Provider access, model visibility, defaults, reasoning, and automatic compaction |
+| **Web Search** | Search provider and its connection settings |
+| **Integrations** | External editor and terminal choices, including **Ask every time** |
+| **Storage** | Retention, leftover processes, build artifacts, logs, worktrees, and data export |
+| **Telemetry** | Optional agent telemetry to a collector you specify |
+| **Updates** | Installed version, update channel, and update checks |
+| **About** | Installation, CLI, and terminal-companion health checks; support report |
 
-**Settings → General** controls the app window: whether to show the project
-switcher and whether to keep the sidebar open.
-
-### Appearance
-
-**Settings → Appearance** contains the app theme, editor and terminal
-appearance, display zoom, and diff layout. See [Theming](/guides/theming/) for
-the canvas, light/dark mode, and terminal colors.
-
-### Notifications
-
-**Settings → Notifications** controls which native notifications Volli sends,
-including when an agent needs your input, a pull request merges, a worktree is
-reclaimed, or an update is ready.
-
-### Models
-
-**Settings → Models** is the Model Access surface. Set default models for the
-Board, Ticket Sessions, and other model purposes; configure named default tiers;
-choose which models appear in pickers; and manage provider accounts. **Automatic
-compaction** is also here. Volli does not silently replace an unavailable model
-with another one.
-
-An Automation can use a project default, a named default tier, or an exact
-model and reasoning level. See [Automations](/guides/automations/#set-a-runtime)
-for how those choices are saved and resolved.
-
-### Web Search
-
-**Settings → Web Search** chooses **Off**, **Brave**, **Exa**, or **SearXNG** for
-structured Session web search. Brave and Exa use an API key; SearXNG uses the
-instance URL you provide. Keys are not shown again after they are saved.
-
-### Integrations
-
-**Settings → Integrations** lists supported external editors and terminals and
-chooses what Volli uses when you open a file or worktree. **Ask every time** is
-available when you do not want a default.
-
-### Storage
-
-**Settings → Storage** groups the data and cleanup controls that affect the
-local install:
-
-- **Retention** sets how long clean Done ticket worktrees can remain before
-  Volli can reclaim their folders. The ticket, branch, commits, pull-request
-  link, and history remain.
-- **Build artifacts** scans worktrees for git-ignored dependencies, build
-  output, and caches and can trim them after confirmation. Local configuration
-  and active or dirty worktrees are protected.
-- **Pi session logs** finds logs no longer referenced by a Session and offers
-  confirmed cleanup.
-- **Orphaned worktrees** scans for folders no longer owned by a ticket and
-  offers a separate confirmed cleanup.
-- **Database** shows the local database and can export the supported data as
-  JSON. The export is a backup and inspection file; Volli has no import path.
-
-### Telemetry
-
-**Settings → Telemetry** optionally exports agent telemetry to an OpenTelemetry
-collector that you specify. It is separate from model requests and is off until
-you enable it.
-
-### Updates
-
-**Settings → Updates** shows the installed version, update channel, and update
-checks for the alpha build.
-
-### About
-
-**Settings → About** checks the installation, CLI integration, and health of the
-supported terminal companions. Use its repair action or copy the support report
-when troubleshooting; it is where the former CLI and harness-health checks now
-live.
+Follow [Models and usage](/guides/models/), [Theming](/guides/theming/), or
+[Manage local storage](/guides/storage/) for those tasks. Subscription usage
+windows appear in the usage-limits popover beside the `⌘K` search, not on the
+Models page.
 
 ## Configure
 
-Open **Configure** for a selected project. These settings belong to that
-project rather than to the whole app.
+Select your project, then open **Configure**.
 
-### Agent
+| Page | Controls |
+| --- | --- |
+| **Skills** | Available Skills and their prompt budget |
+| **Commands** | Project slash-command templates |
+| **MCP Servers** | Server connections and tools offered to new Sessions |
+| **Authority** | Project policy and enforcement posture |
+| **Sessions** | Project Session defaults and instruction precedence |
+| **Appearance** | Project overrides for the app, editor, and terminal |
+| **Worktrees** | Base branch and setup command for new ticket worktrees |
 
-- **Skills** manages the project's available Skills and their prompt budget.
-- **Commands** manages project slash commands and templates.
-- **MCP Servers** configures the project's Model Context Protocol servers.
-- **Authority** sets the project's agent authority policy and approval behavior.
+See [Skills and commands](/guides/skills-and-commands/),
+[MCP servers](/guides/mcp-servers/), and [Agent authority](/guides/authority/)
+for agent configuration. [Chats and worktrees](/guides/agents-and-worktrees/)
+explains base branches, setup, and `.worktreeinclude`.
 
-### Project
+A project appearance override can inherit or replace an app-wide value. A
+Session's tools and authority have their own recorded lifetimes; changing a
+setting does not necessarily change an existing Session. Check the relevant
+guide before relying on a policy change.
 
-- **Sessions** sets project-level Session defaults and instruction precedence.
-- **Appearance** overrides the app theme, editor, and terminal settings for
-  this project.
-- **Worktrees** sets the default base branch, setup command, and copy set for a
-  fresh ticket worktree.
+## Web Search
 
-For the worktree copy set, add a `.worktreeinclude` file at the repository root
-when you need to extend or suppress the defaults:
+In **Settings → Web Search → Provider**, choose **Off**, **Brave**, **Exa**, or
+**SearXNG**. Brave and Exa need an API key. SearXNG needs an instance URL.
+Saved keys are not displayed again.
 
-```
-# Extend the default copy set
-.env.local
-config/dev-secrets.json
-
-# Suppress a default: stop .env* from being copied
-!.env*
-```
-
-The copy step runs once after `git worktree add`, before setup or an agent
-starts. It leaves files that Git already created alone and recreates symlinks as
-symlinks rather than following them.
-
-<Aside type="caution">
-  A copied local configuration file exists in every new ticket worktree. An
-  agent running there can read it.
-</Aside>
-
-## Back up local data
-
-Volli keeps projects, tickets, labels, history, Sessions, comments, and
-Automation records in local storage. It does not sync them to an account. Use
-**Settings → Storage → Database → Export** for a JSON backup or inspection file.
-
-## Next steps
-
-<CardGrid>
-  <LinkCard
-    title="Automations"
-    href="/guides/automations/"
-    description="Save a Runtime choice and control when work starts."
-  />
-  <LinkCard
-    title="Theming"
-    href="/guides/theming/"
-    description="Build the app and terminal color palette."
-  />
-  <LinkCard
-    title="Troubleshooting"
-    href="/reference/troubleshooting/"
-    description="Fix model, worktree, terminal, and local-data problems."
-  />
-</CardGrid>
+Turning search off does not turn off model requests, Browser Tabs, or web
+reads. See [Local data and network access](/reference/data-and-privacy/).
