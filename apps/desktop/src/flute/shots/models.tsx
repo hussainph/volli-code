@@ -1,5 +1,5 @@
 /**
- * Shot · a model for every job (VC-259).
+ * Shot · newest models, and a model for every subagent.
  *
  * Real: `ModelAccessSettings` inside a `ModelAccessProvider` — the Settings →
  * Model Access pane, drawing the tier tree it shipped with: Board at the root,
@@ -41,6 +41,7 @@ import {
   type Cue,
   type Format,
 } from "../kit/film";
+import { Backdrop, useFilmTheme } from "../kit/world";
 
 const MODELS: ModelAccessSnapshot["models"] = [
   {
@@ -132,14 +133,54 @@ const DEFAULTS: ModelAccessDefaults = {
   visual: { providerId: "google", modelId: "gemini-3.8-flash", reasoningLevel: "high" },
 };
 
+/** What "Refresh models" brings in: the newest releases, invented. */
+const NEWEST: ModelAccessSnapshot["models"] = [
+  {
+    providerId: "anthropic",
+    modelId: "claude-opus-5",
+    label: "Claude Opus 5",
+    state: "available",
+    acceptsImageInput: true,
+    reasoningLevels: ["low", "medium", "high", "max"],
+    contextWindow: 400_000,
+  },
+  {
+    providerId: "google",
+    modelId: "gemini-4-flash",
+    label: "Gemini 4 Flash",
+    state: "available",
+    acceptsImageInput: true,
+    reasoningLevels: ["off", "low", "high"],
+  },
+];
+
 const SNAPSHOT: ModelAccessSnapshot = { observedAt: 0, models: MODELS, providers: PROVIDERS };
+const REFRESHED: ModelAccessSnapshot = {
+  observedAt: 1,
+  models: [...NEWEST, ...MODELS],
+  providers: PROVIDERS,
+};
+
+/** After the refresh, Ticket picks up the newest model. */
+const DEFAULTS_REFRESHED: ModelAccessDefaults = {
+  ...DEFAULTS,
+  ticket: { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "high" },
+};
+/** Then Fast — what quick subagents run on — moves to the new Flash. */
+const DEFAULTS_FAST: ModelAccessDefaults = {
+  ...DEFAULTS_REFRESHED,
+  fast: { providerId: "google", modelId: "gemini-4-flash", reasoningLevel: "low" },
+};
 
 /** A client with no main process behind it; state lives for the render only. */
-function createModelAccessClient(): ModelAccessClient {
-  let defaults = DEFAULTS;
+function createModelAccessClient(
+  snapshot: ModelAccessSnapshot,
+  initial: ModelAccessDefaults,
+): ModelAccessClient {
+  let defaults = initial;
   let hidden: readonly HiddenModelRef[] = [];
   return {
-    inspect: async () => SNAPSHOT,
+    inspect: async () => snapshot,
     defaults: async () => defaults,
     setDefault: async (purpose: ModelPurpose, selection: ModelSelection | null) => {
       defaults = { ...defaults, [purpose]: selection };
@@ -161,7 +202,17 @@ function createModelAccessClient(): ModelAccessClient {
   };
 }
 
-const CLIENT = createModelAccessClient();
+/** The shot's three states, swapped by `t`: before the press, after it, Fast re-picked. */
+const CLIENTS = [
+  createModelAccessClient(SNAPSHOT, DEFAULTS),
+  createModelAccessClient(REFRESHED, DEFAULTS_REFRESHED),
+  createModelAccessClient(REFRESHED, DEFAULTS_FAST),
+] as const;
+/** Stable keys for the three stacked clients. */
+const PHASE_KEYS = ["before", "refreshed", "fast"] as const;
+/** Scene ms: the Refresh press, and the Fast tier's change. Mirrored in models.mjs. */
+export const PRESS_AT = 600;
+export const FAST_AT = 1750;
 
 /**
  * The pane's layout: a settings column just wide enough for the label beside
@@ -172,20 +223,37 @@ export const ZOOM = 2;
 export const PANE = { width: 560, height: 406 };
 export const TREE = { width: PANE.width * ZOOM, height: PANE.height * ZOOM };
 
-const CUE: Omit<Cue, "place"> = {
-  at: 250,
-  until: 1650,
-  lines: ["A model for", "every job."],
+const CUE1: Omit<Cue, "place"> = {
+  at: 100,
+  until: 1200,
+  lines: ["Newest models,", "one click."],
+  weights: [800, 320],
+};
+const CUE2: Omit<Cue, "place"> = {
+  at: 1350,
+  until: 2500,
+  lines: ["A model for", "every subagent."],
+  weights: [320, 800],
 };
 
 const CUES: Record<Format, Cue[]> = {
-  landscape: [{ ...CUE, place: "lower" }],
-  portrait: [{ ...CUE, place: "upper" }],
+  landscape: [
+    // Medium, bottom-left: the card lives in the right ~55% of the frame.
+    { ...CUE1, place: "lower", size: "medium" },
+    { ...CUE2, place: "lower", size: "medium" },
+  ],
+  portrait: [
+    { ...CUE1, place: "upper" },
+    { ...CUE2, place: "upper" },
+  ],
 };
 
 export function ModelsShot({ format }: { format: Format }) {
   const t = useFilm();
+  useFilmTheme("lime");
   useFixtures({ api: appApi, seed: seedApp });
+  const phase = t < PRESS_AT ? 0 : t < FAST_AT ? 1 : 2;
+  const pressing = t >= PRESS_AT - 120 && t < PRESS_AT + 160;
   return (
     <>
       <Surface
@@ -202,16 +270,36 @@ export function ModelsShot({ format }: { format: Format }) {
             className="overflow-hidden rounded-lg border border-border shadow-overlay"
             style={{ width: TREE.width, height: TREE.height }}
           >
-            <div style={{ zoom: ZOOM, width: PANE.width }}>
-              <ModelAccessProvider client={CLIENT}>
-                <div className="flex flex-col gap-4" data-film="model-pane">
-                  <ModelAccessSettings />
-                </div>
-              </ModelAccessProvider>
+            <div
+              style={{ zoom: ZOOM, width: PANE.width }}
+              data-film-press={pressing ? "on" : "off"}
+              className="[&[data-film-press=on]_button[aria-label='Refresh_models']]:scale-90 [&[data-film-press=on]_button[aria-label='Refresh_models']]:bg-primary/30 [&[data-film-press=on]_button[aria-label='Refresh_models']]:ring-2 [&[data-film-press=on]_button[aria-label='Refresh_models']]:ring-primary"
+            >
+              {/* All three states stay mounted from frame 0, stacked; only the
+                  current one is visible, so a swap never shows a loading pane. */}
+              <div style={{ position: "relative" }}>
+                {CLIENTS.map((client, index) => (
+                  <div
+                    key={PHASE_KEYS[index]}
+                    style={
+                      index === phase
+                        ? { position: "relative" }
+                        : { position: "absolute", inset: 0, visibility: "hidden" }
+                    }
+                  >
+                    <ModelAccessProvider client={client}>
+                      <div className="flex flex-col gap-4" data-film="model-pane">
+                        <ModelAccessSettings />
+                      </div>
+                    </ModelAccessProvider>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         }
       />
+      <Backdrop t={t} theme="lime" focus={[0.5, 0.5]} />
       <FrameLayer format={format}>
         <Vignette strength={0.4} />
         <Supers cues={CUES[format]} t={t} format={format} />

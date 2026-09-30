@@ -108,7 +108,7 @@ export function useFixtures(setup: { api?: ApiOverrides; seed?: () => void }): v
 }
 
 /** The capture viewport Flute's ScenePreview renders into, once it exists. */
-function useCaptureViewport(): HTMLElement | null {
+export function useCaptureViewport(): HTMLElement | null {
   const [element, setElement] = React.useState<HTMLElement | null>(null);
   // Flute mounts the viewport around the scene, so it may not exist on this
   // component's first commit: look again each frame until it does.
@@ -177,8 +177,14 @@ export interface Cue {
   lines: string[];
   /** Quieter line under the display lines. */
   sub?: string;
-  /** A word in `lines` drawn in the accent colour. */
+  /** A word in `lines` drawn in the accent colour (the theme's ring by default). */
   accent?: string;
+  /**
+   * Mona Sans weight each line lands at (default 780). Lines arrive light and
+   * wide and settle into this, so a heavy line against a light one reads as
+   * emphasis rather than as two sizes of the same thing.
+   */
+  weights?: number[];
   accentColor?: string;
   size?: "hero" | "large" | "medium";
   place?: "lower" | "upper" | "center" | "lower-right";
@@ -206,7 +212,7 @@ function Line({
   return (
     <>
       {before}
-      <span style={{ color: accentColor }}>{accent}</span>
+      <span style={{ color: accentColor ?? "var(--ring)" }}>{accent}</span>
       {after}
     </>
   );
@@ -248,13 +254,23 @@ function Super({ cue, t, format }: { cue: Cue; t: number; format: Format }) {
         ) : null}
         {cue.lines.map((line, index) => {
           const p = progress(t, cue.at + 80 + index * 90, cue.at + 620 + index * 90, ease.outExpo);
+          // The weight lands a beat behind the rise: the line arrives thin and
+          // wide, then sets hard.
+          const w = progress(
+            t,
+            cue.at + 180 + index * 90,
+            cue.at + 760 + index * 90,
+            ease.outCubic,
+          );
           return (
             <div key={line} className="film-line-mask" style={{ fontSize: size }}>
               <div
                 className="film-line"
                 style={{
                   transform: `translateY(${(1 - p) * 105}%)`,
-                  letterSpacing: `${-0.045 + (1 - p) * 0.03}em`,
+                  letterSpacing: `${-0.04 + (1 - w) * 0.02}em`,
+                  fontWeight: Math.round(220 + ((cue.weights?.[index] ?? 780) - 220) * w),
+                  fontStretch: `${124 - 16 * w}%`,
                 }}
               >
                 <Line text={line} accent={cue.accent} accentColor={cue.accentColor} />

@@ -40,83 +40,96 @@ const masters = join(outDir, preview ? "masters" : "masters-720p30");
 // with `--fps 60` and FORMAT scales of 1920/1080 is the 4K-master path.
 const FPS = 30;
 
-/** The edit. Beats and supers are the cut sheet's; keep them in step with the shots. */
+/**
+ * The edit, in chapters. Each chapter wears its own app theme (kit/world.tsx).
+ * Supers are what the viewer reads; `source` is what backs the claim — it
+ * lives in the cut sheet, never on screen.
+ */
 const ORDER = [
   {
     key: "hook",
-    beat: "Macro on VC-239 → pull back to the wall of 175",
-    supers: ["Volli 0.2", "175 tickets · 31 days — Built on its own board."],
-    tickets: "v0.1.2..v0.2.0 commit subjects (175 Done tickets)",
+    chapter: "Open · aurora",
+    beat: "Tight on dozens of live sessions in the sidebar → pull back: the app floating in the world",
+    supers: ["Volli 0.2 — Dozens of agents. Nothing missed."],
+    source: "Sidebar sessions with working/waiting rings (VC-241); Active band (VC-30)",
   },
   {
     key: "picker",
-    beat: "Three cards dragged over Doing; ⌥ grows the Offered list; drop",
-    supers: ["VC-132 · VC-184 — Drop tickets in. Pick what runs."],
-    tickets: "VC-132 Offered list + ⌥ picker; VC-184 multi-select",
+    chapter: "Automations · lagoon",
+    beat: "Three cards dragged onto Doing; the Offered automations list opens; drop",
+    supers: ["New · Automations — Hand off work in one drag."],
+    source: "VC-127 Automations; VC-132 Offered list + ⌥ picker; VC-184 multi-select",
   },
   {
     key: "armed",
+    chapter: "Automations · lagoon",
     beat: "Countdown windows with Cancel drain; rings go working, one waiting",
-    supers: ["VC-127 · VC-128 · VC-241 — Save how work starts."],
-    tickets: "VC-127 Automations; VC-128 column trigger + arming; VC-241 rings working/waiting",
+    supers: ["Agents start on their own. — On a board move or a schedule."],
+    source:
+      "VC-128 column Trigger + arming; schedules per docs/releases/whats-new-0-2; VC-241 rings",
   },
   {
-    key: "cursor",
-    beat: "The Session cursor glides, clicks, lets go of the Browser Tab",
-    supers: ["VC-238 · VC-239 — Agents drive the browser. You see every click."],
-    tickets: "VC-238, VC-239 Browser Tab ownership + animated Session cursor",
+    key: "mcp",
+    chapter: "Agents · cobalt",
+    beat: "Settings → MCP: servers listed, one connects",
+    supers: ["Plug in any MCP server."],
+    source: "MCP servers in Settings → Configure → MCP (main)",
   },
   {
     key: "island",
-    beat: "Activity Island explodes into plan / subagents / shells / tabs, collapses",
-    supers: [
-      "VC-246 · VC-268 · VC-269 · VC-270 — Everything your agent is doing. Plans, subagents, shells — one island.",
-    ],
-    tickets:
-      "VC-246 island; VC-268 Browser Tabs feed; VC-269 subagent feed; VC-270 background shells",
+    chapter: "Agents · cobalt",
+    beat: "The activity bar explodes into plan / subagents / shells / tabs, then settles",
+    supers: ["Smarter agents — See everything your agent does. Subagents, shells, browser tabs."],
+    source: "VC-246 activity bar; VC-268 Browser Tabs; VC-269 subagents; VC-270 background shells",
   },
   {
-    key: "models",
-    beat: "Down the model tier tree",
-    supers: ["VC-259 — A model for every job."],
-    tickets: "VC-259 model tiers",
-  },
-  {
-    key: "limits",
-    beat: "Usage-limits button → breakdown",
-    supers: ["VC-263 · VC-350 · VC-376 — See your limits coming."],
-    tickets: "VC-263, VC-350 usage limits; VC-376 button redesign",
+    key: "cursor",
+    chapter: "Agents · cobalt",
+    beat: "The agent's cursor glides, clicks, hands the tab back",
+    supers: ["Share a browser with your agent. — Watch every click it makes."],
+    source: "VC-238 agent Browser Tabs; VC-239 Tab ownership + Session cursor",
   },
   {
     key: "split",
-    beat: "Split created, divider resized",
-    supers: ["VC-202 · VC-333 — Split view."],
-    tickets: "VC-202, VC-333 split view",
+    chapter: "Multitasking · rose",
+    beat: "One tab splits into panes side by side; dividers slide",
+    supers: ["Multitasking — side by side (see shot for the exact panes)"],
+    source: "VC-202, VC-333 split view tabs",
   },
   {
-    key: "palette",
-    beat: "⌘K, @sessions narrows the list",
-    supers: ["VC-205 — ⌘K, then @sessions."],
-    tickets: "VC-205 command palette",
+    key: "peek",
+    chapter: "Context switching · paper (light)",
+    beat: "Hover sessions in the sidebar: peek cards; open one in the overlay, reply, back",
+    supers: ["Context switching — Hover to peek.", "Reply without losing your place."],
+    source: "VC-30 session hover peek + shared conversation overlay (main)",
   },
   {
-    key: "rail",
-    beat: "Down the Now rail",
-    supers: ["VC-406 — The Now rail."],
-    tickets: "VC-406 Now rail",
+    key: "limits",
+    chapter: "Quality of life · gold",
+    beat: "The usage-limits icon beside ⌘K → the popover's bars",
+    supers: ["Your limits, always in view."],
+    source: "VC-263, VC-350 usage limits; VC-376 icon",
   },
   {
-    key: "scale",
-    beat: "Column headers → the 10,000-ticket board as a cliff",
-    supers: ["VC-316 · p50 board render — 10,000 tickets. 5.8s → 366ms."],
-    tickets:
-      "docs/research/perf/board-windowing-vc316.md: p50 5,797.6 ms → 365.6 ms at 10,000 tickets",
+    key: "models",
+    chapter: "Quality of life · lime",
+    beat: "Refresh models → newest models; a subagent tier's default changes",
+    supers: ["Newest models, one click.", "A model for every subagent."],
+    source: "Model Access: Refresh models; VC-259 default model tiers (Fast/Deep/Visual)",
+  },
+  {
+    key: "sessions",
+    chapter: "Quality of life · aurora",
+    beat: "The sidebar scrolls through dozens of live sessions",
+    supers: ["Dozens of sessions. Still fast."],
+    source: "Sidebar/board rendering work (VC-316 and the 0.2 perf passes)",
   },
   {
     key: "end",
-    beat: "The mark builds; Volli 0.2 · Out now · volli.app; dive into VC-239 (loops)",
-    supers: ["Volli 0.2 — Out now · volli.app"],
-    tickets: "—",
+    chapter: "End · ember (the shipped default theme)",
+    beat: "The mark builds; Volli 0.2; category line; Download for Mac · volli.app; fly-through",
+    supers: ["Volli 0.2 — The workspace for parallel coding agents. Download for Mac · volli.app"],
+    source: "—",
   },
 ];
 
@@ -228,7 +241,7 @@ for (const format of formats) {
 
 // ---- 3. cut sheet + contact sheets ------------------------------------------------
 let at = 0;
-const rows = edit.map(({ key, beat, supers, tickets }, index) => {
+const rows = edit.map(({ key, chapter, beat, supers, source }, index) => {
   const duration = shots.get(key).durationMs;
   const row = {
     index: index + 1,
@@ -236,28 +249,30 @@ const rows = edit.map(({ key, beat, supers, tickets }, index) => {
     start: at,
     end: at + duration,
     duration,
+    chapter,
     beat,
     supers,
-    tickets,
+    source,
   };
   at += duration;
   return row;
 });
 const total = at;
 const sheet = [
-  "# Volli 0.2 — release film cut sheet (VC-464)",
+  "# Volli 0.2 — product film cut sheet (VC-464)",
   "",
-  `Total ${timecode(total)} (${(total / 1000).toFixed(1)}s) · 60fps · both formats share this timing · hard cuts · loops end → start.`,
+  `Total ${timecode(total)} (${(total / 1000).toFixed(1)}s) · ${FPS}fps · both formats share this timing · hard cuts · loops end → start.`,
   "",
-  "| # | In | Out | Len | Shot | Beat | Supers | Backed by |",
-  "|---|----|-----|-----|------|------|--------|-----------|",
+  "| # | In | Out | Len | Chapter · theme | Shot | Beat | Supers | Backed by (never on screen) |",
+  "|---|----|-----|-----|-----------------|------|------|--------|------------------------------|",
   ...rows.map(
     (row) =>
-      `| ${row.index} | ${timecode(row.start)} | ${timecode(row.end)} | ${(row.duration / 1000).toFixed(1)}s | \`${row.key}\` | ${row.beat} | ${row.supers.join(" / ")} | ${row.tickets} |`,
+      `| ${row.index} | ${timecode(row.start)} | ${timecode(row.end)} | ${(row.duration / 1000).toFixed(1)}s | ${row.chapter} | \`${row.key}\` | ${row.beat} | ${row.supers.join(" / ")} | ${row.source} |`,
   ),
   "",
-  "Music notes: the hook's pull-back peaks at ~01.6; the automation beats (picker → armed) are one phrase;",
-  "the montage (split → palette → rail) is three 1.2s hits; the end card's dive is a riser into the loop.",
+  "Music notes: the hook's pull-back is the first lift; each chapter change is a theme change —",
+  "cut the music's phrases there. The QoL montage (limits → models → sessions) is three quick hits;",
+  "the end card's fly-through is the riser into the loop.",
   "",
 ];
 writeFileSync(join(outDir, "CUT-SHEET.md"), sheet.join("\n"));

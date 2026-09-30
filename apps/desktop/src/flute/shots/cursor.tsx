@@ -21,6 +21,7 @@ import type { BrowserTabState } from "../../ipc/contract";
 import { CheckoutPage, PAGE_HEIGHT, PAGE_WIDTH, TARGETS } from "../kit/checkout-page";
 import { ease, progress, typed } from "../kit/clock";
 import { FrameLayer, Supers, useFilm, Vignette, type Cue, type Format } from "../kit/film";
+import { Backdrop, useFilmTheme } from "../kit/world";
 
 const SESSION = { id: "ses-7c1e-checkout", name: "Fix checkout form" };
 const COLOR = pickSessionColor(SESSION.id, []);
@@ -161,10 +162,9 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2300,
       until: 3650,
-      lines: ["Agents drive", "the browser."],
-      sub: "You see every click.",
-      accent: "browser.",
-      accentColor: COLOR,
+      lines: ["Share a browser", "with your agent."],
+      weights: [800, 320],
+      sub: "Watch every click it makes.",
       place: "lower-right",
     },
   ],
@@ -172,16 +172,16 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2300,
       until: 3650,
-      lines: ["Agents drive", "the browser."],
-      sub: "You see every click.",
-      accent: "browser.",
-      accentColor: COLOR,
+      lines: ["Share a browser", "with your agent."],
+      weights: [800, 320],
+      sub: "Watch every click it makes.",
       place: "upper",
     },
   ],
 };
 
 export function CursorShot({ format }: { format: Format }) {
+  useFilmTheme("cobalt");
   const t = useFilm();
   const present = t < T.release;
   const holder = present ? HOLDER : null;
@@ -239,8 +239,9 @@ export function CursorShot({ format }: { format: Format }) {
           }
         />
       </Surface>
+      <Backdrop t={t} theme="cobalt" />
       <FrameLayer format={format}>
-        <Vignette />
+        <Vignette strength={0.4} />
         <Supers cues={CUES[format]} t={t} format={format} />
       </FrameLayer>
     </>

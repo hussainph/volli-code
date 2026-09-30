@@ -51,9 +51,9 @@ function cursorRig(format) {
             rotateZ: mix(-4, -2, open),
           },
       target,
-      near: (wide ? mix(760, 20, open) : mix(700, 100, open)) + 40 * Math.min(1, t / 1850),
+      near: (wide ? mix(760, -260, open) : mix(700, -120, open)) + 40 * Math.min(1, t / 1850),
       offset: wide
-        ? [mix(-160, -400, open), mix(-40, -60, open)]
+        ? [mix(-160, -520, open), mix(-40, -40, open)]
         : [mix(0, 20, open), mix(80, 380, open)],
       focus: mix(0, 40, open),
       fStop: mix(4, 6, open),

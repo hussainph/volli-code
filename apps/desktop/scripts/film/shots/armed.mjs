@@ -14,8 +14,8 @@ const ARMED = { close: 1850, duration: 2800 };
 
 const POSES = {
   wide: {
-    a: { rotation: { rotateX: 14, rotateY: 22, rotateZ: -3 }, near: 960, offset: [330, 60] },
-    b: { rotation: { rotateX: 18, rotateY: 12, rotateZ: -2 }, near: 780, offset: [340, 20] },
+    a: { rotation: { rotateX: 14, rotateY: 22, rotateZ: -3 }, near: 960, offset: [470, 60] },
+    b: { rotation: { rotateX: 18, rotateY: 12, rotateZ: -2 }, near: 760, offset: [480, 20] },
   },
   tall: {
     a: { rotation: { rotateX: 16, rotateY: 16, rotateZ: -3 }, near: 900, offset: [0, 320] },

@@ -18,6 +18,8 @@
 }
 
 .film-frame {
+  --film-scrim: rgb(0 0 0 / 0.72);
+  --film-scrim-soft: rgb(0 0 0 / 0.55);
   position: absolute;
   inset: 0;
   z-index: 20;
@@ -48,7 +50,7 @@
   position: absolute;
   display: flex;
   flex-direction: column;
-  color: #f7f7f8;
+  color: var(--canvas-ink, #f7f7f8);
   font-family: "Film Display", var(--font-sans);
   font-stretch: 112%;
   font-weight: 760;
@@ -124,7 +126,7 @@
   font-size: 30px;
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: rgb(255 255 255 / 0.62);
+  color: var(--canvas-ink-muted, rgb(255 255 255 / 0.62));
 }
 
 .film-super[data-format="portrait"] .film-eyebrow {
@@ -144,7 +146,7 @@
   font-stretch: 100%;
   letter-spacing: -0.015em;
   line-height: 1.12;
-  color: rgb(255 255 255 / 0.72);
+  color: var(--canvas-ink-muted, rgb(255 255 255 / 0.72));
 }
 
 /* A soft pool of dark behind a super, so it reads over a white page as well
@@ -152,25 +154,25 @@
 .film-scrim {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse 60% 55% at 12% 88%, rgb(0 0 0 / 0.78), transparent 72%);
+  background: radial-gradient(ellipse 60% 55% at 12% 88%, var(--film-scrim), transparent 72%);
 }
 .film-scrim[data-place="lower-right"] {
-  background: radial-gradient(ellipse 60% 55% at 88% 88%, rgb(0 0 0 / 0.78), transparent 72%);
+  background: radial-gradient(ellipse 60% 55% at 88% 88%, var(--film-scrim), transparent 72%);
 }
 .film-scrim[data-place="upper"] {
-  background: radial-gradient(ellipse 70% 50% at 20% 12%, rgb(0 0 0 / 0.78), transparent 72%);
+  background: radial-gradient(ellipse 70% 50% at 20% 12%, var(--film-scrim), transparent 72%);
 }
 .film-scrim[data-place="center"] {
-  background: radial-gradient(ellipse 60% 45% at 50% 50%, rgb(0 0 0 / 0.6), transparent 75%);
+  background: radial-gradient(ellipse 60% 45% at 50% 50%, var(--film-scrim-soft), transparent 75%);
 }
 .film-scrim[data-format="portrait"] {
-  background: radial-gradient(ellipse 95% 38% at 30% 72%, rgb(0 0 0 / 0.8), transparent 72%);
+  background: radial-gradient(ellipse 95% 38% at 30% 72%, var(--film-scrim), transparent 72%);
 }
 .film-scrim[data-format="portrait"][data-place="upper"] {
-  background: radial-gradient(ellipse 95% 34% at 30% 22%, rgb(0 0 0 / 0.8), transparent 72%);
+  background: radial-gradient(ellipse 95% 34% at 30% 22%, var(--film-scrim), transparent 72%);
 }
 .film-scrim[data-format="portrait"][data-place="center"] {
-  background: radial-gradient(ellipse 90% 30% at 50% 50%, rgb(0 0 0 / 0.65), transparent 75%);
+  background: radial-gradient(ellipse 90% 30% at 50% 50%, var(--film-scrim-soft), transparent 75%);
 }
 
 /* ---- end card (shots/end.tsx) ------------------------------------------------ */
@@ -211,6 +213,22 @@
   font-size: 176px;
 }
 
+.film-end-tagline {
+  margin-top: -14px;
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 100%;
+  font-weight: 400;
+  font-size: 50px;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: rgb(242 234 224 / 0.78);
+  white-space: nowrap;
+}
+
+.film-end[data-format="portrait"] .film-end-tagline {
+  font-size: 44px;
+}
+
 .film-end-row {
   display: flex;
   align-items: center;
@@ -220,9 +238,9 @@
 
 .film-end-out {
   font-family: "Film Display", var(--font-sans);
-  font-stretch: 112%;
+  font-stretch: 108%;
   font-weight: 700;
-  font-size: 72px;
+  font-size: 60px;
   line-height: 1;
   color: #f2eae0;
 }
@@ -236,8 +254,96 @@
 
 .film-end-url {
   font-family: var(--font-mono);
-  font-size: 64px;
+  font-size: 56px;
   line-height: 1;
-  color: #e8652a;
+  color: #ffb088;
   letter-spacing: -0.01em;
+}
+
+/* ---- light mode: the frame follows the theme ------------------------------------ */
+
+:root.light .film-frame {
+  --film-scrim: rgb(255 255 255 / 0.62);
+  --film-scrim-soft: rgb(255 255 255 / 0.45);
+}
+:root.light .film-super {
+  filter: drop-shadow(0 1px 14px rgb(255 255 255 / 0.5));
+}
+
+/* ---- the world (kit/world.tsx) ------------------------------------------------- */
+
+/* Prepended into Flute's capture viewport, so the stage paints over it. */
+.film-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #050507;
+}
+.film-backdrop-canvas {
+  position: absolute;
+  inset: -12%;
+  background: var(--canvas);
+  transform-origin: 50% 50%;
+}
+.film-backdrop-aurora {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  filter: saturate(1.15);
+}
+.film-backdrop-aurora[data-mode="light"] {
+  mix-blend-mode: normal;
+  opacity: 0.5;
+}
+.film-backdrop-pool {
+  position: absolute;
+  inset: 0;
+}
+.film-backdrop-bloom {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+}
+:root.light .film-backdrop-aurora {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  filter: saturate(1.15);
+}
+.film-backdrop-aurora[data-mode="light"] {
+  mix-blend-mode: normal;
+  opacity: 0.5;
+}
+.film-backdrop-pool {
+  position: absolute;
+  inset: 0;
+}
+.film-backdrop-bloom {
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+.film-backdrop-rings {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.film-backdrop-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1400px;
+  height: 1400px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--ring) 70%, transparent);
+  box-shadow:
+    0 0 40px color-mix(in oklab, var(--ring) 25%, transparent),
+    inset 0 0 40px color-mix(in oklab, var(--ring) 18%, transparent);
+}
+
+/* Flute's Scene paints an opaque black root; the world shows through it
+ * instead. Only when a backdrop is present, so a shot without one keeps its
+ * void. */
+[data-flute-capture="scene"]:has(> .film-backdrop) [data-flute-scene] {
+  background: transparent !important;
 }

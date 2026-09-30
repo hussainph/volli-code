@@ -1,5 +1,5 @@
 /**
- * · A model for every job (VC-259). Component: src/flute/shots/models.tsx.
+ * · Newest models, one click; a model for every subagent. Component: src/flute/shots/models.tsx.
  *
  * Layout: the Default models card, 600×406 pane px laid out at 2× (1200×812
  * world px), centred on the origin. The camera rakes down the tree from Board
@@ -21,20 +21,15 @@ const world = (x, y) => [
   0,
 ];
 
-/** Where the focus sits, in pane px: a hold on each tier, eased between. */
+/** Where the focus sits, in pane px: the header (Refresh), then down to Fast. */
 function focusRow(t) {
   return track(
     t,
     [
-      [0, ROW.board],
-      [240, ROW.board],
-      [520, ROW.ticket],
-      [760, ROW.ticket],
-      [980, ROW.fast],
-      [1120, ROW.fast],
-      [1320, ROW.deep],
-      [1440, ROW.deep],
-      [1640, ROW.visual],
+      [0, 30],
+      [1250, 30],
+      [1700, ROW.fast],
+      [2600, ROW.fast],
     ],
     ease.inOutCubic,
   );
@@ -55,54 +50,47 @@ function level(rotateX, rotateY, bias = 0) {
   return { rotateX, rotateY, rotateZ: rotateZ + bias };
 }
 
+/** Camera beat: 0 → 1 across the move from the header to the Fast row. */
+const beat = (t) => ease.inOutCubic(progress(t, 1150, 1850));
+
 const FORMAT = {
   wide: {
-    rotation: (p) => level(mix(36, 32, p), mix(5, 3.5, p)),
-    // The whole card stays in frame, labels and model names alike: the target
-    // is the card's horizontal middle and the camera holds far enough back that
-    // the model column never leaves the right edge. The tree hangs right of
-    // centre so the super owns the void at lower left.
-    x: PANE.width / 2,
-    from: ROW.utility,
-    to: ROW.deep,
-    near: (p) => mix(-240, -165, p),
-    offset: (p) => [360, mix(-20, 20, p)],
+    rotation: (p) => level(mix(24, 20, p), mix(-10, 2, p)),
+    // The card owns the right ~55% of the frame; the supers own the lime
+    // world on the left. Beat 1: close on the header, Refresh and the Ticket
+    // row. Beat 2: the tree fills the frame height, the reasoning column
+    // cropped off the right edge.
+    x: (b) => mix(300, 250, b),
+    y: (s, b) => mix(mix(120, 150, s), 215, b),
+    near: (s, b) => mix(mix(260, 360, s), 520, b),
+    offset: (s, b) => [mix(420, 460, b), mix(-120, 10, b)],
   },
   tall: {
-    rotation: (p) => ({ rotateX: mix(36, 31, p), rotateY: mix(8, 5, p), rotateZ: mix(-5, -3, p) }),
-    // Its own composition: the card fills the width of the 9:16 frame below
-    // the upper super, pushing in gently as the rail runs down the tree.
-    x: PANE.width / 2,
-    from: ROW.utility,
-    to: ROW.fast,
-    near: (p) => mix(-330, -235, p),
-    offset: (p) => [0, mix(110, 190, p)],
+    rotation: (p) => ({ rotateX: mix(30, 26, p), rotateY: mix(-8, 5, p), rotateZ: mix(3, -3, p) }),
+    x: (b) => mix(PANE.width / 2, 300, b),
+    y: (s, b) => mix(mix(150, 175, s), ROW.fast, b),
+    near: (s, b) => mix(mix(60, 160, s), 320, b),
+    offset: (s, b) => [mix(0, 60, b), mix(260, 300, b)],
   },
 };
 
 function modelsRig(format) {
   const f = FORMAT[format];
   return (t) => {
-    // Already travelling on frame 1: a linear share keeps the rail moving at
-    // both ends, the eased share gives it its swell in the middle.
-    const s = progress(t, 0, 1800);
-    const p = 0.3 * s + 0.7 * ease.inOutSine(s);
-    const rotation = f.rotation(p);
-    const target = world(f.x, mix(f.from, f.to, p));
-    // Focus: the depth of the focused row relative to the target, along the view axis.
-    // The row's middle, between its label and its model's name, so both
-    // halves of a row land sharp together.
-    const focused = world(190, focusRow(t));
+    const s = progress(t, 0, 1250);
+    const b = beat(t);
+    const p = progress(t, 0, 2600);
+    const rotation = f.rotation(0.4 * p + 0.6 * b);
+    const target = world(f.x(b), f.y(s, b));
+    const focused = world(260, focusRow(t));
     const [, , tz] = rotate(target, rotation);
     const [, , fz] = rotate(focused, rotation);
     return {
       rotation,
       target,
-      near: f.near(p),
-      offset: f.offset(p),
+      near: f.near(s, b) - 25 * (p - b),
+      offset: f.offset(s, b),
       focus: tz - fz,
-      // Deep enough that every tier name reads in every frame; the rack still
-      // walks down the tree, falling off gently at the far rows.
       fStop: 5.6,
       focalLength: 120,
       maxBlur: 5,
@@ -112,10 +100,10 @@ function modelsRig(format) {
 
 export const shot = {
   key: "models",
-  title: "A model for every job",
+  title: "Newest models, a model for every subagent",
   description:
-    "VC-259 — a close, raking survey down the real tier tree: Board, Utility, Ticket, then Fast / Deep / Visual.",
-  durationMs: 1800,
+    "Refresh models brings in the newest models; then the camera lands on the Fast tier as its model changes.",
+  durationMs: 2600,
   perspective: 1400,
   nodes: [{ id: "model-tree" }],
   rig: modelsRig,

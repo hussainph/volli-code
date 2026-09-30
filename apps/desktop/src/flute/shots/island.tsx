@@ -57,6 +57,7 @@ import { Message, MessageContent } from "@renderer/components/ui/ai-elements/mes
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 import { FrameLayer, Supers, useFilm, Vignette, type Cue, type Format } from "../kit/film";
+import { Backdrop, useFilmTheme } from "../kit/world";
 
 /* ---------------------------------------------------------------- geometry */
 
@@ -251,6 +252,7 @@ const ACTIONS: ActivityIslandActions = {
   openShell: noop,
   killShell: noop,
   jumpStep: noop,
+  replayTab: noop,
 };
 
 /**
@@ -467,14 +469,18 @@ function CardLayer({ cluster, model }: { cluster: IslandCluster; model: Activity
 const CUE = {
   at: 900,
   until: 3050,
-  lines: ["Everything your", "agent is doing."],
-  sub: "Plans, subagents, shells — one island.",
+  eyebrow: "Smarter agents",
+  lines: ["See everything", "your agent does."],
+  weights: [800, 320],
+  sub: "Subagents, shells, browser tabs.",
 } as const;
 
 const CUES: Record<Format, Cue[]> = {
-  landscape: [{ ...CUE, lines: [...CUE.lines], place: "lower" }],
+  landscape: [{ ...CUE, lines: [...CUE.lines], weights: [...CUE.weights], place: "lower" }],
   // 9:16: out before the pill climbs back into the eyebrow (~2600ms).
-  portrait: [{ ...CUE, until: 2450, lines: [...CUE.lines], place: "lower" }],
+  portrait: [
+    { ...CUE, until: 2450, lines: [...CUE.lines], weights: [...CUE.weights], place: "lower" },
+  ],
 };
 
 /* ---------------------------------------------------------------- the shot */
@@ -505,6 +511,7 @@ function place(x: number, top: number, width: number, height: number): React.CSS
 }
 
 export function IslandShot({ format }: { format: Format }) {
+  useFilmTheme("cobalt");
   const t = useFilm();
   const pillPhase = JSON.stringify(phaseAt(t, true));
   const phase = JSON.stringify(phaseAt(t, false));
@@ -553,8 +560,9 @@ export function IslandShot({ format }: { format: Format }) {
           />
         );
       })}
+      <Backdrop t={t} theme="cobalt" />
       <FrameLayer format={format}>
-        <Vignette strength={0.58} />
+        <Vignette strength={0.45} />
         <Supers cues={CUES[format]} t={t} format={format} />
       </FrameLayer>
     </TooltipProvider>

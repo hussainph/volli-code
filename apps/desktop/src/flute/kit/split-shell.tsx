@@ -147,7 +147,13 @@ export function ShellWindow({
   return (
     <div
       className={`film-shell relative overflow-hidden rounded-[14px] ${className ?? ""}`}
-      style={{ width, height, background: "var(--canvas)" }}
+      style={{
+        width,
+        height,
+        background: "var(--canvas)",
+        boxShadow:
+          "0 0 0 1px rgb(255 255 255 / 0.08), 0 40px 120px rgb(0 0 0 / 0.55), 0 12px 32px rgb(0 0 0 / 0.35)",
+      }}
     >
       <style>{SHELL_CSS}</style>
       <AppShell />

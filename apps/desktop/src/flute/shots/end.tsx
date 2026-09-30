@@ -1,18 +1,18 @@
 /**
- * The end card (VC-464). The wall of 175 hangs far back in the dark, out of
- * focus, every card dimmed but VC-239. In front of it the Volli mark builds
- * itself the way a board fills: three columns run down from the top line and
- * the orange Doing card lands in the middle one. "Volli 0.2", then "Out now"
- * and volli.app. Then the camera dives: through the mark, into the wall, and
- * arrives on VC-239 at exactly the pose and speed the hook opens with, so the
- * film loops without a seam (the rig is scripts/film/shots/end.mjs).
+ * The end card (VC-464). The film's only brand beat, on the app's shipped
+ * default theme (ember). The Volli mark builds itself the way a board fills:
+ * three columns run down from the top line and the orange Doing card lands in
+ * the middle one, while the working-ring motif ripples out behind it. Then the
+ * name, one line that tells a newcomer what Volli is, and where to get it.
+ * The camera flies through the mark on the way out, so the loop back to the
+ * hook is a cut on motion.
  *
  * The mark is `apps/desktop/build/icon-source.svg`'s "Doing Cursor" glyph,
  * drawn here from the same rects so each part can move on the scene clock.
  */
 import { ease, mix, progress } from "../kit/clock";
-import { FORMAT_SIZE, FrameLayer, useFilm, Vignette, type Format } from "../kit/film";
-import { Wall } from "../kit/wall";
+import { FrameLayer, useFilm, Vignette, type Format } from "../kit/film";
+import { Backdrop, useFilmTheme } from "../kit/world";
 
 const CREAM = "#F2EAE0";
 const ORANGE = "#E8652A";
@@ -37,14 +37,14 @@ const BEAT = {
   doingMs: 560,
   name: 700,
   nameMs: 620,
-  out: 1080,
+  tagline: 980,
+  taglineMs: 560,
+  out: 1260,
   outMs: 560,
-  leave: 2720,
-  through: 2780,
-  throughMs: 440,
-  wallWake: 2700,
-  wallWakeMs: 1000,
-  end: 3800,
+  leave: 3080,
+  through: 3140,
+  throughMs: 420,
+  end: 3600,
 };
 
 function Mark({ t, height }: { t: number; height: number }) {
@@ -131,6 +131,9 @@ function Lockup({ t, format }: { t: number; format: Format }) {
   const textOut = progress(t, BEAT.leave, BEAT.leave + 240, ease.outCubic);
   const name = progress(t, BEAT.name, BEAT.name + BEAT.nameMs, ease.outExpo);
   const out = progress(t, BEAT.out, BEAT.out + BEAT.outMs, ease.outCubic);
+  const tagline = progress(t, BEAT.tagline, BEAT.tagline + BEAT.taglineMs, ease.outCubic);
+  // The name lands thin and wide, then sets hard — the supers' own gesture.
+  const weight = progress(t, BEAT.name + 80, BEAT.name + BEAT.nameMs + 120, ease.outCubic);
   if (markOpacity <= 0) return null;
   return (
     <div
@@ -145,9 +148,25 @@ function Lockup({ t, format }: { t: number; format: Format }) {
     >
       <Mark t={t} height={markHeight} />
       <div className="film-end-name-mask" style={{ opacity: 1 - textOut }}>
-        <div className="film-end-name" style={{ transform: `translateY(${(1 - name) * 105}%)` }}>
+        <div
+          className="film-end-name"
+          style={{
+            transform: `translateY(${(1 - name) * 105}%)`,
+            fontWeight: Math.round(mix(220, 800, weight)),
+            fontStretch: `${mix(125, 110, weight)}%`,
+          }}
+        >
           Volli 0.2
         </div>
+      </div>
+      <div
+        className="film-end-tagline"
+        style={{
+          opacity: tagline * (1 - textOut),
+          transform: `translateY(${(1 - tagline) * 16}px)`,
+        }}
+      >
+        The workspace for parallel coding agents.
       </div>
       <div
         className="film-end-row"
@@ -156,7 +175,7 @@ function Lockup({ t, format }: { t: number; format: Format }) {
           transform: `translateY(${(1 - out) * 18}px)`,
         }}
       >
-        <span className="film-end-out">Out now</span>
+        <span className="film-end-out">Download for Mac</span>
         <span className="film-end-dot" />
         <span className="film-end-url">volli.app</span>
       </div>
@@ -165,16 +184,16 @@ function Lockup({ t, format }: { t: number; format: Format }) {
 }
 
 export function EndShot({ format }: { format: Format }) {
+  useFilmTheme("ember");
   const t = useFilm();
-  const size = FORMAT_SIZE[format];
-  // The wall wakes as the camera dives, and is exactly the hook's first frame
-  // (dim 0, vignette 0.45) by the last one.
-  const wake = progress(t, BEAT.wallWake, BEAT.wallWake + BEAT.wallWakeMs, ease.inOutCubic);
+  const portrait = format === "portrait";
+  // Rings and bloom centre on the mark, which sits above the lockup's middle.
+  const focus: [number, number] = portrait ? [0.5, 0.4] : [0.5, 0.33];
   return (
     <>
-      <Wall stageWidth={size.width} stageHeight={size.height} dim={mix(0.8, 0, wake)} />
+      <Backdrop t={t + 1800} theme="ember" focus={focus} />
       <FrameLayer format={format}>
-        <Vignette strength={mix(0.7, 0.45, wake)} />
+        <Vignette strength={0.5} />
         <Lockup t={t} format={format} />
       </FrameLayer>
     </>

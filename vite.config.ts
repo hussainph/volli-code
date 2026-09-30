@@ -34,7 +34,6 @@ const toolingIgnorePatterns = [
   "apps/desktop/src/flute/catalog.js",
   "apps/desktop/src/flute/ProjectPreview.jsx",
   "apps/desktop/src/flute/scenes/*.scene.json",
-  "apps/desktop/src/flute/kit/release-tickets.ts",
 ];
 
 export default defineConfig({

@@ -11,18 +11,24 @@ import recipe8 from "./scenes/island-tall.scene.json";
 import recipe9 from "./scenes/island-wide.scene.json";
 import recipe10 from "./scenes/limits-tall.scene.json";
 import recipe11 from "./scenes/limits-wide.scene.json";
-import recipe12 from "./scenes/models-tall.scene.json";
-import recipe13 from "./scenes/models-wide.scene.json";
-import recipe14 from "./scenes/palette-tall.scene.json";
-import recipe15 from "./scenes/palette-wide.scene.json";
-import recipe16 from "./scenes/picker-tall.scene.json";
-import recipe17 from "./scenes/picker-wide.scene.json";
-import recipe18 from "./scenes/rail-tall.scene.json";
-import recipe19 from "./scenes/rail-wide.scene.json";
-import recipe20 from "./scenes/scale-tall.scene.json";
-import recipe21 from "./scenes/scale-wide.scene.json";
-import recipe22 from "./scenes/split-tall.scene.json";
-import recipe23 from "./scenes/split-wide.scene.json";
+import recipe12 from "./scenes/mcp-tall.scene.json";
+import recipe13 from "./scenes/mcp-wide.scene.json";
+import recipe14 from "./scenes/models-tall.scene.json";
+import recipe15 from "./scenes/models-wide.scene.json";
+import recipe16 from "./scenes/palette-tall.scene.json";
+import recipe17 from "./scenes/palette-wide.scene.json";
+import recipe18 from "./scenes/peek-tall.scene.json";
+import recipe19 from "./scenes/peek-wide.scene.json";
+import recipe20 from "./scenes/picker-tall.scene.json";
+import recipe21 from "./scenes/picker-wide.scene.json";
+import recipe22 from "./scenes/rail-tall.scene.json";
+import recipe23 from "./scenes/rail-wide.scene.json";
+import recipe24 from "./scenes/scale-tall.scene.json";
+import recipe25 from "./scenes/scale-wide.scene.json";
+import recipe26 from "./scenes/sessions-tall.scene.json";
+import recipe27 from "./scenes/sessions-wide.scene.json";
+import recipe28 from "./scenes/split-tall.scene.json";
+import recipe29 from "./scenes/split-wide.scene.json";
 export const sceneModules = {
   "src/flute/scenes/armed-tall.scene.json": async () => ({default:recipe0}),
   "src/flute/scenes/armed-tall.tsx": () => import("./scenes/armed-tall"),
@@ -48,28 +54,40 @@ export const sceneModules = {
   "src/flute/scenes/limits-tall.tsx": () => import("./scenes/limits-tall"),
   "src/flute/scenes/limits-wide.scene.json": async () => ({default:recipe11}),
   "src/flute/scenes/limits-wide.tsx": () => import("./scenes/limits-wide"),
-  "src/flute/scenes/models-tall.scene.json": async () => ({default:recipe12}),
+  "src/flute/scenes/mcp-tall.scene.json": async () => ({default:recipe12}),
+  "src/flute/scenes/mcp-tall.tsx": () => import("./scenes/mcp-tall"),
+  "src/flute/scenes/mcp-wide.scene.json": async () => ({default:recipe13}),
+  "src/flute/scenes/mcp-wide.tsx": () => import("./scenes/mcp-wide"),
+  "src/flute/scenes/models-tall.scene.json": async () => ({default:recipe14}),
   "src/flute/scenes/models-tall.tsx": () => import("./scenes/models-tall"),
-  "src/flute/scenes/models-wide.scene.json": async () => ({default:recipe13}),
+  "src/flute/scenes/models-wide.scene.json": async () => ({default:recipe15}),
   "src/flute/scenes/models-wide.tsx": () => import("./scenes/models-wide"),
-  "src/flute/scenes/palette-tall.scene.json": async () => ({default:recipe14}),
+  "src/flute/scenes/palette-tall.scene.json": async () => ({default:recipe16}),
   "src/flute/scenes/palette-tall.tsx": () => import("./scenes/palette-tall"),
-  "src/flute/scenes/palette-wide.scene.json": async () => ({default:recipe15}),
+  "src/flute/scenes/palette-wide.scene.json": async () => ({default:recipe17}),
   "src/flute/scenes/palette-wide.tsx": () => import("./scenes/palette-wide"),
-  "src/flute/scenes/picker-tall.scene.json": async () => ({default:recipe16}),
+  "src/flute/scenes/peek-tall.scene.json": async () => ({default:recipe18}),
+  "src/flute/scenes/peek-tall.tsx": () => import("./scenes/peek-tall"),
+  "src/flute/scenes/peek-wide.scene.json": async () => ({default:recipe19}),
+  "src/flute/scenes/peek-wide.tsx": () => import("./scenes/peek-wide"),
+  "src/flute/scenes/picker-tall.scene.json": async () => ({default:recipe20}),
   "src/flute/scenes/picker-tall.tsx": () => import("./scenes/picker-tall"),
-  "src/flute/scenes/picker-wide.scene.json": async () => ({default:recipe17}),
+  "src/flute/scenes/picker-wide.scene.json": async () => ({default:recipe21}),
   "src/flute/scenes/picker-wide.tsx": () => import("./scenes/picker-wide"),
-  "src/flute/scenes/rail-tall.scene.json": async () => ({default:recipe18}),
+  "src/flute/scenes/rail-tall.scene.json": async () => ({default:recipe22}),
   "src/flute/scenes/rail-tall.tsx": () => import("./scenes/rail-tall"),
-  "src/flute/scenes/rail-wide.scene.json": async () => ({default:recipe19}),
+  "src/flute/scenes/rail-wide.scene.json": async () => ({default:recipe23}),
   "src/flute/scenes/rail-wide.tsx": () => import("./scenes/rail-wide"),
-  "src/flute/scenes/scale-tall.scene.json": async () => ({default:recipe20}),
+  "src/flute/scenes/scale-tall.scene.json": async () => ({default:recipe24}),
   "src/flute/scenes/scale-tall.tsx": () => import("./scenes/scale-tall"),
-  "src/flute/scenes/scale-wide.scene.json": async () => ({default:recipe21}),
+  "src/flute/scenes/scale-wide.scene.json": async () => ({default:recipe25}),
   "src/flute/scenes/scale-wide.tsx": () => import("./scenes/scale-wide"),
-  "src/flute/scenes/split-tall.scene.json": async () => ({default:recipe22}),
+  "src/flute/scenes/sessions-tall.scene.json": async () => ({default:recipe26}),
+  "src/flute/scenes/sessions-tall.tsx": () => import("./scenes/sessions-tall"),
+  "src/flute/scenes/sessions-wide.scene.json": async () => ({default:recipe27}),
+  "src/flute/scenes/sessions-wide.tsx": () => import("./scenes/sessions-wide"),
+  "src/flute/scenes/split-tall.scene.json": async () => ({default:recipe28}),
   "src/flute/scenes/split-tall.tsx": () => import("./scenes/split-tall"),
-  "src/flute/scenes/split-wide.scene.json": async () => ({default:recipe23}),
+  "src/flute/scenes/split-wide.scene.json": async () => ({default:recipe29}),
   "src/flute/scenes/split-wide.tsx": () => import("./scenes/split-wide"),
 };

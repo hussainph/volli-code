@@ -47,6 +47,7 @@ import {
   type Cue,
   type Format,
 } from "../kit/film";
+import { Backdrop, useFilmTheme } from "../kit/world";
 
 // ---- layout (world px; the rigs mirror these) --------------------------------
 
@@ -163,6 +164,7 @@ function Column({
 export const PICKER = { lift: 0, over: 820, option: 980, drop: 1760, duration: 2600 };
 
 export function PickerShot({ format }: { format: Format }) {
+  useFilmTheme("lagoon");
   const t = useFilm();
   const stage = FORMAT_SIZE[format];
   const dropped = t >= PICKER.drop;
@@ -184,7 +186,10 @@ export function PickerShot({ format }: { format: Format }) {
     {
       at: 220,
       until: 2480,
-      lines: ["Drop tickets in.", "Pick what runs."],
+      eyebrow: "New · Automations",
+      lines: ["Hand off work", "in one drag."],
+      weights: [320, 800],
+      accent: "drag.",
       size: "large",
       ...(format === "portrait" ? { place: "upper" as const } : {}),
     },
@@ -273,8 +278,9 @@ export function PickerShot({ format }: { format: Format }) {
           </div>
         }
       />
+      <Backdrop t={t} theme="lagoon" />
       <FrameLayer format={format}>
-        <Vignette strength={0.5} />
+        <Vignette strength={0.4} />
         <Supers cues={cues} t={t} format={format} />
       </FrameLayer>
     </>
@@ -357,6 +363,7 @@ function ArmedWindowsSurface({
 }
 
 export function ArmedShot({ format }: { format: Format }) {
+  useFilmTheme("lagoon");
   const t = useFilm();
   const stage = FORMAT_SIZE[format];
   useFilmWallClock(t, NOW);
@@ -369,7 +376,9 @@ export function ArmedShot({ format }: { format: Format }) {
     {
       at: 180,
       until: 2680,
-      lines: ["Save how", "work starts."],
+      lines: ["Agents start", "on their own."],
+      weights: [800, 320],
+      sub: "On a board move or a schedule.",
       size: "large",
       ...(format === "portrait" ? { place: "upper" as const } : {}),
     },
@@ -396,8 +405,9 @@ export function ArmedShot({ format }: { format: Format }) {
         ))}
       </Column>
       <ArmedWindowsSurface stage={stage} settled />
+      <Backdrop t={t} theme="lagoon" />
       <FrameLayer format={format}>
-        <Vignette strength={0.5} />
+        <Vignette strength={0.4} />
         <Supers cues={cues} t={t} format={format} />
       </FrameLayer>
     </>

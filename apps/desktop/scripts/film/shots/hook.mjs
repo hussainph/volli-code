@@ -1,63 +1,51 @@
 /**
- * 01 · The hook (src/flute/shots/hook.tsx). Frame 1: a macro on VC-239's
- * card, already dollying in (the end card arrives at the same speed — the
- * loop point). The dolly settles by 420ms, then the camera pulls back and
- * tilts to reveal the whole wall of 175, racking focus from the one card to
- * the many, and keeps drifting along the wall under the count.
+ * 01 · The hook (src/flute/shots/hook.tsx). A 1600×960 AppShell window centred
+ * on the origin; its sidebar's session rows sit in x ∈ [-790, -490], running
+ * from y ≈ -380 down the window.
+ *
+ * Frame 1: a tight oblique on the sidebar's live rows, already sweeping fast
+ * down the list. From ~900ms the camera pulls back and squares up to reveal
+ * the whole window floating in the aurora world, settled by ~2200ms, then
+ * drifts.
  */
 import { ease, mix, progress } from "../lib.mjs";
-import { HERO, MACRO, WALL_GUARD, WALL_NODES, macroNear } from "./wall-geometry.mjs";
 
-const WIDE = {
-  rotation: { rotateX: 34, rotateY: -32, rotateZ: 7 },
-  // A point near the wall's lower edge, held low-left of centre: the wall
-  // runs up and away to the right and off the frame, the void is lower-left.
-  target: [-300, 560, 0],
-  offset: [-160, 200],
-  near: -900,
-  drift: { x: 520, near: 160, rotateY: 5 },
-};
-const TALL = {
-  // The wall's near edge sits just above the count; the wall runs up the
-  // frame and away into the dark.
-  rotation: { rotateX: 34, rotateY: -16, rotateZ: 6 },
-  target: [-150, 760, 0],
-  offset: [60, 110],
-  near: 60,
-  drift: { x: 420, near: 90, rotateY: 4 },
+const RIGS = {
+  wide: {
+    start: { rot: [26, 30, -9], target: [-620, -170, 0], near: 800, offset: [0, 0] },
+    sweepY: 260,
+    end: { rot: [10, 16, -4], target: [60, 0, 0], near: -560, offset: [-300, -110] },
+  },
+  tall: {
+    start: { rot: [30, 22, -8], target: [-620, -170, 0], near: 800, offset: [0, 0] },
+    sweepY: 300,
+    end: { rot: [14, 12, -4], target: [0, 0, 0], near: -1000, offset: [0, -330] },
+  },
 };
 
 function hookRig(format) {
-  const macro = MACRO[format];
-  const end = format === "wide" ? WIDE : TALL;
+  const r = RIGS[format];
   return (t) => {
-    const pull = progress(t, MACRO.settleMs, 2750, ease.inOutCubic);
-    const drift = progress(t, 1900, 4200, ease.inOutSine);
-    const rotation = {
-      rotateX: mix(macro.rotation.rotateX, end.rotation.rotateX, pull),
-      rotateY: mix(macro.rotation.rotateY, end.rotation.rotateY, pull) + end.drift.rotateY * drift,
-      rotateZ: mix(macro.rotation.rotateZ, end.rotation.rotateZ, pull),
-    };
-    const target = [0, 1, 2].map((i) => mix(macro.target[i], end.target[i], pull));
-    target[0] += end.drift.x * drift;
-    const near =
-      t <= MACRO.settleMs
-        ? macroNear(format, t)
-        : mix(macroNear(format, MACRO.settleMs), end.near, pull) + end.drift.near * drift;
+    const sweep = progress(t, 0, 1300, ease.inOutSine);
+    const pull = progress(t, 800, 2250, ease.inOutCubic);
+    const drift = progress(t, 2000, 3000, ease.linear); // never settles: the last frame still moves
+    const sy = mix(r.start.target[1], r.sweepY, sweep);
     return {
-      rotation,
-      target,
-      near,
+      rotation: {
+        rotateX: mix(r.start.rot[0], r.end.rot[0], pull),
+        rotateY: mix(r.start.rot[1], r.end.rot[1], pull) - 5 * drift,
+        rotateZ: mix(r.start.rot[2], r.end.rot[2], pull),
+      },
+      target: [mix(r.start.target[0], r.end.target[0], pull), mix(sy, r.end.target[1], pull), 0],
+      near: mix(r.start.near, r.end.near, pull) - 80 * drift,
       offset: [
-        mix(macro.offset[0], end.offset[0], pull),
-        mix(macro.offset[1], end.offset[1], pull),
+        mix(r.start.offset[0], r.end.offset[0], pull),
+        mix(r.start.offset[1], r.end.offset[1], pull),
       ],
-      // Focus stays on the hero card as the wall opens up, then racks out to
-      // the wall's middle as the aperture closes down.
-      focus: mix(0, 0, pull),
-      fStop: mix(2.4, 7, progress(t, 900, 2900, ease.inOutCubic)),
+      focus: 0,
+      fStop: mix(2.8, 8, pull),
       focalLength: 60,
-      maxBlur: 9,
+      maxBlur: 8,
     };
   };
 }
@@ -65,11 +53,15 @@ function hookRig(format) {
 export const shot = {
   key: "hook",
   title: "Volli 0.2 — the hook",
-  description: "Macro on one real 0.2 ticket (VC-239), pull back to the wall of all 175.",
-  durationMs: 4200,
+  description: "Tight oblique sweep down dozens of live sessions, pull back to the whole app.",
+  durationMs: 3000,
   perspective: 1400,
-  nodes: WALL_NODES,
-  guard: WALL_GUARD,
+  nodes: [{ id: "window" }],
   rig: hookRig,
-  hero: HERO,
+  guard: [
+    [-800, -480, 0],
+    [800, -480, 0],
+    [-800, 480, 0],
+    [800, 480, 0],
+  ],
 };

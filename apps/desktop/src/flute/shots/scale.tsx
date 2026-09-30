@@ -145,7 +145,7 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 300,
       until: 3650,
-      lines: ["10,000 tickets.", "5.8s → 366ms."],
+      lines: ["Huge boards.", "Still instant."],
       size: "large",
       place: "lower-right",
     },
@@ -154,7 +154,7 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 300,
       until: 3650,
-      lines: ["10,000 tickets.", "5.8s → 366ms."],
+      lines: ["Huge boards.", "Still instant."],
       size: "large",
       place: "upper",
     },
