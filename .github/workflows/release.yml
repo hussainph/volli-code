@@ -27,10 +27,17 @@ name: Release
 # produces TWO release runs racing for the same release — see the header of
 # the pre-create step for what that race does.
 #
-# All signing/notarization/publish mechanics live in
+# All signing/notarization/staple mechanics live in
 # apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
-# workflow only supplies credentials, runs the dist pipeline with --publish,
-# and gates the result.
+# workflow supplies credentials, runs the dist pipeline with --publish never,
+# gates the result, and uploads the files itself once nothing is writing to
+# them any more. BUILD AND UPLOAD ARE DELIBERATELY TWO STEPS: electron-builder
+# publishes an artifact as soon as it exists, which means `--publish always`
+# streamed the dmg WHILE the staple hook rewrote that same file in place. The
+# 2026-09-30 run that cut v0.2.0 published a dmg with its 512-byte UDIF trailer
+# clobbered — hdiutil could not open it — and the gate passed anyway, because
+# it validates the local file, never the uploaded one. See the package and
+# publish steps for the shape, and keep them adjacent.
 #
 # The signing certificate is imported into a workflow-owned keychain HERE and
 # handed to electron-builder as CSC_KEYCHAIN, not as CSC_LINK. Since the
@@ -74,14 +81,13 @@ name: Release
 #     v0.1.0-canary.3 run.)
 #
 # The release itself is pre-created in a workflow step rather than left to
-# electron-builder: electron-publish races its own concurrent publisher
-# instances on release creation, which produced duplicate drafts with the
-# artifacts split across them (v0.1.0-canary.3) and 422 already_exists
-# failures for live prereleases (v0.1.0-canary.4). With the release seeded,
-# every publisher instance finds and reuses it and only uploads assets.
-# (Prerelease reuse has a 2h published_at window in electron-publish —
-# re-running a failed job later than that needs the release + tag deleted
-# and the tag re-pushed anyway.)
+# electron-builder, because the publish step uploads into an existing release
+# instead of creating one. It is also what stopped electron-publish from
+# racing its own publisher instances on release creation, which produced
+# duplicate drafts with the artifacts split across them (v0.1.0-canary.3) and
+# 422 already_exists failures for live prereleases (v0.1.0-canary.4).
+# Re-running a job needs no special handling now: the publish step replaces the
+# assets it owns and removes any it does not.
 #   - Stable: bare tags (e.g. v0.2.0). These land as drafts: edit the release
 #     notes, then publish the draft to put it on the updater feed
 #     (electron-updater ignores draft releases).
@@ -115,9 +121,9 @@ on:
         default: true
 
 permissions:
-  # electron-builder creates the GitHub Release and uploads dmg + zip +
-  # latest-mac.yml using GH_TOKEN. `prepare` additionally pushes the release
-  # commit and tag to main with it.
+  # The publish step uploads dmg + zip + latest-mac.yml to the GitHub Release
+  # using GH_TOKEN. `prepare` additionally pushes the release commit and tag to
+  # main with it.
   contents: write
 
 jobs:
@@ -400,18 +406,22 @@ jobs:
       # finds the Developer ID Application identity in CSC_KEYCHAIN (set by
       # the step above; CSC_LINK deliberately absent — see the header), signs
       # with hardened runtime, notarizes the .app (mac.notarize) and the dmg
-      # (afterAllArtifactBuild staple hook), and uploads dmg + zip +
-      # latest-mac.yml to the GitHub Release for this tag.
-      - name: Package, sign, notarize, publish
+      # (afterAllArtifactBuild staple hook), and writes latest-mac.yml.
+      #
+      # --publish never is load-bearing, not caution — see the header. Upload
+      # is the separate step below, after the gate. latest-mac.yml is still
+      # written here: PublishManager builds the update-info file whenever a
+      # publish provider is configured, independently of the --publish mode
+      # (artifactCreatedWithoutExplicitPublishConfig in app-builder-lib).
+      - name: Package, sign, notarize, staple
         working-directory: apps/desktop
         env:
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # vp exec (ci.yml's pattern for workspace binaries) resolves
         # electron-builder from the install's bin dirs regardless of hoisting.
-        run: vp exec electron-builder --publish always
+        run: vp exec electron-builder --publish never
 
       # mac.notarize and the staple hook both degrade to a skip when
       # credentials are absent or wrong-shaped, so trust nothing: prove the
@@ -427,8 +437,13 @@ jobs:
           [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg, found: ${dmgs[*]:-none}"; exit 1; }
           [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one auto-update zip, found: ${zips[*]:-none}"; exit 1; }
           [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
+          # stapler validate reads the ticket, not the image; a dmg whose UDIF
+          # trailer was clobbered passes it. hdiutil is what proves the file is
+          # a disk image at all, which is the failure this gate missed once.
           echo "stapler validate: ${dmgs[0]}"
           xcrun stapler validate "${dmgs[0]}"
+          echo "hdiutil verify: ${dmgs[0]}"
+          hdiutil verify "${dmgs[0]}"
           app="mac-arm64/Volli Code.app"
           [ -d "$app" ] || { echo "::error::$app missing"; exit 1; }
           spctl -a -vv --type execute "$app" 2>&1 | tee spctl-assessment.txt
@@ -436,6 +451,56 @@ jobs:
             echo "::error::app is not notarized — spctl did not report 'Notarized Developer ID'"
             exit 1
           fi
+
+      # Uploading is ours rather than electron-builder's (see the package
+      # step). By now the gate has proved the dmg is a valid, stapled image and
+      # nothing is still writing to apps/desktop/release.
+      - name: Publish artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd apps/desktop/release
+          shopt -s nullglob
+
+          # electron-builder names the local mac artifacts after productName
+          # ("Volli Code-...") but writes latest-mac.yml with the sanitized
+          # "Volli-Code-..." url, and GitHub turns a space in an asset name into
+          # a dot. Rename to the dash form so the asset name matches the url the
+          # updater reads. It also retires the "Volli.Code-...mac.zip.blockmap"
+          # spelling, which is what made publishing a second time into an
+          # existing release 422 with already_exists: electron-builder's own
+          # overwrite matches asset names exactly, so it could not delete the
+          # dotted one.
+          for f in *" "*; do mv "$f" "${f// /-}"; done
+
+          dmgs=(*.dmg); dmgMaps=(*.dmg.blockmap)
+          zips=(*-mac.zip); zipMaps=(*-mac.zip.blockmap)
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg, found: ${dmgs[*]:-none}"; exit 1; }
+          [ "${#dmgMaps[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg blockmap, found: ${dmgMaps[*]:-none}"; exit 1; }
+          [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one auto-update zip, found: ${zips[*]:-none}"; exit 1; }
+          [ "${#zipMaps[@]}" -eq 1 ] || { echo "::error::expected exactly one zip blockmap, found: ${zipMaps[*]:-none}"; exit 1; }
+          [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
+          files=("${dmgs[0]}" "${dmgMaps[0]}" "${zips[0]}" "${zipMaps[0]}" latest-mac.yml)
+
+          # Drop anything already on this release that is not part of the set
+          # about to go up, so re-running a job — or refreshing a draft whose
+          # assets predate the rename above — replaces assets instead of
+          # colliding with them.
+          while read -r name; do
+            [ -n "$name" ] || continue
+            keep=false
+            for f in "${files[@]}"; do
+              if [ "$name" = "$f" ]; then keep=true; break; fi
+            done
+            if [ "$keep" = false ]; then
+              echo "removing asset not in this build: $name"
+              gh release delete-asset "$REF_NAME" "$name" --yes
+            fi
+          done < <(gh release view "$REF_NAME" --json assets -q '.assets[].name')
+
+          gh release upload "$REF_NAME" "${files[@]}" --clobber
+          echo "published to $REF_NAME: ${files[*]}"
 
       - name: Scrub credentials
         if: always()
