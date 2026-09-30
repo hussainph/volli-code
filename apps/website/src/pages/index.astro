@@ -1,365 +1,216 @@
 ---
 /**
- * Public homepage: the whole product first, then the 0.2 Automations release.
+ * volli.app (BRAND.md §9): the product in its world, an essay, the current
+ * release told as chapters, and the close.
  *
- * The interactive board demo gives the core workflow a product surface; the
- * release section explains how a saved Automation becomes a fresh Run and
- * keeps the control boundaries visible.
+ * The release lives in the chapters and nowhere else, so the next release
+ * replaces them and leaves the rest of the page alone.
  */
-import "@fontsource-variable/mona-sans/wght.css";
-import AutomationStoryboard from "../components/AutomationStoryboard.astro";
-import FeatureGlyph from "../components/FeatureGlyph.astro";
+import armedTall from "../assets/stills/armed-tall.webp";
+import armedWide from "../assets/stills/armed-wide.webp";
+import cursorTall from "../assets/stills/cursor-tall.webp";
+import cursorWide from "../assets/stills/cursor-wide.webp";
+import islandTall from "../assets/stills/island-tall.webp";
+import islandWide from "../assets/stills/island-wide.webp";
+import limitsTall from "../assets/stills/limits-tall.webp";
+import limitsWide from "../assets/stills/limits-wide.webp";
+import mcpTall from "../assets/stills/mcp-tall.webp";
+import mcpWide from "../assets/stills/mcp-wide.webp";
+import modelsTall from "../assets/stills/models-tall.webp";
+import modelsWide from "../assets/stills/models-wide.webp";
+import splitTall from "../assets/stills/split-tall.webp";
+import splitWide from "../assets/stills/split-wide.webp";
+import Chapter from "../components/Chapter.astro";
+import Mark from "../components/Mark.astro";
+import Super from "../components/Super.astro";
 import VolliDemo from "../components/VolliDemo";
-import "../styles/global.css";
-import "../styles/home-0-2.css";
+import World from "../components/World.astro";
+import { DOCS_URL, REPOSITORY_URL } from "../data/links";
+import Base from "../layouts/Base.astro";
 
-const repositoryUrl = "https://github.com/hussainph/volli-code";
-const releasesUrl = `${repositoryUrl}/releases`;
-const issuesUrl = `${repositoryUrl}/issues`;
-const docsUrl = "https://docs.volli.app";
-const automationsDocsUrl = `${docsUrl}/guides/automations/`;
 const description =
-  "A local-first macOS workspace for planning parallel coding work, running coding agents, and reviewing every change — now with Automations for repeatable starts.";
-
-// What the workspace is made of. The copy follows the product's established
-// workflow and adds the agent tool surface, Skills, the `volli` CLI, and Change
-// Set review described in CONTEXT.md.
-const workspace = [
-  {
-    title: "Turn ideas into tasks",
-    description:
-      "Start with a rough goal. Create focused tasks yourself, or ask an agent to help break the work down.",
-    glyph: "phases" as const,
-  },
-  {
-    title: "Run agents in parallel",
-    description:
-      "Each ticket gets its own worktree and branch. Run independent tickets in parallel without touching the main checkout.",
-    glyph: "parallel" as const,
-  },
-  {
-    title: "Real tools for agents",
-    description:
-      "An agent reads, edits, and runs commands in its worktree, and uses the volli CLI to read the board, comment, and move tickets.",
-    glyph: "agents" as const,
-  },
-  {
-    title: "Review every change",
-    description:
-      "Inspect a ticket’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
-    glyph: "review" as const,
-  },
-  {
-    title: "Come back any time",
-    description:
-      "Leave, restart Volli, and come back to the same chat with its history intact.",
-    glyph: "context" as const,
-  },
-  {
-    title: "Keep your TUI workflow",
-    description:
-      "Open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal in the same worktree whenever you want to drive it yourself.",
-    glyph: "harnesses" as const,
-  },
-];
+  "Volli is a local-first Mac workspace for running coding agents in parallel: plan on a board, hand each ticket to an agent in its own worktree, and review every change.";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content={description} />
-    <link rel="canonical" href="https://volli.app/" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli | The workspace for parallel coding agents" />
-    <meta property="og:description" content={description} />
-    <meta property="og:image" content="https://volli.app/og.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Volli — the workspace for parallel coding agents" />
-    <meta property="og:site_name" content="Volli" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Volli | The workspace for parallel coding agents" />
-    <meta name="twitter:description" content={description} />
-    <meta name="twitter:image" content="https://volli.app/og.png" />
-    <meta name="theme-color" content="#0a0a0a" />
-    <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli | The workspace for parallel coding agents</title>
-  </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-
-    <header class="site-header">
-      <a class="footer-brand site-brand" href="#top" aria-label="Volli home">
-        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
-        <span>Volli</span>
-      </a>
-      <nav aria-label="Primary">
-        <a href="#product">Product</a>
-        <a href="#automations">Automations</a>
-        <a href={docsUrl}>Docs</a>
-        <a href={repositoryUrl}>GitHub</a>
-        <a class="site-nav-cta" href="/download/">Download</a>
-      </nav>
-    </header>
-
-    {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
-    <main id="main" tabindex="-1">
-      {/* The durable promise. Category, maturity and platform are read before
-          anything else on the page. */}
-      <section class="hero" id="top">
-        <span class="alpha-pill">Alpha · Apple silicon</span>
-        {/* Each clause is masked so it can rise into place once on load; the
-            text stays one node per clause and reads as one sentence. */}
-        <h1 class="hero-headline">
-          <span class="hero-clause"><span>The workspace for</span></span>{" "}
-          <span class="hero-clause"><span>parallel coding agents.</span></span>
-        </h1>
-        <p class="hero-lede">
-          Coding agents work your tickets in parallel, each in its own worktree. You review every
-          change. Local-first, on your Mac.
-        </p>
-
-        <div class="cta-row hero-cta">
-          <a class="cta cta-primary" href="/download/">
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
-              />
-            </svg>
-            <span>Download for Apple silicon</span>
-          </a>
-          <a class="cta cta-secondary" href="#automations">
-            <svg viewBox="0 0 256 256" width="17" height="17" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="20"
-                d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
-              />
-            </svg>
-            <span>See what’s new in 0.2</span>
-          </a>
+<Base
+  title="Volli | The workspace for parallel coding agents"
+  description={description}
+  path="/"
+>
+  {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
+  <main id="main" tabindex="-1">
+    {/* The promise, one line, and the one thing to press. Left-set, beside
+        the picture rather than stacked over it. */}
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-head">
+        <Super
+          size="hero"
+          level={1}
+          id="hero-title"
+          beats={[{ text: "The workspace for" }, { text: "parallel coding agents.", bold: true }]}
+        />
+        <div class="hero-action">
+          <a class="button" href="/download/">Download for Mac</a>
+          <p class="hero-note">Alpha · Apple silicon</p>
         </div>
+      </div>
 
-        <p class="hero-alpha-note">
-          <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
-          <a href={`${docsUrl}/start/install/`}>Install guide</a>
-          <a href={releasesUrl}>Release notes</a>
-        </p>
-      </section>
-
-      {/* The product proof: the same interactive board as the live page. Drag
-          a ticket and a Session opens — the loop everything else builds on. */}
-      <section class="hero-shell" aria-label="Volli product preview">
+      {/* The product in its world: the same interactive board the first site
+          opened on. Drag a ticket and its chat opens. */}
+      <div class="hero-demo">
         <VolliDemo client:load />
-      </section>
+      </div>
+      <p class="hero-caption">It’s live — drag a ticket, or open one.</p>
+    </section>
 
-      {/* What the workspace is made of. The board and the worktrees are the
-          product; Automations, below, are one way to start it. */}
-      <section class="workspace" id="product" aria-labelledby="workspace-title">
-        <div class="section-head">
-          <h2 id="workspace-title">One board. A worktree per ticket.</h2>
-          <p>
-            Each ticket has a brief, a chat you can come back to, and changes to review.
-          </p>
-        </div>
-        <ol class="workspace-grid">
-          {
-            workspace.map((item, index) => (
-              <li class="workspace-item">
-                <FeatureGlyph kind={item.glyph} />
-                <span class="workspace-index">0{index + 1}</span>
-                <h3>{item.title}</h3>
-                <p>{item.description}</p>
-              </li>
-            ))
-          }
-        </ol>
-      </section>
-
-      {/* New in 0.2. The version lives here and nowhere else, so the product
-          does not read as a scheduler once 0.3 ships. One section: the
-          storyboard (§6.3), the three ways a Run starts (§7.1 step 5), and the
-          control facts (§1.4) folded into those three lines rather than listed
-          twice. */}
-      <section class="release" id="automations" aria-labelledby="release-title">
-        <div class="section-head" data-release-head>
-          <span class="release-version">
-            <svg viewBox="0 0 256 256" width="14" height="14" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="22"
-                d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
-              />
-            </svg>
-            New in 0.2
-          </span>
-          <h2 id="release-title">Save how work starts.</h2>
-          <p>
-            Save the Instructions, Trigger, and Runtime once. Run an Automation by hand, arm a board
-            column, or put it on a schedule. Every Run opens a fresh Session.
-          </p>
-          <p>
-            <a href={`${docsUrl}/releases/whats-new-0-2/`}>Read what's new in 0.2 in the Volli Code docs.</a>
-          </p>
-        </div>
-
-        <AutomationStoryboard />
-
-        {/* The three ways a run starts, as three lines. Each carries the
-            control fact that matters for that trigger (§1.4). */}
-        <ul class="ways-list">
-          <li>
-            <b>By hand</b>
-            <span>
-              From the Automations page, a ticket, a board card, or the command palette. It stays
-              available by hand even when automatic triggering is switched off. <strong>Run once</strong>
-              {" "}sends one-time Instructions without saving an Automation.
-            </span>
-          </li>
-          <li>
-            <b>Ticket enters</b>
-            <span>
-              Enable it on this Mac, then arm one Automation per column. Only a deliberate move — a
-              drag, a status change, or a volli CLI move — fires it. Tickets already there are left
-              alone, and the move keeps a single Cancel window.
-            </span>
-          </li>
-          <li>
-            <b>On a schedule</b>
-            <span>
-              Hourly, Every day, Mon–Fri, or Weekly, in your time zone, while Volli is open. A
-              Ticket enters Trigger starts a Ticket Session; a schedule starts a Board Session. Skips
-              are recorded with a reason, never replayed.
-            </span>
-          </li>
-        </ul>
-      </section>
-
-      {/* One place for the trust facts the download page and the docs
-          currently split between them (§3.5). */}
-      <section class="trust" aria-labelledby="trust-title">
-        <div class="section-head">
-          <h2 id="trust-title">Local-first, by construction</h2>
-        </div>
-        <div class="trust-grid">
-          <article class="trust-item">
-            <h3>Your work stays on your Mac</h3>
-            <p>
-              Projects, tickets, chats, and automations — including their switches on this Mac — live
-              in local storage. Each ticket’s worktree is an ordinary Git checkout on your disk. Volli
-              itself needs no account.
-            </p>
-          </article>
-          <article class="trust-item">
-            <h3>Your models, your provider</h3>
-            <p>
-              Model requests go to the provider and account you configure in{" "}
-              <a href={`${docsUrl}/guides/settings/`}>Settings → Models</a>. An Automation’s Runtime
-              chooses its model or a named default tier.
-            </p>
-          </article>
-          <article class="trust-item">
-            <h3>Open source, Apache-2.0</h3>
-            <p>
-              Read the source or report a problem. The alpha is available from{" "}
-              <a href={releasesUrl}>GitHub Releases</a> for Apple silicon Macs.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      {/* The closing routes. */}
-      <section class="closing" aria-labelledby="closing-title">
-        <h2 id="closing-title">Try the alpha</h2>
+    {/* The essay (BRAND.md §3): the one place the page talks at length. */}
+    <section class="essay" aria-labelledby="essay-title">
+      <div class="essay-lockup">
+        <Mark size={72} />
+        <h2 class="essay-name" id="essay-title">Volli</h2>
+        <p class="essay-version">0.2 · alpha</p>
+      </div>
+      <div class="essay-body">
         <p>
-          Apple silicon, macOS 12 or later. Report the problems you find.
+          Coding agents got good. Good enough that the hard part is no longer one agent. It’s six of
+          them, each halfway through something, each wanting you at a different moment.
         </p>
-        <div class="cta-row closing-cta">
-          <a class="cta cta-primary" href="/download/">
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
-              />
-            </svg>
-            <span>Download for Apple silicon</span>
-          </a>
-          <a class="cta cta-secondary" href={automationsDocsUrl}>
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M4 4.6c0-.6.5-1.1 1.1-1.1h4.3c1.1 0 2.1.5 2.6 1.4.6-.9 1.5-1.4 2.6-1.4h4.3c.6 0 1.1.5 1.1 1.1v13c0 .6-.5 1.1-1.1 1.1h-4.3c-.9 0-1.7.4-2.2 1.1a.9.9 0 0 1-1.5 0 2.6 2.6 0 0 0-2.2-1.1H5.1c-.6 0-1.1-.5-1.1-1.1v-13Zm7.1 12.2V6.6c0-.7-.6-1.3-1.3-1.3H5.8v11h3.6c.6 0 1.2.2 1.7.5Zm1.8 0c.5-.3 1.1-.5 1.7-.5h3.6v-11h-4c-.7 0-1.3.6-1.3 1.3v10.2Z"
-              />
-            </svg>
-            <span>Read the docs</span>
-          </a>
-          <a class="cta cta-secondary" href={repositoryUrl}>
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.9 10.9 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.07.79 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"
-              />
-            </svg>
-            <span>View source</span>
-          </a>
+        <p>
+          Volli is a workspace for that. Plan on a board. Hand a ticket to an agent, and it works in
+          its own Git worktree on its own branch, out of your checkout and out of the others’ way.
+          You can see which agents are working and which are waiting on you. When one is done, you
+          review the change and decide what ships.
+        </p>
+        <p>
+          Bring the models and accounts you already pay for. And when you would rather drive
+          yourself, Claude Code, Codex, or any terminal tool runs right beside the chat, in the same
+          worktree.
+        </p>
+        <p>
+          It stays yours. Your projects and history live on your Mac, there is no Volli account,
+          and the source is open under Apache-2.0.
+        </p>
+        <p>0.2 is the release where agents start on their own.</p>
+        <div class="essay-actions">
+          <a class="button" href="/download/">Download for Mac</a>
+          <a class="link-quiet" href={DOCS_URL}>Read the docs <span aria-hidden="true">→</span></a>
+          <a class="link-quiet" href={REPOSITORY_URL}
+            >Source on GitHub <span aria-hidden="true">→</span></a
+          >
         </div>
-        <p class="closing-note">
-          <a href={issuesUrl}>Report a problem</a>
-          <a href={`${repositoryUrl}/security/policy`}>Security</a>
-        </p>
-      </section>
-    </main>
+      </div>
+    </section>
 
-    <footer>
-      <a class="footer-brand" href="#top" aria-label="Volli home">
-        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
-        <span>Volli</span>
-      </a>
-      <nav aria-label="Footer">
-        <a href="/download/">Download</a>
-        <a href="#product">Product</a>
-        <a href="#automations">Automations</a>
-        <a href={docsUrl}>Docs</a>
-        <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
-        <a href={repositoryUrl}>GitHub</a>
-        <a href={releasesUrl}>Releases</a>
-        <a href={`${repositoryUrl}/security/policy`}>Security</a>
-        {/* The OFL notices for the fonts this site self-hosts, emitted by
-            src/pages/licenses.txt.ts. Linked so the notice is reachable, which
-            is what redistributing font software asks of us. */}
-        <a href="/licenses.txt">Licenses</a>
-        <a href={issuesUrl}>Feedback</a>
-      </nav>
-    </footer>
+    {/* The release, as the film tells it: one chapter per headline, each in
+        its own world. */}
+    <section class="release" id="new" aria-labelledby="release-title">
+      <header class="release-head">
+        <h2 id="release-title">New in 0.2</h2>
+        <a class="link-quiet" href={`${DOCS_URL}/releases/whats-new-0-2/`}
+          >Everything in 0.2 <span aria-hidden="true">→</span></a
+        >
+      </header>
 
-    <script>
-      // One decoration, not load-bearing: the beam runs once when the release
-      // section's head is on screen. It stays off under prefers-reduced-motion,
-      // and the page reads the same without it.
-      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      <Chapter
+        id="automations"
+        world="lagoon"
+        wide={armedWide}
+        tall={armedTall}
+        alt="Three tickets land in an armed Doing column; each shows an Implement countdown with a Cancel button."
+        eyebrow="Automations"
+        beats={[{ text: "Agents start", bold: true }, { text: "on their own." }]}
+        sub="Save how work starts. Run it by hand, when a ticket enters a column, or on a schedule."
+        place="bottom-left"
+        focus={[0.7, 0.45]}
+      />
 
-      const releaseHead = document.querySelector<HTMLElement>("[data-release-head]");
-      if (releaseHead && !reducedMotion && "IntersectionObserver" in window) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            if (!entries.some((entry) => entry.isIntersecting)) return;
-            releaseHead.classList.add("is-live");
-            observer.disconnect();
-          },
-          { threshold: 0.6 },
-        );
-        observer.observe(releaseHead);
-      }
-    </script>
-  </body>
-</html>
+      <Chapter
+        id="activity"
+        world="cobalt"
+        wide={islandWide}
+        tall={islandTall}
+        alt="The activity island opened into layers: the agent's plan, its subagents, background shells and browser tabs."
+        eyebrow="Activity"
+        beats={[{ text: "See everything", bold: true }, { text: "your agent does." }]}
+        sub="Its plan, subagents, shells and browser tabs, one glance above the composer."
+        place="bottom-left"
+        focus={[0.72, 0.4]}
+      />
+
+      <Chapter
+        id="browser"
+        world="aurora"
+        wide={cursorWide}
+        tall={cursorTall}
+        alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
+        eyebrow="Browser tabs"
+        beats={[{ text: "Share a browser", bold: true }, { text: "with your agent." }]}
+        sub="Watch every click it makes, and take the tab back whenever you like."
+        place="bottom-right"
+        focus={[0.3, 0.45]}
+      />
+
+      <Chapter
+        id="split"
+        world="rose"
+        wide={splitWide}
+        tall={splitTall}
+        alt="A split view: a terminal running tests beside a chat and its sessions."
+        eyebrow="Split view"
+        beats={[{ text: "Chats, browsers, terminals.", bold: true }, { text: "Side by side." }]}
+        place="bottom-right"
+        focus={[0.4, 0.4]}
+      />
+
+      <div class="montage">
+        <Chapter
+          id="limits"
+          size="small"
+          world="gold"
+          wide={limitsWide}
+          tall={limitsTall}
+          alt="The usage limits popover: session and weekly windows with time left until they reset."
+          beats={[{ text: "Your limits," }, { text: "always in view.", bold: true }]}
+          place="top-left"
+        />
+        <Chapter
+          id="models"
+          size="small"
+          world="lime"
+          wide={modelsWide}
+          tall={modelsTall}
+          alt="Default models for board chats, ticket sessions, and the Fast, Deep and Visual tiers."
+          beats={[{ text: "A model for" }, { text: "every subagent.", bold: true }]}
+          place="top-left"
+        />
+        <Chapter
+          id="mcp"
+          size="small"
+          world="cobalt"
+          wide={mcpWide}
+          tall={mcpTall}
+          alt="Settings, MCP servers: four servers, their tools, and their status."
+          beats={[{ text: "Plug in" }, { text: "any MCP server.", bold: true }]}
+          place="top-left"
+        />
+      </div>
+    </section>
+
+    {/* The close: the film's end card, as a page. */}
+    <World as="section" world="ember" class="close" focus={[0.5, 0.42]} aria-labelledby="close-title">
+      <div class="close-inner" data-reveal>
+        <Mark size={132} build />
+        <Super
+          size="hero"
+          id="close-title"
+          beats={[{ text: "Volli 0.2", bold: true }]}
+          sub="The workspace for parallel coding agents."
+        />
+        <div class="close-actions">
+          <a class="button" href="/download/">Download for Mac</a>
+          <a class="link-quiet" href={DOCS_URL}>Read the docs <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </World>
+  </main>
+</Base>

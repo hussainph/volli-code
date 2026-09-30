@@ -1,0 +1,908 @@
+/*
+ * volli.app — the whole stylesheet (BRAND.md).
+ *
+ * One night, one ink, one ember; colour comes from the worlds, never from the
+ * chrome. The component vocabulary is closed: World, Window, Super, Essay,
+ * Button, Header/Footer. Anything else is argued in BRAND.md first.
+ */
+
+:root {
+  color-scheme: dark;
+  --night: #07070a;
+  --ink: #f5f2ee;
+  --ink-2: rgb(245 242 238 / 0.64);
+  --ink-3: rgb(245 242 238 / 0.42);
+  --hairline: rgb(245 242 238 / 0.1);
+  --ember: #e8652a;
+  --ember-hi: #f2773f;
+  --ember-ink: #1c0b03;
+
+  --sans: "Mona Sans Variable", "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono", monospace;
+
+  --page-max: 1376px;
+  --gutter: clamp(16px, 3.2vw, 40px);
+  --radius-world: clamp(18px, 2vw, 28px);
+  --reel-gap: clamp(12px, 1.6vw, 24px);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  font-family: var(--sans);
+  font-synthesis: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--night);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: var(--night);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ember-hi);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+main:focus {
+  outline: none;
+}
+
+p,
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  top: 12px;
+  left: 12px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--night);
+  font-size: 14px;
+  font-weight: 560;
+  transform: translateY(-200%);
+  transition: transform 180ms var(--ease-out);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* ─── Header / Footer ─────────────────────────────────────────────────── */
+
+.site-header,
+.site-footer,
+main > section,
+.page {
+  width: min(100% - 2 * var(--gutter), var(--page-max));
+  margin-inline: auto;
+}
+
+.site-header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 640;
+  font-stretch: 104%;
+  letter-spacing: -0.02em;
+}
+
+.brand .mark {
+  display: block;
+}
+
+.site-header nav,
+.site-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.site-header nav {
+  gap: clamp(18px, 2.4vw, 32px);
+}
+
+.site-header nav a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--ink-2);
+  font-size: 14.5px;
+  font-weight: 480;
+  transition: color 160ms ease;
+}
+
+.site-header nav a:hover,
+.site-header .site-header-download {
+  color: var(--ink);
+}
+
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 72px 0 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px 40px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.site-footer .brand {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.site-footer nav {
+  gap: 8px 24px;
+  margin-inline-start: auto;
+}
+
+.site-footer nav a {
+  transition: color 160ms ease;
+}
+
+.site-footer nav a:hover {
+  color: var(--ink);
+}
+
+.site-footer-note {
+  flex-basis: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* ─── Button ──────────────────────────────────────────────────────────── */
+
+.button {
+  display: inline-flex;
+  min-height: 48px;
+  padding: 0 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--ember);
+  color: var(--ember-ink);
+  font-size: 15.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.22) inset,
+    0 10px 30px -10px rgb(232 101 42 / 0.6);
+  transition:
+    background-color 160ms ease,
+    transform 160ms var(--ease-out);
+}
+
+.button:hover {
+  background: var(--ember-hi);
+}
+
+.button:active {
+  transform: scale(0.97);
+}
+
+.link-quiet {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+
+.link-quiet span {
+  transition: transform 200ms var(--ease-out);
+}
+
+.link-quiet:hover {
+  color: var(--ink);
+}
+
+.link-quiet:hover span {
+  transform: translateX(3px);
+}
+
+/* ─── Super ───────────────────────────────────────────────────────────── */
+
+.super-eyebrow {
+  margin-bottom: 0.9em;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.super-title {
+  font-size: var(--super-size);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.super-beat {
+  display: block;
+  /* Room for descenders inside the clip the beat rises through. */
+  padding-bottom: 0.1em;
+  margin-bottom: -0.1em;
+  overflow: hidden;
+}
+
+.super-beat > span {
+  display: inline-block;
+}
+
+.super-beat--bold {
+  font-weight: 780;
+  font-stretch: 108%;
+  letter-spacing: -0.04em;
+}
+
+.super-sub {
+  max-width: 30em;
+  margin-top: 1em;
+  color: var(--ink-2);
+  font-size: var(--super-sub-size, 17px);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.super--hero {
+  --super-size: clamp(42px, 6.2vw, 92px);
+  --super-sub-size: clamp(17px, 1.5vw, 20px);
+}
+
+.super--chapter {
+  --super-size: clamp(32px, 4.4vw, 66px);
+  --super-sub-size: clamp(15px, 1.25vw, 18px);
+}
+
+.super--small {
+  --super-size: clamp(26px, 2.4vw, 36px);
+}
+
+/* The one entrance: each beat rises through its own clip, a beat apart. */
+.reveal-ready [data-reveal] .super-beat > span {
+  transform: translateY(105%);
+  transition: transform 900ms var(--ease-out);
+  transition-delay: calc(var(--beat) * 110ms);
+}
+
+.reveal-ready [data-reveal] .super-eyebrow,
+.reveal-ready [data-reveal] .super-sub {
+  opacity: 0;
+  transition: opacity 700ms ease 260ms;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat > span {
+  transform: none;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-eyebrow,
+.reveal-ready [data-reveal].is-revealed .super-sub {
+  opacity: 1;
+}
+
+/* ─── Hero ────────────────────────────────────────────────────────────── */
+
+.hero {
+  padding-top: clamp(28px, 5vh, 64px);
+}
+
+.hero-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px 48px;
+}
+
+.hero-action {
+  display: flex;
+  padding-bottom: 6px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.hero-note,
+.hero-caption {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+
+.hero-demo {
+  margin-top: clamp(28px, 4vw, 48px);
+}
+
+.hero-demo .volli-demo {
+  height: clamp(460px, 42vw, 620px);
+  border: 0;
+  border-radius: var(--radius-world);
+  box-shadow: none;
+}
+
+.hero-caption {
+  margin-top: 14px;
+  text-align: center;
+}
+
+/* ─── Essay ───────────────────────────────────────────────────────────── */
+
+.essay {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 48px clamp(40px, 6vw, 96px);
+  padding-block: clamp(96px, 14vw, 200px);
+  align-items: start;
+}
+
+.essay-lockup {
+  position: sticky;
+  top: 48px;
+  display: grid;
+  justify-items: start;
+  gap: 20px;
+}
+
+.essay-name {
+  font-size: clamp(64px, 8vw, 120px);
+  font-weight: 800;
+  font-stretch: 110%;
+  line-height: 0.9;
+  letter-spacing: -0.05em;
+}
+
+.essay-version {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.essay-body {
+  display: grid;
+  max-width: 34em;
+  gap: 1.1em;
+  font-size: clamp(19px, 1.65vw, 23px);
+  font-weight: 360;
+  line-height: 1.55;
+  letter-spacing: -0.008em;
+  text-wrap: pretty;
+}
+
+.essay-body > p:first-child {
+  color: var(--ink);
+}
+
+.essay-body > p {
+  color: rgb(245 242 238 / 0.82);
+}
+
+.essay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 1.4em;
+  align-items: center;
+  gap: 12px 28px;
+}
+
+/* ─── World ───────────────────────────────────────────────────────────── */
+
+.world {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-world);
+  background: var(--night);
+  isolation: isolate;
+}
+
+.world-light,
+.world-light > * {
+  position: absolute;
+  pointer-events: none;
+}
+
+.world-light {
+  z-index: -1;
+  inset: 0;
+}
+
+.world-canvas {
+  inset: -12%;
+  animation: world-drift 64s var(--ease-in-out) infinite alternate;
+}
+
+.world-pool {
+  inset: -18%;
+  background: radial-gradient(ellipse 48% 44% at var(--px) var(--py), var(--pool), transparent 70%);
+  opacity: var(--pool-alpha);
+  animation: world-orbit 46s var(--ease-in-out) var(--pool-delay) infinite alternate;
+}
+
+.world-bloom {
+  inset: 0;
+  background: radial-gradient(
+    ellipse 50% 44% at var(--world-fx) var(--world-fy),
+    color-mix(in oklab, var(--world-bloom) 50%, transparent),
+    transparent 70%
+  );
+}
+
+/* A vignette, so the light pools toward the subject rather than the edge. */
+.world-light::after {
+  inset: 0;
+  content: "";
+  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 55%, rgb(0 0 0 / 0.42));
+}
+
+@keyframes world-drift {
+  from {
+    transform: translate(-2%, 1.5%) rotate(-2deg) scale(1.02);
+  }
+  to {
+    transform: translate(2%, -1.5%) rotate(2deg) scale(1.08);
+  }
+}
+
+@keyframes world-orbit {
+  from {
+    transform: translate(-6%, 4%) scale(0.96);
+  }
+  to {
+    transform: translate(6%, -5%) scale(1.06);
+  }
+}
+
+/* ─── Release chapters ────────────────────────────────────────────────── */
+
+.release {
+  scroll-margin-top: 24px;
+}
+
+.release-head {
+  display: flex;
+  margin-bottom: var(--reel-gap);
+  padding-bottom: 14px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.release-head h2 {
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.release-head .link-quiet {
+  min-height: 0;
+  font-size: 14px;
+}
+
+.chapter {
+  aspect-ratio: 16 / 9;
+  scroll-margin-top: 24px;
+}
+
+.chapter + .chapter,
+.release .montage {
+  margin-top: var(--reel-gap);
+}
+
+.chapter-still,
+.chapter-still img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.chapter-still img {
+  object-fit: cover;
+}
+
+.chapter-super {
+  position: absolute;
+  z-index: 1;
+  text-shadow: 0 1px 24px rgb(0 0 0 / 0.35);
+  max-width: min(48%, 640px);
+  padding: clamp(24px, 4.2vw, 64px);
+}
+
+/* The film's scrim: a pool of dark behind the words, never a box. */
+.chapter-super::before {
+  position: absolute;
+  z-index: -1;
+  inset: -30% -40%;
+  content: "";
+  background: radial-gradient(closest-side, rgb(4 4 8 / 0.62), rgb(4 4 8 / 0.3) 60%, transparent);
+  pointer-events: none;
+}
+
+.chapter--top-left .chapter-super {
+  top: 0;
+  left: 0;
+}
+
+.chapter--bottom-left .chapter-super {
+  bottom: 0;
+  left: 0;
+}
+
+.chapter--top-right .chapter-super {
+  top: 0;
+  right: 0;
+  text-align: right;
+}
+
+.chapter--bottom-right .chapter-super {
+  right: 0;
+  bottom: 0;
+  text-align: right;
+}
+
+.chapter--top-right .super-sub,
+.chapter--bottom-right .super-sub {
+  margin-left: auto;
+}
+
+/* The small chapters: portrait cards, words above the picture. */
+.montage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--reel-gap);
+}
+
+.montage .chapter {
+  margin-top: 0;
+  aspect-ratio: 4 / 5;
+}
+
+.montage .chapter-still img {
+  object-position: 50% 62%;
+}
+
+.montage .chapter-super {
+  max-width: none;
+  padding: clamp(20px, 2.4vw, 32px);
+}
+
+/* ─── Close ───────────────────────────────────────────────────────────── */
+
+.close {
+  display: grid;
+  min-height: clamp(520px, 62vw, 760px);
+  margin-top: var(--reel-gap);
+  padding: 48px var(--gutter);
+  place-items: center;
+  text-align: center;
+}
+
+.close-inner {
+  display: grid;
+  justify-items: center;
+  gap: 28px;
+}
+
+.close .super-sub {
+  margin-inline: auto;
+}
+
+.close-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 28px;
+}
+
+.close .link-quiet {
+  color: var(--ink);
+  opacity: 0.8;
+}
+
+.close .mark {
+  filter: drop-shadow(0 24px 48px rgb(0 0 0 / 0.35));
+}
+
+/* The mark builds the way a board fills: bars rise, then the card lands. */
+.mark-bar,
+.mark-card {
+  transform-box: fill-box;
+}
+
+.mark-bar {
+  transform-origin: 50% 0;
+}
+
+.reveal-ready .mark--build .mark-bar {
+  transform: scaleY(0);
+  transition: transform 900ms var(--ease-out);
+}
+
+.reveal-ready .mark--build .mark-bar--2 {
+  transition-delay: 90ms;
+}
+
+.reveal-ready .mark--build .mark-bar--3 {
+  transition-delay: 180ms;
+}
+
+.reveal-ready .mark--build .mark-card {
+  opacity: 0;
+  transform: translateY(-60%);
+  transition:
+    opacity 300ms ease 620ms,
+    transform 700ms cubic-bezier(0.34, 1.56, 0.64, 1) 620ms;
+}
+
+.reveal-ready .is-revealed .mark--build .mark-bar,
+.reveal-ready .is-revealed .mark--build .mark-card {
+  opacity: 1;
+  transform: none;
+}
+
+/* ─── Download ────────────────────────────────────────────────────────── */
+
+.dl {
+  display: flex;
+  min-height: clamp(460px, 56vw, 620px);
+  margin-top: clamp(16px, 3vh, 40px);
+  padding: clamp(32px, 6vw, 88px);
+  align-items: flex-end;
+}
+
+.dl-inner {
+  display: grid;
+  max-width: 40rem;
+  gap: 36px;
+}
+
+.dl-build {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.dl-version {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.dl-version span:first-child {
+  color: var(--ink);
+}
+
+.dl-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 28px;
+}
+
+.dl-artifacts .button {
+  gap: 12px;
+}
+
+.dl-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.dl-status,
+.dl-platform {
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.dl-status a,
+.terms a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 160ms ease;
+}
+
+.dl-status a:hover,
+.terms a:hover {
+  text-decoration-color: var(--ink);
+}
+
+.terms {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 32px clamp(40px, 6vw, 96px);
+  padding-block: clamp(80px, 10vw, 140px) 0;
+}
+
+.terms h2 {
+  font-size: clamp(28px, 3vw, 40px);
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.terms dl {
+  display: grid;
+  margin: 0;
+}
+
+.terms dl > div {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 8px 24px;
+  padding: 18px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.terms dt {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.terms dd {
+  margin: 0;
+  color: rgb(245 242 238 / 0.82);
+  font-size: 16.5px;
+  line-height: 1.55;
+}
+
+/* ─── Narrow ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .hero-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hero-action {
+    align-items: flex-start;
+  }
+
+  .essay {
+    grid-template-columns: 1fr;
+  }
+
+  .essay-lockup {
+    position: static;
+  }
+
+  .montage {
+    grid-template-columns: 1fr;
+  }
+
+  .terms {
+    grid-template-columns: 1fr;
+  }
+
+  .montage .chapter {
+    aspect-ratio: 4 / 3;
+  }
+
+  .montage .chapter-still img {
+    object-position: 50% 58%;
+  }
+}
+
+@media (max-width: 720px) {
+  .site-header nav a:not(.site-header-download):last-of-type {
+    display: none;
+  }
+
+  .hero-demo .volli-demo {
+    height: 520px;
+  }
+
+  .terms dl > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  /* Words above the picture, in the world: the film's vertical recomposition
+     leaves no corner for a super at this width. */
+  .chapter {
+    display: flex;
+    aspect-ratio: auto;
+    flex-direction: column;
+  }
+
+  .chapter .chapter-super {
+    position: relative;
+    order: -1;
+    max-width: none;
+    padding: 28px 24px 0;
+    text-align: left;
+  }
+
+  .chapter--top-right .super-sub,
+  .chapter--bottom-right .super-sub {
+    margin-left: 0;
+  }
+
+  .chapter-still {
+    position: relative;
+    aspect-ratio: 4 / 5;
+    height: auto;
+  }
+
+  .montage .chapter {
+    aspect-ratio: auto;
+  }
+
+  .montage .chapter-still {
+    aspect-ratio: 1 / 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .world-canvas,
+  .world-pool {
+    animation: none;
+  }
+}

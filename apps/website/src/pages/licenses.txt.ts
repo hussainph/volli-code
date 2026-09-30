@@ -1,5 +1,7 @@
 import type { APIRoute } from "astro";
 
+import geistMonoLicense from "@fontsource-variable/geist-mono/LICENSE?raw";
+import geistMonoManifest from "@fontsource-variable/geist-mono/package.json";
 import monaSansLicense from "@fontsource-variable/mona-sans/LICENSE?raw";
 import monaSansManifest from "@fontsource-variable/mona-sans/package.json";
 import {
@@ -41,6 +43,12 @@ const REDISTRIBUTED_FONTS: readonly FontPackageSource[] = [
     packageName: "@fontsource-variable/mona-sans",
     manifest: monaSansManifest,
     licenseText: monaSansLicense,
+  },
+  {
+    family: "Geist Mono",
+    packageName: "@fontsource-variable/geist-mono",
+    manifest: geistMonoManifest,
+    licenseText: geistMonoLicense,
   },
 ];
 

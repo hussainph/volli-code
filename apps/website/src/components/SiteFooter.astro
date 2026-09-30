@@ -1,0 +1,25 @@
+---
+/** The quiet end of every page (BRAND.md §7.6). */
+import { DOCS_URL, ISSUES_URL, RELEASES_URL, REPOSITORY_URL } from "../data/links";
+import Mark from "./Mark.astro";
+---
+
+<footer class="site-footer">
+  <a class="brand" href="/" aria-label="Volli home">
+    <Mark size={18} />
+    <span>Volli</span>
+  </a>
+  <nav aria-label="Footer">
+    <a href="/download/">Download</a>
+    <a href={DOCS_URL}>Docs</a>
+    <a href={RELEASES_URL}>Releases</a>
+    <a href={REPOSITORY_URL}>GitHub</a>
+    <a href={ISSUES_URL}>Feedback</a>
+    <a href={`${REPOSITORY_URL}/security/policy`}>Security</a>
+    {/* The OFL notices for the fonts this site self-hosts, emitted by
+        src/pages/licenses.txt.ts. Linked so the notice is reachable, which
+        is what redistributing font software asks of us. */}
+    <a href="/licenses.txt">Licenses</a>
+  </nav>
+  <p class="site-footer-note">Open source under Apache-2.0.</p>
+</footer>

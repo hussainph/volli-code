@@ -1,0 +1,88 @@
+---
+/**
+ * Every volli.app page: the head, the header, the footer, and the one
+ * stylesheet. A page brings its <main> and nothing else.
+ */
+// The full variable file, so supers can use the width axis (BRAND.md §5).
+import "@fontsource-variable/mona-sans/standard.css";
+import "@fontsource-variable/geist-mono/wght.css";
+import "../styles/site.css";
+import SiteFooter from "../components/SiteFooter.astro";
+import SiteHeader from "../components/SiteHeader.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Path on volli.app, e.g. `/download/`. */
+  path: string;
+  /** The share card's title, when it should differ from the tab's. */
+  shareTitle?: string;
+  skipTo?: string;
+}
+
+const { title, description, path, shareTitle = title, skipTo = "#main" } = Astro.props;
+const url = new URL(path, "https://volli.app").href;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <link rel="canonical" href={url} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={url} />
+    <meta property="og:title" content={shareTitle} />
+    <meta property="og:description" content={description} />
+    {/* Absolute, because scrapers do not resolve relative image URLs. Regenerate
+        the card with `pnpm -C apps/website run og` after changing the headline. */}
+    <meta property="og:image" content="https://volli.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Volli — the workspace for parallel coding agents" />
+    <meta property="og:site_name" content="Volli" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={shareTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://volli.app/og.png" />
+    <meta name="theme-color" content="#07070a" />
+    <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
+    <title>{title}</title>
+    {/* Set before first paint, so a super that is about to rise is never shown
+        in place first and then snatched away. */}
+    <script is:inline>
+      if (
+        "IntersectionObserver" in window &&
+        !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      )
+        document.documentElement.classList.add("reveal-ready");
+    </script>
+    <slot name="head" />
+  </head>
+  <body>
+    <a class="skip-link" href={skipTo}>Skip to content</a>
+    <SiteHeader />
+    <slot />
+    <SiteFooter />
+    <script>
+      // The site's one observer: a super rises into place once, the first time
+      // it is on screen. Without JavaScript, or under reduced motion, the CSS
+      // leaves every super where it belongs.
+      const targets = document.querySelectorAll<HTMLElement>("[data-reveal]");
+      if (document.documentElement.classList.contains("reveal-ready")) {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              entry.target.classList.add("is-revealed");
+              observer.unobserve(entry.target);
+            }
+          },
+          { threshold: 0.35 },
+        );
+        for (const target of targets) observer.observe(target);
+      }
+    </script>
+  </body>
+</html>

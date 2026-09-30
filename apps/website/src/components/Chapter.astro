@@ -1,0 +1,92 @@
+---
+/**
+ * One chapter of a release (BRAND.md §9): a World, a still of the real app
+ * floating in it, and a Super set where the film left room for one.
+ *
+ * The stills are the release film's frames with the film's own frame taken
+ * out — no supers, no grade, no backdrop — captured with a transparent
+ * background by `apps/desktop/scripts/film/web-stills.mjs`. Wide screens get
+ * the 16:9 composition, narrow ones the film's 9:16 recomposition.
+ */
+import type { ImageMetadata } from "astro";
+import type { WorldName } from "../data/worlds";
+import Super from "./Super.astro";
+import World from "./World.astro";
+
+interface Beat {
+  text: string;
+  bold?: boolean;
+}
+
+interface Props {
+  world: WorldName;
+  wide: ImageMetadata;
+  tall: ImageMetadata;
+  alt: string;
+  beats: readonly Beat[];
+  eyebrow?: string;
+  sub?: string;
+  /** Which corner the super sits in on wide screens. */
+  place?: "top-left" | "bottom-left" | "top-right" | "bottom-right";
+  focus?: readonly [number, number];
+  size?: "chapter" | "small";
+  id?: string;
+}
+
+const {
+  world,
+  wide,
+  tall,
+  alt,
+  beats,
+  eyebrow,
+  sub,
+  place = "bottom-left",
+  focus,
+  size = "chapter",
+  id,
+} = Astro.props;
+const titleId = `${id ?? world}-title`;
+// A small chapter is a portrait card at every width, so it always wears the
+// film's vertical composition.
+const primary = size === "small" ? tall : wide;
+---
+
+<World
+  as="section"
+  world={world}
+  focus={focus}
+  class:list={["chapter", `chapter--${place}`, `chapter--${size}`]}
+  id={id}
+  aria-labelledby={titleId}
+>
+  <picture class="chapter-still">
+    {
+      size === "chapter" && (
+        <source
+          media="(max-width: 720px)"
+          srcset={tall.src}
+          width={tall.width}
+          height={tall.height}
+        />
+      )
+    }
+    <img
+      src={primary.src}
+      width={primary.width}
+      height={primary.height}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+    />
+  </picture>
+  <Super
+    class="chapter-super"
+    beats={beats}
+    eyebrow={eyebrow}
+    sub={sub}
+    id={titleId}
+    size={size === "small" ? "small" : "chapter"}
+    level={3}
+  />
+</World>

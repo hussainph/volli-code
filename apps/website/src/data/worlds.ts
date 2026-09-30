@@ -1,0 +1,112 @@
+/**
+ * The worlds the site's pictures float in (BRAND.md §2).
+ *
+ * Each world is a real Volli canvas — the same `{stops, vibrancy, grain}` a
+ * person authors in Settings → Appearance — and it is painted at build time by
+ * the app's own canvas engine in `@volli/shared`, so the light behind a still
+ * of the app is the light that app actually wears. The palette is the release
+ * film's (`apps/desktop/src/flute/kit/world.tsx`): the site and the film tell
+ * the same release in the same colours.
+ *
+ * Only build-time code reads this module. Nothing here reaches the browser but
+ * the CSS strings it produces.
+ */
+import {
+  canvasBackground,
+  DEFAULT_CANVAS,
+  effectiveStopHexes,
+  type Canvas,
+  type CanvasStop,
+} from "@volli/shared";
+
+const canvas = (stops: CanvasStop[], vibrancy: number, grain = 0.16): Canvas => ({
+  stops,
+  primaryIndex: 0,
+  vibrancy,
+  grain,
+});
+
+export const WORLDS = {
+  /** The shipped default canvas: one ember pool, high right. Home. */
+  ember: DEFAULT_CANVAS,
+  /** Deep teal into blue — Automations. */
+  lagoon: canvas(
+    [
+      { hex: "#12b5a0", x: 0.25, y: 0.2 },
+      { hex: "#2f6bff", x: 0.85, y: 0.85 },
+    ],
+    0.8,
+  ),
+  /** Electric blue and violet — the agent's tools. */
+  cobalt: canvas(
+    [
+      { hex: "#3d6bff", x: 0.7, y: 0.25 },
+      { hex: "#b04dff", x: 0.15, y: 0.75 },
+      { hex: "#00c2ff", x: 0.9, y: 0.95 },
+    ],
+    0.85,
+  ),
+  /** Violet over teal — the shared browser. */
+  aurora: canvas(
+    [
+      { hex: "#7b5cff", x: 0.72, y: 0.22 },
+      { hex: "#19c3b4", x: 0.18, y: 0.82 },
+    ],
+    0.85,
+  ),
+  /** Rose and plum — side by side. */
+  rose: canvas(
+    [
+      { hex: "#ff4f8b", x: 0.2, y: 0.25 },
+      { hex: "#7a3cff", x: 0.85, y: 0.8 },
+    ],
+    0.8,
+  ),
+  /** Gold into ember — limits. */
+  gold: canvas(
+    [
+      { hex: "#ffb31a", x: 0.7, y: 0.2 },
+      { hex: "#ff5a3c", x: 0.2, y: 0.9 },
+    ],
+    0.75,
+  ),
+  /** Acid lime — models. */
+  lime: canvas([{ hex: "#9be13c", x: 0.3, y: 0.25 }], 0.75),
+} satisfies Record<string, Canvas>;
+
+export type WorldName = keyof typeof WORLDS;
+
+/** One drifting pool of light: an authored stop, unpulled, as the film draws it. */
+export interface WorldPool {
+  hex: string;
+  x: number;
+  y: number;
+  primary: boolean;
+}
+
+export interface PaintedWorld {
+  /** The app's own `--canvas` background for this canvas, grain included. */
+  background: string;
+  /** The authored stops as light (a lone stop gets its mirror, so it never reads flat). */
+  pools: WorldPool[];
+  /** The primary as the dark theme paints it — the bloom behind the subject. */
+  bloom: string;
+}
+
+export function paintWorld(name: WorldName): PaintedWorld {
+  const world: Canvas = WORLDS[name];
+  const stops =
+    world.stops.length > 1
+      ? world.stops
+      : [...world.stops, { ...world.stops[0]!, x: 1 - world.stops[0]!.x, y: 1 - world.stops[0]!.y }];
+  return {
+    background: canvasBackground(world, "dark"),
+    pools: stops.map((stop, index) => ({
+      hex: stop.hex,
+      x: stop.x,
+      y: stop.y,
+      primary: index === world.primaryIndex,
+    })),
+    bloom: effectiveStopHexes(world, "dark")[world.primaryIndex]!,
+  };
+}

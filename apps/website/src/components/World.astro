@@ -1,0 +1,58 @@
+---
+/**
+ * A World (BRAND.md §7.1): the frame every picture on the site floats in.
+ *
+ * The light is a real Volli canvas painted by the app's own engine at build
+ * time (`src/data/worlds.ts`): its `--canvas` background drifting slowly, the
+ * authored stops as larger pools of light on their own orbits, and a bloom of
+ * the primary behind the subject. The drift is CSS only and stops under
+ * reduced motion; nothing here needs JavaScript.
+ */
+import { paintWorld, type WorldName } from "../data/worlds";
+
+interface Props {
+  world: WorldName;
+  /** Where the bloom sits, as fractions of the frame. */
+  focus?: readonly [number, number];
+  class?: string;
+  as?: "div" | "section" | "figure";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+}
+
+const {
+  world,
+  focus = [0.62, 0.5],
+  class: className,
+  as: Tag = "div",
+  id,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledby,
+} = Astro.props;
+const painted = paintWorld(world);
+const [fx, fy] = focus;
+---
+
+<Tag
+  class:list={["world", className]}
+  data-world={world}
+  id={id}
+  aria-label={ariaLabel}
+  aria-labelledby={ariaLabelledby}
+  style={`--world-bloom: ${painted.bloom}; --world-fx: ${fx * 100}%; --world-fy: ${fy * 100}%;`}
+>
+  <div class="world-light" aria-hidden="true">
+    <div class="world-canvas" style={`background: ${painted.background};`}></div>
+    {
+      painted.pools.map((pool, index) => (
+        <div
+          class="world-pool"
+          style={`--pool: ${pool.hex}; --px: ${pool.x * 100}%; --py: ${pool.y * 100}%; --pool-alpha: ${pool.primary ? 0.62 : 0.46}; --pool-delay: ${index * -9}s;`}
+        />
+      ))
+    }
+    <div class="world-bloom"></div>
+  </div>
+  <slot />
+</Tag>
