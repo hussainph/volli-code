@@ -18,7 +18,7 @@ const RIGS = {
   wide: {
     start: { rot: [26, 30, -9], target: [-620, -170, 0], near: 800 },
     sweepY: 260,
-    end: { rot: [8, 12, -2.5], target: [-30, 0, 0], near: -170 },
+    end: { rot: [8, 12, -2.5], target: [-10, -15, 0], near: -60 },
   },
   tall: {
     start: { rot: [30, 22, -8], target: [-620, -170, 0], near: 800 },
