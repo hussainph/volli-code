@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
-    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && pnpm run licenses:check",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && pnpm run check:docs && pnpm run licenses:check",
+    "check:docs": "node scripts/check-docs.mjs --self-test && node scripts/check-docs.mjs",
     "licenses:check": "check-font-notices .",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-docs --branch main",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"

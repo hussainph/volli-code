@@ -1,0 +1,71 @@
+---
+title: Skills and commands
+description: Find, configure, and use reusable Skills and slash commands in Volli.
+sidebar:
+  label: Skills and commands
+---
+
+Available Skills and Commands appear in a composer’s `/` picker, but they do
+different jobs. A **Skill** is a set of instructions you can make available to
+a Session. A **Command** is a saved prompt template that expands into the
+message you send.
+
+## Find and configure Skills
+
+Open **Configure → Skills** for a project. Volli lists Skills from the project
+and from your personal Skills directory:
+
+| Source | Location |
+| --- | --- |
+| This project | `.agents/skills/<slug>/SKILL.md` |
+| Personal | `~/.agents/skills/<slug>/SKILL.md` |
+
+The directory name is the Skill’s `/slug`. If a project and your personal
+directory contain the same slug, the project Skill takes precedence. If a
+Command uses the same name, the Command keeps `/slug` and the Skill appears as
+`/skill:slug`.
+
+Choose a mode for each Skill:
+
+| Mode | What it does |
+| --- | --- |
+| **Auto** | Adds the Skill’s name, path, and description to the Session’s Skills index, so the model can find it. The index adds prompt tokens on every turn. |
+| **Manual** | Keeps the Skill out of the model’s index, but leaves it available when you invoke `/slug`. |
+| **Off** | Removes the Skill from the index and the `/` picker. |
+
+Auto makes the Skill discoverable; it does not include the full `SKILL.md`
+body by itself. The model can read the file when it activates the Skill. You can
+also type `/slug` in a composer to include the Skill’s instructions with that
+message.
+
+## Create and use Commands
+
+Open **Configure → Commands** to see the project and personal commands
+available in a composer. Project commands take precedence over personal
+commands with the same name.
+
+1. In **Configure → Commands**, select **New command**.
+2. Enter a **Name** and **Prompt**. Optional: Add a **Description**.
+3. In **Save to**, choose this project or your personal commands.
+4. Select **Create**.
+5. In a chat composer, type `/` and select the command.
+
+The name becomes the slash command. A command named `review` is invoked as
+`/review`. Commands and Skills supply instructions; they do not grant tools or
+change a Session's authority.
+
+Commands are Markdown prompt templates. A command’s body replaces its
+invocation in the message you send. Add placeholders such as `$1` for the first
+argument or `$ARGUMENTS` for all arguments. For example, `/review src/app.ts`
+can fill `$1` with `src/app.ts`.
+
+Project commands live in `.volli/commands/<name>.md`. Personal commands are
+stored in Volli’s user-data `commands` directory and are available across
+projects. The command’s frontmatter can provide a `description`; the body is the
+prompt.
+
+## Distinguish Skills, Commands, and file references
+
+Typing `/name` can select a Skill or a Command. A Command expands into prompt
+text; a Skill’s instructions are included as a separate resource alongside your
+message. Use `@` for composer file references, not for Skills or Commands.

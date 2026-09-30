@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-**0.2.0 — September 29, 2026.**
+**0.2.0, September 29, 2026.**
 
 0.2 adds **Automations**, lets agents drive **Browser Tabs** you can watch and
 take over, and shows what each chat is holding in the **Activity Island**. It
@@ -36,7 +36,7 @@ same setup by hand, when a ticket enters a board column, or on a schedule.
 
 Create and edit Automations on the **Automations** page. Run a saved one from
 that page, a ticket's **Automations** section, a board card's context menu, or
-the command palette. Automatic starts are off until you turn on **Enabled** for
+the command palette. Automatic starts are off until you turn on **Automatic triggers** for
 this Mac and, for a column Trigger, arm the column. Only a **Deliberate move**
 into an armed column starts a Run, after a short delay you can **Cancel**.
 Schedules use presets and need Volli to be open; a missed due time is recorded
@@ -61,7 +61,8 @@ building.
 - A Session sees your tabs and its own, not the tabs of other Sessions.
 
 What a page shows is treated as untrusted content, and tabs run apart from the
-app itself.
+app itself. See [Use Browser Tabs](/guides/browser-tabs/) for opening a page
+and changing who controls it.
 
 ## The Activity Island
 
@@ -80,7 +81,8 @@ Session is holding besides the conversation:
   survive a relaunch.
 
 The island appears only when there is something to show. The ticket's **Now**
-rail keeps what is true of the whole ticket.
+rail keeps what is true of the whole ticket. See [Use a chat](/guides/sessions/)
+for Session activity and returning to a conversation.
 
 ## Split view
 
@@ -88,7 +90,7 @@ rail keeps what is true of the whole ticket.
 Session, or file to the right or bottom edge of a pane to split there, or use
 `⌘\` to split right and `⇧⌘\` to split down. Each surface keeps its own
 split, and tabs do not move between the two. See
-[Keyboard shortcuts](/reference/keyboard-shortcuts/#panes).
+[Arrange a split view](/guides/split-view/) for the steps and shortcuts.
 
 ## MCP servers
 
@@ -96,7 +98,8 @@ split, and tabs do not move between the two. See
 over stdio or streamable HTTP, and chooses which of their tools chats may use.
 MCP tools run through Volli like its other tools and appear in Session history.
 A change applies to new Sessions; a running Session keeps the tools it started
-with.
+with. See [MCP servers](/guides/mcp-servers/) for discovery, tool selection,
+and transport limits.
 
 ## Model tiers for delegated work
 
@@ -108,6 +111,7 @@ starts another Session or delegates to a subagent can ask for a tier by name.
 An Automation's Runtime can name a tier too.
 
 A subagent that names neither a model nor a tier runs on its parent's model.
+See [Models and usage](/guides/models/) for default resolution and model access.
 
 ## Usage limits
 
@@ -128,7 +132,8 @@ stored in Session history.
   [Keyboard shortcuts](/reference/keyboard-shortcuts/#terminal).
 - **Recovery after a crash.** A Session whose turn was running when Volli quit
   unexpectedly can be resumed, and a message you send to a disconnected
-  Session reconnects it instead of waiting in the queue.
+  Session reconnects it instead of waiting in the queue. See
+  [Recover a Session](/guides/recover-session/).
 
 ## Performance
 

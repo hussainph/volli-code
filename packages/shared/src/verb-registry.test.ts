@@ -620,6 +620,19 @@ describe("the registry table", () => {
     }
   });
 
+  it("describes armed arrival Runs and interruption as ticket-move effects", () => {
+    const effects = verbEntry("ticket.move")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Automatic triggers");
+    expect(effects?.humanVisible.join(" ")).toContain("interrupts");
+    expect(effects?.nonEffects.join(" ")).toContain("Without an enabled, armed Automation");
+  });
+
+  it("locates delegated Sessions in the parent's Activity Island", () => {
+    const effects = verbEntry("session.delegate")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Activity Island");
+    expect(effects?.humanVisible.join(" ")).toContain("no separate Session-list row");
+  });
+
   // VC-134, filed by VC-112 ("The agent's verb") under VC-92 §5's rules. The
   // whole ticket is this entry: one row in this table, in one Role bundle,
   // with no second implementation and no verb surface of its own.

@@ -12,8 +12,6 @@ its chats, inspect files and diffs, and edit its properties. The main tab strip
 keeps the documents and chats you open. The rail beside it has four pages:
 **Now**, **Diffs**, **Files**, and **Search**.
 
-![The ticket workspace for VLT-14 with its body, expanded navigation sidebar, worktree and ticket properties, and the Automations rail showing Run once beside the Chat control.](../../../assets/screenshots/ticket-workspace.png)
-
 ## Now
 
 **Now** shows what is true of the whole ticket, in three sections:
@@ -33,10 +31,10 @@ Reconnecting it does not create a second chat history. What one chat is holding,
 such as its Browser Tabs, subagents, plan, and background shells, is shown in
 the Activity Island above that chat's composer, not in the rail.
 
-Use **Chat** in the **Sessions** heading to start a chat after configuring
-**Settings → Models**. Its menu also opens a terminal companion or a Browser
-Tab. Open a terminal companion explicitly when you need a shell or an external
-TUI harness.
+Use **Chat** in the **Sessions** heading to open a draft after configuring
+[Models](/guides/models/). Send the first message to start the Session. The
+**Chat** menu also opens a [terminal companion](/guides/terminal-companions/)
+or a [Browser Tab](/guides/browser-tabs/).
 
 ### Run an Automation on this ticket
 
@@ -44,8 +42,8 @@ The **Automations** section lists the Automations offered to this ticket. The
 one armed for the ticket's current column comes first and is marked. Select a
 row, or right-click it, to see its saved Instructions, choose the model for
 this Run under **Run on**, and select **Run**. Selecting a row never starts a
-Run by itself. A manual Run is available even when an Automation's **Enabled**
-switch is off.
+Run by itself. A manual Run is available even when **Automatic triggers** is
+off for that Automation.
 
 The Run opens a fresh Session, which appears in **Sessions** with a mark
 showing that a Run started it. The Automations section does not list Runs.
@@ -68,7 +66,14 @@ content in each place. Editing one does not edit the other.
 
 The **Diffs** rail compares the ticket worktree with its base branch. Open a
 file to inspect its diff. The change set includes committed and uncommitted
-work, so it reflects the branch as it is on disk.
+work, so it reflects the branch as it is on disk. See
+[Review and publish changes](/guides/review-changes/) for testing, commits,
+and pull requests.
+
+## Search
+
+The **Search** rail searches files in the ticket's worktree. For tickets and
+Sessions across projects, use the command palette, `⌘K`.
 
 <Aside type="note">
   Worktrees are retained when a ticket is archived. See

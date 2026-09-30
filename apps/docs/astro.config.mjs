@@ -1,6 +1,7 @@
 import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
 import { defineConfig } from "astro/config";
+import { DOC_SECTIONS } from "./src/data/navigation.ts";
 
 export default defineConfig({
   output: "static",
@@ -56,8 +57,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl:
-          "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
+        baseUrl: "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
       },
       components: {
         // The site is dark-only, matching volli.app. (The app itself ships both
@@ -72,50 +72,8 @@ export default defineConfig({
         PageTitle: "./src/components/PageTitle.astro",
         Footer: "./src/components/Footer.astro",
       },
-      customCss: [
-        "@fontsource-variable/mona-sans/wght.css",
-        "./src/styles/volli.css",
-      ],
-      sidebar: [
-        {
-          label: "Get started",
-          items: [
-            { label: "Install", slug: "start/install" },
-            { label: "Quickstart", slug: "start/quickstart" },
-            { label: "Concepts", slug: "start/concepts" },
-          ],
-        },
-        {
-          label: "Releases",
-          items: [{ label: "What's new in 0.2", slug: "releases/whats-new-0-2" }],
-        },
-        {
-          // Ordered by the path through the product: plan on the board, save
-          // repeatable starts, open a task, understand chats and worktrees,
-          // then configure and theme.
-          label: "Using Volli",
-          items: [
-            { label: "The board", slug: "guides/board" },
-            { label: "Automations", slug: "guides/automations" },
-            { label: "Ticket workspace", slug: "guides/ticket-workspace" },
-            { label: "Chats and worktrees", slug: "guides/agents-and-worktrees" },
-            { label: "Settings", slug: "guides/settings" },
-            { label: "Theming", slug: "guides/theming" },
-          ],
-        },
-        {
-          label: "Reference",
-          items: [
-            { label: "CLI", slug: "reference/cli" },
-            {
-              label: "Agent capability changes",
-              slug: "reference/agent-capability-changes",
-            },
-            { label: "Keyboard shortcuts", slug: "reference/keyboard-shortcuts" },
-            { label: "Troubleshooting", slug: "reference/troubleshooting" },
-          ],
-        },
-      ],
+      customCss: ["@fontsource-variable/mona-sans/wght.css", "./src/styles/volli.css"],
+      sidebar: DOC_SECTIONS,
     }),
   ],
 });

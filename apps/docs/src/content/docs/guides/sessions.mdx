@@ -1,0 +1,89 @@
+---
+title: Use a chat
+description: Start a Board chat or ticket chat, then return to its Session history.
+sidebar:
+  label: Use a chat
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Start a chat for broad project work or for one ticket. A chat becomes a durable
+**Session** when you send its first message. You can leave and return without
+starting a duplicate conversation.
+
+## Start a chat
+
+Before starting a built-in chat, choose a default model in **Settings →
+Models**.
+
+- In **Home**, select **Chat** to start a Board chat. It works in the
+  project's main checkout and has no ticket of its own.
+- In a ticket workspace, select **Chat** in **Sessions** to start a ticket
+  chat. It uses that ticket's selected destination: a **New worktree** or the
+  project's **Project checkout**.
+
+You can also choose **Chat** from the menu beside the **Chat** control. The
+composer opens as a **Chat Draft**. Write the opening message and send it to
+create the Session. Opening a draft creates no Session history or new worktree;
+closing an empty draft leaves no Session behind. Draft text and staged files
+are kept while you navigate or reopen Volli.
+
+<Aside type="note">
+  Moving a ticket to **Doing** updates its status. It starts a Run only when an
+  enabled Automation is armed for that column. You can start a chat without an
+  Automation.
+</Aside>
+
+## Send messages while the agent works
+
+While a turn is running, **Queue** adds a message for later. Use **Steer** on
+a queued message, or `⌘Enter` in the composer, to send an instruction into the
+current turn without interrupting it. **Remove** drops a queued message.
+
+Select **Stop turn** to interrupt the current response. This does not undo
+file edits or commands that already ran. Check the result before sending the
+next instruction.
+
+## Inspect Session activity
+
+The **Activity Island** above the composer appears when the Session has
+activity to show:
+
+- **Browser Tabs**: inspect pages the agent opened.
+- **Subagents**: peek at a delegated Session, open it, or stop it. These children
+  share the parent's working directory and do not get separate Session-list rows.
+- **Plan**: read the agent's checklist and its completed-item count.
+- **Background shells**: inspect output from a dev server or other long-running
+  command. These stop when the Session's connection ends; they do not survive
+  a relaunch.
+
+## Return to a Session
+
+In Home, select an existing chat under **Board sessions** in the rail. For a
+ticket chat, open the ticket workspace and select the Session under **Now →
+Sessions**. Its transcript stays with that Session when you switch tabs,
+navigate away, or close its live connection. Sending another message to a
+disconnected chat reconnects that Session instead of creating a second
+conversation.
+
+Closing a chat tab does not delete a durable Session. Open the existing Session
+from its list to return to its history. Starting a new chat creates a different
+Session.
+
+## Choose a terminal companion
+
+Choose **Terminal** from the menu beside **Chat** when you need a shell or want
+to start an external TUI yourself. A terminal is a separate manual workflow,
+not a fallback when chat cannot start. See [Terminal companions](/guides/terminal-companions/)
+for its scope and history limits.
+
+## Start work from an Automation
+
+An Automation Run starts a fresh Session with the saved **Instructions** as its
+first message. A ticket-triggered Run uses the ticket; a scheduled Run starts a
+Board Session in the project's main checkout. See [Automations](/guides/automations/)
+for how to run one and inspect Run history.
+
+If a chat stops or needs provider recovery, follow
+[Recover a Session](/guides/recover-session/). See
+[Chats and worktrees](/guides/agents-and-worktrees/) for checkout scope.
