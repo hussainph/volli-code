@@ -1,365 +1,306 @@
 ---
 /**
- * Public homepage: the whole product first, then the 0.2 Automations release.
+ * volli.app (BRAND.md §9): what Volli is, why you would use it, and its core
+ * features — each one a picture of the real app in its own world, with the
+ * words above it.
  *
- * The interactive board demo gives the core workflow a product surface; the
- * release section explains how a saved Automation becomes a fresh Run and
- * keeps the control boundaries visible.
+ * The copy is Option A from the copy review (`.scratch/copy/OPTIONS.md`), a
+ * working draft until the owner picks.
  */
-import "@fontsource-variable/mona-sans/wght.css";
-import AutomationStoryboard from "../components/AutomationStoryboard.astro";
-import FeatureGlyph from "../components/FeatureGlyph.astro";
-import VolliDemo from "../components/VolliDemo";
-import "../styles/global.css";
-import "../styles/home-0-2.css";
+import introMp4 from "../assets/hero/intro.mp4";
+import introWebm from "../assets/hero/intro.webm";
+import loopMp4 from "../assets/hero/loop.mp4";
+import loopWebm from "../assets/hero/loop.webm";
+import heroPoster from "../assets/hero/poster.webp";
+import Chapter from "../components/Chapter.astro";
+import Feed from "../components/Feed.astro";
+import Mark from "../components/Mark.astro";
+import Super from "../components/Super.astro";
+import World from "../components/World.astro";
+import { DOCS_URL, REPOSITORY_URL } from "../data/links";
+import { still } from "../data/stills";
+import GitHubIcon from "../components/GitHubIcon.astro";
+import Base from "../layouts/Base.astro";
 
-const repositoryUrl = "https://github.com/hussainph/volli-code";
-const releasesUrl = `${repositoryUrl}/releases`;
-const issuesUrl = `${repositoryUrl}/issues`;
-const docsUrl = "https://docs.volli.app";
-const automationsDocsUrl = `${docsUrl}/guides/automations/`;
+// None of these repeat a bento card: this is what's left of the answer to
+// "why not the agent app I already have?"
+const WHY = [
+  {
+    title: "Agents never collide",
+    body: "Each ticket can get its own worktree and branch, so agents never write over each other's code.",
+  },
+  {
+    title: "Diff to pull request",
+    body: "Read a ticket's changes, commit them, and open a draft pull request without leaving the app.",
+  },
+  {
+    title: "Bring your CLI agents",
+    body: "Run any command-line agent in a terminal tab, right inside the ticket's worktree.",
+  },
+  {
+    title: "Stays on your Mac",
+    body: "Projects, tickets and chats are stored locally. Model requests go only to the provider you pick.",
+  },
+  {
+    title: "Free and open source",
+    body: "Apache-2.0. Read the code, or build it yourself.",
+  },
+] as const;
+
+// Invented, public-safe work in the register of the film's sidebar.
+const AGENTS = [
+  "Split the billing service",
+  "Profile slow search query",
+  "Migrate auth to passkeys",
+  "Draft release notes",
+  "Cache avatar thumbnails",
+] as const;
+
 const description =
-  "A local-first macOS workspace for planning parallel coding work, running coding agents, and reviewing every change — now with Automations for repeatable starts.";
-
-// What the workspace is made of. The copy follows the product's established
-// workflow and adds the agent tool surface, Skills, the `volli` CLI, and Change
-// Set review described in CONTEXT.md.
-const workspace = [
-  {
-    title: "Turn ideas into tasks",
-    description:
-      "Start with a rough goal. Create focused tasks yourself, or ask an agent to help break the work down.",
-    glyph: "phases" as const,
-  },
-  {
-    title: "Run agents in parallel",
-    description:
-      "Each ticket gets its own worktree and branch. Run independent tickets in parallel without touching the main checkout.",
-    glyph: "parallel" as const,
-  },
-  {
-    title: "Real tools for agents",
-    description:
-      "An agent reads, edits, and runs commands in its worktree, and uses the volli CLI to read the board, comment, and move tickets.",
-    glyph: "agents" as const,
-  },
-  {
-    title: "Review every change",
-    description:
-      "Inspect a ticket’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
-    glyph: "review" as const,
-  },
-  {
-    title: "Come back any time",
-    description:
-      "Leave, restart Volli, and come back to the same chat with its history intact.",
-    glyph: "context" as const,
-  },
-  {
-    title: "Keep your TUI workflow",
-    description:
-      "Open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal in the same worktree whenever you want to drive it yourself.",
-    glyph: "harnesses" as const,
-  },
-];
+  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents at once. Every task keeps its chats, code and history, so you can pick it back up where you left off.";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content={description} />
-    <link rel="canonical" href="https://volli.app/" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli | The workspace for parallel coding agents" />
-    <meta property="og:description" content={description} />
-    <meta property="og:image" content="https://volli.app/og.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Volli — the workspace for parallel coding agents" />
-    <meta property="og:site_name" content="Volli" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Volli | The workspace for parallel coding agents" />
-    <meta name="twitter:description" content={description} />
-    <meta name="twitter:image" content="https://volli.app/og.png" />
-    <meta name="theme-color" content="#0a0a0a" />
-    <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli | The workspace for parallel coding agents</title>
-  </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-
-    <header class="site-header">
-      <a class="footer-brand site-brand" href="#top" aria-label="Volli home">
-        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
-        <span>Volli</span>
-      </a>
-      <nav aria-label="Primary">
-        <a href="#product">Product</a>
-        <a href="#automations">Automations</a>
-        <a href={docsUrl}>Docs</a>
-        <a href={repositoryUrl}>GitHub</a>
-        <a class="site-nav-cta" href="/download/">Download</a>
-      </nav>
-    </header>
-
-    {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
-    <main id="main" tabindex="-1">
-      {/* The durable promise. Category, maturity and platform are read before
-          anything else on the page. */}
-      <section class="hero" id="top">
-        <span class="alpha-pill">Alpha · Apple silicon</span>
-        {/* Each clause is masked so it can rise into place once on load; the
-            text stays one node per clause and reads as one sentence. */}
-        <h1 class="hero-headline">
-          <span class="hero-clause"><span>The workspace for</span></span>{" "}
-          <span class="hero-clause"><span>parallel coding agents.</span></span>
-        </h1>
-        <p class="hero-lede">
-          Coding agents work your tickets in parallel, each in its own worktree. You review every
-          change. Local-first, on your Mac.
-        </p>
-
-        <div class="cta-row hero-cta">
-          <a class="cta cta-primary" href="/download/">
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
-              />
-            </svg>
-            <span>Download for Apple silicon</span>
-          </a>
-          <a class="cta cta-secondary" href="#automations">
-            <svg viewBox="0 0 256 256" width="17" height="17" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="20"
-                d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
-              />
-            </svg>
-            <span>See what’s new in 0.2</span>
-          </a>
-        </div>
-
-        <p class="hero-alpha-note">
-          <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
-          <a href={`${docsUrl}/start/install/`}>Install guide</a>
-          <a href={releasesUrl}>Release notes</a>
-        </p>
-      </section>
-
-      {/* The product proof: the same interactive board as the live page. Drag
-          a ticket and a Session opens — the loop everything else builds on. */}
-      <section class="hero-shell" aria-label="Volli product preview">
-        <VolliDemo client:load />
-      </section>
-
-      {/* What the workspace is made of. The board and the worktrees are the
-          product; Automations, below, are one way to start it. */}
-      <section class="workspace" id="product" aria-labelledby="workspace-title">
-        <div class="section-head">
-          <h2 id="workspace-title">One board. A worktree per ticket.</h2>
-          <p>
-            Each ticket has a brief, a chat you can come back to, and changes to review.
+<Base
+  title="Volli | Build like a team of twenty"
+  description={description}
+  path="/"
+>
+  {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
+  <main id="main" tabindex="-1">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-head">
+        <div class="hero-words">
+          <Super
+            size="hero"
+            level={1}
+            id="hero-title"
+            speed
+            beats={[{ text: "Build like" }, { text: "a team of twenty.", bold: true }]}
+          />
+          <p class="hero-lede hero-rise" style="--rise: 3">
+            Volli is a Mac app for building ambitious software with many coding agents at once.
+            Every task keeps its chats, code and history, so you can hand off more work and pick it
+            back up exactly where you left off.
           </p>
         </div>
-        <ol class="workspace-grid">
-          {
-            workspace.map((item, index) => (
-              <li class="workspace-item">
-                <FeatureGlyph kind={item.glyph} />
-                <span class="workspace-index">0{index + 1}</span>
-                <h3>{item.title}</h3>
-                <p>{item.description}</p>
-              </li>
-            ))
-          }
-        </ol>
-      </section>
-
-      {/* New in 0.2. The version lives here and nowhere else, so the product
-          does not read as a scheduler once 0.3 ships. One section: the
-          storyboard (§6.3), the three ways a Run starts (§7.1 step 5), and the
-          control facts (§1.4) folded into those three lines rather than listed
-          twice. */}
-      <section class="release" id="automations" aria-labelledby="release-title">
-        <div class="section-head" data-release-head>
-          <span class="release-version">
-            <svg viewBox="0 0 256 256" width="14" height="14" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="22"
-                d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
-              />
-            </svg>
-            New in 0.2
-          </span>
-          <h2 id="release-title">Save how work starts.</h2>
-          <p>
-            Save the Instructions, Trigger, and Runtime once. Run an Automation by hand, arm a board
-            column, or put it on a schedule. Every Run opens a fresh Session.
-          </p>
-          <p>
-            <a href={`${docsUrl}/releases/whats-new-0-2/`}>Read what's new in 0.2 in the Volli Code docs.</a>
-          </p>
+        <div class="hero-action hero-rise" style="--rise: 4">
+          <div class="hero-buttons">
+            <a class="button" href="/download/">Download for Mac</a>
+            <a class="button button--ghost" href={REPOSITORY_URL}>
+              <GitHubIcon />
+              <span>Star on GitHub</span>
+            </a>
+          </div>
+          <p class="hero-note">Free and open source under Apache-2.0. Alpha for Apple silicon Macs.</p>
         </div>
+      </div>
 
-        <AutomationStoryboard />
+      {/* The real app, not a mock: a sweep down a sidebar of live agents that
+          pulls back to the whole window, then drifts forever. Two videos: the
+          intro plays once and hands off to a loop that starts on its last
+          frame. Under reduced motion the page shows only that frame.
+          (apps/desktop/scripts/film/web-hero.mjs) */}
+      <div class="hero-film hero-rise" style="--rise: 5" data-hero-film>
+        <img
+          class="hero-poster"
+          src={heroPoster.src}
+          width={heroPoster.width}
+          height={heroPoster.height}
+          alt="Volli with a sidebar full of agents at work, beside a board of tickets."
+        />
+        <video class="hero-video hero-loop" muted playsinline loop preload="none" aria-hidden="true">
+          <source src={loopMp4} type="video/mp4" />
+          <source src={loopWebm} type="video/webm" />
+        </video>
+        <video class="hero-video hero-intro" muted playsinline preload="auto" aria-hidden="true">
+          <source src={introMp4} type="video/mp4" />
+          <source src={introWebm} type="video/webm" />
+        </video>
+      </div>
+    </section>
 
-        {/* The three ways a run starts, as three lines. Each carries the
-            control fact that matters for that trigger (§1.4). */}
-        <ul class="ways-list">
-          <li>
-            <b>By hand</b>
-            <span>
-              From the Automations page, a ticket, a board card, or the command palette. It stays
-              available by hand even when automatic triggering is switched off. <strong>Run once</strong>
-              {" "}sends one-time Instructions without saving an Automation.
-            </span>
-          </li>
-          <li>
-            <b>Ticket enters</b>
-            <span>
-              Enable it on this Mac, then arm one Automation per column. Only a deliberate move — a
-              drag, a status change, or a volli CLI move — fires it. Tickets already there are left
-              alone, and the move keeps a single Cancel window.
-            </span>
-          </li>
-          <li>
-            <b>On a schedule</b>
-            <span>
-              Hourly, Every day, Mon–Fri, or Weekly, in your time zone, while Volli is open. A
-              Ticket enters Trigger starts a Ticket Session; a schedule starts a Board Session. Skips
-              are recorded with a reason, never replayed.
-            </span>
-          </li>
-        </ul>
-      </section>
-
-      {/* One place for the trust facts the download page and the docs
-          currently split between them (§3.5). */}
-      <section class="trust" aria-labelledby="trust-title">
-        <div class="section-head">
-          <h2 id="trust-title">Local-first, by construction</h2>
-        </div>
-        <div class="trust-grid">
-          <article class="trust-item">
-            <h3>Your work stays on your Mac</h3>
-            <p>
-              Projects, tickets, chats, and automations — including their switches on this Mac — live
-              in local storage. Each ticket’s worktree is an ordinary Git checkout on your disk. Volli
-              itself needs no account.
-            </p>
-          </article>
-          <article class="trust-item">
-            <h3>Your models, your provider</h3>
-            <p>
-              Model requests go to the provider and account you configure in{" "}
-              <a href={`${docsUrl}/guides/settings/`}>Settings → Models</a>. An Automation’s Runtime
-              chooses its model or a named default tier.
-            </p>
-          </article>
-          <article class="trust-item">
-            <h3>Open source, Apache-2.0</h3>
-            <p>
-              Read the source or report a problem. The alpha is available from{" "}
-              <a href={releasesUrl}>GitHub Releases</a> for Apple silicon Macs.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      {/* The closing routes. */}
-      <section class="closing" aria-labelledby="closing-title">
-        <h2 id="closing-title">Try the alpha</h2>
-        <p>
-          Apple silicon, macOS 12 or later. Report the problems you find.
+    <section class="essay" aria-labelledby="essay-title">
+      <div class="essay-lockup">
+        <Mark size={72} />
+        <h2 class="essay-name" id="essay-title">Volli</h2>
+      </div>
+      <div class="essay-body">
+        {/* Each sentence lights up as it scrolls into the reading line. */}
+        <p class="essay-read">
+          <span class="read">It's easy to start a dozen coding agents.</span>{" "}
+          <span class="read">It's just as easy to lose track of what they're all up to.</span>
         </p>
-        <div class="cta-row closing-cta">
-          <a class="cta cta-primary" href="/download/">
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
-              />
-            </svg>
-            <span>Download for Apple silicon</span>
-          </a>
-          <a class="cta cta-secondary" href={automationsDocsUrl}>
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M4 4.6c0-.6.5-1.1 1.1-1.1h4.3c1.1 0 2.1.5 2.6 1.4.6-.9 1.5-1.4 2.6-1.4h4.3c.6 0 1.1.5 1.1 1.1v13c0 .6-.5 1.1-1.1 1.1h-4.3c-.9 0-1.7.4-2.2 1.1a.9.9 0 0 1-1.5 0 2.6 2.6 0 0 0-2.2-1.1H5.1c-.6 0-1.1-.5-1.1-1.1v-13Zm7.1 12.2V6.6c0-.7-.6-1.3-1.3-1.3H5.8v11h3.6c.6 0 1.2.2 1.7.5Zm1.8 0c.5-.3 1.1-.5 1.7-.5h3.6v-11h-4c-.7 0-1.3.6-1.3 1.3v10.2Z"
-              />
-            </svg>
-            <span>Read the docs</span>
-          </a>
-          <a class="cta cta-secondary" href={repositoryUrl}>
-            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.9 10.9 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.07.79 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"
-              />
-            </svg>
-            <span>View source</span>
-          </a>
-        </div>
-        <p class="closing-note">
-          <a href={issuesUrl}>Report a problem</a>
-          <a href={`${repositoryUrl}/security/policy`}>Security</a>
+        <p class="essay-read">
+          <span class="read">In Volli, each task is a ticket.</span>{" "}
+          <span class="read">A ticket holds the brief, the agents working on it, and the changes they make.</span>
         </p>
-      </section>
-    </main>
+        <p class="essay-read">
+          <span class="read">All your tickets sit on one board, so you can see which ones have agents working and which are waiting on you.</span>{" "}
+          <span class="read">Open any ticket to review its changes or pick up right where it stopped.</span>
+        </p>
+      </div>
+    </section>
 
-    <footer>
-      <a class="footer-brand" href="#top" aria-label="Volli home">
-        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
-        <span>Volli</span>
-      </a>
-      <nav aria-label="Footer">
-        <a href="/download/">Download</a>
-        <a href="#product">Product</a>
-        <a href="#automations">Automations</a>
-        <a href={docsUrl}>Docs</a>
-        <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
-        <a href={repositoryUrl}>GitHub</a>
-        <a href={releasesUrl}>Releases</a>
-        <a href={`${repositoryUrl}/security/policy`}>Security</a>
-        {/* The OFL notices for the fonts this site self-hosts, emitted by
-            src/pages/licenses.txt.ts. Linked so the notice is reachable, which
-            is what redistributing font software asks of us. */}
-        <a href="/licenses.txt">Licenses</a>
-        <a href={issuesUrl}>Feedback</a>
-      </nav>
-    </footer>
+    <section class="features" aria-label="Features">
+      <Chapter
+        id="tickets"
+        order={0}
+        span={7}
+        world="ember"
+        still={still("rail")}
+        alt="A ticket's sidebar: its status, priority and labels, its two chats, and its branch."
+        beats={[{ text: "Never lose" }, { text: "the thread", bold: true }]}
+        body="Every task keeps its brief, chats, branch and changes. Come back in a week and it's all still there."
+      />
 
-    <script>
-      // One decoration, not load-bearing: the beam runs once when the release
-      // section's head is on screen. It stays off under prefers-reduced-motion,
-      // and the page reads the same without it.
-      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      <Chapter
+        id="peek"
+        order={1}
+        span={5}
+        world="aurora"
+        still={still("peek")}
+        alt="The sidebar's active chats; hovering one opens a card with its latest message and a reply box."
+        beats={[{ text: "Unblock an agent" }, { text: "in seconds", bold: true }]}
+        body="Hover over an agent to read its latest message and reply. Then get right back to your work."
+      />
 
-      const releaseHead = document.querySelector<HTMLElement>("[data-release-head]");
-      if (releaseHead && !reducedMotion && "IntersectionObserver" in window) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            if (!entries.some((entry) => entry.isIntersecting)) return;
-            releaseHead.classList.add("is-live");
-            observer.disconnect();
-          },
-          { threshold: 0.6 },
-        );
-        observer.observe(releaseHead);
-      }
-    </script>
-  </body>
-</html>
+      <Chapter
+        id="split"
+        order={0}
+        span={5}
+        world="rose"
+        still={still("split")}
+        alt="A split view: a terminal running tests beside a chat."
+        beats={[{ text: "Tabs for everything," }, { text: "side by side", bold: true }]}
+        body="Chats, terminals, files and browsers each open in a tab. Split the view to keep any of them next to each other."
+      />
+
+      <Chapter
+        id="browser"
+        order={1}
+        span={7}
+        world="lagoon"
+        still={still("cursor")}
+        alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
+        beats={[{ text: "Browse the web" }, { text: "with your agents", bold: true }]}
+        body="Your agent drives a real browser tab. Watch it click through your app, or take over at any time."
+      />
+
+      {/* No still here: five of the sidebar's rows arrive and start working
+          together (Feed.astro). */}
+      <Chapter
+        id="activity"
+        order={0}
+        span={7}
+        world="cobalt"
+        beats={[{ text: "Let your agents" }, { text: "organize the work", bold: true }]}
+        body="Agents can write tickets, move them across the board, and start other agents. You don't have to run it all yourself."
+      >
+        <Feed slot="window" rows={AGENTS} label="Five agents, all working" />
+      </Chapter>
+
+      <Chapter
+        id="models"
+        order={1}
+        span={5}
+        world="lime"
+        still={still("models")}
+        alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
+        beats={[{ text: "Bring your" }, { text: "own tokens", bold: true }]}
+        body="Connect any of 40+ model providers with the plan or API key you already have. Pick the right model for each task."
+      />
+
+      <Chapter
+        id="automations"
+        order={0}
+        span={6}
+        world="gold"
+        still={still("armed")}
+        alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
+        beats={[{ text: "Automate" }, { text: "the routine work", bold: true }]}
+        body="Save a workflow once. Run it on a schedule, or whenever a ticket lands in a column."
+      />
+
+      <Chapter
+        id="limits"
+        order={1}
+        span={3}
+        world="ember"
+        still={still("limits")}
+        alt="The usage limits popover: session and weekly windows with time left until they reset."
+        beats={[{ text: "No surprise", bold: true }, { text: "usage limits." }]}
+      />
+
+      <Chapter
+        id="mcp"
+        order={2}
+        span={3}
+        world="cobalt"
+        still={still("mcp")}
+        alt="Settings, MCP servers: four servers, their tools, and their status."
+        beats={[{ text: "Bring your tools", bold: true }, { text: "with MCP servers." }]}
+      />
+
+    </section>
+
+    {/* What makes Volli different, said about Volli alone. */}
+    <section class="why" aria-labelledby="why-title">
+      <div class="why-head" data-reveal>
+        <Super
+          id="why-title"
+          beats={[{ text: "Built for" }, { text: "many agents,", bold: true }, { text: "not one." }]}
+        />
+      </div>
+      <ul class="why-list">
+        {
+          WHY.map((item, index) => (
+            <li class="why-item" data-reveal style={`--stagger: ${index}`}>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </section>
+
+    <World
+      as="section"
+      world="ember"
+      class="close"
+      shader="mesh"
+      focus={[0.5, 0.42]}
+      aria-labelledby="close-title"
+    >
+      <div class="close-inner" data-reveal>
+        <Mark size={132} build />
+        <Super
+          size="hero"
+          id="close-title"
+          beats={[{ text: "Start with" }, { text: "one ticket", bold: true }]}
+          sub="Free for Apple silicon Macs. Open source."
+        />
+        <div class="close-actions">
+          <a class="button" href="/download/">Download for Mac</a>
+          <a class="link-quiet" href={DOCS_URL}>Read the docs <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </World>
+  </main>
+
+  <script>
+    // The hero film: play the intro once, start the loop underneath it just
+    // before it ends, then drop the intro. Nothing plays under reduced motion.
+    const film = document.querySelector<HTMLElement>("[data-hero-film]");
+    const intro = film?.querySelector<HTMLVideoElement>(".hero-intro");
+    const loop = film?.querySelector<HTMLVideoElement>(".hero-loop");
+    if (film && intro && loop && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      loop.preload = "auto";
+      loop.load();
+      intro.addEventListener("playing", () => film.setAttribute("data-playing", ""), { once: true });
+      intro.addEventListener("ended", () => {
+        void loop.play().then(() => film.setAttribute("data-looping", ""));
+      });
+      void intro.play().catch(() => film.setAttribute("data-still", ""));
+    }
+  </script>
+</Base>

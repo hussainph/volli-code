@@ -51,7 +51,7 @@ const WEBSITE_ROOT = resolve(HERE, "..");
  * package at run time, so a version bump cannot leave a stale literal here
  * asserting a notice for a version we no longer ship.
  */
-export const REVIEWED_GSAP_BANNERS = ["GSAP", "CSSPlugin", "Flip", "matrix"];
+export const REVIEWED_GSAP_BANNERS = [];
 
 /**
  * String literals that only appear when a chunk contains GSAP's own runtime,
@@ -336,7 +336,10 @@ function selfTest() {
   // The reviewed list is the gate's whole basis for set equality. An empty one
   // makes every "did it ship" assertion vacuously true, and the only condition
   // under which that is legal is gsap being gone — which is asserted below.
-  expect("the reviewed list is not empty", REVIEWED_GSAP_BANNERS.length > 0);
+  expect(
+    "the reviewed list is empty only when gsap is not a dependency",
+    REVIEWED_GSAP_BANNERS.length > 0 || installedGsapVersion() === null,
+  );
   expect(
     "the reviewed list has no duplicates",
     new Set(REVIEWED_GSAP_BANNERS).size === REVIEWED_GSAP_BANNERS.length,
