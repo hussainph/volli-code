@@ -120,6 +120,12 @@ export function renderNoticeInputs(facts) {
 
   const lines = [];
   const push = (...text) => lines.push(...text);
+  // Sections are numbered as they are emitted rather than hardcoded, because
+  // the GSAP section below drops out entirely once gsap is not a dependency —
+  // a numbered gap ("## 2" missing) would read as a mistake, not a fact about
+  // the tree.
+  let section = 0;
+  const heading = (title) => `## ${++section}. ${title}`;
 
   push(
     "<!-- GENERATED FILE — do not edit by hand.",
@@ -142,7 +148,7 @@ export function renderNoticeInputs(facts) {
 
   // --- LGPL ---------------------------------------------------------------
   push(
-    "## 1. LGPL — libvips, shipped inside the desktop app",
+    heading("LGPL — libvips, shipped inside the desktop app"),
     "",
     `Package: \`${LIBVIPS_PACKAGE}@${libvips.version}\`  `,
     `SPDX: \`${libvips.license}\`  `,
@@ -257,29 +263,37 @@ export function renderNoticeInputs(facts) {
   );
 
   // --- GSAP ---------------------------------------------------------------
-  const gsap = policy.reviewed.gsap;
-  push(
-    "## 2. GSAP — bundled into the marketing website",
-    "",
-    `Package: \`gsap@${facts.gsapVersion}\`  `,
-    `License: ${gsap.license}  `,
-    "Terms read at <https://gsap.com/standard-license> (effective 2025-04-30).",
-    "",
-    "The operative notice already ships: GSAP's own `/*!` banners survive into the deployed",
-    "bundles, which is what section III.3 protects. `apps/website/scripts/check-bundled-license-notices.mjs`",
-    "holds them there. A static website notice, if one is added, needs only:",
-    "",
-    "```text",
-    `GSAP ${facts.gsapVersion} — Copyright 2008-2026, GreenSock. All rights reserved.`,
-    "Used under the GreenSock Standard License: https://gsap.com/standard-license",
-    "```",
-    "",
-  );
+  // Only rendered while gsap is actually installed somewhere in the tree. It
+  // was removed from @volli/website by VC-472 (docs/licensing/dependency-
+  // license-review.md#gsap); the section disappears with the dependency
+  // instead of describing a package nobody ships, the same way this document
+  // never grew a section for apca-w3 while it was devDependency-only and now
+  // has none for it at all.
+  if (facts.gsapVersion !== null) {
+    const gsap = policy.reviewed.gsap;
+    push(
+      heading("GSAP — bundled into the marketing website"),
+      "",
+      `Package: \`gsap@${facts.gsapVersion}\`  `,
+      `License: ${gsap.license}  `,
+      "Terms read at <https://gsap.com/standard-license> (effective 2025-04-30).",
+      "",
+      "The operative notice already ships: GSAP's own `/*!` banners survive into the deployed",
+      "bundles, which is what section III.3 protects. `apps/website/scripts/check-bundled-license-notices.mjs`",
+      "holds them there. A static website notice, if one is added, needs only:",
+      "",
+      "```text",
+      `GSAP ${facts.gsapVersion} — Copyright 2008-2026, GreenSock. All rights reserved.`,
+      "Used under the GreenSock Standard License: https://gsap.com/standard-license",
+      "```",
+      "",
+    );
+  }
 
   // --- Elected licenses ---------------------------------------------------
   const elected = Object.entries(policy.reviewed).filter(([, entry]) => entry.electedLicense);
   push(
-    "## 3. Dual-licensed dependencies — the half Volli elected",
+    heading("Dual-licensed dependencies — the half Volli elected"),
     "",
     "A notice reading only `MPL-2.0 OR Apache-2.0` leaves the reader to guess which set of terms",
     "applies. These entries state the election.",
@@ -295,7 +309,7 @@ export function renderNoticeInputs(facts) {
   // --- License read from elsewhere ----------------------------------------
   const offManifest = Object.entries(policy.reviewed).filter(([, entry]) => entry.licenseSource);
   push(
-    "## 4. Dependencies whose license is not in their manifest",
+    heading("Dependencies whose license is not in their manifest"),
     "",
     "Automated scanners report these as unlicensed. They are not — the license is simply somewhere",
     "a scanner does not look, so a notice generator must be told where to read it from.",
@@ -337,6 +351,26 @@ function findLibvipsRoot() {
   return existsSync(resolve(root, "package.json")) ? root : null;
 }
 
+/**
+ * The installed `gsap` version, or `null` when `@volli/website` no longer
+ * declares it. Mirrors `apps/website/scripts/check-bundled-license-notices.mjs`'s
+ * own `installedGsapVersion` — the same fact read the same way wherever it is
+ * needed — so this generator cannot read the dependency tree differently than
+ * the gate that already knows how to ask "is gsap still here" without an
+ * ENOENT on the package that used to be at that path.
+ */
+function installedGsapVersion() {
+  const manifest = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "apps/website/package.json"), "utf8"),
+  );
+  if (manifest.dependencies?.gsap === undefined && manifest.devDependencies?.gsap === undefined) {
+    return null;
+  }
+  return JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "apps/website/node_modules/gsap/package.json"), "utf8"),
+  ).version;
+}
+
 /** Everything the document is derived from, read off disk. */
 function gatherFacts(libvipsRoot) {
   const policy = JSON.parse(readFileSync(POLICY_PATH, "utf8"));
@@ -348,9 +382,7 @@ function gatherFacts(libvipsRoot) {
 
   return {
     policy,
-    gsapVersion: JSON.parse(
-      readFileSync(resolve(REPO_ROOT, "apps/website/node_modules/gsap/package.json"), "utf8"),
-    ).version,
+    gsapVersion: installedGsapVersion(),
     libvips: {
       version: manifest.version,
       license: manifest.license,
@@ -519,6 +551,7 @@ function selfTest() {
     "states the gsap version",
     rendered.includes("GSAP 3.15.0 — Copyright 2008-2026, GreenSock."),
   );
+  expect("numbers the GSAP section 2 while gsap is installed", rendered.includes("## 2. GSAP"));
   // 4(b) is discharged, so the draft now states it outright — and the claim is
   // driven by the policy record rather than by an edit here, because the record
   // is what `check:licenses` holds to the filesystem and to the files' hashes.
@@ -559,6 +592,30 @@ function selfTest() {
   expect(
     "points the relink claim at the shipped instructions",
     rendered.includes("RELINK-LIBVIPS.md"),
+  );
+
+  // gsap can leave the tree entirely — VC-472 did, for @volli/website — and
+  // when it does, the section describing it must disappear rather than
+  // describe a package nobody ships or a stale version read off a manifest
+  // that no longer declares it. The section after it renumbers to fill the
+  // gap instead of leaving "## 3" with no "## 2" above it.
+  const draftWithoutGsap = renderNoticeInputs({
+    gsapVersion: null,
+    policy: policyFixture("shipped"),
+    libvips: {
+      version: "1.3.3",
+      license: "LGPL-3.0-or-later",
+      repository: "https://github.com/lovell/sharp-libvips",
+      binary: "./lib/libvips-cpp.8.18.6.dylib",
+      componentLicenses: rows,
+      componentVersions: [["vips", "8.18.6"]],
+      licensingNotes: notes,
+    },
+  });
+  expect("drops the GSAP section entirely once gsap is gone", !draftWithoutGsap.includes("GSAP"));
+  expect(
+    "renumbers the following section instead of leaving a numbering gap",
+    draftWithoutGsap.includes("## 2. Dual-licensed dependencies"),
   );
 
   // Determinism, tested as the properties that could actually break it rather

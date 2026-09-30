@@ -165,22 +165,7 @@ The two tables are reproduced side by side rather than joined: upstream keys the
 differently (`exif` against `libexif`, `vips` against `libvips`), and pairing them here
 would mean inventing a mapping upstream does not publish.
 
-## 2. GSAP — bundled into the marketing website
-
-Package: `gsap@3.15.0`  
-License: Standard 'no charge' license: https://gsap.com/standard-license.  
-Terms read at <https://gsap.com/standard-license> (effective 2025-04-30).
-
-The operative notice already ships: GSAP's own `/*!` banners survive into the deployed
-bundles, which is what section III.3 protects. `apps/website/scripts/check-bundled-license-notices.mjs`
-holds them there. A static website notice, if one is added, needs only:
-
-```text
-GSAP 3.15.0 — Copyright 2008-2026, GreenSock. All rights reserved.
-Used under the GreenSock Standard License: https://gsap.com/standard-license
-```
-
-## 3. Dual-licensed dependencies — the half Volli elected
+## 2. Dual-licensed dependencies — the half Volli elected
 
 A notice reading only `MPL-2.0 OR Apache-2.0` leaves the reader to guess which set of terms
 applies. These entries state the election.
@@ -191,7 +176,7 @@ applies. These entries state the election.
 | `node-forge` | (BSD-3-Clause OR GPL-2.0) | BSD-3-Clause |
 | `json-schema` | (AFL-2.1 OR BSD-3-Clause) | BSD-3-Clause |
 
-## 4. Dependencies whose license is not in their manifest
+## 3. Dependencies whose license is not in their manifest
 
 Automated scanners report these as unlicensed. They are not — the license is simply somewhere
 a scanner does not look, so a notice generator must be told where to read it from.
