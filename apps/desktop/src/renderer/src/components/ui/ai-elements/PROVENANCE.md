@@ -172,7 +172,7 @@ a bare "modified" tells a reader nothing.
 Apache-2.0. Two obligations apply to us and both are already discharged — this
 section records where, so that a future change cannot quietly break them.
 
-**§4(a), a copy of the License.** Volli Code is itself Apache-2.0 and ships the
+**§4(a), a copy of the License.** Volli is itself Apache-2.0 and ships the
 full license text at the repository root: [`LICENSE`](../../../../../../../../LICENSE).
 Anyone who receives this source receives that file with it, so the text is not
 duplicated here. `vendor-provenance.test.ts` asserts the root `LICENSE` really

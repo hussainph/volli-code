@@ -16,7 +16,7 @@
 
   "permissive": {
     "$comment": [
-      "Licenses that place no restriction on how Volli Code is used, shipped or charged for, beyond",
+      "Licenses that place no restriction on how Volli is used, shipped or charged for, beyond",
       "attribution and warranty disclaimers. Attribution is still owed for these — that obligation",
       "belongs to the centralized notice files, not to this gate.",
       "A license is NOT listed here merely because it is common: copyleft (any GPL/LGPL/AGPL), the",

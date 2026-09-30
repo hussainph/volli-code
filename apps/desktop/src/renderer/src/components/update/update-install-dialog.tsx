@@ -97,7 +97,7 @@ export function UpdateInstallDialog() {
           <AlertDialogTitle>
             {version === null || version === undefined
               ? "Install update and restart?"
-              : `Update to Volli Code ${version}?`}
+              : `Update to Volli ${version}?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
             The update has been downloaded. Installing restarts the app now

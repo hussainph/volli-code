@@ -129,7 +129,7 @@ if (
   );
 }
 
-const header = `Licence notices for the TextMate theme data bundled with Volli Code's Monaco
+const header = `Licence notices for the TextMate theme data bundled with Volli's Monaco
 editor (via @shikijs/themes). Extracted from the upstream shikijs/textmate-
 grammars-themes packages/tm-themes/NOTICE for only the themes Volli ships; the
 Shiki runtime packages that load them are ordinary dependencies and are covered
@@ -142,7 +142,7 @@ Regenerate with:
 Shipped theme ids:
 ${SHIPPED_THEME_IDS.map((id) => `  - ${id}`).join("\n")}
 
-No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 color
+No terminal themes are bundled. Volli ships no Ghostty or iTerm2 color
 schemes: the terminal is painted from the user's own Ghostty configuration,
 read from their machine, or from a palette derived from Volli's own design
 tokens. Nothing in that path is redistributed, so nothing in it appears below.

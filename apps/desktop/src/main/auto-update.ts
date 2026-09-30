@@ -317,7 +317,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     deps.notify({
       producer: "update-ready",
       title: "Update ready",
-      body: `Volli Code ${info.version} has been downloaded and will install when you quit.`,
+      body: `Volli ${info.version} has been downloaded and will install when you quit.`,
       target: { kind: "update" },
     });
   });

@@ -154,7 +154,7 @@ export function NotificationsPane() {
           tone="error"
           icon={WarningCircleIcon}
           title="The system didn't deliver the last notification"
-          detail={`${failure.message} Check that Volli Code is allowed to notify in ${SYSTEM_SETTINGS_ROUTE}.`}
+          detail={`${failure.message} Check that Volli is allowed to notify in ${SYSTEM_SETTINGS_ROUTE}.`}
         />
       ) : null}
 

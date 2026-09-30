@@ -788,13 +788,13 @@ export function renderNoticeDocument(model) {
 
   const totalPackages = model.entries.length + model.platformNative.length + model.toolchain.length;
   out.push(
-    "VOLLI CODE — THIRD-PARTY SOFTWARE NOTICES AND INFORMATION",
+    "VOLLI — THIRD-PARTY SOFTWARE NOTICES AND INFORMATION",
     "",
     "Generated file. Do not edit by hand.",
     "  regenerate:  node scripts/generate-third-party-notices.mjs",
     "  verify:      pnpm run check:notices",
     "",
-    "Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).",
+    "Scope: the macOS arm64 Volli application bundle (app id app.volli.desktop).",
     `It covers ${totalPackages} third-party packages: the production dependency closure`,
     "of the desktop app and of the bundled `volli` CLI, the native platform packages",
     "electron-builder ships as binaries, the build-time sources whose output is part of",
@@ -810,28 +810,28 @@ export function renderNoticeDocument(model) {
     "",
     // Stated positively, and emitted here rather than typed into the output,
     // because the output is generated: an earlier hand-edit of this paragraph
-    // was silently erased by the next regeneration. Volli Code once shipped a
+    // was silently erased by the next regeneration. Volli once shipped a
     // catalog of 463 third-party terminal themes; VC-413 removed all of it
     // because no individual theme's licence had been verified. An absence is
     // worth saying out loud in a notice document, since a reader cannot tell
     // "not bundled" from "forgotten" by looking at what is missing.
-    "No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 colour",
+    "No terminal themes are bundled. Volli ships no Ghostty or iTerm2 colour",
     "schemes: the terminal is painted from the user's own Ghostty configuration, read",
     "from their machine, or from a palette derived from Volli's own design tokens.",
     "Nothing in that path is redistributed, so nothing in it appears below.",
     "",
   );
 
-  section("1. VOLLI CODE'S OWN LICENCE");
+  section("1. VOLLI'S OWN LICENCE");
   out.push(
-    `Volli Code is distributed under the ${model.projectLicenseName} licence. The complete text is`,
+    `Volli is distributed under the ${model.projectLicenseName} licence. The complete text is`,
     `at ${model.projectLicenseFile} in the repository and ships inside the application bundle at:`,
     "",
     ...model.shippedResources.map((resource) => `  Contents/Resources/${resource.to}`),
     "",
     model.ownershipNote,
     "",
-    "The workspace packages below are part of Volli Code itself and carry that licence;",
+    "The workspace packages below are part of Volli itself and carry that licence;",
     "they are listed so the index accounts for every module in the bundle.",
     "",
     ...model.firstParty.map((name) => `  ${name}`),

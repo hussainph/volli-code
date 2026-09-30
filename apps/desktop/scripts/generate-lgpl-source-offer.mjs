@@ -7,7 +7,7 @@
  *     node apps/desktop/scripts/generate-lgpl-source-offer.mjs --check  # fail if stale
  *     node apps/desktop/scripts/generate-lgpl-source-offer.mjs --verify-sources
  *
- * WHY THIS EXISTS (VC-409). Volli Code ships a prebuilt libvips under the
+ * WHY THIS EXISTS (VC-409). Volli ships a prebuilt libvips under the
  * LGPLv3. Section 4(d) requires that a user be able to run a modified version
  * of the library; taken through 4(d)(0), that means conveying the Minimal
  * Corresponding Source. GPLv3 section 6(d) — which 4(d)(0) reaches — allows
@@ -298,7 +298,7 @@ export function renderSourceOffer(facts) {
     "",
     "# libvips and the GNU Lesser General Public License",
     "",
-    "Volli Code includes **libvips**, bundled together with its own",
+    "Volli includes **libvips**, bundled together with its own",
     "dependencies as a single prebuilt shared library:",
     "",
     `    ${facts.binary}`,

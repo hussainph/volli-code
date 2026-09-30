@@ -1,6 +1,6 @@
 # Dependency license review (VC-409)
 
-Volli Code ships under Apache-2.0. Almost everything it depends on is permissive too — 990 MIT
+Volli ships under Apache-2.0. Almost everything it depends on is permissive too — 990 MIT
 packages, 91 Apache-2.0, and so on down a long tail. This document is about the handful that are
 not, what their licenses actually say, what has been made mechanically true about them, and which
 questions still need a person with authority to answer.
@@ -382,7 +382,7 @@ and libvips:
    UI — literally HTML and CSS on a self-illuminated display, but not *web content* in the sense of
    a page a browser fetches. Whether that is inside the grant is a judgment call.
 2. **Commercial use.** Commercial use needs a signed agreement except under the W3 cooperative
-   agreement for web content. Volli Code is a commercial-intent product, though `apca-w3` is used
+   agreement for web content. Volli is a commercial-intent product, though `apca-w3` is used
    only in its development and never distributed. Whether "commercial use" reaches a test-time tool
    inside a commercial company is a legal reading, not a technical one.
 
@@ -460,7 +460,7 @@ enter the desktop product.
 
 ### Open question Q1 — a product call, not a blocker today
 
-Volli Code is an agent coding workspace: users write and generate code, and no surface lets anyone
+Volli is an agent coding workspace: users write and generate code, and no surface lets anyone
 build visual animations without code. On today's product the Prohibited Uses clause is not engaged,
 and the licensor's FAQ addresses the AI-codegen case directly. Two things are worth a deliberate
 decision rather than a drift:

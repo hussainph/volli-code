@@ -175,7 +175,7 @@ describe("createNotificationDispatcher", () => {
     expect(
       dispatcher.deliver({
         producer: "agent-notify",
-        title: "Volli Code",
+        title: "Volli",
         body: "…",
         target: null,
       }),

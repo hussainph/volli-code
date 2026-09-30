@@ -381,7 +381,7 @@ describe("startAutoUpdate", () => {
       {
         producer: "update-ready",
         title: "Update ready",
-        body: "Volli Code 0.2.0 has been downloaded and will install when you quit.",
+        body: "Volli 0.2.0 has been downloaded and will install when you quit.",
         // A click opens the update surface rather than a random window (VC-295).
         target: { kind: "update" },
       },
@@ -475,13 +475,13 @@ describe("startAutoUpdate", () => {
       {
         producer: "update-ready",
         title: "Update ready",
-        body: "Volli Code 0.2.0 has been downloaded and will install when you quit.",
+        body: "Volli 0.2.0 has been downloaded and will install when you quit.",
         target: { kind: "update" },
       },
       {
         producer: "update-ready",
         title: "Update ready",
-        body: "Volli Code 0.3.0 has been downloaded and will install when you quit.",
+        body: "Volli 0.3.0 has been downloaded and will install when you quit.",
         target: { kind: "update" },
       },
     ]);

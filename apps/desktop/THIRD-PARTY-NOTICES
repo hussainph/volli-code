@@ -1,10 +1,10 @@
-VOLLI CODE — THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+VOLLI — THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 
 Generated file. Do not edit by hand.
   regenerate:  node scripts/generate-third-party-notices.mjs
   verify:      pnpm run check:notices
 
-Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
+Scope: the macOS arm64 Volli application bundle (app id app.volli.desktop).
 It covers 590 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
@@ -18,16 +18,16 @@ and trailing whitespace trimmed; nothing else is rewritten.
 This document reports what each package declares and publishes. It draws no legal
 conclusion about any of it — see the final section for declarations that need one.
 
-No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 colour
+No terminal themes are bundled. Volli ships no Ghostty or iTerm2 colour
 schemes: the terminal is painted from the user's own Ghostty configuration, read
 from their machine, or from a palette derived from Volli's own design tokens.
 Nothing in that path is redistributed, so nothing in it appears below.
 
 =========================================================================================================
-1. VOLLI CODE'S OWN LICENCE
+1. VOLLI'S OWN LICENCE
 =========================================================================================================
 
-Volli Code is distributed under the Apache-2.0 licence. The complete text is
+Volli is distributed under the Apache-2.0 licence. The complete text is
 at LICENSE in the repository and ships inside the application bundle at:
 
   Contents/Resources/LICENSE.txt
@@ -38,7 +38,7 @@ Copyright 2026 Hussain Phalasiya, as recorded in the root LICENSE's Apache-2.0 a
 document reproduces that line rather than restating it, so the LICENSE remains the
 single place the holder is named.
 
-The workspace packages below are part of Volli Code itself and carry that licence;
+The workspace packages below are part of Volli itself and carry that licence;
 they are listed so the index accounts for every module in the bundle.
 
   @volli/agent-runtime
@@ -13172,7 +13172,7 @@ Source:
   scripts/generate-editor-theme-notices.mjs from shikijs/textmate-grammars-themes
   packages/tm-themes/NOTICE.
 ---------------------------------------------------------------------------------------------------------
-Licence notices for the TextMate theme data bundled with Volli Code's Monaco
+Licence notices for the TextMate theme data bundled with Volli's Monaco
 editor (via @shikijs/themes). Extracted from the upstream shikijs/textmate-
 grammars-themes packages/tm-themes/NOTICE for only the themes Volli ships; the
 Shiki runtime packages that load them are ordinary dependencies and are covered
@@ -13185,6 +13185,11 @@ Regenerate with:
 Shipped theme ids:
   - vitesse-light
   - vitesse-dark
+
+No terminal themes are bundled. Volli ships no Ghostty or iTerm2 color
+schemes: the terminal is painted from the user's own Ghostty configuration,
+read from their machine, or from a palette derived from Volli's own design
+tokens. Nothing in that path is redistributed, so nothing in it appears below.
 
 =========================================================================================================
 Files: vitesse-light.json, vitesse-dark.json

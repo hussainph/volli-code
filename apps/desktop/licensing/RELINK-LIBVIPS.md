@@ -10,7 +10,7 @@
 
 # Running your own build of libvips
 
-Volli Code includes **libvips** as a shared library, under the GNU Lesser General Public
+Volli includes **libvips** as a shared library, under the GNU Lesser General Public
 License v3. Section 4(d) of that license entitles you to replace it with your own build and
 still run this application. This file explains how, on macOS.
 
@@ -45,8 +45,8 @@ because that is the name the addon asks the loader for. The script handles this 
 
 ## The obstacle, stated honestly
 
-Volli Code is distributed signed with an Apple Developer ID and the **hardened runtime**, and
-it deliberately does not carry the `com.apple.security.cs.disable-library-validation`
+Volli is distributed signed with an Apple Developer ID and the **hardened runtime**, and it
+deliberately does not carry the `com.apple.security.cs.disable-library-validation`
 entitlement. With that combination, macOS enforces _library validation_: a process will only
 load libraries signed by the same Apple Team ID as the process itself.
 

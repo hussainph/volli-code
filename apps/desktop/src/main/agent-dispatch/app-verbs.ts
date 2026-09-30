@@ -158,7 +158,7 @@ export async function notifyVerb(
 ): Promise<AgentResponse> {
   const { options } = context;
   const message = request.args["message"];
-  const title = request.args["title"] ?? "Volli Code";
+  const title = request.args["title"] ?? "Volli";
   if (
     typeof message !== "string" ||
     message.trim().length === 0 ||
@@ -193,7 +193,7 @@ export async function notifyVerb(
       notifyRefusal(outcome.reason),
       outcome.reason === "unsupported"
         ? "This platform posts no native notifications; report the result in your own output instead."
-        : "Check that Volli Code is allowed to notify in System Settings → Notifications.",
+        : "Check that Volli is allowed to notify in System Settings → Notifications → Volli Code.",
     );
   }
   return { v: 1, ok: true, data: { notified: true } };

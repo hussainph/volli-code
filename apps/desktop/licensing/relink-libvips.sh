@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# relink-libvips.sh — install your own build of libvips into Volli Code.
+# relink-libvips.sh — install your own build of libvips into Volli.
 #
 # This is the Installation Information LGPLv3 section 4(e) asks for, in the
 # form of something you can run. It replaces the libvips shared library inside
@@ -12,7 +12,7 @@
 #
 #     ./relink-libvips.sh --app "/Applications/Volli Code.app" --verify
 #
-# WHY RE-SIGNING IS PART OF THE JOB. Volli Code ships signed with a Developer
+# WHY RE-SIGNING IS PART OF THE JOB. Volli ships signed with a Developer
 # ID and the hardened runtime, and it deliberately does NOT carry the
 # `com.apple.security.cs.disable-library-validation` entitlement. Library
 # validation therefore refuses to load any library not signed by the same Apple
@@ -91,7 +91,7 @@ fi
 # hardcoded: this script keeps working across libvips bumps.
 UNPACKED="$APP/Contents/Resources/app.asar.unpacked/node_modules/@img"
 INSTALLED="$(find "$UNPACKED" -name 'libvips-cpp.*.dylib' -maxdepth 3 2>/dev/null | head -1 || true)"
-[ -n "$INSTALLED" ] || die "no libvips dylib found under $UNPACKED — is this a Volli Code bundle?"
+[ -n "$INSTALLED" ] || die "no libvips dylib found under $UNPACKED — is this a Volli app bundle?"
 
 ADDON="$(find "$UNPACKED" -name 'sharp-darwin-*.node' -maxdepth 3 2>/dev/null | head -1 || true)"
 

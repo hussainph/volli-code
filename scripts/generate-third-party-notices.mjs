@@ -121,7 +121,7 @@ const REQUIRED_RESOURCES = [
 const ARTIFACTS = [
   {
     id: "desktop",
-    description: "the macOS arm64 Volli Code application bundle (app id app.volli.desktop)",
+    description: "the macOS arm64 Volli application bundle (app id app.volli.desktop)",
     // What the ARTIFACT targets, never what the build host happens to be: this
     // check runs on Linux CI, and the .app is macOS arm64 either way.
     target: { os: "darwin", cpu: "arm64" },
