@@ -7,10 +7,14 @@
  * The copy is Option A from the copy review (`.scratch/copy/OPTIONS.md`), a
  * working draft until the owner picks.
  */
+import introMp4 from "../assets/hero/intro.mp4";
+import introWebm from "../assets/hero/intro.webm";
+import loopMp4 from "../assets/hero/loop.mp4";
+import loopWebm from "../assets/hero/loop.webm";
+import heroPoster from "../assets/hero/poster.webp";
 import Chapter from "../components/Chapter.astro";
 import Mark from "../components/Mark.astro";
 import Super from "../components/Super.astro";
-import VolliDemo from "../components/VolliDemo";
 import World from "../components/World.astro";
 import { DOCS_URL, REPOSITORY_URL } from "../data/links";
 import { still } from "../data/stills";
@@ -18,34 +22,19 @@ import GitHubIcon from "../components/GitHubIcon.astro";
 import Base from "../layouts/Base.astro";
 
 const WHY = [
-  {
-    title: "Each task has one home",
-    body: "A ticket holds its chats, branch and changes, so you never match a chat window to an issue by hand.",
-  },
-  {
-    title: "Switching is the point",
-    body: "Peek at any chat from the sidebar and reply without leaving the task you're in.",
-  },
-  {
-    title: "Agents plan with you",
-    body: "Agents can create tickets and start chats, so the board grows with the work.",
-  },
-  {
-    title: "Come back to it later",
-    body: "Leave for a week. Every task still has its full history when you return.",
-  },
-  {
-    title: "Use what you pay for",
-    body: "Sign in with your coding subscriptions and choose a model for each task.",
-  },
+  { title: "One home per task", body: "No more matching chat windows to issues." },
+  { title: "Switching is free", body: "Jump between agents without losing your place." },
+  { title: "Agents that plan", body: "They write tickets and start each other." },
+  { title: "Walk away", body: "A week later, every task is where you left it." },
+  { title: "Your own plans", body: "Use the coding subscriptions you already pay for." },
 ] as const;
 
 const description =
-  "Run coding agents in parallel on your Mac. Volli keeps each ticket with its chats, branch and changes so you can return to the work after time away.";
+  "Volli is a Mac app for running coding agents in parallel. Every task keeps its chats, code and history, so you can run more agents and pick any project back up where you left it.";
 ---
 
 <Base
-  title="Volli | A Mac workspace for parallel coding agents"
+  title="Volli | Dozens of agents, one clear head"
   description={description}
   path="/"
 >
@@ -58,11 +47,11 @@ const description =
             size="hero"
             level={1}
             id="hero-title"
-            beats={[{ text: "A workspace for" }, { text: "parallel coding agents", bold: true }]}
+            beats={[{ text: "Dozens of agents." }, { text: "One clear head.", bold: true }]}
           />
           <p class="hero-lede hero-rise" style="--rise: 3">
-            Volli brings your tickets and agent chats into one Mac app. Run tasks in parallel and
-            return to each task's history when you come back.
+            Volli keeps every task's chats, code and history in one Mac app. Run more agents than
+            you could ever juggle, and pick any project back up exactly where you left it.
           </p>
         </div>
         <div class="hero-action hero-rise" style="--rise: 4">
@@ -77,8 +66,27 @@ const description =
         </div>
       </div>
 
-      <div class="hero-demo hero-rise" style="--rise: 5">
-        <VolliDemo client:load />
+      {/* The real app, not a mock: a sweep down a sidebar of live agents that
+          pulls back to the whole window, then drifts forever. Two videos: the
+          intro plays once and hands off to a loop that starts on its last
+          frame. Under reduced motion the page shows only that frame.
+          (apps/desktop/scripts/film/web-hero.mjs) */}
+      <div class="hero-film hero-rise" style="--rise: 5" data-hero-film>
+        <img
+          class="hero-poster"
+          src={heroPoster.src}
+          width={heroPoster.width}
+          height={heroPoster.height}
+          alt="Volli with a sidebar full of agents at work, beside a board of tickets."
+        />
+        <video class="hero-video hero-loop" muted playsinline loop preload="none" aria-hidden="true">
+          <source src={loopMp4} type="video/mp4" />
+          <source src={loopWebm} type="video/webm" />
+        </video>
+        <video class="hero-video hero-intro" muted playsinline preload="auto" aria-hidden="true">
+          <source src={introMp4} type="video/mp4" />
+          <source src={introWebm} type="video/webm" />
+        </video>
       </div>
     </section>
 
@@ -90,10 +98,10 @@ const description =
       <div class="essay-body">
         {/* Each sentence lights up as it scrolls into the reading line. */}
         <p class="essay-read">
-          <span class="read">On a long-running project, you can lose track of which ticket belongs to which chat window or terminal pane.</span>{" "}
-          <span class="read">Volli keeps the ticket and its agent chats together.</span>{" "}
-          <span class="read">Plan tasks on the board, run them in parallel, and check the sidebar to see which agents need you.</span>{" "}
-          <span class="read">When you return, each task still has its history.</span>
+          <span class="read">Chat windows, terminal panes and your issue tracker don't know about each other.</span>{" "}
+          <span class="read">So you end up holding it all in your head.</span>{" "}
+          <span class="read">Volli puts each task and its agents in one place,</span>{" "}
+          <span class="read">so the work is always where you left it.</span>
         </p>
       </div>
     </section>
@@ -106,8 +114,8 @@ const description =
         world="ember"
         still={still("rail")}
         alt="A ticket's sidebar: its status, priority and labels, its two chats, and its branch."
-        beats={[{ text: "Keep each task's" }, { text: "work together", bold: true }]}
-        body="A ticket is a task in Volli. It keeps your brief, chats, branch and changes together. Close a chat or quit the app, then return to the same history a week later."
+        beats={[{ text: "Never lose" }, { text: "the thread", bold: true }]}
+        body="Every task keeps its brief, chats, branch and changes. Come back in a week and it's all still there."
       />
 
       <Chapter
@@ -117,8 +125,8 @@ const description =
         world="aurora"
         still={still("peek")}
         alt="The sidebar's active chats; hovering one opens a card with its latest message and a reply box."
-        beats={[{ text: "Reply without" }, { text: "leaving your place", bold: true }]}
-        body="The sidebar shows which agents are working and which need you. Hover a chat to peek at it, then reply from an overlay while keeping your current task open."
+        beats={[{ text: "Unblock an agent" }, { text: "in seconds", bold: true }]}
+        body="See who needs you at a glance. Hover, reply, and you're still right where you were."
       />
 
       <Chapter
@@ -128,8 +136,8 @@ const description =
         world="rose"
         still={still("split")}
         alt="A split view: a terminal running tests beside a chat."
-        beats={[{ text: "Put a terminal" }, { text: "beside your chat", bold: true }]}
-        body="Open a chat and a terminal side by side. Run commands or your own command-line agent in the task's branch while its conversation stays in view."
+        beats={[{ text: "Watch it work," }, { text: "side by side", bold: true }]}
+        body="Put a terminal next to the chat. Run the tests yourself while the agent keeps going."
       />
 
       <Chapter
@@ -139,8 +147,8 @@ const description =
         world="lagoon"
         still={still("cursor")}
         alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
-        beats={[{ text: "Share a browser" }, { text: "with your agent", bold: true }]}
-        body="Watch the agent's cursor as it checks a page. Take over the browser tab when you want to try something yourself, then hand it back."
+        beats={[{ text: "See what" }, { text: "your agent sees", bold: true }]}
+        body="Your agent drives a real browser tab. Follow its cursor, or take the wheel."
       />
 
       <Chapter
@@ -150,8 +158,8 @@ const description =
         world="cobalt"
         still={still("island")}
         alt="A chat's activity opened into layers: the agent's plan, the agents it started, background commands and browser tabs."
-        beats={[{ text: "Let agents help" }, { text: "start the work", bold: true }]}
-        body="Ask an agent to create tickets and start chats for them. In each chat, follow its plan, the agents it starts, background commands and browser tabs."
+        beats={[{ text: "Agents that" }, { text: "split up the work", bold: true }]}
+        body="Agents plan tickets and start other agents. You see every step, command and tab they open."
       />
 
       <Chapter
@@ -161,8 +169,8 @@ const description =
         world="lime"
         still={still("models")}
         alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
-        beats={[{ text: "Use subscriptions" }, { text: "you already pay for", bold: true }]}
-        body="Sign in with the coding subscriptions you already have. Choose a model for each task, and set defaults for the agents it starts."
+        beats={[{ text: "Nothing new" }, { text: "to pay for", bold: true }]}
+        body="Sign in with the coding plans you already have. Pick the right model for each task."
       />
 
       <Chapter
@@ -172,8 +180,8 @@ const description =
         world="gold"
         still={still("armed")}
         alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
-        beats={[{ text: "Choose when" }, { text: "agents start", bold: true }]}
-        body="Save instructions for repeated work. Choose them while dragging a ticket, or enable an automation on a column so it runs when a ticket enters."
+        beats={[{ text: "Drag a ticket." }, { text: "Work starts.", bold: true }]}
+        body="Save your instructions once. Drop a ticket in a column and an agent picks it up."
       />
 
       <Chapter
@@ -183,7 +191,7 @@ const description =
         world="ember"
         still={still("limits")}
         alt="The usage limits popover: session and weekly windows with time left until they reset."
-        beats={[{ text: "See your usage", bold: true }, { text: "and reset times." }]}
+        beats={[{ text: "No surprise", bold: true }, { text: "usage limits." }]}
       />
 
       <Chapter
@@ -193,7 +201,7 @@ const description =
         world="cobalt"
         still={still("mcp")}
         alt="Settings, MCP servers: four servers, their tools, and their status."
-        beats={[{ text: "Add tools", bold: true }, { text: "with MCP servers." }]}
+        beats={[{ text: "Bring your tools", bold: true }, { text: "with MCP servers." }]}
       />
 
     </section>
@@ -203,7 +211,7 @@ const description =
       <div class="why-head" data-reveal>
         <Super
           id="why-title"
-          beats={[{ text: "Made for many agents" }, { text: "at once", bold: true }]}
+          beats={[{ text: "Built for" }, { text: "twenty agents,", bold: true }, { text: "not one." }]}
         />
       </div>
       <ol class="why-list">
@@ -217,15 +225,6 @@ const description =
           ))
         }
       </ol>
-      <figure class="why-quote" data-reveal>
-        <blockquote>
-          <p>
-            Before Volli, I could keep four to six agents going at once. Now I regularly run fifteen
-            to twenty, and I can leave for a week and pick up where I left off.
-          </p>
-        </blockquote>
-        <figcaption>Hussain Phalasiya, who builds Volli</figcaption>
-      </figure>
     </section>
 
     <World
@@ -241,8 +240,8 @@ const description =
         <Super
           size="hero"
           id="close-title"
-          beats={[{ text: "Start a chat on" }, { text: "your first ticket", bold: true }]}
-          sub="Add your project, write a task, and choose the model you want to use."
+          beats={[{ text: "Start with" }, { text: "one ticket", bold: true }]}
+          sub="Free for Apple silicon Macs. Open source."
         />
         <div class="close-actions">
           <a class="button" href="/download/">Download for Mac</a>
@@ -251,4 +250,21 @@ const description =
       </div>
     </World>
   </main>
+
+  <script>
+    // The hero film: play the intro once, start the loop underneath it just
+    // before it ends, then drop the intro. Nothing plays under reduced motion.
+    const film = document.querySelector<HTMLElement>("[data-hero-film]");
+    const intro = film?.querySelector<HTMLVideoElement>(".hero-intro");
+    const loop = film?.querySelector<HTMLVideoElement>(".hero-loop");
+    if (film && intro && loop && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      loop.preload = "auto";
+      loop.load();
+      intro.addEventListener("playing", () => film.setAttribute("data-playing", ""), { once: true });
+      intro.addEventListener("ended", () => {
+        void loop.play().then(() => film.setAttribute("data-looping", ""));
+      });
+      void intro.play().catch(() => film.setAttribute("data-still", ""));
+    }
+  </script>
 </Base>

@@ -47,6 +47,9 @@ plain words, short sentences, active voice, facts a skeptic can check.
 
 - **Nothing above a headline.** No eyebrows, kickers, section labels or mono
   tag lines — anywhere on the site. A section is a headline, then its words.
+- **Outcomes, not features.** A headline says what the reader gets ("Never
+  lose the thread"), and its one or two sentences say how. Seven seconds: a
+  visitor who reads only the headlines should still know why to download.
 - **Product first, release last.** A first-time visitor wants to know what
   Volli is, what it does, and why they would use it over the agent app they
   already have. The release number appears at most once, quietly.
@@ -134,10 +137,10 @@ Slow and physical, never decorative for its own sake.
 
 ## 9. Page shapes
 
-**Home.** Hero (what Volli is, the download, the live product) → Essay (the
+**Home.** Hero (the outcome in one line, the download and a star, then the real app: the release film's opening shot as a short video that holds on its last frame) → Essay (the
 problem it solves, in one paragraph) → one Chapter per core feature, each its
 own World: the headline and a few plain sentences at the top, a still of the
-real app below them → a short, fair comparison with Claude Code and Codex →
+real app below them, laid out as a bento → what makes Volli different, said about Volli alone (never naming other tools) →
 Close (ember, the mark, the download) → Footer.
 
 **Download.** One World (ember), one Window-sized panel with the build, the

@@ -390,8 +390,8 @@ main > section,
   animation-delay: calc(160ms + var(--rise) * 90ms);
 }
 
-.reveal-ready .hero-demo.hero-rise {
-  animation-name: hero-demo-rise;
+.reveal-ready .hero-film.hero-rise {
+  animation-name: hero-film-rise;
   animation-duration: 1400ms;
 }
 
@@ -402,7 +402,7 @@ main > section,
   }
 }
 
-@keyframes hero-demo-rise {
+@keyframes hero-film-rise {
   from {
     opacity: 0;
     translate: 0 64px;
@@ -418,15 +418,45 @@ main > section,
   text-align: right;
 }
 
-.hero-demo {
+.hero-film {
+  position: relative;
   margin-top: clamp(28px, 4vw, 48px);
+  overflow: hidden;
+  border-radius: var(--radius-world);
+  background: var(--night);
+  aspect-ratio: 16 / 9;
+  box-shadow: 0 40px 120px -40px rgb(123 92 255 / 0.35);
 }
 
-.hero-demo .volli-demo {
-  height: clamp(460px, 42vw, 620px);
-  border: 0;
-  border-radius: var(--radius-world);
-  box-shadow: none;
+.hero-poster,
+.hero-video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The poster is the loop's first frame and where the intro ends, so the hand-
+   offs are invisible: poster → intro while it plays → loop once it has begun. */
+.hero-video {
+  opacity: 0;
+}
+
+[data-playing] .hero-intro,
+[data-looping] .hero-loop {
+  opacity: 1;
+}
+
+[data-looping] .hero-intro {
+  opacity: 0;
+}
+
+/* With motion allowed the film opens on the intro's own first frame, not on
+   the poster (its end); the poster comes back only if autoplay is refused. */
+.reveal-ready .hero-film:not([data-still]) .hero-poster {
+  opacity: 0;
 }
 
 /* ─── Essay ───────────────────────────────────────────────────────────── */
@@ -671,13 +701,25 @@ main > section,
   margin-top: 4px;
   flex: 1 1 auto;
   overflow: hidden;
-  /* The crop never shows as an edge: the top of the picture fades into the
-     world under the words. */
-  mask-image: linear-gradient(transparent, #000 14%);
+  /* The crop never shows as an edge: the picture fades into the world under
+     the words and at its left, where a still can run past its window. */
+  mask-image:
+    linear-gradient(transparent, #000 14%), linear-gradient(90deg, transparent, #000 8%);
+  mask-composite: intersect;
 }
 
 .chapter--small .chapter-still {
   min-height: clamp(240px, 22vw, 320px);
+  mask-image: linear-gradient(transparent, #000 14%);
+}
+
+/* A small card's still is a crop of a whole app window: it runs edge to edge. */
+.chapter--small .chapter-still img {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-position: 0% 0%;
 }
 
 /* Anchored top-left with a margin, so every app window starts inside its card
@@ -838,53 +880,6 @@ main > section,
 }
 
 .reveal-ready .why-item[data-reveal].is-revealed {
-  opacity: 1;
-  translate: none;
-}
-
-.why-quote {
-  grid-column: 2;
-  margin: clamp(24px, 3vw, 40px) 0 0;
-}
-
-.why-quote blockquote {
-  margin: 0;
-}
-
-.why-quote p {
-  font-size: clamp(22px, 2.2vw, 32px);
-  font-weight: 380;
-  line-height: 1.35;
-  letter-spacing: -0.02em;
-  text-wrap: pretty;
-}
-
-.why-quote p::before {
-  content: "“";
-  margin-left: -0.45em;
-  color: var(--ember);
-}
-
-.why-quote p::after {
-  content: "”";
-  color: var(--ember);
-}
-
-.why-quote figcaption {
-  margin-top: 16px;
-  color: var(--ink-3);
-  font-size: 14px;
-}
-
-.reveal-ready .why-quote[data-reveal] {
-  opacity: 0;
-  translate: 0 24px;
-  transition:
-    opacity 900ms var(--ease-out),
-    translate 1000ms var(--ease-out);
-}
-
-.reveal-ready .why-quote[data-reveal].is-revealed {
   opacity: 1;
   translate: none;
 }
@@ -1104,10 +1099,6 @@ main > section,
     position: static;
   }
 
-  .why-quote {
-    grid-column: 1;
-  }
-
   .hero-buttons {
     justify-content: flex-start;
   }
@@ -1135,10 +1126,6 @@ main > section,
 @media (max-width: 720px) {
   .site-header nav a:not(.site-header-download):last-of-type {
     display: none;
-  }
-
-  .hero-demo .volli-demo {
-    height: 520px;
   }
 
   .terms dl > div {

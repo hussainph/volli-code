@@ -52,7 +52,7 @@ const {
   position = "0% 0%",
   focus = [0.5, 0.7],
   span = 7,
-  shader = "glsl",
+  shader = "mesh",
   order = 0,
   id,
 } = Astro.props;
@@ -70,6 +70,7 @@ const tall = still?.tall;
   world={world}
   focus={focus}
   shader={shader}
+  shaderSpeed={3}
   reveal={order}
   class:list={["chapter", `chapter--span-${span}`, { "chapter--small": span === 3 }]}
   id={id}

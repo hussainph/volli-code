@@ -38,6 +38,7 @@ for (const shot of SHOTS) {
       nodes: typeof shot.nodes === "function" ? shot.nodes(format) : shot.nodes,
       surfaceTracks: shot.surfaceTracks?.(format) ?? [],
       guard: shot.guard ?? [],
+      stepMs: shot.stepMs,
     });
     writeFileSync(join(scenes, `${id}.scene.json`), JSON.stringify(doc, null, 2) + "\n");
     const binding = join(scenes, `${id}.tsx`);

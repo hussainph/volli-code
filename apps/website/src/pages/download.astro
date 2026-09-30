@@ -36,7 +36,7 @@ const description =
           level={1}
           id="download-title"
           beats={[{ text: "Download" }, { text: "Volli.", bold: true }]}
-          sub="One build, for Apple silicon Macs, straight from GitHub Releases. Signed, notarized, and it updates itself."
+          sub="Free for Apple silicon Macs. Signed, notarized, and it updates itself."
         />
         <div class="dl-build" data-slot="build">
           <p class="dl-status" data-live>Checking the latest build…</p>
@@ -57,34 +57,29 @@ const description =
         </div>
         <div>
           <dt>Updates</dt>
-          <dd>
-            Volli checks GitHub Releases, downloads a newer build in the background, and installs
-            it when you quit.
-          </dd>
+          <dd>New builds download in the background and install when you quit.</dd>
         </div>
         <div>
           <dt>Your data</dt>
           <dd>
-            Projects, tickets, chats, Automations and worktrees stay on your Mac. Model requests go
-            to the provider and account you set up in <a href={`${DOCS_URL}/guides/settings/`}
-              >Settings → Models</a
-            >. <a href={`${DOCS_URL}/start/install/`}>Where it all lives</a>.
+            Your projects, tickets and chats stay on your Mac. Model requests go only to the
+            provider you sign in to. <a href={`${DOCS_URL}/start/install/`}>Where it all lives</a>.
           </dd>
         </div>
         <div>
           <dt>Build it yourself</dt>
           <dd>
-            The source is on <a href={REPOSITORY_URL}>GitHub</a>; the <a
+            Get the source on <a href={REPOSITORY_URL}>GitHub</a> and follow the <a
               href={`${DOCS_URL}/start/install/`}>install guide</a
-            > covers building from source.
+            >.
           </dd>
         </div>
         <div>
           <dt>Problems</dt>
           <dd>
-            Open a <a href={ISSUES_URL}>GitHub issue</a>. For anything security-related, use <a
-              href={`${REPOSITORY_URL}/security/advisories/new`}>private vulnerability reporting</a
-            > instead.
+            Open a <a href={ISSUES_URL}>GitHub issue</a>. Report security issues <a
+              href={`${REPOSITORY_URL}/security/advisories/new`}>privately</a
+            >.
           </dd>
         </div>
       </dl>
