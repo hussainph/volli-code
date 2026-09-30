@@ -68,33 +68,62 @@ const source = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/${slug}.md`;
 <style>
   .title-row {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 1rem;
-    margin-top: 1rem;
+    gap: 1.25rem;
+    margin-top: 1.5rem;
   }
 
+  /* The website's heading voice (BRAND.md §5): Mona Sans set heavy, a touch
+     wide, and tightly tracked. */
   h1 {
+    color: var(--volli-ink);
     font-size: var(--sl-text-h1);
-    line-height: var(--sl-line-height-headings);
-    color: var(--sl-color-white);
+    font-weight: 700;
+    font-stretch: 106%;
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
   }
 
+  /* The website's quiet button, small: glass on the page, never a second
+     colour. */
   button {
+    display: inline-flex;
     flex-shrink: 0;
-    padding: 0.25rem 0.625rem;
-    border: 1px solid var(--sl-color-hairline);
-    border-radius: var(--volli-radius, 4px);
-    background: transparent;
-    color: var(--sl-color-gray-3);
+    min-height: 32px;
+    margin-top: 0.35rem;
+    padding: 0 14px;
+    align-items: center;
+    border: 0;
+    border-radius: 999px;
+    background: var(--volli-glass);
+    box-shadow: 0 0 0 1px var(--volli-hairline-strong) inset;
+    color: var(--volli-ink-2);
     font: inherit;
-    font-size: var(--sl-text-xs);
+    font-size: 13px;
+    font-weight: 520;
+    white-space: nowrap;
     cursor: pointer;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
   }
 
   button:hover {
-    border-color: var(--sl-color-gray-4);
-    color: var(--sl-color-gray-1);
+    background: var(--volli-glass-strong);
+    color: var(--volli-ink);
+  }
+
+  @media (max-width: 36rem) {
+    .title-row {
+      flex-direction: column;
+      gap: 0.875rem;
+    }
+
+    button {
+      margin-top: 0;
+    }
   }
 
   @media print {

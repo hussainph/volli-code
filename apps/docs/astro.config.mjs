@@ -11,13 +11,9 @@ export default defineConfig({
   integrations: [
     sitemap(),
     starlight({
-      title: "Volli Code",
+      title: "Volli Docs",
       description:
-        "Documentation for Volli Code, a local-first macOS workspace for parallel coding agents.",
-      logo: {
-        src: "./src/assets/volli-icon-dark.png",
-        alt: "Volli Code",
-      },
+        "Documentation for Volli, a local-first macOS workspace for parallel coding agents.",
       favicon: "/volli-icon-dark.png",
       // Starlight already emits og:title/type/url/description/site_name and
       // twitter:card=summary_large_image — but a large-image card with no image
@@ -41,7 +37,7 @@ export default defineConfig({
           tag: "meta",
           attrs: {
             property: "og:image:alt",
-            content: "Volli Code documentation",
+            content: "Volli documentation",
           },
         },
         {
@@ -60,19 +56,28 @@ export default defineConfig({
         baseUrl: "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
       },
       components: {
-        // The site is dark-only, matching volli.app. (The app itself ships both
-        // light and dark; the marketing site and these docs share one palette.)
-        // Overriding ThemeSelect with an empty component removes the toggle;
-        // volli.css pins the palette so a light-preferring visitor still gets
-        // dark.
-        ThemeSelect: "./src/components/ThemeSelect.astro",
+        // The header lockup and links, drawn like volli.app's header: the
+        // mark and "Volli" (home to volli.app), "Docs", then GitHub and
+        // Download as words rather than an icon row. Starlight's light/dark
+        // select stays; volli.css gives both themes the brand palette.
+        SiteTitle: "./src/components/SiteTitle.astro",
+        SocialIcons: "./src/components/SocialIcons.astro",
         // Adds a "Copy page" control beside the title, and a link to /llms.txt
         // in the footer. Both exist because our readers paste these pages into
         // coding agents.
         PageTitle: "./src/components/PageTitle.astro",
         Footer: "./src/components/Footer.astro",
       },
-      customCss: ["@fontsource-variable/mona-sans/wght.css", "./src/styles/volli.css"],
+      // The website's fonts, loaded the way it loads them (BRAND.md §5): Mona
+      // Sans from its full variable file, so the width axis is there, and
+      // Geist Mono for code. Every font here needs an entry in
+      // src/pages/licenses.txt.ts, or `licenses:check` fails the build.
+      customCss: [
+        "@fontsource-variable/mona-sans/standard.css",
+        "@fontsource-variable/mona-sans/standard-italic.css",
+        "@fontsource-variable/geist-mono/wght.css",
+        "./src/styles/volli.css",
+      ],
       sidebar: DOC_SECTIONS,
     }),
   ],
