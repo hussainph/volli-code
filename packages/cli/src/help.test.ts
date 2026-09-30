@@ -87,7 +87,9 @@ describe("renderHelp command detail", () => {
     const detail = renderHelp(["ticket", "move"]);
     expect(detail).toContain("Usage: volli ticket move <id> --to <column> [options]");
     expect(detail).toContain("--dry-run");
-    expect(detail).toContain("Without an enabled, armed Automation, the move does not start a Session");
+    expect(detail).toContain(
+      "Without an enabled, armed Automation, the move does not start a Session",
+    );
   });
 
   it("advertises a signal rehearsal alongside its append-only warning", () => {
