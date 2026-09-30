@@ -6,14 +6,18 @@
 // assess the download. This hook submits each dmg for its own notarization
 // ticket and staples it.
 //
-// The hook rewrites a file electron-builder has just built, so it MUST run
-// before anything reads that file: artifactBuildCompleted fires per artifact,
-// before emitArtifactCreated, which is where the artifact is hashed into
-// latest-mac.yml and handed to the publisher. afterAllArtifactBuild would be
-// too late on both counts — the feed would carry the pre-staple checksum, and
-// with `--publish always` the publisher could be streaming the dmg while
-// `stapler staple` rewrote it (the v0.2.0 draft of 2026-09-30 published an
-// unmountable dmg exactly that way).
+// The hook rewrites a file electron-builder has just built, so it runs before
+// that file is handed to a publisher: artifactBuildCompleted fires per
+// artifact, immediately before emitArtifactCreated does the hand-off, whereas
+// afterAllArtifactBuild runs once when every artifact already exists. With the
+// hook in the later slot the publisher could start streaming the dmg while
+// `stapler staple` rewrote it, which is how the v0.2.0 draft of 2026-09-30
+// published a dmg with a clobbered UDIF trailer.
+//
+// This is NOT what keeps latest-mac.yml honest: electron-builder hashes the dmg
+// inside the DMG target, before any hook runs, so the feed's dmg entry holds
+// the pre-staple checksum and the release workflow's publish step syncs it from
+// the finished file.
 //
 // electron-builder passes the artifact it just built, which is not always a
 // dmg — the zip takes the same hook — so anything that is not a dmg is

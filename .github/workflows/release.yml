@@ -483,24 +483,38 @@ jobs:
           [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
           files=("${dmgs[0]}" "${dmgMaps[0]}" "${zips[0]}" "${zipMaps[0]}" latest-mac.yml)
 
-          # latest-mac.yml has to describe the file that is about to be
-          # uploaded, not the file as it looked before the staple hook rewrote
-          # the dmg: electron-builder hashes the artifact from inside the build.
-          # Fail here rather than publish a feed whose checksum no download can
-          # match. (The zip entry is the one electron-updater installs from on
-          # macOS, so it is the dmg entry that has to be pinned down.)
+          # latest-mac.yml must describe the dmg about to be uploaded, but
+          # electron-builder builds that entry while it builds the dmg, and the
+          # staple hook rewrites the file afterwards (adding the ticket and the
+          # UDIF trailer that goes with it) — so the feed it wrote carries the
+          # pre-staple checksum and size. Stapling earlier does not help:
+          # electron-builder hashes the dmg inside the DMG target, before any
+          # per-artifact hook runs. Correct the entry here, from the file we are
+          # about to upload. (The zip entry is the one electron-updater installs
+          # from on macOS, and it is written before anything touches the zip.)
           dmgEntryLine=$(grep -n '^  - url: .*\.dmg$' latest-mac.yml | cut -d: -f1 || true)
           [ -n "$dmgEntryLine" ] || { echo "::error::latest-mac.yml has no dmg entry"; exit 1; }
           ymlDmg=$(sed -n "${dmgEntryLine}p" latest-mac.yml | awk '{print $3}')
+          [ "$ymlDmg" = "${dmgs[0]}" ] || { echo "::error::latest-mac.yml dmg entry names '$ymlDmg', not '${dmgs[0]}'"; exit 1; }
+          realSha=$(openssl dgst -sha512 -binary "${dmgs[0]}" | base64 | tr -d '\n')
+          realSize=$(stat -f%z "${dmgs[0]}")
+          awk -v shaLine="$((dmgEntryLine + 1))" -v sizeLine="$((dmgEntryLine + 2))" \
+              -v sha="$realSha" -v size="$realSize" '
+            NR == shaLine  { sub(/sha512:.*/, "sha512: " sha) }
+            NR == sizeLine { sub(/size:.*/, "size: " size) }
+            { print }
+          ' latest-mac.yml > latest-mac.yml.stapled
+          mv latest-mac.yml.stapled latest-mac.yml
+          # Read it back, so an electron-builder that ever lays the entry out
+          # differently fails the run instead of publishing a feed that
+          # misdescribes its own dmg (which is what this used to do silently).
           ymlSha=$(sed -n "$((dmgEntryLine + 1))p" latest-mac.yml | awk '{print $2}')
           ymlSize=$(sed -n "$((dmgEntryLine + 2))p" latest-mac.yml | awk '{print $2}')
-          realSha=$(openssl dgst -sha512 -binary "${dmgs[0]}" | base64)
-          realSize=$(stat -f%z "${dmgs[0]}")
-          if [ "$ymlDmg" != "${dmgs[0]}" ] || [ "$ymlSha" != "$realSha" ] || [ "$ymlSize" != "$realSize" ]; then
-            echo "::error::latest-mac.yml dmg entry does not describe ${dmgs[0]} — feed says url=$ymlDmg sha512=$ymlSha size=$ymlSize, file is sha512=$realSha size=$realSize"
+          if [ "$ymlSha" != "$realSha" ] || [ "$ymlSize" != "$realSize" ]; then
+            echo "::error::could not sync the latest-mac.yml dmg entry — feed says sha512=$ymlSha size=$ymlSize, ${dmgs[0]} is sha512=$realSha size=$realSize"
             exit 1
           fi
-          echo "latest-mac.yml dmg entry matches ${dmgs[0]}"
+          echo "latest-mac.yml dmg entry synced to ${dmgs[0]}"
 
           # Drop anything already on this release that is not part of the set
           # about to go up, so re-running a job — or refreshing a draft whose
