@@ -1,6 +1,6 @@
 ---
 title: Settings and configuration
-description: Configure models, integrations, storage, and project-specific agent behavior in Volli Code.
+description: Configure models, integrations, storage, and project-specific agent behavior in Volli.
 sidebar:
   label: Settings
 ---
@@ -36,11 +36,17 @@ reclaimed, or an update is ready.
 
 ### Models
 
-**Settings → Models** is the Model Access surface. Set default models for the
-Board, Ticket Sessions, and other model purposes; configure named default tiers;
-choose which models appear in pickers; and manage provider accounts. **Automatic
-compaction** is also here. Volli does not silently replace an unavailable model
-with another one.
+**Settings → Models** is the Model Access surface. Set default models for
+**Board chats**, **Ticket Sessions**, and **Utility** work such as chat names
+and summaries. The **Fast**, **Deep**, and **Visual** tiers name models by kind
+of work; an unset tier uses the **Ticket Sessions** default. Agents can ask for
+a tier by name when they start another Session or delegate to a subagent. You
+can also choose which models appear in pickers and manage provider accounts.
+**Automatic compaction** is also here. Volli does not silently replace an
+unavailable model with another one.
+
+Subscription usage windows are not shown here. Open the usage-limits popover
+beside the `⌘K` search to see them.
 
 An Automation can use a project default, a named default tier, or an exact
 model and reasoning level. See [Automations](/guides/automations/#set-a-runtime)
@@ -103,7 +109,8 @@ project rather than to the whole app.
 
 - **Skills** manages the project's available Skills and their prompt budget.
 - **Commands** manages project slash commands and templates.
-- **MCP Servers** configures the project's Model Context Protocol servers.
+- **MCP Servers** configures the project's Model Context Protocol servers and
+  which of their tools new Sessions may use.
 - **Authority** sets the project's agent authority policy and approval behavior.
 
 ### Project

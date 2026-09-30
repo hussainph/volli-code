@@ -109,23 +109,19 @@ You can run a saved Automation from any surface that lists it:
 
 - Select **Run** on the Automations page. For a non-scheduled Automation, pick
   the Ticket to run it on. A scheduled Automation runs for the project.
-- In a Ticket workspace's **Automations** section, use the split Run control
-  or open its menu. The default action is the Automation armed for the Ticket's
-  column, when one is ready.
+- In a Ticket workspace's **Automations** section, select an Automation to see
+  its Instructions, choose a model under **Run on**, and select **Run**. The
+  Automation armed for the Ticket's column is listed first.
 - On a board card, open the **Automations** submenu in its context menu.
 - Use the command palette when the Automation is offered there.
 
 A manual Run does not depend on **Enabled**. That switch controls automatic
-Triggers, not a person's deliberate Run. You can also choose **Run on model**
-from the Ticket's run menu for a one-time model and reasoning override.
+Triggers, not a person's deliberate Run. The ticket's **Run on** choice and the
+card menu's **Run on model** apply a model and reasoning override to that one
+Run without changing the Automation.
 
-### Run once
-
-Use **Run once…** in a Ticket's Automations section when you have Instructions
-for one invocation but do not want to save an Automation. This creates an
-**Unbound Run**: it carries its own Instructions, names no Automation, saves no
-Automation record, and still opens a fresh Session. The form can use the
-**Default model** or a model selected for **This run**.
+For one-off work that you don't want to save as an Automation, start a chat on
+the ticket instead.
 
 ## Enable and arm automatic starts
 
@@ -163,8 +159,7 @@ Use this table to see which action starts a Run, what can prevent it, and which 
 | What you do | What starts | What it opens |
 | --- | --- | --- |
 | You select **Run** on a listing. | A manual Run starts immediately, whether **Enabled** is on or off. | A fresh Ticket Session, or a project-level Board Session for a scheduled Automation. |
-| You choose **Run on model** from a Ticket's run menu. | A manual Run with a one-time model and reasoning override. | A fresh **Session** for that Ticket. |
-| You choose **Run once…** in a Ticket's **Automations** section. | An **Unbound Run**; no Automation record is saved. | A fresh **Session** for that Ticket. |
+| You choose a model under **Run on** in a Ticket's **Automations** section, or **Run on model** in a card's menu. | A manual Run with a one-time model and reasoning override. | A fresh **Session** for that Ticket. |
 | You make a **Deliberate move** into a column whose Automation is **Armed** and **Enabled** on this Mac. | An automatic Run starts after a short cancellable delay; **Cancel** prevents it. | A fresh Ticket Session. |
 | You hold **Option (⌥)** during a drag and choose an offered Automation. | The selected Automation's Run starts after the same cancellable delay. | A fresh Ticket Session. |
 | You leave Volli open until a scheduled due time arrives. | A scheduled Run starts. | A project-level Board Session. |

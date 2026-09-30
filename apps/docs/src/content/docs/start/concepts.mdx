@@ -128,8 +128,10 @@ level. A Run records the resolved model and reasoning it used.
 Session it opened. Run history remains available even if the Automation is
 later deleted.
 
-**Unbound Run.** A one-time Run created by **Run once…**. It carries its own
-Instructions and names no saved Automation.
+**Unbound Run.** A Run that carries its own Instructions and names no saved
+Automation. Pre-release 0.2 builds created one with **Run once…**; 0.2.0 has no
+control that starts one, and existing ones appear in Run history as **Run
+once**. For one-off work, start a chat instead.
 
 **Enabled automation.** An Automation switched on for automatic triggering on
 this Mac. Enablement is off until someone turns it on here. It does not prevent

@@ -9,45 +9,49 @@ import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 A ticket is a task in Volli. Open one to read its **Ticket Body**, return to
 its chats, inspect files and diffs, and edit its properties. The main tab strip
-keeps the documents and chats you open. **Now**, **Diffs**, and **Files** group
-the task's workspace views.
+keeps the documents and chats you open. The rail beside it has four pages:
+**Now**, **Diffs**, **Files**, and **Search**.
 
 ![The ticket workspace for VLT-14 with its body, expanded navigation sidebar, worktree and ticket properties, and the Automations rail showing Run once beside the Chat control.](../../../assets/screenshots/ticket-workspace.png)
 
 ## Now
 
-**Now** shows the repository summary, ticket properties, **Automations**, and
-**Sessions** together. Use **Properties** here to edit status, priority, and
-labels. The repository summary shows the branch, base branch, worktree,
-changes, and pull-request state. Changing status updates the board. Starting a
-chat or an Automation Run is a separate action.
+**Now** shows what is true of the whole ticket, in three sections:
 
-The **Sessions** section lists the ticket's chats and terminal sessions. Open
-one to return to its history. A ticket chat carries the task's context and
-works from that ticket's worktree. Reconnecting it does not create a second
-chat history.
+- **Properties**: status, priority, and labels. Changing status updates the
+  board. Starting a chat or an Automation Run is a separate action.
+- **Sessions**: the ticket's chats and terminal sessions. Ended Sessions are
+  folded under the section heading. Open one to return to its history.
+- **Automations**: the saved Automations this ticket can run.
+
+The ticket's cost is a row pinned at the bottom of **Now**. The worktree row is
+pinned under every page: it shows the branch and opens to the base branch,
+worktree, changes, and pull-request state.
+
+A ticket chat carries the task's context and works from that ticket's worktree.
+Reconnecting it does not create a second chat history. What one chat is holding,
+such as its Browser Tabs, subagents, plan, and background shells, is shown in
+the Activity Island above that chat's composer, not in the rail.
+
+Use **Chat** in the **Sessions** heading to start a chat after configuring
+**Settings → Models**. Its menu also opens a terminal companion or a Browser
+Tab. Open a terminal companion explicitly when you need a shell or an external
+TUI harness.
 
 ### Run an Automation on this ticket
 
-The **Automations** section has a split Run control and this ticket's Run
-history. Its main action uses the Automation armed for the ticket's current
-column, when one is ready. Open the menu to choose another offered Automation,
-choose **Run on model**, or select **Run once…**.
+The **Automations** section lists the Automations offered to this ticket. The
+one armed for the ticket's current column comes first and is marked. Select a
+row, or right-click it, to see its saved Instructions, choose the model for
+this Run under **Run on**, and select **Run**. Selecting a row never starts a
+Run by itself. A manual Run is available even when an Automation's **Enabled**
+switch is off.
 
-**Run once…** opens a form for one-time **Instructions**. It creates an
-**Unbound Run** and saves no Automation record. The form can use the **Default
-model** or a model selected for **This run**. A manual Run is available even
-when an Automation's **Enabled** switch is off.
-
-Each history row opens the fresh Session created by that Run and keeps the
-resolved model and reasoning used at launch. If this project has no saved
-Automations, the section still offers **Run once…**. Select **Open
-Automations** in the section heading to create or edit records; authoring lives
-only on that page.
-
-Use the **Sessions** heading to start a chat after configuring **Settings →
-Models**. Open a terminal companion explicitly when you need a shell or an
-external TUI harness.
+The Run opens a fresh Session, which appears in **Sessions** with a mark
+showing that a Run started it. The Automations section does not list Runs.
+Select **Open Automations** in the section heading to create or edit records;
+authoring lives only on that page. For one-off work that you don't want to
+save, start a chat instead.
 
 ## Files and references
 
