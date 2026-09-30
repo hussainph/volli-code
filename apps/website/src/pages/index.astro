@@ -22,12 +22,29 @@ import { still } from "../data/stills";
 import GitHubIcon from "../components/GitHubIcon.astro";
 import Base from "../layouts/Base.astro";
 
+// None of these repeat a bento card: this is what's left of the answer to
+// "why not the agent app I already have?"
 const WHY = [
-  { title: "One home per task", body: "No more matching chat windows to issues." },
-  { title: "Switching is free", body: "Jump between agents without losing your place." },
-  { title: "Agents that plan", body: "They write tickets and start each other." },
-  { title: "Walk away", body: "A week later, every task is where you left it." },
-  { title: "Your own plans", body: "Use the coding subscriptions you already pay for." },
+  {
+    title: "Agents never collide",
+    body: "Each ticket can get its own worktree and branch, so agents never write over each other's code.",
+  },
+  {
+    title: "Diff to pull request",
+    body: "Read a ticket's changes, commit them, and open a draft pull request without leaving the app.",
+  },
+  {
+    title: "Bring your CLI agents",
+    body: "Run any command-line agent in a terminal tab, right inside the ticket's worktree.",
+  },
+  {
+    title: "Stays on your Mac",
+    body: "Projects, tickets and chats are stored locally. Model requests go only to the provider you pick.",
+  },
+  {
+    title: "Free and open source",
+    body: "Apache-2.0. Read the code, or build it yourself.",
+  },
 ] as const;
 
 // Invented, public-safe work in the register of the film's sidebar.
@@ -144,7 +161,7 @@ const description =
         still={still("peek")}
         alt="The sidebar's active chats; hovering one opens a card with its latest message and a reply box."
         beats={[{ text: "Unblock an agent" }, { text: "in seconds", bold: true }]}
-        body="See who needs you at a glance. Hover, reply, and you're still right where you were."
+        body="Hover over an agent to read its latest message and reply. Then get right back to your work."
       />
 
       <Chapter
@@ -154,8 +171,8 @@ const description =
         world="rose"
         still={still("split")}
         alt="A split view: a terminal running tests beside a chat."
-        beats={[{ text: "Watch it work," }, { text: "side by side", bold: true }]}
-        body="Put a terminal next to the chat. Run the tests yourself while the agent keeps going."
+        beats={[{ text: "Tabs for everything," }, { text: "side by side", bold: true }]}
+        body="Chats, terminals, files and browsers each open in a tab. Split the view to keep any of them next to each other."
       />
 
       <Chapter
@@ -165,8 +182,8 @@ const description =
         world="lagoon"
         still={still("cursor")}
         alt="A checkout page in a browser tab, with the agent's cursor pressing Continue to payment."
-        beats={[{ text: "See what" }, { text: "your agent sees", bold: true }]}
-        body="Your agent drives a real browser tab. Follow its cursor, or take the wheel."
+        beats={[{ text: "Browse the web" }, { text: "with your agents", bold: true }]}
+        body="Your agent drives a real browser tab. Watch it click through your app, or take over at any time."
       />
 
       {/* No still here: five of the sidebar's rows arrive and start working
@@ -176,8 +193,8 @@ const description =
         order={0}
         span={7}
         world="cobalt"
-        beats={[{ text: "Agents that" }, { text: "split up the work", bold: true }]}
-        body="Agents write tickets and start other agents. Watch them all work at once."
+        beats={[{ text: "Let your agents" }, { text: "organize the work", bold: true }]}
+        body="Agents can write tickets, move them across the board, and start other agents. You don't have to run it all yourself."
       >
         <Feed slot="window" rows={AGENTS} label="Five agents, all working" />
       </Chapter>
@@ -189,8 +206,8 @@ const description =
         world="lime"
         still={still("models")}
         alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
-        beats={[{ text: "Nothing new" }, { text: "to pay for", bold: true }]}
-        body="Sign in with the coding plans you already have. Pick the right model for each task."
+        beats={[{ text: "Bring your" }, { text: "own tokens", bold: true }]}
+        body="Connect any of 40+ model providers with the plan or API key you already have. Pick the right model for each task."
       />
 
       <Chapter
@@ -200,8 +217,8 @@ const description =
         world="gold"
         still={still("armed")}
         alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
-        beats={[{ text: "Drag a ticket." }, { text: "Work starts.", bold: true }]}
-        body="Save your instructions once. Drop a ticket in a column and an agent picks it up."
+        beats={[{ text: "Automate" }, { text: "the routine work", bold: true }]}
+        body="Save a workflow once. Run it on a schedule, or whenever a ticket lands in a column."
       />
 
       <Chapter
