@@ -49,6 +49,8 @@ mkdirSync(frames, { recursive: true });
 const frameName = (index) => join(frames, `${String(index).padStart(4, "0")}.png`);
 const fps = Number(option("--fps", "30"));
 const scale = Number(option("--scale", "1.75"));
+// Flute's capture bridge: the same `seek` its own export drives (capture.mjs).
+const BRIDGE = "__FLUTE_CAPTURE__";
 const width = Number(option("--width", "2400"));
 const viewport = sceneId.endsWith("-tall")
   ? { width: 1080, height: 1920 }
@@ -93,27 +95,30 @@ if (!args.includes("--encode")) {
     `http://127.0.0.1:${port}/lab/?flute-preview=1&flute-scene=${encodeURIComponent(sceneId)}`,
     { waitUntil: "load", timeout: 180_000 },
   );
-  await page.waitForFunction(() => typeof window.__FLUTE_CAPTURE__?.seek === "function", null, {
+  await page.waitForFunction((name) => typeof window[name]?.seek === "function", BRIDGE, {
     timeout: 180_000,
   });
   await page.evaluate(() => document.fonts.ready);
-  const { selector, durationMs } = await page.evaluate(() => ({
-    selector: window.__FLUTE_CAPTURE__.selector,
-    durationMs: window.__FLUTE_CAPTURE__.durationMs,
-  }));
+  const { selector, durationMs } = await page.evaluate(
+    (name) => ({ selector: window[name].selector, durationMs: window[name].durationMs }),
+    BRIDGE,
+  );
 
   const seek = (ms) =>
-    page.evaluate(async (elapsed) => {
-      window.__FLUTE_CAPTURE__.seek(elapsed);
-      const want = String(elapsed);
-      const deadline = performance.now() + 5000;
-      while (document.documentElement.dataset.filmTime !== want) {
-        if (performance.now() > deadline) throw new Error(`scene never reached ${want}`);
+    page.evaluate(
+      async ([name, elapsed]) => {
+        window[name].seek(elapsed);
+        const want = String(elapsed);
+        const deadline = performance.now() + 5000;
+        while (document.documentElement.dataset.filmTime !== want) {
+          if (performance.now() > deadline) throw new Error(`scene never reached ${want}`);
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
         await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    }, ms);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      },
+      [BRIDGE, ms],
+    );
 
   const box = await page.evaluate((sel) => {
     const rect = document.querySelector(sel).getBoundingClientRect();
@@ -133,7 +138,10 @@ if (!args.includes("--encode")) {
   await page.evaluate(() => document.documentElement.classList.remove("web-hero-walking"));
   for (let index = first; index < count; index += 1) {
     await seek(Math.round(((index * 1000) / fps) * 1000) / 1000);
-    const text = await page.evaluate((sel) => document.querySelector(sel)?.innerText ?? "", selector);
+    const text = await page.evaluate(
+      (sel) => document.querySelector(sel)?.innerText ?? "",
+      selector,
+    );
     for (const pattern of PRIVATE) {
       const hit = text.match(pattern);
       if (hit !== null) throw new Error(`${sceneId}: private-looking text in frame: ${hit[0]}`);
@@ -169,17 +177,40 @@ if (!args.includes("--encode")) {
     ];
     const run = (extra) =>
       new Promise((resolve, reject) => {
-        const child = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...input, ...extra], {
-          stdio: ["ignore", "inherit", "inherit"],
-        });
+        const child = spawn(
+          "ffmpeg",
+          ["-hide_banner", "-loglevel", "error", "-y", ...input, ...extra],
+          {
+            stdio: ["ignore", "inherit", "inherit"],
+          },
+        );
         child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}`))));
       });
     return Promise.all([
       run([
-        "-c:v", "libx264", "-preset", "slow", "-crf", "21", "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart", join(outDir, `${name}.mp4`),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "21",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        join(outDir, `${name}.mp4`),
       ]),
-      run(["-c:v", "libvpx-vp9", "-crf", "36", "-b:v", "0", "-row-mt", "1", join(outDir, `${name}.webm`)]),
+      run([
+        "-c:v",
+        "libvpx-vp9",
+        "-crf",
+        "36",
+        "-b:v",
+        "0",
+        "-row-mt",
+        "1",
+        join(outDir, `${name}.webm`),
+      ]),
     ]);
   };
   await encode("intro", 0, split);

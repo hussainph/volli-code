@@ -98,7 +98,10 @@ export function paintWorld(name: WorldName): PaintedWorld {
   const stops =
     world.stops.length > 1
       ? world.stops
-      : [...world.stops, { ...world.stops[0]!, x: 1 - world.stops[0]!.x, y: 1 - world.stops[0]!.y }];
+      : [
+          ...world.stops,
+          { ...world.stops[0]!, x: 1 - world.stops[0]!.x, y: 1 - world.stops[0]!.y },
+        ];
   return {
     background: canvasBackground(world, "dark"),
     pools: stops.map((stop, index) => ({
@@ -164,7 +167,7 @@ export function shaderPalette(name: WorldName): WorldShaderPalette {
   return {
     base,
     // The CSS lists the topmost layer first; a shader paints bottom-up.
-    canvas: layers.reverse(),
+    canvas: layers.toReversed(),
     light: painted.pools,
     bloom: painted.bloom,
     grain: WORLDS[name].grain,

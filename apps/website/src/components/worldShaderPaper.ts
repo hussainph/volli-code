@@ -1,12 +1,11 @@
 /**
  * The Paper Shaders engines (https://shaders.paper.design, Apache-2.0,
- * © Lost Coast Labs / Paper): MeshGradient and GrainGradient, driven through
- * the vanilla `ShaderMount` so `WorldShader` owns the lifecycle — when to
- * mount, when to pause, when to hand the GPU context back.
+ * © Lost Coast Labs / Paper), driven through the vanilla `ShaderMount` so
+ * `WorldShader` owns the lifecycle — when to mount, when to pause, when to hand
+ * the GPU context back.
  *
- * Loaded with a dynamic import (via `worldShaderMesh.ts` / `worldShaderGrain.ts`),
- * so a page that only uses the hand-written `glsl` variant never downloads it,
- * and the mesh never pays for the grain's noise texture.
+ * Loaded with a dynamic import (via `worldShaderMesh.ts`), so the static world
+ * paints first and the shader library never blocks it.
  */
 import { ShaderFitOptions, ShaderMount, type ShaderMountUniforms } from "@paper-design/shaders";
 

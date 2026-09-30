@@ -53,17 +53,17 @@ plain words, short sentences, active voice, facts a skeptic can check.
 - **Product first, release last.** A first-time visitor wants to know what
   Volli is, what it does, and why they would use it over the agent app they
   already have. The release number appears at most once, quietly.
-- **Two beats per line.** A light clause, then a bold one: *Hand off work*
+- **Two beats per line.** A light clause, then a bold one: _Hand off work_
   **in one drag.** This is the super, and it is the only headline shape.
 - **Short, declarative, second person.** No exclamation marks, no "supercharge",
   no "seamless", no "powerful", no "AI-powered".
 - **Product nouns stay in the docs.** The homepage never says Runtime, Trigger,
-  Board Session, Unbound Run, Change Set. It says *agents*, *tickets*, *your
-  board*, *a schedule*. The link to the docs is where the nouns start.
+  Board Session, Unbound Run, Change Set. It says _agents_, _tickets_, _your
+  board_, _a schedule_. The link to the docs is where the nouns start.
 - **Say it once.** A fact appears in one place on a page. The old page named
   "local-first" four times and the 0.2 Triggers three times.
 - **Honest about the stage.** It is an alpha for Apple silicon; the download
-  button says *Download for Mac* and the page says *alpha* once, near it.
+  button says _Download for Mac_ and the page says _alpha_ once, near it.
 
 The essay under the hero is the one place for more than a line. It is written
 like the Sky essay: short paragraphs, first principles, no bullets.
@@ -83,25 +83,25 @@ drawn, not photographed — `apps/desktop/build/icon-source.svg` is the source.
 One family, used with range: **Mona Sans Variable**, loaded from its full
 variable file so the width axis is available.
 
-| Role | Setting |
-|---|---|
+| Role              | Setting                                 |
+| ----------------- | --------------------------------------- |
 | Super, light beat | wght 300 · wdth 100 · tracking −0.035em |
-| Super, bold beat | wght 780 · wdth 110 · tracking −0.04em |
-| Essay | wght 380 · 1.25rem/1.6 · measure ≤ 36em |
-| UI (buttons, nav) | wght 520 · 0.9375rem |
+| Super, bold beat  | wght 780 · wdth 110 · tracking −0.04em  |
+| Essay             | wght 380 · 1.25rem/1.6 · measure ≤ 36em |
+| UI (buttons, nav) | wght 520 · 0.9375rem                    |
 
 The two-weight line is the brand's signature, shared with the film's supers.
 
 ## 6. Colour
 
-| Token | Value | Use |
-|---|---|---|
-| `--night` | `#07070a` | The page. |
-| `--ink` | `#f5f2ee` | Headlines and body — warm, like the mark's bone. |
-| `--ink-2` | `rgb(245 242 238 / 0.62)` | Secondary copy. |
-| `--ink-3` | `rgb(245 242 238 / 0.4)` | The note under a button, footer. |
-| `--hairline` | `rgb(245 242 238 / 0.1)` | The only border. |
-| `--ember` | `#e8652a` | The primary button and the mark's card. Nowhere else. |
+| Token        | Value                     | Use                                                   |
+| ------------ | ------------------------- | ----------------------------------------------------- |
+| `--night`    | `#07070a`                 | The page.                                             |
+| `--ink`      | `#f5f2ee`                 | Headlines and body — warm, like the mark's bone.      |
+| `--ink-2`    | `rgb(245 242 238 / 0.62)` | Secondary copy.                                       |
+| `--ink-3`    | `rgb(245 242 238 / 0.4)`  | The note under a button, footer.                      |
+| `--hairline` | `rgb(245 242 238 / 0.1)`  | The only border.                                      |
+| `--ember`    | `#e8652a`                 | The primary button and the mark's card. Nowhere else. |
 
 Chapter canvases are the film's (`apps/desktop/src/flute/kit/world.tsx`).
 
@@ -117,7 +117,7 @@ A page is built from these and nothing else. A new need is argued here first.
 3. **Super** — one two-beat headline and an optional one-line sub. Nothing
    above it.
 4. **Essay** — the mark and name on the left, prose on the right.
-5. **Button** — *primary* (ember pill, one per view) and *quiet* (text with an
+5. **Button** — _primary_ (ember pill, one per view) and _quiet_ (text with an
    arrow). No outlined pills, no icon soup.
 6. **Header / Footer** — the mark and name; four links; the download.
 7. **Feed** — a Window drawn in the page's own type: a few of the sidebar's

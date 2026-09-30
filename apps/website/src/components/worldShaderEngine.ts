@@ -19,4 +19,5 @@ export interface WorldEngine {
   dispose(): void;
 }
 
-export type WorldShaderVariant = "mesh" | "grain" | "glsl";
+/** Paper Shaders' MeshGradient: the one living light the site uses. */
+export type WorldShaderVariant = "mesh";

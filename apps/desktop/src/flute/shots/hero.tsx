@@ -27,7 +27,7 @@ function backdropClock(t: number): number {
   return INTRO_MS + (LOOP_MS / (2 * Math.PI)) * Math.sin(2 * Math.PI * u);
 }
 
-export function HeroShot(_: { format: Format }) {
+export function HeroShot(_props: { format: Format }) {
   const t = useFilm();
   useFilmTheme("aurora");
   useFilmWallClock(t, NOW);

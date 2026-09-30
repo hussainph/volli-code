@@ -15,9 +15,8 @@
  *   - the backing canvas is capped at 1.5 device pixels per CSS pixel;
  *   - under `prefers-reduced-motion: reduce` it paints one still frame.
  *
- * Variants: `glsl` is a hand-written shader with no dependency that paints the
- * static world exactly and then lets it drift; `mesh` and `grain` are Paper
- * Shaders' MeshGradient and GrainGradient, loaded on demand.
+ * The light is Paper Shaders' MeshGradient (`worldShaderMesh.ts`), loaded on
+ * demand.
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -38,28 +37,23 @@ const MAX_DPR = 1.5;
 /** How far outside the viewport a world keeps its GPU context. */
 const NEAR_MARGIN = "60% 0px";
 
-let webgl1: boolean | undefined;
 let webgl2: boolean | undefined;
 
-function supports(version: 1 | 2): boolean {
-  const cached = version === 1 ? webgl1 : webgl2;
-  if (cached !== undefined) return cached;
-  let ok = false;
+function supportsWebGl2(): boolean {
+  if (webgl2 !== undefined) return webgl2;
   try {
     const gl = document
       .createElement("canvas")
-      .getContext(version === 1 ? "webgl" : "webgl2", { failIfMajorPerformanceCaveat: true });
-    ok = gl !== null;
-    (gl as WebGLRenderingContext | null)?.getExtension("WEBGL_lose_context")?.loseContext();
+      .getContext("webgl2", { failIfMajorPerformanceCaveat: true });
+    webgl2 = gl !== null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
   } catch {
-    ok = false;
+    webgl2 = false;
   }
-  if (version === 1) webgl1 = ok;
-  else webgl2 = ok;
-  return ok;
+  return webgl2;
 }
 
-export default function WorldShader({ palette, variant = "glsl", speed = 1 }: Props) {
+export default function WorldShader({ palette, variant = "mesh", speed = 1 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
 
@@ -67,7 +61,7 @@ export default function WorldShader({ palette, variant = "glsl", speed = 1 }: Pr
     const host = hostRef.current;
     const world = host?.closest<HTMLElement>(".world") ?? host?.parentElement;
     if (!host || !world) return;
-    if (!supports(variant === "glsl" ? 1 : 2)) return;
+    if (!supportsWebGl2()) return;
 
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let engine: WorldEngine | null = null;
@@ -112,16 +106,8 @@ export default function WorldShader({ palette, variant = "glsl", speed = 1 }: Pr
       };
       let next: WorldEngine | null = null;
       try {
-        if (variant === "glsl") {
-          const { mountGl } = await import("./worldShaderGl");
-          next = mine === generation ? mountGl(host, palette, options) : null;
-        } else if (variant === "mesh") {
-          const { mountMesh } = await import("./worldShaderMesh");
-          next = mine === generation ? mountMesh(host, palette, options) : null;
-        } else {
-          const { mountGrain } = await import("./worldShaderGrain");
-          next = mine === generation ? await mountGrain(host, palette, options) : null;
-        }
+        const { mountMesh } = await import("./worldShaderMesh");
+        next = mine === generation ? mountMesh(host, palette, options) : null;
       } catch {
         next = null;
       }

@@ -44,11 +44,7 @@ function heroRig(format) {
         rotateY: mix(r.start.rot[1], r.end.rot[1], pull) + 8 * swing,
         rotateZ: mix(r.start.rot[2], r.end.rot[2], pull) - 1.2 * swing,
       },
-      target: [
-        mix(r.start.target[0], r.end.target[0], pull),
-        mix(sy, r.end.target[1], pull),
-        0,
-      ],
+      target: [mix(r.start.target[0], r.end.target[0], pull), mix(sy, r.end.target[1], pull), 0],
       near: mix(r.start.near, r.end.near, pull) - 50 * bob,
       offset: [0, 0],
       focus: 0,
@@ -62,7 +58,8 @@ function heroRig(format) {
 export const shot = {
   key: "hero",
   title: "volli.app — the hero",
-  description: "The hook's sweep down live agents, pulling back to the centred window, then a seamless drift.",
+  description:
+    "The hook's sweep down live agents, pulling back to the centred window, then a seamless drift.",
   durationMs: INTRO_MS + LOOP_MS,
   perspective: 1400,
   nodes: [{ id: "window" }],
