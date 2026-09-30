@@ -5,6 +5,7 @@
  * The build is resolved live from GitHub Releases by `src/lib/releases.ts`, so
  * a new release needs no edit here (VC-62).
  */
+import Mark from "../components/Mark.astro";
 import Super from "../components/Super.astro";
 import World from "../components/World.astro";
 import { DOCS_URL, ISSUES_URL, RELEASES_URL, REPOSITORY_URL } from "../data/links";
@@ -36,7 +37,7 @@ const description =
           level={1}
           id="download-title"
           beats={[{ text: "Download" }, { text: "Volli.", bold: true }]}
-          sub="Free for Apple silicon Macs. Signed, notarized, and it updates itself."
+          sub="Free for Apple silicon Macs."
         />
         <div class="dl-build" data-slot="build">
           <p class="dl-status" data-live>Checking the latest build…</p>
@@ -45,6 +46,9 @@ const description =
         <p class="dl-platform" data-platform-note hidden>
           Volli runs on Apple silicon Macs.
         </p>
+      </div>
+      <div class="dl-mark" data-reveal aria-hidden="true">
+        <Mark size={240} build />
       </div>
     </World>
 

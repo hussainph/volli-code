@@ -1171,6 +1171,20 @@ main > section,
   margin-top: clamp(16px, 3vh, 40px);
   padding: clamp(32px, 6vw, 88px);
   align-items: flex-end;
+  justify-content: space-between;
+  gap: 48px;
+}
+
+/* The close's building mark, standing in the ember bloom. */
+.dl-mark {
+  align-self: center;
+  padding-inline-end: clamp(0px, 4vw, 64px);
+}
+
+.dl-mark .mark {
+  width: auto;
+  height: clamp(150px, 20vw, 260px);
+  filter: drop-shadow(0 24px 48px rgb(0 0 0 / 0.35));
 }
 
 .dl-inner {
@@ -1331,6 +1345,33 @@ main > section,
 }
 
 @media (max-width: 720px) {
+  .dl {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    justify-content: flex-end;
+  }
+
+  .dl-mark {
+    align-self: flex-start;
+    padding-inline-end: 0;
+  }
+
+  .dl-mark .mark {
+    height: 112px;
+  }
+
+  .dl-inner {
+    max-width: 100%;
+  }
+
+  /* The version line and the file size drop under the label, not off the card. */
+  .dl-artifacts .button {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: 10px;
+    white-space: normal;
+  }
+
   .site-header nav a:not(.site-header-download):last-of-type {
     display: none;
   }
