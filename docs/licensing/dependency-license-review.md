@@ -57,7 +57,8 @@ library unpacked and shipped, and a gate that cannot read the packaging config h
 | `@img/sharp-libvips-*` | LGPL-3.0-or-later | Shipped inside the packaged desktop app | **Resolved** — the library is kept, the hardening is kept; notice, licence texts, source directions and relink instructions all ship |
 | ~~`apca-w3`~~ | Bespoke "Limited W3 License" | — | **Removed** by VC-412; §B3 is moot |
 | ~~`colorparsley`~~ | AGPL v3 | — | **Removed** with `apca-w3`; the AGPL is out of the tree |
-| `gsap` | GreenSock Standard License | Marketing website bundle | **Fixed** — notices were being stripped; one product question left open |
+| ~~`gsap`~~ | GreenSock Standard License | — | **Removed** by VC-472; the notice gate stays, with an empty reviewed list |
+| `@paper-design/shaders` | Apache-2.0 (with a NOTICE) | Marketing website bundle | Its NOTICE is reproduced in the site's `/licenses.txt` (Apache-2.0 §4(d)) |
 | `lightningcss*` | MPL-2.0 | Build-time only | No action; recorded |
 | `dompurify`, `node-forge`, `json-schema` | Dual-licensed | Various | No action; elected half recorded |
 | `khroma`, `@yuku-*/binding-*` | MIT, but not in the manifest | Various | No action; source of the license recorded |
@@ -411,6 +412,12 @@ opinion rather than a live one.
 <a id="gsap"></a>
 
 ## 3. GSAP — a custom license on the marketing website
+
+> **Update (VC-472):** the website no longer uses GSAP — the interactive demo that
+> animated with it was replaced by a video of the real app. `gsap` is gone from
+> `apps/website/package.json` and `REVIEWED_GSAP_BANNERS` is empty, which the gate
+> allows only while `gsap` is not a dependency. The review below stands for any
+> future reintroduction.
 
 ### What the license says
 

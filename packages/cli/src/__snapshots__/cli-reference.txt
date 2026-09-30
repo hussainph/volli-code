@@ -382,7 +382,9 @@ Options:
 Effects:
 - Durable write: Update the Ticket's board status and order and append one status-change Ticket event.
 - Human sees: The Ticket moves to the selected board column.
-- Does not: The move does not start a Session, submit a kickoff turn, or create a worktree.
+- Human sees: If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.
+- Human sees: Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.
+- Does not: Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.
 
 Example: volli ticket move VC-12 --to needs-review
 
@@ -629,7 +631,7 @@ Input:
 Effects:
 - Durable write: Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.
 - Durable write: When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state and quoting its final message as the subagent's prose; a long message is cut, with `session answer` naming the rest.
-- Human sees: The subagent appears in the session list as a child of this Session, with its own transcript.
+- Human sees: The subagent appears in the parent Session's Activity Island, where the person can inspect its transcript or open it as a tab. It has no separate Session-list row.
 - Does not: No Ticket moves, and the person driving is not asked anything.
 - Does not: This Session is not paused: the call returns at once and the answer arrives later.
 

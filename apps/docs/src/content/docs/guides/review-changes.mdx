@@ -1,0 +1,96 @@
+---
+title: Review and publish changes
+description: Inspect a ticket's Change Set, commit work, and push it to a draft pull request.
+sidebar:
+  label: Review and publish changes
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+In the ticket workspace, inspect a ticket's **Change Set**: the committed and
+uncommitted changes in its worktree, compared with its base branch. Review the
+file diffs before you commit or publish the branch.
+
+To publish a GitHub pull request, the repository needs a GitHub remote and the
+GitHub CLI (`gh`) installed and authenticated. Use `gh auth login` in a terminal
+if needed. You can inspect and commit locally without creating a PR.
+
+## Inspect the Change Set
+
+1. Open the ticket workspace and select **Diffs** in the rail.
+2. Read the changed-file list and its insertion and deletion totals.
+3. Select a file to open its diff in a tab. Use **Refresh changes** to read the
+   Change Set again.
+
+The **Diffs** page shows the whole Change Set. A file you committed locally
+still appears, as long as that commit is not in the base branch. The worktree
+footer sits under every rail page; open it to see the branch, base, worktree
+state, and pull-request actions.
+
+## Test the result
+
+Open a [terminal companion](/guides/terminal-companions/) on the ticket and run
+the project's relevant tests or build checks. Use the ticket's **Files** rail to
+read the changed files in context. Opening **Diffs** runs no checks and does not
+certify the agent's work.
+
+## Commit changes
+
+1. In the worktree footer, open **More repository actions** and choose **Commit**.
+2. Enter a **Commit message**.
+3. Review **Include unstaged changes**. Clear it to commit only the files you
+   have staged.
+4. Confirm **Commit**.
+
+The main repository action can also combine commit and push, with labels such
+as **Commit & create draft PR** or **Commit & push updates**. The same
+confirmation appears. Volli cannot undo a commit for you.
+
+## Push a branch and create a draft PR
+
+When the branch has committed work to publish and no pull request exists,
+choose **Push & create draft PR**. If a pull request already exists, the action
+pushes updates; use **View PR** to open it. A push publishes only the commits
+already on the branch; uncommitted work stays in the worktree. Commit and push
+are separate Git operations, even when the main repository action runs both.
+
+Volli pushes the branch with Git and uses `gh` to find or create the draft
+pull request. If publishing fails after the commit, the local commit remains.
+Fix the reported authentication or remote problem, then push again. Volli does
+not merge the draft pull request for you.
+
+## Bring in base-branch changes
+
+From the ticket's terminal companion, merge the available base ref:
+
+```sh
+volli worktree sync VC-12
+```
+
+Replace `VC-12` with your ticket's ID. Sync uses the refs already on disk; it
+does not fetch from the remote or wait for checks. If it reports `conflicted`,
+read the listed paths, then resolve and commit the merge in the terminal. To
+abandon that merge, use `volli worktree sync VC-12 --abort`.
+
+After your pull request is merged, follow
+[Clean up worktrees](/guides/clean-up-worktrees/) to remove checkout state.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Chats and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="Choose worktree scope and compare or sync ticket branches."
+  />
+  <LinkCard
+    title="The ticket workspace"
+    href="/guides/ticket-workspace/"
+    description="Return to ticket chats, files, Diffs, and repository status."
+  />
+  <LinkCard
+    title="Terminal companions"
+    href="/guides/terminal-companions/"
+    description="Use the ticket worktree from a shell or external TUI."
+  />
+</CardGrid>

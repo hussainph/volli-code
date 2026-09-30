@@ -261,31 +261,6 @@
       "blocked": "docs/licensing/dependency-license-review.md#lgpl-libvips"
     },
 
-    "gsap": {
-      "license": "Standard 'no charge' license: https://gsap.com/standard-license.",
-      "versions": ["3.15.0"],
-      "disposition": "shipped",
-      "summary": [
-        "GreenSock Standard License (Webflow), effective 2025-04-30, read at gsap.com/standard-license.",
-        "Permitted Uses cover any website, web application or digital interface, commercial included and",
-        "at no charge. The one restriction that could reach Volli is Prohibited Uses: GSAP may not be",
-        "used in tools that let users build visual animations WITHOUT CODE in a way that competes with",
-        "Webflow's visual animation building. The licensor's own FAQ places AI code-generation tools",
-        "outside that prohibition.",
-        "Section III.3 additionally forbids removing GSAP's proprietary notices — which the production",
-        "website build was doing until this ticket; see apps/website/scripts/check-bundled-license-notices.mjs."
-      ],
-      "obligations": [
-        "Keep the /*! legal banners in the deployed bundles (III.3).",
-        "Stay out of the desktop product, where the no-code-animation-builder question would arise.",
-        "Re-read the terms on a version bump: section VI.2 lets Webflow revise them, and using a version",
-        "released after a revision is what accepts it."
-      ],
-      "direct": { "@volli/website": "dependencies" },
-      "imports": ["apps/website/src/components/*"],
-      "blocked": "docs/licensing/dependency-license-review.md#gsap"
-    },
-
     "lightningcss*": {
       "license": "MPL-2.0",
       "versions": ["1.32.0", "1.33.0"],

@@ -1,27 +1,29 @@
 /**
  * Open Graph share cards for volli.app and docs.volli.app.
  *
- * Until this existed, neither site had an `og:image`. Every link posted to X,
- * Hacker News, Discord, Slack or iMessage rendered as a bare text card, which
- * is the one piece of launch surface you cannot fix after the fact — the
- * scrapers cache what they saw the first time.
+ * Every link posted to X, Hacker News, Discord, Slack or iMessage renders this
+ * card, and it is the one piece of launch surface you cannot fix after the
+ * fact — the scrapers cache what they saw the first time.
  *
  * The card is rendered by Chromium rather than drawn with a canvas API so it
- * uses the site's real typeface (Mona Sans Variable, at the hero's own weight
- * and tracking) and the site's real palette, pulled from `global.css` below.
- * A drawn-by-hand card drifts from the site the first time the brand moves;
- * this one is the same fonts and the same hexes.
+ * is set in the site's real typeface (Mona Sans Variable, from the same full
+ * variable files `Base.astro` loads, so the width axis and the italic are
+ * there) with the site's real palette and mark, copied from `site.css` and
+ * `Mark.astro` below. It follows `brand/BRAND.md`: the night, ink and one
+ * ember; nothing above the headline; one two-beat Super, light then bold. On
+ * the website card the bold beat is the hero's italic, holding the still
+ * speed lines the hero shows under reduced motion.
  *
  * It renders at 2x and downsamples to 1200x630, because text rasterised
  * directly at 1200px wide is noticeably coarser than text supersampled from
- * 2400px. 1200x630 is the size every major scraper wants, and `summary_large_image`
- * is what makes X use it.
+ * 2400px. 1200x630 is the size every major scraper wants, and
+ * `summary_large_image` is what makes X use it.
  *
  * Deliberately typographic, with no product screenshot: a share card is
  * usually seen at around 500px wide in a feed, where UI chrome turns to mush
  * and a headline still reads.
  *
- * Run when the headline, the palette or the icon changes:
+ * Run when the headline, the palette or the mark changes:
  *
  *   node apps/website/scripts/generate-og-image.mjs
  *
@@ -45,38 +47,52 @@ const WIDTH = 1200;
 const HEIGHT = 630;
 const SCALE = 2;
 
-/** The site's palette, copied from `src/styles/global.css`. */
+/** The site's palette, copied from `src/styles/site.css` (BRAND.md §6). */
 const PALETTE = {
-  page: "#0a0a0a",
-  text: "#f5f5f7",
-  muted: "#9a9a9a",
-  quiet: "#6e6e73",
-  line: "#2a2a2a",
+  night: "#07070a",
+  ink: "#f5f2ee",
+  ink2: "rgb(245 242 238 / 0.64)",
+  ink3: "rgb(245 242 238 / 0.42)",
+  hairline: "rgb(245 242 238 / 0.1)",
   ember: "#e8652a",
+  bone: "#f2eae0",
 };
+
+/** The mark (BRAND.md §4), the same glyph as `src/components/Mark.astro`. */
+const MARK = `<svg class="mark" viewBox="48 42 160 172" aria-hidden="true">
+  <rect x="48" y="42" width="40" height="172" rx="18" fill="${PALETTE.bone}" />
+  <rect x="108" y="42" width="40" height="100" rx="18" fill="${PALETTE.bone}" />
+  <rect x="108" y="158" width="40" height="44" rx="10" fill="${PALETTE.ember}" />
+  <rect x="168" y="42" width="40" height="136" rx="18" fill="${PALETTE.bone}" />
+</svg>`;
 
 /**
  * The two cards.
  *
- * The copy is shorter than the page's own hero copy on purpose. A feed
- * preview truncates, and the full lede ("Turn a rough idea into focused tasks
- * yourself or with an agent...") loses its second clause exactly where the
- * meaning lives.
+ * The headline is the page's own Super, two beats, light then bold. The lede
+ * is shorter than the page's: a feed preview truncates, and the second
+ * sentence of the hero lede is where it would cut. There is no eyebrow — the
+ * brand puts nothing above a headline — so the facts a skeptic checks sit in
+ * the quiet line at the foot of the card.
  */
 const CARDS = [
   {
     out: join(websiteRoot, "public/og.png"),
-    eyebrow: "Alpha · Apple silicon",
-    headline: "The workspace for parallel coding agents.",
-    lede: "Plan the work, run agents in parallel, review every change.",
-    footer: "volli.app",
+    section: null,
+    beats: ["Build like", "a team of twenty."],
+    speed: true,
+    lede: "A Mac app for building ambitious software with many coding agents at once.",
+    host: "volli.app",
+    note: "Free and open source · For Apple silicon Macs",
   },
   {
     out: join(repoRoot, "apps/docs/public/og.png"),
-    eyebrow: "Documentation",
-    headline: "Everything you need to run Volli.",
-    lede: "Install, quickstart, concepts, guides, and the CLI reference.",
-    footer: "docs.volli.app",
+    section: "Docs",
+    beats: ["Everything you need", "to run Volli."],
+    speed: false,
+    lede: "Install, quickstart, concepts, guides and the CLI reference.",
+    host: "docs.volli.app",
+    note: "",
   },
 ];
 
@@ -84,22 +100,18 @@ const CARDS = [
  *  network and no file:// reads, so the render cannot silently fall back to a
  *  system font and produce a subtly wrong card. */
 async function loadAssets() {
-  const [font, icon] = await Promise.all([
-    fs.readFile(
-      join(
-        websiteRoot,
-        "node_modules/@fontsource-variable/mona-sans/files/mona-sans-latin-wght-normal.woff2",
-      ),
-    ),
-    fs.readFile(join(websiteRoot, "brand/volli-icon-master.png")),
+  const files = join(websiteRoot, "node_modules/@fontsource-variable/mona-sans/files");
+  const [upright, italic] = await Promise.all([
+    fs.readFile(join(files, "mona-sans-latin-standard-normal.woff2")),
+    fs.readFile(join(files, "mona-sans-latin-standard-italic.woff2")),
   ]);
   return {
-    font: font.toString("base64"),
-    icon: icon.toString("base64"),
+    upright: upright.toString("base64"),
+    italic: italic.toString("base64"),
   };
 }
 
-function markup({ eyebrow, headline, lede, footer }, { font, icon }) {
+function markup({ section, beats: [light, bold], speed, lede, host, note }, { upright, italic }) {
   return `<!doctype html>
 <html>
   <head>
@@ -107,9 +119,17 @@ function markup({ eyebrow, headline, lede, footer }, { font, icon }) {
     <style>
       @font-face {
         font-family: "Mona Sans Variable";
-        src: url(data:font/woff2;base64,${font}) format("woff2-variations");
+        src: url(data:font/woff2;base64,${upright}) format("woff2-variations");
         font-weight: 200 900;
+        font-stretch: 75% 125%;
         font-style: normal;
+      }
+      @font-face {
+        font-family: "Mona Sans Variable";
+        src: url(data:font/woff2;base64,${italic}) format("woff2-variations");
+        font-weight: 200 900;
+        font-stretch: 75% 125%;
+        font-style: italic;
       }
       * { box-sizing: border-box; margin: 0; }
       body {
@@ -118,89 +138,106 @@ function markup({ eyebrow, headline, lede, footer }, { font, icon }) {
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        padding: 72px 76px;
-        background: ${PALETTE.page};
-        color: ${PALETTE.text};
+        padding: 64px 80px 60px;
+        background: ${PALETTE.night};
+        color: ${PALETTE.ink};
         font-family: "Mona Sans Variable", sans-serif;
         font-synthesis: none;
         -webkit-font-smoothing: antialiased;
         overflow: hidden;
         position: relative;
       }
-      /* An ember wash bleeding off the top-right corner, echoing the warm-to-cool
-         gradient inside the app icon. Large and low-opacity so it reads as depth
-         rather than as a coloured shape. */
-      .glow {
+      /* Ember is home (BRAND.md §2): one low pool of the default canvas's
+         light, rising from below the card's foot. Large and faint, so it
+         reads as the world rather than as a coloured shape. */
+      .world {
         position: absolute;
-        top: -340px;
-        right: -260px;
-        width: 900px;
-        height: 900px;
-        border-radius: 50%;
-        background: radial-gradient(circle, ${PALETTE.ember}33 0%, ${PALETTE.ember}0d 42%, transparent 68%);
+        inset: 0;
+        background:
+          radial-gradient(ellipse 62% 58% at 88% 118%, rgb(232 101 42 / 0.36), transparent 70%),
+          radial-gradient(ellipse 48% 44% at 62% 124%, rgb(242 119 63 / 0.12), transparent 72%);
       }
-      .row { display: flex; align-items: center; justify-content: space-between; position: relative; }
-      .brand { display: flex; align-items: center; gap: 18px; }
-      .brand img { width: 64px; height: 64px; border-radius: 15px; }
+      .row { position: relative; display: flex; align-items: center; justify-content: space-between; }
+      .brand { display: flex; align-items: center; gap: 16px; }
+      .mark { display: block; width: 37px; height: 40px; }
       .brand span {
-        font-size: 31px;
-        font-weight: 500;
-        letter-spacing: -0.035em;
+        font-size: 34px;
+        font-weight: 640;
+        font-stretch: 104%;
+        letter-spacing: -0.02em;
       }
-      .eyebrow {
-        padding: 9px 20px 10px;
-        border: 1px solid ${PALETTE.line};
-        border-radius: 999px;
-        color: ${PALETTE.muted};
-        font-size: 20px;
-        font-weight: 400;
-        letter-spacing: -0.01em;
-        white-space: nowrap;
+      .brand .section {
+        padding-left: 16px;
+        border-left: 2px solid ${PALETTE.hairline};
+        color: ${PALETTE.ink2};
+        font-weight: 420;
+        font-stretch: 100%;
       }
       .body { position: relative; }
-      /* Hero tracking and weight, scaled up for the card. */
+      /* The Super: a light beat, then a bold one (BRAND.md §5). */
       h1 {
-        max-width: 19ch;
-        font-size: 78px;
-        font-weight: 420;
-        letter-spacing: -0.05em;
-        line-height: 1.06;
-        text-wrap: balance;
+        font-size: 104px;
+        font-weight: 300;
+        line-height: 1;
+        letter-spacing: -0.035em;
+      }
+      h1 span { display: block; padding-bottom: 0.08em; }
+      h1 .bold {
+        font-weight: 780;
+        font-stretch: 108%;
+        letter-spacing: -0.04em;
+      }
+      /* The hero's bold beat: italic, with its speed lines held still — dark
+         slits and one ember stripe clipped to the letters, as the hero looks
+         under reduced motion. */
+      h1 .speed { font-style: italic; }
+      h1 .speed > span {
+        display: inline-block;
+        padding-right: 0.08em;
+        color: transparent;
+        background:
+          linear-gradient(90deg, transparent 0, ${PALETTE.night} 6%, transparent 58%) 0 34% / 7em 0.05em repeat-x,
+          linear-gradient(90deg, transparent 0, ${PALETTE.night} 5%, transparent 44%) 0 49% / 4.5em 0.04em repeat-x,
+          linear-gradient(90deg, transparent 0, ${PALETTE.ember} 4%, transparent 52%) 0 61% / 9em 0.065em repeat-x,
+          linear-gradient(90deg, transparent 0, ${PALETTE.night} 7%, transparent 50%) 0 74% / 5.5em 0.045em repeat-x,
+          ${PALETTE.ink};
+        -webkit-background-clip: text;
+        background-clip: text;
       }
       p {
-        margin-top: 26px;
-        max-width: 46ch;
-        color: ${PALETTE.muted};
-        font-size: 27px;
-        font-weight: 360;
-        letter-spacing: -0.012em;
-        line-height: 1.45;
-      }
-      .footer {
-        color: ${PALETTE.quiet};
-        font-size: 22px;
-        font-weight: 400;
+        margin-top: 30px;
+        max-width: 1040px;
+        color: rgb(245 242 238 / 0.78);
+        font-size: 28px;
+        font-weight: 380;
         letter-spacing: -0.01em;
+        line-height: 1.4;
+        text-wrap: pretty;
       }
-      .rule { height: 1px; flex: 1; margin-left: 26px; background: ${PALETTE.line}; }
+      .foot {
+        color: ${PALETTE.ink3};
+        font-size: 22px;
+        font-weight: 440;
+        letter-spacing: -0.005em;
+      }
     </style>
   </head>
   <body>
-    <div class="glow"></div>
+    <div class="world"></div>
     <div class="row">
       <div class="brand">
-        <img src="data:image/png;base64,${icon}" alt="" />
+        ${MARK}
         <span>Volli</span>
+        ${section ? `<span class="section">${section}</span>` : ""}
       </div>
-      <div class="eyebrow">${eyebrow}</div>
     </div>
     <div class="body">
-      <h1>${headline}</h1>
+      <h1><span>${light}</span><span class="bold${speed ? " speed" : ""}"><span>${bold}</span></span></h1>
       <p>${lede}</p>
     </div>
-    <div class="row">
-      <div class="footer">${footer}</div>
-      <div class="rule"></div>
+    <div class="row foot">
+      <span>${host}</span>
+      <span>${note}</span>
     </div>
   </body>
 </html>`;

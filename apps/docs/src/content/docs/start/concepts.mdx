@@ -1,12 +1,11 @@
 ---
 title: Concepts
-description: Translate tasks, agent chats, branches, and review into the terms Volli uses in its UI and documentation.
+description: Learn the words Volli uses in the app and the docs for tickets, chats, worktrees, and review.
 sidebar:
   label: Concepts
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
-import AgentOperatingModel from "../../../components/AgentOperatingModel.astro";
 
 Use this page when a Volli label is unfamiliar. The table translates the common
 workflow into the terms you see in the app.
@@ -16,7 +15,7 @@ workflow into the terms you see in the app.
 | Plan and track a unit of work | **Ticket** |
 | State the task's outcome and constraints | **Ticket Body** |
 | Run an agent conversation | **Chat** |
-| Keep a durable record of a chat or terminal | **Session** |
+| Keep a lasting record of a chat or terminal | **Session** |
 | Give a task its own Git checkout | **Ticket worktree** |
 | Inspect a task's branch changes | **Change Set** |
 
@@ -27,9 +26,9 @@ These terms have the same meaning across the app and its documentation.
 **Project.** A tracked codebase folder. Removing it from Volli does not remove
 the folder from disk.
 
-**Home.** The project's tabbed workspace. A project opens here. Its first tab is
-the Board and cannot be closed. Board chats and Project Files open as tabs
-beside it.
+**Home.** The project's tabbed workspace. Opening a project lands here. Its
+first tab is the Board, which you cannot close. Board chats and Project Files
+open as tabs beside it.
 
 **Ticket.** A task on the board. It holds a title, status, and Ticket Body. A
 ticket can provide the context for a ticket chat and its worktree.
@@ -37,7 +36,7 @@ ticket can provide the context for a ticket chat and its worktree.
 **Ticket Body.** The task's Markdown brief and starting instruction. It is part
 of the ticket record, not a repository file.
 
-**Ticket workspace.** The working surface for one task. Its main tabs hold the
+**Ticket workspace.** Where you work on one ticket. Its main tabs hold the
 Ticket Body, chats, files, and diffs. Its rail groups repository state,
 properties, and chats under Now, with separate Diffs and Files views.
 
@@ -45,36 +44,39 @@ properties, and chats under Now, with separate Diffs and Files views.
 
 ## Chats
 
-**Session.** The durable record for a chat or terminal. It remains available
-after its live connection, turn, or run ends.
+**Chat Draft.** A composer you have opened without sending its first message.
+It has no Session history or running agent yet. Sending the first message
+creates the Session.
 
-**Chat.** Volli's built-in agent conversation. It uses the model you choose in
-Model Access and shows the agent's messages, tool steps, and questions in the
-app.
+**Session.** The saved record of a chat or terminal. It stays available after
+its connection, turn, or run ends.
 
-**Ticket chat.** A chat for one task. It carries the ticket's Body and resolved
-context, and works in the ticket's worktree.
+**Chat.** Volli's built-in agent conversation. It uses the model you choose
+and shows the agent's messages, tool steps, and questions in the app.
+
+**Ticket chat.** A chat for one task. It carries the ticket's **Ticket Body**
+and the context resolved for it, and works in the ticket's worktree.
 
 **Board chat.** A chat for broad project work, started from Home. It works in
 your main checkout and can create and edit tickets. Use it to turn a rough idea
 into tasks.
 
 **Model Access.** The accounts, subscriptions, credentials, and models that
-Volli can use. In the app, this policy is under **Settings → Models**. Choose a
-default model there before you start a chat. Credentials
-do not enter chat history.
+Volli can use. In the app, you manage it under **Settings → Models**. Choose a
+default model there before you start a chat. Credentials never enter chat
+history.
 
-**Terminal companion.** A manual terminal or external TUI you open for work in
-a project or worktree: Claude Code, Codex, OpenCode, or your own. Open it from
-the caret beside **Chat**. Volli never opens one as a fallback when a chat
-fails.
+**Terminal companion.** A shell you open yourself in a project or worktree.
+Use it to run your own commands, or start an external terminal UI, such as
+Claude Code, Codex, or OpenCode, from that shell. Open it from the caret
+beside **Chat**. Volli never opens one as a fallback when a chat fails.
 
 ## Git work
 
 **Ticket worktree.** An isolated Git checkout for a task. Volli creates its
 branch as `volli/<DISPLAY-ID>-<slug>` and stores the checkout under
-`~/.volli/worktrees/`. A worktree is disposable checkout state. Volli can
-recreate it from the retained branch after cleanup.
+`~/.volli/worktrees/`. A worktree holds only checkout state. After cleanup,
+Volli can recreate it from the branch it keeps.
 
 **Main checkout.** The repository folder you added as a project.
 
@@ -87,23 +89,13 @@ against its base branch.
 
 ## History and control
 
-**Session Event.** An immutable fact in a Session's local history, such as a
-message, command outcome, interaction, attachment outcome, or recovery signal.
+A Session keeps its conversation after a turn ends or you close its tab, and
+reopening it returns to that history. Recovery reconnects the same Session.
 
-**Command.** Explicit user intent recorded before the runtime is asked to act.
-
-**Receipt.** The recorded outcome of a Command: accepted, rejected, completed,
-or unreconciled.
-
-**Attention.** A reconstructed view that shows when a Session needs recovery or
-input. It is derived from Session history rather than a source of truth.
-
-## Agent-facing operating model
-
-The CLI and managed Volli skill pack use the following operating model. Run
-`volli help concepts` for the same facts without opening this site.
-
-<AgentOperatingModel />
+See [Use a chat](/guides/sessions/) for starting and recovering a Session. If
+you write instructions for agents, the [agent operating
+model](/reference/agent-operating-model/) explains roles, tools, and what each
+command does.
 
 ## Automations
 
@@ -111,43 +103,26 @@ The CLI and managed Volli skill pack use the following operating model. Run
 **Instructions**, and a **Runtime**. Every Automation can be run by hand; its
 Trigger describes what else may start it.
 
-**Trigger.** What starts an Automation besides a person: **Only when I run it**,
-**Ticket enters**, or **On a schedule**. A new Automation uses **Only when I
-run it**. A column Trigger makes an Automation available in selected columns;
-a schedule uses one of Volli's hourly, daily, weekdays, or weekly presets.
+**Trigger.** What starts an Automation besides running it yourself. A new
+Automation uses **Only when I run it**, which means nothing else starts it; the
+other values are **Ticket enters** and **On a schedule**. A column Trigger makes
+an Automation available in selected columns; a schedule uses one of Volli's
+hourly, daily, weekdays, or weekly presets.
 
-**Instructions.** The message sent as the first message of the fresh Session a
-Run opens. Instructions use the chat composer's `/` templates and Skills and
-`@` file references.
+**Instructions.** The message an Automation sends as the first message of the
+fresh Session a Run opens. It uses the chat composer's `/` templates and Skills
+and `@` file references.
 
 **Runtime.** The model policy for a Run. It can inherit the project default,
 name one of the configured default tiers, or pin an exact model and reasoning
-level. A Run records the resolved model and reasoning it used.
+level. A Run records the model and reasoning it ended up using.
 
-**Run.** One invocation of an Automation and the durable record of the fresh
-Session it opened. Run history remains available even if the Automation is
-later deleted.
+**Run.** One start of a saved Automation and the record of the fresh Session
+it opened. Run history stays even if you delete the Automation later.
 
-**Unbound Run.** A one-time Run created by **Run once…**. It carries its own
-Instructions and names no saved Automation.
-
-**Enabled automation.** An Automation switched on for automatic triggering on
-this Mac. Enablement is off until someone turns it on here. It does not prevent
-a person from running the Automation by hand.
-
-**Armed automation.** The one Automation a column fires after a ticket makes a
-Deliberate move into it. A column can arm at most one, and arming is local to
-the machine and not retroactive.
-
-**Offered list.** The Automations a column presents during a Deliberate move.
-A column can offer several but fires at most one automatically. The list also
-has a **Move only** choice.
-
-**Option-drag picker.** The expanded Offered list shown while **Option (⌥)**
-is held during a card drag. Up to nine offered rows get digits **1**–**9**;
-**0** chooses **Move only**.
-
-See [Automations](/guides/automations/) for the authoring and running steps.
+See [Automations](/guides/automations/) for how Runs start. The
+[column-trigger guide](/guides/automations/columns/) explains Automatic
+triggers, arming a column, and choosing a Run while you drag a ticket.
 
 ## Next steps
 

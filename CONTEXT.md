@@ -1,4 +1,4 @@
-# Volli Code
+# Volli
 
 Local-first planner and execution workspace. This glossary is the canonical project language. Some Session and Automation terms below describe planned architecture; code and tests remain authoritative for current behavior.
 

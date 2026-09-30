@@ -722,9 +722,13 @@ export const VERB_REGISTRY = [
             "Update the Ticket's board status and order and append one status-change Ticket event.",
         },
       ],
-      humanVisible: ["The Ticket moves to the selected board column."],
+      humanVisible: [
+        "The Ticket moves to the selected board column.",
+        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
+        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
+      ],
       nonEffects: [
-        "The move does not start a Session, submit a kickoff turn, or create a worktree.",
+        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
       ],
     },
     positionalId: "required",
@@ -2182,7 +2186,7 @@ export const VERB_REGISTRY = [
         },
       ],
       humanVisible: [
-        "The subagent appears in the session list as a child of this Session, with its own transcript.",
+        "The subagent appears in the parent Session's Activity Island, where the person can inspect its transcript or open it as a tab. It has no separate Session-list row.",
       ],
       nonEffects: [
         "No Ticket moves, and the person driving is not asked anything.",
