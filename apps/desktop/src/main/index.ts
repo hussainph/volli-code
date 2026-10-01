@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import {
   acceptsImageInputIn,
   applySkillModes,
+  authorityJudgeDenialReason,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -181,6 +182,7 @@ import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
+import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -587,6 +589,10 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
   }
   return input.tools;
+}
+
+async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
+  return authorityJudgeDenialReason(input.cause);
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -1140,6 +1146,31 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           models: piModelAccess.models,
           catalogReady: piModelAccess.catalogReady,
+          recordDecision: async (fact) => {
+            if (sessionEngine === null || fact.sessionId === null) {
+              throw new Error("Authority review has no durable Session ledger.");
+            }
+            // authority.judge's caller redacts the reasoning-blind state BEFORE
+            // decide, so neither cloud transport nor this full-state audit sees
+            // secrets. Renderer scrubbing drops the native audit copy entirely.
+            await sessionEngine.observe({
+              id: `audit:decision:${randomUUID()}`,
+              kind: "adapter.observed",
+              sessionId: fact.sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: {
+                  kind: "system",
+                  id: "authority-classifier",
+                  detail: { purpose: fact.purpose, authoriser: "classifier" },
+                },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              name: "authority.judge.audit",
+              native: JSON.parse(JSON.stringify(fact)),
+            });
+          },
           recordUsage: async (sessionId, usage, purpose) => {
             if (sessionEngine === null) return;
             await sessionEngine.observe({
@@ -1480,6 +1511,7 @@ app.whenReady().then(async () => {
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
+  let authorityReason = categoryAuthorityReason;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -1488,6 +1520,7 @@ app.whenReady().then(async () => {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          authorityReason: (input) => authorityReason(input),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -1574,6 +1607,7 @@ app.whenReady().then(async () => {
           ...(desktopDecisions === null
             ? {}
             : {
+                decisions: desktopDecisions.port,
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),
@@ -1834,6 +1868,32 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  if (dbHandle.ok && piRuntimeHost !== null && sessionEngine !== null) {
+    authorityReason = createAuthorityReason({
+      db: dbHandle.db,
+      readModelDefaults: () => readModelAccessDefaults(dbHandle.db),
+      completeUtility: (input) => piRuntimeHost.completeUtility(input),
+      recordUsage: async (sessionId, usage) => {
+        await sessionEngine.observe({
+          id: `usage:authority-reason:${randomUUID()}`,
+          kind: "usage.recorded",
+          sessionId,
+          occurredAt: Date.now(),
+          provenance: {
+            source: {
+              kind: "system",
+              id: "authority-reason",
+              detail: { purpose: "authority.judge", reasonSource: "utility" },
+            },
+            venue: { id: "local", kind: "local" },
+          },
+          attachmentId: null,
+          turnId: null,
+          usage,
+        });
+      },
+    });
+  }
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).

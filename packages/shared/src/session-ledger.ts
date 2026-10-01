@@ -4,6 +4,7 @@
  */
 
 import type {
+  AuthorityReviewObservation,
   CompactionReason,
   CompactionWorkReason,
   ModelSelection,
@@ -819,6 +820,11 @@ export type SessionEventPayload =
       /** The refusing rule's own words, as the model received them. */
       reason: string;
     }
+  /** A classifier verdict, not a denial: shadow reviews never block a call. */
+  | (Omit<AuthorityReviewObservation, "kind"> & {
+      kind: "authority.reviewed";
+      attachmentId: string;
+    })
   | {
       kind: "adapter.observed";
       attachmentId: string | null;
@@ -870,6 +876,7 @@ export const SESSION_PROJECTION_EVENT_KINDS = [
   "attachment.native_referenced",
   "attachment.opened",
   "authority.denied",
+  "authority.reviewed",
   "command.receipt.recorded",
   "command.recorded",
   "context.compacted",
@@ -1020,6 +1027,7 @@ type ObservedSessionEventKind =
   | "interaction.resolved"
   | "interaction.cancelled"
   | "authority.denied"
+  | "authority.reviewed"
   | "adapter.observed"
   | "usage.recorded";
 
@@ -1187,6 +1195,22 @@ export function observationPayload(
         tool: observation.tool,
         cause: observation.cause,
         reason: observation.reason,
+      };
+    case "authority.reviewed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        toolCallId: observation.toolCallId,
+        tool: observation.tool,
+        mode: observation.mode,
+        authoriser: observation.authoriser,
+        wouldFlag: observation.wouldFlag,
+        reason: observation.reason,
+        category: observation.category,
+        answers: observation.answers,
+        missReason: observation.missReason,
+        thresholds: observation.thresholds,
       };
     case "adapter.observed":
       return {
@@ -2053,6 +2077,7 @@ function foldSessionProjection(
       case "context.compacted":
       case "context.compaction_failed":
       case "context.reasoning_dropped":
+      case "authority.reviewed":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":

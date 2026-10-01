@@ -29,6 +29,38 @@ function turn(message: UIMessage): string {
 }
 
 describe("the desktop transcript-row mapping", () => {
+  it.each(["shadow", "auto"] as const)(
+    "draws a %s classifier verdict quietly, never as a message bubble",
+    (mode) => {
+      const [row] = projectTranscriptRows(
+        [],
+        [],
+        [],
+        [
+          {
+            sequence: 1,
+            afterMessageId: null,
+            toolCallId: "call-1",
+            tool: "execute",
+            mode,
+            reason: "Outside the request.",
+          },
+        ],
+      );
+      if (row === undefined) throw new Error("expected a verdict notice");
+      const html = renderToStaticMarkup(
+        <ChatTranscriptRow row={row} context={context} live={false} />,
+      );
+      expect(html).toContain(
+        `${mode === "shadow" ? "Would block" : "Blocked"} execute: Outside the request.`,
+      );
+      expect(html).toContain("text-muted-foreground");
+      expect(html).not.toContain("is-user");
+      expect(html).not.toContain("is-assistant");
+      expect(html).not.toContain('aria-label="Copy"');
+    },
+  );
+
   it("draws a projected host notice without entering the user-message component", () => {
     const modelText =
       '[Subagent Session child-1 ("Review tests") completed its task. Read its answer.]';

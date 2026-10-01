@@ -4,7 +4,11 @@
  * Ordered evaluation is load-bearing rather than incidental. The rules overlap —
  * `git config http.sslVerify false` writes repository plumbing *and* weakens TLS
  * — and first-match-wins is what turns that overlap into one nameable refusal
- * instead of a set.
+ * instead of a set. Which order is load-bearing too, and there are two: pack
+ * order by default, and — behind {@link evaluate}'s `hardDeniesFirst` option,
+ * for per-call review (VC-28) — every hard deny ahead of the overridable rules,
+ * so a liftable refusal cannot end up speaking for one nobody may lift. Both are
+ * first-match; only the list they match against differs.
  *
  * No rule judges the tool's *name*, and the absence is deliberate. The Agent
  * Tool Surface makes availability the enforcement: a Session is offered exactly
@@ -93,6 +97,7 @@
 
 import {
   AUTHORITY_RULE_IDS,
+  isOverridableAuthorityRule,
   type AuthorityRuleId,
   type AuthoritySnapshot,
   type PolicyCommandSegment,
@@ -676,18 +681,64 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   },
 };
 
+/** The first rule in `order` that refuses, or null when none does. */
+function firstDenial(
+  order: readonly AuthorityRuleId[],
+  call: PolicyToolCall,
+  snapshot: AuthoritySnapshot,
+  context: PolicyContext,
+): PolicyDecision | null {
+  for (const rule of order) {
+    const reason = RULE_CHECKS[rule](call, snapshot, context);
+    if (reason !== null) return { outcome: "deny", rule, reason };
+  }
+  return null;
+}
+
 /**
- * The verdict on one normalized call: the first rule in pack order that refuses,
- * or `allow` when none does.
+ * The pack reordered for per-call review (VC-28): every rule a person cannot
+ * overrule, then the rules they can, each half in pack order.
+ *
+ * Split with {@link isOverridableAuthorityRule} rather than by restocking the
+ * halves from `OVERRIDABLE_AUTHORITY_RULES`, so the one list in `authority.ts`
+ * stays the single source of truth — a rule moved between the lists there
+ * reorders this one without a second edit to keep in step. That
+ * predicate also answers for the classifier causes, which are not rules: they
+ * never appear in {@link AUTHORITY_RULE_IDS}, so over the pack the predicate is
+ * exactly the record's overridable membership.
+ *
+ * The order exists because pack order alone lets an overridable refusal mask a
+ * hard one. `path.outside-workspace` leads the pack, so `curl -k
+ * https://example.com > /tmp/out` cites the redirect — a refusal a person may
+ * lift — while the TLS weakening riding the same command line, which no "yes"
+ * may carry out, never speaks. Per-call review asks over exactly the denial the
+ * gate returns, so offered that question a person could answer yes and release
+ * a call with a live hard deny. Under this order the same call cites
+ * `command.tls-weakening`, and only a call whose every refusal is liftable
+ * reaches the ask.
+ */
+const HARD_DENIES_FIRST_ORDER: readonly AuthorityRuleId[] = [
+  ...AUTHORITY_RULE_IDS.filter((rule) => !isOverridableAuthorityRule(rule)),
+  ...AUTHORITY_RULE_IDS.filter((rule) => isOverridableAuthorityRule(rule)),
+];
+
+/**
+ * The verdict on one normalized call: the first rule in evaluation order that
+ * refuses, or `allow` when none does.
+ *
+ * The order is pack order unless `options.hardDeniesFirst` is set, which runs
+ * {@link HARD_DENIES_FIRST_ORDER} instead — see its comment for why per-call
+ * review asks for it. Both orders are first-match over the same nine pure
+ * predicates, so the option changes only which refusal is cited, never whether
+ * a call is refused at all; with the option absent or false this function is
+ * exactly what it has always been.
  */
 export function evaluate(
   call: PolicyToolCall,
   snapshot: AuthoritySnapshot,
   context: PolicyContext,
+  options: { hardDeniesFirst?: boolean } = {},
 ): PolicyDecision {
-  for (const rule of AUTHORITY_RULE_IDS) {
-    const reason = RULE_CHECKS[rule](call, snapshot, context);
-    if (reason !== null) return { outcome: "deny", rule, reason };
-  }
-  return { outcome: "allow" };
+  const order = options.hardDeniesFirst === true ? HARD_DENIES_FIRST_ORDER : AUTHORITY_RULE_IDS;
+  return firstDenial(order, call, snapshot, context) ?? { outcome: "allow" };
 }

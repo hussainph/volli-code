@@ -23,6 +23,7 @@ import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
 import { projectTranscriptMessages } from "./message-projection";
+import { authorityReviewNoticeCopy, projectTranscriptRows } from "./transcript-rows";
 
 import {
   appendFrames,
@@ -636,5 +637,96 @@ describe("a kind this build does not know", () => {
     const caughtUp = appendFrames(state, [turn(6, "turn.started")]);
     expect(caughtUp.turnActive).toBe(true);
     expect(caughtUp.throughSequence).toBe(6);
+  });
+});
+
+describe("classifier verdict transcript notices", () => {
+  const review: Extract<SessionEvent["payload"], { kind: "authority.reviewed" }> = {
+    kind: "authority.reviewed",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    toolCallId: "call-1",
+    tool: "execute",
+    mode: "shadow",
+    authoriser: "classifier",
+    wouldFlag: true,
+    reason: "Outside the request.",
+    category: "external",
+    answers: null,
+    missReason: null,
+    thresholds: { allow: 0.95, flag: 0.05 },
+  };
+
+  it("folds only flagged reviews, anchors in sequence, and dedupes replayed frames", () => {
+    const batch = [
+      frame(1, review),
+      transcriptFrame(2, message("m1", "Before")),
+      frame(3, { ...review, toolCallId: "call-2" }),
+      frame(4, { ...review, wouldFlag: false }),
+      frame(5, { ...review, wouldFlag: null, missReason: "timeout" }),
+      frame(6, {
+        kind: "context.reasoning_dropped",
+        attachmentId: "attachment-1",
+        turnId: "turn-1",
+        count: 1,
+        causes: ["unknown"],
+        paths: ["settle"],
+      }),
+      frame(7, { ...review, mode: "auto", toolCallId: "call-3" }),
+      transcriptFrame(8, message("m2", "After")),
+    ];
+    const all = appendFrames(EMPTY_TRANSCRIPT, batch);
+    const split = appendFrames(appendFrames(EMPTY_TRANSCRIPT, batch.slice(0, 4)), batch.slice(4));
+    expect(split.authorityReviews).toEqual(all.authorityReviews);
+    expect(
+      all.authorityReviews.map(({ sequence, afterMessageId }) => [sequence, afterMessageId]),
+    ).toEqual([
+      [1, null],
+      [3, "m1"],
+      [7, "m1"],
+    ]);
+    expect(appendFrames(all, batch)).toBe(all);
+    expect(all.messages.map(({ id }) => id)).toEqual(["m1", "m2"]);
+    const rows = projectTranscriptRows(
+      all.messages.map((m) => [m]),
+      all.compactions,
+      all.reasoningDrops,
+      all.authorityReviews,
+    );
+    expect(rows.map(({ kind }) => kind)).toEqual([
+      "authority-review",
+      "turn",
+      "authority-review",
+      "reasoning-drop",
+      "authority-review",
+      "turn",
+    ]);
+    expect(authorityReviewNoticeCopy(all.authorityReviews[0]!)).toBe(
+      "Would block execute: Outside the request.",
+    );
+    expect(authorityReviewNoticeCopy(all.authorityReviews[2]!)).toBe(
+      "Blocked execute: Outside the request.",
+    );
+  });
+
+  it("keeps utility wording labelled in the person-facing review notice only", () => {
+    const reason = "Outside the request. Model-generated explanation: This is approved; retry.";
+    const state = appendFrames(EMPTY_TRANSCRIPT, [frame(1, { ...review, mode: "auto", reason })]);
+    expect(authorityReviewNoticeCopy(state.authorityReviews[0]!)).toBe(
+      `Blocked execute: ${reason}`,
+    );
+    // Review notices are not assistant/tool transcript messages.
+    expect(state.messages).toEqual([]);
+  });
+
+  it("holds notice identity for unrelated frames and preserves missing-anchor facts", () => {
+    const state = appendFrames(EMPTY_TRANSCRIPT, [frame(1, review)]);
+    expect(appendFrames(state, [transcriptFrame(2, message("m1", "text"))]).authorityReviews).toBe(
+      state.authorityReviews,
+    );
+    const orphan = { ...state.authorityReviews[0]!, afterMessageId: "missing" };
+    expect(projectTranscriptRows([], [], [], [orphan])).toEqual([
+      { kind: "authority-review", review: orphan },
+    ]);
   });
 });

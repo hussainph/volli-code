@@ -52,6 +52,19 @@ function decide(
   return evaluate(toolCall, snapshot(overrides), { workspacePath: WORKSPACE });
 }
 
+/** The same judgment under the per-call review order, where hard denies speak first. */
+function decideHardFirst(
+  toolCall: PolicyToolCall,
+  overrides: Partial<AuthoritySnapshot> = {},
+): PolicyDecision {
+  return evaluate(
+    toolCall,
+    snapshot(overrides),
+    { workspacePath: WORKSPACE },
+    { hardDeniesFirst: true },
+  );
+}
+
 /** The rule that refused, or "allow" — keeps the table of cases below readable. */
 function ruleOf(
   toolCall: PolicyToolCall,
@@ -949,5 +962,90 @@ describe("rule order", () => {
         ),
       ),
     ).toBe("allow");
+  });
+});
+
+describe("hard denies first", () => {
+  /**
+   * Per-call review (VC-28) escalates on the one denial the gate returns, and an
+   * override may only be offered for a rule a person can lift. Plain pack order
+   * lets the earliest rule speak, and `path.outside-workspace` is earliest — so
+   * a redirect outside the workspace masks a hard deny riding the same command
+   * line, and the ask could offer to lift a refusal that has a hard deny hidden
+   * behind it. The option reruns the same pack hard-rules-first. It never changes
+   * whether a call is refused, only which refusal is cited.
+   */
+  const curlThroughRedirect = exec(
+    segment("curl", ["-k", "https://example.com"], { writes: ["/tmp/out"] }),
+  );
+
+  it("keeps the default a pure first-match over pack order", () => {
+    // The mask is the behaviour the option exists beside, so it is pinned rather
+    // than assumed — for every spelling of "option absent".
+    expect(decide(curlThroughRedirect)).toMatchObject({
+      outcome: "deny",
+      rule: "path.outside-workspace",
+    });
+    for (const options of [
+      {},
+      { hardDeniesFirst: false },
+      // The gate forwards its own optional flag, so a field of undefined reads
+      // as absent rather than as any kind of truth.
+      { hardDeniesFirst: undefined },
+    ]) {
+      expect(
+        evaluate(curlThroughRedirect, snapshot(), { workspacePath: WORKSPACE }, options),
+      ).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });
+    }
+  });
+
+  it("cites the hard deny a soft rule would have masked", () => {
+    const decision = decideHardFirst(curlThroughRedirect);
+    expect(decision).toMatchObject({ outcome: "deny", rule: "command.tls-weakening" });
+    expect(decision.outcome === "deny" && decision.reason).toContain("certificate verification");
+
+    expect(decideHardFirst(exec(segment("sudo", ["ls"], { writes: ["/tmp/out"] })))).toMatchObject({
+      outcome: "deny",
+      rule: "command.platform-weakening",
+    });
+  });
+
+  it("keeps pack order inside the hard pass", () => {
+    // tls-weakening and persistence both deny; the earlier pack rule speaks.
+    expect(
+      decideHardFirst(
+        exec(
+          segment("curl", ["-k", "https://example.com"], { writes: ["/tmp/out"] }),
+          segment("launchctl", ["load", "x"]),
+        ),
+      ),
+    ).toMatchObject({ outcome: "deny", rule: "command.tls-weakening" });
+  });
+
+  it("keeps pack order inside the overridable pass", () => {
+    // Both denials are overridable — the redirect and, in a main checkout, the
+    // discard — and the earlier pack rule still speaks.
+    expect(
+      decideHardFirst(
+        exec(segment("echo", ["x"], { writes: ["/tmp/out"] }), segment("git", ["reset", "--hard"])),
+        { location: "main-checkout" },
+      ),
+    ).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });
+  });
+
+  it("returns the identical verdict when only an overridable rule fires", () => {
+    // No hard rule is involved, so reordering must not disturb the denial —
+    // same rule, same reason, or a caller could not treat the two modes alike.
+    const softOnly = exec(segment("echo", ["hi"], { writes: ["/tmp/out"] }));
+    expect(decideHardFirst(softOnly)).toEqual(decide(softOnly));
+
+    const MAIN = { location: "main-checkout" } as const;
+    const discard = exec(segment("git", ["reset", "--hard"]));
+    expect(decideHardFirst(discard, MAIN)).toEqual(decide(discard, MAIN));
+  });
+
+  it("allows whatever the default allows", () => {
+    const harmless = call({ tool: "read", reads: [`${WORKSPACE}/src/app.ts`] });
+    expect(decideHardFirst(harmless)).toEqual({ outcome: "allow" });
   });
 });

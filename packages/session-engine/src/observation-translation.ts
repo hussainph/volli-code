@@ -27,6 +27,7 @@
  */
 
 import type {
+  AuthorityReviewObservation,
   AttentionObservation,
   CompactionObservation,
   CompactionProgressObservation,
@@ -192,6 +193,10 @@ export type TranslatedObservation =
       cause: string;
       reason: string;
     })
+  | (TranslatedObservationBase &
+      Omit<AuthorityReviewObservation, "kind"> & {
+        kind: "authority.reviewed";
+      })
   | (TranslatedObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;
@@ -386,6 +391,16 @@ export class RuntimeObservationTranslator {
         return this.#translateActivity(observation, emit);
       case "authority":
         return this.#translateAuthority(observation, emit);
+      case "authority-review": {
+        const { kind: _kind, ...review } = observation;
+        return emit({
+          ...review,
+          // Durable id derivation: frozen on ship, like authority.denied.
+          id: `${this.#namespace}:authority-review:${this.#attachmentId}:${++this.#sequence}`,
+          kind: "authority.reviewed",
+          occurredAt: this.#now(),
+        });
+      }
       case "attention":
         return emit(this.#attentionObservation(observation));
       case "interaction":
@@ -447,6 +462,7 @@ export class RuntimeObservationTranslator {
       // log. Reconcile therefore never actually offers one — the case exists so
       // this switch stays exhaustive against the type it is honestly wider than.
       case "authority":
+      case "authority-review":
         return [];
     }
   }

@@ -1,17 +1,28 @@
+// @vitest-environment jsdom
 /**
  * Configure → Authority, the door VC-172 added.
  *
- * WHAT THIS LAYER CAN SEE. These render to static markup, which is the house
- * pattern for a pane — and a Radix `Select` renders its trigger with an EMPTY
- * value span there, while an `InfoHint` keeps its prose in an unopened popover.
- * So neither the selected word nor the hint text is assertable here, and
- * pretending otherwise would be a test that passes on markup nobody sees.
+ * WHAT THIS LAYER CAN SEE. Most of these render to static markup, which is the
+ * house pattern for a pane — and a Radix `Select` renders its trigger with an
+ * EMPTY value span there, while an `InfoHint` keeps its prose in an unopened
+ * popover. So neither the selected word nor the hint text is assertable
+ * statically, and pretending otherwise would be a test that passes on markup
+ * nobody sees.
  *
- * What IS assertable is the thing worth pinning: which rows exist, and which of
- * them are marked as having departed from the built-in defaults. Divergence is
- * `OverrideControl`'s revert button, its `aria-label` names the inherited value
- * it would return to, and both render. That is the inheritance model itself —
- * the reason the pane stores departures rather than a resolved document.
+ * The one thing static markup cannot pin — that the Decision mode dropdown
+ * really offers Automatic review, enabled, through the same Select it always
+ * had — is pinned by driving the real component in jsdom with the keyboard,
+ * in the save test below. jsdom implements focus and key events; it lays
+ * nothing out, so the one layout call the Select makes while moving focus
+ * between items (`scrollIntoView`) is stubbed, the way `model-name.test.tsx`
+ * stubs measured clipping.
+ *
+ * What IS assertable statically is the thing worth pinning there: which rows
+ * exist, and which of them are marked as having departed from the built-in
+ * defaults. Divergence is `OverrideControl`'s revert button, its `aria-label`
+ * names the inherited value it would return to, and both render. That is the
+ * inheritance model itself — the reason the pane stores departures rather than
+ * a resolved document.
  *
  * VC-285 adds a second assertable class, and it is assertable for the same
  * reason it was added: the outcome of the selected posture, the unit each
@@ -20,8 +31,10 @@
  * the pane experienced.
  */
 import { DEFAULT_AUTHORITY_POLICY, type Project } from "@volli/shared";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
@@ -70,6 +83,22 @@ const ENTITIES: Readonly<Record<string, string>> = {
   "&#x27;": "'",
   "&rsquo;": "\u2019",
 };
+
+/** One keystroke, as the keyboard delivers it to the target. */
+function press(target: Element | null, key: string): void {
+  target?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+}
+
+/**
+ * Let React's effects — and the Select's own focus timers — run to rest.
+ * Arrow navigation inside an open Select moves focus from a `setTimeout`, so
+ * the flush is one macrotask, not only microtasks.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 /**
  * Static markup escapes the few entities a label can carry; search compares the
@@ -156,8 +185,10 @@ describe("Configure → Authority", () => {
    */
   it("says what each posture does beside the control, not in a popover", () => {
     expect(render({ enforcement: "off" })).toContain("Off — no authority checks.");
-    expect(render(null)).toContain("Observe — save this attachment’s policy; allow calls.");
-    expect(render({ enforcement: "enforce" })).toContain("Enforce — block rule violations.");
+    expect(render(null)).toContain("Observe — record shadow verdicts; allow calls.");
+    expect(render({ enforcement: "enforce" })).toContain(
+      "Enforce — keep hard denials; apply the decision mode.",
+    );
   });
 
   it("says when a person is asked, and only under Enforce", () => {
@@ -170,7 +201,7 @@ describe("Configure → Authority", () => {
     const html = render({ enforcement: "enforce" });
 
     expect(html).not.toContain("no authority checks");
-    expect(html).not.toContain("save this attachment’s policy");
+    expect(html).not.toContain("record shadow verdicts");
   });
 
   /*
@@ -182,8 +213,11 @@ describe("Configure → Authority", () => {
   it("says that a change reaches new attachments, where the change is made", () => {
     for (const policy of [null, { enforcement: "off" as const }]) {
       const html = render(policy);
-      expect(html).toContain("Applies to new attachments");
+      expect(html).toContain("Enforcement and decision mode apply to new attachments");
       expect(html).toContain("the live connection a Session runs on");
+      expect(html).toContain("not one already running.");
+      expect(html.match(/apply to new attachments/g)).toHaveLength(1);
+      expect(html).not.toContain("Applies to the next attachment, not one already running.");
     }
   });
 
@@ -243,17 +277,89 @@ describe("Configure → Authority", () => {
     expect(html).not.toContain("after 1 denied call");
   });
 
-  /*
-   * `judgmentMode` rides the Snapshot and has no runtime reader until VC-28.
-   * The row may still be set — it is durable policy — but it must not be read
-   * as the thing deciding calls today, which is what "Who judges the rest: Ask
-   * me" claimed.
-   */
-  it("does not present the decision mode as protection that runs today", () => {
-    const html = render(null);
+  it("keeps the row's own dropdown, offering automatic review with no classifier slot", () => {
+    for (const policy of [null, { classifierModel: null }, { judgmentMode: "auto" as const }]) {
+      const html = render(policy);
+      expect(html).toContain("Decision mode");
+      expect(html).not.toContain("not active yet");
+      // The control is the dropdown the row has always had — the same shape the
+      // enforcement and peek rows use — not a second chooser vocabulary.
+      const trigger = html.match(/<button[^>]*id="authority-judgment"[^>]*>/)?.[0];
+      expect(trigger).toContain('data-slot="select-trigger"');
+      expect(html).toContain("not one already running.");
+      // And the obsolete classifier slot is gone entirely: no control, and no
+      // prose pointing at one.
+      expect(/classifier/i.test(html)).toBe(false);
+    }
+  });
 
-    expect(html).toContain("Decision mode — not active yet");
-    expect(html).not.toContain("Who judges the rest");
+  it("saves automatic review through the existing authority policy door without a classifier slot", async () => {
+    const original = project({
+      enforcement: "enforce",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 7 },
+      actors: { session: { coordinationVerbs: ["ticket.show"] } },
+    });
+    const setAuthorityPolicy = vi.fn(async () => ({
+      ok: true as const,
+      project: {
+        ...original,
+        authorityPolicy: { ...original.authorityPolicy, judgmentMode: "auto" as const },
+      },
+    }));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("api", { projects: { setAuthorityPolicy } });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <AuthorityPane project={original} />
+          </TooltipProvider>,
+        ),
+      );
+      const trigger = container.querySelector<HTMLButtonElement>(
+        '[data-slot="select-trigger"][id="authority-judgment"]',
+      );
+      expect(trigger).not.toBeNull();
+
+      // The dropdown, driven the way a keyboard drives it: ArrowDown opens and
+      // lands on the selected item, ArrowDown again moves the highlight, Enter
+      // commits. Everything below is the real Radix Select, not a mock. jsdom
+      // lays nothing out, so the one layout call the Select makes while moving
+      // focus between items is stubbed for the duration.
+      Element.prototype.scrollIntoView = () => undefined;
+      act(() => press(trigger, "ArrowDown"));
+      await settle();
+
+      const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+      expect(options.map((option) => option.textContent)).toEqual(["Ask me", "Automatic review"]);
+      // The legacy gate is gone: no classifier is configured, and Automatic
+      // review is offered anyway, enabled.
+      const automatic = options[1];
+      expect(automatic?.hasAttribute("data-disabled")).toBe(false);
+      expect(document.activeElement).toBe(options[0]);
+
+      act(() => press(document.activeElement, "ArrowDown"));
+      await settle();
+      expect(document.activeElement).toBe(automatic);
+      expect(automatic?.hasAttribute("data-highlighted")).toBe(true);
+
+      act(() => press(automatic, "Enter"));
+      await settle();
+      expect(trigger?.getAttribute("data-state")).toBe("closed");
+      expect(setAuthorityPolicy).toHaveBeenCalledExactlyOnceWith({
+        id: original.id,
+        override: { ...original.authorityPolicy, judgmentMode: "auto" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps the decision mode revert readable, whatever the row is called", () => {

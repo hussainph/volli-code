@@ -39,6 +39,11 @@ import type {
   DecisionModelTestView,
 } from "../../../../ipc/contract";
 import {
+  AUTHORITY_REASON_SOURCE_KEY,
+  AUTHORITY_REASON_SOURCES,
+  authorityReasonSource,
+  type AuthorityReasonSource,
+  authorityOptInExtensionKey,
   catalogGroups,
   cloudLabel,
   cloudOptionKey,
@@ -50,6 +55,7 @@ import {
   DEFAULT_LOCAL_DECISION_MODEL_ID,
   decisionMode,
   entryForKey,
+  extendAuthorityCloudOptIn,
   localSetting,
   priceLabel,
   settingLabel,
@@ -88,8 +94,10 @@ import {
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
+import { writeThrough } from "@renderer/stores/mutate";
 
 type LoadState =
   | { status: "loading" }
@@ -196,6 +204,72 @@ export function CloudOptInDialog({
   );
 }
 
+/** Existing cloud agreements never silently acquire tool-call review. */
+function CloudOptInExtension({
+  setting,
+  catalog,
+  projectId,
+  onAllow,
+}: {
+  setting: DecisionModelSetting | null;
+  catalog: readonly DecisionModelCatalogEntry[];
+  projectId: string | null;
+  onAllow(setting: DecisionModelSetting): Promise<boolean>;
+}) {
+  const key = authorityOptInExtensionKey(setting, projectId);
+  const [asking, setAsking] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    setAsking(key !== null && appStateStorage.getItem(key) !== "declined" ? key : null);
+  }, [key]);
+
+  function decline(): void {
+    if (busy || asking === null) return;
+    // Update the cache and send the durable receipt now, not after the
+    // ordinary preference debounce. Storage reports any failed write.
+    appStateStorage.setItem(asking, "declined");
+    void flushPendingAppStateKey(asking);
+    setAsking(null);
+  }
+
+  async function allow(): Promise<void> {
+    if (busy || setting?.kind !== "cloud") return;
+    setBusy(true);
+    try {
+      if (await onAllow(extendAuthorityCloudOptIn(setting, Date.now()))) setAsking(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = setting === null ? "" : settingLabel(setting, catalog);
+  return (
+    <AlertDialog
+      open={asking !== null && asking === key}
+      onOpenChange={(open) => (open ? undefined : decline())}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Allow tool-call review with {label}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {label} runs off this Mac. Tool-call review sends your user messages and the bare tool
+            call (name and arguments) off this Mac. It does not send assistant prose, reasoning,
+            tool outputs or tool descriptions. Choose None at any time to stop.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button variant="outline" disabled={busy} onClick={decline}>
+            Not now
+          </Button>
+          <Button disabled={busy} onClick={() => void allow()}>
+            Allow tool-call review
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 /**
  * "Pick a model for new Sessions", one switch (VC-432). Turning it on is the
  * one moment a cloud opt-in is extended: the dialog says what the purpose
@@ -273,6 +347,88 @@ function TestResult({ test }: { test: DecisionModelTestView | null }) {
   );
 }
 
+/** The only app-wide block-reason control; projects never get another axis. */
+function BlockReasonRow() {
+  const [state, setState] = React.useState<
+    | { status: "loading" }
+    | { status: "loaded"; source: AuthorityReasonSource }
+    | { status: "error"; message: string }
+  >({ status: "loading" });
+  const [busy, setBusy] = React.useState(false);
+  const fetches = useLatestAsync();
+  const load = React.useCallback(async () => {
+    const token = fetches.claim();
+    try {
+      // Bootstrap is the existing renderer read door for app_state; the
+      // storage cache alone cannot report a failed durable read.
+      const result = await window.api.data.bootstrap();
+      if (!fetches.isCurrent(token)) return;
+      if (!result.ok) {
+        setState({ status: "error", message: result.error });
+        return;
+      }
+      setState({
+        status: "loaded",
+        source: authorityReasonSource(result.data.appState[AUTHORITY_REASON_SOURCE_KEY]),
+      });
+    } catch (error) {
+      if (fetches.isCurrent(token)) setState({ status: "error", message: errorMessage(error) });
+    }
+  }, [fetches]);
+  React.useEffect(() => {
+    void load();
+    return () => fetches.invalidate();
+  }, [load, fetches]);
+
+  async function save(source: AuthorityReasonSource): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    const saved = await writeThrough("save the block reason choice", () =>
+      window.api.appState.set(AUTHORITY_REASON_SOURCE_KEY, JSON.stringify(source)),
+    );
+    setBusy(false);
+    if (saved !== null) setState({ status: "loaded", source });
+  }
+
+  return (
+    <PrefRow
+      label="Block reason"
+      testId="authority-reason-source"
+      hint={
+        <>
+          Utility model explains the risk category. Without a utility model, the risk category is
+          used.
+        </>
+      }
+    >
+      {state.status === "loaded" ? (
+        <Segmented
+          ariaLabel="Block reason"
+          value={state.source}
+          options={AUTHORITY_REASON_SOURCES}
+          disabled={busy}
+          onChange={(source) => void save(source)}
+        />
+      ) : state.status === "loading" ? (
+        <span className="text-ui text-muted-foreground">Loading…</span>
+      ) : (
+        <Notice
+          announce
+          tone="error"
+          icon={WarningIcon}
+          title="Couldn't read the block reason choice"
+          detail={state.message}
+          actions={
+            <Button size="xs" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          }
+        />
+      )}
+    </PrefRow>
+  );
+}
+
 /**
  * Settings → Models: the app-wide decision model.
  *
@@ -301,8 +457,8 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
     setModelId(storedModel === DEFAULT_LOCAL_DECISION_MODEL_ID ? "" : storedModel);
   }, [storedUrl, storedModel]);
 
-  async function save(setting: DecisionModelSetting): Promise<void> {
-    if (busy) return;
+  async function save(setting: DecisionModelSetting, notifyFailure = false): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setFieldError(null);
     setTest(null);
@@ -310,12 +466,17 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
       const result = await window.api.decisionModel.set({ scope: "global" }, setting);
       if (!result.ok) {
         setFieldError(result.error);
-        return;
+        // The extension dialog remains open for retry, so its failure must
+        // be announced above the modal rather than only on the page below.
+        if (notifyFailure) toastError(`Couldn't enable tool-call review: ${result.error}`);
+        return false;
       }
       adopt(result);
       setDraftMode(null);
+      return true;
     } catch (error) {
       toastError(`Couldn't save the decision model: ${errorMessage(error)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -509,6 +670,8 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
         </>
       ) : null}
 
+      <BlockReasonRow />
+
       {fieldError === null ? null : (
         <Notice announce tone="error" icon={WarningIcon} title={fieldError} />
       )}
@@ -520,6 +683,12 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
           setAsking(null);
           void save(cloudSetting(entry, Date.now()));
         }}
+      />
+      <CloudOptInExtension
+        setting={global}
+        catalog={view.catalog}
+        projectId={null}
+        onAllow={(setting) => save(setting, true)}
       />
     </PrefSection>
   );
@@ -574,8 +743,8 @@ export function ProjectDecisionModelRow({
   const override = view.project ?? null;
   const effective = override ?? view.global;
 
-  async function save(setting: DecisionModelSetting | null): Promise<void> {
-    if (busy) return;
+  async function save(setting: DecisionModelSetting | null): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     try {
       const result = await window.api.decisionModel.set(
@@ -584,12 +753,14 @@ export function ProjectDecisionModelRow({
       );
       if (!result.ok) {
         toastError(`Couldn't save this project's decision model: ${result.error}`);
-        return;
+        return false;
       }
       adopt(result);
       if (result.project !== undefined) onSaved(result.project);
+      return true;
     } catch (error) {
       toastError(`Couldn't save this project's decision model: ${errorMessage(error)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -664,6 +835,12 @@ export function ProjectDecisionModelRow({
           }}
         />
       </PrefRow>
+      <CloudOptInExtension
+        setting={override}
+        catalog={view.catalog}
+        projectId={project.id}
+        onAllow={save}
+      />
       {override?.kind === "cloud" ? (
         // Only a project's own cloud model has a switch here; one that inherits
         // follows the app-wide switch above it.

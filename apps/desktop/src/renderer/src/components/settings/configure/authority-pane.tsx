@@ -29,22 +29,19 @@
  * `patch` — so a document that states them survives a person changing the
  * enforcement dial.
  *
- * ── WHAT VC-285 CHANGED, AND WHY IT IS COPY RATHER THAN BEHAVIOUR ─────────
- * Nothing below writes, resolves or pins differently than it did. What changed
- * is that the pane stopped keeping its consequences in popovers:
+ * ── THE AUTHORITY BOUNDARY SHOWN BESIDE ITS CONTROLS ────────────────────
+ * Controls show consequences in their rows; the attachment snapshot still
+ * pins the policy rather than allowing an edit to change a running executor:
  *
  *  - **The outcome is beside the control.** "Observe" beside "Ask me" read as
  *    active protection, while Observe refuses nothing at all. Each posture now
  *    says what it does to a call, in the row, unopened.
- *  - **Observe is a POLICY record, not a call record.** It saves the Snapshot
- *    this attachment ran under; it does not record each allowed or refused
- *    call. Saying "record only" would promise VC-28's work.
+ *  - **Observe records shadow verdicts.** VC-28 reviews calls without refusing
+ *    them; Enforce keeps hard denials and can apply automatic review.
  *  - **The inactive controls look inactive.** Under Off and Observe nothing is
  *    ever refused, so no denial can accumulate toward a threshold: the two
  *    limits are disabled and say why, while keeping their values — they are
- *    still what the next enforcing attachment would run under. `judgmentMode`
- *    has no runtime reader at all until VC-28, and its row says so rather than
- *    naming a judge that is not judging.
+ *    still what the next enforcing attachment would run under.
  *  - **Units live in the boxes.** `3` and `20` are not settings anyone can
  *    read; "3 denials in a row" and "20 denials total" are.
  *  - **The attachment is named where the change is made.** An edit here reaches
@@ -103,20 +100,19 @@ const ENFORCEMENT_LABELS: Record<AuthorityEnforcement, string> = {
  * being opened.
  *
  * Each one is the runtime seam said in a person's words. `off` builds no
- * Snapshot, so no check runs. `observe` builds and saves one and installs no
- * gate, so every call is allowed — and what is saved is THIS ATTACHMENT'S
- * POLICY, not a record of what it did. `enforce` installs the gate, and a rule
- * violation is blocked before anybody is asked about anything.
+ * Snapshot, so no check runs. `observe` records shadow review verdicts but
+ * allows calls. `enforce` preserves hard denials and applies the chosen
+ * decision mode to calls the deterministic rules cannot settle.
  */
 const ENFORCEMENT_OUTCOMES: Record<AuthorityEnforcement, string> = {
   off: "Off \u2014 no authority checks.",
-  observe: "Observe \u2014 save this attachment’s policy; allow calls.",
-  enforce: "Enforce \u2014 block rule violations.",
+  observe: "Observe \u2014 record shadow verdicts; allow calls.",
+  enforce: "Enforce \u2014 keep hard denials; apply the decision mode.",
 };
 
 const JUDGMENT_LABELS: Record<JudgmentMode, string> = {
   ask: "Ask me",
-  auto: "Classifier",
+  auto: "Automatic review",
 };
 
 const PEEK_LABELS: Record<PeekDisclosure, string> = {
@@ -236,13 +232,6 @@ export function AuthorityPane({ project }: { project: Project }) {
     };
   }
 
-  // `auto` names a judge that does not exist until a classifier is configured,
-  // and `classifierModel` has no surface yet. Offering it would let someone
-  // select a decision-maker that cannot decide, so it is visible and disabled
-  // rather than hidden — the posture exists, and a person looking for it should
-  // find out why it is unavailable rather than wonder where it went.
-  const classifierAvailable = effective.classifierModel !== null;
-
   // The one question every row below is qualified by: while calls are allowed,
   // no call is ever denied, so nothing can count toward a denial limit.
   const enforcing = effective.enforcement === "enforce";
@@ -273,16 +262,18 @@ export function AuthorityPane({ project }: { project: Project }) {
             <span className="text-foreground">{ENFORCEMENT_OUTCOMES[effective.enforcement]}</span>
             {enforcing ? " Ask after the limits below." : null}
             <span className="mt-1 block">
-              Applies to new attachments — the live connection a Session runs on.
+              Enforcement and decision mode apply to new attachments — the live connection a Session
+              runs on — not one already running.
             </span>
           </>
         }
         hint={
           <>
             <strong>Off</strong> builds no policy record and runs no rule checks.{" "}
-            <strong>Observe</strong> saves the policy this attachment ran under and refuses nothing;
-            it does not record each call. <strong>Enforce</strong> blocks what the rules deny, and
-            brings a person in once the denial limits below are reached — a hard rule stays refused
+            <strong>Observe</strong> records shadow verdicts and allows calls.{" "}
+            <strong>Enforce</strong> keeps hard denials and applies the decision mode to calls the
+            rules cannot settle. Automatic review uses the configured decision model; without one it
+            asks you. The denial limits below can also bring you in — a hard rule stays refused
             either way.
           </>
         }
@@ -312,30 +303,17 @@ export function AuthorityPane({ project }: { project: Project }) {
         </OverrideControl>
       </PrefRow>
 
-      {/*
-       * The row the audit read as protection. `judgmentMode` is durable policy
-       * — it is copied into every Snapshot and pinned there — and NOTHING reads
-       * it to decide a call: neither "Ask me" nor "Classifier" judges anything
-       * until VC-28. So it stays settable, because what it sets is real and
-       * pinned, and the label refuses to let it be read as today's guard.
-       */}
       <PrefRow
-        label="Decision mode — not active yet"
+        label="Decision mode"
         htmlFor="authority-judgment"
         testId="authority-judgment"
         hint={
-          classifierAvailable ? (
-            <>
-              Who will rule on a call the deterministic rules cannot settle. Saved with each
-              attachment&rsquo;s policy and pinned to it; nothing reads it to decide a call yet.
-            </>
-          ) : (
-            <>
-              Who will rule on a call the deterministic rules cannot settle. Saved with each
-              attachment&rsquo;s policy and pinned to it; nothing reads it to decide a call yet. No
-              classifier is configured either, so that choice is unavailable.
-            </>
-          )
+          <>
+            Ask me brings you in for calls the rules cannot settle. Automatic review uses the
+            decision model configured in Settings or this project’s Sessions settings, and asks you
+            if no model is configured or review cannot decide. Observe records the shadow verdict
+            without blocking the call; Enforce applies the verdict. Hard denials stay denied.
+          </>
         }
       >
         <OverrideControl
@@ -344,6 +322,8 @@ export function AuthorityPane({ project }: { project: Project }) {
           overridden={override?.judgmentMode !== undefined}
           onRevert={() => void patch({ judgmentMode: undefined })}
         >
+          {/* The same dropdown the row has always had; VC-28 only turns the
+              second posture on, so `auto` carries no disabled gate any more. */}
           <Select
             value={effective.judgmentMode}
             disabled={saving}
@@ -354,11 +334,7 @@ export function AuthorityPane({ project }: { project: Project }) {
             </SelectTrigger>
             <SelectContent>
               {JUDGMENT_MODES.map((value) => (
-                <SelectItem
-                  key={value}
-                  value={value}
-                  disabled={value === "auto" && !classifierAvailable}
-                >
+                <SelectItem key={value} value={value}>
                   {JUDGMENT_LABELS[value]}
                 </SelectItem>
               ))}

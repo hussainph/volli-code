@@ -503,11 +503,11 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
             clock.resume();
           }
         };
-  // Every call is judged under the lock, one at a time and in the order the
-  // program issued them, and then runs as its kind allows: reads beside each
-  // other, anything else alone. Running holds no lock — a long `bash` or a
-  // `session.start` does not stop another call being judged, and a question
-  // it asks waits its turn below.
+  // Admitted calls are judged under the lock, one at a time in issue order.
+  // The execution slot covers judgement too: no call may normalize paths or
+  // receive approval before an earlier exclusive call finishes changing them.
+  // Reads can still be judged and run beside other reads. Running holds no
+  // judgement lock; any question it asks waits its turn below.
   const lockedJudge: BeforeToolCall | undefined =
     judge === undefined
       ? undefined
@@ -595,31 +595,40 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     if (input.untrustedSources.has(tool.name)) markUntrusted(tool.name);
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
-    const slotted: AgentTool = {
-      ...tool,
-      execute: (callId, params, executeSignal, onUpdate) =>
-        slots.run(shared, executeSignal, () =>
-          tool.execute(callId, params, executeSignal, onUpdate),
-        ),
-    };
     await host.observe({ type: "tool_execution_start", toolCallId: id, toolName: tool.name, args });
-    const call = (beforeToolCall: BeforeToolCall | undefined) =>
+    const call = () =>
       runToolCall(
         { type: "toolCall", id, name: tool.name, arguments: (args ?? {}) as JsonObject },
         {
-          tools: [slotted],
+          tools: [tool],
           assistantMessage: syntheticMessage(),
-          context: { messages: [], tools: [slotted] } satisfies AgentContext,
-          ...(beforeToolCall === undefined ? {} : { beforeToolCall }),
+          context: { messages: [], tools: [tool] } satisfies AgentContext,
+          ...(lockedJudge === undefined ? {} : { beforeToolCall: lockedJudge }),
           signal,
         },
       );
-    // Judged one at a time under the judgement lock, run under the slots, and
-    // with the program's scope, so any question the call puts to a person
-    // takes the question lock.
-    const outcome = await withCallScope(scope, () => call(lockedJudge)).finally(() => {
-      record.durationMs = now() - record.startedAt;
-    });
+    // Admit before argument preparation, validation, the gate (including its
+    // audit), and execution. The slot cannot be released between approval and
+    // use. Keep the program's scope around the whole call so questions raised
+    // by either the gate or the tool take the question lock.
+    const outcome = await slots
+      .run(shared, signal, () => withCallScope(scope, call))
+      .catch((error: unknown) => {
+        if (!signal.aborted) throw error;
+        // Slot admission can now abort before Pi runs. Still pair the start
+        // event with an error end, leaving the call unfinished and unjournaled
+        // below, just like a cancellation caught by Pi during execution.
+        return {
+          result: {
+            content: [{ type: "text" as const, text: "Operation aborted" }],
+            details: undefined,
+          },
+          isError: true,
+        };
+      })
+      .finally(() => {
+        record.durationMs = now() - record.startedAt;
+      });
     await host.observe({
       type: "tool_execution_end",
       toolCallId: id,

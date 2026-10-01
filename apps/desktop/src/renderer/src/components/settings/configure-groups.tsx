@@ -131,7 +131,8 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             // renamed this row from "Who judges the rest" and the old term
             // went with it — a keyword for a label nobody can see finds
             // nothing and hides the one that is missing.
-            "decision mode \u2014 not active yet",
+            "decision mode",
+            "automatic review",
             "ask me after",
             "or after, in total",
             "you can read",
