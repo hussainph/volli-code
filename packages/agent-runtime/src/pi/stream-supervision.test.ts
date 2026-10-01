@@ -368,3 +368,19 @@ describe("superviseStreams", () => {
     await expect(out.result()).resolves.toMatchObject({ errorMessage: STREAM_IDLE_MESSAGE });
   });
 });
+
+it("preserves a thrown transport's code instead of confusing it with the host's idle cut", async () => {
+  for (const code of ["ECONNRESET", 42]) {
+    const error = Object.assign(new Error("connection failed"), { code });
+    const inner: StreamFn = () => {
+      throw error;
+    };
+    const out = superviseStreams(inner, TIMING).streamFn(
+      MODEL,
+      CONTEXT,
+    ) as AssistantMessageEventStream;
+    const message = await out.result();
+    expect(message.rawStopReason).toBe("volli.runtime-error");
+    expect(message.diagnostics?.[0]?.error?.code).toBe(typeof code === "string" ? code : undefined);
+  }
+});

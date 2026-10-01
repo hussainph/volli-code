@@ -6118,6 +6118,7 @@ describe("startSession", () => {
       null,
       { kind: "unknown" },
       { kind: "turn", state: "started" },
+      { kind: "turn", state: "interrupted", turnId: "t", stopDetail: { category: "guessed" } },
       { kind: "message-settled", turnId: "turn-1", message: null },
       { kind: "message-settled", turnId: "turn-1", message: { ...settled, entryId: 1 } },
       { kind: "message-settled", turnId: "turn-1", message: { ...settled, role: "user" } },
@@ -13184,4 +13185,44 @@ describe("provider interruption details (VC-482)", () => {
     });
     await handle.close();
   });
+});
+
+it.each(["authentication_error", "context_length_exceeded"])(
+  "uses the provider's %s field to select recovery",
+  async (type) => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail(JSON.stringify({ error: { type, message: "neutral" } })),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      reason: type === "authentication_error" ? "auth" : "context",
+    });
+    await handle.close();
+  },
+);
+
+it("keeps unsupported-fetch routes unchanged and records a refusal without a message", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const finishing = scriptedStream([(emit) => emit.finish()]);
+  const models = modelsWithStream((model, context, options) => {
+    expect(options?.fetch).toBeUndefined();
+    void options?.onProviderStreamEvent?.({ type: "response.refusal.done" }, model);
+    return finishing(model, context, options);
+  });
+  Object.assign(models.getModel(PROVIDER_ID, MODEL_ID)!, { api: "google-generative-ai" });
+  const runtime = createPiAgentRuntime({ sessionDataDir, models });
+  const handle = await runtime.startSession(spec);
+  await handle.submitUserMessage("go");
+  expect(observations.at(-1)).toMatchObject({
+    state: "interrupted",
+    stopDetail: { category: "provider-refused", message: null },
+  });
+  await handle.close();
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderStopCapture, finalStopDetail, safeStopMessage } from "./provider-stop";
 import { isTransientTransportFailure } from "./transcript";
@@ -286,4 +286,77 @@ it("bounds unknown HTTP bodies and keeps network failures as structured codes", 
     message: null,
     httpStatus: 500,
   });
+});
+
+it("passes healthy/bodyless responses through and never guesses a code for untyped throws", async () => {
+  for (const response of [new Response("ok"), new Response(null, { status: 401 })]) {
+    const capture = new ProviderStopCapture();
+    expect(
+      await capture.fetch(
+        async () => response,
+        () => 0,
+      )("https://fixture.invalid"),
+    ).toBe(response);
+  }
+  for (const error of [new Error("untyped"), "untyped"]) {
+    const capture = new ProviderStopCapture();
+    await expect(
+      capture.fetch(
+        async () => {
+          throw error;
+        },
+        () => 0,
+      )("https://fixture.invalid"),
+    ).rejects.toBe(error);
+    expect(capture.detail(message()).category).toBe("unknown");
+  }
+});
+
+it("honors cancellation while inspecting an error body, even if reader cancellation itself rejects", async () => {
+  const controller = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  const chunk = Promise.withResolvers<ReadableStreamReadResult<Uint8Array>>();
+  const reader = {
+    read: () => {
+      entered.resolve();
+      return chunk.promise;
+    },
+    cancel: vi.fn(async () => {
+      chunk.resolve({ done: true, value: undefined });
+      throw new Error("cancel refused");
+    }),
+  };
+  const response = {
+    ok: false,
+    status: 400,
+    headers: new Headers(),
+    clone: () => ({ body: { getReader: () => reader } }),
+  } as unknown as Response;
+  const capture = new ProviderStopCapture();
+  const fetching = capture.fetch(
+    async () => response,
+    () => 0,
+  )("https://fixture.invalid", { signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  expect(await fetching).toBe(response);
+  expect(reader.cancel).toHaveBeenCalledTimes(2);
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  await capture.fetch(
+    async () => new Response("ignored", { status: 400 }),
+    () => 0,
+  )("https://fixture.invalid", { signal: alreadyAborted.signal });
+});
+
+it("uses diagnostic names only when recognized, ignoring diagnostic prose and unknown codes", () => {
+  for (const diagnostic of [
+    { type: "hint", timestamp: 0 },
+    { type: "hint", timestamp: 0, error: { name: "APIConnectionError", message: "neutral" } },
+    { type: "hint", timestamp: 0, error: { code: "new-code", message: "auth overload" } },
+  ]) {
+    expect(new ProviderStopCapture().detail(message({ diagnostics: [diagnostic] })).category).toBe(
+      diagnostic.error?.name === "APIConnectionError" ? "network" : "unknown",
+    );
+  }
 });
