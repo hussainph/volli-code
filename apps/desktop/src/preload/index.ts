@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "../ipc/secrets";
 // Type-only imports ONLY, from BOTH sources below: the pack config keeps main
 // and preload dependency-disjoint (see CAUTION in vite.config.ts) — a runtime
 // import from @volli/shared here could split a shared chunk out of preload.cjs.
@@ -522,6 +523,14 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
+  },
+  /** Person-only credential door. Reads return metadata, never stored values. */
+  secrets: {
+    list: (projectId?: string): Promise<SecretsResult> => invoke("volli:secrets-list", projectId),
+    submit: (input: SecretSubmitInput): Promise<Result> => invoke("volli:secret-submit", input),
+    decline: (id: string): Promise<Result> => invoke("volli:secret-decline", id),
+    revoke: (id: string): Promise<Result> => invoke("volli:secret-revoke", id),
+    replace: (input: SecretReplaceInput): Promise<Result> => invoke("volli:secret-replace", input),
   },
   mcp: {
     list: (input: McpProjectInput): Promise<McpServersResult> => invoke("volli:mcp-list", input),

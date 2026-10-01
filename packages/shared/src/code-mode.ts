@@ -196,6 +196,7 @@ export interface CodeModeSurface {
  */
 const DIRECT_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
   "ask_user",
+  "request_secret",
   "todo_write",
   "shell_start",
   "shell_output",
@@ -244,6 +245,7 @@ export function toolGroupOf(tool: string, definition?: McpToolDefinition): strin
     case "web_search":
       return "web";
     case "ask_user":
+    case "request_secret":
     case "todo_write":
       return "conversation";
     case "shell_start":

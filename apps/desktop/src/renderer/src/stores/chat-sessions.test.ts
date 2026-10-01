@@ -333,11 +333,9 @@ describe("createChatSession", () => {
     });
   });
 
-  it("settles a background attach transport failure as the Session's own error", async () => {
-    // The create answered, so the Session exists — an attach that never reached
-    // main must surface on it rather than vanish into a rejected background
-    // promise (CLAUDE.md: no silently swallowed mutation).
-    const { state, store } = fixture();
+  it("toasts a late background attach failure without mounting the chat or losing its kickoff", async () => {
+    const { state, store, holdAttach, releaseAttach, commands, ticketStarts } = fixture();
+    holdAttach();
     state.attachAnswer = () => {
       throw new Error("socket hang up");
     };
@@ -345,19 +343,67 @@ describe("createChatSession", () => {
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
       ticketId: "t1",
-      title: null,
+      title: "Work on VC-1",
     });
-
     expect(sessionId).toBe(SESSION.id);
+    // The dormant tab and queued first message are what kickoff prepares.
+    // No React view is rendered before or after the asynchronous failure.
+    store.getState().openChatTab("t1", sessionId!);
+    const kickoff = { id: "kickoff-1", text: "Begin work on this ticket." };
+    store.getState().enqueue(sessionId!, kickoff);
+    expect(toast.error).not.toHaveBeenCalled();
+
+    releaseAttach();
     await vi.waitFor(() => {
       expect(store.getState().sessions[SESSION.id]).toMatchObject({
         lifecycle: "error",
         sessionError: "Could not start Session: socket hang up",
+        queue: [kickoff],
       });
+      expect(toast.error).toHaveBeenCalledWith(
+        "Could not start Session: socket hang up",
+        expect.anything(),
+      );
     });
+    expect(commands).toEqual([]);
+    expect(ticketStarts).toHaveLength(1);
+    expect(toast.error).toHaveBeenCalledOnce();
+    expect(store.getState().openTabs).toEqual({ t1: [SESSION.id] });
   });
 
-  it("lets durable Ticket Attention explain a refused attach without masking recovery", async () => {
+  it("toasts a background stream-opening failure without a mounted chat", async () => {
+    const { state, store, holdAttach, releaseAttach } = fixture();
+    holdAttach();
+    state.snapshotError = new Error("snapshot unavailable");
+
+    const sessionId = await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "Work on VC-1",
+    });
+
+    expect(sessionId).toBe(SESSION.id);
+    await vi.waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Lost the Session stream: snapshot unavailable",
+        expect.anything(),
+      );
+    });
+    expect(store.getState().sessions[SESSION.id]?.sessionError).toBe(
+      "Lost the Session stream: snapshot unavailable",
+    );
+    releaseAttach();
+    // Let the independently held attach settle; success must not erase the
+    // stream's Retry band or turn the Session into a falsely healthy surface.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(store.getState().sessions[SESSION.id]).toMatchObject({
+      lifecycle: "error",
+      sessionError: "Lost the Session stream: snapshot unavailable",
+    });
+    expect(toast.error).toHaveBeenCalledOnce();
+  });
+
+  it("lets durable Ticket Attention explain a refused attach without a duplicate toast", async () => {
     const { state, store } = fixture();
     state.attachAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
 
@@ -374,6 +420,7 @@ describe("createChatSession", () => {
         sessionError: null,
       });
     });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("has no Session to keep when the create itself never answered", async () => {

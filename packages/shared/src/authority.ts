@@ -172,6 +172,8 @@ export const NON_CODING_TOOL_IDS = [
    * the Cache Prefix reason every name above was.
    */
   "codemode",
+  /** Requesting a credential outside the chat; the model receives only an outcome (VC-481). */
+  "request_secret",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

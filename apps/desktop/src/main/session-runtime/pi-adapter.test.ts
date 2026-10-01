@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { SecretService } from "../secrets/service";
+import { SecretStore } from "../secrets/store";
 
 import {
   getProjectAuthorityPolicy,
@@ -1907,6 +1911,110 @@ describe("Pi native adapter attach", () => {
     expect(runtime.specs).toHaveLength(1);
     expect(runtime.spec.recovery).toMatchObject({ sessionId: "pi-session-previous" });
     expect(binding.reconcile).toBeTypeOf("function");
+  });
+});
+
+function secrets() {
+  return new SecretService(
+    new SecretStore(join(process.cwd(), `.secret-adapter-${randomUUID()}.enc`), {
+      isEncryptionAvailable: () => false,
+      encryptString: () => {
+        throw new Error("unused");
+      },
+      decryptString: () => {
+        throw new Error("unused");
+      },
+    }),
+  );
+}
+
+describe("Pi credential waiting and lifetime", () => {
+  it("filters output for every frozen surface without granting request_secret or injection", async () => {
+    const service = secrets();
+    service.store.put({
+      name: "TOKEN",
+      value: "dummy-global-token",
+      scope: "session",
+      sessionId: "another",
+    });
+    const { binding, runtime } = await attached({
+      resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+        service.port(
+          { sessionId, projectId, sessionLabel: "Session", projectLabel: "Project" },
+          wait,
+          allowInjection,
+        ),
+    });
+    expect(runtime.spec.secret).toBeUndefined();
+    expect(runtime.spec.credentialRedaction?.redact("dummy-global-token")).toBe("‹secret:TOKEN›");
+    expect(sessionToolIds(runtime.spec)).not.toContain("request_secret");
+    expect(service.environment(SESSION_ID)).toEqual({});
+    await binding.release("requested");
+  });
+  it("publishes credential decisions, withdraws them and retires values only on close", async () => {
+    const service = secrets();
+    const { binding, runtime, sink } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "request_secret"],
+      }),
+      resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+        service.port(
+          { sessionId, projectId, sessionLabel: "Session", projectLabel: "Project" },
+          wait,
+          allowInjection,
+        ),
+    });
+    const request = () =>
+      runtime.spec.secret!.request(
+        { name: "TOKEN", toolCallId: "credential-call" },
+        new AbortController().signal,
+      );
+    const waiting = request();
+    const list = service.list();
+    if (!list.ok) throw new Error("missing list");
+    const metadata = list.requests[0]!;
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ credential: metadata, options: [] }),
+      }),
+    );
+    service.submit(metadata.id, "dummy-adapter-token", "session");
+    expect(await waiting).toBe("signed in");
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "resolved",
+        interactionId: metadata.id,
+        resolution: { optionIds: ["signed in"], response: null },
+      }),
+    );
+    expect(service.environment(SESSION_ID)).toEqual({ TOKEN: "dummy-adapter-token" });
+    const entry = service.store.list().find((item) => item.name === "TOKEN")!;
+    service.store.revoke(entry.id);
+    const withdrawn = request();
+    const next = service.list();
+    if (!next.ok) throw new Error("missing list");
+    await binding.withdrawInteraction!(next.requests[0]!.id);
+    expect(await withdrawn).toBe("still missing");
+    // Engine withdrawal already writes cancellation; the binding must not repeat it.
+    expect(
+      sink.observations.filter(
+        (observation) => observation.kind === "interaction" && observation.state === "cancelled",
+      ),
+    ).toEqual([]);
+    const last = request();
+    await binding.release("requested");
+    expect(await last).toBe("still missing");
+    expect(runtime.closes).toBe(1);
+    expect(service.environment(SESSION_ID)).toEqual({});
+    expect(await request()).toBe("still missing");
+    expect(JSON.stringify(sink.observations)).not.toContain("dummy-adapter-token");
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({ kind: "interaction", state: "cancelled" }),
+    );
   });
 });
 
