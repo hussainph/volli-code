@@ -3,6 +3,21 @@
 Open `pnpm lab`, then `/lab/#workspace-icons` (“Workspace icons · identity & attention”).
 This is a fixture-only prototype. It changes neither the shipped workspace rail nor real read receipts.
 
+## Study 02 — the workspace atelier
+
+The creative follow-up lives at `/lab/#workspace-identity-studio` (“Workspace atelier · a little character”). Study 01 links to it; both remain independently reviewable.
+
+- Four material studies: **Etched** (a carved canvas keycap), **Porcelain** (a glyph in a circular inset), **Orbit** (a tiny planet with its own ring), and **Letterpress** (a printed identity seal).
+- A 24-mark Phosphor library with a searchable picker and three collision-aware, name-based suggestions. These suggestions are **local deterministic fixtures for a future Jev classifier**, not actual model output. No project name leaves the browser, no decision service is called, and the UI says so.
+- Initials are treated as a first-class signature: Editorial, Architect, and Woven. Procedural mirrored stamps are keyed by the draft's stable identity plus an explicit variation, not the project name.
+- Local PNG/JPEG/WebP marks, limited to 2 MB and decoded before adoption. SVG and arbitrary remote URLs are not accepted. Replacing the choice or leaving the scratch cancels the meaning of an in-flight image read.
+- “Make it mine” commits the current name, mark, material, and canvas **only into the local rail rehearsal**. It creates or updates one fixture, never a real project. Editing the draft afterward does not change the saved mark. Renaming or requesting suggestions does not silently replace the selected glyph.
+- The oversized preview tilts under a fine mouse pointer using a gesture spring (0.5s, bounce 0.2). Pointer-driven choices reveal through transform/opacity transitions (200ms, the existing `--ease-out`). Hover feedback is a tiny 2px lift at 160ms. Keyboard choices are immediate; reduced motion and the explicit Motion off control remove movement. No ambient loop or animated navigation target was added.
+
+This deliberately stretches the visual language inside the lab: editorial display type, tactile frames, large preview objects, and whimsical orbital decoration. It does **not** stretch the notification meanings. The 36px rail rehearsal still separates identity, selection, unread, and Session state exactly as Study 01 does.
+
+For production, the Jev integration would need a registered decision purpose, bounded icon-name validation, explicit configured-provider policy, timeout/failure fallback to initials, and a saved identity choice with a human override. The catalogue and pure suggestion model are a prototype of the choice boundary, not a production adapter.
+
 ## The questions the rail should answer
 
 1. **Where am I going?** A stable monogram (or the optional fixture glyph study) identifies the workspace. The destination's resolved canvas provides context, not state.

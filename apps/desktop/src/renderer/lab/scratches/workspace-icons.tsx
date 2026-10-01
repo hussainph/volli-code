@@ -310,6 +310,12 @@ export default function WorkspaceIconsScratch() {
   return (
     <TooltipProvider>
       <div className="flex flex-col gap-6">
+        <a
+          href="#workspace-identity-studio"
+          className="self-start rounded-full border border-border bg-card px-4 py-2 text-ui"
+        >
+          Study 02 · Visit the workspace atelier →
+        </a>
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-ui">
             Scenario
