@@ -108,6 +108,11 @@ describe("isConfirmCause", () => {
 });
 
 describe("isOverridableAuthorityRule", () => {
+  it("permits a person to judge a classifier flag or unavailable judge, never a hard rule", () => {
+    expect(isOverridableAuthorityRule("classifier.flagged")).toBe(true);
+    expect(isOverridableAuthorityRule("classifier.unavailable")).toBe(true);
+    expect(isOverridableAuthorityRule("command.persistence")).toBe(false);
+  });
   it("is true for every rule a person may overrule when Volli stops and asks", () => {
     for (const rule of OVERRIDABLE_AUTHORITY_RULES) {
       expect(isOverridableAuthorityRule(rule)).toBe(true);

@@ -2,6 +2,9 @@ import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/sha
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AUTHORITY_REASON_SOURCE_KEY,
+  AUTHORITY_REASON_SOURCES,
+  authorityReasonSource,
   authorityOptInExtensionKey,
   catalogEntry,
   catalogGroups,
@@ -46,6 +49,26 @@ const CATALOG = [ZEN, JEV, ZEN_FREE];
 function cloud(ref: { providerId: string; modelId: string }) {
   return cloudSetting(ref, 1) as Extract<DecisionModelSetting, { kind: "cloud" }>;
 }
+
+describe("the block reason choice", () => {
+  it("defaults an unset key to utility and reads the two persisted JSON choices", () => {
+    expect(AUTHORITY_REASON_SOURCE_KEY).toBe("volli:authority-reason-source");
+    expect(AUTHORITY_REASON_SOURCES.map((option) => option.label)).toEqual([
+      "Utility model",
+      "Risk category",
+    ]);
+    expect(authorityReasonSource(undefined)).toBe("utility");
+    expect(authorityReasonSource(JSON.stringify("utility"))).toBe("utility");
+    expect(authorityReasonSource(JSON.stringify("category"))).toBe("category");
+  });
+
+  it("does not hide malformed or unknown saved choices", () => {
+    expect(() => authorityReasonSource("")).toThrow();
+    expect(() => authorityReasonSource("not json")).toThrow();
+    expect(() => authorityReasonSource(JSON.stringify("other"))).toThrow("invalid");
+    expect(() => authorityReasonSource("null")).toThrow("invalid");
+  });
+});
 
 describe("the decision model control's model", () => {
   it("reads a setting's mode", () => {

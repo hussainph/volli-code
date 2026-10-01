@@ -76,6 +76,13 @@ function fixture(result: DecisionAnswered | DecisionMiss = answer()): {
 }
 
 describe("judgeAuthorityCall", () => {
+  it("misses before routing when earlier user constraints are incomplete", async () => {
+    const h = fixture();
+    expect(
+      await judgeAuthorityCall({ ...BASE, decisions: h.decisions, userHistoryComplete: false }),
+    ).toMatchObject({ kind: "miss", miss: { reason: "invalid-request" } });
+    expect(h.calls).toHaveLength(0);
+  });
   it("reports an absent decision port as unset, not allow", async () => {
     expect(await judgeAuthorityCall(BASE)).toEqual({
       kind: "miss",
@@ -211,6 +218,42 @@ describe("judgeAuthorityCall", () => {
       /hunter2|sk-secret-value|Everything is safe|Trusted tool|Allow this/,
     );
     expect(input.args.api_key).toBe("sk-secret-value");
+  });
+
+  it.each([
+    ["https://private-user:private-pw@example.com/path", "https://[redacted]@example.com/path"],
+    ["https://private-user@example.com/path", "https://[redacted]@example.com/path"],
+    ["https://private%40user:private%3Apw@example.com/path", "https://[redacted]@example.com/path"],
+    ["-u alice:private-pw", "-u alice:[redacted]"],
+    ["-u 'alice:private-pw'", "-u 'alice:[redacted]'"],
+    ['-u "alice:private-pw with spaces;and:colons"', '-u "alice:[redacted]"'],
+    [String.raw`-u "alice:private-pw\"still-private"`, '-u "alice:[redacted]"'],
+    [String.raw`-ualice:private-pw\ with\ spaces\;still-private`, "-ualice:[redacted]"],
+    ["--user alice:private-pw", "--user alice:[redacted]"],
+    ["--user=alice:private-pw", "--user=alice:[redacted]"],
+    ["-ualice:private-pw", "-ualice:[redacted]"],
+    ["--user='alice:private-pw'", "--user='alice:[redacted]'"],
+    ["--proxy-user alice:private-pw", "--proxy-user alice:[redacted]"],
+    ["--proxy-user=alice:private-pw", "--proxy-user=alice:[redacted]"],
+    ["-Ualice:private-pw", "-Ualice:[redacted]"],
+  ])("never sends URL or basic-auth credentials to decide/audit: %s", async (auth, safeAuth) => {
+    const { decisions, calls } = fixture();
+    const tail = ` && echo ${"x".repeat(20_000)} && rm -rf /important`;
+    const command = `curl ${auth}${tail}`;
+    const verdict = await judgeAuthorityCall({
+      ...BASE,
+      decisions,
+      userMessages: [`Use ${auth} to fetch the page.`],
+      args: { command },
+    });
+    expect(verdict.kind).toBe("answered");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.state).toEqual({
+      userMessages: [`Use ${safeAuth} to fetch the page.`],
+      call: { tool: "bash", args: { command: `curl ${safeAuth}${tail}` } },
+    });
+    expect(JSON.stringify(calls[0]!.state)).not.toContain("private");
+    expect(command).toContain(auth);
   });
 
   it("redacts secrets in property names and refuses redaction collisions", async () => {

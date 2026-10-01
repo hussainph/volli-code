@@ -102,12 +102,22 @@ const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;]+/gi;
 const NAMED_SECRET =
   /\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
+// Start at the fixed scheme delimiter and stay within one authority. A
+// failed match cannot rescan an arbitrarily long scheme or cross a URL path.
+const URL_USERINFO_SECRET = /(:\/\/)[^\s/\\?#"'<>]*@/g;
+// Literal curl-style basic auth, including proxy credentials (-U). Quoted
+// passwords can contain shell separators; bare passwords stop at those
+// separators so a chained command's tail is never consumed. Escape and
+// ordinary-character arms are disjoint to keep retries linear, including
+// quoted passwords with escaped quotes and bare escaped spaces/separators.
+const COMMAND_BASIC_AUTH_SECRET =
+  /((?:^|[\s;|&()])(?:--(?:proxy-)?user(?:[ \t]+|=)|-[uU][ \t]*))("(?:\\[^\r\n]|[^"\\\r\n])*"|'[^'\r\n]*'|(?:\\[^\r\n]|[^\s;|&()<>"'\\])+)/g;
 const SENSITIVE_KEY = /(?:token|apikey|password|secret|authorization|credential)/i;
 // Every redaction pattern starts with one of these markers. Most tool output
-// has none, so one scan avoids four full-string replacement scans while
+// has none, so one scan avoids the full-string replacement scans while
 // retaining the exact slow path for anything that might contain a secret.
 const SECRET_MARKER =
-  /(?:\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_]|\bbearer\s|\bauthorization\s*:|\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:))/i;
+  /(?:\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_]|\bbearer\s|\bauthorization\s*:|\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)|:\/\/[^\s/\\?#"'<>]*@|(?:^|[\s;|&()])(?:--(?:proxy-)?user(?:[ \t]|=)|-[uU]))/i;
 const REDACTED_VALUE = "[redacted]";
 
 /**
@@ -275,7 +285,11 @@ function browseFacet(
 ): ActivityBrowse | null {
   const base = BROWSER_TOOL_ACTION[toolName];
   if (base === undefined) return null;
-  const reported = readActivityBrowse(readField(recordOf(rawOutput), "details"));
+  // Facets leave the adapter alongside the normalized output: the host's
+  // original details must not bypass payload redaction (notably URL userinfo).
+  const reported = readActivityBrowse(
+    normalizeActivityValue(readField(recordOf(rawOutput), "details")),
+  );
   if (reported !== null) return reported;
   const source = recordOf(input);
   return {
@@ -674,6 +688,14 @@ function boundSummaryText(value: string): string {
 export function redactPayloadSecrets(value: string): string {
   if (!SECRET_MARKER.test(value)) return value;
   return value
+    .replace(URL_USERINFO_SECRET, "$1[redacted]@")
+    .replace(COMMAND_BASIC_AUTH_SECRET, (match, prefix: string, credentials: string) => {
+      const colon = credentials.indexOf(":");
+      if (colon < 0) return match;
+      const first = credentials.charAt(0);
+      const quote = first === '"' || first === "'" ? first : "";
+      return `${prefix}${credentials.slice(0, colon + 1)}[redacted]${quote}`;
+    })
     .replace(PREFIXED_SECRET, "[redacted]")
     .replace(
       AUTHORIZATION_HEADER_SECRET,

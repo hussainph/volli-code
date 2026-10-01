@@ -375,7 +375,7 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
  * allowance and escalate a Session that was never refused anything. The same
  * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm" | "classifier";
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -1111,6 +1111,14 @@ export interface SessionRuntimeSpec {
   authority?: AuthoritySnapshot;
   /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
   decisions?: DecisionPort;
+  /** Optional wording pass on flags only; it never decides permission. */
+  authorityReason?: (input: {
+    sessionId: string;
+    tool: string;
+    category: string;
+    fallback: string;
+    signal?: AbortSignal;
+  }) => Promise<string>;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -2090,6 +2098,8 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /** A small output budget for latency-sensitive utility explanations. */
+  maxOutputTokens?: number;
   /**
    * The caller's deadline. Background work has no one waiting on it, so a
    * provider that never answers must not leave a promise pending for the life

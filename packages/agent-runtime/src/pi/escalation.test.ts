@@ -91,6 +91,53 @@ function pendingAsk(): {
   };
 }
 
+describe("classifier hand-back", () => {
+  it.each(["allow", "refuse"] as const)(
+    "asks immediately on a miss and honours only the person's %s",
+    async (choice) => {
+      const ask = vi.fn<
+        (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+      >(async () => choice);
+      const machine = escalation({ ask });
+      const result = await machine.resolve({
+        verdict: { outcome: "deny", cause: "classifier.unavailable", reason: "timeout" },
+        tool: "bash",
+        toolCallId: "call",
+        turnId: "turn",
+        askImmediately: true,
+      });
+      expect(ask).toHaveBeenCalledOnce();
+      expect(ask.mock.calls[0]?.[0]).toMatchObject({
+        trip: "classifier",
+        overridable: true,
+        reason: "timeout",
+      });
+      expect(result.outcome).toBe(choice === "allow" ? "allow" : "deny");
+    },
+  );
+
+  it("pauses unattended automatic sessions at hand-back, without granting a miss", async () => {
+    const machine = escalation();
+    const flagged = {
+      verdict: { outcome: "deny", cause: "classifier.flagged", reason: "risk" } as const,
+      tool: "bash",
+      toolCallId: "call",
+      turnId: "turn",
+      pauseIfUnattended: true,
+    };
+    expect(await machine.resolve(flagged)).toMatchObject({ interrupt: false });
+    expect(await machine.resolve(flagged)).toMatchObject({ interrupt: false });
+    expect(await machine.resolve(flagged)).toMatchObject({ outcome: "deny", interrupt: true });
+    expect(
+      await escalation().resolve({
+        ...flagged,
+        askImmediately: true,
+        verdict: { outcome: "deny", cause: "classifier.unavailable", reason: "unset" },
+      }),
+    ).toMatchObject({ outcome: "deny", interrupt: true });
+  });
+});
+
 describe("AuthorityEscalation", () => {
   it("stands aside for an allowed call and forgets the run of refusals before it", async () => {
     const ask = vi.fn(async () => "refuse" as const);

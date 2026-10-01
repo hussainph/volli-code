@@ -219,10 +219,20 @@ export async function judgeAuthorityCall(input: {
   sessionId: string;
   projectId: string;
   userMessages: readonly string[];
+  /** A lost carry/history boundary cannot invent permission from new text. */
+  userHistoryComplete?: boolean;
   tool: string;
   args: unknown;
   signal?: AbortSignal;
 }): Promise<AuthorityJudgeVerdict> {
+  if (input.userHistoryComplete === false) {
+    return miss(
+      decisionMiss(
+        "invalid-request",
+        "Earlier user constraints could not be recovered. Ask the person before this call runs.",
+      ),
+    );
+  }
   if (input.decisions === undefined) {
     return miss(decisionMiss("unset", "No authority classifier is configured."));
   }

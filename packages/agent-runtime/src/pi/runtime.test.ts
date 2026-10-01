@@ -59,6 +59,9 @@ import {
   type AuthoritySnapshot,
   type DecisionCall,
   type DecisionPort,
+  type DecisionMissReason,
+  type RuntimeAskRequest,
+  type RuntimeAskChoice,
   type McpToolDefinition,
   type ObservabilityEvent,
   type CompactionObservation,
@@ -2972,6 +2975,571 @@ describe("startSession", () => {
     expect(attachment.observations).toContainEqual(
       expect.objectContaining({ kind: "authority-review", missReason: "unset", wouldFlag: null }),
     );
+  });
+
+  function autoReviewHarness(
+    input: {
+      flag?: boolean;
+      miss?: DecisionMissReason;
+      count?: number;
+      command?: string;
+      skippedRead?: boolean;
+      priorDenials?: number;
+      ask?: SessionRuntimeSpec["ask"];
+      authorityReason?: SessionRuntimeSpec["authorityReason"];
+      observer?: SessionRuntimeSpec["observer"];
+    } = {},
+  ) {
+    const attachment = fixture({ tools: { tools: ["execute", "read"] } });
+    const calls: DecisionCall<unknown>[] = [];
+    const decisions: DecisionPort = {
+      async decide<T>(call: DecisionCall<T>): Promise<T> {
+        calls.push(call);
+        if (input.miss !== undefined)
+          return call.fallback({
+            reason: input.miss,
+            status: "error",
+            message: "Review unavailable",
+          });
+        const category = input.flag === true ? "external" : "safe";
+        return call.use({
+          model: { where: "cloud", providerId: "typesafe", modelId: "jev" },
+          elapsedMs: 1,
+          answers: {
+            authorised: { type: "bool", probability: 0.99, value: true, confidence: 0.98 },
+            risk: {
+              type: "choice",
+              choice: category,
+              probabilities: {
+                safe: input.flag === true ? 0.01 : 0.99,
+                destructive: 0,
+                disclosure: 0,
+                security: 0,
+                external: input.flag === true ? 0.99 : 0.01,
+                uncertain: 0,
+              },
+              confidence: 0.988,
+            },
+          },
+        });
+      },
+    };
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    let resultContext: Context | undefined;
+    const createRuntime = () =>
+      createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        ...(input.skippedRead
+          ? {}
+          : {
+              executionEnvFactory: async () =>
+                ({
+                  cwd: attachment.worktreePath,
+                  exec,
+                  cleanup: async () => undefined,
+                }) as unknown as ExecutionEnv,
+            }),
+        models: modelsWithStream(
+          scriptedStream([
+            ...Array.from({ length: input.count ?? 1 }, () => (emit: EmitApi) => {
+              if (input.skippedRead)
+                emit.toolCall("read", { path: join(attachment.worktreePath, "MARKER.txt") });
+              else emit.toolCall("bash", { command: input.command ?? "printf hi" });
+              emit.finish();
+            }),
+            (emit, context) => {
+              resultContext = context;
+              emit.text("Safer route");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+    const spec: SessionRuntimeSpec = {
+      ...attachment.spec,
+      authority: { ...attachment.spec.authority, enforcement: "enforce", judgmentMode: "auto" },
+      decisions,
+      ask: input.ask,
+      authorityReason: input.authorityReason,
+      priorAuthorityDenials: input.priorDenials,
+      observer: input.observer ?? attachment.spec.observer,
+    };
+    return {
+      attachment,
+      runtime: createRuntime(),
+      createRuntime,
+      spec,
+      calls,
+      exec,
+      context: () => resultContext,
+    };
+  }
+
+  it("skips automatic review for native reads without requiring a configured judge", async () => {
+    const h = autoReviewHarness({ skippedRead: true, miss: "unset" });
+    writeFileSync(join(h.attachment.worktreePath, "MARKER.txt"), "read content");
+    const handle = await h.runtime.startSession(h.spec);
+    await handle.submitUserMessage("Inspect the file");
+    await handle.close();
+    expect(h.calls).toHaveLength(0);
+    expect(JSON.stringify(h.context()?.messages)).toContain("read content");
+  });
+
+  it("allows a clean automatic verdict, and denies a flag with optional utility wording", async () => {
+    for (const flag of [false, true]) {
+      const reason = vi.fn(async () => "This call may publish to a shared system.");
+      const h = autoReviewHarness({ flag, authorityReason: reason });
+      const handle = await h.runtime.startSession(h.spec);
+      await handle.submitUserMessage("Run the call");
+      await handle.close();
+      expect(h.exec).toHaveBeenCalledTimes(flag ? 0 : 1);
+      expect(reason).toHaveBeenCalledTimes(flag ? 1 : 0);
+      expect(h.attachment.observations).toContainEqual(
+        expect.objectContaining({ kind: "authority-review", mode: "auto", wouldFlag: flag }),
+      );
+      if (flag)
+        expect(JSON.stringify(h.context()?.messages)).toContain("do not work around this block");
+    }
+  });
+
+  it.each(["allow", "refuse"] as const)(
+    "hands back after three flags; %s runs at most the exact third call",
+    async (choice) => {
+      const ask = vi.fn<
+        (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+      >(async () => choice);
+      const h = autoReviewHarness({ flag: true, count: 3, ask });
+      const handle = await h.runtime.startSession(h.spec);
+      await handle.submitUserMessage("Run calls");
+      await handle.close();
+      expect(ask).toHaveBeenCalledOnce();
+      expect(ask.mock.calls[0]?.[0]).toMatchObject({
+        cause: "classifier.flagged",
+        trip: "consecutive",
+        overridable: true,
+      });
+      expect(h.exec).toHaveBeenCalledTimes(choice === "allow" ? 1 : 0);
+      expect(h.calls).toHaveLength(3);
+    },
+  );
+
+  it("lets a person grant only the current call when the automatic judge misses", async () => {
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "allow");
+    const h = autoReviewHarness({ miss: "timeout", count: 2, ask });
+    const handle = await h.runtime.startSession(h.spec);
+    await handle.submitUserMessage("Run");
+    await handle.close();
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(h.exec).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls.every(([request]) => request.trip === "classifier")).toBe(true);
+  });
+
+  it("does not run an automatic allowance before the final review fact is durable", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const h = autoReviewHarness({
+      observer: async (observation) => {
+        if (observation.kind === "authority-review") {
+          entered.resolve();
+          await release.promise;
+        }
+      },
+    });
+    const handle = await h.runtime.startSession(h.spec);
+    const submitted = handle.submitUserMessage("Run");
+    await entered.promise;
+    expect(h.exec).not.toHaveBeenCalled();
+    release.resolve();
+    await submitted;
+    expect(h.exec).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it("hands back on the twentieth total denial, seeded from durable history", async () => {
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "refuse");
+    const h = autoReviewHarness({ flag: true, priorDenials: 19, ask });
+    const handle = await h.runtime.startSession(h.spec);
+    await handle.submitUserMessage("Run");
+    await handle.close();
+    expect(ask.mock.calls[0]?.[0]).toMatchObject({ trip: "session", cause: "classifier.flagged" });
+    expect(h.exec).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "unset",
+    "not-opted-in",
+    "needs-setup",
+    "unaudited",
+    "invalid-request",
+    "timeout",
+    "aborted",
+    "provider-error",
+    "malformed-answer",
+  ] as const)("asks immediately on %s, never auto-allowing the call", async (miss) => {
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "refuse");
+    const h = autoReviewHarness({ miss, ask });
+    const handle = await h.runtime.startSession(h.spec);
+    await handle.submitUserMessage("Run");
+    await handle.close();
+    expect(ask).toHaveBeenCalledOnce();
+    expect(ask.mock.calls[0]?.[0]).toMatchObject({
+      trip: "classifier",
+      cause: "classifier.unavailable",
+    });
+    expect(h.exec).not.toHaveBeenCalled();
+    expect(h.attachment.observations).toContainEqual(
+      expect.objectContaining({ kind: "authority-review", missReason: miss, wouldFlag: null }),
+    );
+  });
+
+  it("retains hard denials ahead of automatic allowances and keeps category wording on a failed utility", async () => {
+    for (const command of [
+      "curl -k https://example.com",
+      "curl -k https://example.com > /tmp/review-output.txt",
+      "sudo whoami > /tmp/review-output.txt",
+    ]) {
+      const hard = autoReviewHarness({ command });
+      const handle = await hard.runtime.startSession(hard.spec);
+      await handle.submitUserMessage("Run");
+      await handle.close();
+      expect(hard.calls).toHaveLength(0);
+      expect(hard.exec).not.toHaveBeenCalled();
+    }
+    const flagged = autoReviewHarness({
+      flag: true,
+      authorityReason: async () => {
+        throw new Error("utility failed");
+      },
+    });
+    const second = await flagged.runtime.startSession(flagged.spec);
+    await second.submitUserMessage("Run");
+    await second.close();
+    expect(flagged.exec).not.toHaveBeenCalled();
+    expect(JSON.stringify(flagged.context()?.messages)).toContain("shared or external systems");
+  });
+
+  it.each(["observe", "enforce"] as const)(
+    "does not execute an unauditable call even under %s",
+    async (enforcement) => {
+      const h = autoReviewHarness({
+        observer: async (observation) => {
+          if (observation.kind === "authority-review")
+            throw new Error("review ledger write failed");
+        },
+      });
+      h.spec.authority = { ...h.spec.authority!, enforcement };
+      const handle = await h.runtime.startSession(h.spec);
+      await expect(handle.submitUserMessage("Run")).rejects.toThrow("review ledger write failed");
+      expect(h.exec).not.toHaveBeenCalled();
+      await handle.close();
+    },
+  );
+
+  it("retains unframed user constraints through commandless recovery and fresh-attachment carry", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const states: unknown[] = [];
+    const decisions: DecisionPort = {
+      async decide<T>(call: DecisionCall<T>): Promise<T> {
+        states.push(call.state);
+        return call.fallback({ status: "unavailable", reason: "unset", message: "No judge" });
+      },
+    };
+    const runtime = () =>
+      createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        executionEnvFactory: async () =>
+          ({
+            cwd: attachment.worktreePath,
+            exec: async () => ({
+              ok: true as const,
+              value: { stdout: "tool output", stderr: "", exitCode: 0 },
+            }),
+            cleanup: async () => undefined,
+          }) as unknown as ExecutionEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "printf hi" });
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("assistant prose");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+    const spec: SessionRuntimeSpec = {
+      ...attachment.spec,
+      authority: { ...attachment.spec.authority, enforcement: "observe" },
+      decisions,
+    };
+    const first = await runtime().startSession(spec);
+    await first.submitUserMessage("Do not deploy; inspect only");
+    const recovered = first.recovery;
+    await first.close();
+    const second = await runtime().startSession({ ...spec, recovery: recovered });
+    await second.submitUserMessage("Run my focused test", "queue", "authority-command-2");
+    const earlier = second.recovery!;
+    await second.close();
+    const thirdSpec = {
+      ...spec,
+      identity: { ...spec.identity, attachmentId: "authority-attachment-2" },
+    };
+    const third = await runtime().startSession({
+      ...thirdSpec,
+      carry: {
+        ...earlier,
+        attachmentId: spec.identity.attachmentId,
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    await third.submitUserMessage("Continue the test");
+    const carriedRecovery = third.recovery;
+    await third.close();
+    const fourth = await runtime().startSession({ ...thirdSpec, recovery: carriedRecovery });
+    await fourth.submitUserMessage("Check again");
+    await fourth.close();
+    expect(states.map((state) => (state as { userMessages: string[] }).userMessages)).toEqual([
+      ["Do not deploy; inspect only"],
+      ["Do not deploy; inspect only", "Run my focused test"],
+      ["Do not deploy; inspect only", "Run my focused test", "Continue the test"],
+      ["Do not deploy; inspect only", "Run my focused test", "Continue the test", "Check again"],
+    ]);
+    expect(JSON.stringify(states)).not.toMatch(/assistant prose|tool output|BEGIN TICKET BRIEF/);
+  });
+
+  it("persists failed user-history carry as a classifier miss through recovery and further carry", async () => {
+    const h = autoReviewHarness();
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "refuse");
+    const first = await h.runtime.startSession({
+      ...h.spec,
+      ask,
+      carryUnreadable: "Earlier attachment could not be read",
+    });
+    await first.submitUserMessage("Continue");
+    const recovery = first.recovery!;
+    await first.close();
+    const second = await h.createRuntime().startSession({ ...h.spec, ask, recovery });
+    await second.submitUserMessage("Continue again");
+    const earlier = second.recovery!;
+    await second.close();
+    const third = await h.createRuntime().startSession({
+      ...h.spec,
+      ask,
+      identity: { ...h.spec.identity, attachmentId: "history-failed-carry" },
+      carry: {
+        ...earlier,
+        attachmentId: h.spec.identity.attachmentId,
+        workspacePath: h.attachment.worktreePath,
+      },
+    });
+    await third.submitUserMessage("Continue once more");
+    await third.close();
+    expect(h.calls).toHaveLength(0);
+    expect(h.exec).not.toHaveBeenCalled();
+    expect(ask).toHaveBeenCalledTimes(3);
+    expect(h.attachment.observations.filter((o) => o.kind === "authority-review")).toEqual(
+      Array.from({ length: 3 }, () =>
+        expect.objectContaining({ missReason: "invalid-request", wouldFlag: null }),
+      ),
+    );
+  });
+
+  it("does not judge with partial history when a carried snapshot contains non-text entries", async () => {
+    const h = autoReviewHarness();
+    const first = await h.runtime.startSession(h.spec);
+    await first.submitUserMessage("No deployments");
+    const recovery = first.recovery!;
+    await first.close();
+    const entries = readJsonl(recovery.sessionFilePath);
+    const custom = entries.find((entry) => entry["customType"] === "volli.authority-user-input")!;
+    custom["data"] = { userMessages: ["No deployments", 3] };
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "refuse");
+    const second = await h.createRuntime().startSession({ ...h.spec, ask, recovery });
+    await second.submitUserMessage("Continue");
+    await second.close();
+    expect(h.calls).toHaveLength(1);
+    expect(ask).toHaveBeenCalledOnce();
+    expect(h.exec).toHaveBeenCalledOnce();
+  });
+
+  it.each(["legacy-command", "legacy-direct", "malformed-input", "missing-input"] as const)(
+    "keeps omitted %s user history closed through recovery and fresh carry",
+    async (kind) => {
+      const h = autoReviewHarness();
+      const first = await h.runtime.startSession(h.spec);
+      await first.submitUserMessage(
+        "No deployments",
+        "queue",
+        kind === "legacy-command" ? "legacy-command" : undefined,
+      );
+      const recovery = first.recovery!;
+      await first.close();
+      const entries = readJsonl(recovery.sessionFilePath);
+      if (kind === "legacy-command") {
+        const receipt = entries.find(
+          (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "command-accepted",
+        )!;
+        delete (receipt["data"] as Record<string, unknown>)["authorityUserText"];
+      } else {
+        const receipt = entries.find(
+          (entry) => entry["customType"] === "volli.authority-user-input",
+        )!;
+        if (kind === "legacy-direct") receipt["customType"] = "old-input";
+        else receipt["data"] = kind === "malformed-input" ? null : {};
+      }
+      writeFileSync(
+        recovery.sessionFilePath,
+        `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+      const ask = vi.fn<
+        (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+      >(async () => "refuse");
+      const second = await h.createRuntime().startSession({ ...h.spec, ask, recovery });
+      await second.submitUserMessage("Continue");
+      const earlier = second.recovery!;
+      await second.close();
+      const third = await h.createRuntime().startSession({
+        ...h.spec,
+        ask,
+        identity: { ...h.spec.identity, attachmentId: "legacy-carry" },
+        carry: {
+          ...earlier,
+          attachmentId: h.spec.identity.attachmentId,
+          workspacePath: h.attachment.worktreePath,
+        },
+      });
+      await third.submitUserMessage("Continue again");
+      await third.close();
+      expect(h.calls).toHaveLength(1);
+      expect(h.exec).toHaveBeenCalledOnce();
+      expect(ask).toHaveBeenCalledTimes(2);
+      expect(
+        h.attachment.observations.filter((o) => o.kind === "authority-review").slice(1),
+      ).toEqual(
+        Array.from({ length: 2 }, () => expect.objectContaining({ missReason: "invalid-request" })),
+      );
+    },
+  );
+
+  it.each([
+    ["volli.context.v1", null],
+    ["volli.observation.v1", null],
+    ["volli.context.v1", {}],
+  ] as const)("misses closed on uninspectable %s history %j", async (customType, data) => {
+    const h = autoReviewHarness();
+    const first = await h.runtime.startSession(h.spec);
+    await first.submitUserMessage("Inspect only");
+    const recovery = first.recovery!;
+    await first.close();
+    const entries = readJsonl(recovery.sessionFilePath);
+    const marker = entries.find(
+      (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "turn",
+    )!;
+    marker["customType"] = customType;
+    marker["data"] = data;
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+    const ask = vi.fn<
+      (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+    >(async () => "refuse");
+    const second = await h.createRuntime().startSession({ ...h.spec, ask, recovery });
+    await second.submitUserMessage("Continue");
+    await second.close();
+    expect(h.calls).toHaveLength(1);
+    expect(ask).toHaveBeenCalledOnce();
+    expect(h.exec).toHaveBeenCalledOnce();
+  });
+
+  it.each(["legacy-compaction", "malformed-command"] as const)(
+    "does not repair earlier %s history with a later valid receipt",
+    async (kind) => {
+      const h = autoReviewHarness();
+      const first = await h.runtime.startSession(h.spec);
+      await first.submitUserMessage("Inspect only");
+      const recovery = first.recovery!;
+      await first.close();
+      const entries = readJsonl(recovery.sessionFilePath);
+      const marker = entries.find(
+        (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "turn",
+      )!;
+      if (kind === "legacy-compaction") {
+        marker["type"] = "compaction";
+        delete marker["customType"];
+        delete marker["data"];
+        Object.assign(marker, {
+          summary: "Earlier user restrictions were compacted.",
+          retainedTail: [],
+          tokensBefore: 100,
+          fromHook: false,
+        });
+      } else {
+        marker["data"] = { kind: "command-accepted", operation: "message.submit" };
+      }
+      writeFileSync(
+        recovery.sessionFilePath,
+        `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+      const ask = vi.fn<
+        (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>
+      >(async () => "refuse");
+      if (kind === "malformed-command") {
+        await expect(h.createRuntime().startSession({ ...h.spec, ask, recovery })).rejects.toThrow(
+          "Pi recovery marker is malformed",
+        );
+        expect(ask).not.toHaveBeenCalled();
+      } else {
+        const second = await h.createRuntime().startSession({ ...h.spec, ask, recovery });
+        await second.submitUserMessage("Continue");
+        await second.close();
+        expect(ask).toHaveBeenCalledOnce();
+      }
+      expect(h.calls).toHaveLength(1);
+      expect(h.exec).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not confuse reasoning elision with a missing user-history carry", async () => {
+    const h = autoReviewHarness();
+    const first = await h.runtime.startSession(h.spec);
+    await first.submitUserMessage("Inspect only");
+    const recovery = first.recovery!;
+    await first.close();
+    const entries = readJsonl(recovery.sessionFilePath);
+    const marker = entries.find(
+      (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "turn",
+    )!;
+    marker["customType"] = "volli.context.v1";
+    marker["data"] = { kind: "reasoning-dropped" };
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+    const second = await h.createRuntime().startSession({ ...h.spec, recovery });
+    await second.submitUserMessage("Continue");
+    await second.close();
+    expect(h.calls).toHaveLength(2);
+    expect(h.exec).toHaveBeenCalledTimes(2);
   });
 
   it("gives the default environment Pi's own unscoped file verbs", async () => {
@@ -11622,6 +12190,21 @@ describe("completeUtility", () => {
       { role: "user", content: "The login button is broken", timestamp: expect.any(Number) },
     ]);
     expect(calls[0]!.options).toEqual({});
+  });
+
+  it("forwards the optional block-reason output budget to the named utility model", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Shared system risk" }, (call) => calls.push(call)),
+    });
+    await runtime.completeUtility({
+      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+      systemPrompt: "Explain a block",
+      user: "external",
+      maxOutputTokens: 80,
+    });
+    expect(calls[0]!.options).toEqual({ maxTokens: 80 });
   });
 
   it("passes a non-off reasoning level through verbatim", async () => {

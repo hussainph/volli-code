@@ -39,6 +39,10 @@ import type {
   DecisionModelTestView,
 } from "../../../../ipc/contract";
 import {
+  AUTHORITY_REASON_SOURCE_KEY,
+  AUTHORITY_REASON_SOURCES,
+  authorityReasonSource,
+  type AuthorityReasonSource,
   authorityOptInExtensionKey,
   catalogGroups,
   cloudLabel,
@@ -90,6 +94,7 @@ import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
+import { writeThrough } from "@renderer/stores/mutate";
 
 type LoadState =
   | { status: "loading" }
@@ -273,6 +278,88 @@ function TestResult({ test }: { test: DecisionModelTestView | null }) {
       <StatusDot state={test.ok ? "ready" : "error"} />
       {test.ok ? `Answered in ${Math.round(test.elapsedMs)} ms` : test.message}
     </span>
+  );
+}
+
+/** The only app-wide block-reason control; projects never get another axis. */
+function BlockReasonRow() {
+  const [state, setState] = React.useState<
+    | { status: "loading" }
+    | { status: "loaded"; source: AuthorityReasonSource }
+    | { status: "error"; message: string }
+  >({ status: "loading" });
+  const [busy, setBusy] = React.useState(false);
+  const fetches = useLatestAsync();
+  const load = React.useCallback(async () => {
+    const token = fetches.claim();
+    try {
+      // Bootstrap is the existing renderer read door for app_state; the
+      // storage cache alone cannot report a failed durable read.
+      const result = await window.api.data.bootstrap();
+      if (!fetches.isCurrent(token)) return;
+      if (!result.ok) {
+        setState({ status: "error", message: result.error });
+        return;
+      }
+      setState({
+        status: "loaded",
+        source: authorityReasonSource(result.data.appState[AUTHORITY_REASON_SOURCE_KEY]),
+      });
+    } catch (error) {
+      if (fetches.isCurrent(token)) setState({ status: "error", message: errorMessage(error) });
+    }
+  }, [fetches]);
+  React.useEffect(() => {
+    void load();
+    return () => fetches.invalidate();
+  }, [load, fetches]);
+
+  async function save(source: AuthorityReasonSource): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    const saved = await writeThrough("save the block reason choice", () =>
+      window.api.appState.set(AUTHORITY_REASON_SOURCE_KEY, JSON.stringify(source)),
+    );
+    setBusy(false);
+    if (saved !== null) setState({ status: "loaded", source });
+  }
+
+  return (
+    <PrefRow
+      label="Block reason"
+      testId="authority-reason-source"
+      hint={
+        <>
+          Utility model explains the risk category. Without a utility model, the risk category is
+          used.
+        </>
+      }
+    >
+      {state.status === "loaded" ? (
+        <Segmented
+          ariaLabel="Block reason"
+          value={state.source}
+          options={AUTHORITY_REASON_SOURCES}
+          disabled={busy}
+          onChange={(source) => void save(source)}
+        />
+      ) : state.status === "loading" ? (
+        <span className="text-ui text-muted-foreground">Loading…</span>
+      ) : (
+        <Notice
+          announce
+          tone="error"
+          icon={WarningIcon}
+          title="Couldn't read the block reason choice"
+          detail={state.message}
+          actions={
+            <Button size="xs" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          }
+        />
+      )}
+    </PrefRow>
   );
 }
 
@@ -507,6 +594,8 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
           ) : null}
         </>
       ) : null}
+
+      <BlockReasonRow />
 
       {fieldError === null ? null : (
         <Notice announce tone="error" icon={WarningIcon} title={fieldError} />

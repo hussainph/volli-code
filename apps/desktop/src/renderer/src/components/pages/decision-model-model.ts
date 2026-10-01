@@ -12,6 +12,26 @@ import {
   type DecisionModelSetting,
 } from "@volli/shared";
 
+/** One app-wide wording preference; it does not change a block verdict. */
+export const AUTHORITY_REASON_SOURCE_KEY = "volli:authority-reason-source";
+export type AuthorityReasonSource = "utility" | "category";
+export const AUTHORITY_REASON_SOURCES: readonly {
+  key: AuthorityReasonSource;
+  label: string;
+}[] = [
+  { key: "utility", label: "Utility model" },
+  { key: "category", label: "Risk category" },
+];
+
+export function authorityReasonSource(raw: string | undefined): AuthorityReasonSource {
+  if (raw === undefined) return "utility";
+  const value: unknown = JSON.parse(raw);
+  if (value !== "utility" && value !== "category") {
+    throw new Error("The saved block reason choice is invalid.");
+  }
+  return value;
+}
+
 /** The three choices the control offers, in order. */
 export type DecisionMode = "none" | "local" | "cloud";
 

@@ -22,6 +22,12 @@ function keywordsFor(key: string): readonly string[] {
 }
 
 describe("the Models category's search index", () => {
+  it("finds the global block reason control and both choices", () => {
+    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+    for (const label of ["Block reason", "Utility model", "Risk category"]) {
+      expect(terms).toContain(label.toLowerCase());
+    }
+  });
   it("finds every default-model row by its own label", () => {
     // The rail matches a lowercased substring, so the stored terms are
     // compared the same way the shell compares them.

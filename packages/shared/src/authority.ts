@@ -535,6 +535,8 @@ export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCau
 export type AuthorityDenialCause =
   | AuthorityRuleId
   | "call.unreadable"
+  | "classifier.flagged"
+  | "classifier.unavailable"
   | BudgetCauseId
   | ConfirmCauseId;
 
@@ -595,7 +597,11 @@ export const OVERRIDABLE_AUTHORITY_RULES = [
 
 /** Whether a refusal is one a person can overrule, or one that only reports. */
 export function isOverridableAuthorityRule(cause: AuthorityDenialCause): boolean {
-  return (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause);
+  return (
+    cause === "classifier.flagged" ||
+    cause === "classifier.unavailable" ||
+    (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause)
+  );
 }
 
 export const BUILTIN_RULE_PACK_ID = "volli.builtin";

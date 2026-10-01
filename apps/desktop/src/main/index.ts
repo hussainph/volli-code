@@ -170,6 +170,7 @@ import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { createDesktopDecisions } from "./decision/desktop";
+import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -560,6 +561,10 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
   }
   return input.tools;
+}
+
+async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
+  return input.fallback;
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -1422,6 +1427,7 @@ app.whenReady().then(async () => {
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
+  let authorityReason = categoryAuthorityReason;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -1430,6 +1436,7 @@ app.whenReady().then(async () => {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          authorityReason: (input) => authorityReason(input),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -1744,6 +1751,32 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  if (dbHandle.ok && piRuntimeHost !== null && sessionEngine !== null) {
+    authorityReason = createAuthorityReason({
+      db: dbHandle.db,
+      readModelDefaults: () => readModelAccessDefaults(dbHandle.db),
+      completeUtility: (input) => piRuntimeHost.completeUtility(input),
+      recordUsage: async (sessionId, usage) => {
+        await sessionEngine.observe({
+          id: `usage:authority-reason:${randomUUID()}`,
+          kind: "usage.recorded",
+          sessionId,
+          occurredAt: Date.now(),
+          provenance: {
+            source: {
+              kind: "system",
+              id: "authority-reason",
+              detail: { purpose: "authority.judge", reasonSource: "utility" },
+            },
+            venue: { id: "local", kind: "local" },
+          },
+          attachmentId: null,
+          turnId: null,
+          usage,
+        });
+      },
+    });
+  }
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).

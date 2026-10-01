@@ -66,7 +66,7 @@ export type AuthorityDisposition =
        * a threshold that never arrives.
        */
       record: boolean;
-      /** Set only by an explicit `stop`, and never without {@link record}. */
+      /** Explicit stop, or auto-mode's unattended hand-back; never without record. */
       interrupt: boolean;
     };
 
@@ -97,6 +97,10 @@ export interface AuthorityCall {
    * `beforeToolCall` as its second argument.
    */
   signal?: AbortSignal;
+  /** An unavailable automatic judge must ask now, never silently pass the call. */
+  askImmediately?: boolean;
+  /** Automatic review pauses at hand-back even when a host has no ask surface. */
+  pauseIfUnattended?: boolean;
 }
 
 const ALLOW: AuthorityDisposition = { outcome: "allow" };
@@ -245,17 +249,23 @@ export class AuthorityEscalation {
     // rather than the second. Consecutive wins ties because it is the more
     // specific complaint: it names one line of work rather than the Session.
     const trip: RuntimeAskTrip | null =
-      nextConsecutive >= this.#consecutiveThreshold
-        ? "consecutive"
-        : nextSession >= this.#sessionTrip
-          ? "session"
-          : null;
+      call.askImmediately === true
+        ? "classifier"
+        : nextConsecutive >= this.#consecutiveThreshold
+          ? "consecutive"
+          : nextSession >= this.#sessionTrip
+            ? "session"
+            : null;
 
     const ask = this.#ask;
     if (ask === undefined || trip === null) {
       this.#consecutiveDenials = nextConsecutive;
       this.#sessionDenials = nextSession;
-      return { ...refused, record: true, interrupt: false };
+      return {
+        ...refused,
+        record: true,
+        interrupt: ask === undefined && trip !== null && call.pauseIfUnattended === true,
+      };
     }
 
     // Read once and used twice — to describe the question and to bound what its

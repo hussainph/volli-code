@@ -312,7 +312,7 @@ describe("the fallback is the answer to every miss", () => {
 
   it("refuses a caller that is not a purpose", async () => {
     const { decisions } = service();
-    expect(await ask(decisions, { purpose: "authority.judge" as DecisionPurpose })).toMatchObject({
+    expect(await ask(decisions, { purpose: "unknown.purpose" as DecisionPurpose })).toMatchObject({
       miss: { reason: "invalid-request" },
     });
   });

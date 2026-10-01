@@ -3228,6 +3228,32 @@ describe("a departure written by the product reaches the next attachment's Snaps
     };
   }
 
+  it("carries the existing automatic policy and host-only decision/wording ports to the runtime", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+    updateProjectAuthorityPolicy(
+      db.db,
+      "p1",
+      { enforcement: "enforce", judgmentMode: "auto" },
+      1000,
+    );
+    const decisions: import("@volli/shared").DecisionPort = {
+      decide: async (call) =>
+        call.fallback({ status: "unavailable", reason: "unset", message: "No model" }),
+    };
+    const authorityReason = vi.fn(async (input: { fallback: string }) => input.fallback);
+    const { binding, runtime } = await attached({
+      ...fromDatabase("p1"),
+      decisions,
+      authorityReason,
+    });
+    expect(binding.authority).toMatchObject({ enforcement: "enforce", judgmentMode: "auto" });
+    expect(runtime.spec.authority).toEqual(binding.authority);
+    expect(runtime.spec.decisions).toBe(decisions);
+    expect(runtime.spec.authorityReason).toBe(authorityReason);
+    expect(authorityReason).not.toHaveBeenCalled();
+  });
+
   it("carries enforcement from the write, through resolution, into the pinned Snapshot", async () => {
     db = openTestDb();
     insertProject(db.db, testProject({ id: "p1" }));

@@ -478,6 +478,7 @@ export interface PiAdapterOptions {
   resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
   /** Authority review is host policy, not an agent tool capability. */
   decisions?: import("@volli/shared").DecisionPort;
+  authorityReason?: SessionRuntimeSpec["authorityReason"];
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -839,6 +840,7 @@ function piNativeAdapter(
           workspacePath: spec.directory,
         }),
         decisions: options.decisions,
+        authorityReason: options.authorityReason,
         classify: options.resolveClassifyPort?.({
           sessionId: spec.sessionId,
           projectId: context.projectId,
@@ -944,6 +946,7 @@ interface PiBindingOptions {
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
   decisions: import("@volli/shared").DecisionPort | undefined;
+  authorityReason: SessionRuntimeSpec["authorityReason"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -964,6 +967,7 @@ class PiBinding implements BindingHandle {
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
   readonly #decisions: import("@volli/shared").DecisionPort | undefined;
+  readonly #authorityReason: SessionRuntimeSpec["authorityReason"];
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1002,6 +1006,7 @@ class PiBinding implements BindingHandle {
     this.#shell = options.shell;
     this.#classify = options.classify;
     this.#decisions = options.decisions;
+    this.#authorityReason = options.authorityReason;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1163,6 +1168,7 @@ class PiBinding implements BindingHandle {
       // be ABSENT, not set to undefined.
       ...(this.#authority === null ? {} : { authority: this.#authority }),
       ...(this.#decisions === undefined ? {} : { decisions: this.#decisions }),
+      ...(this.#authorityReason === undefined ? {} : { authorityReason: this.#authorityReason }),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,

@@ -40,6 +40,7 @@ import {
   errorMessage,
   isActivityKind,
   isMcpToolId,
+  isOverridableAuthorityRule,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -74,7 +75,11 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import { authorityClassifierEligible, authorityVerdict } from "../authority/gate";
+import {
+  authorityClassifierEligible,
+  authorityVerdict,
+  type AuthorityVerdict,
+} from "../authority/gate";
 import { AUTHORITY_JUDGE_THRESHOLDS, judgeAuthorityCall } from "../authority/judge";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
@@ -528,6 +533,7 @@ async function runUtilityCompletion(
       // default-level request. Every other level passes through verbatim.
       ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.maxOutputTokens === undefined ? {} : { maxTokens: input.maxOutputTokens }),
       // OpenCode Go requires one opaque routing identity on every physical
       // provider request. A utility completion has no attachment or sidecar
       // whose id can supply it, and it makes exactly one request, so mint one
@@ -808,6 +814,76 @@ interface ContextCarriedMarker {
   kind: "context-carried";
   fromAttachmentId: string;
   entries: JsonValue;
+}
+
+const VOLLI_AUTHORITY_INPUT_MARKER = "volli.authority-user-input";
+
+function authorityUserMessagesIn(entries: readonly Entry[]): string[] {
+  return entries.flatMap((entry) => {
+    if (entry.type !== "custom") return [];
+    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER && isRecord(entry.data)) {
+      // Kept outside the size-bounded model context. Dropping an old constraint
+      // would invent authority; oversized history instead misses closed in judge.
+      const messages = entry.data["userMessages"];
+      if (Array.isArray(messages))
+        return messages.filter((text): text is string => typeof text === "string");
+      return typeof entry.data["text"] === "string" ? [entry.data["text"]] : [];
+    }
+    const marker = recoveredObservation(entry);
+    return marker?.kind === "command-accepted" &&
+      marker.operation === "message.submit" &&
+      typeof marker.authorityUserText === "string"
+      ? [marker.authorityUserText]
+      : [];
+  });
+}
+
+/** The missing-history state is durable and propagates across further carries. */
+function authorityUserHistoryCompleteIn(entries: readonly Entry[]): boolean {
+  let carried = false;
+  let carriedHistory = false;
+  let rawUsers = 0;
+  let directInputs = 0;
+  let inputSeen = false;
+  for (const entry of entries) {
+    // A legacy summary before any authority receipt may conceal constraints;
+    // later user input cannot retroactively make that elision complete.
+    if (entry.type === "compaction" && !inputSeen) return false;
+    if (entry.type === "message" && entry.message.role === "user") rawUsers += 1;
+    if (entry.type !== "custom") continue;
+    if (entry.customType === VOLLI_CONTEXT_MARKER) {
+      // Reasoning elision is not a conversation carry and loses no user text.
+      if (!isRecord(entry.data)) return false;
+      if (entry.data["kind"] === "context-carried") carried = true;
+      else if (entry.data["kind"] !== "reasoning-dropped") return false;
+    }
+    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER) {
+      if (!isRecord(entry.data) || entry.data["historyIncomplete"] === true) return false;
+      const messages = entry.data["userMessages"];
+      if (Array.isArray(messages)) {
+        if (!messages.every((text) => typeof text === "string")) return false;
+        carriedHistory = true;
+      } else if (typeof entry.data["text"] === "string") {
+        directInputs += 1;
+      } else return false;
+      inputSeen = true;
+    }
+    if (entry.customType === VOLLI_OBSERVATION_MARKER) {
+      if (!isRecord(entry.data)) return false;
+      if (
+        entry.data["kind"] === "command-accepted" &&
+        entry.data["operation"] === "message.submit"
+      ) {
+        // The normal marker reader already rejects malformed commands. Legacy
+        // valid markers can still lack separable authority text.
+        if (typeof entry.data["authorityUserText"] !== "string") return false;
+        inputSeen = true;
+      }
+    }
+  }
+  // Commandless deliveries write one separate receipt per native user entry.
+  // Legacy framed messages/markers cannot silently become absent constraints.
+  return rawUsers === directInputs && (!carried || carriedHistory);
 }
 
 const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
@@ -1419,7 +1495,11 @@ async function readCarriedConversation(
   expected: SidecarIdentity,
   budget: CarryTokenBudget | undefined,
   context: Context,
-): Promise<Entry[]> {
+): Promise<{
+  entries: Entry[];
+  authorityUserMessages: string[];
+  authorityHistoryComplete: boolean;
+}> {
   // No legacy-sidecar migration here, unlike a resume: a closed attachment's
   // sidecar was migrated by the attach that last opened it, or predates this
   // build's whole Pi line and is not worth reopening a conversation from.
@@ -1435,7 +1515,12 @@ async function readCarriedConversation(
   try {
     await assertSidecarIdentity(opened, expected, context);
     const branch = await sidecarBranch(opened, context);
-    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context), budget);
+    const entries = await branch.findEntries({ order: "oldestFirst" }, context);
+    return {
+      entries: carriedConversation(entries, budget),
+      authorityUserMessages: authorityUserMessagesIn(entries),
+      authorityHistoryComplete: authorityUserHistoryCompleteIn(entries),
+    };
   } finally {
     await opened.close(piContext()).catch(
       /* v8 ignore next -- closing a sidecar we only read is best effort. */
@@ -1707,7 +1792,7 @@ async function attachSession(
     let carried = false;
     if (inputRecovery === undefined && spec.carry !== undefined) {
       try {
-        const entries = await readCarriedConversation(
+        const conversation = await readCarriedConversation(
           sidecars,
           host.sessionDataDir,
           spec.carry,
@@ -1715,14 +1800,26 @@ async function attachSession(
           carryTokenBudget(model),
           attachContext,
         );
-        if (entries.length > 0) {
+        if (
+          conversation.entries.length > 0 ||
+          conversation.authorityUserMessages.length > 0 ||
+          !conversation.authorityHistoryComplete
+        ) {
           await mainBranch.appendCustomEntry(
             VOLLI_CONTEXT_MARKER,
             {
               kind: "context-carried",
               fromAttachmentId: spec.carry.attachmentId,
-              entries: JSON.parse(JSON.stringify(entries)) as JsonValue,
+              entries: JSON.parse(JSON.stringify(conversation.entries)) as JsonValue,
             } satisfies ContextCarriedMarker,
+            attachContext,
+          );
+          await mainBranch.appendCustomEntry(
+            VOLLI_AUTHORITY_INPUT_MARKER,
+            {
+              userMessages: conversation.authorityUserMessages,
+              historyIncomplete: !conversation.authorityHistoryComplete,
+            },
             attachContext,
           );
           carried = true;
@@ -1809,13 +1906,18 @@ async function attachSession(
     assertUniqueAcceptedCommands(recoveredMarkers);
     // Older markers have no separable user input: omit rather than giving the
     // judge a Runtime Brief, skill instructions or assistant summaries.
-    const authorityUserMessages = recoveredMarkers.flatMap((marker) =>
-      marker.kind === "command-accepted" &&
-      marker.operation === "message.submit" &&
-      typeof marker.authorityUserText === "string"
-        ? [marker.authorityUserText]
-        : [],
-    );
+    const authorityUserMessages = authorityUserMessagesIn(recoveredEntries);
+    const authorityUserHistoryComplete =
+      carryFailure === undefined && authorityUserHistoryCompleteIn(recoveredEntries);
+    if (!authorityUserHistoryComplete) {
+      // If this cannot persist, attachment fails rather than returning a live
+      // automatic gate with lost constraints. Recovery never silently clears it.
+      await mainBranch.appendCustomEntry(
+        VOLLI_AUTHORITY_INPUT_MARKER,
+        { historyIncomplete: true },
+        attachContext,
+      );
+    }
     const messageMarkerCounts = new Map<string, number>();
     for (const observation of recoveredObservations) {
       if (observation.kind !== "message-settled") continue;
@@ -2276,7 +2378,16 @@ async function attachSession(
         rememberResources(delivery.resources);
         authorityUserMessages.push(delivery.authorityUserText);
       }
-      if (!delivery?.commandId) return false;
+      if (!delivery?.commandId) {
+        if (delivery?.operation === "message.submit") {
+          await mainBranch.appendCustomEntry(
+            VOLLI_AUTHORITY_INPUT_MARKER,
+            { text: delivery.authorityUserText },
+            piContext(),
+          );
+        }
+        return false;
+      }
       if (delivery.operation === "message.submit") {
         await persistObservation({
           kind: "command-accepted",
@@ -2343,17 +2454,22 @@ async function attachSession(
           authority,
           workspacePath: spec.workspacePath,
           readableRoots: toolOutput.readableDirectories,
+          hardDeniesFirst: true,
         });
+        const auto = authority.enforcement === "enforce" && authority.judgmentMode === "auto";
+        const hardDenied = verdict.outcome === "deny" && !isOverridableAuthorityRule(verdict.cause);
+        const eligible = authorityClassifierEligible({
+          tool: toolCall.name,
+          args,
+          workspacePath: spec.workspacePath,
+          verdict,
+        });
+        let judgedVerdict: AuthorityVerdict =
+          auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
+        let askImmediately = false;
         // VC-480 hook: an explicit ledger allowance belongs here, after hard
         // denies and deterministic skips, before invoking the classifier.
-        if (
-          authorityClassifierEligible({
-            tool: toolCall.name,
-            args,
-            workspacePath: spec.workspacePath,
-            verdict,
-          })
-        ) {
+        if (eligible) {
           const review = await judgeAuthorityCall({
             decisions: spec.decisions,
             sessionId: spec.identity.sessionId,
@@ -2361,19 +2477,52 @@ async function attachSession(
             // Full user-message history, not compacted assistant summaries or
             // re-injected resource messages. No tool outputs or descriptions.
             userMessages: authorityUserMessages,
+            userHistoryComplete: authorityUserHistoryComplete,
             tool: toolCall.name,
             args,
             signal,
           });
-          await commitObservation({
+          let reason = review.kind === "answered" ? review.reason : review.miss.message;
+          if (auto) {
+            if (review.kind === "miss") {
+              judgedVerdict = {
+                outcome: "deny",
+                cause: "classifier.unavailable",
+                reason: `Automatic review is unavailable: ${reason} Ask the person before this call runs.`,
+              };
+              askImmediately = true;
+            } else if (review.wouldFlag) {
+              if (spec.authorityReason !== undefined) {
+                try {
+                  reason = await spec.authorityReason({
+                    sessionId: spec.identity.sessionId,
+                    tool: toolCall.name,
+                    category: review.category,
+                    fallback: reason,
+                    signal,
+                  });
+                } catch {
+                  // Wording is optional, permission is not. Keep the category.
+                }
+              }
+              judgedVerdict = {
+                outcome: "deny",
+                cause: "classifier.flagged",
+                reason: `${reason} Find a safer route; do not work around this block.`,
+              };
+            } else {
+              judgedVerdict = { outcome: "allow" };
+            }
+          }
+          const recorded = await observationDelivery.deliverChecked({
             kind: "authority-review",
             turnId,
             toolCallId: toolCall.id,
             tool: toolCall.name,
-            mode: "shadow",
+            mode: auto ? "auto" : "shadow",
             authoriser: "classifier",
             wouldFlag: review.kind === "answered" ? review.wouldFlag : null,
-            reason: review.kind === "answered" ? review.reason : review.miss.message,
+            reason,
             category: review.kind === "answered" ? review.category : null,
             answers: review.kind === "answered" ? review.answered.answers : null,
             missReason: review.kind === "miss" ? review.miss.reason : null,
@@ -2382,6 +2531,16 @@ async function attachSession(
               flag: AUTHORITY_JUDGE_THRESHOLDS.riskMaxProbability,
             },
           });
+          if (!recorded) {
+            // This is a broken durable host, not a classifier denial. Stop
+            // before an unauditable call runs, in shadow as well as auto.
+            interruptTurn();
+            return {
+              block: true,
+              reason:
+                "Authority review could not be recorded. Stop and ask the person to restore the Session ledger; do not work around this boundary.",
+            };
+          }
         }
         // Shadow never changes what ran, including under an observe Snapshot.
         if (authority.enforcement === "observe") return undefined;
@@ -2389,7 +2548,9 @@ async function attachSession(
         // this parks on has to lose to a cancelled run, and Pi re-reads that
         // signal the instant this callback returns.
         const disposition = await escalation.resolve({
-          verdict,
+          verdict: judgedVerdict,
+          askImmediately,
+          pauseIfUnattended: auto,
           tool: toolCall.name,
           toolCallId: toolCall.id,
           turnId,

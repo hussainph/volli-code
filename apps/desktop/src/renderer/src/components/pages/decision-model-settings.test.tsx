@@ -8,7 +8,11 @@ import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/sha
 import type { DecisionModelResult, DecisionModelSettingsView } from "../../../../ipc/contract";
 import type { Project } from "@volli/shared";
 
-import { authorityOptInExtensionKey, cloudSetting } from "./decision-model-model";
+import {
+  AUTHORITY_REASON_SOURCE_KEY,
+  authorityOptInExtensionKey,
+  cloudSetting,
+} from "./decision-model-model";
 import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 
 import {
@@ -87,10 +91,21 @@ function stubApi(global: DecisionModelSetting, project?: DecisionModelSetting) {
     ok: true as const,
     test: { ok: true as const, elapsedMs: 42.4, probability: 0.97 },
   }));
+  const appState = new Map<string, string>();
+  const bootstrap = vi.fn(async () => ({
+    ok: true as const,
+    data: { appState: Object.fromEntries(appState) },
+  }));
+  const setAppState = vi.fn(async (key: string, value: string) => {
+    appState.set(key, value);
+    return { ok: true } as { ok: true } | { ok: false; error: string };
+  });
   vi.stubGlobal("api", {
     decisionModel: { get: async () => ({ ok: true as const, settings: view }), set, test },
+    data: { bootstrap },
+    appState: { set: setAppState },
   });
-  return { set, test };
+  return { set, test, appState, bootstrap, setAppState };
 }
 
 async function render(node: React.ReactNode): Promise<void> {
@@ -215,6 +230,88 @@ describe("Settings → Models → Decision model", () => {
     await act(async () => button("Cloud").click());
     expect(document.querySelector('[data-testid="decision-model-cloud"]')).not.toBeNull();
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+describe("the global Block reason choice", () => {
+  it("defaults to utility with no utility model configured, persists JSON, and reads it on remount", async () => {
+    const { setAppState, bootstrap } = stubApi({ kind: "none" });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(button("Utility model").getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelectorAll('[data-testid="authority-reason-source"]')).toHaveLength(1);
+    await act(async () => button("Risk category").click());
+    expect(setAppState).toHaveBeenCalledWith(
+      AUTHORITY_REASON_SOURCE_KEY,
+      JSON.stringify("category"),
+    );
+    expect(button("Risk category").getAttribute("aria-pressed")).toBe("true");
+    await unmount();
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(bootstrap).toHaveBeenCalledTimes(2);
+    expect(button("Risk category").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button("Utility model").click());
+    expect(setAppState).toHaveBeenLastCalledWith(
+      AUTHORITY_REASON_SOURCE_KEY,
+      JSON.stringify("utility"),
+    );
+  });
+
+  it("reads an existing category choice without rewriting it", async () => {
+    const { appState, setAppState } = stubApi({ kind: "none" });
+    appState.set(AUTHORITY_REASON_SOURCE_KEY, JSON.stringify("category"));
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(button("Risk category").getAttribute("aria-pressed")).toBe("true");
+    expect(setAppState).not.toHaveBeenCalled();
+  });
+
+  it.each(["refused", "rejected"])(
+    "surfaces a %s save and retains the durable selection for retry",
+    async (failure) => {
+      const { setAppState } = stubApi({ kind: "none" });
+      if (failure === "refused")
+        setAppState.mockResolvedValueOnce({ ok: false, error: "disk full" });
+      else setAppState.mockRejectedValueOnce(new Error("disk full"));
+      await render(<DecisionModelSettings onSignIn={() => undefined} />);
+      await act(async () => button("Risk category").click());
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't save the block reason choice: disk full",
+        expect.objectContaining({ closeButton: true }),
+      );
+      expect(button("Utility model").getAttribute("aria-pressed")).toBe("true");
+      expect(button("Risk category").disabled).toBe(false);
+      await act(async () => button("Risk category").click());
+      expect(button("Risk category").getAttribute("aria-pressed")).toBe("true");
+    },
+  );
+
+  it.each(["refused", "rejected", "invalid"])(
+    "surfaces a %s load and offers retry",
+    async (failure) => {
+      const { bootstrap, appState, setAppState } = stubApi({ kind: "none" });
+      if (failure === "refused") {
+        bootstrap.mockResolvedValueOnce({ ok: false, error: "read failed" } as never);
+      } else if (failure === "rejected") {
+        bootstrap.mockRejectedValueOnce(new Error("read failed"));
+      } else {
+        appState.set(AUTHORITY_REASON_SOURCE_KEY, "broken JSON");
+      }
+      await render(<DecisionModelSettings onSignIn={() => undefined} />);
+      expect(document.body.textContent).toContain("Couldn't read the block reason choice");
+      expect(document.querySelector('[aria-label="Block reason"]')).toBeNull();
+      expect(setAppState).not.toHaveBeenCalled();
+      appState.delete(AUTHORITY_REASON_SOURCE_KEY);
+      await act(async () => button("Retry").click());
+      expect(button("Utility model").getAttribute("aria-pressed")).toBe("true");
+    },
+  );
+
+  it("does not add a per-project reason axis", async () => {
+    const { bootstrap } = stubApi({ kind: "none" });
+    await render(
+      <ProjectDecisionModelRow project={{ id: "p1" } as Project} onSaved={() => undefined} />,
+    );
+    expect(document.querySelector('[data-testid="authority-reason-source"]')).toBeNull();
+    expect(bootstrap).not.toHaveBeenCalled();
   });
 });
 

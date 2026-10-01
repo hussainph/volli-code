@@ -83,6 +83,30 @@ describe("classifier routing order", () => {
 });
 
 describe("authorityVerdict", () => {
+  it("does not allow a soft redirect denial to mask a hard command rule under per-call review", () => {
+    const { raw } = workspace();
+    for (const command of [
+      "curl -k https://example.com > /tmp/review-output.txt",
+      "sudo whoami > /tmp/review-output.txt",
+    ]) {
+      const verdict = authorityVerdict({
+        tool: "bash",
+        args: { command },
+        authority: snapshot(),
+        workspacePath: raw,
+        hardDeniesFirst: true,
+      });
+      expect(verdict).toMatchObject({ outcome: "deny" });
+      expect(
+        authorityClassifierEligible({
+          tool: "bash",
+          args: { command },
+          workspacePath: raw,
+          verdict,
+        }),
+      ).toBe(false);
+    }
+  });
   it("stands aside for work the Session's authority permits", () => {
     const { raw } = workspace();
     expect(

@@ -22,6 +22,18 @@ function progress(activityId: string): RuntimeActivityObservation {
 }
 
 describe("OrderedObservationDelivery", () => {
+  it("reports individual durable write failure without poisoning subsequent checked writes", async () => {
+    const failure = new Error("audit failed");
+    const delivery = new OrderedObservationDelivery<RuntimeActivityObservation>(
+      async (observation) => {
+        if (observation.activityId === "failed") throw failure;
+      },
+    );
+    await expect(delivery.deliverChecked(progress("failed"))).resolves.toBe(false);
+    await expect(delivery.deliverChecked(progress("saved"))).resolves.toBe(true);
+    expect(delivery.consumeFailure()).toBe(failure);
+    expect(delivery.consumeFailure()).toBeUndefined();
+  });
   it("serializes concurrent progress observations and retains only the first observer failure", async () => {
     let releaseFirst: (() => void) | undefined;
     const firstEntered = Promise.withResolvers<void>();

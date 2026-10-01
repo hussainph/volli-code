@@ -12,6 +12,7 @@ import {
   MAX_ACTIVITY_VALUE_TOTAL_LENGTH,
   MAX_ACTIVITY_IDENTIFIER_LENGTH,
   mapPiActivity,
+  redactPayloadSecrets,
   type PiActivityContext,
 } from "./activity";
 
@@ -331,8 +332,98 @@ describe("mapPiActivity", () => {
     });
   });
 
+  it.each([
+    ["-u alice:private-pw", "-u alice:[redacted]"],
+    ["-u 'alice:private-pw'", "-u 'alice:[redacted]'"],
+    ['-u "alice:private-pw with spaces;and:colons"', '-u "alice:[redacted]"'],
+    [String.raw`-u "alice:private-pw\"still-private"`, '-u "alice:[redacted]"'],
+    [String.raw`-ualice:private-pw\ with\ spaces\;still-private`, "-ualice:[redacted]"],
+    ["--user alice:private-pw", "--user alice:[redacted]"],
+    ["--user=alice:private-pw", "--user=alice:[redacted]"],
+    ["-ualice:private-pw", "-ualice:[redacted]"],
+    ["--user='alice:private-pw'", "--user='alice:[redacted]'"],
+    ["--proxy-user alice:private-pw", "--proxy-user alice:[redacted]"],
+    ["--proxy-user=alice:private-pw", "--proxy-user=alice:[redacted]"],
+    ["-Ualice:private-pw", "-Ualice:[redacted]"],
+    ["-u :private-pw", "-u :[redacted]"],
+    ["-u alice:", "-u alice:[redacted]"],
+  ])("redacts basic auth in activity input, output and descriptors: %s", (auth, safeAuth) => {
+    const command = `curl ${auth} https://example.com; echo done && rm -rf /important`;
+    const safeCommand = `curl ${safeAuth} https://example.com; echo done && rm -rf /important`;
+    expect(redactPayloadSecrets(command)).toBe(safeCommand);
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-basic-auth",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: command }] },
+        isError: true,
+      },
+      activityContext({ input: { command }, observedAt: 555 }),
+    );
+    expect(activity.input).toEqual({ command: safeCommand });
+    expect(activity.output).toEqual({ content: [{ type: "text", text: safeCommand }] });
+    expect(activity.descriptor.subject.label).toBe(safeCommand);
+    expect(activity.descriptor.outcome?.summary).toBe(safeCommand);
+    expect(activity.error).toBe(safeCommand);
+    expect(JSON.stringify(activity)).not.toContain("private-pw");
+  });
+
+  it.each([
+    "https://private-alice:private-pw@example.com/path?x=1#frag",
+    "https://private-alice@example.com/path",
+    "ftp://private%40alice:private%3Apw@example.com/path",
+  ])("redacts complete URL userinfo without changing the host or tail: %s", (url) => {
+    const safeUrl = url.replace(/:\/\/.*@/, "://[redacted]@");
+    expect(redactPayloadSecrets(`fetch '${url}' && rm -rf /important`)).toBe(
+      `fetch '${safeUrl}' && rm -rf /important`,
+    );
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-url-auth",
+        toolName: "browser_navigate",
+        result: {
+          content: [{ type: "text", text: url }],
+          details: { action: "open", url, title: url, target: url, error: url },
+        },
+        isError: false,
+      },
+      activityContext({ input: { url }, observedAt: 556 }),
+    );
+    expect(activity.input).toEqual({ url: safeUrl });
+    expect(activity.output).toMatchObject({ content: [{ type: "text", text: safeUrl }] });
+    expect(activity.descriptor.browse).toMatchObject({
+      url: safeUrl,
+      title: safeUrl,
+      target: safeUrl,
+      error: safeUrl,
+    });
+    expect(JSON.stringify(activity)).not.toContain("private");
+  });
+
+  it("redacts every credential while retaining an unbounded command tail", () => {
+    const tail = ` && echo ${"x".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH + 1)} && rm -rf /important`;
+    expect(
+      redactPayloadSecrets(
+        "curl -u alice:private-pw --proxy-user bob:proxy-pw https://private-user:private-url-pw@example.com" +
+          tail,
+      ),
+    ).toBe(
+      "curl -u alice:[redacted] --proxy-user bob:[redacted] https://[redacted]@example.com" + tail,
+    );
+    expect(redactPayloadSecrets("-u alice:private-pw|curl --user=bob:proxy-pw&echo done")).toBe(
+      "-u alice:[redacted]|curl --user=bob:[redacted]&echo done",
+    );
+  });
+
+  it("keeps long near misses unchanged without scanning beyond an authority or argument", () => {
+    const clean = `https://${"a".repeat(40_000)} /path/private@example.com curl -u ${"b".repeat(40_000)} && echo end`;
+    expect(redactPayloadSecrets(clean)).toBe(clean);
+  });
+
   // The redaction fast path (VC-356) answers "could this string hold a secret?"
-  // with one marker scan before it runs the four replacement scans. A marker
+  // with one marker scan before it runs the replacement scans. A marker
   // that misses is silent: the string is returned untouched and a credential
   // lands in durable activity payloads with nothing to notice it. So every
   // pattern arm gets a case here, and each one is written as a value the
@@ -369,7 +460,7 @@ describe("mapPiActivity", () => {
   });
 
   it("returns marker-free output byte for byte, including near-miss words the patterns do not match", () => {
-    // The fast path's whole value is that ordinary output skips four scans. Its
+    // The fast path's whole value is that ordinary output skips replacement scans. Its
     // whole risk is returning something it should have changed. These strings
     // sit deliberately close to the patterns — the words appear, the syntax
     // that makes them a secret does not — so they pin both halves at once.
@@ -379,6 +470,10 @@ describe("mapPiActivity", () => {
       "skip the pkg-config step; xoxo from the build bot",
       "authorization is granted per Session, not per Ticket",
       "api key management lives behind Model Access",
+      "https://example.com/path/alice@example.com?contact=bob@example.com",
+      "curl --username alice --proxy-user alice https://example.com",
+      "curl -u alice https://example.com; echo done",
+      "curl -u 'alice' --user=\"bob\" https://example.com",
     ];
     const activity = mapPiActivity(
       {
