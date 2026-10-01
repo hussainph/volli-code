@@ -1,5 +1,4 @@
 import {
-  MCP_RESULT_MAX_CHARS,
   type McpJsonValue,
   type McpServerDraft,
   type McpToolDefinition,
@@ -152,15 +151,14 @@ function convertResult(
     // mutable prototype-bearing value before the runtime sees it.
     structuredContent = JSON.parse(JSON.stringify(result.structuredContent)) as McpJsonValue;
   }
-  const converted: RuntimeMcpCallResult = {
+  // No size refusal here (VC-469). A long result reaches the runtime whole,
+  // which cuts what the model reads and saves the rest beside the Session; the
+  // only bound left is the runtime's outer one on what it keeps and writes.
+  return {
     content,
     ...(structuredContent === undefined ? {} : { structuredContent }),
     isError: result.isError ?? false,
   };
-  if (JSON.stringify(converted).length > MCP_RESULT_MAX_CHARS) {
-    throw new Error("MCP result exceeded the safe size limit");
-  }
-  return converted;
 }
 
 /**
@@ -190,7 +188,7 @@ interface ClientEntry {
  * first; a caller that gives up stops waiting and the open carries on for the
  * rest. A client is retired only when a call on it fails with
  * {@link McpTransportFailure} — never for a call's own abort, a server's error
- * answer, a timeout or an oversized result — and a retired client is closed
+ * answer or a timeout — and a retired client is closed
  * only after the last call still running on it settles, so a sibling that
  * could still succeed is not cut off by someone else's failure.
  */
@@ -265,9 +263,6 @@ export class McpSessionHost {
       // This call was withdrawn, or the attachment closed under it. Either way
       // the connection did nothing wrong and stays for every other caller.
       if (combined.signal.aborted) throw combined.signal.reason;
-      if (error instanceof Error && error.message === "MCP result exceeded the safe size limit") {
-        throw error;
-      }
       if (error instanceof McpTransportFailure) this.#retire(server.id, entry);
       return {
         content: [

@@ -216,6 +216,29 @@ describe("PiSessionOrphanService explicit reclaim", () => {
     expect(existsSync(secondPath)).toBe(false);
   });
 
+  it("removes a reclaimed sidecar's saved tool output with it, and no one else's (VC-469)", async () => {
+    const orphanPath = writePiSession("orphan-with-output");
+    const keptPath = writePiSession("attached-with-output");
+    bindPi("attached-with-output");
+    const orphanOutput = orphanPath.replace(/\.jsonl$/u, ".tool-output");
+    const keptOutput = keptPath.replace(/\.jsonl$/u, ".tool-output");
+    for (const directory of [orphanOutput, keptOutput]) {
+      mkdirSync(directory);
+      writeFileSync(join(directory, "tc-1.0a1b2c3d.txt"), "saved");
+    }
+    const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
+    const scan = await service.scan();
+    // The output directory is not a sidecar and is never inventoried as one.
+    expect(scan.candidates.map((candidate) => candidate.sessionId)).toEqual(["orphan-with-output"]);
+    expect(scan.skipped).toEqual([]);
+
+    await service.reclaim({ scanRevision: scan.revision, itemIds: [scan.candidates[0]!.itemId] });
+
+    expect(existsSync(orphanPath)).toBe(false);
+    expect(existsSync(orphanOutput)).toBe(false);
+    expect(existsSync(keptOutput)).toBe(true);
+  });
+
   it("protects a session attached after scan and leaves its file", async () => {
     const path = writePiSession("attached-during-confirmation");
     const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });

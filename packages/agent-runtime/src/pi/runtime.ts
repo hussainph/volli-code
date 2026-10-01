@@ -125,6 +125,7 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { ToolOutputStore, toolOutputDirectoryFor } from "./tool-output";
 import { applyToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
@@ -2048,8 +2049,16 @@ async function attachSession(
     // carry host-authored parallel-read marks — honoured only when this
     // runtime was built to — gets every other tool marked sequential. Names
     // and schemas, the provider-visible half, never change.
+    //
+    // Long tool results are cut for the model and saved whole beside this
+    // attachment's sidecar, so they live exactly as long as the conversation
+    // that names them (VC-469). The gate below lets the Session read them.
+    const toolOutput = new ToolOutputStore({
+      directory: toolOutputDirectoryFor(sidecarMetadata.path),
+      workspacePath: spec.workspacePath,
+    });
     const { tools, toolExecution } = applyToolDispatch(
-      createSessionTools(spec, ownedToolEnv),
+      createSessionTools(spec, ownedToolEnv, toolOutput),
       spec.tools.mcp ?? [],
       host.parallelMcpReads,
     );
@@ -2279,6 +2288,7 @@ async function attachSession(
           args,
           authority,
           workspacePath: spec.workspacePath,
+          readableRoots: [toolOutput.directory],
         });
         // Pi's own per-call signal is passed on rather than dropped: a question
         // this parks on has to lose to a cancelled run, and Pi re-reads that

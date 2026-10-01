@@ -63,6 +63,45 @@ describe("authorityVerdict", () => {
     ).toEqual({ outcome: "allow" });
   });
 
+  it("lets the Session read its own saved tool output, and only while that is a real directory (VC-469)", () => {
+    const { raw, real } = workspace();
+    const base = join(real, "..");
+    const saved = join(base, "sessions", "s.tool-output");
+    const file = join(saved, "tc-1.0a1b2c3d.txt");
+    const verdict = (path: string, readableRoots?: readonly string[]) =>
+      authorityVerdict({
+        tool: "read",
+        args: { path },
+        authority: snapshot(),
+        workspacePath: raw,
+        ...(readableRoots === undefined ? {} : { readableRoots }),
+      }).outcome;
+
+    // Not made yet: there is nothing in it to read, and it grants nothing.
+    expect(verdict(file, [saved])).toBe("deny");
+    mkdirSync(saved, { recursive: true });
+    writeFileSync(file, "saved");
+    expect(verdict(file, [saved])).toBe("allow");
+    expect(verdict(file)).toBe("deny");
+    // Never a write, even inside it.
+    expect(
+      authorityVerdict({
+        tool: "write",
+        args: { path: file, content: "x" },
+        authority: snapshot(),
+        workspacePath: raw,
+        readableRoots: [saved],
+      }).outcome,
+    ).toBe("deny");
+    // A link planted where the directory goes grants nothing, wherever it points.
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, "secret.txt"), "s");
+    const pointed = join(base, "sessions", "pointed.tool-output");
+    symlinkSync(elsewhere, pointed);
+    expect(verdict(join(pointed, "secret.txt"), [pointed])).toBe("deny");
+  });
+
   it("compares operands against the resolved root, not the symlink the caller passed", () => {
     const { raw, real } = workspace();
     expect(raw).not.toBe(real);

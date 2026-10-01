@@ -12,6 +12,8 @@ export interface McpProtocolTool {
   name: string;
   description?: string;
   inputSchema: unknown;
+  /** The schema of the tool's `structuredContent`, when the server publishes one (VC-469). */
+  outputSchema?: unknown;
 }
 
 /** SDK-free client seam used by discovery and live attachment hosts. */
@@ -98,6 +100,9 @@ export async function discoverMcpServer(
         toolName: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        // An output schema that fails the input-schema bounds is left off and
+        // the tool stays usable: it only types the structured half of a result.
+        ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
       });
       if (!sanitized.ok) {
         return {

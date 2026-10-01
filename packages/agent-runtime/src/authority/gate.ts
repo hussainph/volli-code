@@ -22,7 +22,7 @@ import {
   type AuthoritySnapshot,
   type PolicyToolCall,
 } from "@volli/shared";
-import { normalizeToolCall, resolveWorkspaceRoot } from "./normalize";
+import { normalizeToolCall, resolveReadableRoot, resolveWorkspaceRoot } from "./normalize";
 
 /** Allow, or a refusal named well enough to count and to record. */
 export type AuthorityVerdict =
@@ -37,6 +37,12 @@ export function authorityVerdict(input: {
   args: unknown;
   authority: AuthoritySnapshot;
   workspacePath: string;
+  /**
+   * Directories outside the workspace holding output this Session's own tools
+   * saved, which it may read (VC-469). Resolved per call, so one that does not
+   * exist yet, or that is not a real directory, grants nothing.
+   */
+  readableRoots?: readonly string[];
 }): AuthorityVerdict {
   let workspacePath: string;
   let call: PolicyToolCall;
@@ -50,7 +56,13 @@ export function authorityVerdict(input: {
       reason: `This call could not be checked against the Session's authority, so it was refused: ${errorMessage(error)}`,
     };
   }
-  const decision = evaluate(call, input.authority, { workspacePath });
+  const readableRoots = (input.readableRoots ?? []).flatMap(
+    (root) => resolveReadableRoot(root) ?? [],
+  );
+  const decision = evaluate(call, input.authority, {
+    workspacePath,
+    ...(readableRoots.length === 0 ? {} : { readableRoots }),
+  });
   if (decision.outcome === "allow") return ALLOW;
   return { outcome: "deny", cause: decision.rule, reason: decision.reason };
 }

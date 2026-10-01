@@ -15,6 +15,7 @@ function client(
     name: string;
     description?: string;
     inputSchema: unknown;
+    outputSchema?: unknown;
   }[],
 ): McpProtocolClient & { close: ReturnType<typeof vi.fn> } {
   return {
@@ -48,6 +49,29 @@ describe("discoverMcpServer", () => {
       { name: "new_tool", enabled: false, error: null },
     ]);
     expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a published output schema, and keeps a tool whose output schema it cannot accept (VC-469)", async () => {
+    const outputSchema = { type: "object", properties: { echo: { type: "string" } } };
+    const catalog = await discoverMcpServer({
+      server,
+      enabledToolNames: ["typed", "mistyped"],
+      signal: new AbortController().signal,
+      open: async () =>
+        client([
+          { name: "typed", inputSchema: { type: "object" }, outputSchema },
+          { name: "mistyped", inputSchema: { type: "object" }, outputSchema: { type: "string" } },
+          { name: "untyped", inputSchema: { type: "object" } },
+        ]),
+      workspacePath: "/repo/worktree",
+    });
+
+    expect(catalog.map((tool) => [tool.name, tool.error, tool.definition?.outputSchema])).toEqual([
+      ["typed", null, outputSchema],
+      ["mistyped", null, undefined],
+      ["untyped", null, undefined],
+    ]);
+    expect(catalog[1]?.enabled).toBe(true);
   });
 
   it("shows a bounded reason for each invalid definition without weakening its schema", async () => {

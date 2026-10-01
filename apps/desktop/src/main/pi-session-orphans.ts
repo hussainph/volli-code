@@ -6,12 +6,14 @@ import {
   lstatSync,
   openSync,
   readSync,
+  rmSync,
   unlinkSync,
 } from "node:fs";
 import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type Database from "better-sqlite3";
+import { toolOutputDirectoryFor } from "@volli/agent-runtime";
 import type {
   PiSessionOrphanCandidate,
   PiSessionOrphanInventory,
@@ -138,6 +140,10 @@ export class PiSessionOrphanService {
           throw new Error("The Pi session is now referenced by a Volli attachment");
         }
         unlinkSync(candidate.path);
+        // The long tool results that sidecar's conversation named (VC-469)
+        // live beside it and go with it; nothing else names them. `rmSync`
+        // does not follow a link standing in the directory's place.
+        rmSync(toolOutputDirectoryFor(candidate.path), { recursive: true, force: true });
         removed.push(publicCandidate(candidate));
       } catch (error) {
         kept.push({ candidate: publicCandidate(candidate), reason: errorMessage(error) });

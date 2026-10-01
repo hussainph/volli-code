@@ -244,12 +244,27 @@ function isDeviceSink(path: string): boolean {
   return DEVICE_SINKS.has(path) || containsPath("/dev/fd", path);
 }
 
-/** Every path `path.outside-workspace` judges. Command operands are not among them. */
-function containedPaths(call: PolicyToolCall): string[] {
+/**
+ * Every path `path.outside-workspace` judges, and where each may be. Command
+ * operands are not among them.
+ *
+ * A read may also land in one of the Session's own readable roots (VC-469);
+ * a write never may.
+ */
+function containedPaths(
+  call: PolicyToolCall,
+  context: PolicyContext,
+): { path: string; roots: readonly string[] }[] {
+  const writeRoots = [context.workspacePath];
+  const readRoots = [context.workspacePath, ...(context.readableRoots ?? [])];
   return [
-    ...call.reads,
-    ...call.writes,
-    ...segmentsOf(call).flatMap((segment) => segment.writes.filter((path) => !isDeviceSink(path))),
+    ...call.reads.map((path) => ({ path, roots: readRoots })),
+    ...[
+      ...call.writes,
+      ...segmentsOf(call).flatMap((segment) =>
+        segment.writes.filter((path) => !isDeviceSink(path)),
+      ),
+    ].map((path) => ({ path, roots: writeRoots })),
   ];
 }
 
@@ -540,8 +555,8 @@ type RuleCheck = (
  */
 const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   "path.outside-workspace": (call, _snapshot, context) => {
-    for (const path of containedPaths(call)) {
-      if (!containsPath(context.workspacePath, path)) {
+    for (const { path, roots } of containedPaths(call, context)) {
+      if (!roots.some((root) => containsPath(root, path))) {
         return `${path} is outside the Session workspace ${context.workspacePath}; every read and write must stay inside it.`;
       }
     }

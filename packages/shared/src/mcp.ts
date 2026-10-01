@@ -18,7 +18,24 @@ export const MCP_TOOL_COUNT_MAX = 128;
 export const MCP_PROVENANCE_VALUE_MAX_CHARS = 256;
 export const MCP_CONNECTION_TIMEOUT_MS = 10_000;
 export const MCP_CALL_TIMEOUT_MS = 30_000;
-export const MCP_RESULT_MAX_CHARS = 256 * 1_024;
+/**
+ * UTF-8 bytes of a result's text the model reads whole (VC-469).
+ *
+ * Pi 0.99's own MCP bound, which is Codex's: past it the model reads the
+ * start and the end of the text around a `…N chars truncated…` marker, and the
+ * whole text is saved to a file in the Session's own storage that the result
+ * names. A result is never refused for its size.
+ */
+export const MCP_RESULT_INLINE_MAX_BYTES = 20 * 1_024;
+/**
+ * The outer bound on one result: the most of its text written to disk, and the
+ * largest `structuredContent` (as UTF-8 JSON) the result keeps (VC-469).
+ *
+ * It replaced a hard 256 KiB refusal. Text past it is not saved, and the result
+ * says how much of the whole the file holds; structured content past it is
+ * dropped from the result, which says so.
+ */
+export const MCP_RESULT_MAX_BYTES = 8 * 1_024 * 1_024;
 
 export type McpJsonPrimitive = string | number | boolean | null;
 export type McpJsonValue = McpJsonPrimitive | McpJsonObject | readonly McpJsonValue[];
@@ -36,6 +53,14 @@ export interface McpToolDefinition {
   providerName: McpToolId;
   description: string;
   inputSchema: McpJsonObject;
+  /**
+   * The JSON Schema the server publishes for this tool's `structuredContent`,
+   * when it publishes one that passes the same bounds as {@link inputSchema}
+   * (VC-469). Never sent to the model: it types the structured half of a result
+   * for programmatic callers. Absent on every definition frozen before 0.99,
+   * and on any tool whose server published none or one Volli could not accept.
+   */
+  outputSchema?: McpJsonObject;
   /**
    * Host-authored: Volli has audited this exact `(serverId, toolName)` as an
    * idempotent read that may overlap other such reads in one model batch
@@ -58,6 +83,8 @@ export interface McpToolCandidate {
   toolName: string;
   description?: string;
   inputSchema: unknown;
+  /** What the server published as the tool's `outputSchema`, if anything. */
+  outputSchema?: unknown;
 }
 
 export type McpTransportConfig =
@@ -175,7 +202,17 @@ export interface McpServerRecord extends McpServerDraft {
 }
 
 export type McpToolSanitization =
-  | { ok: true; definition: McpToolDefinition }
+  | {
+      ok: true;
+      definition: McpToolDefinition;
+      /**
+       * Why the published output schema was left off a tool that is otherwise
+       * usable. An output schema only types the structured half of a result,
+       * so one Volli cannot accept costs that typing and nothing else; the
+       * tool is not refused for it the way an unusable input schema refuses it.
+       */
+      outputSchemaRejected?: string;
+    }
   | { ok: false; reason: string };
 
 const PROVIDER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -311,34 +348,41 @@ export function isMcpToolId(value: unknown): value is McpToolId {
   return typeof value === "string" && value.startsWith("mcp__") && PROVIDER_NAME.test(value);
 }
 
-function schemaFailure(value: unknown): string | null {
+/**
+ * Why a published schema cannot be used, or `null` when it can.
+ *
+ * One set of bounds for both halves of a tool (VC-469): an output schema is as
+ * much third-party JSON as an input schema, it is frozen into Session history
+ * the same way, and the MCP specification requires both to be object schemas.
+ */
+function schemaFailure(value: unknown, label: "input schema" | "output schema"): string | null {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
-    return "input schema must be a JSON Schema object";
+    return `${label} must be a JSON Schema object`;
   }
   const root = value as Record<string, unknown>;
-  if (root["type"] !== "object") return 'input schema root type must be "object"';
+  if (root["type"] !== "object") return `${label} root type must be "object"`;
   if (
     root["properties"] !== undefined &&
     (root["properties"] === null ||
       Array.isArray(root["properties"]) ||
       typeof root["properties"] !== "object")
   ) {
-    return "input schema properties must be an object";
+    return `${label} properties must be an object`;
   }
   if (
     root["required"] !== undefined &&
     (!Array.isArray(root["required"]) ||
       root["required"].some((entry: unknown) => typeof entry !== "string"))
   ) {
-    return "input schema required must contain only strings";
+    return `${label} required must contain only strings`;
   }
 
   let nodes = 0;
   const seen = new Set<object>();
   const visit = (entry: unknown, depth: number): string | null => {
     nodes += 1;
-    if (nodes > MCP_SCHEMA_MAX_NODES) return "input schema has too many values";
-    if (depth > MCP_SCHEMA_MAX_DEPTH) return "input schema is nested too deeply";
+    if (nodes > MCP_SCHEMA_MAX_NODES) return `${label} has too many values`;
+    if (depth > MCP_SCHEMA_MAX_DEPTH) return `${label} is nested too deeply`;
     if (
       entry === null ||
       typeof entry === "string" ||
@@ -347,8 +391,8 @@ function schemaFailure(value: unknown): string | null {
     ) {
       return null;
     }
-    if (typeof entry !== "object") return "input schema must contain only JSON values";
-    if (seen.has(entry)) return "input schema must not contain cycles";
+    if (typeof entry !== "object") return `${label} must contain only JSON values`;
+    if (seen.has(entry)) return `${label} must not contain cycles`;
     seen.add(entry);
     if (Array.isArray(entry)) {
       for (const child of entry) {
@@ -359,10 +403,10 @@ function schemaFailure(value: unknown): string | null {
     }
     const prototype = Object.getPrototypeOf(entry);
     if (prototype !== Object.prototype && prototype !== null) {
-      return "input schema must contain only JSON values";
+      return `${label} must contain only JSON values`;
     }
     for (const [key, child] of Object.entries(entry)) {
-      if (key.length > 256) return "input schema contains an oversized key";
+      if (key.length > 256) return `${label} contains an oversized key`;
       const failure = visit(child, depth + 1);
       if (failure !== null) return failure;
     }
@@ -371,13 +415,13 @@ function schemaFailure(value: unknown): string | null {
   const failure = visit(value, 0);
   if (failure !== null) return failure;
   const encoded = JSON.stringify(value);
-  if (encoded.length > MCP_SCHEMA_MAX_CHARS) return "input schema is too large";
+  if (encoded.length > MCP_SCHEMA_MAX_CHARS) return `${label} is too large`;
   try {
     return JSON_SCHEMA_VALIDATOR.validateSchema(value)
       ? null
-      : "input schema must be valid JSON Schema";
+      : `${label} must be valid JSON Schema`;
   } catch {
-    return "input schema must be valid JSON Schema";
+    return `${label} must be valid JSON Schema`;
   }
 }
 
@@ -396,18 +440,23 @@ export function sanitizeMcpToolDefinition(input: McpToolCandidate): McpToolSanit
   if (description.length > MCP_DESCRIPTION_MAX_CHARS) {
     return { ok: false, reason: "tool description is too long" };
   }
-  const schemaError = schemaFailure(input.inputSchema);
+  const schemaError = schemaFailure(input.inputSchema, "input schema");
   if (schemaError !== null) return { ok: false, reason: schemaError };
-  return {
-    ok: true,
-    definition: {
-      serverId: input.serverId,
-      toolName: input.toolName,
-      providerName: mcpProviderToolName(input.serverId, input.serverName, input.toolName),
-      description,
-      inputSchema: input.inputSchema as McpJsonObject,
-    },
+  const outputSchemaError =
+    input.outputSchema === undefined ? null : schemaFailure(input.outputSchema, "output schema");
+  const definition: McpToolDefinition = {
+    serverId: input.serverId,
+    toolName: input.toolName,
+    providerName: mcpProviderToolName(input.serverId, input.serverName, input.toolName),
+    description,
+    inputSchema: input.inputSchema as McpJsonObject,
+    ...(input.outputSchema === undefined || outputSchemaError !== null
+      ? {}
+      : { outputSchema: input.outputSchema as McpJsonObject }),
   };
+  return outputSchemaError === null
+    ? { ok: true, definition }
+    : { ok: true, definition, outputSchemaRejected: outputSchemaError };
 }
 
 const STDIO_ARG_COUNT_MAX = 64;
@@ -669,9 +718,15 @@ export function validateMcpToolDefinitions(
       toolName: definition.toolName,
       description: definition.description,
       inputSchema: definition.inputSchema,
+      ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
     });
     if (!sanitized.ok)
       throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.reason}`);
+    // Discovery drops an output schema it cannot accept, so a frozen one that
+    // fails the same check was damaged after it was written.
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(definition.providerName)) {
       throw new Error(`Invalid MCP provider name for ${definition.toolName}`);
     }
