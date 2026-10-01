@@ -46,4 +46,4 @@ export function stressCopy<T extends PeekCopy>(fixture: T, mode: TextCase): T {
 
 /** Do not assume generated titles are the longest things a person can rename. */
 export const CONTENT_LIMITS_NOTE =
-  "Generated session titles use a 48-character budget before the ellipsis. No shared upper bound was established for manual session or ticket titles. Summary lengths here are stress fixtures, not a backend contract.";
+  "Generated session titles are bounded: the heuristic cuts a message prefix at 48 characters with an ellipsis, and a model title gives up whole words past 64. No shared upper bound was established for manual session or ticket titles. Summary lengths here are stress fixtures, not a backend contract.";

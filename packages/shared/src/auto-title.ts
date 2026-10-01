@@ -292,8 +292,8 @@ function isQuote(char: string | undefined): boolean {
   return char === '"' || char === "'" || char === "`";
 }
 
-/** Trailing sentence furniture a title never needs: `.`, `!`, `,`, `;`, `:`, `?`. */
-const TRAILING_PUNCTUATION = /[.!;,?:]+$/;
+/** Trailing sentence furniture a title never needs: `.`, `!`, `,`, `;`, `:`, `?`, `…`. */
+const TRAILING_PUNCTUATION = /[.!;,?:…]+$/;
 
 /**
  * A `Title:` / `Title -` prefix — the one non-title shape the prompt's "return
@@ -349,10 +349,10 @@ function withoutLeadIn(words: readonly string[]): readonly string[] {
  * tempting: "Fix this", "Do it all" and "Wait a while" are whole titles, and
  * dropping their last word would break them to fix nothing. The words here
  * read as unfinished wherever they land; the ones a title may legitimately end
- * on — "Turn notifications off", "Find out", "Stand by" — are held back to
- * {@link CUT_DANGLING_TAIL}, which only a cut this file made may take from,
- * because there the tail is the cut's artifact rather than the model's own
- * last word.
+ * on — as an adverb ("Nothing left behind") or a particle ("Turn
+ * notifications off") — are held back to {@link CUT_DANGLING_TAIL}, which only
+ * a cut this file made may take from, because there the tail is the cut's
+ * artifact rather than the model's own last word.
  */
 const DANGLING_TAIL = new Set([
   // Articles and possessives: a noun is required next.
@@ -370,19 +370,11 @@ const DANGLING_TAIL = new Set([
   "or",
   "nor",
   "but",
-  // Prepositions and subordinators that always need a complement.
-  "above",
-  "after",
+  // Prepositions that cannot be an adverb either.
   "against",
   "among",
   "at",
-  "before",
-  "behind",
-  "below",
-  "beneath",
   "beside",
-  "between",
-  "beyond",
   "despite",
   "during",
   "except",
@@ -392,25 +384,34 @@ const DANGLING_TAIL = new Set([
   "of",
   "onto",
   "per",
-  "since",
   "throughout",
   "toward",
   "towards",
-  "underneath",
   "until",
   "upon",
   "via",
   "with",
-  "within",
-  "without",
 ]);
 
 /**
- * What is dangling only after a cut this file made: a particle or preposition
- * a whole title may legitimately end on, a demonstrative with no noun, an
- * auxiliary with no verb.
+ * What is dangling only after a cut this file made: a word a whole title may
+ * legitimately end on as an adverb or a particle ("Nothing left behind",
+ * "The morning after", "Turn notifications off", "Find out"), a demonstrative
+ * with no noun, an auxiliary with no verb.
  */
 const CUT_DANGLING_TAIL = new Set([
+  "above",
+  "after",
+  "before",
+  "behind",
+  "below",
+  "beneath",
+  "between",
+  "beyond",
+  "since",
+  "underneath",
+  "within",
+  "without",
   "in",
   "on",
   "off",
@@ -488,7 +489,10 @@ function isDanglingTail(word: string, cut: boolean): boolean {
  */
 function withoutDanglingTail(words: readonly string[], cut: boolean): readonly string[] {
   let end = words.length;
-  while (end > 0 && isDanglingTail(words[end - 1]!, cut)) end -= 1;
+  // `cut` is admitted for the word this pass is about to expose as well: the
+  // tail after a removal is the removal's artifact, whether or not a ceiling
+  // trim started the pass.
+  while (end > 0 && isDanglingTail(words[end - 1]!, cut || end < words.length)) end -= 1;
   return end === words.length ? words : words.slice(0, end);
 }
 
@@ -543,12 +547,17 @@ export function sanitizeAutoTitle(raw: string): string | null {
     title = title.slice(1, -1).trim();
   }
   title = title.replace(TITLE_PREFIX, "").trim();
-  const words = withoutLeadIn(title.length === 0 ? [] : title.split(" "));
+  // The lead-in decision runs on the words as the model wrote them — a
+  // trailing ":" is how "Here is the title:" is recognised. After it, the
+  // trailing punctuation comes off the STRING rather than off the joined
+  // result, so a lone "." cannot leave a trailing space behind or hide the
+  // connector it was hanging off.
+  const leadIn = withoutLeadIn(title.length === 0 ? [] : title.split(" "));
+  const normalized = leadIn.join(" ").replace(TRAILING_PUNCTUATION, "").trim();
+  const words = normalized.length === 0 ? [] : normalized.split(" ");
   if (words.length > AUTO_TITLE_MAX_WORDS * PROSE_WORD_FACTOR) return null;
   const overCeiling = words.length > AUTO_TITLE_TOLERATED_WORDS;
   const ceilinged = overCeiling ? words.slice(0, AUTO_TITLE_TOLERATED_WORDS) : words;
-  const budgeted = fitWholeWords(ceilinged, AUTO_TITLE_MAX_LENGTH, overCeiling)
-    .join(" ")
-    .replace(TRAILING_PUNCTUATION, "");
+  const budgeted = fitWholeWords(ceilinged, AUTO_TITLE_MAX_LENGTH, overCeiling).join(" ");
   return budgeted.length === 0 ? null : budgeted;
 }

@@ -328,7 +328,7 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Fix the login flow")).toBe("Fix the login flow");
   });
 
-  it("refuses prose rather than shipping its first six words as a fragment", () => {
+  it("refuses prose rather than shipping its first eight words as a fragment", () => {
     expect(
       sanitizeAutoTitle("I would be happy to help you with that request and here is what I think"),
     ).toBeNull();
@@ -368,9 +368,40 @@ describe("sanitizeAutoTitle", () => {
     );
   });
 
-  it("trims an answer past the tolerated ceiling to whole words, not mid-phrase", () => {
+  it("trims an answer past the tolerated ceiling to whole words, never mid-word", () => {
     expect(sanitizeAutoTitle("The quick brown fox jumps over the lazy dog")).toBe(
       "The quick brown fox jumps over the lazy",
+    );
+  });
+
+  it("leaves a word a whole title may end on standing", () => {
+    // "behind" and "after" are adverbs as often as prepositions; a title that
+    // ends on one is whole, so only a cut this file made may take it.
+    expect(sanitizeAutoTitle("Nothing left behind")).toBe("Nothing left behind");
+    expect(sanitizeAutoTitle("The morning after")).toBe("The morning after");
+  });
+
+  it("drops the connector a drop exposed, not just the one it removed", () => {
+    // Removing "the" leaves "in" hanging, and the same pass must take it too —
+    // otherwise the title reads as cut, which is the whole defect (VC-490).
+    expect(sanitizeAutoTitle("Check the docs in the")).toBe("Check the docs");
+  });
+
+  it("takes trailing punctuation off before the words are judged", () => {
+    // A lone "." used to leave a trailing space behind, and to hide the
+    // connector it was hanging off (VC-490 review).
+    expect(sanitizeAutoTitle("Fix the login flow .")).toBe("Fix the login flow");
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and .")).toBe(
+      "Polish MCP page for simplicity",
+    );
+  });
+
+  it("strips an ellipsis the model wrote, and the connector it hid", () => {
+    expect(sanitizeAutoTitle("Review classifier decision service…")).toBe(
+      "Review classifier decision service",
+    );
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and…")).toBe(
+      "Polish MCP page for simplicity",
     );
   });
 
