@@ -607,6 +607,37 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  it("writes a decision model's pick and why beside the selection, and only then (VC-432)", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+    const auto = {
+      confidence: 0.7,
+      alternatives: [
+        { selection: { ...selection, reasoningLevel: "high" as const }, probability: 0.2 },
+      ],
+    };
+
+    await plane.submit({
+      commandId: "command-model-select-auto",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection, auto },
+      provenance: userProvenance,
+    });
+
+    const selected = (await plane.listEvents({ sessionId: session.id })).find(
+      (event) => event.payload.kind === "model.selected",
+    );
+    expect(selected?.payload).toEqual({ kind: "model.selected", selection, auto });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelAuto: auto,
+    });
+  });
+
   it("rejects model changes while a turn is active", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());

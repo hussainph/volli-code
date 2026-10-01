@@ -65,6 +65,12 @@ export interface CreateChatSessionInput {
    * every start but the composer's Create & start means (VC-56).
    */
   model?: ModelSelection;
+  /**
+   * The first message, offered to the automatic model choice (VC-432). Sent
+   * only when the Session's model is the configured default rather than a
+   * person's pick; main ignores it unless a decision model is set up.
+   */
+  autoSelect?: { request: string };
 }
 
 export interface ChatSessionsState extends ChatSessionWrites {
@@ -305,6 +311,7 @@ export function createChatSessionsStore(
             ? { skills: input.skills }
             : {}),
           ...(input.model === undefined ? {} : { model: input.model }),
+          ...(input.autoSelect === undefined ? {} : { autoSelect: input.autoSelect }),
         });
       } catch (failure) {
         // A create refused for the missing default model is a predictable
@@ -391,7 +398,14 @@ export function createChatSessionsStore(
               operationId: provisional.operationId,
               requestedSessionId: sessionId,
               ...(provisional.skills === undefined ? {} : { skills: provisional.skills }),
-              ...(provisional.model === undefined ? {} : { model: provisional.model }),
+              // A model frozen from the default is no choice: leave it unnamed
+              // and offer the first message to the automatic pick instead.
+              ...(provisional.model === undefined || provisional.modelIsDefault === true
+                ? {}
+                : { model: provisional.model }),
+              ...(provisional.modelIsDefault === true && staged.held[0] !== undefined
+                ? { autoSelect: { request: staged.held[0].text } }
+                : {}),
             },
             // A provisional view owns no resident client yet. Wait until create
             // is still wanted and every staged Blob has a Session owner; a

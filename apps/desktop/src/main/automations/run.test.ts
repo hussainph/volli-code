@@ -369,6 +369,30 @@ describe("createAutomationRunner", () => {
     });
   });
 
+  it("offers the Instructions to an automatic model choice only when nothing pins a Runtime (VC-432)", async () => {
+    const h = harness();
+    const unpinned = await savedAutomation(h, { instructions: "Summarise the open PRs" });
+    const pinned = await savedAutomation(h, {
+      name: "Pinned",
+      instructions: "Summarise the open PRs",
+      runtime: { kind: "tier", tier: "fast" },
+    });
+    for (const automation of [unpinned, pinned]) {
+      await h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+        attendance: "attended",
+      });
+      await h.runner.settled();
+    }
+
+    expect(h.creates[0]?.autoSelect).toEqual({ request: "Summarise the open PRs" });
+    expect(h.creates[1]).not.toHaveProperty("autoSelect");
+    expect(h.creates[1]?.modelOverride).toMatchObject({ tier: "fast" });
+  });
+
   it("stores a tier Runtime through the ledger and reads it back as a tier (VC-259)", async () => {
     const h = harness();
     const automation = await savedAutomation(h, { runtime: { kind: "tier", tier: "fast" } });

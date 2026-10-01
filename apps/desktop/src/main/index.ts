@@ -169,6 +169,7 @@ import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
@@ -1936,7 +1937,11 @@ app.whenReady().then(async () => {
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readModelAnchor: async (sessionId) => {
             const { projection } = await sessionRuntime.projection({ sessionId });
-            return { selection: projection.modelSelection, tier: projection.modelTier };
+            return {
+              selection: projection.modelSelection,
+              tier: projection.modelTier,
+              auto: projection.modelAuto,
+            };
           },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
@@ -1945,6 +1950,16 @@ app.whenReady().then(async () => {
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // A start that named no model may have one chosen from the person's
+          // approved pairs by the decision model (VC-432), once, at birth.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                autoSelect: createModelAutoSelect({
+                  db: sessionDb,
+                  port: desktopDecisions.port,
+                }),
+              }),
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own

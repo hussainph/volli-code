@@ -571,6 +571,32 @@ describe("promoteChatSession", () => {
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held[0]?.state).toBe("unsent");
   });
 
+  it("leaves a default-frozen model unnamed and offers the first message to the automatic choice (VC-432)", async () => {
+    const { store, ticketStarts } = fixture();
+    openDraft();
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    useChatDraftsStore.getState().setProvisionalModel(DRAFT_ID, model, { fromDefault: true });
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, { id: "m1", text: "rename the helper" });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(ticketStarts[0]).toMatchObject({ autoSelect: { request: "rename the helper" } });
+    expect(ticketStarts[0]).not.toHaveProperty("model");
+  });
+
+  it("sends a person's own pick as the model, and offers nothing to the automatic choice", async () => {
+    const { store, ticketStarts } = fixture();
+    openDraft();
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    useChatDraftsStore.getState().setProvisionalModel(DRAFT_ID, model);
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, { id: "m1", text: "rename the helper" });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(ticketStarts[0]).toMatchObject({ model });
+    expect(ticketStarts[0]).not.toHaveProperty("autoSelect");
+  });
+
   it("does not attach a runtime when project teardown lands during Blob transfer", async () => {
     const { attaches, store, subscriptions } = fixture();
     openDraft(true);

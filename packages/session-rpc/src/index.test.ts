@@ -1512,6 +1512,82 @@ describe("Session tRPC router", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("carries the first message for automatic model choice on create (VC-432)", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: null,
+      title: null,
+      autoSelect: { request: "rename the helper" },
+    });
+    expect(calls).toEqual([
+      expect.objectContaining({ autoSelect: { request: "rename the helper" } }),
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-2",
+        projectId: "project-1",
+        ticketId: null,
+        title: null,
+        // @ts-expect-error — the request is text.
+        autoSelect: { request: 7 },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("carries the decision model's pick across to the renderer, and a command cannot declare one", async () => {
+    const fixture = runtimeFixture();
+    const auto = { confidence: 0.8, alternatives: [] };
+    const caller = createSessionRouter().createCaller({
+      runtime: {
+        ...fixture.runtime,
+        projection: async (input) => {
+          const base = await fixture.runtime.projection(input);
+          return { ...base, projection: { ...base.projection, modelAuto: auto } };
+        },
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+    expect(resolved.projection.modelAuto).toEqual(auto);
+
+    const submitted: unknown[] = [];
+    const commandCaller = createSessionRouter().createCaller({
+      runtime: {
+        ...fixture.runtime,
+        command: async (request) => {
+          submitted.push(request.command);
+          return fixture.runtime.command(request);
+        },
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await commandCaller.session.command({
+      commandId: "command-1",
+      sessionId: "session-1",
+      command: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+        // A renderer-side pick is a person's: provenance is never self-declared.
+        auto,
+      } as never,
+    });
+    expect(submitted[0]).not.toHaveProperty("auto");
+  });
+
   it("carries a client-requested Session id on create, UUID-checked at the edge (VC-358)", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];

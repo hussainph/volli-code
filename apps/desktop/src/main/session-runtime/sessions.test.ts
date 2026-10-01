@@ -1694,6 +1694,290 @@ describe("a subagent's inherited anchor, through the one start door (VC-431)", (
   });
 });
 
+function modelRecord(commands: SessionRuntimeCommandRequest[]) {
+  return commands.find((request) => request.command.kind === "model.select")?.command;
+}
+
+describe("a decision model's choice of model, at birth (VC-432)", () => {
+  const FAST: ModelSelection = {
+    providerId: "anthropic",
+    modelId: "haiku",
+    reasoningLevel: "low",
+  };
+  const DEEP: ModelSelection = {
+    providerId: "anthropic",
+    modelId: "opus",
+    reasoningLevel: "high",
+  };
+  const AUTO = { confidence: 0.8, alternatives: [{ selection: MODEL, probability: 0.15 }] };
+  const access = {
+    observedAt: 1,
+    providers: [],
+    models: [FAST, DEEP, MODEL].map((model) =>
+      Object.assign({}, model, {
+        label: model.modelId,
+        state: "available",
+        reasoningLevels: ["low", "medium", "high"],
+        acceptsImageInput: false,
+      }),
+    ),
+  } as unknown as ModelAccessSnapshot;
+  const tiers = async (tier: string): Promise<ModelSelection> =>
+    tier === "fast" ? FAST : tier === "deep" ? DEEP : MODEL;
+
+  // A Session that has only just been created carries no model yet; only a
+  // parent does. (The harness default answers every Session with MODEL, which
+  // is how a REPLAYED start looks.)
+  const FRESH = { selection: null, tier: null };
+  const parentAnchored =
+    (anchor: Awaited<ReturnType<SessionsOptions["readModelAnchor"]>>) => async (id: string) =>
+      id === "parent-session" ? anchor : FRESH;
+  const born = (overrides: Parameters<typeof sessions>[0] = {}) =>
+    sessions({ readModelAnchor: parentAnchored({ selection: MODEL, tier: null }), ...overrides });
+
+  function pick(overrides: Partial<SessionsOptions["autoSelect"] & object> = {}) {
+    const asked: Array<Parameters<NonNullable<SessionsOptions["autoSelect"]>["decide"]>[0]> = [];
+    return {
+      asked,
+      port: {
+        available: () => true,
+        decide: async (input) => {
+          asked.push(input);
+          return { selection: DEEP, auto: AUTO };
+        },
+        ...overrides,
+      } satisfies NonNullable<SessionsOptions["autoSelect"]>,
+    };
+  }
+
+  it("records the pick and why, offering only the approved pairs", async () => {
+    const { asked, port } = pick();
+    const { commands, sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+
+    const created = await door.create({
+      ...startInput("operation-auto"),
+      autoSelect: { request: "  rename a variable  " },
+    });
+
+    expect(created.model).toEqual(DEEP);
+    expect(modelRecord(commands)).toEqual({ kind: "model.select", selection: DEEP, auto: AUTO });
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      sessionId: "session-1",
+      projectId: "project-1",
+      request: "rename a variable",
+      tierHint: null,
+    });
+    // The default first, then the tiers' own models; one pair once.
+    expect(asked[0]?.candidates.map((candidate) => candidate.selection)).toEqual([
+      MODEL,
+      FAST,
+      DEEP,
+    ]);
+  });
+
+  it("keeps the default's tier when the pick is the default itself", async () => {
+    const { port } = pick({ decide: async () => ({ selection: MODEL, auto: AUTO }) });
+    const { commands, sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    await door.create({ ...startInput("operation-same"), autoSelect: { request: "x" } });
+    expect(modelRecord(commands)).toEqual({ kind: "model.select", selection: MODEL, auto: AUTO });
+  });
+
+  it.each([
+    ["a named model", { modelOverride: { model: DEEP } }],
+    ["a named tier", { modelOverride: { tier: "fast" as const } }],
+    ["a named reasoning level", { modelOverride: { reasoningLevel: "low" as const } }],
+    ["no request", { autoSelect: { request: "   " } }],
+  ])("never second-guesses a caller with %s", async (_name, extra) => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    await door.create({ ...startInput("operation-named"), autoSelect: { request: "x" }, ...extra });
+    expect(asked).toEqual([]);
+  });
+
+  it("asks nothing and records nothing extra with no decision model, or no request offered", async () => {
+    const { asked, port } = pick({ available: () => false });
+    const withPort = born({ readDefaultModel: tiers, autoSelect: port });
+    await withPort.sessions.create({
+      ...startInput("operation-off"),
+      autoSelect: { request: "x" },
+    });
+    expect(asked).toEqual([]);
+    expect(modelRecord(withPort.commands)).toEqual({ kind: "model.select", selection: MODEL });
+
+    const without = born({ readDefaultModel: tiers });
+    await without.sessions.create({
+      ...startInput("operation-none"),
+      autoSelect: { request: "x" },
+    });
+    expect(modelRecord(without.commands)).toEqual({ kind: "model.select", selection: MODEL });
+  });
+
+  it.each([
+    ["is unsure or missed", { decide: async () => null }],
+    [
+      "throws",
+      {
+        decide: async () => {
+          throw new Error("down");
+        },
+      },
+    ],
+  ])("keeps the configured default when the decision %s", async (_name, overrides) => {
+    const { port } = pick(overrides);
+    const { commands, sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    const created = await door.create({
+      ...startInput("operation-miss"),
+      autoSelect: { request: "x" },
+    });
+    expect(created.model).toEqual(MODEL);
+    expect(modelRecord(commands)).toEqual({ kind: "model.select", selection: MODEL });
+  });
+
+  it("asks nothing when fewer than two pairs are approved", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: async () => MODEL,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    await door.create({ ...startInput("operation-one"), autoSelect: { request: "x" } });
+    // The port is still reached (it owns the "nothing to choose" answer), but
+    // with a single candidate, so nothing can be sent.
+    expect(asked.every((input) => input.candidates.length < 2)).toBe(true);
+  });
+
+  it("offers a tier's pair only when Model Access can run it, and never without an inspector", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () =>
+        ({
+          ...access,
+          models: access.models.filter((model) => model.modelId !== "haiku"),
+        }) as ModelAccessSnapshot,
+      autoSelect: port,
+    });
+    await door.create({ ...startInput("operation-signed-out"), autoSelect: { request: "x" } });
+    expect(asked[0]?.candidates.map((candidate) => candidate.selection)).toEqual([MODEL, DEEP]);
+
+    const bare = pick();
+    const { sessions: noInspector } = born({ readDefaultModel: tiers, autoSelect: bare.port });
+    await noInspector.create({ ...startInput("operation-blind"), autoSelect: { request: "x" } });
+    expect(bare.asked[0]?.candidates.map((candidate) => candidate.selection)).toEqual([MODEL]);
+  });
+
+  it("falls back, without a word, when the catalog cannot be read", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => {
+        throw new Error("catalog down");
+      },
+      autoSelect: port,
+    });
+    const created = await door.create({
+      ...startInput("operation-catalog"),
+      autoSelect: { request: "x" },
+    });
+    expect(created.model).toEqual(MODEL);
+    expect(asked).toEqual([]);
+  });
+
+  it("states a replayed start's record again, whatever a second decision would say", async () => {
+    const recorded = { confidence: 0.6, alternatives: [] };
+    const { asked, port } = pick();
+    const { commands, sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      // The Session this operation already minted carries its model and pick.
+      readModelAnchor: async () => ({ selection: FAST, tier: null, auto: recorded }),
+      autoSelect: port,
+    });
+
+    const created = await door.create({
+      ...startInput("operation-replayed"),
+      autoSelect: { request: "x" },
+    });
+
+    expect(asked).toEqual([]);
+    expect(created.model).toEqual(FAST);
+    expect(modelRecord(commands)).toEqual({
+      kind: "model.select",
+      selection: FAST,
+      auto: recorded,
+    });
+  });
+
+  it("restates a replayed start's record even once the decision model is off", async () => {
+    const { port } = pick({ available: () => false });
+    const { commands, sessions: door } = born({
+      readDefaultModel: tiers,
+      readModelAnchor: async () => ({ selection: DEEP, tier: "deep", auto: AUTO }),
+      autoSelect: port,
+    });
+    await door.create({ ...startInput("operation-replayed-off"), autoSelect: { request: "x" } });
+    expect(modelRecord(commands)).toEqual({
+      kind: "model.select",
+      selection: DEEP,
+      tier: "deep",
+      auto: AUTO,
+    });
+  });
+
+  it("gives a subagent's decision the tier its parent runs on", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      readModelAnchor: parentAnchored({ selection: DEEP, tier: "deep" }),
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    await door.create({
+      ...startInput("operation-child"),
+      role: "subagent",
+      parentSessionId: "parent-session",
+      autoSelect: { request: "find the flaky test" },
+    });
+    expect(asked[0]?.tierHint).toBe("deep");
+    // The child's fallback is its parent's anchor, which is the first candidate.
+    expect(asked[0]?.candidates[0]?.selection).toEqual(DEEP);
+  });
+
+  it("reads a parent anchored on no agent tier as no hint", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      readModelAnchor: parentAnchored({ selection: DEEP, tier: "utility" }),
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    await door.create({
+      ...startInput("operation-child-2"),
+      role: "subagent",
+      parentSessionId: "parent-session",
+      autoSelect: { request: "x" },
+    });
+    expect(asked[0]?.tierHint).toBeNull();
+  });
+});
+
 function startInput(operationId: string) {
   return {
     operationId,

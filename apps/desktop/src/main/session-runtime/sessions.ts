@@ -22,13 +22,19 @@
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
 import {
+  AUTO_SELECT_TIERS,
+  autoSelectCandidates,
   DEFAULT_MODEL_REQUIRED,
   defaultModelRequiredForTier,
   isAgentModelTier,
   modelPurposeForRole,
 } from "@volli/shared";
 import type {
+  AgentModelTier,
+  AutoSelectCandidate,
+  AutoSelectPick,
   ModelAccessSnapshot,
+  ModelAutoPick,
   ModelSelection,
   McpToolDefinition,
   ModelTier,
@@ -261,6 +267,15 @@ export interface SessionStartInput {
   actor?: TicketEventActor;
   modelOverride?: SessionModelOverride;
   /**
+   * The request this Session is being born to carry, offered to the decision
+   * model that may choose its model (VC-432). Honoured only when the start
+   * names NO model, tier or reasoning level — a caller that said what it wants
+   * is never second-guessed — and only when a decision model is configured and
+   * permitted, so an absent or ignored hint changes nothing. The text is the
+   * first message, a delegated task or an Automation's Instructions.
+   */
+  autoSelect?: { request: string };
+  /**
    * Trusted in-process ancestry from a Ticket caller's claimed `session.start`.
    * The renderer's create schema cannot name it; only the bound tool door may
    * pass this birth context through the shared facade.
@@ -334,6 +349,11 @@ export type SessionModelOverride = {
 export interface SessionModelAnchor {
   readonly selection: ModelSelection | null;
   readonly tier: ModelTier | null;
+  /**
+   * The decision model's pick behind `selection`, when it chose it (VC-432).
+   * Read back only to state a replayed start's record exactly as it was.
+   */
+  readonly auto?: ModelAutoPick | undefined;
 }
 
 /**
@@ -395,6 +415,32 @@ export function anchoredOnParent(
     model: { providerId: parent.selection.providerId, modelId: parent.selection.modelId },
     reasoningLevel: level ?? parent.selection.reasoningLevel,
   };
+}
+
+/**
+ * What a start reaches to let a decision model choose its model (VC-432).
+ * Both halves are the composition root's: the desktop answers them from the
+ * decision service and its settings.
+ */
+export interface SessionAutoSelectPort {
+  /**
+   * Whether a decision for this project could run at all: a model is
+   * configured and, in the cloud, opted into for `model.select`. One database
+   * read, so a start with no decision model pays for nothing else.
+   */
+  available(projectId: string): boolean;
+  /**
+   * The pick among `candidates` for this request, or null for every way a
+   * decision is not made or not trusted: unset, slow, wrong, or below the
+   * confidence threshold. Never rejects; null is "keep the default".
+   */
+  decide(input: {
+    sessionId: string;
+    projectId: string;
+    request: string;
+    tierHint: AgentModelTier | null;
+    candidates: readonly AutoSelectCandidate[];
+  }): Promise<AutoSelectPick | null>;
 }
 
 /** The durable identity a create-only call resolves — nothing about an executor. */
@@ -501,6 +547,11 @@ export interface SessionsOptions {
    */
   inspectModelAccess?(): Promise<ModelAccessSnapshot>;
   /**
+   * The decision model's say over a start that named no model (VC-432). Absent
+   * means nothing is ever auto-picked.
+   */
+  autoSelect?: SessionAutoSelectPort;
+  /**
    * Records the `session_started` ticket event. Living in `mint` — the one
    * shared creation path under BOTH `create` (the renderer's optimistic open)
    * and `start` (the agent socket) — is what makes every door's start land in
@@ -606,6 +657,108 @@ async function resolveModelSelection(
   return { providerId: model.providerId, modelId: model.modelId, reasoningLevel };
 }
 
+function sameSelection(a: ModelSelection, b: ModelSelection): boolean {
+  return (
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId &&
+    a.reasoningLevel === b.reasoningLevel
+  );
+}
+
+/**
+ * Whether this start is the kind an automatic choice may apply to: it offered
+ * a request and named no model, tier or reasoning level. Whether a decision
+ * could actually run is {@link autoSelectWanted}'s further question.
+ */
+function autoSelectOffered(options: SessionsOptions, input: SessionStartInput): boolean {
+  const named = input.modelOverride;
+  return (
+    options.autoSelect !== undefined &&
+    (input.autoSelect?.request.trim() ?? "") !== "" &&
+    named?.model === undefined &&
+    named?.tier === undefined &&
+    named?.reasoningLevel === undefined
+  );
+}
+
+/** {@link autoSelectOffered}, and a decision for this project could run: one settings read. */
+function autoSelectWanted(options: SessionsOptions, input: SessionStartInput): boolean {
+  return (
+    autoSelectOffered(options, input) && (options.autoSelect?.available(input.projectId) ?? false)
+  );
+}
+
+/**
+ * The decision model's pick for a start that named no model (VC-432), or null
+ * to keep `configuredDefault`.
+ *
+ * Quiet on every miss, by design: no port, nothing to carry, a caller that
+ * named a model, tier or level, a decision model not configured or not
+ * permitted, fewer than two approved pairs, a catalog that cannot be read, a
+ * slow or unsure answer — each is the configured default, with nothing said
+ * and nothing awaited beyond the decision's own short deadline. Only the
+ * person's approved pairs are ever offered: the default and each agent tier's
+ * configured model, held to what Model Access says can run right now.
+ */
+async function autoSelectModel(
+  options: SessionsOptions,
+  input: SessionStartInput,
+  configuredDefault: ModelSelection,
+  parentAnchor: SessionModelAnchor | null,
+  sessionId: string,
+): Promise<AutoSelectPick | null> {
+  const port = options.autoSelect;
+  if (port === undefined || !autoSelectWanted(options, input)) return null;
+  const request = input.autoSelect?.request.trim() ?? "";
+  try {
+    const tiers = Object.fromEntries(
+      await Promise.all(
+        AUTO_SELECT_TIERS.map(async (tier) => [tier, await options.readDefaultModel(tier, null)]),
+      ),
+    ) as Partial<Record<AgentModelTier, ModelSelection | null>>;
+    const approved = autoSelectCandidates(configuredDefault, tiers);
+    if (approved.length < 2) return null;
+    const runnable = await runnableSelections(options);
+    const candidates = approved.filter(
+      (candidate) =>
+        sameSelection(candidate.selection, configuredDefault) ||
+        (runnable?.(candidate.selection) ?? false),
+    );
+    return await port.decide({
+      sessionId,
+      projectId: input.projectId,
+      request,
+      tierHint:
+        parentAnchor?.tier !== null &&
+        parentAnchor?.tier !== undefined &&
+        isAgentModelTier(parentAnchor.tier)
+          ? parentAnchor.tier
+          : null,
+      candidates,
+    });
+  } catch {
+    // The default stands. A person is not waiting on a refinement they did not
+    // ask for, and the model they will see is the one the Session runs.
+    return null;
+  }
+}
+
+/** Whether Model Access can run a selection right now, or null when it cannot be asked. */
+async function runnableSelections(
+  options: SessionsOptions,
+): Promise<((selection: ModelSelection) => boolean) | null> {
+  if (options.inspectModelAccess === undefined) return null;
+  const access = await options.inspectModelAccess();
+  return (selection) =>
+    access.models.some(
+      (model) =>
+        model.providerId === selection.providerId &&
+        model.modelId === selection.modelId &&
+        model.state === "available" &&
+        model.reasoningLevels.includes(selection.reasoningLevel),
+    );
+}
+
 /** Product-owned Session start commands over private adapter migration scaffolding. */
 export function createSessions(options: SessionsOptions): Sessions {
   /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
@@ -642,13 +795,14 @@ export function createSessions(options: SessionsOptions): Sessions {
     // the one creation path under both `create` and `start`. A second start
     // path that minted a subagent would otherwise get its parent's ports and
     // silently miss its parent's model.
-    const override =
+    const parentAnchor =
       input.parentSessionId === undefined
+        ? null
+        : await options.readModelAnchor(input.parentSessionId);
+    const override =
+      parentAnchor === null
         ? input.modelOverride
-        : anchoredOnParent(
-            input.modelOverride,
-            await options.readModelAnchor(input.parentSessionId),
-          );
+        : anchoredOnParent(input.modelOverride, parentAnchor);
     const model = await resolveModelSelection(options, override, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
@@ -729,12 +883,40 @@ export function createSessions(options: SessionsOptions): Sessions {
     // so a subagent that inherited a rung records the rung it inherited — both
     // for the header and because that is what its own children read next
     // (VC-431).
-    const tier = override?.tier;
+    //
+    // VC-432: a start that named nothing may have its model chosen by the
+    // decision model, once, here at birth. The configured default resolved
+    // above IS the fallback, so every miss lands exactly where a start with no
+    // decision model would have. A pick that is the default itself keeps the
+    // default's tier provenance; any other pick is an exact model.
+    //
+    // A replayed start finds its Session already carrying a model, and states
+    // that same record again: the engine refuses a replay whose intent
+    // differs, and a second decision (or a miss) is exactly such a difference.
+    // Best-effort: a start that cannot read its own Session back is a start
+    // with nothing replayed, never a start that fails over a refinement.
+    const anchor = autoSelectOffered(options, input)
+      ? await options.readModelAnchor(created.sessionId).catch(() => null)
+      : null;
+    const replayed = anchor?.selection ?? null;
+    const picked =
+      replayed === null
+        ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
+        : null;
+    const chosen = replayed ?? picked?.selection ?? model;
+    const auto = replayed === null ? picked?.auto : anchor?.auto;
+    const tier =
+      replayed !== null
+        ? (anchor?.tier ?? undefined)
+        : picked !== null && !sameSelection(picked.selection, model)
+          ? undefined
+          : override?.tier;
     await recordModelSelection(options.runtime, {
       commandId: `${input.operationId}:model`,
       sessionId: created.sessionId,
-      model,
+      model: chosen,
       ...(tier === undefined ? {} : { tier }),
+      ...(auto === undefined ? {} : { auto }),
     });
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
@@ -745,7 +927,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
     await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
-    return { sessionId: created.sessionId, model };
+    return { sessionId: created.sessionId, model: chosen };
   }
 
   return {
@@ -841,7 +1023,13 @@ function attachmentReady(result: SessionRuntimeCommandResult): boolean {
 /** Record the Session's model policy durably, or refuse before anything attaches. */
 async function recordModelSelection(
   runtime: StructuredSessionCommands,
-  input: { commandId: string; sessionId: string; model: ModelSelection; tier?: ModelTier },
+  input: {
+    commandId: string;
+    sessionId: string;
+    model: ModelSelection;
+    tier?: ModelTier;
+    auto?: ModelAutoPick;
+  },
 ): Promise<void> {
   const selected = await runtime.command({
     commandId: input.commandId,
@@ -850,6 +1038,7 @@ async function recordModelSelection(
       kind: "model.select",
       selection: input.model,
       ...(input.tier === undefined ? {} : { tier: input.tier }),
+      ...(input.auto === undefined ? {} : { auto: input.auto }),
     },
   });
   if (selected.receipt?.status !== "completed") {

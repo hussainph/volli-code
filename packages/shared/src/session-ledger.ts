@@ -13,6 +13,7 @@ import type {
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import type { McpToolDefinition } from "./mcp";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
@@ -642,8 +643,11 @@ export type SessionEventPayload =
    * pin, never the policy itself: the Session runs `selection`, and a later
    * Settings change to that tier moves nothing here. Absent on every
    * selection a person or a caller made by exact id.
+   *
+   * `auto` (VC-432) is present when a decision model chose the selection at
+   * the Session's birth: how sure it was and what it passed over.
    */
-  | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier }
+  | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
@@ -1216,7 +1220,7 @@ export type SessionCommandIntent =
   /** End this Session's work, recording who did it (VC-86). Completes in-engine like a signal. */
   | { kind: "session.stop"; reason: string | null; by: SessionStopActor }
   /** `tier`: which named tier this selection resolved from, if a start named one (VC-259). */
-  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier }
+  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
@@ -1554,6 +1558,13 @@ export interface SessionProjection {
    * clears it, because the model then running is no longer the tier's.
    */
   readonly modelTier: ModelTier | null;
+  /**
+   * Present when a decision model chose `modelSelection` at birth (VC-432):
+   * the confidence and the alternatives it passed over. Absent otherwise — and
+   * cleared, like the tier, by any later selection that is not itself an
+   * automatic one, since the model then running is no longer its pick.
+   */
+  readonly modelAuto?: ModelAutoPick;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   readonly turnActive: boolean;
   /**
@@ -1784,6 +1795,7 @@ function foldSessionProjection(
   let stopped: SessionProjection["stopped"] = base?.stopped ?? null;
   let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
   let modelTier: ModelTier | null = base?.modelTier ?? null;
+  let modelAuto: ModelAutoPick | null = base?.modelAuto ?? null;
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
   let authorityDenials = base?.authorityDenials ?? 0;
@@ -1840,6 +1852,7 @@ function foldSessionProjection(
       case "model.selected":
         modelSelection = event.payload.selection;
         modelTier = event.payload.tier ?? null;
+        modelAuto = event.payload.auto ?? null;
         break;
       case "session.input.recorded":
         break;
@@ -2069,6 +2082,7 @@ function foldSessionProjection(
     stopped,
     modelSelection,
     modelTier,
+    ...(modelAuto === null ? {} : { modelAuto }),
     turnActive,
     lastTurnOutcome,
     authorityDenials,

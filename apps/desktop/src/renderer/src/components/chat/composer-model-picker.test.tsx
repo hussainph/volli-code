@@ -8,6 +8,7 @@ import {
   type ModelAccessDefaults,
   type ModelAccessModel,
   type ModelAccessProvider as CatalogProvider,
+  type ModelAutoPick,
   type ModelPickerView,
 } from "@volli/shared";
 
@@ -230,6 +231,7 @@ async function renderPill(input: {
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
   selectionTier?: string | null;
+  selectionAuto?: ModelAutoPick | null;
   onChange?: (next: ComposerModelSelection) => void;
   compactEffort?: { onChange(level: string): void };
   composerWidth?: number;
@@ -255,6 +257,7 @@ async function renderPill(input: {
       tiers={input.withTiers === false ? undefined : tiers}
       selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
       selectionTier={input.selectionTier ?? null}
+      selectionAuto={input.selectionAuto ?? null}
       disabled={false}
       onChange={input.onChange ?? (() => undefined)}
       open
@@ -462,6 +465,57 @@ describe("reading the whole selected model without changing it", () => {
     const identity = document.querySelector('[data-testid="model-pill-identity"]');
     expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
     expect(identity?.textContent).toContain(pill?.getAttribute("title") ?? "");
+  });
+});
+
+/** VC-432: a model a decision model chose at birth says so, and offers what it passed over. */
+describe("an auto-picked model", () => {
+  const AUTO: ModelAutoPick = {
+    confidence: 0.8,
+    alternatives: [
+      {
+        selection: { providerId: "anthropic", modelId: "haiku", reasoningLevel: "low" },
+        probability: 0.15,
+      },
+    ],
+  };
+
+  it("says what was picked and offers each alternative as one press to override it", async () => {
+    const onChange = vi.fn();
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      selectionTier: "Auto",
+      selectionAuto: AUTO,
+      onChange,
+    });
+    const line = document.querySelector('[data-testid="model-pill-auto"]');
+    expect(line?.textContent).toContain("Auto-picked Claude Sonnet · medium");
+    const alternative = document.querySelector<HTMLButtonElement>(
+      '[data-testid="model-pill-auto-alternative"]',
+    );
+    expect(alternative?.textContent).toBe("Claude Haiku · low");
+    expect(alternative?.getAttribute("title")).toBe("15%");
+    await act(async () => alternative?.click());
+    expect(onChange).toHaveBeenCalledWith({
+      providerId: "anthropic",
+      modelId: "haiku",
+      reasoningLevel: "low",
+    });
+  });
+
+  it("shows no alternatives line when nothing was passed over, and nothing at all without a pick", async () => {
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      selectionAuto: { confidence: 1, alternatives: [] },
+    });
+    expect(document.querySelector('[data-testid="model-pill-auto-alternative"]')).toBeNull();
+    expect(document.querySelector('[data-testid="model-pill-auto"]')).not.toBeNull();
+    await act(async () => root?.unmount());
+    container?.remove();
+    await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
+    expect(document.querySelector('[data-testid="model-pill-auto"]')).toBeNull();
   });
 });
 

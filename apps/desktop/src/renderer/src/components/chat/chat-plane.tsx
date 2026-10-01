@@ -426,7 +426,11 @@ export function ChatPlane({
   // The tier the model resolved from (VC-259), as the Settings row names it;
   // null for the ordinary Session whose model was chosen by exact id.
   const modelTier = projection?.modelTier ?? null;
-  const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
+  // A model a decision model chose at birth (VC-432) reads "Auto" where a
+  // named tier would read its label: the same "qualifier · model" grammar.
+  const selectionAuto = projection?.modelAuto ?? null;
+  const selectionTier =
+    modelTier !== null ? modelTierRow(modelTier).label : selectionAuto === null ? null : "Auto";
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null || provisional !== undefined,
@@ -909,7 +913,9 @@ export function ChatPlane({
       // Blob/setup failure must replay the same model even if Settings changes
       // before retry or relaunch.
       if (launch !== undefined && launch.model === undefined && provisionalModel !== null) {
-        drafts.setProvisionalModel(sessionId, provisionalModel);
+        // Frozen from the default, not picked: promotion lets an automatic
+        // model choice (VC-432) have the say a person did not take.
+        drafts.setProvisionalModel(sessionId, provisionalModel, { fromDefault: true });
       }
       // Resources ride the message object itself — through hold, queue and
       // steer — so a copy released later delivers exactly what `/skill`
@@ -1678,6 +1684,7 @@ export function ChatPlane({
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
               selectionTier={selectionTier}
+              selectionAuto={selectionAuto}
               onSelectionChange={changeModel}
               modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
               working={working}

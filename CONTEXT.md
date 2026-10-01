@@ -280,10 +280,14 @@ server on this Mac (loopback only, nothing leaves it); cloud means a Pi
 catalog classifier such as TypeSafe's Jev, reached with the provider's own
 Model Access credential and only for the purposes the person opted into.
 Every caller goes through the host **Decision Service** under a named
-**Decision Purpose** (`agent.classify` today) and must state a deterministic
+**Decision Purpose** (`agent.classify` and `model.select`) and must state a deterministic
 fallback, which is its answer whenever the model is unset, unreachable, slow,
 wrong-shaped or refused. Agents reach it through the `classify` tool, present
 only in Sessions created while one was configured.
+**Automatic model choice** (`model.select`) lets a cloud Decision Model, behind
+its own switch, pick a new Session's model and reasoning level from the
+person's approved pairs — once, at birth, falling back to the configured default
+on any miss — and the Session records and shows the pick (`Auto-picked`).
 _Avoid_: classifier model (when meaning the setting), router, judge (that is a
 purpose)
 

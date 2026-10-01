@@ -411,6 +411,8 @@ export interface ChatSessionTransport {
      * surface but the New-ticket composer's Create & start sends (VC-56).
      */
     model?: ModelSelection;
+    /** The first message, for automatic model choice (VC-432); ignored when `model` is set. */
+    autoSelect?: { request: string };
   }): Promise<{ sessionId: string }>;
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }

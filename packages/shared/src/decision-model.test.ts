@@ -10,6 +10,7 @@ import {
   DECISION_LIMITS,
   DECISION_PURPOSE_POLICY,
   DECISION_PURPOSES,
+  DECISION_BASE_PURPOSES,
   isDecisionPurpose,
   localDecisionUrlProblem,
   NO_DECISION_MODEL,
@@ -18,6 +19,7 @@ import {
   parseDecisionModelSetting,
   readDecisionAnswers,
   resolveDecisionModelSetting,
+  withDecisionPurpose,
   type DecisionModelSetting,
   type DecisionQuestion,
 } from "./decision-model";
@@ -38,7 +40,7 @@ const LOCAL: DecisionModelSetting = {
 
 describe("purposes", () => {
   it("names every caller, and only those", () => {
-    expect(DECISION_PURPOSES).toEqual(["agent.classify"]);
+    expect(DECISION_PURPOSES).toEqual(["agent.classify", "model.select"]);
     expect(isDecisionPurpose("agent.classify")).toBe(true);
     expect(isDecisionPurpose("authority.judge")).toBe(false);
     expect(isDecisionPurpose(7)).toBe(false);
@@ -52,6 +54,16 @@ describe("purposes", () => {
     }
     // Routine agent calls leave usage, never a per-call audit fact.
     expect(DECISION_PURPOSE_POLICY["agent.classify"].audit).toBe(false);
+    // A new Session waits on a model choice, so it gets seconds, not the tool's half minute.
+    expect(DECISION_PURPOSE_POLICY["model.select"].audit).toBe(false);
+    expect(DECISION_PURPOSE_POLICY["model.select"].timeoutMs).toBeLessThan(
+      DECISION_PURPOSE_POLICY["agent.classify"].timeoutMs,
+    );
+  });
+
+  it("keeps a purpose with its own switch out of the first opt-in", () => {
+    expect(DECISION_BASE_PURPOSES).toEqual(["agent.classify"]);
+    expect(decisionCloudDisclosure("Jev")).not.toMatch(/models you have set up/);
   });
 });
 
@@ -154,6 +166,32 @@ describe("the cloud disclosure", () => {
       `Jev · TypeSafe runs off this Mac. Using it sends ${DECISION_PURPOSE_POLICY["agent.classify"].sends}.`,
     );
     expect(decisionCloudDisclosure("Jev", ["agent.classify"])).toMatch(/page content/);
+  });
+});
+
+describe("switching one purpose on or off", () => {
+  const cloud = CLOUD as Extract<DecisionModelSetting, { kind: "cloud" }>;
+
+  it("extends the opt-in, re-stamped, in vocabulary order", () => {
+    const on = withDecisionPurpose(cloud, "model.select", true, 5_000);
+    expect(on?.optIn).toEqual({ acceptedAt: 5_000, purposes: ["agent.classify", "model.select"] });
+    expect(on === null ? null : parseDecisionModelSetting(on)).toEqual(on);
+    // The target is the same once it is on.
+    expect(decisionTargetFor(on!, "model.select").ok).toBe(true);
+    expect(decisionTargetFor(cloud, "model.select")).toMatchObject({
+      ok: false,
+      miss: { reason: "not-opted-in" },
+    });
+  });
+
+  it("withdraws one purpose and keeps the rest and the original agreement time", () => {
+    const both = withDecisionPurpose(cloud, "model.select", true, 5_000)!;
+    const off = withDecisionPurpose(both, "model.select", false, 9_000);
+    expect(off?.optIn).toEqual({ acceptedAt: 5_000, purposes: ["agent.classify"] });
+  });
+
+  it("refuses to leave an opt-in that covers nothing", () => {
+    expect(withDecisionPurpose(cloud, "agent.classify", false, 1)).toBeNull();
   });
 });
 

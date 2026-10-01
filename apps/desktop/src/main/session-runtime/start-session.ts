@@ -157,6 +157,10 @@ export async function startSessionOperation(
     title,
     actor: input.actor,
     ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
+    // The caller's own message is the request an automatic model choice reads
+    // (VC-432); the stock kickoff says nothing about the work, so it offers
+    // none. Ignored whenever the caller named a model, tier or level.
+    ...(typeof input.message === "string" ? { autoSelect: { request: input.message } } : {}),
     ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
   });
   // The kickoff rides only a ready attach — a Session that needs recovery holds
