@@ -106,6 +106,7 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
   type RuntimeClassifyPort,
+  type RuntimeCallScope,
   type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
@@ -1247,9 +1248,14 @@ class PiBinding implements BindingHandle {
       ...(verbs.length === 0
         ? {}
         : {
-            callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
+            // A Code Mode program's call lends its scope (VC-471): the
+            // door's budget question then waits its turn among the
+            // program's questions, and stops the program's clock.
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
               callVerb!(sessionIdentity, request, signal, (ask, askSignal) =>
-                this.#ask(ask, askSignal),
+                scope === undefined
+                  ? this.#ask(ask, askSignal)
+                  : scope.question(() => this.#ask(ask, askSignal)),
               ),
           }),
     };

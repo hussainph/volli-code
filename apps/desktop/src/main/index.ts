@@ -37,6 +37,7 @@ import {
   makeAgentError,
   memoizedPathExists,
   resolveAgentToolSurface,
+  inheritCodeModeSurface,
   resolveDefaultModel,
   resolveShell,
   roleImpliedByTicket,
@@ -1286,10 +1287,19 @@ app.whenReady().then(async () => {
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           recordedMcp: async (sessionId) =>
             recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
-          record: async (sessionId, tools, mcpTools = []) => {
+          record: async (sessionId, tools, mcpTools = [], parentSessionId) => {
             // Code Mode's routes and limits are frozen beside the names they
-            // route, at the same birth, from main's own state (VC-471).
-            const codeModeSurface = codeMode.surfaceFor(tools, mcpTools);
+            // route, at the same birth, from main's own state (VC-471) — and
+            // a child's from its parent's record, so a tool its parent could
+            // call only directly never becomes callable from its program.
+            const parentCodeMode =
+              parentSessionId === undefined
+                ? undefined
+                : recordedCodeMode(await sessionEngine.listEvents({ sessionId: parentSessionId }));
+            const codeModeSurface =
+              parentCodeMode === undefined
+                ? codeMode.surfaceFor(tools, mcpTools)
+                : inheritCodeModeSurface(parentCodeMode, tools);
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {

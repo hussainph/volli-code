@@ -250,6 +250,27 @@ export function codeModeSurfaceFor(input: {
 }
 
 /**
+ * A subagent's Code Mode record, bounded by its parent's (VC-9's rule, for
+ * routes): the child's tools are already a subset of the parent's, and each
+ * keeps the route the parent froze for it, with the parent's limits. So a
+ * tool the parent could only call directly is never callable from a child's
+ * program, whatever today's defaults say. Absent when the child's surface
+ * does not hold `codemode`.
+ */
+export function inheritCodeModeSurface(
+  parent: CodeModeSurface,
+  tools: readonly SessionToolId[],
+): CodeModeSurface | undefined {
+  if (!tools.includes(CODE_MODE_TOOL_ID)) return undefined;
+  const routes: Record<string, ToolRoute> = {};
+  for (const tool of tools) {
+    if (tool === CODE_MODE_TOOL_ID) continue;
+    routes[tool] = Object.hasOwn(parent.routes, tool) ? parent.routes[tool]! : "direct";
+  }
+  return { routes, limits: { ...parent.limits } };
+}
+
+/**
  * A Code Mode record read back against the surface it was frozen with.
  *
  * Strict in both directions, on the frozen-surface rule's reasoning: a record
@@ -269,7 +290,7 @@ export function parseCodeModeSurface(
   }
   const expected = tools.filter((tool) => tool !== CODE_MODE_TOOL_ID);
   const keys = Object.keys(routesRow);
-  if (keys.length !== expected.length || expected.some((tool) => !(tool in routesRow))) {
+  if (keys.length !== expected.length || expected.some((tool) => !Object.hasOwn(routesRow, tool))) {
     throw new Error(`${context}.routes must name exactly the tools of the surface`);
   }
   const routes: Record<string, ToolRoute> = {};

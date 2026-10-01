@@ -67,6 +67,7 @@ import {
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createClassifyTool } from "./classify-tool";
 import { createShellTool } from "./shell-tools";
+import { currentCallScope } from "./call-scope";
 import type { SurfaceTool } from "../codemode/tool";
 import { piContext } from "./pi-context";
 import { MAX_READ_IMAGE_BASE64_BYTES, processReadImage } from "./read-image-processor";
@@ -541,15 +542,18 @@ export function createMcpTool(
       try {
         let result;
         try {
-          result = await binding.port.call(
-            {
-              serverId: definition.serverId,
-              toolName: definition.toolName,
-              arguments: params as Readonly<Record<string, unknown>>,
-              toolCallId,
-            },
-            combined.signal,
-          );
+          const request = {
+            serverId: definition.serverId,
+            toolName: definition.toolName,
+            arguments: params as Readonly<Record<string, unknown>>,
+            toolCallId,
+          };
+          // A program's call carries its scope, so a question the host puts
+          // to a person mid-call waits its turn (VC-471).
+          const scope = currentCallScope();
+          result = await (scope === undefined
+            ? binding.port.call(request, combined.signal)
+            : binding.port.call(request, combined.signal, scope));
         } catch {
           throw new Error("The MCP tool call failed without a safe result.");
         }
@@ -736,17 +740,20 @@ export function createVerbTool(
         else one.addEventListener("abort", abandon, { once: true });
       }
       try {
-        const result = await binding.port(
-          {
-            verb: binding.verb,
-            input: params as Readonly<Record<string, unknown>>,
-            // Passed through rather than regenerated: the host derives its
-            // durable operation id from this plus the caller it already knows,
-            // which is what makes a replayed call one act instead of two.
-            toolCallId,
-          },
-          withdrawn.signal,
-        );
+        const request = {
+          verb: binding.verb,
+          input: params as Readonly<Record<string, unknown>>,
+          // Passed through rather than regenerated: the host derives its
+          // durable operation id from this plus the caller it already knows,
+          // which is what makes a replayed call one act instead of two.
+          toolCallId,
+        };
+        // A program's call carries its scope, so a budget question the door
+        // puts to a person waits its turn (VC-471).
+        const scope = currentCallScope();
+        const result = await (scope === undefined
+          ? binding.port(request, withdrawn.signal)
+          : binding.port(request, withdrawn.signal, scope));
         // `details` is the host's structured aside for the transcript row; the
         // model reads `content` and nothing else.
         // The host's canonical verb and legacy result copy remain unchanged.
