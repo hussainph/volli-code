@@ -50,6 +50,10 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import {
+  isDeclaredRoute,
+  routeOf,
+  type CodeModeSurface,
+  type SessionToolBinding,
   MCP_RESULT_IMAGE_MAX_BYTES,
   MCP_RESULT_INLINE_MAX_BYTES,
   MCP_RESULT_MAX_BYTES,
@@ -62,6 +66,7 @@ import {
 } from "@volli/shared";
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createShellTool } from "./shell-tools";
+import type { SurfaceTool } from "../codemode/tool";
 import { piContext } from "./pi-context";
 import { MAX_READ_IMAGE_BASE64_BYTES, processReadImage } from "./read-image-processor";
 import {
@@ -249,65 +254,108 @@ export function createSessionTools(
   spec: SessionToolInput,
   env: ExecutionEnv,
   output?: ToolOutputStore,
+  buildCodeMode?: CodeModeBuilder,
 ): AgentTool[] {
-  return sessionToolBindings(spec).map((binding) => {
-    switch (binding.tool) {
-      case "read":
-      case "edit":
-      case "write":
-      case "execute":
-        return createTool(binding.tool, env, output);
-      case "ask_user":
-        return createAskUserTool(binding.port, spec.signal);
-      case "web_fetch":
-        return createWebFetchTool(binding.port, spec.signal);
-      case "web_search":
-        return createWebSearchTool(binding.port, spec.signal);
-      case "todo_write":
-        // The one arm that takes neither the environment nor a port: the
-        // binding carries a name because there is nothing behind the name to
-        // carry (VC-6).
-        return createTodoWriteTool();
-      case "browser_tabs":
-      case "browser_navigate":
-      case "browser_snapshot":
-      case "browser_act":
-      case "browser_screenshot":
-      case "browser_console":
-        // Six names, one port, one factory: the binding arms all carry the
-        // whole RuntimeBrowserPort, and the factory picks the method the name
-        // stands for. See ./browser-tools.ts for why the grain is per intent.
-        return createBrowserTool(binding.tool, binding.port, spec.signal);
-      case "browser_acquire":
-      case "browser_release":
-        // The hold pair (VC-239) binds to the port with `acquire`/`release`
-        // proven present — `sessionToolBindings` offered these names only
-        // because the port carries both.
-        return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
-      case "browser_find":
-        // Bound to the port with `find` proven present (VC-364), on the hold
-        // pair's terms: a Session frozen before it is handed a port without.
-        return createBrowserFindTool(binding.port, spec.signal);
-      case "shell_start":
-      case "shell_output":
-      case "shell_kill":
-        // Three names, one port, one factory (VC-270), on the browser arms'
-        // terms. See ./shell-tools.ts for what a background shell is.
-        return createShellTool(binding.tool, binding.port, spec.signal);
-      default:
-        if ("definition" in binding) return createMcpTool(binding, spec.signal, output);
-        // The verb half, and the one branch that cannot be a case label: its
-        // members are registry data, so there is no closed set of literals to
-        // enumerate here. Exhaustiveness is kept by the assignment below —
-        // `binding` narrows to the verb arm, and a name added to
-        // `SessionToolBinding` with no case above would not satisfy it.
-        return createVerbTool(
-          binding satisfies { verb: VerbToolKey },
-          spec.signal,
-          spec.tools.mcpManagementNames,
-        );
-    }
+  const bindings = sessionToolBindings(spec);
+  const built = bindings.map((binding): SurfaceTool | null =>
+    binding.tool === "codemode"
+      ? null
+      : {
+          id: binding.tool,
+          tool: createBoundTool(binding, spec, env, output),
+          verb: "verb" in binding,
+          ...("definition" in binding ? { mcp: binding.definition } : {}),
+        },
+  );
+  const codeMode = spec.tools.codeMode;
+  if (codeMode === undefined) return built.map((entry) => entry!.tool);
+  // Code Mode (VC-471) is built last, over every other tool of the surface —
+  // declared or not — and the array the Agent declares is then the routes'
+  // answer: `direct` and `both` tools, and `codemode` at its own frozen
+  // position. A `code`, `deferred` or `hidden` tool is bound and reachable
+  // only from a program, which is what makes its route structural: the Agent
+  // has no tool of that name to resolve a model's direct call against.
+  if (buildCodeMode === undefined) {
+    throw new Error("This Session's surface names codemode, but no Code Mode host is wired.");
+  }
+  const codemode = buildCodeMode(
+    codeMode,
+    built.filter((entry): entry is SurfaceTool => entry !== null),
+  );
+  return bindings.flatMap((binding, index) => {
+    if (binding.tool === "codemode") return [codemode];
+    return isDeclaredRoute(routeOf(codeMode, binding.tool)) ? [built[index]!.tool] : [];
   });
+}
+
+/** Builds the `codemode` tool over the rest of a Session's surface; supplied by the runtime. */
+export type CodeModeBuilder = (
+  surface: CodeModeSurface,
+  tools: readonly SurfaceTool[],
+) => AgentTool;
+
+function createBoundTool(
+  binding: Exclude<SessionToolBinding, { tool: "codemode" }>,
+  spec: SessionToolInput,
+  env: ExecutionEnv,
+  output: ToolOutputStore | undefined,
+): AgentTool {
+  switch (binding.tool) {
+    case "read":
+    case "edit":
+    case "write":
+    case "execute":
+      return createTool(binding.tool, env, output);
+    case "ask_user":
+      return createAskUserTool(binding.port, spec.signal);
+    case "web_fetch":
+      return createWebFetchTool(binding.port, spec.signal);
+    case "web_search":
+      return createWebSearchTool(binding.port, spec.signal);
+    case "todo_write":
+      // The one arm that takes neither the environment nor a port: the
+      // binding carries a name because there is nothing behind the name to
+      // carry (VC-6).
+      return createTodoWriteTool();
+    case "browser_tabs":
+    case "browser_navigate":
+    case "browser_snapshot":
+    case "browser_act":
+    case "browser_screenshot":
+    case "browser_console":
+      // Six names, one port, one factory: the binding arms all carry the
+      // whole RuntimeBrowserPort, and the factory picks the method the name
+      // stands for. See ./browser-tools.ts for why the grain is per intent.
+      return createBrowserTool(binding.tool, binding.port, spec.signal);
+    case "browser_acquire":
+    case "browser_release":
+      // The hold pair (VC-239) binds to the port with `acquire`/`release`
+      // proven present — `sessionToolBindings` offered these names only
+      // because the port carries both.
+      return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
+    case "browser_find":
+      // Bound to the port with `find` proven present (VC-364), on the hold
+      // pair's terms: a Session frozen before it is handed a port without.
+      return createBrowserFindTool(binding.port, spec.signal);
+    case "shell_start":
+    case "shell_output":
+    case "shell_kill":
+      // Three names, one port, one factory (VC-270), on the browser arms'
+      // terms. See ./shell-tools.ts for what a background shell is.
+      return createShellTool(binding.tool, binding.port, spec.signal);
+    default:
+      if ("definition" in binding) return createMcpTool(binding, spec.signal, output);
+      // The verb half, and the one branch that cannot be a case label: its
+      // members are registry data, so there is no closed set of literals to
+      // enumerate here. Exhaustiveness is kept by the assignment below —
+      // `binding` narrows to the verb arm, and a name added to
+      // `SessionToolBinding` with no case above would not satisfy it.
+      return createVerbTool(
+        binding satisfies { verb: VerbToolKey },
+        spec.signal,
+        spec.tools.mcpManagementNames,
+      );
+  }
 }
 
 export const MCP_UNTRUSTED_DATA_WARNING =

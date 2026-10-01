@@ -51,6 +51,7 @@ import {
   workspaceInstallCommand,
 } from "@volli/shared";
 import type {
+  CodeModeSurface,
   McpToolDefinition,
   PromptResource,
   RuntimeVerbResult,
@@ -70,6 +71,7 @@ import type {
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
 import { desktopMcpDispatch } from "./mcp/dispatch-policy";
+import { codeModeSandboxFor, desktopCodeMode } from "./codemode/dev-config";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -521,6 +523,19 @@ function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" |
       event.payload.input.kind === "tool-surface"
     ) {
       return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
+}
+
+/** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
+function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.codeMode;
     }
   }
   return undefined;
@@ -1128,6 +1143,14 @@ app.whenReady().then(async () => {
     packaged: !isDev,
     log: (message) => console.warn(`[volli] ${message}`),
   });
+  // Code Mode (VC-471, phase 1): developer-only, read once from an unpackaged
+  // build's environment, like the parallel-read opt-in above. It decides only
+  // what NEW Sessions are born with; a Session's own record decides the rest.
+  const codeMode = desktopCodeMode({
+    env: process.env,
+    packaged: !isDev,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1200,6 +1223,9 @@ app.whenReady().then(async () => {
                   // before it keeps its list and is handed a port without
                   // `find`.
                   "browser_find",
+                  // Code Mode (VC-471), while the developer opt-in is set.
+                  // Last, for the Cache Prefix reason every name above is.
+                  ...(codeMode.enabled ? (["codemode"] as const) : []),
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1221,6 +1247,9 @@ app.whenReady().then(async () => {
           recordedMcp: async (sessionId) =>
             recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
           record: async (sessionId, tools, mcpTools = []) => {
+            // Code Mode's routes and limits are frozen beside the names they
+            // route, at the same birth, from main's own state (VC-471).
+            const codeModeSurface = codeMode.surfaceFor(tools, mcpTools);
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {
@@ -1230,6 +1259,7 @@ app.whenReady().then(async () => {
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },
               provenance: {
                 source: { kind: "system", id: "pi-runtime", detail: null },
@@ -1372,6 +1402,14 @@ app.whenReady().then(async () => {
           // Frozen parallel-read marks take effect only while the developer
           // opt-in is set (VC-454); unset, every Session is sequential again.
           parallelMcpReads: mcpDispatch.parallelMcpReads,
+          // Where Code Mode's sandbox worker and WebAssembly are, for an
+          // unpackaged build: the workspace's own installed copy (VC-471).
+          // A packaged build is never offered Code Mode in phase 1.
+          ...codeModeSandboxFor(
+            isDev,
+            () => app.getAppPath(),
+            (message) => console.warn(`[volli] ${message}`),
+          ),
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
@@ -1533,6 +1571,7 @@ app.whenReady().then(async () => {
             // allowlist (VC-454): a tool taken off it stops overlapping.
             let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
             let mcpManagementNames = recordedMcpManagementNames(events);
+            const codeModeSurface = recordedCodeMode(events);
             if (toolSurface === null) {
               mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
@@ -1548,7 +1587,11 @@ app.whenReady().then(async () => {
                   sessionId,
                   input: {
                     kind: "tool-surface",
-                    tools: sessionToolSurface.resolve(attaching.role, []),
+                    // Nor is it born into Code Mode: that is a birth record
+                    // with routes, and a backfill has none to freeze.
+                    tools: sessionToolSurface
+                      .resolve(attaching.role, [])
+                      .filter((tool) => tool !== "codemode"),
                     mcpManagementNames: "server",
                   },
                   provenance,
@@ -1565,6 +1608,7 @@ app.whenReady().then(async () => {
               toolSurface,
               ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
+              ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
               // edit. Resolved per attach for the reason the web ports are: what

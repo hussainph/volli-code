@@ -17,6 +17,7 @@ import {
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import { codeModeSurfaceFor } from "./code-mode";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -258,7 +259,7 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-4, -1)).toEqual([
+    expect(NON_CODING_TOOL_IDS.slice(-5, -2)).toEqual([
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -289,7 +290,9 @@ describe("sessionToolIds", () => {
       "shell_kill",
       "browser_find",
     ]);
-    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("browser_find");
+    // Followed only by `codemode` (VC-471), appended after it for the same reason.
+    expect(NON_CODING_TOOL_IDS.at(-2)).toBe("browser_find");
+    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("codemode");
     expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).not.toContain(
       "browser_find",
     );
@@ -362,7 +365,20 @@ describe("sessionToolIds", () => {
     // a Snapshot built from this call cannot under-report the surface, whatever
     // the surface holds.
     const everything = sessionToolIds({
-      tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+      tools: {
+        tools: ["read", "edit", "write", "execute"],
+        todoWrite: true,
+        codeMode: codeModeSurfaceFor({
+          tools: sessionToolIds({
+            tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+            askUser: port,
+            webFetch: port,
+            webSearch: port,
+            browser: browserEveryPortFixture,
+            shell: shellPort,
+          }),
+        }),
+      },
       askUser: port,
       webFetch: port,
       webSearch: port,

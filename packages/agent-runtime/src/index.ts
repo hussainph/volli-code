@@ -17,6 +17,8 @@ export {
   type PiSignInSteps,
 } from "./pi/sign-in";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export { codeModeSandboxAssetsFrom } from "./codemode/assets";
+export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";
 export {
   DEFAULT_MCP_SERVER_LIMITS,
   McpServerBudget,

@@ -96,6 +96,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_output",
       "shell_kill",
       "browser_find",
+      "codemode",
       "session.start",
       "automation.run",
       "session.stop",
@@ -148,6 +149,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_output",
       "shell_kill",
       "browser_find",
+      "codemode",
       "session.delegate",
       "watch",
     ]);
@@ -196,6 +198,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_output",
       "shell_kill",
       "browser_find",
+      "codemode",
     ]);
   });
 

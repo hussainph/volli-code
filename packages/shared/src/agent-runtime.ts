@@ -25,6 +25,7 @@ import type {
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -302,6 +303,15 @@ export interface RuntimeToolBundle {
   mcp?: readonly McpToolDefinition[];
   /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
   mcpManagementNames?: "server";
+  /**
+   * Whether this Session's surface names `codemode`, and if so the route of
+   * every other tool and the limits each script run is held to (VC-471).
+   *
+   * `todo_write`'s reasoning: no port answers Code Mode — the runtime builds
+   * it over the Session's own tools — so the bundle is what decides it. Absent
+   * on every Session born without it, which keeps their surface unchanged.
+   */
+  codeMode?: CodeModeSurface;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -1366,6 +1376,9 @@ export type SessionToolBinding =
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
   // The search (VC-364) carries the port with its optional `find` proven.
   | { tool: "browser_find"; port: RuntimeBrowserFindPort }
+  // Code Mode (VC-471) carries its frozen record: the runtime builds the tool
+  // over the Session's other tools, so there is no port to carry.
+  | { tool: "codemode"; codeMode: CodeModeSurface }
   // A name and nothing else, like a coding tool — but for the opposite reason.
   // A coding tool carries nothing because the runtime holds the environment
   // this package cannot see; `todo_write` carries nothing because there is
@@ -1440,6 +1453,10 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
     browser_find: find === undefined ? null : { tool: "browser_find", port: find },
+    codemode:
+      spec.tools.codeMode === undefined
+        ? null
+        : { tool: "codemode", codeMode: spec.tools.codeMode },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -1459,7 +1476,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       "This Session's bundle names MCP tools, but no MCP port is wired to answer them.",
     );
   }
-  return [
+  const bindings: SessionToolBinding[] = [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
     ...verbs.map((verb): SessionToolBinding => ({
@@ -1473,6 +1490,17 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       port: mcp as RuntimeMcpPort,
     })),
   ];
+  // Held to the surface it routes, at the boundary that builds the surface: a
+  // record routing a tool the Session does not hold, or leaving one out, is
+  // a Session whose provider tool array would differ from the one it was
+  // born with (VC-471).
+  if (spec.tools.codeMode !== undefined) {
+    parseCodeModeSurface(
+      spec.tools.codeMode,
+      bindings.map((binding) => binding.tool),
+    );
+  }
+  return bindings;
 }
 
 /**

@@ -24,6 +24,7 @@ import {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  codeModeSurfaceFor,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
   mcpProviderToolName,
@@ -1424,6 +1425,44 @@ describe("Pi native adapter attach", () => {
       tools: ["read", "edit", "write", "execute"],
       todoWrite: true,
     });
+  });
+
+  it("carries Code Mode's frozen routes into the bundle, and refuses a surface that names it without them (VC-471)", async () => {
+    const codeMode = codeModeSurfaceFor({
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+    });
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+        codeMode,
+      }),
+    });
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      codeMode,
+    });
+    const missing = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+      }),
+    });
+    await expect(missing).rejects.toThrow("names codemode without its routes");
+  });
+
+  it("hands the runtime host the Code Mode sandbox location when main supplies one (VC-471)", () => {
+    const seen: unknown[] = [];
+    createPiRuntimeHost({
+      sessionDataDir: "/tmp/volli-codemode-host",
+      codeModeSandbox: { wasmPath: "/opt/quickjs.wasm" },
+      createRuntime: (options) => {
+        seen.push(options.codeModeSandbox);
+        return new FakeRuntime();
+      },
+      resolveRuntimeContext: async () => context,
+    });
+    expect(seen).toEqual([{ wasmPath: "/opt/quickjs.wasm" }]);
   });
 
   it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
