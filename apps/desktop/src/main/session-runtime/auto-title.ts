@@ -3,10 +3,10 @@
  *
  * The shipped heuristic names a Session instantly and stays the offline,
  * unconfigured and failed-call answer. Behind it, one utility completion asks
- * a model for a sharper title — six words maximum — and the heuristic is
- * replaced only when the stored title is still byte-identical to what the
- * heuristic wrote, so a person who renamed while the call was in flight wins
- * and the model answer is dropped.
+ * a model for a sharper title — a few words, six at the prompt's target — and
+ * the heuristic is replaced only when the stored title is still byte-identical
+ * to what the heuristic wrote, so a person who renamed while the call was in
+ * flight wins and the model answer is dropped.
  *
  * The call is deliberately not part of the chat: it runs through
  * `completeUtility`, which creates no Session, no attachment, no transcript
@@ -251,7 +251,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       completion = await options.completeUtility({
         model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
-        // Capped and delimited: a title is six words, and the opening decides
+        // Capped and delimited: a title is a few words, and the opening decides
         // them. A pasted file behind the question is billed input that buys
         // nothing, and unbounded text is where instruction-shaped content hides.
         user: autoTitlePrompt(request.firstMessage, ticket, request.automation),

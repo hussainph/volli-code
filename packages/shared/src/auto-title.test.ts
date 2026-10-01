@@ -2,10 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { ModelSelection } from "./agent-runtime";
 import {
+  AUTO_TITLE_MAX_LENGTH,
   AUTO_TITLE_MAX_SUBJECT_CHARS,
   AUTO_TITLE_MAX_TICKET_CHARS,
   AUTO_TITLE_MAX_WORDS,
   AUTO_TITLE_SYSTEM_PROMPT,
+  AUTO_TITLE_TOLERATED_WORDS,
   autoTitlePrompt,
   cheapestReasoningLevel,
   resolveAutoTitleModel,
@@ -54,10 +56,17 @@ describe("resolveAutoTitleModel", () => {
 describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
   const prompt = AUTO_TITLE_SYSTEM_PROMPT.toLowerCase();
 
-  it("states the ceiling the sanitizer actually enforces", () => {
-    // Drift here is the expensive kind: the prompt would promise one budget
-    // while the sanitizer cut at another, and every title would look truncated.
-    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`${AUTO_TITLE_MAX_WORDS} words is the hard ceiling`);
+  it("states a ceiling the sanitizer never cuts below", () => {
+    // Drift here is the expensive kind when it runs the other way: a prompt
+    // promising one budget while the sanitizer cut at a smaller one would
+    // truncate every title the model wrote inside what it was told. The
+    // sanitizer's tolerance is therefore the LARGER number — the prompt's
+    // target is what the model aims at, and the tolerance is the overshoot a
+    // real answer may keep (VC-490: a model told "six" answers seven, and
+    // cutting that word off is what stored names ending in "and").
+    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`Aim for ${AUTO_TITLE_MAX_WORDS} words`);
+    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`Never go past ${AUTO_TITLE_TOLERATED_WORDS} words`);
+    expect(AUTO_TITLE_TOLERATED_WORDS).toBeGreaterThanOrEqual(AUTO_TITLE_MAX_WORDS);
   });
 
   it("aims below the ceiling rather than at it", () => {
@@ -85,12 +94,13 @@ describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
     expect(AUTO_TITLE_SYSTEM_PROMPT).not.toContain("Title:");
   });
 
-  it("keeps every example inside the ceiling it preaches", () => {
+  it("keeps every example inside the numbers it preaches", () => {
     const titles = AUTO_TITLE_SYSTEM_PROMPT.split("\n")
       .filter((line) => line.includes(" -> "))
       .map((line) => line.split(" -> ")[1]);
     expect(titles).toHaveLength(6);
     for (const title of titles) {
+      expect(title.split(" ").length).toBeLessThanOrEqual(AUTO_TITLE_MAX_WORDS);
       expect(sanitizeAutoTitle(title)).toBe(title);
     }
   });
@@ -279,9 +289,9 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Auth: login and signup")).toBe("Auth: login and signup");
   });
 
-  it("keeps a colon that lands past the word ceiling, which cannot be a lead-in", () => {
+  it("keeps a colon that lands past the target, which cannot be a lead-in", () => {
     expect(sanitizeAutoTitle("one two three four five six seven: title")).toBe(
-      "one two three four five six",
+      "one two three four five six seven: title",
     );
   });
 
@@ -318,7 +328,7 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Fix the login flow")).toBe("Fix the login flow");
   });
 
-  it("refuses prose rather than shipping its first six words as a fragment", () => {
+  it("refuses prose rather than shipping its first eight words as a fragment", () => {
     expect(
       sanitizeAutoTitle("I would be happy to help you with that request and here is what I think"),
     ).toBeNull();
@@ -328,18 +338,136 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Title Case conventions")).toBe("Title Case conventions");
   });
 
-  it(`cuts answers longer than ${AUTO_TITLE_MAX_WORDS} words down to that many`, () => {
-    expect(sanitizeAutoTitle("The quick brown fox jumps over the lazy dog")).toBe(
-      "The quick brown fox jumps over",
+  it("keeps the model's whole phrase when it runs past the target", () => {
+    // The regression this policy exists for (VC-490): the prompt asks for six
+    // words, models answer seven, and the old six-word slice stored the first
+    // six — names that stopped at "and" or "for" instead of at a subject.
+    // These are the real answers that were cut in the wild.
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and clarity")).toBe(
+      "Polish MCP page for simplicity and clarity",
+    );
+    expect(sanitizeAutoTitle("Assess cloud sandbox design options for Volli")).toBe(
+      "Assess cloud sandbox design options for Volli",
+    );
+    expect(sanitizeAutoTitle("Test authority protection on a temp database")).toBe(
+      "Test authority protection on a temp database",
     );
   });
 
-  it("caps length at the session-title budget on a word boundary", () => {
-    expect(
-      sanitizeAutoTitle(
-        "Internationalization infrastructure investigation compatibility documentation rationalization",
-      ),
-    ).toBe("Internationalization infrastructure…");
+  it("keeps a complete answer that runs past the old character budget", () => {
+    // 49 characters, and the old 48-character cut stored it as "Review
+    // classifier decision service…" — an ellipsis the model never wrote.
+    expect(sanitizeAutoTitle("Review classifier decision service implementation")).toBe(
+      "Review classifier decision service implementation",
+    );
+  });
+
+  it("keeps an answer at the tolerated ceiling whole", () => {
+    expect(sanitizeAutoTitle("Review model selection across all configured provider tiers")).toBe(
+      "Review model selection across all configured provider tiers",
+    );
+  });
+
+  it("trims an answer past the tolerated ceiling to whole words, never mid-word", () => {
+    expect(sanitizeAutoTitle("The quick brown fox jumps over the lazy dog")).toBe(
+      "The quick brown fox jumps over the lazy",
+    );
+  });
+
+  it("leaves a word a whole title may end on standing", () => {
+    // "behind", "after" and "AND" are adverbs, particles or operators as often
+    // as they are connectors; a word alone is not proof a phrase is incomplete.
+    expect(sanitizeAutoTitle("Nothing left behind")).toBe("Nothing left behind");
+    expect(sanitizeAutoTitle("The morning after")).toBe("The morning after");
+    expect(sanitizeAutoTitle("Implement bitwise AND")).toBe("Implement bitwise AND");
+    expect(sanitizeAutoTitle("Compare before and after")).toBe("Compare before and after");
+  });
+
+  it("leaves an in-budget answer exactly as the model wrote it", () => {
+    // The repair only ever touches a cut this file made (VC-490 review): a
+    // trailing word alone never earns a removal, or "Implement bitwise AND"
+    // would lose its operator and "Turn notifications off" its action.
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and")).toBe(
+      "Polish MCP page for simplicity and",
+    );
+    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
+  });
+
+  it("drops the connector a drop exposed, not just the one it removed", () => {
+    // Removing "the" leaves "and" hanging, and the same pass must take it too —
+    // otherwise the title reads as cut, which is the whole defect (VC-490).
+    expect(sanitizeAutoTitle("Check the docs in the portal and the CLI")).toBe(
+      "Check the docs in the portal",
+    );
+  });
+
+  it("keeps a particle at the cut boundary, which may complete an action", () => {
+    // "off" ends a complete action, so a cut boundary is not proof it dangles
+    // (VC-490 review); the same word in an untrimmed answer is kept too.
+    expect(sanitizeAutoTitle("Review session settings and turn all notifications off today")).toBe(
+      "Review session settings and turn all notifications off",
+    );
+    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
+  });
+
+  it("takes trailing punctuation off before the words are judged", () => {
+    // A lone "." used to leave a trailing space behind, and to hide the
+    // connector it was hanging off (VC-490 review).
+    expect(sanitizeAutoTitle("Fix the login flow .")).toBe("Fix the login flow");
+    expect(sanitizeAutoTitle("Polish the MCP page for simplicity and clarity and speed .")).toBe(
+      "Polish the MCP page for simplicity and clarity",
+    );
+  });
+
+  it("strips an ellipsis the model wrote", () => {
+    expect(sanitizeAutoTitle("Review classifier decision service…")).toBe(
+      "Review classifier decision service",
+    );
+  });
+
+  it("strips punctuation before the character budget, so it cannot force a cut", () => {
+    // 64 characters exactly, and 65 with the period: the period must come off
+    // before the budget decides, or "across clients" is dropped for its sake
+    // (VC-490 review).
+    const exact = "Review classifier decision service implementation across clients";
+    expect(exact).toHaveLength(AUTO_TITLE_MAX_LENGTH);
+    expect(sanitizeAutoTitle(exact)).toBe(exact);
+    expect(sanitizeAutoTitle(`${exact}.`)).toBe(exact);
+    // 68 characters: one whole word over, so the word goes rather than a cut
+    // landing mid-word.
+    expect(sanitizeAutoTitle(`${exact} now`)).toBe(exact);
+  });
+
+  it("strips punctuation the cut itself exposed", () => {
+    // The trim can land on a word that carried internal punctuation, leaving a
+    // trailing comma the pre-cut strip never saw (VC-490 review).
+    expect(sanitizeAutoTitle("Review docs settings models tests runs plans providers, more")).toBe(
+      "Review docs settings models tests runs plans providers",
+    );
+  });
+
+  it("drops a connector a trim left hanging off the end", () => {
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and clarity and speed")).toBe(
+      "Polish MCP page for simplicity and clarity",
+    );
+  });
+
+  it("refuses a single word that cannot fit the budget", () => {
+    // A title past the budget is not a title, and a single word has nothing
+    // left to cut it to — the heuristic stands instead (VC-490 review).
+    expect(sanitizeAutoTitle("x".repeat(1000))).toBeNull();
+  });
+
+  it("gives up whole words rather than growing an ellipsis", () => {
+    // 93 characters at six words: the word ceiling cannot bound this, so the
+    // length budget drops whole words. A model title is a phrase the model
+    // chose, and "…" on it would read as a cut the model did not make.
+    const title = sanitizeAutoTitle(
+      "Internationalization infrastructure investigation compatibility documentation rationalization",
+    );
+    expect(title).toBe("Internationalization infrastructure investigation compatibility");
+    expect(title?.length).toBeLessThanOrEqual(AUTO_TITLE_MAX_LENGTH);
+    expect(title).not.toContain("…");
   });
 
   it("returns null when nothing survives", () => {

@@ -159,6 +159,33 @@ describe("createAutoTitler().refine", () => {
     expect(h.retitle.mock.calls).toEqual([[SESSION_ID, "Fix the login flow"]]);
   });
 
+  it("stores the model's whole phrase up to the ceiling, and trims past it at a word", async () => {
+    // The VC-490 regression, end to end: the prompt asks for six words and
+    // models answer seven, and that answer used to be sliced to six —
+    // "Polish MCP page for simplicity and" was the stored name.
+    const seven = harness({
+      completeUtility: async () => ({
+        text: "Polish MCP page for simplicity and clarity",
+        usage: null,
+      }),
+    });
+    await seven.refine({});
+    expect(seven.retitle.mock.calls).toEqual([
+      [SESSION_ID, "Polish MCP page for simplicity and clarity"],
+    ]);
+
+    const past = harness({
+      completeUtility: async () => ({
+        text: "Review session settings and turn all notifications off today",
+        usage: null,
+      }),
+    });
+    await past.refine({});
+    expect(past.retitle.mock.calls).toEqual([
+      [SESSION_ID, "Review session settings and turn all notifications off"],
+    ]);
+  });
+
   it("gives the whole refinement one deadline, shared by the probe and the call", async () => {
     const h = harness({});
     await h.refine({});
