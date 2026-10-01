@@ -24,7 +24,8 @@ export function SessionPeekDialog({
   returnFocus,
   children,
   style,
-}: React.PropsWithChildren<{
+}: {
+  children?: React.ReactNode | ((closeForNavigation: () => void) => React.ReactNode);
   open: boolean;
   title: string;
   state?: string;
@@ -35,8 +36,17 @@ export function SessionPeekDialog({
   onClose(): void;
   returnFocus?(): HTMLElement | null;
   style?: React.CSSProperties;
-}>) {
+}) {
   const descriptionId = React.useId();
+  const openedAsTab = React.useRef(false);
+  React.useEffect(() => {
+    if (open) openedAsTab.current = false;
+  }, [open]);
+  // Header and transcript links share the same close/focus handoff.
+  const closeForNavigation = () => {
+    openedAsTab.current = true;
+    onClose();
+  };
   return (
     <Dialog
       open={open}
@@ -52,6 +62,12 @@ export function SessionPeekDialog({
         // A modal's Escape must not also dismiss the peek/parent behind it.
         onEscapeKeyDown={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
+          // Navigation hands focus to the destination pane, not the row that
+          // opened this preview (which may now be behind another tab).
+          if (openedAsTab.current) {
+            event.preventDefault();
+            return;
+          }
           const target = returnFocus?.() ?? null;
           if (target === null) return;
           event.preventDefault();
@@ -70,7 +86,15 @@ export function SessionPeekDialog({
             )}
             {metadata}
             {onOpen === undefined ? null : (
-              <Button type="button" variant="ghost" size="sm" onClick={onOpen}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  closeForNavigation();
+                  onOpen();
+                }}
+              >
                 <ArrowSquareOutIcon />
                 {openLabel}
               </Button>
@@ -82,7 +106,7 @@ export function SessionPeekDialog({
             </DialogDescription>
           )}
         </div>
-        {children}
+        {typeof children === "function" ? children(closeForNavigation) : children}
       </DialogContent>
     </Dialog>
   );

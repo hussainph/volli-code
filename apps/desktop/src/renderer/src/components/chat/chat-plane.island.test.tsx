@@ -320,17 +320,13 @@ describe("the Activity Island in the chat plane", () => {
     click(openAsTab!);
     expect(onOpenSession).toHaveBeenCalledWith(CHILD);
 
-    // The modal took focus, so the row's card — a popover — dismissed under
-    // it: the row is gone. Escape closes the peek, focus returns to the
-    // island's agents cluster (the anchor that reopens the card), and the
-    // child's client stays resident (closeChatSession is not ref-counted).
+    // Promotion dismisses the modal without a second Escape. The source row
+    // is gone and must not reclaim focus from the destination tab; the child's
+    // client stays resident (closeChatSession is not ref-counted).
     expect(row!.isConnected).toBe(false);
-    await act(async () => {
-      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
     await settle();
     expect(document.body.querySelector("[data-session-peek-dialog]")).toBeNull();
-    expect(document.activeElement).toBe(cluster);
+    expect(document.activeElement).not.toBe(cluster);
     expect(store.getState().sessions[CHILD]).toBeDefined();
   });
 });
