@@ -9,7 +9,7 @@
  * only stand-in is the browser, which follows the authorization redirect the
  * way approving consent would.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,9 +167,11 @@ describe("signing in to a remote MCP server", () => {
     });
 
     // The file holds the tokens, readable by this user only…
-    const file = join(dir, "mcp-credentials.json");
-    expect(statSync(file).mode & 0o777).toBe(0o600);
-    const stored = readFileSync(file, "utf8");
+    const fd = openSync(join(dir, "mcp-credentials.json"), "r");
+    const mode = fstatSync(fd).mode & 0o777;
+    const stored = readFileSync(fd, "utf8");
+    closeSync(fd);
+    expect(mode).toBe(0o600);
     expect(stored).toContain(fixture.issuedTokens[0]);
     // …the PKCE verifier and the state of a finished sign-in are not kept…
     expect(stored).not.toContain("codeVerifier");

@@ -31,7 +31,16 @@
  *
  * Nothing here is ever logged, and no error this module raises quotes a value.
  */
-import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  fchmodSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 
 /** pi-mcp's persisted OAuth state, minus the two fields that live only in memory. */
 export interface McpStoredOAuthState {
@@ -217,11 +226,18 @@ export class FileMcpCredentialStore extends RecordStore {
   }
 
   #load(): Record<string, McpServerCredentialRecord> {
-    if (!existsSync(this.#path)) return {};
+    // One open file, checked and read through the same descriptor: no window
+    // in which the path could be swapped between the check and the read.
+    let fd: number;
     try {
-      if ((statSync(this.#path).mode & 0o077) !== 0)
-        chmodSync(this.#path, MCP_CREDENTIAL_FILE_MODE);
-      const parsed = JSON.parse(readFileSync(this.#path, "utf8")) as unknown;
+      fd = openSync(this.#path, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw error;
+    }
+    try {
+      if ((fstatSync(fd).mode & 0o077) !== 0) fchmodSync(fd, MCP_CREDENTIAL_FILE_MODE);
+      const parsed = JSON.parse(readFileSync(fd, "utf8")) as unknown;
       if (
         parsed === null ||
         typeof parsed !== "object" ||
@@ -243,6 +259,8 @@ export class FileMcpCredentialStore extends RecordStore {
         `[volli] MCP credential file ${this.#path} could not be read; moved aside to ${aside}. Sign in again or re-enter the stored values in Settings.`,
       );
       return {};
+    } finally {
+      closeSync(fd);
     }
   }
 }
