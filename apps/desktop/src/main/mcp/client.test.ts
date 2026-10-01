@@ -18,13 +18,18 @@ import { MCP_CALL_TIMEOUT_MS, MCP_CONNECTION_TIMEOUT_MS } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  classifyMcpConnectionError,
   isMcpTransportFailure,
   MCP_LIST_MAX_PAGES,
   mcpLaunchEnvironment,
   protocolClientForConnectedClient,
   type CloseableMcpClient,
 } from "./client";
-import { McpCredentialMissingError, McpSignInRequiredError } from "./credentials";
+import {
+  McpCredentialMissingError,
+  McpProtocolEraError,
+  McpSignInRequiredError,
+} from "./credentials";
 import { McpTransportFailure } from "./discovery";
 
 let close: (() => Promise<void>) | null = null;
@@ -278,6 +283,98 @@ describe("MCP transport failure classification (VC-454, on pi-mcp)", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBe(rejection);
     expect(error).not.toBeInstanceOf(McpTransportFailure);
+  });
+});
+
+function versionErrorBody(error: unknown, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ jsonrpc: "2.0", id: 1, error, ...extra });
+}
+
+describe("structural protocol-era refusals (VC-479)", () => {
+  const server = {
+    name: "Fixture",
+    transport: { type: "stdio" as const, command: "unused", args: [] },
+  };
+  const data = { supported: ["2026-07-28"], requested: "2025-11-25" };
+  const rpcError = { code: -32022, message: "Version refused", data };
+
+  it("recognizes a stdio version error regardless of its prose", () => {
+    const error = new McpError(-32022, "Version refused", data);
+    expect(classifyMcpConnectionError(error, server)).toBeInstanceOf(McpProtocolEraError);
+  });
+
+  it.each([1, "request", null, undefined])(
+    "recognizes an HTTP 400 version error with id %s",
+    (id) => {
+      const error = new McpHttpError(400, "Bad request", versionErrorBody(rpcError, { id }));
+      expect(classifyMcpConnectionError(error, server)).toBeInstanceOf(McpProtocolEraError);
+    },
+  );
+
+  it.each([
+    undefined,
+    null,
+    "2026-07-28",
+    {},
+    { supported: "2026-07-28" },
+    { supported: [] },
+    { supported: ["2026-07-28", 1] },
+    { supported: ["2026-07-28", null] },
+    { supported: ["2026-07-28-extra"] },
+    { supported: ["2025-11-25"], requested: "2026-07-28" },
+    ...["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"].map((version) => ({
+      supported: ["2026-07-28", version],
+    })),
+  ])("does not infer modern-only support from invalid or compatible data %#", (invalidData) => {
+    for (const error of [
+      new McpError(-32022, "2026-07-28", invalidData),
+      new McpHttpError(400, "Bad request", versionErrorBody({ ...rpcError, data: invalidData })),
+    ]) {
+      expect(classifyMcpConnectionError(error, server)).toBe(error);
+    }
+  });
+
+  it.each([-32601, -32602, -32000, -32020, -32021])(
+    "does not guess from a different code %s",
+    (code) => {
+      for (const error of [
+        new McpError(code, "2026-07-28", data),
+        new McpHttpError(400, "Bad request", versionErrorBody({ ...rpcError, code })),
+      ]) {
+        expect(classifyMcpConnectionError(error, server)).toBe(error);
+      }
+    },
+  );
+
+  it.each([
+    "2026-07-28",
+    "{invalid json 2026-07-28",
+    JSON.stringify(null),
+    JSON.stringify([rpcError]),
+    JSON.stringify(rpcError),
+    versionErrorBody(rpcError, { jsonrpc: "1.0" }),
+    versionErrorBody(rpcError, { id: {} }),
+    versionErrorBody(rpcError, { result: {} }),
+    versionErrorBody(rpcError, { method: "initialize" }),
+    versionErrorBody({ ...rpcError, message: null }),
+    versionErrorBody({ ...rpcError, code: "-32022" }),
+  ])("leaves a malformed or non-JSON-RPC HTTP body unchanged %#", (invalidBody) => {
+    const error = new McpHttpError(400, "Bad request", invalidBody);
+    expect(classifyMcpConnectionError(error, server)).toBe(error);
+  });
+
+  it.each([401, 403, 404, 429, 500])(
+    "does not interpret HTTP %s as version negotiation",
+    (status) => {
+      const error = new McpHttpError(status, "Refused", versionErrorBody(rpcError));
+      expect(classifyMcpConnectionError(error, server)).toBe(error);
+    },
+  );
+
+  it("leaves plain version mentions and existing problems unchanged", () => {
+    for (const error of [new Error("2026-07-28"), new McpProtocolEraError(server.name)]) {
+      expect(classifyMcpConnectionError(error, server)).toBe(error);
+    }
   });
 });
 
