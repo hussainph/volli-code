@@ -21,6 +21,7 @@ import {
   DEFAULT_AUTHORITY_POLICY,
   defaultModelRequiredForTier,
   NO_AUTOMATION_TRIGGER,
+  verbEntry,
 } from "@volli/shared";
 import type {
   AuthorityPolicy,
@@ -29,6 +30,9 @@ import type {
   ModelSelection,
   RuntimeAskRequest,
   RuntimeSessionIdentity,
+  VerbResultDetailsSchema,
+  VerbResultFieldSchema,
+  VerbToolKey,
 } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
@@ -1457,8 +1461,15 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     expect(result.text).toMatch(/arrive|delivered/);
     expect(result.text).toMatch(/keep working|continue/i);
     expect(result.text).not.toContain(CHILD_SESSION);
-    // The row's structured aside: the child's id to open and its name.
-    expect(result.details).toEqual({ sessionId: CHILD_SESSION, title: "Token refresh hunt" });
+    // The row's structured aside: the child's id to open and its name — and,
+    // for a program (VC-471), the handle, model and state the prose states.
+    expect(result.details).toEqual({
+      sessionId: CHILD_SESSION,
+      handle: CHILD_SESSION.slice(0, 8),
+      title: "Token refresh hunt",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
+      state: "running",
+    });
   });
 
   it("a Ticket Session delegates within its own Ticket", async () => {
@@ -1536,5 +1547,241 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       new AbortController().signal,
     );
     expect(result.text).toContain("not available this launch");
+  });
+});
+
+/**
+ * Where a verb result's `details` part from the schema its registry entry
+ * declares, one line per difference — empty when it conforms (VC-471).
+ *
+ * Total over `VerbResultDetailsSchema`'s closed vocabulary, which is why it
+ * needs no validator: required keys, no undeclared keys, primitive types,
+ * enums, string lists, and one level of nested object.
+ */
+function detailsProblems(
+  value: unknown,
+  schema: VerbResultDetailsSchema | VerbResultFieldSchema,
+  path = "details",
+): string[] {
+  switch (schema.type) {
+    case "string":
+      if (typeof value !== "string") return [`${path} is not a string`];
+      return schema.enum === undefined || schema.enum.includes(value)
+        ? []
+        : [`${path} is not one of ${schema.enum.join(", ")}`];
+    case "number":
+      return typeof value === "number" && Number.isFinite(value) ? [] : [`${path} is not a number`];
+    case "boolean":
+      return typeof value === "boolean" ? [] : [`${path} is not a boolean`];
+    case "array":
+      return Array.isArray(value) && value.every((item) => typeof item === "string")
+        ? []
+        : [`${path} is not a list of strings`];
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return [`${path} is not an object`];
+      }
+      const record = value as Record<string, unknown>;
+      return [
+        ...schema.required
+          .filter((key) => !(key in record))
+          .map((key) => `${path}.${key} is missing`),
+        ...Object.keys(record)
+          .filter((key) => !(key in schema.properties))
+          .map((key) => `${path}.${key} is not declared`),
+        ...Object.entries(schema.properties).flatMap(([key, field]) =>
+          key in record ? detailsProblems(record[key], field, `${path}.${key}`) : [],
+        ),
+      ];
+    }
+  }
+}
+
+/** One verb's declared result details, from the registry entry the tool is built from. */
+function schemaOf(verb: VerbToolKey): VerbResultDetailsSchema {
+  const schema = verbEntry(verb)?.tool?.resultDetails;
+  if (schema === undefined) throw new Error(`${verb} declares no resultDetails`);
+  return schema;
+}
+
+describe("verb result details match the registry (VC-471)", () => {
+  const CHILD = "cccccccc-0000-0000-0000-000000000000";
+  const WATCHED = "dddddddd-0000-0000-0000-000000000000";
+
+  /**
+   * One door holding every host a fan-out reaches: the Sessions facade for a
+   * start, the delegation host, and a Session engine plus watch registry for
+   * `watch`. `state` is what the start and the delegation report back.
+   */
+  function fanOutDoor(state: "ready" | "needs-recovery" = "ready") {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", name: "Volli", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
+    );
+    const db = ctx.db;
+    const model: ModelSelection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high",
+    };
+    const door = createAgentToolDoor({
+      db,
+      projects: () => listProjects(db),
+      sessions: () => ({
+        start: async () => ({
+          sessionId: STARTED_SESSION,
+          state,
+          receipt: null,
+          throughSequence: 2,
+          model,
+        }),
+      }),
+      submitSessionMessage: async () => undefined,
+      actorTicketDisplay: () => null,
+      now: () => 1_000,
+      delegation: grantingDelegation(),
+      automations: () => null,
+      authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+      watches: () => recordingWatches(),
+      supervise: () =>
+        ({
+          sessionEngine: {
+            listSessions: async () => [
+              {
+                session: {
+                  id: WATCHED,
+                  projectId: "project-one",
+                  ticketId: null,
+                  parentSessionId: null,
+                  title: "Implementer",
+                  createdAt: 1,
+                },
+                attachments: [],
+              },
+            ],
+          },
+        }) as never,
+      delegate: () => ({
+        watching: () => false,
+        rearm: async () => undefined,
+        delegate: async (input) => ({
+          childSessionId: CHILD,
+          handle: CHILD.slice(0, 8),
+          title: input.title ?? "Delegated task",
+          model,
+          state: state === "ready" ? "running" : "needs-recovery",
+        }),
+        liveChildren: () => [],
+        recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
+      }),
+      mcp: () => null,
+    });
+    return (verb: VerbToolKey, input: Record<string, unknown>) =>
+      door(CALLER, { verb, input, toolCallId: `tc-${verb}` }, new AbortController().signal);
+  }
+
+  it.each(["ready", "needs-recovery"] as const)(
+    "returns details that conform to each verb's declared schema (%s)",
+    async (state) => {
+      const call = fanOutDoor(state);
+      const calls: readonly [VerbToolKey, Record<string, unknown>][] = [
+        ["session.start", { ticket: "VC-1", message: "Fix the flaky auth test" }],
+        ["session.delegate", { task: "Find where the auth token is refreshed" }],
+        ["watch", { sessions: "dddddddd", tickets: "VC-1" }],
+        ["watch", { tickets: "VC-1", action: "unwatch" }],
+      ];
+      for (const [verb, input] of calls) {
+        const result = await call(verb, input);
+        expect(result.details, verb).toBeDefined();
+        expect(detailsProblems(result.details, schemaOf(verb)), verb).toEqual([]);
+      }
+    },
+  );
+
+  it("carries the facts the prose states, so a program never parses the prose", async () => {
+    const call = fanOutDoor();
+
+    const started = await call("session.start", { ticket: "VC-1", title: "Auth fix" });
+    expect(started.details).toEqual({
+      sessionId: STARTED_SESSION,
+      handle: "abcdef12",
+      ticket: "VC-1",
+      title: "Auth fix",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+      state: "running",
+    });
+    // The prose a direct caller reads is unchanged by the data beside it.
+    expect(started.text).toContain('Started Session abcdef12 on VC-1, titled "Auth fix".');
+    expect(started.text).not.toContain(STARTED_SESSION);
+
+    const watched = await call("watch", { sessions: "dddddddd" });
+    expect(watched.details).toEqual({
+      action: "watch",
+      sessions: ["dddddddd"],
+      tickets: [],
+      ended: 0,
+    });
+  });
+
+  it("names a start that needs recovery in the same word a delegation uses", async () => {
+    const recovering = await fanOutDoor("needs-recovery")("session.start", { ticket: "VC-1" });
+    expect(recovering.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
+    expect(recovering.text).toContain("its attachment needs recovery");
+  });
+
+  it("sends no details with a refusal, so a program can tell the two apart", async () => {
+    const call = fanOutDoor();
+    for (const [verb, input] of [
+      ["session.start", { ticket: "VC-404" }],
+      ["session.delegate", {}],
+      ["watch", {}],
+    ] as const) {
+      expect((await call(verb, input)).details, verb).toBeUndefined();
+    }
+  });
+
+  it("catches a host drifting from its schema", () => {
+    // The helper is what the tests above lean on, so it is shown failing too.
+    expect(
+      detailsProblems(
+        {
+          sessionId: 7,
+          ticket: "VC-1",
+          title: "t",
+          model: { providerId: "p", modelId: "m", reasoningLevel: "turbo" },
+          state: "ready",
+          cursor: "c-1",
+        },
+        schemaOf("session.start"),
+      ),
+    ).toEqual([
+      "details.handle is missing",
+      "details.cursor is not declared",
+      "details.sessionId is not a string",
+      "details.model.reasoningLevel is not one of off, minimal, low, medium, high, xhigh, max",
+      "details.state is not one of running, needs-recovery",
+    ]);
+    expect(
+      detailsProblems(
+        { action: "watch", sessions: "a", tickets: [1], ended: "0" },
+        schemaOf("watch"),
+      ),
+    ).toEqual([
+      "details.sessions is not a list of strings",
+      "details.tickets is not a list of strings",
+      "details.ended is not a number",
+    ]);
+    expect(detailsProblems(null, schemaOf("watch"))).toEqual(["details is not an object"]);
+    expect(
+      detailsProblems(true, { type: "boolean", description: "A flag." }, "details.flag"),
+    ).toEqual([]);
+    expect(
+      detailsProblems("yes", { type: "boolean", description: "A flag." }, "details.flag"),
+    ).toEqual(["details.flag is not a boolean"]);
   });
 });

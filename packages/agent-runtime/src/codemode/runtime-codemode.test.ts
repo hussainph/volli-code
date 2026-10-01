@@ -595,9 +595,15 @@ describe("Code Mode through the real Session path", () => {
         requests.push(request);
         // A program's call lends its question scope; a direct call has none.
         scoped.push(scope !== undefined);
+        // Shaped as the desktop door answers (VC-471): the handle as data
+        // beside the sentence, so the program never parses the sentence.
         return {
           text: `started for ${String(request.input.ticket)}`,
-          details: { sessionId: "child-1" },
+          details: {
+            sessionId: "child-1-0000-0000",
+            handle: "child-1",
+            ticket: String(request.input.ticket),
+          },
         };
       },
     });
@@ -612,7 +618,7 @@ describe("Code Mode through the real Session path", () => {
                      for (const ticket of ["VC-1", "VC-2"]) {
                        out.push(await tools.session_start({ ticket, sessionId: "someone-else" }));
                      }
-                     return out.map((started) => started.details.sessionId + ":" + started.text);`,
+                     return out.map((started) => started.details.handle + ":" + started.details.ticket);`,
             },
           },
         ],
@@ -640,9 +646,12 @@ describe("Code Mode through the real Session path", () => {
       },
       { verb: "session.start", input: { ticket: "VC-3" }, toolCallId: "d-1" },
     ]);
-    expect(resultText(h, "cm-1")).toContain(
-      'Returned: ["child-1:started for VC-1","child-1:started for VC-2"]',
-    );
+    expect(resultText(h, "cm-1")).toContain('Returned: ["child-1:VC-1","child-1:VC-2"]');
+    // What the program was written against: the registry's declared details,
+    // carried through the real surface into the codemode tool's TypeScript.
+    const codemode = getCurrentTools(h.seen[0]!.messages).find((tool) => tool.name === "codemode");
+    expect(codemode?.description).toMatch(/\n\s*handle: string;/u);
+    expect(codemode?.description).toContain("// The Session this call started.");
   });
 
   it.each([

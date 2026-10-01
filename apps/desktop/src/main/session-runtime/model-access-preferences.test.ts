@@ -5,17 +5,20 @@ import { setAppState } from "../db/app-state-repo";
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
   assertDefaultModelAvailable,
+  CODE_MODE_POLICY_APP_STATE_KEY,
   COMPACTION_POLICY_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULT_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
   MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
   MODEL_PICKER_VIEW_APP_STATE_KEY,
+  readCodeModePolicy,
   readCompactionPolicy,
   readDefaultModelSelection,
   readHiddenModels,
   readModelAccessDefaults,
   readModelPickerView,
   reconcileModelAccessPreferences,
+  writeCodeModePolicy,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
@@ -591,6 +594,29 @@ describe("the stored compaction policy", () => {
     );
 
     expect(readCompactionPolicy(ctx.db)).toEqual({ autoCompaction: false });
+  });
+});
+
+describe("the stored Code Mode policy (VC-471)", () => {
+  it("is on, with each model's own default, until a profile says otherwise", () => {
+    ctx = openTestDb();
+    expect(readCodeModePolicy(ctx.db)).toEqual({ enabled: true, models: {} });
+    setAppState(ctx.db, CODE_MODE_POLICY_APP_STATE_KEY, "not-json", 1);
+    expect(readCodeModePolicy(ctx.db)).toEqual({ enabled: true, models: {} });
+  });
+
+  it("round-trips the switch and the pins, dropping a pin that is not a mode", () => {
+    ctx = openTestDb();
+    const stored = writeCodeModePolicy(
+      ctx.db,
+      {
+        enabled: false,
+        models: { "openai-codex/gpt-5.5": "only", "anthropic/claude-haiku-4-5": "maybe" as never },
+      },
+      1,
+    );
+    expect(stored).toEqual({ enabled: false, models: { "openai-codex/gpt-5.5": "only" } });
+    expect(readCodeModePolicy(ctx.db)).toEqual(stored);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   modelPurposeForRole,
 } from "@volli/shared";
 import type {
+  CodeModeBirth,
   ModelAccessSnapshot,
   ModelSelection,
   McpToolDefinition,
@@ -162,7 +163,23 @@ export interface SessionToolSurfacePorts {
     grants: readonly string[],
     within?: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    /**
+     * Code Mode's decision for this birth (VC-471), from {@link codeModeAt}:
+     * the surface names `codemode` only when it says `offered`. Absent for a
+     * legacy backfill, which is never born into Code Mode.
+     */
+    codeMode?: CodeModeBirth,
   ): readonly SessionToolId[];
+  /**
+   * Code Mode's decision for a Session born on `model` holding `mcpTools`
+   * (VC-471) — its mode from that model's own family and pins, whether its
+   * surface gets `codemode`, the prompt paragraph, the large servers. Asked
+   * ONCE per birth, and the one answer handed to both {@link resolve} and
+   * {@link record}, so a setting flipped between them cannot split the two.
+   * A Subagent Session asks with its OWN model: its parent bounds which tools
+   * it has, not how they are routed. Absent where Code Mode does not exist.
+   */
+  codeModeAt?(model: ModelSelection, mcpTools: readonly McpToolDefinition[]): CodeModeBirth;
   /** Selected sanitized definitions for a newly born root Session. */
   resolveMcp?(projectId: string): readonly McpToolDefinition[];
   /** Exact definitions a parent froze, used verbatim by a new child. */
@@ -177,12 +194,8 @@ export interface SessionToolSurfacePorts {
     sessionId: string,
     tools: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
-    /**
-     * A Subagent Session's parent, so what the child freezes beside its names
-     * — Code Mode's routes (VC-471) — is bounded by the parent's record the
-     * way the names are. Absent for a root Session.
-     */
-    parentSessionId?: string,
+    /** Code Mode's decision for this birth (VC-471), the same one {@link resolve} was given. */
+    birth?: { codeMode?: CodeModeBirth },
   ): Promise<void>;
 }
 
@@ -686,11 +699,14 @@ export function createSessions(options: SessionsOptions): Sessions {
       input.parentSessionId === undefined
         ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
         : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
+    // Code Mode decides once, here, from this Session's own model (VC-471).
+    const codeMode = options.toolSurface.codeModeAt?.(model, mcpTools);
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
       within === null ? undefined : within,
       mcpTools,
+      codeMode,
     );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),
@@ -743,7 +759,7 @@ export function createSessions(options: SessionsOptions): Sessions {
       created.sessionId,
       toolSurface,
       mcpTools,
-      ...(input.parentSessionId === undefined ? [] : [input.parentSessionId]),
+      codeMode === undefined ? {} : { codeMode },
     );
     return { sessionId: created.sessionId, model };
   }

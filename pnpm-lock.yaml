@@ -68,6 +68,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.8)
+      '@earendil-works/pi-codemode':
+        specifier: 0.99.2
+        version: 0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
       '@earendil-works/pi-mcp':
         specifier: 0.99.2
         version: 0.99.2

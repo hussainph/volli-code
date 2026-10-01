@@ -177,6 +177,14 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             ...MODEL_TIER_ROWS.map((row) => row.label.toLowerCase()),
             "default models",
             "automatic compaction",
+            // Code Mode (VC-471): its section and switch, the "Pin a model"
+            // row behind Advanced, and the words someone looking for it uses.
+            "code mode",
+            "codemode",
+            "sandbox",
+            "javascript",
+            "program",
+            "pin a model",
             "catalog",
             "signed in",
             "available to connect",

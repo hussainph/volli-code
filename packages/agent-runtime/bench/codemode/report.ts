@@ -1,20 +1,24 @@
 /**
  * The VC-471 benchmark tables, from the saved live runs.
  *
- *   node --experimental-strip-types packages/agent-runtime/bench/codemode/report.ts
+ *   node --experimental-strip-types packages/agent-runtime/bench/codemode/report.ts [phase2]
  *
- * Reads every `results/*.json` the live lane wrote. For each model and task the
- * newest file holding that task wins, so a rerun of one task replaces only that
- * task. Tasks whose grade depends on the answer alone are graded again with the
+ * Reads every `results/*.json` the live lane wrote (phase 1), or with
+ * `phase2`, every `results/phase2/*.json`. Phase 1: for each model, task and
+ * arm the newest file holding that cell wins, so a rerun replaces only that
+ * cell. Phase 2: every file's trials are pooled, so a follow-up run of a few
+ * arms adds trials to those cells rather than replacing them. Tasks whose grade depends on the answer alone are graded again with the
  * current grader — a grader fixed after a run must not need a paid rerun — and
- * the multi-Session task keeps the grade it was given, which depended on what
- * the host saw. Medians throughout.
+ * the multi-Session task is graded again from the host's saved evidence
+ * (`fanoutGrade`: every Ticket started, the reply exactly their handles;
+ * watching is implied, as the real `session_start` watches what it opens).
+ * Medians throughout.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { TASKS, type TaskId } from "./tasks.ts";
+import { fanoutGrade, TASKS, type TaskId } from "./tasks.ts";
 
 interface Trial {
   task: TaskId;
@@ -30,6 +34,7 @@ interface Trial {
   elapsedMs: number;
   costUsd: number;
   answer: string;
+  evidence?: { started?: Record<string, string> };
 }
 
 interface Saved {
@@ -39,7 +44,7 @@ interface Saved {
 }
 
 const ANSWER_GRADED: ReadonlySet<TaskId> = new Set(["loop-filter", "browser-tabs", "single-call"]);
-const ARMS = ["direct", "codemode", "codemode-only"];
+const ARMS = ["direct", "codemode", "codemode-nudge", "codemode-only"];
 const ORDER: TaskId[] = ["loop-filter", "browser-tabs", "session-fanout", "single-call"];
 
 function median(values: readonly number[]): number {
@@ -56,9 +61,10 @@ function table(headers: string[], rows: string[][]): string {
   ].join("\n");
 }
 
-const directory = join(import.meta.dirname, "results");
+const pooled = process.argv.includes("phase2");
+const directory = join(import.meta.dirname, "results", ...(pooled ? ["phase2"] : []));
 const files = readdirSync(directory)
-  .filter((name) => name.endsWith(".json"))
+  .filter((name) => name.endsWith(".json") && statSync(join(directory, name)).isFile())
   .map((name) => ({ path: join(directory, name), at: statSync(join(directory, name)).mtimeMs }))
   .toSorted((left, right) => left.at - right.at);
 
@@ -69,10 +75,13 @@ for (const file of files) {
   const tasks = byModel.get(saved.model) ?? new Map<TaskId, Trial[]>();
   const present = new Set(saved.results.map((result) => result.task));
   for (const task of present) {
-    tasks.set(
-      task,
-      saved.results.filter((result) => result.task === task),
-    );
+    // Newest wins per (task, arm): a file that reran one arm keeps the rest.
+    const fresh = saved.results.filter((result) => result.task === task);
+    const arms = new Set(fresh.map((result) => result.arm));
+    tasks.set(task, [
+      ...(tasks.get(task) ?? []).filter((result) => pooled || !arms.has(result.arm)),
+      ...fresh,
+    ]);
   }
   byModel.set(saved.model, tasks);
 }
@@ -89,7 +98,11 @@ for (const [model, tasks] of byModel) {
       const mine = trials.filter((trial) => trial.arm === arm);
       if (mine.length === 0) continue;
       const correct = mine.filter((trial) =>
-        regrade ? regrade(trial.answer) : trial.correct,
+        regrade
+          ? regrade(trial.answer)
+          : task === "session-fanout" && trial.evidence !== undefined
+            ? fanoutGrade(trial.answer, trial.evidence)
+            : trial.correct,
       ).length;
       const pick = (field: (trial: Trial) => number) => median(mine.map(field));
       spend += mine.reduce((sum, trial) => sum + trial.costUsd, 0);

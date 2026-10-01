@@ -9,12 +9,14 @@
  * declarations under each routing:
  *
  * - `direct`: no Code Mode, every MCP tool declared.
- * - `both`: Code Mode added, every tool still declared (the phase 1 default).
- * - `code`: MCP tools routed `code` — listed in the codemode description,
- *   under its declaration budget, and not declared.
- * - `deferred`: MCP tools routed `deferred` — only counted in the codemode
- *   description; a program finds them with `searchTools()`.
- * - `only`: Pi's `codemode.mode: only` — every code-callable tool routed `code`.
+ * - `both`: mode `both` — Code Mode added, every tool still declared.
+ * - `code`: mode `both` with the MCP server routed `code` — listed in the
+ *   codemode description, under its declaration budget, and not declared.
+ * - `deferred`: mode `both` with the MCP server routed `deferred` — only
+ *   counted in the codemode description; a program finds its tools with
+ *   `searchTools()`. What a large server gets at birth, whatever the mode.
+ * - `only`: mode `only` — every capability group a program can call whole is
+ *   routed `code`; a group with a direct-only member stays declared.
  *
  * Tokens are o200k counts of each tool's name, description and JSON Schema,
  * the part every provider serializes; provider framing adds a constant.
@@ -31,7 +33,6 @@ import {
   type McpToolDefinition,
   type RuntimeMcpPort,
   type SessionRuntimeSpec,
-  type ToolRoute,
 } from "@volli/shared";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { describe, expect, it } from "vite-plus/test";
@@ -131,19 +132,12 @@ function arrayFor(mcp: readonly McpToolDefinition[], routing: Routing): AgentToo
   const surface = codeModeSurfaceFor({
     tools: sessionToolIds(base),
     mcpTools: mcp,
+    mode: routing === "only" ? "only" : "both",
     mcpRoute: () => (routing === "code" ? "code" : routing === "deferred" ? "deferred" : undefined),
+    limits: DEFAULT_CODE_MODE_LIMITS,
   });
-  const routes: Record<string, ToolRoute> =
-    routing === "only"
-      ? Object.fromEntries(
-          Object.entries(surface.routes).map(([tool, route]) => [
-            tool,
-            route === "both" ? "code" : route,
-          ]),
-        )
-      : surface.routes;
   return createSessionTools(
-    { ...base, tools: { ...base.tools, codeMode: { routes, limits: DEFAULT_CODE_MODE_LIMITS } } },
+    { ...base, tools: { ...base.tools, codeMode: surface } },
     null as never,
     undefined,
     (codeMode, tools) =>

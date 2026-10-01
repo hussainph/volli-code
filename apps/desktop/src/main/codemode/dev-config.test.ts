@@ -1,20 +1,14 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  DEFAULT_CODE_MODE_POLICY,
+  type CodeModePolicy,
   mcpProviderToolName,
   type McpToolDefinition,
   type SessionToolId,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  CODE_MODE_DEV_ENV,
-  codeModeSandboxFor,
-  desktopCodeMode,
-  readCodeModeDevConfig,
-} from "./dev-config";
+import { CODE_MODE_DEV_ENV, desktopCodeMode, readCodeModeDevConfig } from "./dev-config";
 
 const env = (value: string | undefined) => ({ [CODE_MODE_DEV_ENV]: value });
 
@@ -26,26 +20,36 @@ describe("readCodeModeDevConfig", () => {
     expect(readCodeModeDevConfig(env("1"), { packaged: true })).toEqual({ kind: "off" });
   });
 
-  it("turns on with the default limits for a bare switch", () => {
+  it("turns on, mode `both`, with the default limits for a bare switch", () => {
     for (const value of ["1", "on", "true"]) {
       expect(readCodeModeDevConfig(env(value), { packaged: false })).toEqual({
         kind: "on",
-        config: { mcpRoutes: new Map(), limits: DEFAULT_CODE_MODE_LIMITS },
+        config: { mode: "both", mcpRoutes: new Map(), limits: DEFAULT_CODE_MODE_LIMITS },
       });
     }
   });
 
-  it("reads server routes and limits from JSON", () => {
+  it("reads a mode, server routes and limits from JSON", () => {
     const read = readCodeModeDevConfig(
-      env(JSON.stringify({ mcp: { github: "deferred" }, limits: { maxNestedCalls: 50 } })),
+      env(
+        JSON.stringify({
+          mode: "only",
+          mcp: { github: "deferred" },
+          limits: { maxNestedCalls: 50 },
+        }),
+      ),
       { packaged: false },
     );
     expect(read).toEqual({
       kind: "on",
       config: {
+        mode: "only",
         mcpRoutes: new Map([["github", "deferred"]]),
         limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 50 },
       },
+    });
+    expect(readCodeModeDevConfig(env("{}"), { packaged: false })).toMatchObject({
+      config: { mode: "both" },
     });
   });
 
@@ -54,6 +58,7 @@ describe("readCodeModeDevConfig", () => {
       ["{", "JSON"],
       ["[1]", "must be 1 or a JSON object"],
       ['{"other": 1}', 'unknown field "other"'],
+      ['{"mode": "sometimes"}', "mode must be off, both or only"],
       ['{"mcp": 1}', "mcp must be an object"],
       ['{"mcp": {"bad id": "code"}}', 'mcp key "bad id" is not a server id'],
       ['{"mcp": {"github": "everywhere"}}', 'mcp route for "github" is not a route'],
@@ -80,65 +85,121 @@ describe("desktopCodeMode", () => {
     inputSchema: { type: "object" },
   };
   const tools: SessionToolId[] = ["read", "ask_user", "codemode", search.providerName];
+  const sonnet = { providerId: "anthropic", modelId: "claude-sonnet-4-6" };
+  const gpt = { providerId: "openai-codex", modelId: "gpt-5.5" };
+  /** A server past the size threshold, so it is deferred whatever the mode. */
+  const large: McpToolDefinition[] = Array.from({ length: 21 }, (_, index) => ({
+    ...search,
+    serverId: "big",
+    toolName: `t${index}`,
+    providerName: mcpProviderToolName("big", "Big", `t${index}`),
+  }));
 
-  it("offers nothing and records nothing while off", () => {
+  it("follows the stored setting, read at each birth", () => {
     const logged: string[] = [];
-    const off = desktopCodeMode({
+    let policy: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
+    const codeMode = desktopCodeMode({
       env: env("{"),
       packaged: false,
       log: (line) => logged.push(line),
+      policy: () => policy,
+      sandboxAvailable: true,
     });
-    expect(off.enabled).toBe(false);
+    // An unreadable variable is ignored, and said so, and the setting rules.
     expect(logged).toHaveLength(1);
-    expect(off.surfaceFor(["read"], [])).toBeUndefined();
-    // A child inheriting codemode from its parent still freezes a whole record.
-    expect(off.surfaceFor(tools, [search])?.limits).toEqual(DEFAULT_CODE_MODE_LIMITS);
+    const born = codeMode.birth(sonnet, []);
+    expect(born).toMatchObject({ mode: "both", offered: true });
+    expect(codeMode.birth(gpt, [])).toMatchObject({ mode: "off", offered: false });
+    expect(codeMode.birth(undefined, [])).toMatchObject({ offered: false });
+    expect(codeMode.surfaceFor(born, tools, [search])).toMatchObject({
+      mode: "both",
+      routes: { read: "both", ask_user: "direct", [search.providerName]: "both" },
+      limits: DEFAULT_CODE_MODE_LIMITS,
+    });
+    expect(codeMode.surfaceFor(born, ["read"], [])).toBeUndefined();
+    policy = { enabled: true, models: { "openai-codex/gpt-5.5": "only" } };
+    expect(codeMode.birth(gpt, [])).toMatchObject({ mode: "only", offered: true });
+    policy = { enabled: false, models: {} };
+    expect(codeMode.birth(sonnet, [])).toMatchObject({ offered: false });
   });
 
-  it("freezes routes for exactly the surface a new Session was born with", () => {
-    const on = desktopCodeMode({
-      env: env(JSON.stringify({ mcp: { github: "code" } })),
+  it("freezes the routes from the decision it is handed, whatever the setting says by then", () => {
+    let policy: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
+    const codeMode = desktopCodeMode({
+      env: {},
       packaged: false,
       log: () => undefined,
+      policy: () => policy,
+      sandboxAvailable: true,
     });
-    expect(on.enabled).toBe(true);
-    expect(on.surfaceFor(tools, [search])?.routes).toEqual({
-      read: "both",
+    const born = codeMode.birth(sonnet, []);
+    // The switch flips between the surface and its record: the record still
+    // follows the one decision the surface was resolved from.
+    policy = { enabled: false, models: {} };
+    expect(codeMode.surfaceFor(born, tools, [search])?.routes["read"]).toBe("both");
+  });
+
+  it("offers nothing and defers nothing when this launch has no sandbox", () => {
+    const codeMode = desktopCodeMode({
+      env: env("1"),
+      packaged: false,
+      log: () => undefined,
+      policy: () => DEFAULT_CODE_MODE_POLICY,
+      sandboxAvailable: false,
+    });
+    const born = codeMode.birth(sonnet, large);
+    expect(born).toMatchObject({ mode: "off", nudge: false, offered: false });
+    expect(born.largeServers.size).toBe(0);
+    // With a sandbox the same large server would have been deferred.
+    const withSandbox = desktopCodeMode({
+      env: {},
+      packaged: false,
+      log: () => undefined,
+      policy: () => DEFAULT_CODE_MODE_POLICY,
+      sandboxAvailable: true,
+    }).birth(gpt, large);
+    expect(withSandbox).toMatchObject({ mode: "off", offered: true });
+    expect([...withSandbox.largeServers]).toEqual(["big"]);
+  });
+
+  it("gives a child its own model's mode and paragraph, inside the tools its parent froze", () => {
+    const pinned: CodeModePolicy = { enabled: true, models: { "openai-codex/gpt-5.5": "both" } };
+    const codeMode = desktopCodeMode({
+      env: {},
+      packaged: false,
+      log: () => undefined,
+      policy: () => pinned,
+      sandboxAvailable: true,
+    });
+    // A GPT parent pinned to `both` carries the paragraph its family gets.
+    const parent = codeMode.birth(gpt, []);
+    expect(codeMode.surfaceFor(parent, tools, [search])).toMatchObject({
+      mode: "both",
+      nudge: true,
+    });
+    // Its Sonnet child decides from Sonnet: `both`, and no paragraph.
+    const child = codeMode.birth(sonnet, []);
+    const childTools: SessionToolId[] = ["read", "codemode"];
+    const record = codeMode.surfaceFor(child, childTools, []);
+    expect(record).toMatchObject({ mode: "both", routes: { read: "both" } });
+    expect(record).not.toHaveProperty("nudge");
+  });
+
+  it("lets a developer's variable stand in for the setting, for every model", () => {
+    const codeMode = desktopCodeMode({
+      env: env(JSON.stringify({ mode: "only", mcp: { github: "deferred" } })),
+      packaged: false,
+      log: () => undefined,
+      policy: () => ({ enabled: false, models: {} }),
+      sandboxAvailable: true,
+    });
+    const born = codeMode.birth(gpt, []);
+    expect(born).toMatchObject({ mode: "only", offered: true });
+    expect(codeMode.birth(undefined, [])).toMatchObject({ mode: "off", offered: false });
+    expect(codeMode.surfaceFor(born, tools, [search])?.routes).toEqual({
+      read: "code",
       ask_user: "direct",
-      [search.providerName]: "code",
+      [search.providerName]: "deferred",
     });
-    expect(on.surfaceFor(["read"], [])).toBeUndefined();
-  });
-});
-
-describe("codeModeSandboxFor", () => {
-  it("names nothing for a packaged build, and logs a sandbox it cannot find", () => {
-    expect(
-      codeModeSandboxFor(
-        false,
-        () => "/nowhere",
-        () => undefined,
-      ),
-    ).toEqual({});
-    const logged: string[] = [];
-    const root = mkdtempSync(join(tmpdir(), "volli-codemode-app-"));
-    expect(
-      codeModeSandboxFor(
-        true,
-        () => root,
-        (line) => logged.push(line),
-      ),
-    ).toEqual({});
-    expect(logged[0]).toContain("Code Mode's sandbox could not be located");
-  });
-
-  it("finds the workspace's own sandbox from the app directory", () => {
-    const appPath = join(import.meta.dirname, "..", "..", "..");
-    const found = codeModeSandboxFor(
-      true,
-      () => appPath,
-      () => undefined,
-    );
-    expect(found.codeModeSandbox?.wasmPath).toMatch(/quickjs\.wasm$/u);
   });
 });

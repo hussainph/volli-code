@@ -34,6 +34,19 @@ describe("the Models category's search index", () => {
       ).toBe(true);
     }
   });
+
+  it("finds the Code Mode section by its labels and the words someone looks for it by (VC-471)", () => {
+    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+
+    // The section title and switch ("Code Mode"), the row behind Advanced,
+    // and what a person who has only heard of it types.
+    for (const label of ["Code Mode", "Pin a model", "codemode", "sandbox", "javascript"]) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `${label} should find Settings → Models`,
+      ).toBe(true);
+    }
+  });
 });
 
 describe("the Storage category's search index", () => {
