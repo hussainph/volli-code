@@ -28,6 +28,7 @@ import {
   modelPurposeForRole,
 } from "@volli/shared";
 import type {
+  CodeModeBirth,
   ModelAccessSnapshot,
   ModelSelection,
   McpToolDefinition,
@@ -162,8 +163,24 @@ export interface SessionToolSurfacePorts {
     grants: readonly string[],
     within?: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    /**
+     * Code Mode's decision for this birth (VC-471), from {@link codeModeAt}:
+     * the surface names `codemode` only when it says `offered`. Absent for a
+     * legacy backfill, which is never born into Code Mode.
+     */
+    codeMode?: CodeModeBirth,
     classify?: boolean,
   ): readonly SessionToolId[];
+  /**
+   * Code Mode's decision for a Session born on `model` holding `mcpTools`
+   * (VC-471) — its mode from that model's own family and pins, whether its
+   * surface gets `codemode`, the prompt paragraph, the large servers. Asked
+   * ONCE per birth, and the one answer handed to both {@link resolve} and
+   * {@link record}, so a setting flipped between them cannot split the two.
+   * A Subagent Session asks with its OWN model: its parent bounds which tools
+   * it has, not how they are routed. Absent where Code Mode does not exist.
+   */
+  codeModeAt?(model: ModelSelection, mcpTools: readonly McpToolDefinition[]): CodeModeBirth;
   /** Selected sanitized definitions for a newly born root Session. */
   resolveMcp?(projectId: string): readonly McpToolDefinition[];
   /**
@@ -186,6 +203,8 @@ export interface SessionToolSurfacePorts {
     sessionId: string,
     tools: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    /** Code Mode's decision for this birth (VC-471), the same one {@link resolve} was given. */
+    birth?: { codeMode?: CodeModeBirth },
   ): Promise<void>;
 }
 
@@ -690,11 +709,14 @@ export function createSessions(options: SessionsOptions): Sessions {
         ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
         : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
     const classify = (await options.toolSurface.resolveClassify?.(input.projectId)) ?? false;
+    // Code Mode decides once, here, from this Session's own model (VC-471).
+    const codeMode = options.toolSurface.codeModeAt?.(model, mcpTools);
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
       within === null ? undefined : within,
       mcpTools,
+      codeMode,
       classify,
     );
     const created = await options.runtime.command({
@@ -744,7 +766,12 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
+    await options.toolSurface.record(
+      created.sessionId,
+      toolSurface,
+      mcpTools,
+      codeMode === undefined ? {} : { codeMode },
+    );
     return { sessionId: created.sessionId, model };
   }
 

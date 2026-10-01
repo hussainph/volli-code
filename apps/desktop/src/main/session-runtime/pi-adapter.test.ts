@@ -24,6 +24,7 @@ import {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  codeModeSurfaceFor,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
   mcpProviderToolName,
@@ -1458,6 +1459,44 @@ describe("Pi native adapter attach", () => {
     });
   });
 
+  it("carries Code Mode's frozen routes into the bundle, and refuses a surface that names it without them (VC-471)", async () => {
+    const codeMode = codeModeSurfaceFor({
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+    });
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+        codeMode,
+      }),
+    });
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      codeMode,
+    });
+    const missing = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+      }),
+    });
+    await expect(missing).rejects.toThrow("names codemode without its routes");
+  });
+
+  it("hands the runtime host the Code Mode sandbox location when main supplies one (VC-471)", () => {
+    const seen: unknown[] = [];
+    createPiRuntimeHost({
+      sessionDataDir: "/tmp/volli-codemode-host",
+      codeModeSandbox: { wasmPath: "/opt/quickjs.wasm" },
+      createRuntime: (options) => {
+        seen.push(options.codeModeSandbox);
+        return new FakeRuntime();
+      },
+      resolveRuntimeContext: async () => context,
+    });
+    expect(seen).toEqual([{ wasmPath: "/opt/quickjs.wasm" }]);
+  });
+
   it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
     // Absent, not `false`: the attachment refuses a derived tool array that
     // disagrees with the record, so this is the assertion standing between an
@@ -2440,6 +2479,52 @@ describe("Pi native adapter escalation", () => {
       interactionId: "budget-ask:call-9",
       resolution: { optionIds: ["once"], response: null },
     });
+  });
+
+  it("asks a Code Mode program's budget question through the scope the call was lent (VC-471)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "claimed at the limit" };
+      },
+    });
+    const scoped: string[] = [];
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "cm-1:abc:1" },
+      new AbortController().signal,
+      {
+        question: async (asking) => {
+          scoped.push("waiting");
+          const answer = await asking();
+          scoped.push("answered");
+          return answer;
+        },
+      },
+    );
+    if (lent === undefined) throw new Error("The binding lent no budget ask");
+    const choice = lent(
+      {
+        cause: "budget.delegation-children",
+        tool: "session_start",
+        toolCallId: "cm-1:abc:1",
+        turnId: null,
+        reason: "At the limit.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(scoped).toEqual(["waiting"]);
+    expect(sink.observations[0]).toMatchObject({ kind: "interaction", state: "opened" });
+    await binding.dispatch(answerCommand("budget-ask:cm-1:abc:1", ["once"]));
+    expect(await choice).toBe("allow");
+    expect(scoped).toEqual(["waiting", "answered"]);
   });
 
   /**

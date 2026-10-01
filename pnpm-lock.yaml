@@ -34,6 +34,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-agent-core@0.99.2': f3265a13753dcbe6e52c900535aed325dc0fdc2215a51d494dd62ec92c70c4c0
+  '@earendil-works/pi-codemode@0.99.2': 12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3
 
 importers:
 
@@ -66,6 +67,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.8)
+      '@earendil-works/pi-codemode':
+        specifier: 0.99.2
+        version: 0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
       '@fontsource-variable/geist-mono':
         specifier: ^5.3.0
         version: 5.3.0
@@ -397,12 +401,18 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.99.2
         version: 0.99.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-codemode':
+        specifier: 0.99.2
+        version: 0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+      acorn:
+        specifier: 8.18.0
+        version: 8.18.0
       gpt-tokenizer:
         specifier: ^4.0.0
         version: 4.0.0
@@ -1155,6 +1165,10 @@ packages:
     resolution: {integrity: sha512-9RFOEdY+ZTJ1AI+UuAFs4RM0tF2Tje/R/CEv9gWTJHt0iTu8XHZs64U/EIZxNSllFmec/4HfwsOxYj1qQek9bg==}
     engines: {node: '>=22.19.0'}
     hasBin: true
+
+  '@earendil-works/pi-codemode@0.99.2':
+    resolution: {integrity: sha512-PVxNGu4l7LI92MvwUbaY3trjznU1Mlp2OMGwHwCWzLsjG7/lDa8xf6ei+Gws7VCt+Ri1tO+nFVl9KV2EeX7HWg==}
+    engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-telemetry@0.99.2':
     resolution: {integrity: sha512-WThYU4XM6jjjzH4FzLdreN7QAPS9SDdokL0W0Ldheg1ssCIJkfpK7PgebFm7/PoQub7OiXx+SRF6B/oF7z7lXA==}
@@ -6472,6 +6486,9 @@ packages:
     resolution: {integrity: sha512-WuyALRjWPDGtt/wzJiadO5AXY+8hZ80hVpe6MyivgraREW751X3SbhRvG3eLKOYN+8VEvqLcf3wdnt44Z4S4SA==}
     engines: {node: '>=10'}
 
+  quickjs-wasi@3.6.2:
+    resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
+
   radix-ui@1.6.7:
     resolution: {integrity: sha512-QBdhh1arIEUvPC0dQ5+nwWAxt7+N+oP/9jPwjJkGFoSk/sqxg32gJtSXGtFh8frAIcS6oC9cx2Q+7KYCQLOAeA==}
     peerDependencies:
@@ -8461,6 +8478,10 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
+
+  '@earendil-works/pi-codemode@0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)':
+    dependencies:
+      quickjs-wasi: 3.6.2
 
   '@earendil-works/pi-telemetry@0.99.2': {}
 
@@ -14177,6 +14198,8 @@ snapshots:
   pvutils@1.2.0: {}
 
   quick-lru@5.1.1: {}
+
+  quickjs-wasi@3.6.2: {}
 
   radix-ui@1.6.7(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
     dependencies:

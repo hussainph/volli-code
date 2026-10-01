@@ -54,6 +54,11 @@ allowances: no setup, declined opt-in, timeout, abort, malformed response,
 invalid/incomplete input or failed service audit is never automatic approval.
 Hard rules cannot be overridden by classifier output or a person's allowance.
 
+Code Mode programs are containers: each actual nested tool call passes the same
+review gate. The outer script is not classifier input and does not reset denial
+counters. Slot admission encloses the nested call's gate and execution, so a
+queued call is checked against state after earlier exclusive mutations finish.
+
 Settings → Decision model has one Block reason choice: Utility model (default)
 or Risk category. Only a configured utility model is used; unset, failed,
 aborted or slow wording falls back to the category. The wording call receives
