@@ -1,5 +1,5 @@
 diff --git a/dist/runtime/host.js b/dist/runtime/host.js
-index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..40646d21f45028434af4a06801e3046b885db9af 100644
+index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..69da44adcd5901889241dcdaa6ba569e2bdc2438 100644
 --- a/dist/runtime/host.js
 +++ b/dist/runtime/host.js
 @@ -56,10 +56,13 @@ class Execution {
@@ -16,7 +16,16 @@ index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..40646d21f45028434af4a06801e3046b
          this.promise = new Promise((resolve) => {
              this.resolveResult = resolve;
          });
-@@ -139,6 +142,15 @@ class Execution {
+@@ -103,6 +106,8 @@ class Execution {
+             })),
+             wasm,
+             memoryLimitBytes: options.memoryLimitBytes,
++            maxOutputChars: options.maxOutputChars,
++            maxCallChars: options.maxCallChars,
+             store: options.store,
+             interrupt: this.interrupt,
+         };
+@@ -139,6 +144,15 @@ class Execution {
              return;
          switch (message.type) {
              case "output":
@@ -32,44 +41,208 @@ index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..40646d21f45028434af4a06801e3046b
                  this.output.push(message.item);
                  break;
              case "call":
-@@ -240,6 +252,7 @@ export class CodemodeSandbox {
+@@ -153,11 +167,22 @@ class Execution {
+         }
+     }
+     handleDone(message) {
++        const limit = this.maxOutputChars;
+         if (!message.ok) {
++            // The worker bounds an error before posting it; this holds for a worker that did not.
++            if (limit !== undefined && message.error.length > limit) {
++                this.finish({ kind: "script", name: "RangeError", message: `The script's error passed its limit of ${limit} characters` });
++                return;
++            }
+             const parsed = JSON.parse(message.error);
+             this.finish({ kind: "script", ...parsed });
+             return;
+         }
++        // Checked before parsing, so a value past the bound is never parsed or kept.
++        if (limit !== undefined && message.value !== undefined && this.outputChars + message.value.length > limit) {
++            this.finish({ kind: "script", name: "RangeError", message: `The script's return value passed its output limit of ${limit} characters` });
++            return;
++        }
+         this.finish(undefined, message.value === undefined ? undefined : JSON.parse(message.value), message.writes);
+     }
+     async handleCall(message) {
+@@ -240,6 +265,8 @@ export class CodemodeSandbox {
      globalsByName = new Map();
      timeoutMs;
      memoryLimitBytes;
 +    maxOutputChars;
++    maxCallChars;
      wasm;
      workerUrl;
      running = new Set();
-@@ -247,6 +260,7 @@ export class CodemodeSandbox {
+@@ -247,6 +274,8 @@ export class CodemodeSandbox {
      constructor(options = {}) {
          this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
          this.memoryLimitBytes = options.memoryLimitBytes;
 +        this.maxOutputChars = options.maxOutputChars;
++        this.maxCallChars = options.maxCallChars;
          this.wasm = options.wasm;
          this.workerUrl = options.workerUrl ?? defaultWorkerUrl();
          for (const tool of options.tools ?? [])
-@@ -298,6 +312,7 @@ export class CodemodeSandbox {
+@@ -298,6 +327,8 @@ export class CodemodeSandbox {
              timeoutMs: options.timeoutMs ?? this.timeoutMs,
              signal: options.signal,
              memoryLimitBytes: this.memoryLimitBytes,
 +            maxOutputChars: this.maxOutputChars,
++            maxCallChars: this.maxCallChars,
              store: serializeStore(options.store),
              wasm: this.wasm === undefined ? loadQuickJSWasm() : Promise.resolve(this.wasm),
              workerUrl: this.workerUrl,
+diff --git a/dist/runtime/worker.js b/dist/runtime/worker.js
+index aa77a8acc0dd7525d5e7605a1cccb57fb4b42196..c3817f60f6a7ea368c005333fa7f7429319575e5 100644
+--- a/dist/runtime/worker.js
++++ b/dist/runtime/worker.js
+@@ -44,8 +44,36 @@ function describeException(error) {
+     const stack = error.stack?.trimEnd();
+     return JSON.stringify({ name: error.name, message: error.message, stack: stack ? `${head}\n${stack}` : head });
+ }
++/**
++ * Bounds on what this worker posts to the host, checked here so that an
++ * oversized message is never copied to the host's thread at all.
++ */
++function limitFailure(message) {
++    return JSON.stringify({ name: "RangeError", message, stack: `RangeError: ${message}` });
++}
++/** An error's JSON, cut to `maxChars` of message and stack. */
++function boundedError(json, maxChars) {
++    if (maxChars === undefined || json.length <= maxChars)
++        return json;
++    let parsed;
++    try {
++        parsed = JSON.parse(json);
++    }
++    catch {
++        return limitFailure("The script's error could not be reported");
++    }
++    const half = Math.max(1, Math.floor(maxChars / 2) - 64);
++    const cut = (value) => (typeof value === "string" && value.length > half ? `${value.slice(0, half)}…` : value);
++    return JSON.stringify({ name: cut(parsed.name), message: cut(parsed.message), stack: cut(parsed.stack) });
++}
+ async function main(data) {
+     const interrupt = new Int32Array(data.interrupt);
++    const maxOutputChars = data.maxOutputChars;
++    const maxCallChars = data.maxCallChars;
++    let heldChars = 0;
++    let limited = false;
++    // Assigned once the prelude exists; a call refused for its size is settled through it.
++    let refuseCall;
+     const vm = await QuickJS.create({
+         wasm: data.wasm,
+         memoryLimit: data.memoryLimitBytes,
+@@ -56,37 +84,55 @@ async function main(data) {
+         wasi: discardOutput,
+     });
+     // Called from the prelude with primitives only.
++    const failOnLimit = (message) => {
++        limited = true;
++        post({ type: "done", ok: false, error: limitFailure(message) });
++    };
+     const bridge = vm.newFunction("bridge", (kind, a, b, c) => {
++        if (limited)
++            return vm.undefined;
+         switch (kind.toString()) {
+             case "call":
+-            case "global":
++            case "global": {
++                const id = a.toNumber();
++                const args = c === undefined || c.isUndefined ? undefined : c.toString();
++                if (maxCallChars !== undefined && args !== undefined && args.length > maxCallChars) {
++                    // Refused here, so arguments past the bound never reach the host.
++                    setImmediate(() => refuseCall?.(id, `The call's arguments passed their limit of ${maxCallChars} characters`));
++                    break;
++                }
+                 post({
+                     type: "call",
+-                    id: a.toNumber(),
++                    id,
+                     target: kind.toString() === "call" ? "tool" : "global",
+                     name: b.toString(),
+-                    args: c === undefined || c.isUndefined ? undefined : c.toString(),
++                    args,
+                 });
+                 break;
+-            case "output":
+-                post({
+-                    type: "output",
+-                    item: a.toString() === "image"
+-                        ? { type: "image", data: b.toString(), mimeType: c.toString() }
+-                        : { type: "text", text: b.toString() },
+-                });
++            }
++            case "output": {
++                const item = a.toString() === "image"
++                    ? { type: "image", data: b.toString(), mimeType: c.toString() }
++                    : { type: "text", text: b.toString() };
++                heldChars += item.type === "text" ? item.text.length : item.data.length;
++                if (maxOutputChars !== undefined && heldChars > maxOutputChars) {
++                    failOnLimit(`The script's output passed its limit of ${maxOutputChars} characters`);
++                    break;
++                }
++                post({ type: "output", item });
+                 break;
++            }
+             case "done":
+                 if (a.toBoolean()) {
+-                    post({
+-                        type: "done",
+-                        ok: true,
+-                        value: b === undefined || b.isUndefined ? undefined : b.toString(),
+-                        writes: c.toString(),
+-                    });
++                    const value = b === undefined || b.isUndefined ? undefined : b.toString();
++                    if (maxOutputChars !== undefined && value !== undefined && heldChars + value.length > maxOutputChars) {
++                        failOnLimit(`The script's return value passed its output limit of ${maxOutputChars} characters`);
++                        break;
++                    }
++                    post({ type: "done", ok: true, value, writes: c.toString() });
+                 }
+                 else {
+-                    post({ type: "done", ok: false, error: b.toString() });
++                    post({ type: "done", ok: false, error: boundedError(b.toString(), maxOutputChars) });
+                 }
+                 break;
+         }
+@@ -102,6 +148,17 @@ async function main(data) {
+         vm.executePendingJobs();
+         vm.callFunction(stalled, api).dispose();
+     };
++    refuseCall = (id, message) => {
++        try {
++            vm.withScope(() => {
++                vm.callFunction(settle, api, vm.newNumber(id), vm.false, vm.newString(message));
++            });
++            drain();
++        }
++        catch (error) {
++            crash(error);
++        }
++    };
+     parentPort?.on("message", (message) => {
+         if (!isHostToWorkerMessage(message))
+             return;
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 9a5259bfde448c5f92426c2fee5a4d39087d1697..849ff48d141b79a374eb031d1566b98249dc68a1 100644
+index 9a5259bfde448c5f92426c2fee5a4d39087d1697..787fbb2c1bae34a580f904fe4c260c111ccdc80d 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -110,6 +110,12 @@ export interface CodemodeSandboxOptions {
+@@ -110,6 +110,18 @@ export interface CodemodeSandboxOptions {
       * `InternalError: out of memory`. Default: no limit beyond wasm32's 4 GiB address space.
       */
      memoryLimitBytes?: number;
 +    /**
-+     * Most characters of `text()`, `console.*` and `image()` output the host keeps. Past it the
-+     * execution fails as a `script` error and the worker is terminated, so a program that prints in a
-+     * loop cannot grow the host's memory without bound. Default: no limit.
++     * Most characters of `text()`, `console.*` and `image()` output, the return value, and an error's
++     * text, together, that the host is sent. Past it the execution fails as a `script` error, checked
++     * in the worker before the message is posted, so a program that prints in a loop or returns a
++     * huge value cannot grow the host's memory. Default: no limit.
 +     */
 +    maxOutputChars?: number;
++    /**
++     * Most characters of JSON arguments one tool or global call may carry. A call past it is refused
++     * inside the worker, so its arguments never reach the host. Default: no limit.
++     */
++    maxCallChars?: number;
      /**
       * Compiled `quickjs-wasi/quickjs.wasm`, usually from {@link loadQuickJSWasm}. Default:
       * `loadQuickJSWasm()`, the file in the installed `quickjs-wasi` package. Pass it when that file

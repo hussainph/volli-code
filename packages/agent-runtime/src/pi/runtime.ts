@@ -129,6 +129,7 @@ import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools, type CodeModeBuilder } from "./tools";
 import { CodeModeJournal } from "../codemode/journal";
+import { scopedAsk } from "./call-scope";
 import {
   createCodeModeTool,
   type CodeModeSandboxAssets,
@@ -2353,10 +2354,15 @@ async function attachSession(
     const gateToolCalls = (
       authority: AuthoritySnapshot,
     ): NonNullable<AgentOptions["beforeToolCall"]> => {
+      const ask = spec.ask;
       const escalation = new AuthorityEscalation({
         fallback: authority.fallback,
         priorDenials: spec.priorAuthorityDenials,
-        ask: spec.ask,
+        // A program's nested call asks through the program's scope, so its
+        // escalations queue behind any other question it has open (VC-471).
+        ...(ask === undefined
+          ? {}
+          : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
         signal: spec.signal,
         now: host.now,
       });

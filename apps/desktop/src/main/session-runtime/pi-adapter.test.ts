@@ -2449,6 +2449,52 @@ describe("Pi native adapter escalation", () => {
     });
   });
 
+  it("asks a Code Mode program's budget question through the scope the call was lent (VC-471)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "claimed at the limit" };
+      },
+    });
+    const scoped: string[] = [];
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "cm-1:abc:1" },
+      new AbortController().signal,
+      {
+        question: async (asking) => {
+          scoped.push("waiting");
+          const answer = await asking();
+          scoped.push("answered");
+          return answer;
+        },
+      },
+    );
+    if (lent === undefined) throw new Error("The binding lent no budget ask");
+    const choice = lent(
+      {
+        cause: "budget.delegation-children",
+        tool: "session_start",
+        toolCallId: "cm-1:abc:1",
+        turnId: null,
+        reason: "At the limit.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(scoped).toEqual(["waiting"]);
+    expect(sink.observations[0]).toMatchObject({ kind: "interaction", state: "opened" });
+    await binding.dispatch(answerCommand("budget-ask:cm-1:abc:1", ["once"]));
+    expect(await choice).toBe("allow");
+    expect(scoped).toEqual(["waiting", "answered"]);
+  });
+
   /**
    * The same seam carrying VC-380's confirmation, under its OWN frozen segment.
    * Nothing has been refused here: the verb is permitted and its arguments are

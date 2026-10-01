@@ -1281,7 +1281,11 @@ export interface SessionRuntimeSpec {
    * can act on rather than as thrown errors — the line {@link webFetch} draws
    * between a refusal and a host that could not answer at all.
    */
-  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
+  callVerb?: (
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
@@ -1304,8 +1308,26 @@ export interface RuntimeMcpCall {
   toolCallId: string;
 }
 
+/**
+ * What the runtime lends one tool call while it runs (VC-471).
+ *
+ * A Code Mode program can have several calls in flight, and a host may put a
+ * question to the person driving from inside a call — a verb's spent budget,
+ * an MCP server's sign-in. `question` is the program's own door for that: the
+ * host runs its ask through it, and the program holds every question to one
+ * at a time and stops its own clock while a person answers. Absent for a call
+ * the model made directly: the host then asks exactly as it always has.
+ */
+export interface RuntimeCallScope {
+  question<T>(ask: () => Promise<T>): Promise<T>;
+}
+
 export interface RuntimeMcpPort {
-  call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult>;
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ): Promise<RuntimeMcpCallResult>;
 }
 
 /** One product verb call, as the runtime hands it to the host. */

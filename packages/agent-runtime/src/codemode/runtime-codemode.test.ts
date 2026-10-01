@@ -242,6 +242,11 @@ function resultText(h: Harness, id: string): string {
     .join("\n");
 }
 
+/** A nested id without its program digest: `<outer>:<digest>:<n>` read as `<outer>:<n>`. */
+function short(id: string): string {
+  return id.replace(/:[0-9a-f]{12}:/u, ":");
+}
+
 function declared(context: Context): string[] {
   return getCurrentTools(context.messages).map((tool) => tool.name);
 }
@@ -282,7 +287,8 @@ describe("Code Mode through the real Session path", () => {
     expect(text.length).toBeLessThan(600);
     // Every nested call is its own activity row, id derived from the outer call.
     const nested = activities(h).filter((activity) => activity.activityId.startsWith("cm-1:"));
-    expect(nested.map((activity) => `${activity.state}:${activity.activityId}`)).toEqual(
+    expect(nested[0]!.activityId).toMatch(/^cm-1:[0-9a-f]{12}:1$/u);
+    expect(nested.map((activity) => `${activity.state}:${short(activity.activityId)}`)).toEqual(
       Array.from({ length: 7 }, (_, index) => [
         `started:cm-1:${index + 1}`,
         `completed:cm-1:${index + 1}`,
@@ -406,7 +412,9 @@ describe("Code Mode through the real Session path", () => {
     const denials = h.observations.flatMap((observation) =>
       observation.kind === "authority" && observation.state === "denied" ? [observation] : [],
     );
-    expect(denials.map((denial) => [denial.toolCallId, denial.tool, denial.cause])).toEqual([
+    expect(
+      denials.map((denial) => [short(denial.toolCallId ?? ""), denial.tool, denial.cause]),
+    ).toEqual([
       ["d-1", "bash", "command.git-escapes-workspace"],
       ["d-2", "bash", "command.git-escapes-workspace"],
       ["cm-1:1", "bash", "command.git-escapes-workspace"],
@@ -417,7 +425,7 @@ describe("Code Mode through the real Session path", () => {
     expect(resultText(h, "cm-1")).toContain("1 call: 0 ok, 1 failed (bash #1)");
     // One escalation counter for the Session: two direct refusals and one
     // nested one are three in a row, and the third is the one that asks.
-    expect(asked.map((request) => [request.toolCallId, request.trip])).toEqual([
+    expect(asked.map((request) => [short(request.toolCallId), request.trip])).toEqual([
       ["cm-1:1", "consecutive"],
     ]);
   });
@@ -442,7 +450,7 @@ describe("Code Mode through the real Session path", () => {
         ask: async (request) => {
           live += 1;
           peakLive = Math.max(peakLive, live);
-          asked.push(request.toolCallId);
+          asked.push(short(request.toolCallId));
           // Longer than the program's whole running-time budget, once.
           await new Promise((resolve) => setTimeout(resolve, asked.length === 1 ? 1_300 : 50));
           live -= 1;
@@ -481,7 +489,7 @@ describe("Code Mode through the real Session path", () => {
           if (
             observation.kind === "activity" &&
             observation.state === "started" &&
-            observation.activityId === "cm-1:1"
+            short(observation.activityId) === "cm-1:1"
           ) {
             setTimeout(started, 200);
           }
@@ -494,7 +502,9 @@ describe("Code Mode through the real Session path", () => {
     expect(existsSync(join(h.worktree, "queued.txt"))).toBe(false);
     const nested = activities(h).filter((activity) => activity.activityId.startsWith("cm-1:"));
     expect(
-      nested.find((activity) => activity.activityId === "cm-1:1" && activity.state === "failed"),
+      nested.find(
+        (activity) => short(activity.activityId) === "cm-1:1" && activity.state === "failed",
+      ),
     ).toBeDefined();
     const outer = activities(h).find(
       (activity) => activity.activityId === "cm-1" && activity.state === "failed",
@@ -549,10 +559,13 @@ describe("Code Mode through the real Session path", () => {
   it("hands a nested verb call the outer call's derived id and nothing about who is calling", async () => {
     const h = harness();
     const requests: unknown[] = [];
+    const scoped: boolean[] = [];
     const spec = specFor(h, {
       tools: { tools: ["read"], verbs: ["session.start"] },
-      callVerb: async (request) => {
+      callVerb: async (request, _signal, scope) => {
         requests.push(request);
+        // A program's call lends its question scope; a direct call has none.
+        scoped.push(scope !== undefined);
         return {
           text: `started for ${String(request.input.ticket)}`,
           details: { sessionId: "child-1" },
@@ -575,8 +588,16 @@ describe("Code Mode through the real Session path", () => {
           },
         ],
       },
+      { calls: [{ id: "d-1", name: "session_start", args: { ticket: "VC-3" } }] },
       { text: "done" },
     ]);
+    expect(scoped).toEqual([true, true, false]);
+    expect(String((requests[0] as { toolCallId: string }).toolCallId)).toMatch(
+      /^cm-1:[0-9a-f]{12}:1$/u,
+    );
+    for (const request of requests as { toolCallId: string }[]) {
+      request.toolCallId = short(request.toolCallId);
+    }
     expect(requests).toEqual([
       {
         verb: "session.start",
@@ -588,6 +609,7 @@ describe("Code Mode through the real Session path", () => {
         input: { ticket: "VC-2", sessionId: "someone-else" },
         toolCallId: "cm-1:2",
       },
+      { verb: "session.start", input: { ticket: "VC-3" }, toolCallId: "d-1" },
     ]);
     expect(resultText(h, "cm-1")).toContain(
       'Returned: ["child-1:started for VC-1","child-1:started for VC-2"]',
@@ -671,4 +693,66 @@ describe("Code Mode through the real Session path", () => {
       bound.close();
     },
   );
+
+  it("lends a program's MCP calls its question scope, so sign-ins mid-call ask one at a time", async () => {
+    const h = harness();
+    const definitions = withParallelReadEligibility(
+      ["first", "second"].map((toolName) => ({
+        serverId: "fixture-1",
+        toolName,
+        providerName: mcpProviderToolName("fixture-1", "Fixture", toolName),
+        description: "Read one fixture record.",
+        inputSchema: { type: "object" },
+      })),
+      new Set([
+        mcpToolKey({ serverId: "fixture-1", toolName: "first" }),
+        mcpToolKey({ serverId: "fixture-1", toolName: "second" }),
+      ]),
+    );
+    let asking = 0;
+    let peakAsking = 0;
+    const scoped: boolean[] = [];
+    const port: RuntimeMcpPort = {
+      call: async (request, _signal, scope) => {
+        scoped.push(scope !== undefined);
+        // VC-470's host asks the person to sign in from inside the call; it
+        // runs the ask through the scope the call was lent.
+        const ask = async () => {
+          asking += 1;
+          peakAsking = Math.max(peakAsking, asking);
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          asking -= 1;
+        };
+        await (scope === undefined ? ask() : scope.question(ask));
+        return { content: [{ type: "text", text: request.toolName }], isError: false };
+      },
+    };
+    const [first, second] = definitions.map((definition) => definition.providerName);
+    await runTurn(
+      h,
+      specFor(h, {
+        tools: { tools: ["read"], mcp: definitions },
+        mcp: port,
+        limits: { timeoutMs: 1_000 },
+      }),
+      [
+        {
+          calls: [
+            {
+              id: "cm-1",
+              name: "codemode",
+              args: {
+                code: `return (await Promise.all([tools.${first}({}), tools.${second}({})])).map((one) => one.text);`,
+              },
+            },
+          ],
+        },
+        { text: "done" },
+      ],
+      { parallelMcpReads: true },
+    );
+    expect(resultText(h, "cm-1")).toContain('Returned: ["first","second"]');
+    expect(scoped).toEqual([true, true]);
+    expect(peakAsking).toBe(1);
+  }, 15_000);
 });

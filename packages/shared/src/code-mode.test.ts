@@ -6,6 +6,7 @@ import {
   codeModeSurfaceFor,
   DEFAULT_CODE_MODE_LIMITS,
   defaultToolRoute,
+  inheritCodeModeSurface,
   isCodeCallable,
   isCodeCallableRoute,
   isDeclaredRoute,
@@ -175,6 +176,20 @@ describe("parseCodeModeSurface", () => {
     expect(() =>
       parseCodeModeSurface({ ...good, limits: { ...good.limits, maxImages: 3 } }, tools),
     ).toThrow("codeMode.limits names a limit this build does not know");
+  });
+});
+
+describe("inheritCodeModeSurface", () => {
+  it("bounds a child's routes and limits by its parent's record", () => {
+    const parent: CodeModeSurface = {
+      routes: { read: "both", write: "direct", web_fetch: "code" },
+      limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 9 },
+    };
+    expect(inheritCodeModeSurface(parent, ["read", "write", "execute", "codemode"])).toEqual({
+      routes: { read: "both", write: "direct", execute: "direct" },
+      limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 9 },
+    });
+    expect(inheritCodeModeSurface(parent, ["read"])).toBeUndefined();
   });
 });
 

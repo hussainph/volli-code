@@ -7,7 +7,11 @@
  * join it to its own words, return it as a plain string. Per-value marking
  * would not survive that, so the marking is per run instead: a run that called
  * any tool whose results come from outside the Session — the web tools, the
- * Browser, every MCP tool — has its whole output returned inside one untrusted
+ * Browser, every MCP tool, the verbs that relay another agent's words or a
+ * server's account of itself (`watch`, `session.delegate`, `mcp.list`, marked
+ * in `tool.ts` by durable id), and a `read` of a file Volli saved from such a
+ * result (which opens with the saved-output notice) — has its whole output
+ * returned inside one untrusted
  * envelope, with an id minted after the program finished, so the program
  * never saw it and cannot have written a line that closes it.
  *
@@ -29,7 +33,11 @@ export const MCP_UNTRUSTED_DATA_WARNING_TEXT = MCP_UNTRUSTED_DATA_WARNING;
 
 const BROWSER_NAMES: ReadonlySet<string> = new Set(BROWSER_TOOL_NAMES);
 
-/** Whether a tool's results come from outside the Session and its workspace. */
+/**
+ * Whether a tool's results come from outside the Session and its workspace,
+ * by wire name. Verbs are judged by durable id where the program's tools are
+ * listed, and a saved-output `read` by what it returned.
+ */
 export function isUntrustedSource(name: string): boolean {
   return (
     name === "web_fetch" || name === "web_search" || BROWSER_NAMES.has(name) || isMcpToolId(name)

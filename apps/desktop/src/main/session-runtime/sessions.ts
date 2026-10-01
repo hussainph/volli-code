@@ -177,6 +177,12 @@ export interface SessionToolSurfacePorts {
     sessionId: string,
     tools: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    /**
+     * A Subagent Session's parent, so what the child freezes beside its names
+     * — Code Mode's routes (VC-471) — is bounded by the parent's record the
+     * way the names are. Absent for a root Session.
+     */
+    parentSessionId?: string,
   ): Promise<void>;
 }
 
@@ -733,7 +739,12 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
+    await options.toolSurface.record(
+      created.sessionId,
+      toolSurface,
+      mcpTools,
+      ...(input.parentSessionId === undefined ? [] : [input.parentSessionId]),
+    );
     return { sessionId: created.sessionId, model };
   }
 

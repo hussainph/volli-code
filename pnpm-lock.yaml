@@ -34,7 +34,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-agent-core@0.99.2': f3265a13753dcbe6e52c900535aed325dc0fdc2215a51d494dd62ec92c70c4c0
-  '@earendil-works/pi-codemode@0.99.2': 60f2fa75b0a0fb380efc7382f21b15f77721077b6276b6384cb37cfe544a0d13
+  '@earendil-works/pi-codemode@0.99.2': 12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3
 
 importers:
 
@@ -400,7 +400,7 @@ importers:
         version: 0.99.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-codemode':
         specifier: 0.99.2
-        version: 0.99.2(patch_hash=60f2fa75b0a0fb380efc7382f21b15f77721077b6276b6384cb37cfe544a0d13)
+        version: 0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -8476,7 +8476,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-codemode@0.99.2(patch_hash=60f2fa75b0a0fb380efc7382f21b15f77721077b6276b6384cb37cfe544a0d13)':
+  '@earendil-works/pi-codemode@0.99.2(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)':
     dependencies:
       quickjs-wasi: 3.6.2
 

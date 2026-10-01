@@ -85,13 +85,21 @@ than by copy:
 
 **When a check needs a person mid-program, the program pauses.** The nested
 call's promise stays pending while the gate parks on the `ask` port; the VM has
-no timers or I/O, so the program simply waits. Its running-time clock stops
-while any call is judged and while any Volli verb runs (a verb's only wait is a
-person answering a budget question). Every other call queues behind the
-judgement lock, so **no second judgement and no second question can start**. A
-call that runs alone (anything but a read) holds that lock from its judgement to
-its end, which also keeps a verb's own budget question from overlapping a
-judgement's. The answer resolves the pause: `allow` runs the call, `refuse`
+no timers or I/O, so the program simply waits. Calls are judged one at a time,
+under one lock, in the order the program issued them; then each runs as its
+kind allows (reads beside each other, anything else alone) and holds no lock
+while it runs. **Every question a nested call can put to a person goes through
+a second, run-wide question lock**: the gate's escalation (its `ask` port is
+wrapped), a verb's budget question (the desktop adapter asks through the scope
+the call is lent), and — once VC-470 lands — an MCP server's sign-in or
+credential question (the port's `call` takes the same optional scope). The scope
+reaches the call through an `AsyncLocalStorage` (`pi/call-scope.ts`), so a direct
+call outside any program asks exactly as before. So **no second question can
+open while one is open**, and parallel reads stay parallel until one of them
+actually asks. The running-time clock stops while a call is judged and from the
+moment a question waits for its turn until it is answered, so a pure wait (a
+`watch`, a start that asks nothing) spends the program's own time and a person
+deciding spends none. The answer resolves the pause: `allow` runs the call, `refuse`
 rejects it in the program with the rule's words, `stop` ends the turn and with it
 the run and every nested call in flight. The pause is bounded too, at 15 minutes
 on top of the run's own limit: the clock stops while a person decides, but the VM
@@ -145,7 +153,11 @@ and the limits are read when a Session is born and frozen there. Unsetting the
 variable is the kill switch for new Sessions only: removing `codemode` from a
 Session that has it would change its provider tool array, which the
 frozen-surface rule forbids. A subagent is bounded by its parent's record: no
-`codemode` in the parent, none in the child. A legacy backfill is never born
+`codemode` in the parent, none in the child; and a child that has it freezes its
+parent's route for each tool it holds (`inheritCodeModeSurface`, from the
+parent's own `tool-surface` record read at the child's birth), with the parent's
+limits — so a tool the parent could call only directly is never callable from a
+child's program, whatever today's defaults say. A legacy backfill is never born
 into Code Mode.
 
 ### Script interface
@@ -276,18 +288,18 @@ and the codec suite, and `apps/desktop/src/main/codemode/dev-config.test.ts`.
 | rule | mechanism | proved by |
 | --- | --- | --- |
 | Fresh sandbox, no Node, env, files, network, subprocess; only named tools | pi-codemode: a new worker and QuickJS VM per run; the VM's only imports are a WASI clock/random shim and one host-call bridge | *offers a program nothing but its tools* (`process`, `require`, `fetch`, timers, `WebAssembly`, `Buffer`, `import()`); *starts each run in a fresh VM* |
-| Hard limits: time, memory, output, nested calls, concurrency | frozen `limits`; an active-time `RunClock` (pauses on judgement) under a wall-clock ceiling (limit + 15 min of pause); the VM heap limit; a middle cut with the whole saved, and a host-side output cap (the `maxOutputChars` patch); a call counter that stops a program looping past it; 1 MiB per call's arguments; 100 `searchTools`/`describeTool` calls with bounded queries; `ExecutionSlots` | *spins past its running time*; *bounds the time a program may spin while a judgement is paused*; *memory limit*; *cuts long output … saves it whole*; *output passes what the host will hold*; *nested-call limit*; *keeps calling past its limit*; *arguments are past the limit*; *caps what a program's searches cost the host*; *overlaps reads, runs everything else alone* (peak = limit) |
+| Hard limits: time, memory, output, nested calls, concurrency | frozen `limits`; an active-time `RunClock` (pauses on judgement) under a wall-clock ceiling (limit + 15 min of pause); the VM heap limit; a middle cut with the whole saved, and a host-side output cap counted in characters (4 Mi) over printed output, the return value and an error's text together, checked in the worker before anything is posted and again in the host before a message is parsed (the `maxOutputChars` patch); a call counter that stops a program looping past it; 1 Mi characters per call's arguments, refused in the worker before they are posted (the `maxCallChars` patch); 100 `searchTools`/`describeTool` calls with bounded queries; `ExecutionSlots` | *spins past its running time*; *bounds the time a program may spin while a judgement is paused*; *memory limit*; *cuts long output … saves it whole*; *output passes what the host will hold*; *holds a huge return value or error text to the output limit*; *nested-call limit*; *keeps calling past its limit*; *arguments are past the limit before they reach the host*; *caps what a program's searches cost the host*; *overlaps reads, runs everything else alone* (peak = limit) |
 | Whole program parsed and checked before any call; invalid code has no side effects | `checkScript`: acorn parses it as one async function body (so it cannot close the sandbox's wrapper), every `tools.<name>` must be code-callable, `codemode` is refused by name, the options line may only lower limits | *parses and checks the whole program before any call runs* (late syntax error, unknown tool, self-call, wrapper break-out: the file the first line would write never exists) |
 | Settings and eligibility from app-owned state | routes and limits frozen by main at birth in the Session ledger; the runtime reads only `spec.tools.codeMode`; nothing reads the worktree | codec round-trip and refusal tests; *options line … never raise it*; `dev-config.test.ts` (packaged builds ignore the variable) |
 | Only the frozen surface; never `codemode` | the sandbox is handed exactly the code-callable tools of the surface, and a route is held to `isCodeCallable`'s rules, so even a damaged record cannot put a direct-only tool, an unlisted verb or `codemode` in a program | *declares direct and both tools … rebinds the same array*; *does not offer a direct-only or hidden tool*; *holds a damaged record to the rules*; self-call refusal |
 | Same input checks, identity, authority, role limits, budgets, refusals, host handler | Pi's `runToolCall` + the Session's own gate instance + the Session's own `AgentTool` | *judges a nested bash call exactly as it judges the same call made directly* (same rule, same words, one escalation counter); *hands a nested verb call the outer call's derived id and nothing about who is calling* |
-| Stable nested ids; replay never repeats a completed effect | id `<outer>:<n>` in issue order (a minted id when a provider sends none); `Date`/`Math.random` pinned per run; a per-attachment journal, keyed by outer id *and* program and kept only for a run that was stopped part-way, answers completed positions, stops a diverged replay, and stops rather than re-runs a call whose result was too large to keep (4 MiB per run, 16 runs); verbs derive their durable operation id from the id they are handed (`<session>:<outer>:<n>`) | *answers a stopped run's completed calls … never repeats their effect*; *never replays a run that reached its end, or another program under the same id*; *keeps no journal for a call with no id*; *stops a replay that diverges* (a `Promise.race`); *runs again a call that never finished*; *stops rather than re-runs … too large to keep*; *keeps the effect of a call that finished after its signal fired* |
+| Stable nested ids; replay never repeats a completed effect | id `<outer>:<program digest>:<n>` in issue order (a minted id when a provider sends none); `Date` (including `new Date().constructor`), `performance.now()` and `Math.random` pinned per run, best-effort, with divergence detection as the backstop; a per-attachment journal, keyed by outer id *and* program and kept only for a run that was stopped part-way, answers completed positions, stops a diverged replay, and stops rather than re-runs a call whose result was too large to keep (4 MiB per run, 16 runs); verbs derive their durable operation id from the id they are handed (`<session>:<outer>:<digest>:<n>`) | *answers a stopped run's completed calls … never repeats their effect*; *never replays a run that reached its end, or another program under the same id*; *keeps no journal for a call with no id*; *stops a replay that diverges* (a `Promise.race`); *runs again a call that never finished*; *stops rather than re-runs … too large to keep*; *keeps the effect of a call that finished after its signal fired* |
 | Cancellation reaches nested calls | the turn's signal and the attachment's abort the run; the sandbox aborts each pending call's signal; queued calls leave the queue without running | real `sleep 30` killed on interrupt, the queued `write` never happens; unit cases for in-flight, queued and pre-cancelled calls |
 | Stable result order; explicit partial failure | `Promise.all`/`allSettled` order in the VM; per-call status in the result header and in `details.nestedCalls` | *overlaps reads … returns results in the order asked*; *makes a partial failure explicit* |
-| Approvals never several at once | one judgement lock, FIFO; non-read calls hold it through their run; the clock pauses | *pauses the program on an approval, one prompt at a time* (three approvals, peak one, the first longer than the whole budget); *never lets a judgement's question overlap a verb's own budget question* |
+| Approvals never several at once | one judgement lock, FIFO, held only while a call is judged; one question lock every question takes (gate escalation, verb budget, MCP sign-in), lent to the call through an `AsyncLocalStorage` scope; the clock pauses while judging and while a question waits or is open | *pauses the program on an approval, one prompt at a time* (three approvals, peak one, the first longer than the whole budget); *never lets a judgement's question overlap a verb's own budget question*; *holds MCP sign-in questions to one at a time, keeps reads overlapping until they ask*; *lends a program's MCP calls its question scope*; the adapter's *asks a Code Mode program's budget question through the scope* |
 | Within VC-454's per-server MCP bound | nested MCP calls go through the same `RuntimeMcpPort`, which main binds through the process-wide `McpServerBudget`; only host-marked reads overlap, and only when the runtime honours marks (the same switch the Agent's batches obey) | *keeps a program's MCP reads inside the per-server bound*: six marked reads issued at once, concurrency limit six, a bound of two — the server sees two, and one at a time with the switch off |
 | Visible in activity, logs and cost records | nested events go through the runtime's own `observeToolActivity` (same mapping, same ordered delivery, same recovery marker), under their own ids; the gate records observability per nested call; the result's `details.nestedCalls` is Pi's bounded `NestedToolCalls` | the real-path loop test asserts 14 activity rows and 8 gate decisions; *bounds the nested call record it keeps* |
-| Web, Browser and MCP content stays marked untrusted | taint per run: any call to those tools — answered live or from the replay journal — and any search or description that returned an MCP server's own text envelopes the whole output in markers whose id is minted after the program finished | *keeps web content marked untrusted in whatever the program returns* (a forged end marker in the page stays inside); *keeps an untrusted answer marked when it comes from the journal*; *caps what a program's searches cost … marks MCP descriptions untrusted* |
+| Web, Browser, MCP and other agents' content stays marked untrusted | taint per run: any call to those tools, to the verbs that relay another agent's or a server's words (`watch`, `session.delegate`, `mcp.list`, by durable id), or a `read` that returned a file Volli saved from an untrusted result (it opens with the saved-output notice) — answered live or from the replay journal, which keeps the mark — and any search or description that returned an MCP server's own text envelopes the whole output in markers whose id is minted after the program finished | *keeps web content marked untrusted in whatever the program returns* (a forged end marker in the page stays inside); *marks the run untrusted when a verb carries another agent's words, or a read opens saved output*; *keeps an untrusted answer marked when it comes from the journal*; *caps what a program's searches cost … marks MCP descriptions untrusted* |
 | Images designed before screenshots are code-callable | phase 1's design: no image enters a program (placeholders naming the type) and none leaves one (`image()` output dropped and counted); `browser_screenshot` is `direct` | *lets no image into a program or out of one* |
 
 **Two honest limits of the replay guarantee.** The journal lives as long as the
@@ -296,7 +308,7 @@ runs a tool call id twice, and a relaunch does not re-run an unfinished tool cal
 so the journal guards a replay path Volli does not take today; it is keyed by the
 program as well as the id because Pi does not promise unique ids (an
 OpenAI-compatible backend may send none). The durable half is the one that matters now: a nested
-`session.start` reaches the door with `<outer>:<n>`, which the door turns into its
+`session.start` reaches the door with `<outer>:<digest>:<n>`, which the door turns into its
 operation id, so a re-issued start is one start across a relaunch. And
 `Promise.race` over calls whose results arrive in a different order on a replay
 can issue a different call at a position the journal holds; that is the
@@ -314,11 +326,30 @@ switch, a damaged record could route a direct-only tool into programs, a
 dev-config key check read inherited properties, and a nested call could finish
 after its parent.
 
+**The PR review (#652).** A second review asked for: the output cap to cover the
+return value and a thrown error's text, bounded before the host parses them
+(now checked in the worker and again in `host.js`, in characters); `watch`,
+`session.delegate`, `mcp.list` and saved-output `read`s to mark a run untrusted;
+questions raised during execution — VC-470's MCP sign-in and credential asks,
+and a verb's budget — to wait their turn behind one run-wide lock with the
+clock stopped, rather than verbs holding the judgement lock for their whole run;
+the pinned `Date` to survive `new Date().constructor`; consistent units for the
+output and argument caps; and the program's digest in nested ids. Each is above,
+with its test.
+
 **What Pi 0.99 records that Volli does not yet.** Pi's `ToolResultMessage`
 carries `nestedCalls`; Volli's plain `Agent` loop does not copy it from a result,
 so the bounded record rides the codemode result's `details` (persisted and on the
 activity row) instead. `parentToolCallId` is the coding agent's extension field;
-Volli's nested ids name their parent instead (`<outer>:<n>`).
+Volli's nested ids name their parent instead (`<outer>:<digest>:<n>`).
+
+**How `codemode` sits in a parallel batch.** In a Session that honours MCP
+parallel-read marks, `applyToolDispatch` marks every tool but the host-marked
+reads `sequential`, and `codemode` is never a marked read. Pi runs a batch that
+holds any sequential call one call at a time, in source order, so a `codemode`
+call never overlaps the model's direct MCP reads in the same message (*never
+lets a codemode call overlap direct MCP reads in one batch*). A program's own
+nested reads still overlap inside its run, within the same per-server bound.
 
 ---
 

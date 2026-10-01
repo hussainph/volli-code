@@ -49,7 +49,6 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   CODE_MODE_TOOL_ID,
-  MCP_RESULT_MAX_BYTES,
   isCodeCallable,
   isDeclaredRoute,
   isListedRoute,
@@ -57,12 +56,12 @@ import {
   type CodeModeLimits,
   type CodeModeSurface,
   type McpToolDefinition,
+  type RuntimeCallScope,
   type ToolRoute,
 } from "@volli/shared";
 import {
   cutMiddle,
   cutResultText,
-  formatBytes,
   toolOutputCut,
   type ToolOutputCut,
   type ToolOutputStore,
@@ -82,6 +81,8 @@ import { checkScript } from "./script";
 import { ExecutionSlots, Mutex, RunClock } from "./schedule";
 import { outputSchemaFor, shapeResult, toolKind, type ShapedOutcome, type ToolKind } from "./shape";
 import { isUntrustedSource, untrustedEnvelope } from "./trust";
+import { withCallScope } from "../pi/call-scope";
+import { SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
 
 type BeforeToolCall = NonNullable<AgentLoopConfig["beforeToolCall"]>;
 
@@ -175,12 +176,15 @@ const NODE_API_HINT =
   "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`.";
 
 /**
- * The most program output the host holds, in characters: what one saved
- * result file can hold. Past it the run fails (the sandbox patch's
- * `maxOutputChars`), so a program printing in a loop cannot grow Electron
- * main's memory for the length of its deadline.
+ * The most program output the host is sent, in characters — printed output,
+ * the return value and an error's text together. Past it the run fails, and
+ * the sandbox's worker checks it before posting (the `maxOutputChars` patch),
+ * so a program printing in a loop or returning a huge value cannot grow
+ * Electron main's memory. Four mebi-characters: at most 8 MiB as JavaScript
+ * holds them, and at most 12 MiB as UTF-8 — about what one saved result
+ * file keeps.
  */
-export const MAX_HELD_OUTPUT_CHARS = MCP_RESULT_MAX_BYTES;
+export const MAX_HELD_OUTPUT_CHARS = 4 * 1_024 * 1_024;
 
 /**
  * Calls past the nested-call limit that still reject inside the program
@@ -193,11 +197,12 @@ const CALLS_PAST_LIMIT = 10;
 export const DEFAULT_PAUSE_ALLOWANCE_MS = 15 * 60_000;
 
 /**
- * The largest arguments one nested call may carry, as canonical JSON. A
+ * The largest arguments one nested call may carry, in characters of JSON. A
  * program passes paths and commands, not payloads; past this the call fails
- * inside the program and nothing of it is kept.
+ * inside the program, refused by the sandbox's worker before its arguments
+ * are ever posted to the host (the `maxCallChars` patch).
  */
-export const MAX_NESTED_ARGUMENT_BYTES = 1_024 * 1_024;
+export const MAX_NESTED_ARGUMENT_CHARS = 1_024 * 1_024;
 
 /**
  * `searchTools()` and `describeTool()` calls one run may make. They are not
@@ -224,6 +229,21 @@ const OVERLAPPING_TOOLS: ReadonlySet<string> = new Set([
   "browser_find",
   "browser_console",
 ]);
+
+/**
+ * Verbs that may overlap, by durable id: they read state and start nothing.
+ * `watch` registers interest and returns; `mcp.list` lists. A start or a
+ * delegation runs alone.
+ */
+const OVERLAPPING_VERBS: ReadonlySet<string> = new Set(["watch", "mcp.list"]);
+
+/**
+ * Verbs whose answers carry text Volli did not write, by durable id: what
+ * another agent said (`watch`, `session.delegate`), and what MCP servers say
+ * about their own tools (`mcp.list`). A program that slices them would strip
+ * the markers a direct call reads them inside.
+ */
+const UNTRUSTED_VERBS: ReadonlySet<string> = new Set(["watch", "session.delegate", "mcp.list"]);
 
 const codemodeSchema = Type.Object({
   code: Type.String({
@@ -295,8 +315,16 @@ export function createCodeModeTool(
     callable
       .filter(
         (entry) =>
-          OVERLAPPING_TOOLS.has(entry.tool.name) ||
+          (!entry.verb && OVERLAPPING_TOOLS.has(entry.tool.name)) ||
+          (entry.verb && OVERLAPPING_VERBS.has(entry.id)) ||
           (host.honourParallelReads === true && entry.mcp?.parallelRead === true),
+      )
+      .map((entry) => entry.tool.name),
+  );
+  const untrustedSources = new Set(
+    callable
+      .filter((entry) =>
+        entry.verb ? UNTRUSTED_VERBS.has(entry.id) : isUntrustedSource(entry.tool.name),
       )
       .map((entry) => entry.tool.name),
   );
@@ -321,6 +349,7 @@ export function createCodeModeTool(
         search,
         names,
         overlapping,
+        untrustedSources,
         outerId: toolCallId,
         source: params.code,
         signal,
@@ -338,6 +367,7 @@ interface RunInput {
   search: ToolSearch;
   names: ReadonlyMap<string, string>;
   overlapping: ReadonlySet<string>;
+  untrustedSources: ReadonlySet<string>;
   outerId: string;
   source: string;
   signal: AbortSignal | undefined;
@@ -351,7 +381,8 @@ interface CallRecord {
   argumentsBytes: number;
   startedAt: number;
   status: "ok" | "error" | "unfinished";
-  durationMs?: number;
+  /** How long it ran, so far: updated when the call settles. */
+  durationMs: number;
   error?: string;
 }
 
@@ -388,6 +419,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   // A provider that sends no tool-call id gets one minted for this run: nested
   // ids must be unique, and an empty id must never match a journal.
   const outerId = input.outerId === "" ? `codemode-${randomUUID()}` : input.outerId;
+  const programDigest = digest(input.source).slice(0, 12);
   const journalKey = input.outerId === "" ? undefined : runKey(input.outerId, input.source);
   const journal: RunJournal =
     journalKey === undefined
@@ -453,12 +485,31 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
             clock.resume();
           }
         };
-  // A call that may overlap is judged under the lock and then runs beside
-  // others like it; nothing about running it can ask a person.
+  // Every call is judged under the lock, one at a time and in the order the
+  // program issued them, and then runs as its kind allows: reads beside each
+  // other, anything else alone. Running holds no lock — a long `bash` or a
+  // `session.start` does not stop another call being judged, and a question
+  // it asks waits its turn below.
   const lockedJudge: BeforeToolCall | undefined =
     judge === undefined
       ? undefined
       : (context, callSignal) => judging.run(() => judge(context, callSignal));
+  // One question at a time, structurally: every question any nested call puts
+  // to a person — the gate's escalation, a verb's budget, an MCP server's
+  // sign-in — goes through this lock, and the clock stops from the moment a
+  // question waits for its turn until it is answered. Calls run beside each
+  // other as their kind allows until one of them actually asks.
+  const questions = new Mutex();
+  const scope: RuntimeCallScope = {
+    question: async (ask) => {
+      clock.pause();
+      try {
+        return await questions.run(ask);
+      } finally {
+        clock.resume();
+      }
+    },
+  };
 
   const nestedCall = async (
     tool: AgentTool,
@@ -480,7 +531,10 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         `This program has made its ${limits.maxNestedCalls} calls; no more are run. Return what you have.`,
       );
     }
-    const id = `${outerId}:${position}`;
+    // The program's digest is part of the id, so a backend that reuses a
+    // tool-call id cannot make a second program's `session.start` look, to
+    // the door's idempotency, like the first's.
+    const id = `${outerId}:${programDigest}:${position}`;
     const json = canonicalJson(args);
     const argumentsBytes = Buffer.byteLength(json, "utf8");
     const argumentsDigest = digest(json);
@@ -503,7 +557,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         throw unkept;
       }
       // A remembered answer from an untrusted source is still one.
-      if (isUntrustedSource(tool.name)) markUntrusted(tool.name);
+      if (remembered.untrusted === true) markUntrusted(tool.name);
       replayed += 1;
       return deliver(remembered.outcome);
     }
@@ -517,32 +571,18 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       argumentsBytes,
       startedAt: now(),
       status: "unfinished",
+      durationMs: 0,
     };
     records.push(record);
-    if (argumentsBytes > MAX_NESTED_ARGUMENT_BYTES) {
-      record.status = "error";
-      record.error = "arguments over the limit";
-      throw new Error(
-        `The arguments to ${tool.name} are ${formatBytes(argumentsBytes)}, over the ${formatBytes(MAX_NESTED_ARGUMENT_BYTES)} a call may carry. Pass a path or a command, not the data.`,
-      );
-    }
-    if (isUntrustedSource(tool.name)) markUntrusted(tool.name);
+    if (input.untrustedSources.has(tool.name)) markUntrusted(tool.name);
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
-    // A verb's only wait is a person answering its budget question, so its
-    // run stops the clock the way judgement does.
-    const verb = input.kinds.get(tool.name) === "verb";
     const slotted: AgentTool = {
       ...tool,
       execute: (callId, params, executeSignal, onUpdate) =>
-        slots.run(shared, executeSignal, async () => {
-          if (verb) clock.pause();
-          try {
-            return await tool.execute(callId, params, executeSignal, onUpdate);
-          } finally {
-            if (verb) clock.resume();
-          }
-        }),
+        slots.run(shared, executeSignal, () =>
+          tool.execute(callId, params, executeSignal, onUpdate),
+        ),
     };
     await host.observe({ type: "tool_execution_start", toolCallId: id, toolName: tool.name, args });
     const call = (beforeToolCall: BeforeToolCall | undefined) =>
@@ -556,12 +596,12 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
           signal,
         },
       );
-    // One prompt at a time, structurally. A call that runs alone — every
-    // write, `bash`, verb and unmarked MCP tool, and the only kind whose own
-    // execution can ask a person (a verb's budget) — holds the judgement
-    // lock from its judgement to its end, so no other judgement, and so no
-    // other question, can start while it runs.
-    const outcome = await (shared ? call(lockedJudge) : judging.run(() => call(judge)));
+    // Judged one at a time under the judgement lock, run under the slots, and
+    // with the program's scope, so any question the call puts to a person
+    // takes the question lock.
+    const outcome = await withCallScope(scope, () => call(lockedJudge)).finally(() => {
+      record.durationMs = now() - record.startedAt;
+    });
     await host.observe({
       type: "tool_execution_end",
       toolCallId: id,
@@ -570,7 +610,6 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       isError: outcome.isError,
     });
     const shaped = shapeResult(input.kinds.get(tool.name)!, outcome.result, outcome.isError);
-    record.durationMs = now() - record.startedAt;
     if (outcome.isError && signal.aborted) {
       // Cancelled under it: nothing says the call completed, so it is neither
       // journaled nor reported as an answer. A call that SUCCEEDED after its
@@ -580,7 +619,19 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     }
     record.status = shaped.ok ? "ok" : "error";
     if (!shaped.ok) record.error = shaped.message.slice(0, MAX_RECORDED_ERROR_CHARS);
-    remember(journal, position, { name: tool.name, argumentsDigest, outcome: shaped });
+    // `read` of a file Volli saved from an untrusted result opens with the
+    // trust notice; a program could drop it, so the run is marked instead.
+    const savedOutput =
+      tool.name === "read" &&
+      outcome.result.content?.[0]?.type === "text" &&
+      outcome.result.content[0].text === SAVED_TOOL_OUTPUT_WARNING;
+    if (savedOutput) markUntrusted("read (saved tool output)");
+    remember(journal, position, {
+      name: tool.name,
+      argumentsDigest,
+      outcome: shaped,
+      ...(savedOutput || input.untrustedSources.has(tool.name) ? { untrusted: true } : {}),
+    });
     return deliver(shaped);
   };
 
@@ -649,6 +700,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     timeoutMs: Number.POSITIVE_INFINITY,
     memoryLimitBytes: limits.memoryLimitBytes,
     maxOutputChars: MAX_HELD_OUTPUT_CHARS,
+    maxCallChars: MAX_NESTED_ARGUMENT_CHARS,
     ...(host.sandbox?.wasmPath === undefined
       ? {}
       : { wasm: loadQuickJSWasm(host.sandbox.wasmPath) }),
@@ -721,7 +773,7 @@ function nestedCalls(records: readonly CallRecord[]): NestedToolCalls {
     };
     if (record.args !== undefined) recorded.arguments = record.args;
     else recorded.argumentsBytes = record.argumentsBytes;
-    if (record.durationMs !== undefined) recorded.durationMs = Math.round(record.durationMs);
+    recorded.durationMs = Math.round(record.durationMs);
     if (record.error !== undefined) recorded.error = record.error;
     return recorded;
   });

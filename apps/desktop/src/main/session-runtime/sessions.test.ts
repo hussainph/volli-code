@@ -93,6 +93,7 @@ describe("Sessions", () => {
       sessionId: string;
       tools: readonly string[];
       mcpTools: readonly McpToolDefinition[];
+      parentSessionId?: string;
     }> = [];
     const { sessions: door } = sessions({
       // This test is about MCP inheritance, not model inheritance: a parent
@@ -108,8 +109,13 @@ describe("Sessions", () => {
         resolveMcp: () => [settingsTool],
         recorded: async () => ["read", parentTool.providerName],
         recordedMcp: async () => [parentTool],
-        record: async (sessionId, tools, mcpTools = []) => {
-          records.push({ sessionId, tools, mcpTools });
+        record: async (sessionId, tools, mcpTools = [], parentSessionId) => {
+          records.push({
+            sessionId,
+            tools,
+            mcpTools,
+            ...(parentSessionId === undefined ? {} : { parentSessionId }),
+          });
         },
       },
     });
@@ -140,6 +146,9 @@ describe("Sessions", () => {
         sessionId: "session-1",
         tools: ["read", parentTool.providerName],
         mcpTools: [parentTool],
+        // The parent rides along, so what the child freezes beside its names
+        // (VC-471's Code Mode routes) is bounded by the parent's record too.
+        parentSessionId: "parent-1",
       },
     ]);
   });

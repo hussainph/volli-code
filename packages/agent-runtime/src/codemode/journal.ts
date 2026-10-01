@@ -1,12 +1,15 @@
 /**
  * Replay of a Code Mode run never repeats a completed call (VC-471).
  *
- * Every nested call's id is derived from the outer call: `<outer id>:<n>`,
- * where `n` counts the calls in the order the program issued them. A program
- * is deterministic given its inputs — the VM is single-threaded, has no timers
- * and no I/O, and `Date` and `Math.random` are pinned per run (see the
- * prelude) — so a run of the same program under the same outer call issues the
- * same calls in the same order for as long as it receives the same results.
+ * Every nested call's id is derived from the outer call and the program:
+ * `<outer id>:<program digest>:<n>`, where `n` counts the calls in the order
+ * the program issued them. A program
+ * is close to deterministic given its inputs — the VM is single-threaded, has
+ * no timers and no I/O, and `Date`, `performance.now()` and `Math.random` are
+ * pinned per run (see the prelude) — so a run of the same program under the
+ * same outer call issues the same calls in the same order for as long as it
+ * receives the same results. Where a program finds a way to differ anyway,
+ * the divergence rule below stops the replay rather than guessing.
  *
  * The journal holds those results for a run that did not finish. When the
  * same program runs again under the same outer call id — a host retry, a
@@ -52,6 +55,8 @@ export interface JournaledCall {
   argumentsDigest: string;
   /** What it came to; `null` when it was past the run's bound and not kept. */
   outcome: ShapedOutcome | null;
+  /** Its answer came from outside the Session, so a replay of it is marked too. */
+  untrusted?: true;
 }
 
 /** One unfinished program's record. */
@@ -115,7 +120,7 @@ export function runKey(outerId: string, source: string): string {
 export function remember(
   run: RunJournal,
   position: number,
-  call: { name: string; argumentsDigest: string; outcome: ShapedOutcome },
+  call: { name: string; argumentsDigest: string; outcome: ShapedOutcome; untrusted?: true },
 ): void {
   const size = Buffer.byteLength(JSON.stringify(call.outcome), "utf8");
   const keep = run.bytes + size <= RUN_JOURNAL_MAX_BYTES;
@@ -150,18 +155,30 @@ export function seedOf(text: string): number {
 }
 
 /**
- * One line of JavaScript that pins `Math.random` and `Date` for a run.
+ * One line of JavaScript that pins `Math.random`, `Date` and
+ * `performance.now()` for a run.
  *
  * Prepended to the program's first line rather than given a line of its own,
  * so every line number a stack trace reports is the program's own. `Date` is
  * replaced by a function that answers the run's epoch for `Date.now()` and a
- * bare `new Date()`, and defers to the real one for any explicit date.
+ * bare `new Date()`, and defers to the real one for any explicit date; the
+ * real one's prototype points back at the replacement, so
+ * `new Date().constructor` is the pinned clock too. `performance` becomes
+ * one whose `now()` answers 0 and whose origin is the run's epoch.
+ *
+ * Pinning is best-effort, not a proof: a program could still find a source
+ * of difference this misses (a `WeakRef` read after a collection, say). That
+ * is why replay checks each call against the journal and stops at the first
+ * that differs — a program that diverges loses its replay, never runs a call
+ * twice under the belief it is the same one.
  */
 export function determinismPrelude(seed: number, epoch: number): string {
   return (
     `(()=>{let s=${seed}|0;Math.random=()=>{s=(s+0x6D2B79F5)|0;let t=Math.imul(s^(s>>>15),1|s);` +
     `t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296};` +
     `const R=Date,T=${epoch};const D=function(...a){return new.target?(a.length===0?new R(T):new R(...a)):new R(T).toString()};` +
-    `D.prototype=R.prototype;D.now=()=>T;D.parse=R.parse;D.UTC=R.UTC;globalThis.Date=D})();`
+    `D.prototype=R.prototype;Object.defineProperty(R.prototype,"constructor",{value:D,writable:true,configurable:true});` +
+    `D.now=()=>T;D.parse=R.parse;D.UTC=R.UTC;globalThis.Date=D;` +
+    `Object.defineProperty(globalThis,"performance",{value:Object.freeze({now:()=>0,timeOrigin:T}),writable:true,configurable:true})})();`
   );
 }
