@@ -84,6 +84,8 @@ export interface BackgroundShellHostDependencies {
   publishState(state: BackgroundShellState): void;
   /** The renderer's feed: a shell the host forgot. */
   publishRemoved(shellId: string): void;
+  /** Apply after combining chunks, before tool or renderer reads. Never logs output. */
+  redactOutput?: (text: string) => string;
   /** Where a started shell is recorded so a later launch can still attribute it. */
   ledger?: SpawnLedgerPort;
   createId?: () => string;
@@ -341,7 +343,7 @@ export class BackgroundShellHost {
 
     await this.settle(entry);
     const { output } = ring.readNew();
-    return { shell: { ...record }, pid, output };
+    return { shell: { ...record }, pid, output: this.safeOutput(output) };
   }
 
   /** The settle window: the exit, or the bound, whichever is first. */
@@ -369,7 +371,7 @@ export class BackgroundShellHost {
       tail === undefined
         ? entry.ring.readNew()
         : entry.ring.readTail(Math.max(0, Math.min(Math.floor(tail), this.tailMaxBytes)));
-    return { shell: { ...entry.record }, ...read };
+    return { shell: { ...entry.record }, ...read, output: this.safeOutput(read.output) };
   }
 
   /** SIGTERM the group, SIGKILL after the grace; resolves once the shell has exited. */
@@ -402,6 +404,14 @@ export class BackgroundShellHost {
     }
   }
 
+  private safeOutput(text: string): string {
+    try {
+      return this.deps.redactOutput?.(text) ?? text;
+    } catch {
+      return "[Output withheld: credential redaction failed.]";
+    }
+  }
+
   // ---- the renderer's doors: every shell, unscoped by Session -------------
 
   listAll(): BackgroundShellState[] {
@@ -412,7 +422,7 @@ export class BackgroundShellHost {
   tailOf(shellId: string): { output: string; shell: BackgroundShellState } | null {
     const entry = this.shells.get(shellId);
     if (entry === undefined) return null;
-    return { output: entry.ring.all(), shell: this.stateOf(entry) };
+    return { output: this.safeOutput(entry.ring.all()), shell: this.stateOf(entry) };
   }
 
   /** A person's kill: a no-op on a shell that has exited or is unknown, not a refusal. */

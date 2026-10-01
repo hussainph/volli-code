@@ -70,6 +70,7 @@ export interface AgentShellPortOptions {
    * every toolchain on its own default.
    */
   concurrencyEnv?: () => Promise<Record<string, string>>;
+  secretEnvironment?: () => Readonly<Record<string, string>>;
 }
 
 export function createAgentShellPort(options: AgentShellPortOptions): AgentShellPort {
@@ -106,7 +107,10 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
       const env = sessionCommandEnvironment(process.env, {
         identity: options.identity,
         pathPrefixes: options.pathPrefixes,
-        environment: (await options.concurrencyEnv?.()) ?? {},
+        environment: {
+          ...(await options.concurrencyEnv?.()),
+          ...options.secretEnvironment?.(),
+        },
       });
       const started = await options.host.start(owner, {
         command: input.command,

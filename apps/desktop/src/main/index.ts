@@ -9,6 +9,7 @@ import {
   net,
   powerMonitor,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -195,6 +196,12 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { SecretStore } from "./secrets/store";
+import { keychainSecretCodec } from "./secrets/codec";
+import { SecretService } from "./secrets/service";
+import { retiresSessionSecrets } from "./secrets/lifetime";
+import { registerSecretIpc } from "./secrets/ipc";
+import { refusingCredentialReads } from "@volli/agent-runtime";
 import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import { createPeekSummarizer } from "./session-control/peek-summary";
@@ -1214,6 +1221,24 @@ app.whenReady().then(async () => {
   // the database itself, and never the keychain — see `mcp/credential-store.ts`.
   // Beside `dbPath` rather than under `userData` so a smoke run on its own
   // VOLLI_DB_PATH cannot read or write a real profile's tokens.
+  // Lazy: no keychain access until a stored secret is used or a person saves one.
+  // Session-only storage never needs the keychain. No plaintext fallback.
+  const secrets = new SecretService(
+    new SecretStore(join(dirname(dbPath), "session-secrets.enc"), keychainSecretCodec(safeStorage)),
+  );
+  sessionWakeBus?.subscribe(({ event }) => {
+    if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
+  });
+  registerSecretIpc(secrets, (sender) => {
+    const url = sender.getURL();
+    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
+    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
+    const actual = new URL(url);
+    const expected = new URL(renderer);
+    actual.hash = "";
+    expected.hash = "";
+    return actual.href === expected.href;
+  });
   const mcpCredentials = new FileMcpCredentialStore(
     join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
   );
@@ -1335,6 +1360,7 @@ app.whenReady().then(async () => {
                   // `resolveClassify` answered that at birth, and the record
                   // keeps the answer for the Session's whole life.
                   ...(classify ? (["classify"] as const) : []),
+                  "request_secret",
                   // Code Mode (VC-471), when the setting gives this model a
                   // mode or the Session holds an MCP server too large to
                   // declare. Last, for the Cache Prefix reason every name
@@ -1463,6 +1489,7 @@ app.whenReady().then(async () => {
    * renderer doors are registered there, once a window can receive them.
    */
   const backgroundShells = new BackgroundShellHost({
+    redactOutput: (text) => secrets.store.redact(text),
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     // One row per started shell (VC-341). A background shell is the door a
@@ -1567,18 +1594,22 @@ app.whenReady().then(async () => {
             // identity is resolved through the one per-attachment store the
             // shell port resolves through too (VC-270), so both doors export
             // the same token — see `attachment-identity.ts`.
-            return piExecutionEnv(workspacePath, {
-              pathPrefixes: [runtimePaths.binDir],
-              identity: attachmentIdentities.resolve(identity),
-              // This Session's concurrency budget (VC-339), computed at attach
-              // from the Sessions working now — under the identity above, which
-              // is what keeps a machine fact from ever posing as who is running.
-              environment: await sessionConcurrencyEnvFor(identity.sessionId),
-              // The execution environment is owned by this attachment and its
-              // cleanup runs on every close path. Revoke there so a copied
-              // token cannot outlive the structured attachment that held it.
-              onCleanup: () => attachmentIdentities.release(identity.attachmentId),
-            });
+            return refusingCredentialReads(
+              await piExecutionEnv(workspacePath, {
+                pathPrefixes: [runtimePaths.binDir],
+                identity: attachmentIdentities.resolve(identity),
+                // This Session's concurrency budget (VC-339), computed at attach
+                // from the Sessions working now — under the identity above, which
+                // is what keeps a machine fact from ever posing as who is running.
+                environment: await sessionConcurrencyEnvFor(identity.sessionId),
+                secretEnvironment: () => secrets.environment(identity.sessionId),
+                // The execution environment is owned by this attachment and its
+                // cleanup runs on every close path. Revoke there so a copied
+                // token cannot outlive the structured attachment that held it.
+                onCleanup: () => attachmentIdentities.release(identity.attachmentId),
+              }),
+              workspacePath,
+            );
           },
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the
@@ -1600,6 +1631,7 @@ app.whenReady().then(async () => {
               // machine, so it self-limits by the budget that is true when it
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
+              secretEnvironment: () => secrets.environment(scope.sessionId),
             }),
           // The Session's decision port (VC-478), bound to the Session and its
           // project at attach. Membership is the frozen record's; this only
@@ -1611,6 +1643,19 @@ app.whenReady().then(async () => {
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),
+          resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+            secrets.port(
+              {
+                sessionId,
+                sessionLabel: `Session ${shortSessionId(sessionId)}`,
+                projectId,
+                projectLabel: dbHandle.ok
+                  ? (getProjectById(dbHandle.db, projectId)?.name ?? "Project")
+                  : "Project",
+              },
+              wait,
+              allowInjection,
+            ),
           resolveMcpPort:
             mcpSettings === null
               ? undefined

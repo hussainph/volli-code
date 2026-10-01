@@ -17,6 +17,7 @@ import type { CodeModeSurface } from "./code-mode";
 import type { McpToolDefinition } from "./mcp";
 import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
+import type { SecretRequestMetadata } from "./secrets";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   mergeSessionUsageSummaries,
@@ -205,6 +206,8 @@ export interface SessionInteraction {
    * directly.
    */
   prompts?: readonly SessionInteractionPrompt[];
+  /** Person-only credential waiting. Metadata only; never resolve via a generic answer. */
+  credential?: SecretRequestMetadata;
   native: SessionNativeReference;
 }
 

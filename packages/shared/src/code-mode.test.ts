@@ -196,6 +196,8 @@ describe("codeModeSurfaceFor", () => {
       "mcp-management",
       "tool:classify",
     ]);
+    expect(defaultToolRoute("request_secret")).toBe("direct");
+    expect(toolGroupOf("request_secret")).toBe("conversation");
     expect(toolGroupOf(mcp("search").providerName, mcp("search"))).toBe("mcp:srv");
     expect(toolGroupOf(mcp("search").providerName)).toBe(`mcp:${mcp("search").providerName}`);
   });

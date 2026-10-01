@@ -134,6 +134,7 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { privateSecretExecution } from "./secrets";
 import { CodeModeJournal } from "../codemode/journal";
 import { scopedAsk } from "./call-scope";
 import {
@@ -2188,7 +2189,8 @@ async function attachSession(
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
     toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
-    const ownedToolEnv = toolEnv;
+    const credentialRedaction = spec.credentialRedaction ?? spec.secret;
+    const ownedToolEnv = privateSecretExecution(toolEnv, credentialRedaction);
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
@@ -2228,6 +2230,9 @@ async function attachSession(
       dataDirectory: host.sessionDataDir,
       ledger: host.toolOutputLedger,
       workspacePath: spec.workspacePath,
+      ...(credentialRedaction === undefined
+        ? {}
+        : { redact: (text: string) => credentialRedaction.redact(text) }),
     });
     // Code Mode (VC-471), for a Session born with it: one more tool, built over
     // the Session's own tools and reaching them through the gate below — the

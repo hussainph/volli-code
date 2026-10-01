@@ -66,6 +66,7 @@ import {
 } from "@volli/shared";
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createClassifyTool } from "./classify-tool";
+import { createRequestSecretTool, redactToolResults } from "./secrets";
 import { createShellTool } from "./shell-tools";
 import { currentCallScope } from "./call-scope";
 import type { SurfaceTool } from "../codemode/tool";
@@ -264,7 +265,10 @@ export function createSessionTools(
       ? null
       : {
           id: binding.tool,
-          tool: createBoundTool(binding, spec, env, output),
+          tool: redactToolResults(
+            createBoundTool(binding, spec, env, output),
+            spec.credentialRedaction ?? spec.secret,
+          ),
           verb: "verb" in binding,
           ...("verb" in binding ? verbDetailsSchema(binding.verb) : {}),
           ...("definition" in binding ? { mcp: binding.definition } : {}),
@@ -281,9 +285,12 @@ export function createSessionTools(
   if (buildCodeMode === undefined) {
     throw new Error("This Session's surface names codemode, but no Code Mode host is wired.");
   }
-  const codemode = buildCodeMode(
-    codeMode,
-    built.filter((entry): entry is SurfaceTool => entry !== null),
+  const codemode = redactToolResults(
+    buildCodeMode(
+      codeMode,
+      built.filter((entry): entry is SurfaceTool => entry !== null),
+    ),
+    spec.credentialRedaction ?? spec.secret,
   );
   return bindings.flatMap((binding, index) => {
     if (binding.tool === "codemode") return [codemode];
@@ -311,6 +318,8 @@ function createBoundTool(
       return createTool(binding.tool, env, output);
     case "ask_user":
       return createAskUserTool(binding.port, spec.signal);
+    case "request_secret":
+      return createRequestSecretTool(binding.port, spec.signal);
     case "web_fetch":
       return createWebFetchTool(binding.port, spec.signal);
     case "web_search":
