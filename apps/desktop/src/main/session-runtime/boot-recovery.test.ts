@@ -156,6 +156,125 @@ describe("closeStaleAttachments", () => {
     expect(target.observed).toEqual([]);
   });
 
+  it("retires only adapter-authored approvals parked on the recovered attachment", async () => {
+    const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
+    const approval = {
+      asked: "write /outside/a",
+      because: "outside",
+      reason: "outside",
+      stages: [],
+      held: null,
+    };
+    const target = recorder({
+      "project-1": [
+        {
+          ...lost,
+          interactions: {
+            active: [
+              { id: "ask:lost", attachmentId: "pi-1", approval },
+              { id: "ask-user:model", attachmentId: "pi-1" },
+              { id: "ask:elsewhere", attachmentId: "pi-2", approval },
+            ],
+          },
+        },
+      ],
+    });
+    await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
+    expect(target.observed).toMatchObject([
+      { kind: "interaction.cancelled", interactionId: "ask:lost", reason: "abandoned" },
+    ]);
+    expect(target.observed).toHaveLength(1);
+  });
+
+  it("reports a failed approval retirement and keeps recovering", async () => {
+    const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
+    const target = recorder(
+      {
+        "project-1": [
+          {
+            ...lost,
+            interactions: {
+              active: [
+                {
+                  id: "ask:lost",
+                  attachmentId: "pi-1",
+                  approval: {
+                    asked: "write /outside/a",
+                    because: "outside",
+                    reason: "outside",
+                    stages: [],
+                    held: null,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      async (event) => {
+        if (event.kind === "interaction.cancelled") throw new Error("cannot retire card");
+      },
+    );
+    const { run, onError } = sweep(target, ["project-1"]);
+    await run;
+    expect(onError).toHaveBeenCalledWith(
+      "pi-1",
+      expect.objectContaining({ message: "cannot retire card" }),
+    );
+    expect(target.reconciled).toEqual([{ sessionId: "session-1", attachmentId: "pi-1" }]);
+  });
+
+  it.each(["already-interrupted", "failed-reconcile", "closed"])(
+    "retires abandoned approvals after %s",
+    async (state) => {
+      const lost = session(
+        "session-1",
+        [
+          attachment({
+            id: "pi-1",
+            adapterId: "pi",
+            status: state === "closed" ? "closed" : "open",
+          }),
+        ],
+        state === "failed-reconcile",
+      );
+      const target = recorder(
+        {
+          "project-1": [
+            {
+              ...lost,
+              interactions: {
+                active: [
+                  {
+                    id: "ask:lost",
+                    attachmentId: "pi-1",
+                    approval: {
+                      asked: "write /outside/a",
+                      because: "outside",
+                      reason: "outside",
+                      stages: [],
+                      held: null,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        undefined,
+        async () => {
+          throw new Error("sidecar missing");
+        },
+      );
+      await sweep(target, ["project-1"]).run;
+      expect(
+        target.observed.some(
+          (event) => event.kind === "interaction.cancelled" && event.interactionId === "ask:lost",
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("closes a structured turn as interrupted when it cannot be rehydrated", async () => {
     const target = recorder(
       {

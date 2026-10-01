@@ -419,3 +419,24 @@ describe("watch notices (VC-457)", () => {
     ]);
   });
 });
+
+describe("ledger-hit host receipts", () => {
+  const notice = {
+    kind: "approval-used",
+    approvalId: "approval",
+    asked: "write /outside",
+    summary: "Write to /outside",
+  } as const;
+  it("projects a receipt without making a person-authored Turn", () => {
+    expect(readHostNotice(message(sessionHostNoticeMetadata(notice)))).toEqual(notice);
+  });
+  it.each([
+    { ...notice, approvalId: "" },
+    { ...notice, summary: null },
+    { ...notice, asked: 1 },
+  ])("keeps malformed receipts noninteractive: %j", (invalid) => {
+    expect(readHostNotice(message({ kind: "session-host-notice", notice: invalid }))).toMatchObject(
+      { kind: "unknown" },
+    );
+  });
+});

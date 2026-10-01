@@ -2280,6 +2280,78 @@ CREATE INDEX IF NOT EXISTS session_read_receipts_unread
   WHERE unread_since IS NOT NULL;
 `;
 
+/**
+ * Migration 054: `authority_approvals` — the remembered approvals of VC-480.
+ *
+ * One row per "allow for this Session" or "always allow in this project", with
+ * where it came from. App-owned like `projects.authority_policy` and for the
+ * same reason: no verb or tool exposes it, so the Session it governs cannot
+ * write it. Revoking is a soft delete (`revoked_at`), so Undo restores the same
+ * row with the same provenance. A Session row dies with its Session.
+ */
+const MIGRATION_054_AUTHORITY_APPROVALS = `
+CREATE TABLE IF NOT EXISTS authority_approvals (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope                TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+  session_id           TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  operation            TEXT NOT NULL,
+  key                  TEXT NOT NULL,
+  rule                 TEXT NOT NULL,
+  provenance           TEXT NOT NULL CHECK (json_valid(provenance)),
+  created_at           INTEGER NOT NULL,
+  use_count            INTEGER NOT NULL DEFAULT 0,
+  last_used_at         INTEGER,
+  last_used_session_id TEXT,
+  revoked_at           INTEGER,
+  CHECK ((scope = 'session') = (session_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS authority_approvals_project
+  ON authority_approvals(project_id)
+  WHERE revoked_at IS NULL;
+
+-- Who authorised every gated call, written before the call ran (VC-480). The
+-- activity log's raw material: append-only, one row per decision.
+CREATE TABLE IF NOT EXISTS authority_decisions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  tool         TEXT NOT NULL,
+  authoriser   TEXT NOT NULL,
+  rule         TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  asked        TEXT NOT NULL,
+  approval_id  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS authority_decisions_session
+  ON authority_decisions(session_id, created_at);
+`;
+
+/** Successful calls and user mutation history are separate from per-grant counters. */
+const MIGRATION_055_APPROVAL_HISTORY = `
+CREATE TABLE IF NOT EXISTS authority_approval_completions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  approval_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, tool_call_id)
+);
+CREATE TABLE IF NOT EXISTS authority_approval_commands (
+  command_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  receipt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS authority_approval_events (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL UNIQUE REFERENCES authority_approval_commands(command_id),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2557,6 +2629,17 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_053_PROJECT_DECISION_MODEL,
     apply: applyMigration053ProjectDecisionModel,
   },
+  {
+    version: 54,
+    name: "authority_approvals — remembered approvals, app-owned (VC-480)",
+    sql: MIGRATION_054_AUTHORITY_APPROVALS,
+    apply: applyMigration054AuthorityApprovals,
+  },
+  {
+    version: 55,
+    name: "approval completion and command history (VC-480)",
+    sql: MIGRATION_055_APPROVAL_HISTORY,
+  },
 ];
 
 /**
@@ -2568,6 +2651,20 @@ function applyMigration053ProjectDecisionModel(db: Database.Database): void {
   const columns = db.pragma("table_info(projects)") as { name: string }[];
   if (columns.some(({ name }) => name === "decision_model")) return;
   db.exec(MIGRATION_053_PROJECT_DECISION_MODEL);
+}
+
+/**
+ * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
+ * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * Repair the skipped decision-model column before creating any missing ledger
+ * tables, without rewinding user_version or rebuilding populated tables.
+ */
+function applyMigration054AuthorityApprovals(db: Database.Database): void {
+  applyMigration053ProjectDecisionModel(db);
+  const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  const hasApprovals = tableExists.get("authority_approvals") !== undefined;
+  const hasDecisions = tableExists.get("authority_decisions") !== undefined;
+  if (!hasApprovals || !hasDecisions) db.exec(MIGRATION_054_AUTHORITY_APPROVALS);
 }
 
 /**

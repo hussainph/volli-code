@@ -80,6 +80,7 @@ import {
 import {
   authorityClassifierEligible,
   authorityVerdict,
+  describeCall,
   type AuthorityVerdict,
 } from "../authority/gate";
 import { AUTHORITY_JUDGE_THRESHOLDS, judgeAuthorityCall } from "../authority/judge";
@@ -2498,6 +2499,7 @@ async function attachSession(
           : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
         signal: spec.signal,
         now: host.now,
+        ...(spec.approvals === undefined ? {} : { approvals: spec.approvals }),
       });
       return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
@@ -2506,6 +2508,7 @@ async function attachSession(
           authority,
           workspacePath: spec.workspacePath,
           readableRoots: toolOutput.readableDirectories,
+          ...(spec.approvals === undefined ? {} : { protection: true }),
           hardDeniesFirst: true,
         });
         // Code Mode's isolated program is a container, not an authority act:
@@ -2520,7 +2523,14 @@ async function attachSession(
           });
           return undefined;
         }
-        const auto = authority.enforcement === "enforce" && authority.judgmentMode === "auto";
+        // Protection deliberately uses the deterministic ledger/card funnel,
+        // even when an upgraded On project retains a legacy automatic policy.
+        // Legacy attachments keep VC-28's shadow/automatic review unchanged.
+        const protectedCall = spec.approvals !== undefined;
+        const auto =
+          !protectedCall &&
+          authority.enforcement === "enforce" &&
+          authority.judgmentMode === "auto";
         const hardDenied = verdict.outcome === "deny" && !isOverridableAuthorityRule(verdict.cause);
         const eligible = authorityClassifierEligible({
           tool: toolCall.name,
@@ -2532,9 +2542,7 @@ async function attachSession(
           auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
         let askImmediately = false;
         let personReason: string | undefined;
-        // VC-480 hook: an explicit ledger allowance belongs here, after hard
-        // denies and deterministic skips, before invoking the classifier.
-        if (eligible) {
+        if (!protectedCall && eligible) {
           const review = await judgeAuthorityCall({
             decisions: spec.decisions,
             sessionId: spec.identity.sessionId,
@@ -2622,6 +2630,7 @@ async function attachSession(
           pauseIfUnattended: auto,
           tool: toolCall.name,
           toolCallId: toolCall.id,
+          asked: describeCall(toolCall.name, args),
           turnId,
           signal,
         });
@@ -3435,6 +3444,16 @@ async function attachSession(
 
       try {
         await commitObservation(await persistObservation(activity));
+        if (!event.isError) {
+          try {
+            // The action already succeeded. A lost use count is bookkeeping,
+            // not a failed tool: throwing into Pi here drops the real result
+            // and invites a repeat of an action that has already happened.
+            await spec.approvals?.completed?.(event.toolCallId);
+          } catch (error) {
+            console.error("Approval completion bookkeeping failed", event.toolCallId, error);
+          }
+        }
       } finally {
         activityByToolCallId.delete(event.toolCallId);
       }

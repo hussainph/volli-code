@@ -514,6 +514,7 @@ export class ObservabilityReducer {
       case "attention":
         return { kind: "attention", phase: observation.state, reason: observation.reason };
       // Durable classifier verdicts carry calibration data, never exporter content.
+      case "approval-used":
       case "authority-review":
       case "delta":
       case "message-settled":

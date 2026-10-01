@@ -20,11 +20,14 @@
  */
 import {
   askInteractionId,
+  decodeApprovalConsent,
+  isApprovalInteraction,
   readInteractionAnswers,
   readInteractionPrompts,
   SESSION_ESCALATION_CONTINUE_ID,
   SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
+  type ApprovalDetail,
   type RendererSessionEventPayload,
   type RendererSessionInteraction,
   type SessionInteractionAnswer,
@@ -1011,8 +1014,7 @@ export function interactionForApproval(
   toolCallId: string | null,
 ): RendererSessionInteraction | null {
   if (toolCallId === null) return null;
-  const interactionId = askInteractionId(toolCallId);
-  return interactions.find((interaction) => interaction.id === interactionId) ?? null;
+  return interactions.find((interaction) => approvalMatchesCall(interaction, toolCallId)) ?? null;
 }
 
 /**
@@ -1030,8 +1032,21 @@ export function footInteraction(
   interactions: readonly RendererSessionInteraction[],
   gatedCallIds: ReadonlySet<string>,
 ): RendererSessionInteraction | null {
-  const drawn = new Set([...gatedCallIds].map(askInteractionId));
-  return interactions.find((interaction) => !drawn.has(interaction.id)) ?? null;
+  return (
+    interactions.find(
+      (interaction) => ![...gatedCallIds].some((id) => approvalMatchesCall(interaction, id)),
+    ) ?? null
+  );
+}
+
+/** Retry cards keep the call's correlation without reusing a resolved card ID. */
+function approvalMatchesCall(interaction: RendererSessionInteraction, toolCallId: string): boolean {
+  if (interaction.id === askInteractionId(toolCallId)) return true;
+  return (
+    isApprovalInteraction(interaction) &&
+    /^approval-retry:[1-9][0-9]*:/u.test(interaction.id) &&
+    interaction.id.replace(/^approval-retry:[1-9][0-9]*:/u, "") === toolCallId
+  );
 }
 
 /* ---------------------------------------------------------------- receipt */
@@ -1062,10 +1077,60 @@ const RECEIPT_LEADS: Record<InteractionReceipt["verdict"], string> = {
   stopped: "You stopped the turn at",
 };
 
+/**
+ * The receipt an approval card (VC-480) leaves, in its own words rather than
+ * the generic permission vocabulary: what was remembered, and for how long.
+ * A ledger hit is the same card answered by an earlier approval, in one line.
+ */
+function describeApprovalResolution(
+  interaction: RendererSessionInteraction & { approval: ApprovalDetail },
+  resolution: SessionInteractionResolution,
+): InteractionReceipt {
+  const detail = interaction.approval;
+  const choice = decodeApprovalConsent(
+    interaction.options,
+    resolution.optionIds,
+    resolution.response,
+  );
+  const subject = interaction.title.replace(/^Allow /u, "").replace(/\?$/u, "");
+  if (typeof choice === "object") {
+    const said = choice.message.replaceAll(/\s+/gu, " ");
+    return {
+      verdict: "rejected",
+      lead: "You denied",
+      subject,
+      trailer: `\u201c${said}\u201d`,
+    };
+  }
+  if (choice === "ledger") {
+    return {
+      verdict: "standing",
+      lead: "Allowed by your earlier approval:",
+      subject:
+        interaction.options.find((option) => option.id.toLowerCase() === "ledger")?.description ??
+        detail.asked,
+      trailer: null,
+    };
+  }
+  if (choice === "allow-project") {
+    return { verdict: "standing", lead: "You allowed", subject, trailer: "always in this project" };
+  }
+  if (choice === "allow-session") {
+    return { verdict: "standing", lead: "You allowed", subject, trailer: "for this Session" };
+  }
+  if (choice === "allow") {
+    return { verdict: "allowed", lead: "You allowed", subject, trailer: "once" };
+  }
+  return { verdict: "rejected", lead: "You denied", subject, trailer: null };
+}
+
 export function describeInteractionResolution(
   interaction: RendererSessionInteraction,
   resolution: SessionInteractionResolution,
 ): InteractionReceipt {
+  if (isApprovalInteraction(interaction)) {
+    return describeApprovalResolution(interaction, resolution);
+  }
   const prompts = readInteractionPrompts(interaction);
   const answers = readInteractionAnswers(interaction, resolution);
   // Each answer's ids are read against its *own* question's options, which is
@@ -1205,6 +1270,25 @@ export function indexOpenedInteractions(
       byId.set(payload.interaction.id, payload.interaction);
   }
   return byId;
+}
+
+/** Rejected answer attempts, indexed by the durable answer command ID. */
+export function approvalAnswerFailures(
+  frames: readonly {
+    event: { payload: RendererSessionEventPayload } | null;
+  }[],
+): ReadonlyMap<string, "once" | "not-delivered"> {
+  const failed = new Map<string, "once" | "not-delivered">();
+  for (const frame of frames) {
+    const payload = frame.event?.payload;
+    if (payload?.kind === "command.receipt.recorded" && payload.receipt.status === "rejected") {
+      failed.set(
+        payload.receipt.commandId,
+        payload.receipt.code === "PI_APPROVAL_NOT_REMEMBERED" ? "once" : "not-delivered",
+      );
+    }
+  }
+  return failed;
 }
 
 /** A durable answer, at the transcript position where it was given. */

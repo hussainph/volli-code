@@ -51,7 +51,9 @@ import {
 } from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
-import { insertProject, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, insertProject, listProjects } from "./db/projects-repo";
+import { setAppState } from "./db/app-state-repo";
+import { migrateProtectionPolicies, PROTECTION_POLICY_MIGRATION_KEY } from "./protection/settings";
 import { getTicket, insertTicket } from "./db/tickets-repo";
 import { DelegateSessionError } from "./session-runtime/delegate-session";
 import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
@@ -430,6 +432,56 @@ describe("session_start through the Agent Tool Surface", () => {
     expect(delegation.extensions).toEqual([]);
     expect(h.startInputs).toEqual([]);
   });
+
+  it.each([null, "off", "observe"] as const)(
+    "restores main's delegation path with Protection Off (%s), an old dogfood marker and a stored restriction",
+    async (enforcement) => {
+      const delegation = cappedDelegation([]);
+      const h = harness({
+        delegation,
+        authorityPolicy: () => getProjectAuthorityPolicy(ctx!.db, "project-one"),
+      });
+      const db = ctx!.db;
+      const store = (policy: Record<string, unknown>) =>
+        db
+          .prepare("UPDATE projects SET authority_policy = ? WHERE id = ?")
+          .run(JSON.stringify(policy), "project-one");
+      const visible = enforcement === null ? {} : { enforcement };
+      store(visible);
+      // Today's main: the spent allowance asks, records one extension and starts.
+      const askOnMain = vi.fn<VerbBudgetAsk>(async () => "allow");
+      const mainResult = await h.call({ ticket: "VC-1" }, "main-start", TICKET_CALLER, askOnMain);
+      expect(askOnMain).toHaveBeenCalledOnce();
+      expect(mainResult.text).toContain("Started Session");
+      delegation.extensions.length = 0;
+      h.startInputs.length = 0;
+
+      setAppState(db, PROTECTION_POLICY_MIGRATION_KEY, '{ "completedAt": 1, "policies": [] }', 1);
+      store({ ...visible, budgets: { delegationExceeded: "refuse" } });
+      expect(getProjectAuthorityPolicy(db, "project-one").enforcement).not.toBe("enforce");
+      expect(getProjectAuthorityPolicy(db, "project-one").budgets.delegationExceeded).toBe(
+        "refuse",
+      );
+      migrateProtectionPolicies(db, 2);
+
+      const askAfterUpgrade = vi.fn<VerbBudgetAsk>(async () => "allow");
+      const result = await h.call(
+        { ticket: "VC-1" },
+        "upgraded-start",
+        TICKET_CALLER,
+        askAfterUpgrade,
+      );
+      expect(result).toEqual(mainResult);
+      expect(askAfterUpgrade).toHaveBeenCalledExactlyOnceWith(
+        { ...askOnMain.mock.calls[0]![0], toolCallId: "upgraded-start" },
+        expect.any(AbortSignal),
+      );
+      expect(delegation.extensions).toEqual([
+        { parentSessionId: TICKET_CALLER.sessionId, toolCallId: "upgraded-start" },
+      ]);
+      expect(h.startInputs).toHaveLength(1);
+    },
+  );
 
   it("does not ask at all under a refuse posture", async () => {
     const delegation = cappedDelegation([]);
