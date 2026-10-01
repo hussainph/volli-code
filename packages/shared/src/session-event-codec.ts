@@ -36,6 +36,8 @@
  * this table exists to make impossible.
  */
 
+import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "./session-stop";
+
 import {
   COMPACTION_REASONS,
   COMPACTION_WORK_REASONS,
@@ -325,6 +327,7 @@ const codecs = {
       kind: "turn.interrupted",
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
+      ...optionalStopDetail(record.stopDetail, `${context}.stopDetail`),
     }),
     scrub: (payload) => payload,
   },
@@ -1597,6 +1600,7 @@ function decodeAttention(value: unknown, context: string): SessionAttention {
     attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
     detail: readNullableString(row.detail, `${context}.detail`),
     diagnostic: decodeNativeDetail(row.diagnostic, `${context}.diagnostic`),
+    ...optionalStopDetail(row.stopDetail, `${context}.stopDetail`),
   };
   if (kind === "rate_limited") {
     return { ...base, kind, retryAt: readNullableInteger(row.retryAt, `${context}.retryAt`) };
@@ -2009,4 +2013,27 @@ function enumValue<const T extends readonly string[]>(
     throw new Error(`${context} has an unsupported value`);
   }
   return value as T[number];
+}
+
+/** Optional rather than defaulted: legacy event identity must not change on replay. */
+function optionalStopDetail(value: unknown, context: string): { stopDetail?: SessionStopDetail } {
+  return value === undefined ? {} : { stopDetail: decodeSessionStopDetail(value, context) };
+}
+
+export function decodeSessionStopDetail(value: unknown, context: string): SessionStopDetail {
+  const row = asRecord(value, context);
+  const bounded = (field: unknown, key: string, max: number): string | null => {
+    const text = readNullableString(field, `${context}.${key}`);
+    if (text !== null && text.length > max)
+      throw new Error(`${context}.${key} exceeds ${max} characters`);
+    return text;
+  };
+  return {
+    category: enumValue(row.category, SESSION_STOP_CATEGORIES, `${context}.category`),
+    message: bounded(row.message, "message", 401),
+    providerType: bounded(row.providerType, "providerType", 80),
+    httpStatus: readNullableInteger(row.httpStatus, `${context}.httpStatus`),
+    retry: enumValue(row.retry, ["not-retried", "exhausted"], `${context}.retry`),
+    resetsAt: readNullableInteger(row.resetsAt, `${context}.resetsAt`),
+  };
 }

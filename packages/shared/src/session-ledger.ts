@@ -3,6 +3,8 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type {
   AuthorityReviewObservation,
   CompactionReason,
@@ -507,11 +509,8 @@ export function sessionAwaitsUser(
  * cancellation or an incomplete record and does not enter the red listing
  * state.
  *
- * Deliberately NOT a network/auth/provider vocabulary: which transport fault
- * produced the dead end is classified inside the runtime and thrown away
- * before the Attention is written, so a row that said "network" here would be
- * guessing. Widening this vocabulary is a change to what the runtime RECORDS,
- * not to what this function reads.
+ * Provider facts now travel separately as SessionStopDetail; the umbrella
+ * remains frozen so old Sessions retain their meaning.
  */
 export const SESSION_INTERRUPTION_REASONS = ["stopped-by-runtime", "crash-recovered"] as const;
 
@@ -549,14 +548,39 @@ const INTERRUPTION_ATTENTIONS = [
  * turning into a lifecycle fact it is explicitly not allowed to be.
  */
 export function sessionInterruptionReason(
-  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
 ): SessionInterruptionReason | null {
   if (projection.turnActive) return null;
   if (projection.lastTurnOutcome !== "interrupted") return null;
+  // A fact on THIS turn outranks a still-active Attention from an older crash.
+  if (projection.lastTurnStopDetail) return "stopped-by-runtime";
   for (const [kind, reason] of INTERRUPTION_ATTENTIONS) {
     if (projection.attention.active.some((attention) => attention.kind === kind)) return reason;
   }
   return null;
+}
+
+/** The latest interruption's facts, or an honest generic detail for legacy events. */
+export function sessionInterruptionDetail(
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
+): SessionStopDetail | null {
+  if (sessionInterruptionReason(projection) !== "stopped-by-runtime") return null;
+  return (
+    projection.lastTurnStopDetail ?? {
+      category: "unknown",
+      message: null,
+      providerType: null,
+      httpStatus: null,
+      retry: "not-retried",
+      resetsAt: null,
+    }
+  );
 }
 
 /**
@@ -567,12 +591,16 @@ export function sessionInterruptionReason(
  * CLI's `session list`), and two hand-copies is how they come to disagree.
  */
 export function sessionEndedInterrupted(
-  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
 ): boolean {
   return sessionInterruptionReason(projection) !== null;
 }
 
 interface SessionAttentionBase {
+  stopDetail?: SessionStopDetail;
   id: string;
   attachmentId: string | null;
   detail: string | null;
@@ -728,7 +756,12 @@ export type SessionEventPayload =
   | { kind: "run.completed"; attachmentId: string; runId: string }
   | { kind: "turn.started"; attachmentId: string; turnId: string }
   | { kind: "turn.completed"; attachmentId: string; turnId: string }
-  | { kind: "turn.interrupted"; attachmentId: string; turnId: string }
+  | {
+      kind: "turn.interrupted";
+      attachmentId: string;
+      turnId: string;
+      stopDetail?: SessionStopDetail;
+    }
   /**
    * The Session's context was summarized, and the history before the summary
    * left the model's view without leaving the Session's.
@@ -1138,6 +1171,9 @@ export function observationPayload(
         kind: observation.kind,
         attachmentId: observation.attachmentId,
         turnId: observation.turnId,
+        ...(observation.kind === "turn.interrupted" && observation.stopDetail !== undefined
+          ? { stopDetail: observation.stopDetail }
+          : {}),
       };
     case "context.compacted":
       return {
@@ -1629,6 +1665,7 @@ export interface SessionProjection {
    * verdict on an earlier one.
    */
   readonly lastTurnOutcome: SessionTurnOutcome | null;
+  readonly lastTurnStopDetail?: SessionStopDetail | null;
   /**
    * How many calls this Session's authority has refused, over its whole life.
    *
@@ -1850,6 +1887,7 @@ function foldSessionProjection(
   let modelAuto: ModelAutoPick | null = base?.modelAuto ?? null;
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
+  let lastTurnStopDetail = base?.lastTurnStopDetail ?? null;
   let authorityDenials = base?.authorityDenials ?? 0;
   const usage: SessionUsage[] = [];
   let usageCostUsdExact = checkpoint?.usageCostUsdExact ?? 0;
@@ -2048,6 +2086,7 @@ function foldSessionProjection(
         turnActive = true;
         // The outcome is about the latest turn, and this one has none yet.
         lastTurnOutcome = null;
+        lastTurnStopDetail = null;
         // A turn can have been admitted before a supervisor recorded its stop.
         // Only a fresh attachment is an explicit resumption, so this turn must
         // not erase the stop while the supervisor is still releasing it.
@@ -2055,10 +2094,12 @@ function foldSessionProjection(
       case "turn.completed":
         turnActive = false;
         lastTurnOutcome = "completed";
+        lastTurnStopDetail = null;
         break;
       case "turn.interrupted":
         turnActive = false;
         lastTurnOutcome = "interrupted";
+        lastTurnStopDetail = event.payload.stopDetail ?? null;
         break;
       // `session.created` carries the Session row as it was at birth — the
       // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
@@ -2138,6 +2179,7 @@ function foldSessionProjection(
     ...(modelAuto === null ? {} : { modelAuto }),
     turnActive,
     lastTurnOutcome,
+    ...(lastTurnStopDetail === null ? {} : { lastTurnStopDetail }),
     authorityDenials,
     // `usageSummary` supplies exact counters, bases and token totals. Money is
     // recomputed from the checkpoint's unrounded accumulator instead of adding

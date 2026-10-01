@@ -117,5 +117,6 @@ export * from "./theme/app-state";
 export * from "./theme/project-override";
 export * from "./theme/editor-themes";
 
+export * from "./session-stop";
 export * from "./approval-observation";
 export * from "./approval-command";

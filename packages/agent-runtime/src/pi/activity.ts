@@ -6,6 +6,8 @@
  * renderer consumption.
  */
 
+import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
+
 import type {
   ActivityBrowse,
   ActivityBrowseAction,
@@ -24,7 +26,6 @@ import {
 } from "@volli/shared";
 // Preserve the existing adapter exports while every consumer shares one policy.
 export { isSensitiveKey, redactPayloadSecrets } from "@volli/shared";
-import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
 export const MAX_ACTIVITY_SUMMARY_LENGTH = 300;
@@ -116,6 +117,7 @@ const REDACTED_VALUE = "[redacted]";
 export function mapPiActivity(
   event: unknown,
   context: PiActivityContext,
+  credentialRedaction?: DiagnosticRedactionPort,
 ): RuntimeActivityObservation {
   const turnId = turnIdOf(context);
   try {
@@ -158,7 +160,11 @@ export function mapPiActivity(
     };
 
     return state === "failed"
-      ? { ...base, state, error: failureText(output, descriptor.outcome?.summary ?? null) }
+      ? {
+          ...base,
+          state,
+          error: failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction),
+        }
       : base;
   } catch {
     return genericObservation(turnId, fallbackStateOf(event));
@@ -515,9 +521,14 @@ function summaryFor(result: Record<string, RuntimeActivityValue> | null): string
   return text.length > 0 ? boundSummaryText(text) : cleanSummaryText(readField(result, "summary"));
 }
 
-function failureText(output: RuntimeActivityValue, summary: string | null): string {
-  if (summary !== null) return sanitizeDiagnostic(summary);
-  if (typeof output === "string" && output.length > 0) return sanitizeDiagnostic(output);
+function failureText(
+  output: RuntimeActivityValue,
+  summary: string | null,
+  credentialRedaction: DiagnosticRedactionPort,
+): string {
+  if (summary !== null) return safeStopMessage(summary, credentialRedaction);
+  if (typeof output === "string" && output.length > 0)
+    return safeStopMessage(output, credentialRedaction);
   return "Tool execution failed.";
 }
 

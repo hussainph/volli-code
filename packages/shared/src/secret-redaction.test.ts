@@ -256,3 +256,26 @@ describe("preservation and repeatability", () => {
     expect(redactPayloadSecrets(raw)).toBe(safe);
   });
 });
+
+it.each([
+  ["Authorization Bearer dummy-short-secret", "dummy-short-secret"],
+  ["Basic ZHVtbXk6c2VjcmV0", "ZHVtbXk6c2VjcmV0"],
+  ["Cookie: session=dummy-cookie; csrf=dummy-csrf", "dummy-csrf"],
+  ["Set-Cookie: csrf=dummy-csrf; Secure", "dummy-csrf"],
+])("scrubs standalone schemes and complete cookie headers: %s", (raw, secret) => {
+  expect(redactPayloadSecrets(raw)).not.toContain(secret);
+});
+
+it.each([
+  "Cookie: session=dummy; csrf=dummy-two; rm -rf /important",
+  "Cookie: session=dummy; csrf = dummy-two; rm -rf /important",
+  'curl -H "Cookie: session=dummy; csrf=dummy-two" && rm -rf /important',
+  "curl -H 'Cookie: session=dummy; csrf=dummy-two; Secure; HttpOnly; Partitioned' && rm -rf /important",
+  'Cookie: "session=dummy; csrf=dummy-two"; rm -rf /important',
+  "Set-Cookie: session=dummy; Path=/private; Secure; rm -rf /important",
+])("scrubs the full cookie header but preserves a command tail: %s", (raw) => {
+  const safe = redactPayloadSecrets(raw);
+  expect(safe).not.toContain("dummy");
+  expect(safe).not.toContain("/private");
+  expect(safe).toContain("rm -rf /important");
+});

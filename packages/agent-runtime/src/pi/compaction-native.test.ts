@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   MemorySessionRepo,
@@ -276,3 +277,24 @@ describe("native compaction fallback", () => {
     expect(resolved.discarded[0]).toContain("original history");
   });
 });
+
+it.each(DIAGNOSTIC_SECRET_CASES)(
+  "redacts native fallback %s before appending compaction details",
+  async (_label, raw, secrets) => {
+    native.mockResolvedValue({ kind: "failed", message: raw });
+    const sidecar = await new MemorySessionRepo().create({}, piContext());
+    const outcome = await compactSession({
+      sidecar,
+      path: path(),
+      models: { completeSimple: async () => summary("stop", measured) } as unknown as typeof models,
+      model,
+      settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 },
+      credentialRedaction: diagnosticCredentialRedaction,
+    });
+    expect(outcome.kind).toBe("compacted");
+    const persisted = await sidecar.findEntries({}, piContext());
+    for (const artifact of [outcome, persisted]) {
+      for (const secret of secrets) expect(JSON.stringify(artifact)).not.toContain(secret);
+    }
+  },
+);

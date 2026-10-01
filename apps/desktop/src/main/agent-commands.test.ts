@@ -2440,6 +2440,14 @@ describe("agent command service", () => {
       occurredAt: 3_000,
       provenance,
       turnId: "turn-interrupted",
+      stopDetail: {
+        category: "rate-limited",
+        providerType: "usage_limit_reached",
+        message: "Limit used",
+        httpStatus: 429,
+        retry: "not-retried",
+        resetsAt: 1800000000000,
+      },
     });
     const service = createAgentCommandService({
       db: ctx.db,
@@ -2496,6 +2504,14 @@ describe("agent command service", () => {
             status: "interrupted",
             waitingOn: null,
             interruptedReason: "stopped-by-runtime",
+            interruption: {
+              category: "rate-limited",
+              providerType: "usage_limit_reached",
+              message: "Limit used",
+              httpStatus: 429,
+              retry: "not-retried",
+              resetsAt: 1800000000000,
+            },
             lastActivityAgeMs: 7_000,
           }),
         ]),
@@ -2521,7 +2537,18 @@ describe("agent command service", () => {
     });
     expect(interruptedPeek).toMatchObject({
       ok: true,
-      data: { status: "interrupted", interruptedReason: "stopped-by-runtime" },
+      data: {
+        status: "interrupted",
+        interruptedReason: "stopped-by-runtime",
+        interruption: {
+          category: "rate-limited",
+          providerType: "usage_limit_reached",
+          message: "Limit used",
+          httpStatus: 429,
+          retry: "not-retried",
+          resetsAt: 1800000000000,
+        },
+      },
     });
   });
 

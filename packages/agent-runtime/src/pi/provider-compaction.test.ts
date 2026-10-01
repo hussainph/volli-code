@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { COMPACTION_SUMMARY_PREFIX } from "@earendil-works/pi-agent-core";
@@ -665,4 +666,31 @@ describe("details round trip", () => {
     // A Pi-written details object (arbitrary JSON) never reads as native.
     expect(readProviderCompaction({ pi: "whatever Pi wrote" }).kind).toBe("absent");
   });
+});
+
+describe("native compaction diagnostic privacy", () => {
+  for (const mode of ["http", "throw"] as const) {
+    it.each(DIAGNOSTIC_SECRET_CASES)(
+      `${mode} redacts %s before returning failure`,
+      async (_label, raw, secrets) => {
+        const outcome = await compactProviderNative({
+          model: OPENAI_MODEL,
+          models: modelsReturningAuth({ apiKey: "dummy-api-key" }),
+          messages: [user("hello")],
+          enabled: true,
+          credentialRedaction: diagnosticCredentialRedaction,
+          fetch: async () => {
+            if (mode === "throw") throw new Error(raw);
+            return jsonResponse(
+              { error: { message: raw }, request: { password: "envelope-dummy-482" } },
+              400,
+            );
+          },
+        });
+        expect(outcome.kind).toBe("failed");
+        for (const secret of [...secrets, "envelope-dummy-482"])
+          expect(JSON.stringify(outcome)).not.toContain(secret);
+      },
+    );
+  }
 });

@@ -5762,3 +5762,37 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
     ).toBe(true);
   });
 });
+
+it("commits stop facts from the executor through the observation codec into the Session projection", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const stopDetail = {
+    category: "provider-refused" as const,
+    providerType: "refusal",
+    message: "Declined",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  await adapter.emit({ kind: "turn", state: "started", turnId: "t", occurredAt: 160 });
+  await adapter.emit({
+    kind: "attention",
+    state: "raised",
+    reason: "runtime-failure",
+    message: "Declined",
+    stopDetail,
+  });
+  await adapter.emit({
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    occurredAt: 161,
+    stopDetail,
+  });
+  const snapshot = await runtime.snapshot({ sessionId });
+  expect(snapshot.projection.attention.primary?.stopDetail).toEqual(stopDetail);
+  expect(snapshot.projection.lastTurnStopDetail).toEqual(stopDetail);
+  expect(
+    snapshot.frames.find(({ event }) => event.payload.kind === "turn.interrupted")?.event.payload,
+  ).toMatchObject({ stopDetail });
+});

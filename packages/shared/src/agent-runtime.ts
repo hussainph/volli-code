@@ -15,6 +15,8 @@ import type { ApprovalUsedObservation } from "./approval-observation";
  * facts; an executor states what happened and never what to record.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
@@ -1811,6 +1813,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  * it, so it must not be mistaken for a transport fault worth retrying as is.
  */
 export interface RuntimeFailure {
+  stopDetail?: SessionStopDetail;
   reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
@@ -1966,6 +1969,7 @@ export interface AttachmentObservation {
 }
 
 export interface TurnObservation {
+  stopDetail?: SessionStopDetail;
   kind: "turn";
   state: "started" | "completed" | "interrupted";
   turnId: string;
@@ -2166,6 +2170,7 @@ export type RuntimeActivityObservation =
  * nobody is notified about it.
  */
 export interface AttentionObservation {
+  stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
   reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";

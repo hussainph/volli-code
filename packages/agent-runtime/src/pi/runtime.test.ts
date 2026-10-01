@@ -99,6 +99,7 @@ import {
   createPiAgentRuntime,
   type PiRuntimeHostOptions,
 } from "./runtime";
+import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
 import { McpServerBudget } from "../mcp/server-budget";
 import { authorityVerdict } from "../authority/gate";
 import type { ConnectivityPort } from "./connectivity";
@@ -6716,6 +6717,7 @@ describe("startSession", () => {
       null,
       { kind: "unknown" },
       { kind: "turn", state: "started" },
+      { kind: "turn", state: "interrupted", turnId: "t", stopDetail: { category: "guessed" } },
       { kind: "message-settled", turnId: "turn-1", message: null },
       { kind: "message-settled", turnId: "turn-1", message: { ...settled, entryId: 1 } },
       { kind: "message-settled", turnId: "turn-1", message: { ...settled, role: "user" } },
@@ -13709,3 +13711,441 @@ describe("transcript context (pi 0.87)", () => {
     expect(ceiling).toBe(48_000 - transcriptTokens - 4_096);
   });
 });
+
+describe("provider interruption details (VC-482)", () => {
+  it("persists stream-native usage-limit facts and replays the same turn and Attention", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const finishing = scriptedStream([(emit) => emit.fail("Limit used")]);
+    const models = modelsWithStream((model, context, options) => {
+      void options?.onResponse?.(
+        { status: 429, headers: { "retry-after": "60", authorization: "never-store-this" } },
+        model,
+      );
+      void options?.onProviderStreamEvent?.(
+        {
+          type: "error",
+          error: { type: "usage_limit_reached", message: "Limit used", resets_at: 1800000000 },
+        },
+        model,
+      );
+      return finishing(model, context, options);
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models,
+      retryBackoffMs: instantBackoff,
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    const turn = observations.find((o) => o.kind === "turn" && o.state === "interrupted");
+    expect(turn).toMatchObject({
+      stopDetail: {
+        category: "rate-limited",
+        providerType: "usage_limit_reached",
+        httpStatus: 429,
+        message: "Limit used",
+        resetsAt: 1800000000000,
+        retry: "not-retried",
+      },
+    });
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      stopDetail: (turn as Extract<RuntimeObservation, { kind: "turn" }>).stopDetail,
+    });
+    const recovery = handle.recovery!;
+    await handle.close();
+    expect(readFileSync(recovery.sessionFilePath, "utf8")).not.toContain("never-store-this");
+    const replay = await runtime.startSession({ ...spec, recovery });
+    expect((await replay.reconcile(null)).observations).toContainEqual(turn);
+    await replay.close();
+  });
+
+  it("treats an explicit Responses refusal as interruption even when Pi settles it as stop", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const finishing = scriptedStream([settles("Declined")]);
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream((model, context, options) => {
+        calls += 1;
+        void options?.onProviderStreamEvent?.(
+          { type: "response.refusal.done", refusal: "Declined; you can retry your request" },
+          model,
+        );
+        return finishing(model, context, options);
+      }),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    expect(calls).toBe(1);
+    expect(observations.at(-1)).toMatchObject({
+      kind: "turn",
+      state: "interrupted",
+      stopDetail: { category: "provider-refused" },
+    });
+    await handle.close();
+  });
+});
+
+it.each(["authentication_error", "context_length_exceeded"])(
+  "uses the provider's %s field to select recovery",
+  async (type) => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail(JSON.stringify({ error: { type, message: "neutral" } })),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      reason: type === "authentication_error" ? "auth" : "context",
+    });
+    await handle.close();
+  },
+);
+
+it("keeps unsupported-fetch routes unchanged and records a refusal without a message", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const finishing = scriptedStream([(emit) => emit.finish()]);
+  const models = modelsWithStream((model, context, options) => {
+    expect(options?.fetch).toBeUndefined();
+    void options?.onProviderStreamEvent?.({ type: "response.refusal.done" }, model);
+    return finishing(model, context, options);
+  });
+  Object.assign(models.getModel(PROVIDER_ID, MODEL_ID)!, { api: "google-generative-ai" });
+  const runtime = createPiAgentRuntime({ sessionDataDir, models });
+  const handle = await runtime.startSession(spec);
+  await handle.submitUserMessage("go");
+  expect(observations.at(-1)).toMatchObject({
+    state: "interrupted",
+    stopDetail: { category: "provider-refused", message: null },
+  });
+  await handle.close();
+});
+
+it("redacts provider failures before sidecar, replay and observations (review items 1–2)", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const stored = "stored-dummy-482";
+  const request = "request-dummy-482";
+  const diagnostic = "diagnostic-dummy-482";
+  const telemetry: ObservabilityEvent[] = [];
+  const logs = [vi.spyOn(console, "error"), vi.spyOn(console, "warn"), vi.spyOn(console, "log")];
+  const runtime = createPiAgentRuntime({
+    sessionDataDir,
+    observability: {
+      record: (event) => {
+        telemetry.push(event);
+      },
+    },
+    models: modelsWithStream((model) => {
+      const output = createAssistantMessageEventStream();
+      const message = baseMessage(model);
+      message.stopReason = "error";
+      message.content = [{ type: "text", text: `Request body: ${request}` }];
+      Object.assign(message, { echoedRequest: { password: request } });
+      message.errorMessage = JSON.stringify({
+        error: { type: "invalid_request_error", message: `Wrong value ${stored}` },
+        request: { password: request },
+      });
+      message.diagnostics = [
+        {
+          type: "provider_transport_failure",
+          timestamp: 1,
+          error: { name: "Error", message: `password=${diagnostic}`, stack: `request=${request}` },
+          details: { request: { password: request }, headers: { cookie: diagnostic } },
+        },
+        {
+          type: "anthropic_input_transformations",
+          timestamp: 1,
+          details: {
+            transformations: [
+              {
+                type: "prefix_binding_mismatch",
+                path: "messages.1.content.0",
+                reason: `password=${diagnostic}`,
+                request,
+              },
+            ],
+          },
+        },
+      ];
+      queueMicrotask(() => {
+        output.push({ type: "error", reason: "error", error: message });
+        output.end(message);
+      });
+      return output;
+    }),
+    retryBackoffMs: instantBackoff,
+  });
+  const handle = await runtime.startSession({
+    ...spec,
+    credentialRedaction: { redact: (text) => text.replaceAll(stored, "[redacted]") },
+  });
+  try {
+    await handle.submitUserMessage("go");
+    const artifacts =
+      JSON.stringify({
+        observations,
+        telemetry,
+        logs: logs.map((log) => log.mock.calls),
+        replay: await handle.reconcile(null),
+      }) + readFileSync(handle.recovery!.sessionFilePath, "utf8");
+    for (const secret of [stored, request, diagnostic]) expect(artifacts).not.toContain(secret);
+    expect(artifacts).not.toContain('"password"');
+    expect(artifacts).not.toContain('"headers"');
+    expect(artifacts).not.toContain('"stack"');
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      stopDetail: { category: "bad-request", message: "Wrong value [redacted]" },
+    });
+  } finally {
+    await handle.close();
+    for (const log of logs) log.mockRestore();
+  }
+});
+
+it("keeps Anthropic context recovery beside its truthful bad-request stop category (review item 5)", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const runtime = createPiAgentRuntime({
+    sessionDataDir,
+    models: modelsWithStream(
+      scriptedStream([
+        (emit) =>
+          emit.fail(
+            '400 {"error":{"type":"invalid_request_error","message":"prompt is too long"}}',
+          ),
+      ]),
+    ),
+  });
+  const handle = await runtime.startSession(spec);
+  try {
+    await handle.submitUserMessage("go");
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      reason: "context",
+      stopDetail: {
+        category: "bad-request",
+        providerType: "invalid_request_error",
+        httpStatus: 400,
+      },
+    });
+  } finally {
+    await handle.close();
+  }
+});
+
+describe("compaction failure privacy (VC-482 verification blocker)", () => {
+  for (const reason of ["threshold", "overflow", "manual"] as const) {
+    it.each(DIAGNOSTIC_SECRET_CASES)(
+      `${reason} redacts %s before all durable and visible surfaces`,
+      async (_label, raw, secrets) => {
+        const { spec, observations, sessionDataDir } = fixture();
+        const telemetry: ObservabilityEvent[] = [];
+        const logs = [
+          vi.spyOn(console, "error"),
+          vi.spyOn(console, "warn"),
+          vi.spyOn(console, "log"),
+        ];
+        const steps: ScriptStep[] =
+          reason === "manual"
+            ? [settles("first answer"), settles("second answer"), (emit) => emit.fail(raw)]
+            : reason === "overflow"
+              ? [
+                  settles("first answer"),
+                  (emit) =>
+                    emit.fail(
+                      '400 {"error":{"type":"invalid_request_error","message":"prompt is too long"}}',
+                    ),
+                  (emit) => emit.fail(raw),
+                ]
+              : [
+                  settles("first answer"),
+                  settlesHolding("second answer", 200_000),
+                  (emit) => emit.fail(raw),
+                  settles("third answer"),
+                ];
+        const runtime = createPiAgentRuntime({
+          sessionDataDir,
+          models: modelsWithStream(scriptedStream(steps)),
+          observability: {
+            record: (event) => {
+              telemetry.push(event);
+            },
+          },
+        });
+        const handle = await runtime.startSession({
+          ...spec,
+          credentialRedaction: diagnosticCredentialRedaction,
+        });
+        try {
+          await handle.submitUserMessage("go");
+          await handle.submitUserMessage("carry on");
+          const receipt = reason === "manual" ? await handle.compact() : null;
+          if (reason === "threshold") await handle.submitUserMessage("continue");
+          if (reason === "manual")
+            expect(receipt).toMatchObject({ kind: "rejected", reason: "summary-failed" });
+          const failures = observations.filter(
+            (o): o is Extract<RuntimeObservation, { kind: "compaction"; state: "failed" }> =>
+              o.kind === "compaction" && o.state === "failed",
+          );
+          expect(failures).toHaveLength(1);
+          expect(failures[0]).toMatchObject({ reason });
+          // Drive the actual event/ledger/UI projection, not a second sanitizer in the test.
+          const { RuntimeObservationTranslator } =
+            await import("../../../session-engine/src/observation-translation");
+          const { createInMemorySessionLedger } =
+            await import("../../../session-engine/src/in-memory-ledger");
+          const { observationPayload, projectSession } = await import("@volli/shared");
+          const { compactionBoundaryCopy } =
+            await import("../../../session-presentation/src/compaction-boundary");
+          const row: import("@volli/shared").Session = {
+            id: spec.identity.sessionId,
+            projectId: "p",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: "Fixture",
+            createdAt: 0,
+          };
+          const translator = new RuntimeObservationTranslator({
+            namespace: "pi",
+            sessionId: row.id,
+            attachmentId: spec.identity.attachmentId,
+            now: () => 0,
+          });
+          const events: import("@volli/shared").SessionEvent[] = failures
+            .flatMap((o) => translator.replay(o))
+            .filter((fact) => fact.kind === "context.compaction_failed")
+            .map((fact, i) => ({
+              id: `event-${i}`,
+              sessionId: row.id,
+              sequence: i + 1,
+              occurredAt: 0,
+              recordedAt: 0,
+              provenance: {
+                source: { kind: "system", id: "fixture", detail: null },
+                venue: { id: "fixture", kind: "local" },
+              },
+              payload: observationPayload(
+                {
+                  ...fact,
+                  sessionId: row.id,
+                  provenance: {
+                    source: { kind: "system", id: "fixture", detail: null },
+                    venue: { id: "fixture", kind: "local" },
+                  },
+                  attachmentId: spec.identity.attachmentId,
+                },
+                { projectId: "p", ticketId: null },
+              ),
+            }));
+          const ledger = createInMemorySessionLedger();
+          const ledgerEvents = await ledger.transaction((tx) => {
+            tx.insertSession(row);
+            for (const event of events) tx.appendEvent(event);
+            return tx.listEvents({ sessionId: row.id });
+          });
+          const ui = compactionBoundaryCopy({
+            outcome: "failed",
+            reason,
+            sequence: 1,
+            afterMessageId: null,
+            detail: failures[0]!.message,
+          });
+          const artifacts = {
+            sidecar: readFileSync(handle.recovery!.sessionFilePath, "utf8"),
+            observations,
+            replay: await handle.reconcile(null),
+            receipt,
+            telemetry,
+            logs: logs.map((log) => log.mock.calls),
+            events,
+            ledgerEvents,
+            projection: projectSession(row, ledgerEvents),
+            ui,
+          };
+          for (const [surface, value] of Object.entries(artifacts)) {
+            for (const secret of secrets)
+              expect(JSON.stringify(value), `${surface} leaks ${secret}`).not.toContain(secret);
+          }
+        } finally {
+          await handle.close();
+          for (const log of logs) log.mockRestore();
+        }
+      },
+    );
+  }
+
+  it.each(DIAGNOSTIC_SECRET_CASES)(
+    "threshold exception redacts %s before persistence",
+    async (_label, raw, secrets) => {
+      const { spec, observations, sessionDataDir } = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir,
+        models: modelsWithStream(scriptedStream([settles("answer")])),
+        compactionPolicy: () => {
+          throw new Error(raw);
+        },
+      });
+      const handle = await runtime.startSession({
+        ...spec,
+        credentialRedaction: diagnosticCredentialRedaction,
+      });
+      try {
+        await handle.submitUserMessage("go");
+        expect(observations).toContainEqual(
+          expect.objectContaining({ kind: "compaction", state: "failed", reason: "threshold" }),
+        );
+        const artifacts =
+          JSON.stringify({ observations, replay: await handle.reconcile(null) }) +
+          readFileSync(handle.recovery!.sessionFilePath, "utf8");
+        for (const secret of secrets) expect(artifacts).not.toContain(secret);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+});
+
+it.each(DIAGNOSTIC_SECRET_CASES)(
+  "manual compaction exception redacts %s before reaching its caller",
+  async (_label, raw, secrets) => {
+    const { spec, observations, sessionDataDir } = fixture();
+    let failPolicy = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("first answer"), settles("second answer")])),
+      compactionPolicy: () => {
+        if (failPolicy)
+          throw Object.assign(new Error(raw), { cause: raw, request: { password: raw } });
+        return { autoCompaction: false };
+      },
+    });
+    const handle = await runtime.startSession({
+      ...spec,
+      credentialRedaction: diagnosticCredentialRedaction,
+    });
+    try {
+      await handle.submitUserMessage("go");
+      await handle.submitUserMessage("carry on");
+      failPolicy = true;
+      let rejected: unknown;
+      try {
+        await handle.compact();
+      } catch (error) {
+        rejected = error;
+      }
+      expect(rejected).toBeInstanceOf(Error);
+      expect(rejected).not.toHaveProperty("cause");
+      expect(rejected).not.toHaveProperty("request");
+      const artifacts =
+        JSON.stringify({ observations, replay: await handle.reconcile(null) }) +
+        readFileSync(handle.recovery!.sessionFilePath, "utf8") +
+        String(rejected);
+      for (const secret of secrets) expect(artifacts).not.toContain(secret);
+    } finally {
+      await handle.close();
+    }
+  },
+);

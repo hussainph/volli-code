@@ -12,6 +12,11 @@ const JWT_SECRET = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
 // Never search a body with regex: unmatched BEGIN candidates must not each
 // rescan the remaining uncontrolled text.
 const PEM_BOUNDARY = /-----(BEGIN|END) ([A-Z0-9]+(?:[ -][A-Z0-9]+)*)-----/g;
+const BASIC_SECRET = /\bbasic\s+[A-Za-z0-9+/]+=*/gi;
+// A cookie header includes later cookies/attributes, but never a shell tail.
+const COOKIE_HEADER_SECRET = /\b(?:set-cookie|cookie)[ \t]*[:=][ \t]*/gi;
+const COOKIE_ATTRIBUTE =
+  /[ \t]*;[ \t]*(?:([A-Za-z0-9!#$%*+.^_`~-]+[ \t]*=[ \t]*)|(?:Secure|HttpOnly|Partitioned)\b)/iy;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;|&()<>]+/gi;
 // Start at the fixed scheme delimiter and stay within one authority, so a
@@ -34,6 +39,8 @@ const SECRET_MARKER = new RegExp(
     JWT_SECRET.source,
     "-----BEGIN ",
     BEARER_SECRET.source,
+    BASIC_SECRET.source,
+    COOKIE_HEADER_SECRET.source,
     URL_USERINFO_SECRET.source,
     COMMAND_BASIC_AUTH_PREFIX.source,
   ].join("|"),
@@ -181,11 +188,40 @@ function redactAssignments(value: string): string {
   return parts.join("");
 }
 
+/** Scan complete cookie headers without hiding a command after them. */
+function redactCookieHeaders(value: string): string {
+  COOKIE_HEADER_SECRET.lastIndex = 0;
+  const quoteBefore = quoteTracker(value);
+  const parts: string[] = [];
+  let copied = 0;
+  let match: RegExpExecArray | null;
+  while ((match = COOKIE_HEADER_SECRET.exec(value)) !== null) {
+    const boundaryQuote = quoteBefore(match.index);
+    let end = assignmentValueEnd(value, COOKIE_HEADER_SECRET.lastIndex, false, boundaryQuote);
+    while (true) {
+      COOKIE_ATTRIBUTE.lastIndex = end;
+      const attribute = COOKIE_ATTRIBUTE.exec(value);
+      if (attribute === null) break;
+      end =
+        attribute[1] !== undefined
+          ? assignmentValueEnd(value, COOKIE_ATTRIBUTE.lastIndex, false, boundaryQuote)
+          : COOKIE_ATTRIBUTE.lastIndex;
+    }
+    parts.push(value.slice(copied, match.index), `Cookie: ${REDACTED}`);
+    copied = end;
+    COOKIE_HEADER_SECRET.lastIndex = end;
+  }
+  parts.push(value.slice(copied));
+  return parts.join("");
+}
+
 /** Redact credential text without truncating or swallowing unquoted command tails. */
 export function redactPayloadSecrets(value: string): string {
   if (!SECRET_MARKER.test(value)) return value;
   return redactAssignments(
-    redactBasicAuth(redactPemBlocks(value).replace(URL_USERINFO_SECRET, "$1[redacted]@"))
+    redactCookieHeaders(
+      redactBasicAuth(redactPemBlocks(value).replace(URL_USERINFO_SECRET, "$1[redacted]@")),
+    )
       .replace(PREFIXED_SECRET, REDACTED)
       .replace(AWS_SECRET, REDACTED)
       .replace(JWT_SECRET, REDACTED)
@@ -193,6 +229,7 @@ export function redactPayloadSecrets(value: string): string {
         AUTHORIZATION_HEADER_SECRET,
         (_match, scheme: string) => `Authorization: ${scheme} ${REDACTED}`,
       )
-      .replace(BEARER_SECRET, `Bearer ${REDACTED}`),
+      .replace(BEARER_SECRET, `Bearer ${REDACTED}`)
+      .replace(BASIC_SECRET, `Basic ${REDACTED}`),
   );
 }

@@ -8,6 +8,8 @@
  * Contracts: developers.openai.com/api/docs/guides/compaction and
  * platform.claude.com/docs/en/build-with-claude/compaction.
  */
+
+import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
 import {
   convertToLlm,
   COMPACTION_SUMMARY_PREFIX,
@@ -28,7 +30,7 @@ import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode
 import type { SessionUsage } from "@volli/shared";
 import { Buffer } from "node:buffer";
 import { providerImageGuard } from "./provider-images";
-import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
+import { costBasisForApi } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
 
 export const ANTHROPIC_COMPACT_BETA = "compact-2026-01-12";
@@ -136,6 +138,7 @@ export type ProviderCompactionOutcome =
   | { kind: "failed"; message: string; rawUsage?: Usage };
 
 export interface ProviderCompactionInput {
+  credentialRedaction?: DiagnosticRedactionPort;
   model: Model<Api>;
   models: Models;
   messages: readonly AgentMessage[];
@@ -302,7 +305,10 @@ export async function compactProviderNative(
       kind: "failed",
       message: input.signal?.aborted
         ? "provider-native compaction aborted"
-        : sanitizeDiagnostic(error instanceof Error ? error.message : String(error)),
+        : safeStopMessage(
+            error instanceof Error ? error.message : String(error),
+            input.credentialRedaction,
+          ),
     };
   }
 }
@@ -350,7 +356,8 @@ async function compactOpenAI(
     headers,
     request,
   );
-  if (!response.ok) return failure(response, "OpenAI /responses/compact");
+  if (!response.ok)
+    return failure(response, "OpenAI /responses/compact", input.credentialRedaction);
   const parsed: unknown = await boundedJson(response);
   input.signal?.throwIfAborted();
   const rawUsage = record(parsed)
@@ -453,7 +460,7 @@ async function compactAnthropic(
     headers,
     request,
   );
-  if (!counted.ok) return failure(counted, "Anthropic token counting");
+  if (!counted.ok) return failure(counted, "Anthropic token counting", input.credentialRedaction);
   const countResult: unknown = await boundedJson(counted);
   if (
     !record(countResult) ||
@@ -490,7 +497,7 @@ async function compactAnthropic(
       },
     },
   );
-  if (!response.ok) return failure(response, "Anthropic compaction");
+  if (!response.ok) return failure(response, "Anthropic compaction", input.credentialRedaction);
   const parsed: unknown = await boundedJson(response);
   input.signal?.throwIfAborted();
   const rawUsage = record(parsed)
@@ -744,20 +751,18 @@ function headerRecord(response: Response): Record<string, string> {
 /**
  * A response body, read no further than `limit` bytes.
  *
- * The two callers want opposite things from that limit, so they say which. A
- * JSON body has to arrive whole or not at all — half a canonical window is not
- * a smaller canonical window — so it `fail`s. An error body is only ever read
- * for its first few hundred characters, so it `truncate`s: refusing to quote a
- * provider's complaint because the complaint was long would lose the one thing
- * that failure was carrying.
+ * Both JSON and error bodies must arrive whole or not at all: half a canonical
+ * window is not a smaller window, and a partial credential cannot be matched
+ * by the exact-value redactor. Never truncate unredacted provider text.
  */
-async function boundedText(
-  response: Response,
-  limit: number,
-  whenOversized: "fail" | "truncate",
-): Promise<string> {
+async function boundedText(response: Response, limit: number): Promise<string> {
   const body = response.body;
-  if (!body) return (await response.text()).slice(0, limit);
+  if (!body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text) > limit)
+      throw new Error("The provider response exceeded the size this runtime will read.");
+    return text;
+  }
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -769,28 +774,37 @@ async function boundedText(
       size += value.byteLength;
       if (size <= limit) continue;
       await reader.cancel();
-      if (whenOversized === "fail")
-        throw new Error("The provider response exceeded the size this runtime will read.");
-      break;
+      throw new Error("The provider response exceeded the size this runtime will read.");
     }
   } finally {
     reader.releaseLock();
   }
-  return new TextDecoder().decode(Buffer.concat(chunks)).slice(0, limit);
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
-  return JSON.parse(await boundedText(response, MAX_RESPONSE_BYTES, "fail")) as unknown;
+  return JSON.parse(await boundedText(response, MAX_RESPONSE_BYTES)) as unknown;
 }
 
 async function failure(
   response: Response,
   endpointName: string,
+  credentialRedaction: DiagnosticRedactionPort,
 ): Promise<ProviderCompactionOutcome> {
-  const body = await boundedText(response, MAX_ERROR_BODY_BYTES, "truncate");
+  let body: string;
+  try {
+    // A partial body can end inside a stored credential. Withhold it rather
+    // than presenting a prefix that exact-value matching cannot recognize.
+    body = await boundedText(response, MAX_ERROR_BODY_BYTES);
+  } catch {
+    return {
+      kind: "failed",
+      message: `${endpointName} failed with ${response.status}: Provider error body withheld.`,
+    };
+  }
   return {
     kind: "failed",
-    message: `${endpointName} failed with ${response.status}: ${sanitizeDiagnostic(body.slice(0, 500))}`,
+    message: `${endpointName} failed with ${response.status}: ${safeStopMessage(body, credentialRedaction)}`,
   };
 }
 

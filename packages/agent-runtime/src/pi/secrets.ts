@@ -87,7 +87,7 @@ export function createRequestSecretTool(
 }
 
 /** Fail closed if the host cannot redact; never expose its failure's text. */
-function redact(text: string, port: RedactionPort): string {
+export function redactCredentialText(text: string, port: RedactionPort): string {
   try {
     return port.redact(text);
   } catch {
@@ -103,12 +103,12 @@ function redact(text: string, port: RedactionPort): string {
  * images and text redaction cannot find a credential rendered as pixels.
  */
 function scrub(value: unknown, port: RedactionPort): unknown {
-  if (typeof value === "string") return redact(value, port);
+  if (typeof value === "string") return redactCredentialText(value, port);
   if (typeof value === "number" || typeof value === "boolean") {
     // A JSON primitive can carry the exact credential too. Keep its original
     // type (and e.g. negative zero) only when the textual check is unchanged.
     const text = String(value);
-    const safe = redact(text, port);
+    const safe = redactCredentialText(text, port);
     return safe === text ? value : safe;
   }
   if (Array.isArray(value)) return value.map((entry) => scrub(entry, port));
@@ -125,7 +125,10 @@ function scrub(value: unknown, port: RedactionPort): unknown {
         : value;
     }
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [redact(key, port), scrub(entry, port)]),
+      Object.entries(value).map(([key, entry]) => [
+        redactCredentialText(key, port),
+        scrub(entry, port),
+      ]),
     );
   }
   return value;
@@ -187,7 +190,9 @@ export function redactToolResults(tool: AgentTool, port: RedactionPort | undefin
         // Drop the original stack, cause and custom properties, which may all
         // carry values a message-only redaction would leave in durable events.
         // eslint-disable-next-line preserve-caught-error -- the original cause may contain a credential
-        throw new Error(redact(error instanceof Error ? error.message : String(error), port));
+        throw new Error(
+          redactCredentialText(error instanceof Error ? error.message : String(error), port),
+        );
       }
     },
   };
