@@ -343,37 +343,14 @@ export function codeModeSurfaceFor(input: {
 }
 
 /**
- * A subagent's Code Mode record, bounded by its parent's (VC-9's rule, for
- * routes): the child's tools are already a subset of the parent's, and each
- * keeps the route the parent froze for it, with the parent's limits. So a
- * tool the parent could only call directly is never callable from a child's
- * program, whatever today's defaults say. Absent when the child's surface
- * does not hold `codemode`.
- */
-export function inheritCodeModeSurface(
-  parent: CodeModeSurface,
-  tools: readonly SessionToolId[],
-): CodeModeSurface | undefined {
-  if (!tools.includes(CODE_MODE_TOOL_ID)) return undefined;
-  const routes: Record<string, ToolRoute> = {};
-  for (const tool of tools) {
-    if (tool === CODE_MODE_TOOL_ID) continue;
-    routes[tool] = Object.hasOwn(parent.routes, tool) ? parent.routes[tool]! : "direct";
-  }
-  return {
-    routes,
-    limits: { ...parent.limits },
-    ...(parent.mode === undefined ? {} : { mode: parent.mode }),
-    ...(parent.nudge === true ? { nudge: true as const } : {}),
-  };
-}
-
-/**
  * A Code Mode record read back against the surface it was frozen with.
  *
- * Strict in both directions, on the frozen-surface rule's reasoning: a record
- * that names a tool the surface does not hold, or leaves one out, would bind a
- * different provider tool array than the one the Session was born with.
+ * Strict in both directions about routes, on the frozen-surface rule's
+ * reasoning: a record that names a tool the surface does not hold, or leaves
+ * one out, would bind a different provider tool array than the one the
+ * Session was born with. Strict about every limit and field this build
+ * knows; a key it does not know is ignored, so an older build can still
+ * decode a newer Session's record.
  */
 export function parseCodeModeSurface(
   value: unknown,
@@ -413,14 +390,11 @@ export function parseCodeModeSurface(
     }
     limits[key] = limit;
   }
-  if (Object.keys(limitsRow).length !== Object.keys(CODE_MODE_LIMIT_BOUNDS).length) {
-    throw new Error(`${context}.limits names a limit this build does not know`);
-  }
-  for (const key of Object.keys(row)) {
-    if (key !== "routes" && key !== "limits" && key !== "mode" && key !== "nudge") {
-      throw new Error(`${context}.${key} is not part of a Code Mode record`);
-    }
-  }
+  // A key this build does not know — a limit or a field a newer build added —
+  // is left unread rather than refused, so a downgrade can still attach a
+  // Session a newer build created. Every key this build DOES know is held to
+  // its rule above and below; the routes, which bind the tool array, stay
+  // exact in both directions.
   if (row.mode !== undefined && !isCodeModeMode(row.mode)) {
     throw new Error(`${context}.mode is not a Code Mode mode`);
   }

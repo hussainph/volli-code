@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { CodeModeBirth } from "@volli/shared";
 import type {
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -93,7 +94,6 @@ describe("Sessions", () => {
       sessionId: string;
       tools: readonly string[];
       mcpTools: readonly McpToolDefinition[];
-      parentSessionId?: string;
     }> = [];
     const { sessions: door } = sessions({
       // This test is about MCP inheritance, not model inheritance: a parent
@@ -109,15 +109,8 @@ describe("Sessions", () => {
         resolveMcp: () => [settingsTool],
         recorded: async () => ["read", parentTool.providerName],
         recordedMcp: async () => [parentTool],
-        record: async (sessionId, tools, mcpTools = [], birth) => {
-          records.push({
-            sessionId,
-            tools,
-            mcpTools,
-            ...(birth?.parentSessionId === undefined
-              ? {}
-              : { parentSessionId: birth.parentSessionId }),
-          });
+        record: async (sessionId, tools, mcpTools = []) => {
+          records.push({ sessionId, tools, mcpTools });
         },
       },
     });
@@ -148,9 +141,6 @@ describe("Sessions", () => {
         sessionId: "session-1",
         tools: ["read", parentTool.providerName],
         mcpTools: [parentTool],
-        // The parent rides along, so what the child freezes beside its names
-        // (VC-471's Code Mode routes) is bounded by the parent's record too.
-        parentSessionId: "parent-1",
       },
     ]);
   });
@@ -161,7 +151,7 @@ describe("Sessions", () => {
     let configured = true;
     const { sessions: door } = sessions({
       toolSurface: {
-        resolve: (_role, _grants, _within, _mcp, _model, classify = false) => [
+        resolve: (_role, _grants, _within, _mcp, _codeMode, classify = false) => [
           "read",
           ...(classify ? (["classify"] as const) : []),
         ],
@@ -195,14 +185,25 @@ describe("Sessions", () => {
     expect(records).toEqual([["read", "classify"], ["read"]]);
   });
 
-  it("hands the surface ports the model a Session is born on, for Code Mode's per-model mode (VC-471)", async () => {
+  it("asks Code Mode once per birth, with the Session's own model, and hands both steps that one answer (VC-471)", async () => {
+    const asked: unknown[] = [];
     const resolved: unknown[] = [];
     const recorded: unknown[] = [];
+    const decision: CodeModeBirth = {
+      mode: "both",
+      nudge: false,
+      offered: true,
+      largeServers: new Set(),
+    };
     const { sessions: door } = sessions({
       toolSurface: {
-        resolve: (_role, _grants, _within, _mcpTools, model) => {
-          resolved.push(model);
-          return ["read"];
+        codeModeAt: (model, mcpTools) => {
+          asked.push([model, mcpTools]);
+          return decision;
+        },
+        resolve: (_role, _grants, _within, _mcpTools, codeMode) => {
+          resolved.push(codeMode);
+          return ["read", "codemode"];
         },
         recorded: async () => null,
         record: async (_sessionId, _tools, _mcpTools, birth) => {
@@ -217,8 +218,31 @@ describe("Sessions", () => {
       role: "project",
       title: "Root",
     });
-    expect(resolved).toEqual([MODEL]);
-    expect(recorded).toEqual([{ model: MODEL }]);
+    expect(asked).toEqual([[MODEL, []]]);
+    expect(resolved).toEqual([decision]);
+    expect(recorded).toEqual([{ codeMode: decision }]);
+    expect(resolved[0]).toBe(recorded[0] && (recorded[0] as { codeMode: unknown }).codeMode);
+  });
+
+  it("records no Code Mode decision where the host has none", async () => {
+    const recorded: unknown[] = [];
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: () => ["read"],
+        recorded: async () => null,
+        record: async (_sessionId, _tools, _mcpTools, birth) => {
+          recorded.push(birth);
+        },
+      },
+    });
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    expect(recorded).toEqual([{}]);
   });
 
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {

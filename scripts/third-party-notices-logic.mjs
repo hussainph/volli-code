@@ -444,6 +444,47 @@ export function unpackedPackages(builderConfig) {
 }
 
 /**
+ * Whether electron-builder keeps package `name` in the shipped node_modules
+ * tree: named in the whitelist itself, or under a whitelisted scope that a
+ * narrowing entry (`!node_modules/@scope/!(a|b)/**`) does not drop. A scoped
+ * package is otherwise easy to mislabel: `@earendil-works` is whitelisted for
+ * pi-codemode alone, and pi-ai, under the same scope, is bundled.
+ * @param {string} name @param {Record<string, unknown>} builderConfig
+ */
+export function isKeptInTree(name, builderConfig) {
+  const kept = new Set(keptNodeModulePackages(builderConfig));
+  if (kept.has(name)) return true;
+  if (!name.startsWith("@") || !name.includes("/")) return false;
+  const [scope, rest] = name.split("/");
+  if (!kept.has(scope)) return false;
+  const files = Array.isArray(builderConfig.files) ? builderConfig.files : [];
+  const narrowing = files
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => /^!node_modules\/(@[^/]+)\/!\((.*)\)\/\*\*$/.exec(entry))
+    .find((match) => match !== null && match[1] === scope);
+  return narrowing === undefined || narrowing[2].split("|").includes(rest);
+}
+
+/**
+ * How one package reaches the .app, as its notice line says it: inside a
+ * chunk, as files in the node_modules tree (and whether unpacked from the
+ * asar), or both — a package main inlines AND starts files of by path
+ * (`alsoBundled`, apps/desktop/scripts/path-reached-packages.json).
+ * @param {string} name @param {Record<string, unknown>} builderConfig
+ * @param {Set<string>} [alsoBundled]
+ */
+export function shippedAsFor(name, builderConfig, alsoBundled = new Set()) {
+  if (!isKeptInTree(name, builderConfig)) return "bundled into a chunk";
+  const unpacked = new Set(unpackedPackages(builderConfig));
+  const scope = name.startsWith("@") ? name.split("/")[0] : null;
+  const tree =
+    unpacked.has(name) || (scope !== null && unpacked.has(scope))
+      ? "node_modules tree, unpacked from the asar"
+      : "node_modules tree";
+  return alsoBundled.has(name) ? `bundled into a chunk and ${tree}` : tree;
+}
+
+/**
  * Does `name` (a package or a scope like `@img`) appear in the shipped set?
  * Scope entries in electron-builder's whitelist keep every package under the
  * scope, so a scope is covered when any package under it is covered.

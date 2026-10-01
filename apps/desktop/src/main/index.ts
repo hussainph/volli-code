@@ -38,7 +38,6 @@ import {
   memoizedPathExists,
   resolveAgentToolSurface,
   DEFAULT_CODE_MODE_POLICY,
-  inheritCodeModeSurface,
   resolveDefaultModel,
   resolveShell,
   roleImpliedByTicket,
@@ -1185,11 +1184,22 @@ app.whenReady().then(async () => {
   // unpackaged build's environment can override like the parallel-read opt-in
   // above. It decides only what NEW Sessions are born with; a Session's own
   // record decides the rest.
+  // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
+  // workspace's installed copy unpackaged, and the copy electron-builder
+  // unpacks beside app.asar when packaged. Located once, at boot: a launch
+  // that cannot find them offers no Session Code Mode at all.
+  const codeModeSandbox = codeModeSandboxAssets({
+    packaged: app.isPackaged,
+    appPath: () => app.getAppPath(),
+    resourcesPath: () => process.resourcesPath,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
   const codeMode = desktopCodeMode({
     env: process.env,
     packaged: !isDev,
     log: (message) => console.warn(`[volli] ${message}`),
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
+    sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
@@ -1215,7 +1225,7 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants, within, mcpTools = [], model, classify = false) => {
+          resolve: (role, grants, within, mcpTools = [], codeModeBirth, classify = false) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -1272,7 +1282,7 @@ app.whenReady().then(async () => {
                   // mode or the Session holds an MCP server too large to
                   // declare. Last, for the Cache Prefix reason every name
                   // above is.
-                  ...(codeMode.birth(model, mcpTools).offered ? (["codemode"] as const) : []),
+                  ...(codeModeBirth?.offered === true ? (["codemode"] as const) : []),
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1295,19 +1305,18 @@ app.whenReady().then(async () => {
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           recordedMcp: async (sessionId) =>
             recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
-          record: async (sessionId, tools, mcpTools = [], { model, parentSessionId } = {}) => {
+          // Code Mode's one decision per birth (VC-471), from the Session's
+          // own model; `resolve` and `record` are both handed this answer.
+          codeModeAt: (model, mcpTools) => codeMode.birth(model, mcpTools),
+          record: async (sessionId, tools, mcpTools = [], { codeMode: codeModeBirth } = {}) => {
             // Code Mode's routes and limits are frozen beside the names they
-            // route, at the same birth, from main's own state (VC-471) — and
-            // a child's from its parent's record, so a tool its parent could
-            // call only directly never becomes callable from its program.
-            const parentCodeMode =
-              parentSessionId === undefined
-                ? undefined
-                : recordedCodeMode(await sessionEngine.listEvents({ sessionId: parentSessionId }));
+            // route, at the same birth, from the decision `resolve` was given.
+            // A child's names are already bounded by its parent's record
+            // (VC-9); its routes follow its own model's mode.
             const codeModeSurface =
-              parentCodeMode === undefined
-                ? codeMode.surfaceFor(tools, mcpTools, model)
-                : inheritCodeModeSurface(parentCodeMode, tools);
+              codeModeBirth === undefined
+                ? undefined
+                : codeMode.surfaceFor(codeModeBirth, tools, mcpTools);
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {
@@ -1460,15 +1469,8 @@ app.whenReady().then(async () => {
           // Frozen parallel-read marks take effect only while the developer
           // opt-in is set (VC-454); unset, every Session is sequential again.
           parallelMcpReads: mcpDispatch.parallelMcpReads,
-          // Where Code Mode's sandbox worker and WebAssembly are (VC-471):
-          // the workspace's installed copy unpackaged, and the copy
-          // electron-builder unpacks beside app.asar when packaged.
-          ...codeModeSandboxAssets({
-            packaged: app.isPackaged,
-            appPath: () => app.getAppPath(),
-            resourcesPath: () => process.resourcesPath,
-            log: (message) => console.warn(`[volli] ${message}`),
-          }),
+          // Code Mode's sandbox (VC-471), located once at boot above.
+          ...codeModeSandbox,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed

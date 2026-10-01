@@ -135,17 +135,37 @@ export interface CodeModeModel {
 export interface DesktopCodeMode {
   /**
    * What Code Mode gives a Session born on `model` with `mcpTools`: whether
-   * its surface names `codemode`, in which mode, and which servers are too
-   * large to declare. Read from the setting now, at birth.
+   * its surface names `codemode`, in which mode, with or without the prompt
+   * paragraph, and which servers are too large to declare. Read from the
+   * setting now — ONCE per birth: the caller hands this same answer to the
+   * surface resolver and to {@link surfaceFor}, so a setting flipped between
+   * the two can never freeze a `codemode` whose every route is `direct`.
+   *
+   * A build whose sandbox could not be located offers nothing and defers
+   * nothing: a large server's tools routed behind a `codemode` that cannot
+   * run would be unreachable for the Session's whole life.
    */
   birth(model: CodeModeModel | undefined, mcpTools: readonly McpToolDefinition[]): CodeModeBirth;
-  /** The record a new Session's surface freezes, when that surface names `codemode`. */
+  /**
+   * The record a new Session's surface freezes from `birth`, when that
+   * surface names `codemode`. A Subagent Session's surface is already bounded
+   * by its parent's (VC-9), so this routes only the tools the child holds —
+   * by the child's own mode, from its own model.
+   */
   surfaceFor(
+    birth: CodeModeBirth,
     tools: readonly SessionToolId[],
     mcpTools: readonly McpToolDefinition[],
-    model: CodeModeModel | undefined,
   ): CodeModeSurface | undefined;
 }
+
+/** What a Session gets when Code Mode cannot run at all: nothing, and nothing deferred. */
+const UNAVAILABLE: CodeModeBirth = Object.freeze({
+  mode: "off",
+  nudge: false,
+  offered: false,
+  largeServers: new Set<string>(),
+});
 
 export function desktopCodeMode(options: {
   env: Readonly<Record<string, string | undefined>>;
@@ -153,6 +173,8 @@ export function desktopCodeMode(options: {
   log: (message: string) => void;
   /** The stored setting, read per birth so a change reaches the next Session. */
   policy: () => CodeModePolicy;
+  /** Whether this launch located a sandbox to run programs in. */
+  sandboxAvailable: boolean;
 }): DesktopCodeMode {
   const read = readCodeModeDevConfig(options.env, { packaged: options.packaged });
   if (read.kind === "invalid") options.log(read.reason);
@@ -167,15 +189,14 @@ export function desktopCodeMode(options: {
           models:
             model === undefined ? {} : { [`${model.providerId}/${model.modelId}`]: config.mode },
         };
-  const birth = (
-    model: CodeModeModel | undefined,
-    mcpTools: readonly McpToolDefinition[],
-  ): CodeModeBirth => codeModeBirth({ policy: policy(model), model: model ?? null, mcpTools });
   return {
-    birth,
-    surfaceFor: (tools, mcpTools, model) =>
+    birth: (model, mcpTools) =>
+      options.sandboxAvailable
+        ? codeModeBirth({ policy: policy(model), model: model ?? null, mcpTools })
+        : UNAVAILABLE,
+    surfaceFor: (birth, tools, mcpTools) =>
       codeModeSurfaceAtBirth({
-        birth: birth(model, mcpTools),
+        birth,
         tools,
         mcpTools,
         limits: config?.limits ?? DEFAULT_CODE_MODE_LIMITS,
