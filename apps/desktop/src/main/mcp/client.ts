@@ -11,7 +11,7 @@
  * - **Paging.** A catalog is read at most {@link MCP_LIST_MAX_PAGES} pages deep
  *   (pi-mcp's own `listTools` allows a thousand), with a repeated cursor
  *   refused rather than followed.
- * - **Framing.** One stdio message may be at most 1 MB.
+ * - **Framing.** One message may be at most 8 MiB plus framing on either transport.
  * - **Environment.** A local server gets {@link mcpLaunchEnvironment}'s fixed
  *   allowlist and nothing inherited — pi-mcp inherits the whole environment
  *   unless told not to — plus the person's own env entries, resolved now.
@@ -22,8 +22,10 @@
  * replaces was dual-era: it also probed `server/discover` for the
  * `2026-07-28` revision and accepted the pre-release `2024-10-07`. A dual-era
  * server answers `initialize` and keeps working; a server that speaks ONLY
- * `2026-07-28` refuses the handshake, and that refusal is recognised and
- * reported as {@link McpProtocolEraError} rather than as an opaque failure.
+ * `2026-07-28` refuses the handshake. A structured UnsupportedProtocolVersion
+ * refusal (-32022, data.supported) is reported as {@link McpProtocolEraError}
+ * when it advertises that revision and none this client accepts. Prose alone
+ * cannot identify the era. Modern discovery/calls still await pi-mcp support.
  *
  * STDIO SHUTDOWN. pi-mcp starts each server in its own process group and, on
  * close, ends stdin, then signals SIGTERM and SIGKILL to the whole group, so a
@@ -40,6 +42,7 @@ import {
   McpTimeoutError,
   StdioTransport,
   StreamableHttpTransport,
+  SUPPORTED_PROTOCOL_VERSIONS,
   type AuthProvider,
   type CallToolResult,
   type McpFetch,
@@ -504,21 +507,115 @@ function transportFor(
   }
   return cancellableHttpTransport({
     url: server.transport.url,
-    fetch: boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
+    fetch: classifyHttpVersionRefusalFetch(
+      boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
+    ),
     maxMessageBytes: MCP_HTTP_MESSAGE_MAX_BYTES,
     ...(auth === undefined ? {} : { authProvider: auth }),
   });
 }
 
-/** Whether a handshake refusal names the modern-only `2026-07-28` revision. */
-function refusedAsModernOnly(error: unknown): boolean {
-  const texts: string[] = [];
-  if (error instanceof McpError) {
-    texts.push(error.message, JSON.stringify(error.data ?? null));
-  } else if (error instanceof McpHttpError) {
-    texts.push(error.body);
+/**
+ * A recognized modern version error, not a version mentioned in arbitrary prose.
+ * A dual-era advertisement is not a modern-only refusal: initialize can still
+ * work with a revision pi-mcp accepts. Do not infer an era from other codes.
+ */
+function modernOnlyVersionError(code: unknown, data: unknown): boolean {
+  if (code !== -32022 || !isRecord(data)) return false;
+  const supported = data["supported"];
+  if (!Array.isArray(supported) || !supported.every((version) => typeof version === "string")) {
+    return false;
   }
-  return texts.some((text) => text.includes("2026-07-28"));
+  return (
+    supported.includes("2026-07-28") &&
+    !supported.some((version) =>
+      (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(version),
+    )
+  );
+}
+
+interface ModernOnlyHttpRefusal {
+  message: string;
+  data: unknown;
+}
+
+/** A valid JSON-RPC HTTP 400 refusal that advertises no version pi-mcp accepts. */
+function modernOnlyHttpRefusal(bodyText: string): ModernOnlyHttpRefusal | undefined {
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return undefined;
+  }
+  if (
+    !isRecord(body) ||
+    body["jsonrpc"] !== "2.0" ||
+    "result" in body ||
+    "method" in body ||
+    (body["id"] !== undefined &&
+      body["id"] !== null &&
+      typeof body["id"] !== "string" &&
+      !(typeof body["id"] === "number" && Number.isFinite(body["id"]))) ||
+    !isRecord(body["error"]) ||
+    typeof body["error"]["message"] !== "string" ||
+    !modernOnlyVersionError(body["error"]["code"], body["error"]["data"])
+  ) {
+    return undefined;
+  }
+  return { message: body["error"]["message"], data: body["error"]["data"] };
+}
+
+/** Only an initialize refusal is protocol-version negotiation, not a later HTTP error. */
+function isInitializeRequest(init: Parameters<McpFetch>[1]): boolean {
+  if (typeof init?.body !== "string") return false;
+  let request: unknown;
+  try {
+    request = JSON.parse(init.body);
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(request) &&
+    request["jsonrpc"] === "2.0" &&
+    request["method"] === "initialize" &&
+    (typeof request["id"] === "string" ||
+      (typeof request["id"] === "number" && Number.isFinite(request["id"])))
+  );
+}
+
+/**
+ * pi-mcp currently truncates HTTP error bodies to 8 KiB before it constructs
+ * McpHttpError. Inspect this bounded response first so a valid structured
+ * version refusal larger than that library prefix is not lost. The outer
+ * boundedFetch still enforces Volli's 8 MiB message cap.
+ */
+function classifyHttpVersionRefusalFetch(base: McpFetch): McpFetch {
+  return async (input, init) => {
+    const response = await base(input, init);
+    if (response.status !== 400 || !isInitializeRequest(init)) return response;
+    let refusal: ModernOnlyHttpRefusal | undefined;
+    try {
+      refusal = modernOnlyHttpRefusal(await response.clone().text());
+    } catch {
+      return response;
+    }
+    if (refusal === undefined) return response;
+    await response.body?.cancel().catch(() => undefined);
+    throw new McpError(-32022, refusal.message, refusal.data);
+  };
+}
+
+/**
+ * Recognize pi-mcp's stdio JSON-RPC error, or a structured HTTP 400 error body.
+ * HTTP validation errors may omit id (or use null), unlike stdio responses.
+ * The body has already passed boundedFetch's message bound. This only names
+ * a refused legacy handshake; transport-specific modern probing/fallback must
+ * be implemented upstream in pi-mcp, not as a second client here.
+ */
+function refusedAsModernOnly(error: unknown): boolean {
+  if (error instanceof McpError) return modernOnlyVersionError(error.code, error.data);
+  if (!(error instanceof McpHttpError) || error.status !== 400) return false;
+  return modernOnlyHttpRefusal(error.body) !== undefined;
 }
 
 /**

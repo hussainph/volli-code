@@ -1,3 +1,4 @@
+import { McpError, McpHttpError } from "@earendil-works/pi-mcp";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -26,6 +27,36 @@ afterEach(async () => {
 });
 
 describe("real MCP transport fixtures", () => {
+  it.each(["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"])(
+    "still discovers and calls a legacy-only %s stdio server",
+    async (revision) => {
+      const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+      const client = await openMcpProtocolClient(
+        {
+          id: "legacy-fixture",
+          name: "Legacy fixture",
+          enabled: true,
+          transport: { type: "stdio", command: process.execPath, args: [fixture, revision] },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      );
+      opened.push(client);
+      await expect(client.listTools(new AbortController().signal)).resolves.toEqual([
+        { name: "fixture_echo", inputSchema: { type: "object" } },
+      ]);
+      await expect(
+        client.callTool({
+          name: "fixture_echo",
+          arguments: { exact: revision },
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toEqual({
+        content: [{ type: "text", text: JSON.stringify({ exact: revision }) }],
+      });
+    },
+  );
+
   // The servers here are built on the official SDK 2.0 — the most common MCP
   // server stack — so these also pin that pi-mcp's 2025-11-25 handshake is
   // accepted by a dual-era server (VC-470).
@@ -130,69 +161,76 @@ describe("real MCP transport fixtures", () => {
     await expect(client.listTools(new AbortController().signal)).resolves.toHaveLength(2);
   });
 
-  it("discovers and calls a local unauthenticated Streamable HTTP server", async () => {
-    const handler = createMcpHandler(
-      () => {
-        const fixture = new McpServer({ name: "volli-http-fixture", version: "1.0.0" });
-        fixture.registerTool(
-          "fixture_http",
-          { description: "Reply from a real Streamable HTTP fixture" },
-          async () => ({
-            content: [{ type: "text", text: "HTTP fixture response" }],
-            structuredContent: { transport: "streamable-http" },
+  it.each([undefined, "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"])(
+    "discovers and calls a local Streamable HTTP server (%s; undefined is dual-era)",
+    async (revision) => {
+      const handler = createMcpHandler(
+        () => {
+          const fixture = new McpServer(
+            { name: "volli-http-fixture", version: "1.0.0" },
+            revision === undefined ? {} : { supportedProtocolVersions: [revision] },
+          );
+          fixture.registerTool(
+            "fixture_http",
+            { description: "Reply from a real Streamable HTTP fixture" },
+            async () => ({
+              content: [{ type: "text", text: "HTTP fixture response" }],
+              structuredContent: { transport: "streamable-http" },
+            }),
+          );
+          return fixture;
+        },
+        { responseMode: "json" },
+      );
+      const http = createServer(toNodeHandler(handler));
+      await new Promise<void>((resolve, reject) => {
+        http.once("error", reject);
+        http.listen(0, "127.0.0.1", resolve);
+      });
+      closing.push(
+        async () =>
+          new Promise<void>((resolve, reject) => {
+            void handler.close().finally(() => {
+              http.close((error) => (error === undefined ? resolve() : reject(error)));
+            });
           }),
-        );
-        return fixture;
-      },
-      { responseMode: "json" },
-    );
-    const http = createServer(toNodeHandler(handler));
-    await new Promise<void>((resolve, reject) => {
-      http.once("error", reject);
-      http.listen(0, "127.0.0.1", resolve);
-    });
-    closing.push(
-      async () =>
-        new Promise<void>((resolve, reject) => {
-          void handler.close().finally(() => {
-            http.close((error) => (error === undefined ? resolve() : reject(error)));
-          });
+      );
+      const address = http.address();
+      if (address === null || typeof address === "string")
+        throw new Error("fixture did not listen");
+
+      const client = await openMcpProtocolClient(
+        {
+          id: "http-fixture",
+          name: "HTTP fixture",
+          enabled: true,
+          transport: { type: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      );
+      opened.push(client);
+
+      await expect(client.listTools(new AbortController().signal)).resolves.toEqual([
+        expect.objectContaining({
+          name: "fixture_http",
+          description: "Reply from a real Streamable HTTP fixture",
         }),
-    );
-    const address = http.address();
-    if (address === null || typeof address === "string") throw new Error("fixture did not listen");
-
-    const client = await openMcpProtocolClient(
-      {
-        id: "http-fixture",
-        name: "HTTP fixture",
-        enabled: true,
-        transport: { type: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
-      },
-      process.cwd(),
-      new AbortController().signal,
-    );
-    opened.push(client);
-
-    await expect(client.listTools(new AbortController().signal)).resolves.toEqual([
-      expect.objectContaining({
-        name: "fixture_http",
-        description: "Reply from a real Streamable HTTP fixture",
-      }),
-    ]);
-    await expect(
-      client.callTool({
-        name: "fixture_http",
-        arguments: {},
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        content: [{ type: "text", text: "HTTP fixture response" }],
-        structuredContent: { transport: "streamable-http" },
-      }),
-    );
-  });
+      ]);
+      await expect(
+        client.callTool({
+          name: "fixture_http",
+          arguments: {},
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          content: [{ type: "text", text: "HTTP fixture response" }],
+          structuredContent: { transport: "streamable-http" },
+        }),
+      );
+    },
+  );
 });
 
 /** A one-route HTTP server answering every POST with a fixed status and body. */
@@ -219,20 +257,62 @@ async function answering(status: number, body: string) {
   return { url: `http://127.0.0.1:${address.port}/mcp`, seen };
 }
 
-describe("refusals the client names (VC-470)", () => {
-  it("names a server that speaks only the 2026-07-28 revision instead of failing opaquely", async () => {
-    const fixture = await answering(
-      400,
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        error: {
-          code: -32022,
-          message: "Unsupported protocol version",
-          data: { supported: ["2026-07-28"], requested: "2025-11-25" },
+describe("refusals the client names (VC-470, structural since VC-479)", () => {
+  it("names a structured modern-only stdio refusal without inspecting its prose", async () => {
+    const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+    await expect(
+      openMcpProtocolClient(
+        {
+          id: "modern-stdio",
+          name: "Modern stdio",
+          enabled: true,
+          transport: { type: "stdio", command: process.execPath, args: [fixture, "2026-07-28"] },
         },
-      }),
+        process.cwd(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(McpProtocolEraError);
+  });
+
+  it("does not infer an era from a stdio method error even when its data names the modern revision", async () => {
+    const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+    await expect(
+      openMcpProtocolClient(
+        {
+          id: "modern-stdio",
+          name: "Modern stdio",
+          enabled: true,
+          transport: {
+            type: "stdio",
+            command: process.execPath,
+            args: [fixture, "2026-07-28", "method-not-found"],
+          },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(McpError);
+  });
+
+  it("names a structured modern-only HTTP 400 refusal instead of failing opaquely", async () => {
+    const handler = createMcpHandler(
+      () =>
+        new McpServer(
+          { name: "modern-only", version: "1" },
+          { supportedProtocolVersions: ["2026-07-28"] },
+        ),
+      { legacy: "reject" },
     );
+    const http = createServer(toNodeHandler(handler));
+    await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+    closing.push(async () => {
+      await handler.close();
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    });
+    const address = http.address();
+    if (address === null || typeof address === "string") throw new Error("fixture did not listen");
+    const fixture = { url: `http://127.0.0.1:${address.port}/mcp` };
 
     await expect(
       openMcpProtocolClient(
@@ -246,6 +326,49 @@ describe("refusals the client names (VC-470)", () => {
         new AbortController().signal,
       ),
     ).rejects.toBeInstanceOf(McpProtocolEraError);
+  });
+
+  it("names a structured HTTP refusal larger than pi-mcp's 8 KiB error-body prefix", async () => {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32022,
+        message: "x".repeat(9_000),
+        data: { supported: ["2026-07-28"], requested: "2025-11-25" },
+      },
+    });
+    expect(Buffer.byteLength(body)).toBeGreaterThan(8 * 1_024);
+    const fixture = await answering(400, body);
+
+    await expect(
+      openMcpProtocolClient(
+        {
+          id: "large-modern-refusal",
+          name: "Large modern refusal",
+          enabled: true,
+          transport: { type: "streamable-http", url: fixture.url },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(McpProtocolEraError);
+  });
+
+  it("does not infer an era from an HTTP body merely mentioning the modern revision", async () => {
+    const fixture = await answering(400, "Upstream failed while contacting a 2026-07-28 server");
+    await expect(
+      openMcpProtocolClient(
+        {
+          id: "http-error",
+          name: "HTTP error",
+          enabled: true,
+          transport: { type: "streamable-http", url: fixture.url },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(McpHttpError);
   });
 
   it("calls a 401 to a server carrying the person's own Authorization header a rejected credential, not a sign-in", async () => {

@@ -269,9 +269,32 @@ Two things the SDK negotiated are gone, and both are worth naming:
 - **`2026-07-28`**, the stateless revision reached through `server/discover`.
   A server that speaks it *and* the earlier revisions (a "dual-era" server, which
   is what the official SDKs build by default) answers `initialize` and works as
-  before. A server that speaks **only** `2026-07-28` refuses the handshake; Volli
-  recognises that refusal and says so, rather than reporting an opaque failure.
+  before. Modern-only discovery and calls remain **blocked on pi-mcp upstream**:
+  Volli pins `0.99.2`, and the newer published `1.0.0` still implements only the
+  earlier handshake. Volli does not fork the client.
+  Since VC-479, Volli names a refusal only from a structured
+  `UnsupportedProtocolVersionError` (JSON-RPC code `-32022`) whose
+  `data.supported` string array contains `2026-07-28` and none of the revisions
+  pi-mcp accepts. Over HTTP this must be a JSON-RPC error body on **400**;
+  over stdio it is the JSON-RPC error itself. A version mentioned only in an
+  error's prose, an invalid body, or a compatible dual-era advertisement is not
+  enough. Modern-only servers can also refuse `initialize` with other errors,
+  so not every such server can be identified by this legacy client.
 - **`2024-10-07`**, a pre-release revision no current server negotiates.
+
+The eventual upstream implementation must follow the spec's transport-specific
+compatibility rules: stdio probes `server/discover` and falls back to
+`initialize` on non-modern errors or a probe timeout; HTTP attempts a modern
+request and inspects a 400's JSON-RPC body before falling back. A recognized
+modern version error selects a mutually supported revision rather than falling
+back. These probes are **not implemented by pi-mcp yet**. Modern requests also
+carry version and capabilities in `_meta` (and required HTTP metadata headers),
+without protocol sessions; MRTR input requests and subscriptions replace the old
+server-initiated requests and GET stream. See the
+[revision changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+and [compatibility rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
+The structural-detection change does not change frozen tool surfaces, tool names,
+credential routing, per-request token reads, or these limits.
 
 The bounds VC-8 set are kept: a 10-second limit on the handshake and on a
 catalog read, a 30-second limit on a tool call, and at most 64 pages of
