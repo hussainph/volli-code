@@ -144,6 +144,46 @@ describe("Sessions", () => {
     ]);
   });
 
+  it("asks once at birth whether the project offers classify, and freezes the answer into the surface (VC-478)", async () => {
+    const asked: string[] = [];
+    const records: Array<readonly string[]> = [];
+    let configured = true;
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: (_role, _grants, _within, _mcp, classify = false) => [
+          "read",
+          ...(classify ? (["classify"] as const) : []),
+        ],
+        resolveClassify: async (projectId) => {
+          asked.push(projectId);
+          return configured;
+        },
+        recorded: async () => null,
+        record: async (_sessionId, tools) => {
+          records.push(tools);
+        },
+      },
+    });
+    await door.create({
+      operationId: "with",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Born with a decision model",
+    });
+    // Turning the model off afterwards reaches the next Session only.
+    configured = false;
+    await door.create({
+      operationId: "without",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Born without",
+    });
+    expect(asked).toEqual(["project-1", "project-1"]);
+    expect(records).toEqual([["read", "classify"], ["read"]]);
+  });
+
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {
     // The Role decides the rung (VC-53): a Ticket Session reads the `ticket`
     // tier, a project chat the `global` one. Spoken as a tier since VC-259,
