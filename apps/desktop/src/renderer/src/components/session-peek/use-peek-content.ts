@@ -1,32 +1,27 @@
 /**
- * VC-30 — what one peek costs: a single fold of a Session's durable tail.
+ * A peek reads a local fold before asking for utility prose. The question and
+ * transcript fallback stay readable throughout refinement, including refusal
+ * or failure. No subscription, adoption, refresh timer, or platform API.
  *
- * ONE PULL, NO SUBSCRIPTION, NO ADOPTION. Reading a peek must be cheaper than
- * opening the Session, or the peek is just a slower way to open it: there is no
- * `session.subscribe`, no resident client and no `adoptChatSession` anywhere in
- * this file. Adoption happens later and only on an explicit intent — a pin, a
- * reply, or viewing the conversation (plan §1.1, §3.3).
- *
- * WHAT IS CACHED, AND WHAT INVALIDATES IT. One answer per Session during the
- * cooldown, so sweeping back along a band redraws cards it has already
- * read without asking again. The cache is keyed by the Session AND by an activity
- * token the caller supplies — its listing row's `lastActivityAt`, which main
- * pushes on every fold (`volli:session-activity`). A cached read also expires
- * after the summary cooldown so a later glance can retry a budget refusal or
- * failed refinement even when no new activity arrived. There is no refresh
- * timer: only an actual peek re-reads.
- *
- * A LATE ANSWER IS DROPPED. The pointer moves faster than a fold: by the time a
- * pull settles the card may be about another Session entirely, so the result is
- * applied only while it is still the one being asked for.
+ * The cache is shared with folder lines by the controller. Standalone callers
+ * get the same Session/activity coalescing and next-glance cooldown semantics.
+ * A late answer may fill the cache, never a card that has moved elsewhere.
  */
 import * as React from "react";
-import { SESSION_PEEK_REFRESH_MS, type SessionPeekContent } from "@volli/shared";
+import type { SessionPeekContent } from "@volli/shared";
+
+import {
+  observePeekContent,
+  PeekContentCache,
+  type PeekContentRead,
+  type ReadPeekContent,
+} from "./peek-content-cache";
 
 export interface PeekContentState {
   content: SessionPeekContent | null;
+  /** Only the first local fold loads; refinement never hides readable content. */
   loading: boolean;
-  /** The fold failed, or answered with no such Session. The card says so. */
+  /** The local fold failed, or answered with no such Session. */
   failed: boolean;
 }
 
@@ -34,42 +29,43 @@ const IDLE: PeekContentState = { content: null, loading: false, failed: false };
 
 export function usePeekContent(
   sessionId: string | null,
-  read: (sessionId: string) => Promise<SessionPeekContent | null>,
+  read: ReadPeekContent,
   activityToken: number,
+  refine = true,
+  sharedCache?: PeekContentCache,
 ): PeekContentState {
-  const cache = React.useRef(
-    new Map<string, { content: SessionPeekContent | null; readAt: number }>(),
-  );
+  const cache = React.useMemo(() => sharedCache ?? new PeekContentCache(read), [read, sharedCache]);
+  const active = React.useRef<{
+    sessionId: string;
+    activityToken: number;
+    cache: PeekContentCache;
+    entry: PeekContentRead;
+  } | null>(null);
   const [state, setState] = React.useState<PeekContentState>(IDLE);
-  const key = sessionId === null ? null : `${sessionId}:${activityToken}`;
 
   React.useEffect(() => {
-    if (sessionId === null || key === null) {
+    if (sessionId === null) {
+      active.current = null;
       setState(IDLE);
       return;
     }
-    const cached = cache.current.get(key);
-    if (cached !== undefined && Date.now() - cached.readAt < SESSION_PEEK_REFRESH_MS) {
-      setState({ content: cached.content, loading: false, failed: cached.content === null });
-      return;
-    }
-    let live = true;
-    setState({ content: null, loading: true, failed: false });
-    void read(sessionId).then(
-      (content) => {
-        cache.current.set(key, { content, readAt: Date.now() });
-        if (!live) return;
-        setState({ content, loading: false, failed: content === null });
-      },
-      () => {
-        if (!live) return;
-        setState({ content: null, loading: false, failed: true });
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [key, read, sessionId]);
+    const previous = active.current;
+    // Pinning is not a new glance: keep its fold even after the cooldown.
+    const entry =
+      previous?.sessionId === sessionId &&
+      previous.activityToken === activityToken &&
+      previous.cache === cache
+        ? previous.entry
+        : cache.get(sessionId, activityToken);
+    active.current = { sessionId, activityToken, cache, entry };
+    return observePeekContent(entry, refine, (current) => {
+      setState({
+        content: current.content ?? null,
+        loading: current.content === undefined && !current.failed,
+        failed: current.failed || current.content === null,
+      });
+    });
+  }, [activityToken, cache, refine, sessionId]);
 
   return state;
 }

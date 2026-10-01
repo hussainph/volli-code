@@ -41,6 +41,9 @@ function entry(
 ): SessionPeekEntry {
   return { at, role, text, tools: [] };
 }
+function excerpt(text: string): string {
+  return text.repeat(Math.ceil(2_000 / text.length)).slice(0, 2_000);
+}
 function harness(overrides: Partial<PeekSummarizerOptions> = {}) {
   let clock = 0;
   const readModelDefaults = vi.fn(() => ({ ...EMPTY_MODEL_ACCESS_DEFAULTS, utility: UTILITY }));
@@ -178,24 +181,137 @@ describe("hover-only peek summaries", () => {
     },
   );
 
-  it("caps combined input, gives newer messages priority, and sends no extra repair for long output", async () => {
+  it("retains the latest user request alongside the five newest progress entries", async () => {
+    const h = harness();
+    const goal = entry("Fix hover summaries without increasing utility model costs.", "user", 3);
+    const progress = [
+      "Read the current summary prompt and hover request path.",
+      "Found the six-message slice that discards the user's request.",
+      "Reserved bounded input space for the latest user goal.",
+      "Kept the newest progress excerpts in conversation order.",
+      "Added input-selection regressions without changing cooldowns.",
+      "The focused tests pass; the change is ready for review.",
+    ].map((text, index) => entry(text, "assistant", index + 4));
+    const entries = [
+      entry("Rename the sidebar headings.", "user", 1),
+      entry("The sidebar headings are updated.", "assistant", 2),
+      goal,
+      ...progress,
+    ];
+    const summary = await h.summarize("s", entries);
+    const sent = JSON.parse(h.completeUtility.mock.calls[0]![0].user) as {
+      role: string;
+      text: string;
+    }[];
+    expect(sent).toEqual([goal, ...progress.slice(1)].map(({ role, text }) => ({ role, text })));
+    expect(sent).toHaveLength(6);
+    expect(sent.reduce((total, message) => total + message.text.length, 0)).toBeLessThanOrEqual(
+      PEEK_SUMMARY_INPUT_CHARS,
+    );
+    h.advance(PEEK_SUMMARY_SESSION_GAP_MS);
+    expect(
+      await h.summarize("s", [
+        progress.at(-1)!,
+        { ...entry(" ", "assistant", 10), tools: ["read_file"] },
+        entry("Internal summary instructions", "system", 11),
+      ]),
+    ).toBe(summary);
+    expect(h.inspectModelAccess).toHaveBeenCalledTimes(1);
+    expect(h.completeUtility).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([3, 6])(
+    "reserves the goal when %i realistic 2000-character progress excerpts fill the input budget",
+    async (progressCount) => {
+      const h = harness();
+      const goal = entry(
+        excerpt(
+          "Fix the hover summary so the user's request remains visible alongside recent progress. ",
+        ),
+        "user",
+        1,
+      );
+      const progress = [
+        "Read the summary service and identified the newest-first input allocation. ",
+        "Confirmed that tool-only messages do not invalidate the cached summary. ",
+        "Kept the utility model selection, accounting and cooldown behavior intact. ",
+        "Added a regression that exceeds the six-entry limit with spoken progress. ",
+        "Reserved input space for the goal before allocating the newest progress text. ",
+        "Verified chronological message order and the total character budget in the focused tests. ",
+      ]
+        .slice(0, progressCount)
+        .map((text, index) => entry(excerpt(text), "assistant", index + 2));
+      await h.summarize("s", [goal, ...progress]);
+      const sent = JSON.parse(h.completeUtility.mock.calls[0]![0].user) as {
+        role: string;
+        text: string;
+      }[];
+      expect(sent).toEqual([goal, ...progress.slice(-2)].map(({ role, text }) => ({ role, text })));
+      expect(sent.length).toBeLessThanOrEqual(6);
+      expect(sent.reduce((total, message) => total + message.text.length, 0)).toBe(
+        PEEK_SUMMARY_INPUT_CHARS,
+      );
+      expect(h.completeUtility).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves message order when the latest request follows earlier progress", async () => {
+    const h = harness();
+    const progress = [
+      "Read the existing implementation. ",
+      "Updated the summary input allocation. ",
+      "The focused regressions pass. ",
+    ].map((text, index) =>
+      entry(text.repeat(Math.ceil(2_000 / text.length)).slice(0, 2_000), "assistant", index + 1),
+    );
+    const goal = entry(
+      "Also preserve the utility cooldown. ".repeat(100).slice(0, 2_000),
+      "user",
+      4,
+    );
+    await h.summarize("s", [...progress, goal]);
+    expect(JSON.parse(h.completeUtility.mock.calls[0]![0].user)).toEqual(
+      [...progress.slice(-2), goal].map(({ role, text }) => ({ role, text })),
+    );
+    expect(h.completeUtility).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["assistant", "user"] as const)(
+    "accepts %s-only input while keeping at most six spoken entries",
+    async (role) => {
+      const h = harness();
+      const entries = Array.from({ length: 7 }, (_, index) =>
+        entry(`Summary input message ${index + 1}.`, role, index + 1),
+      );
+      await h.summarize("s", entries);
+      expect(JSON.parse(h.completeUtility.mock.calls[0]![0].user)).toEqual(
+        entries.slice(-6).map(({ role: messageRole, text }) => ({ role: messageRole, text })),
+      );
+      expect(h.completeUtility).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("bounds the goal, keeps newest progress, and sends no extra repair for long output", async () => {
     const longOutput = "Readable summary. ".repeat(100);
     const h = harness();
     h.completeUtility.mockResolvedValue({ text: ` ${longOutput} `, usage: null });
     expect(
       await h.summarize("s", [
         entry("old".repeat(3_000), "user"),
-        entry("new".repeat(1_000), "assistant", 2),
+        entry("new".repeat(2_000), "assistant", 2),
       ]),
     ).toBe(longOutput.trim());
     const sent = JSON.parse(h.completeUtility.mock.calls[0]![0].user) as {
       role: string;
       text: string;
     }[];
+    expect(sent).toEqual([
+      { role: "user", text: "old".repeat(3_000).slice(0, 2_000) },
+      { role: "assistant", text: "new".repeat(2_000).slice(0, 4_000) },
+    ]);
     expect(sent.reduce((total, message) => total + message.text.length, 0)).toBe(
       PEEK_SUMMARY_INPUT_CHARS,
     );
-    expect(sent[1]!.text).toBe("new".repeat(1_000));
     expect(h.completeUtility).toHaveBeenCalledTimes(1);
   });
 

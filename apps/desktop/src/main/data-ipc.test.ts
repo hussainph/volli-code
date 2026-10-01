@@ -2675,7 +2675,7 @@ describe("volli:session-read-set (VC-30)", () => {
 });
 
 describe("volli:session-peek-content (VC-30)", () => {
-  it("runs utility refinement only when the peek content is requested", async () => {
+  it("reads local content without utility work, then refines only on explicit demand", async () => {
     const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
     const created = await sessionEngine.createSession({
       commandId: "create-summary-peek",
@@ -2693,8 +2693,14 @@ describe("volli:session-peek-content (VC-30)", () => {
     handlers.clear();
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine, summarizePeek });
     expect(summarizePeek).not.toHaveBeenCalled();
+    const local = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+    });
+    expect(local).toMatchObject({ ok: true, content: { entries: [], question: null } });
+    expect(summarizePeek).not.toHaveBeenCalled();
     const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
       sessionId: created.session.id,
+      refine: true,
     });
     expect(summarizePeek).toHaveBeenCalledExactlyOnceWith(created.session.id, []);
     expect(result).toMatchObject({ ok: true, content: { summary: "Combined summary" } });

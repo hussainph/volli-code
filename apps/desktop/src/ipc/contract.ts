@@ -3195,6 +3195,8 @@ export type SessionReadSetResult = Result<{ read: SessionReadState }>;
 /** One peek's fold (VC-30). How much it holds is `SESSION_PEEK_ENTRIES`, not the caller's to pick. */
 export interface SessionPeekContentInput {
   sessionId: string;
+  /** Explicit summary demand. Absent/false reads local content without model work. */
+  refine?: boolean;
 }
 
 /**

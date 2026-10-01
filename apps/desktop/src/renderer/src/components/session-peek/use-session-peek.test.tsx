@@ -97,9 +97,7 @@ function row(rowId: string, overrides: Partial<SessionPeekRow> = {}): SessionPee
 /** Every port a mock; nothing here needs main to answer. */
 function ports(): SessionPeekPorts {
   return {
-    readContent: vi.fn<(sessionId: string) => Promise<SessionPeekContent | null>>(() =>
-      Promise.resolve(null),
-    ),
+    readContent: vi.fn<SessionPeekPorts["readContent"]>(() => Promise.resolve(null)),
     answer: vi.fn(() => Promise.resolve(true)),
     sendMessage: vi.fn(() => Promise.resolve(true)),
     openSession: vi.fn(),
@@ -119,6 +117,8 @@ interface SurfaceProps {
   /** Spreads `scrollProps` where the surfaces used to, as a surface mid-migration does. */
   spread?: boolean;
   folders?: ReadonlyMap<string, readonly string[]>;
+  activityToken?: number;
+  activityByRow?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -132,16 +132,18 @@ function Surface({
   override = false,
   spread = false,
   folders,
+  activityToken = NOW - 120_000,
+  activityByRow,
 }: SurfaceProps) {
   const known = React.useMemo(() => {
     const map = new Map<string, SessionPeekRow>();
     for (const rowId of [...rowIds, SESSION_ROW, SECOND_ROW]) {
       if (missing.includes(rowId)) continue;
       if (rowId.startsWith("folder:")) continue;
-      map.set(rowId, row(rowId));
+      map.set(rowId, row(rowId, { at: activityByRow?.get(rowId) ?? activityToken }));
     }
     return map;
-  }, [missing, rowIds]);
+  }, [activityByRow, activityToken, missing, rowIds]);
 
   const options: SessionPeekOptions = {
     ticketPrefix: "VLT",
@@ -185,6 +187,17 @@ function Surface({
   );
 }
 
+const LOCAL: SessionPeekContent = {
+  sessionId: "chat-a1",
+  entries: [{ at: 1, role: "assistant", text: "Readable local progress", tools: [] }],
+  summary: null,
+  question: QUESTION,
+  turns: 1,
+  turnDepth: 1,
+  unreadable: 0,
+  lastActivityAt: NOW,
+};
+const GENERATED = { ...LOCAL, summary: "Combined goal and progress" };
 const EMPTY_FOLDERS: ReadonlyMap<string, readonly string[]> = new Map();
 const NO_MISSING: readonly string[] = [];
 let PORTS: SessionPeekPorts = ports();
@@ -387,7 +400,10 @@ describe("Space into a folder's card", () => {
     await render({ rowIds: [FOLDER_ROW], folders });
     expect(readContent).not.toHaveBeenCalled();
     await pressSpace(rowButton(FOLDER_ROW));
-    expect(readContent).toHaveBeenCalledTimes(1);
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+    ]);
     expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
       "Combined user request and agent progress",
     );
@@ -411,6 +427,161 @@ describe("Space into a folder's card", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("shows local folder lines and joins pending refinement when reopened after dismissal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const local = Promise.withResolvers<SessionPeekContent | null>();
+    const refinement = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation((_id, refine) => (refine ? refinement.promise : local.promise));
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(readContent.mock.calls).toEqual([["chat-a1", false]]);
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe("No summary yet");
+    await act(async () => local.resolve(LOCAL));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+    ]);
+    await pressKey(card()!, "Escape");
+    expect(card()).toBeNull();
+    await act(async () => vi.advanceTimersByTime(1_001));
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(card()?.dataset.peekSubject).toBe("ticket");
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    expect(readContent).toHaveBeenCalledTimes(2);
+    await act(async () => refinement.resolve(GENERATED));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+  });
+
+  it("a folder drill shares pending refinement with the Session card", async () => {
+    const refinement = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation((_id, refine) =>
+      refine ? refinement.promise : Promise.resolve(LOCAL),
+    );
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    await pressSpace(rowButton(FOLDER_ROW));
+    await act(async () => {
+      card()!
+        .querySelector<HTMLButtonElement>(`[data-peek-drill="${SESSION_ROW}"]`)!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(card()?.dataset.peekSubject).toBe("session");
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+    ]);
+    await act(async () => refinement.resolve(GENERATED));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+  });
+
+  it("folder activity invalidates local reads and drops late old refinements", async () => {
+    const old = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockResolvedValueOnce(LOCAL).mockReturnValueOnce(old.promise);
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders, activityToken: 1 });
+    await pressSpace(rowButton(FOLDER_ROW));
+    const fresh = { ...GENERATED, lastActivityAt: NOW + 1, summary: "Fresh activity" };
+    readContent.mockResolvedValue(fresh);
+    await render({ rowIds: [FOLDER_ROW], folders, activityToken: 2 });
+    await act(async () => old.resolve(GENERATED));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe("Fresh activity");
+    expect(readContent).toHaveBeenCalledTimes(4);
+  });
+
+  it("another Session's activity does not expire an unchanged line during a continuous glance", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const fresh = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation(async (id, refine) => ({
+      ...LOCAL,
+      sessionId: id,
+      summary: refine ? `Summary for ${id}` : null,
+    }));
+    const folders = new Map([[TICKET.id, [SESSION_ROW, SECOND_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders, activityToken: 1 });
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-b2", false],
+      ["chat-a1", true],
+      ["chat-b2", true],
+    ]);
+    await act(async () => vi.advanceTimersByTime(60_000));
+    readContent.mockImplementation(() => fresh.promise);
+    await render({
+      rowIds: [FOLDER_ROW],
+      folders,
+      activityToken: 1,
+      activityByRow: new Map([[SECOND_ROW, 2]]),
+    });
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SESSION_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe("Summary for chat-a1");
+    expect(readContent.mock.calls.filter(([id]) => id === "chat-a1")).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+    ]);
+    expect(readContent.mock.calls.at(-1)).toEqual(["chat-b2", false]);
+    await act(async () =>
+      fresh.resolve({ ...GENERATED, sessionId: "chat-b2", lastActivityAt: NOW + 1 }),
+    );
+    expect(readContent.mock.calls.filter(([id]) => id === "chat-a1")).toHaveLength(2);
+    expect(readContent.mock.calls.at(-1)).toEqual(["chat-b2", true]);
+  });
+
+  it("a closed folder never refines a local read that settles after dismissal", async () => {
+    const local = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockReturnValueOnce(local.promise);
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    await pressSpace(rowButton(FOLDER_ROW));
+    await pressKey(card()!, "Escape");
+    await act(async () => local.resolve(LOCAL));
+    expect(card()).toBeNull();
+    expect(readContent.mock.calls).toEqual([["chat-a1", false]]);
+  });
+
+  it("folder refinement failure retains a real fallback and retries only after cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation(async (_id, refine) => {
+      if (refine) throw new Error("Utility offline");
+      return LOCAL;
+    });
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    await pressKey(card()!, "Escape");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(readContent).toHaveBeenCalledTimes(2);
+    await pressKey(card()!, "Escape");
+    await act(async () => vi.advanceTimersByTime(60_000));
+    readContent.mockImplementation(async (_id, refine) => (refine ? GENERATED : LOCAL));
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(readContent).toHaveBeenCalledTimes(4);
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
   });
 
   it("moves focus onto the card, which has to be focusable to receive it", async () => {
@@ -453,6 +624,61 @@ function resident(active: readonly RendererSessionInteraction[]): void {
 }
 
 describe("the pinned card's question (§3.3)", () => {
+  it.each([true, false])(
+    "pinned activity reads are local, including a hidden summary (question=%s)",
+    async (question) => {
+      const local = Promise.withResolvers<SessionPeekContent | null>();
+      const readContent = vi.mocked(PORTS.readContent);
+      readContent.mockReturnValueOnce(local.promise).mockResolvedValue(LOCAL);
+      resident(question ? [QUESTION] : []);
+      await render({ rowIds: [SESSION_ROW], activityToken: 1 });
+      await pressSpace(rowButton(SESSION_ROW));
+      await pressSpace(rowButton(SESSION_ROW));
+      expect(card()?.getAttribute("role")).toBe("dialog");
+      await act(async () => local.resolve(LOCAL));
+      await render({ rowIds: [SESSION_ROW], activityToken: 2 });
+      expect(readContent.mock.calls).toEqual([
+        ["chat-a1", false],
+        ["chat-a1", false],
+      ]);
+      if (question) {
+        expect(card()?.querySelector("[data-peek-summary]")).toBeNull();
+        expect(card()?.textContent).toContain("Recompute on scroll end");
+      } else {
+        expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+          "Readable local progress",
+        );
+      }
+    },
+  );
+
+  it("a keyboard-open unpinned card shows local text and its question while refinement is pending", async () => {
+    const local = Promise.withResolvers<SessionPeekContent | null>();
+    const refinement = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation((_id, refine) => (refine ? refinement.promise : local.promise));
+    await render({ rowIds: [SESSION_ROW] });
+    await pressSpace(rowButton(SESSION_ROW));
+    expect(readContent.mock.calls).toEqual([["chat-a1", false]]);
+    expect(card()?.querySelector("[data-summary-state]")?.getAttribute("data-summary-state")).toBe(
+      "loading",
+    );
+    await act(async () => local.resolve(LOCAL));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    expect(card()?.querySelector("[data-peek-question]")?.textContent).toBe(QUESTION.title);
+    expect(card()?.querySelector("[data-summary-state]")?.getAttribute("data-summary-state")).toBe(
+      "ready",
+    );
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+    ]);
+    await act(async () => refinement.resolve(GENERATED));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+  });
+
   it("is the resident projection's, and goes the instant that does", async () => {
     resident([QUESTION]);
     await render({ rowIds: [SESSION_ROW] });

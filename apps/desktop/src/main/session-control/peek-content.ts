@@ -7,8 +7,9 @@
  * somebody sweeping the pointer down a sidebar would otherwise attach and
  * detach a dozen executors. So the card asks for one fold and draws it, and
  * only an explicit intent (pinning it to answer a question) adopts the Session
- * through the door that already exists. The hover read may ask the process-wide
- * utility summarizer for one budgeted refinement; no agent-loop event does.
+ * through the door that already exists. A separate explicit refinement read
+ * may ask the process-wide utility summarizer; no agent-loop event does. The
+ * renderer first shows the local fold, then keeps it visible while refining.
  *
  * ── WHY IT IS THE CLI's FOLD ──────────────────────────────────────────────
  * `readSessionTranscriptTail` is the same read `volli session peek` has shipped
@@ -51,7 +52,7 @@ export interface SessionPeekContentPorts {
    */
   readArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
-  /** Called only by the renderer's actual hover read, never the CLI or agent loop. */
+  /** Called only by an explicit refinement read, never a local read, CLI or agent loop. */
   summarize?: (sessionId: string, entries: readonly SessionPeekEntry[]) => Promise<string | null>;
 }
 
@@ -72,10 +73,11 @@ export const PEEK_SUMMARY_WINDOW_ENTRIES = 32;
  */
 export async function readSessionPeekContent(
   ports: SessionPeekContentPorts,
-  input: { sessionId: string },
+  input: { sessionId: string; refine?: boolean },
 ): Promise<SessionPeekContent | null> {
   const projection = await ports.getSession({ sessionId: input.sessionId });
   if (projection === null) return null;
+  const summarize = input.refine === true ? ports.summarize : undefined;
   const tail = await readSessionTranscriptTail(
     {
       listEvents: ports.listEvents,
@@ -83,7 +85,7 @@ export async function readSessionPeekContent(
     },
     {
       sessionId: input.sessionId,
-      limit: ports.summarize === undefined ? SESSION_PEEK_ENTRIES : PEEK_SUMMARY_WINDOW_ENTRIES,
+      limit: summarize === undefined ? SESSION_PEEK_ENTRIES : PEEK_SUMMARY_WINDOW_ENTRIES,
       textLimit: PEEK_EXCERPT_CHARS,
     },
   );
@@ -91,7 +93,7 @@ export async function readSessionPeekContent(
   // Session asking" — `sessionNotificationItem` picks the same one, so the card
   // and the alert that sent somebody to it are talking about the same question.
   const question = projection.interactions.active[0];
-  const summary = await ports.summarize?.(input.sessionId, tail.entries);
+  const summary = await summarize?.(input.sessionId, tail.entries);
   return {
     sessionId: input.sessionId,
     ...(summary === undefined ? {} : { summary }),

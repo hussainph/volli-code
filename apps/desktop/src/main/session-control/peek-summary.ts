@@ -25,6 +25,7 @@ export const PEEK_SUMMARY_GLOBAL_GAP_MS = 10_000;
 export const PEEK_SUMMARY_TIMEOUT_MS = 10_000;
 export const PEEK_SUMMARY_INPUT_CHARS = 6_000;
 export const PEEK_SUMMARY_MAX_CHARS = 250;
+const PEEK_SUMMARY_GOAL_CHARS = 2_000;
 const CACHE_LIMIT = 200;
 
 export const PEEK_SUMMARY_SYSTEM_PROMPT = [
@@ -80,12 +81,9 @@ export function createPeekSummarizer(options: PeekSummarizerOptions): PeekSummar
       cache.delete(sessionId);
       cache.set(sessionId, previous);
     }
-    const spoken = entries
-      .filter(
-        (entry) =>
-          (entry.role === "user" || entry.role === "assistant") && entry.text.trim() !== "",
-      )
-      .slice(-SESSION_PEEK_ENTRIES);
+    const spoken = entries.filter(
+      (entry) => (entry.role === "user" || entry.role === "assistant") && entry.text.trim() !== "",
+    );
     const newest = spoken.at(-1);
     if (newest === undefined) return previous?.text ?? null;
     const spokenKey = JSON.stringify([newest.at, newest.role, newest.text]);
@@ -119,14 +117,20 @@ export function createPeekSummarizer(options: PeekSummarizerOptions): PeekSummar
       if (available === undefined || available.state !== "available") return cached.text;
       const reasoningLevel = cheapestReasoningLevel(available.reasoningLevels);
       if (reasoningLevel === null) return cached.text;
-      // Newest words get the input budget first; roles survive, but tool names,
-      // arguments, outputs, reasoning and system messages never enter the prompt.
-      let remaining = PEEK_SUMMARY_INPUT_CHARS;
+      // Pin the latest goal within the same six-entry limit, even after a long
+      // run of assistant progress. An evicted goal precedes all recent entries.
+      const goal = spoken.findLast((entry) => entry.role === "user");
+      const recent = spoken.slice(-SESSION_PEEK_ENTRIES);
+      if (goal !== undefined && !recent.includes(goal)) recent[0] = goal;
+      // Reserve a bounded goal excerpt before giving newest progress the rest.
+      // Roles and conversation order survive, but tools/reasoning/system do not.
+      const goalChars = Math.min(goal?.text.length ?? 0, PEEK_SUMMARY_GOAL_CHARS);
+      let remaining = PEEK_SUMMARY_INPUT_CHARS - goalChars;
       const messages: { role: string; text: string }[] = [];
-      for (const entry of spoken.toReversed()) {
-        if (remaining === 0) break;
-        const text = entry.text.slice(0, remaining);
-        remaining -= text.length;
+      for (const entry of recent.toReversed()) {
+        const text = entry.text.slice(0, entry === goal ? goalChars : remaining);
+        if (text === "") continue;
+        if (entry !== goal) remaining -= text.length;
         messages.unshift({ role: entry.role, text });
       }
       const completion = await options.completeUtility({

@@ -1549,8 +1549,14 @@ describe("DATA_IPC descriptor table", () => {
   describe("volli:session-peek-content", () => {
     const { guard, invalidError } = DATA_IPC["volli:session-peek-content"];
 
-    it("accepts a Session id — the whole ask", () => {
+    it("accepts local reads and explicit refinement demand", () => {
       expect(guard([{ sessionId: "s1" }])).toBe(true);
+      expect(guard([{ sessionId: "s1", refine: false }])).toBe(true);
+      expect(guard([{ sessionId: "s1", refine: true }])).toBe(true);
+    });
+
+    it.each([null, "true", 1, {}])("rejects non-boolean refinement demand (%j)", (refine) => {
+      expect(guard([{ sessionId: "s1", refine }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {

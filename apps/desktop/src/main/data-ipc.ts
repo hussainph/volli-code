@@ -1311,13 +1311,12 @@ export function registerDataIpcHandlers(
     },
 
     /**
-     * One peek's content (VC-30): the Session's transcript tail plus the
-     * question it is asking, folded once per glance.
+     * One peek's content (VC-30): the Session's transcript tail plus its question.
+     * The default local read is immediate; an explicit refinement read can
+     * spend the host's utility budget while the client keeps local content visible.
      *
      * Straight through to `peek-content.ts`, which composes the engine fold the
-     * CLI's `session peek` already uses. Nothing here adopts the Session or
-     * opens a stream — hovering a row must cost one read and leave nothing to
-     * tear down.
+     * CLI's `session peek` already uses. No Session adoption or stream.
      */
     "volli:session-peek-content": async (
       input: SessionPeekContentInput,
