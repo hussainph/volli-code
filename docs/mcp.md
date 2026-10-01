@@ -5,9 +5,11 @@ become ordinary tools in that Session's tool array, alongside `read`, `execute`
 and Volli's own verbs.
 
 This document covers how servers are configured, who may configure them, what
-the warnings mean, and how to recover when an install goes wrong. The client,
-the transports, the tool-name safety rules and the frozen tool surface were
-built in VC-8; the agent-facing management verbs in VC-380.
+the warnings mean, how sign-in and credentials work, and how to recover when an
+install goes wrong. The client, the transports, the tool-name safety rules and
+the frozen tool surface were built in VC-8; the agent-facing management verbs in
+VC-380; sign-in, credentials and the move to the `@earendil-works/pi-mcp`
+client in VC-470.
 
 ## The one rule everything else follows
 
@@ -32,16 +34,41 @@ just installed a server will otherwise try to call its tools in the same turn.
 
 ## Configuring a server by hand
 
-**Settings → Configure → MCP Servers.** Press *Add server* to open the editor,
-fill in the transport, press *Test and discover* to connect and read its tool
-list, tick the tools you want, and save. Nothing is stored until discovery
-succeeds, and discovered tools default to off — every tool is an explicit
-choice. *Cancel* closes the editor; *Edit* on a server row reopens it populated.
+**Settings → Configure → MCP Servers.** Each server is one row: where it lives,
+how many of its tools are on, and whether it works. Refresh age and detailed
+provenance live in the server dialog. When it does not, the row says why and offers the one fix
+(*Sign in*, *Add credential*, *Retry*). A switch turns the server off without
+forgetting it, and a menu holds the rest: tools, connection, refresh, sign out
+and remove (which asks first, because it deletes stored credentials).
 
-A configured server's tools sit behind *Show tools* on its summary card, which
-is where they are enabled and disabled. A real catalog is thirty-plus tools with
-a paragraph of description each, so the page shows the counts, the freshness,
-the origin and anything wrong, and opens the rest on request.
+Everything about one server opens as one dialog, with one *Save*:
+
+- **Adding a server.** Choose *Remote* or *Local*, give the URL
+  (or the executable and its arguments), and press *Connect* in the footer (or Enter).
+  The optional name is suggested from the host or package. Headers, environment
+  variables and custom OAuth client settings open only when needed. A server
+  that wants sign-in or a credential says so, with its next action in the footer. Nothing is stored
+  until discovery succeeds, and **discovered tools start off**: every tool is an
+  explicit choice, and *Add server* saves only what you ticked.
+- **Choosing tools.** Clicking a row opens its tools: a filter (name, title or
+  description), *All · On · Off*, **Select all**, and — when the server labels
+  its tools read-only — a **Read-only** group and a **Can make changes** group,
+  each with its own checkbox, so every read can be turned on in one click and
+  each write judged on its own. A checkbox for a group or for the whole list is
+  checked, clear or mixed, and with a filter typed it acts on the listed tools
+  only. A row shows the server's title for the tool beside its exact name, one
+  line of description, and, opened, the whole description and the arguments it
+  takes. A tool marked *Destructive* is one the server says can delete or
+  overwrite. The labels are the server's own (`annotations.readOnlyHint`,
+  `destructiveHint`, `title`): Volli shows them and sorts by them, and never
+  trusts them for anything else. A tool whose definition Volli cannot offer is
+  listed last with the reason and cannot be ticked. Saving a change to tools
+  alone writes it without connecting.
+- **Editing the connection.** *Edit* in the dialog opens the fields. Press
+  *Connect*, review the tools, then *Save*. On the same endpoint, a tool still
+  offered keeps its choice, and one that is gone is dropped. Changing endpoints
+  starts every tool off again; the old catalog is hidden while editing. Tool
+  choices apply to new Sessions only.
 
 ## The agent-facing verbs
 
@@ -142,8 +169,10 @@ and not restricted to the workspace. It can read anything you can read.
 The one thing it does **not** get is Volli's secrets. `mcpLaunchEnvironment()`
 in `apps/desktop/src/main/mcp/client.ts` hands a launched server a short fixed
 allowlist — `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR` and the Windows
-equivalents — and nothing else. No model provider key, no Volli session token,
-no telemetry credential.
+equivalents — and nothing else is inherited. No model provider key, no Volli
+session token, no telemetry credential. The only additions are the environment
+entries a **person** configured for that server in Settings (see
+[Credentials and sign-in](#credentials-and-sign-in)).
 
 ### A remote (streamable HTTP) server
 
@@ -151,24 +180,27 @@ no telemetry credential.
 > paths and anything a model puts in a tool call, and Volli cannot see what it
 > does with them.*
 
-The operator of that endpoint sees every argument of every call. Volli sends no
-credentials of its own.
+The operator of that endpoint sees every argument of every call. Volli sends it
+no credential of its own — only the headers a person configured for it, or the
+OAuth token a person signed in for (see
+[Credentials and sign-in](#credentials-and-sign-in)).
 
 ### The MCP verbs refuse a query string
 
 `server_preview` and `server_install` **refuse** a URL that carries a query string,
 before anything is connected:
 
-> *That endpoint carries a query string, and the MCP verbs refuse one. Volli has
-> no secret storage for MCP servers and cannot tell a token from an ordinary
-> parameter, so a query string would be stored in plain text and sent to the
-> server as given.*
+> *That endpoint carries a query string, and the MCP verbs refuse one. Volli
+> cannot tell a token from an ordinary parameter, so a query string would be
+> stored in plain text and sent to the server as given.*
 
 A query string is the last place in a URL a credential can sit once userinfo
 (`user:pass@`) and fragments are already refused. Volli cannot tell `?token=…`
 from `?version=2`, so it refuses the **shape** rather than guessing at the
 meaning. The alternative is storing an unknown value in plain text — in the
-project database and in every backup bundle — and calling that support.
+project database and in every backup bundle — and calling that support. A
+credential has a proper home now: a header, a stored secret or a sign-in, all of
+them a person's to set.
 
 This is the cost of the rule, stated plainly: **a server that needs a non-secret
 query parameter cannot be installed by an agent.** The way through is
@@ -223,22 +255,248 @@ either: an `https://` URL is accepted as streamable HTTP and then fails during
 the handshake. If a server's documentation offers both, use its streamable HTTP
 endpoint.
 
-## Authentication is not supported yet
+### The client and its protocol versions
 
-VC-8 deliberately excluded authenticated HTTP, custom headers, and secret
-environment values, and VC-380 does not reopen it. There is no `headers` field,
-no `env` field and no `token` field on any verb, because a field would promise
-something the transport layer will not do.
+Since VC-470 the client is `@earendil-works/pi-mcp` (MIT), which replaced the
+official `@modelcontextprotocol/client` SDK. It opens with `initialize` at
+protocol revision **`2025-11-25`** and accepts a server that answers
+`2025-06-18`, `2025-03-26` or `2024-11-05`.
 
-**The practical consequence:** many real MCP servers need an API key, and an
-agent cannot install those. Until a later ticket adds secret handling, an agent
-can only install servers that need no credential. A person can still configure
-such a server by hand only to the same extent — the limitation is in the
-transport, not in the verbs.
+Two things the SDK negotiated are gone, and both are worth naming:
 
-Never put a credential in a verb argument. There is no field for one, a URL
-carrying a query string is **refused outright**, and provenance values are
-charset-bounded so they cannot carry structured secrets.
+- **`2026-07-28`**, the stateless revision reached through `server/discover`.
+  A server that speaks it *and* the earlier revisions (a "dual-era" server, which
+  is what the official SDKs build by default) answers `initialize` and works as
+  before. A server that speaks **only** `2026-07-28` refuses the handshake; Volli
+  recognises that refusal and says so, rather than reporting an opaque failure.
+- **`2024-10-07`**, a pre-release revision no current server negotiates.
+
+The bounds VC-8 set are kept: a 10-second limit on the handshake and on a
+catalog read, a 30-second limit on a tool call, and at most 64 pages of
+`tools/list` (a repeated cursor is refused). One message may be at most 8 MiB
+plus framing on either transport — VC-469's outer bound on a tool result — on
+stdio per line, and over HTTP per JSON response body (refused on its declared
+length, or stopped mid-read) or per SSE event.
+
+### Stopping a local server
+
+A local server is started in its own process group. When a Session detaches,
+the connection closes stdin, waits briefly, then sends SIGTERM and finally
+SIGKILL to the **whole group** — so a server started through `npx` or `uvx`,
+whose launcher keeps the real server as a child, leaves nothing behind. On app
+quit every open connection is closed the same way after the Sessions have
+closed, and if the process exits without closing one, the client's exit hook
+SIGTERMs every group it started. Two gaps in the client are closed on Volli's
+side: a server that had already exited leaves helpers in its group, and a group
+member that ignores SIGTERM after the server has gone gets no SIGKILL. After
+every close, whatever is still in the group gets SIGTERM, a two-second grace,
+then SIGKILL. `stdio-lifecycle.test.ts` checks all of this with real processes,
+`npx` included.
+
+A message over the 8 MiB bound is refused at once with an error that says so,
+rather than leaving the call to wait out its 30 seconds.
+
+## Credentials and sign-in
+
+Many real servers need a credential: an API key in a header, a token in an
+environment variable, or an OAuth sign-in. Volli supports all three, under one
+rule.
+
+**Credentials are routed to the person.** An agent never supplies, sees or
+stores a credential value. Only a person adds one, in **Settings → Configure →
+MCP Servers**, and only a person signs in. When an agent's work needs one, the
+agent raises a question that reaches the person; the person acts; the agent is
+told the outcome — signed in, declined, or still missing — and never the value.
+
+That promise holds **at the tool surface**: no verb, tool result, question or
+record carries a value. It is not a sandbox. A Session with full access runs
+its shell as you, and your user can read `mcp-credentials.json` (see below), so
+such a Session's commands could read it too — exactly as they could read
+`~/.pi/agent/auth.json` or any other file you can. A Scoped Session's commands
+run behind Seatbelt with your home directory in `denyRead`, which covers the
+file.
+
+**Credentials only travel over https**, or over plain http to this machine. A
+header, a bearer token or a sign-in sent in clear to another host is readable
+by anyone on the path, so Settings refuses to save credentials for such an
+endpoint (and says why), and Volli refuses to sign in to one.
+
+### Signing in (OAuth)
+
+A remote server without an `Authorization` header of its own can sign in with
+OAuth. When such a server refuses a connection, its row in Settings shows
+**Needs sign-in** with a *Sign in* control (a server that has never asked for one
+shows none; *Sign in* in the server dialog appears when *Connect* is refused
+for one). *Sign in* opens the server's
+authorization page in your browser and waits (up to five minutes, or until you
+press *Cancel sign-in*) for the browser to come back to a temporary server on
+`127.0.0.1`. Volli:
+
+- discovers the authorization server from the challenge the MCP server sent
+  (protected-resource and authorization-server metadata);
+- registers itself with it as *Volli Code* (dynamic client registration), or
+  uses a **pre-registered client** you configured;
+- uses PKCE (S256) for the authorization code, and refuses an authorization
+  server whose metadata does not say it supports S256 — MCP requires the
+  client to check;
+- opens only an https authorization page (plain http only when the MCP server
+  is itself on this machine);
+- checks the `iss` the browser comes back with against the authorization
+  server it started with (RFC 9207), whenever one is sent or the server says
+  it always sends one — Sentry, Linear and GitHub all do;
+- listens for the redirect on a port it chose itself, reusing that port for a
+  client it registered, never one named by the authorization server;
+- refreshes the access token by itself when the server rejects it, sharing one
+  refresh between concurrent requests;
+- signs in again for more scope when the server asks for it (`403
+  insufficient_scope`): the row shows *Needs sign-in* again, and signing in
+  requests what was granted plus what was asked for (step-up).
+
+*Sign out* stops a sign-in still in progress, deletes the stored tokens and the
+client registration, and asks the authorization server to revoke the tokens
+when it advertises a revocation endpoint (best effort). Every request
+Volli makes to an authorization server has a 10-second limit and a 1 MiB limit
+on its answer, so one that stops answering fails a call rather than holding
+every call to that server behind it.
+One sign-in runs per server at a time: Settings and an agent's question join the
+same one, an agent that stops waiting leaves it running for the person, and the
+person's *Cancel sign-in* stops it for everyone.
+
+**Pre-registered clients.** Under *Custom OAuth client* in the connection fields: a client ID, an
+optional client secret (a stored secret or a `${NAME}` reference), and either a
+callback port — the redirect is then `http://127.0.0.1:<port>/callback` — or a
+whole loopback callback URL (`http://localhost:…`, `127.0.0.1` or `[::1]`) for a
+client registered with a different redirect. *Scope* replaces the scopes the
+server advertises.
+
+**A running Session picks up a sign-in.** Tokens are read on every request, so
+a Session already running uses a refreshed token, or the token from a sign-in
+a person just completed, on its very next call, without being reattached. Its
+frozen tool list does not change: signing in, like installing, affects which
+tools are offered only to Sessions created afterwards. A Session signs in only
+to the address it was started with: if the stored server has since been
+pointed elsewhere, its sign-in question is answered "this server's address
+changed since the Session started; review it in Settings" and neither address
+is signed in to.
+
+### Headers and environment values
+
+In the connection fields, a remote server takes **Headers** and a local server takes
+**Environment variables** entries. Each value is one of two kinds, and neither is stored
+as plain text in configuration:
+
+| Kind | What is stored in the project | Where the value comes from |
+| --- | --- | --- |
+| **Stored secret** | Only that a secret exists for this slot. | You type it once. It is kept in a file readable only by you (below), never shown back — the field reads *Stored* — and replaced by typing a new one. |
+| **Environment variable** | The reference, e.g. `Bearer ${GITHUB_TOKEN}`. | Volli's own environment, read when the server connects. Literal text may surround `${NAME}` references; a value with no reference must be a secret. |
+
+There is no third, literal kind. A plain value typed into configuration would be
+stored in the project database and copied into every backup bundle, and Volli
+cannot tell a key from an ordinary value any better than it can tell
+`?token=…` from `?version=2`. A value that is not secret still works as a
+*Secret*; it simply lives where a secret would.
+
+Values are resolved **at connect time** — headers on every request — and go only
+to the server they belong to: a header to that server's endpoint URL and nowhere
+else (not to the authorization server it signs in with, and not across a
+redirect to another origin), an environment value to that server's process. They are never logged, never put in an error
+(an error names the slot, `header Authorization`, or the variable,
+`${GITHUB_TOKEN}`, never the value), and a server's stderr is never surfaced.
+Names may appear where an agent can read them; values never do.
+A value stored or replaced while a Session runs reaches it too: headers on the
+next request, and a local server's environment by restarting that Session's
+connection to it before the next call.
+
+A local server's environment values go to the command **as it resolves in the
+project root** — and an agent working in that project can change what `npx foo`
+or `node ./server.js` actually runs there (a `node_modules/.bin` entry, the
+script itself). Give a local server a secret only if you trust what the project
+can make that command run.
+
+A reference reads **Volli's** environment. A Volli started from Finder or the
+Dock has launchd's environment, not your shell's exports, so a variable your
+`.zshrc` exports is usually not there; store it as a secret instead, or launch
+Volli from a terminal.
+
+**Why `!command` is refused.** Pi also accepts `!command` — a command whose
+output is the value (`!op read …`, `!gh auth token`). Volli refuses it and
+keeps the `!` prefix reserved. A remote server is otherwise something Volli
+never starts a process for, and `!command` would turn an HTTP header into a
+command run as you, travelling with the configuration into backup bundles and,
+once VC-379 imports repository `mcp.json` files, arriving from a repository. The
+use it serves — keeping the secret out of the configuration — is already served
+by a stored secret, which runs nothing.
+
+### Where credentials are kept
+
+In `mcp-credentials.json` beside the profile database (`<userData>/` in the
+app), mode `0600`: written whole to a fresh temporary file (created exclusively,
+never through a symlink), flushed to disk, then renamed into place, so a power
+cut leaves the old file or the new one. A symlink found at the path is never
+read through. Not the macOS
+keychain, for the reasons in
+`docs/research/env-credential-ux-architecture-review.md`: keychain access raised
+a prompt whenever the build's signature changed, and every peer (Pi's own
+`mcp-auth.json`, opencode, Codex) uses a user-only file. It holds stored
+secrets, OAuth tokens and client registrations — never a PKCE verifier, which
+lives only in the memory of the sign-in that made it.
+
+Credentials never reach the project database, a backup bundle (the file is
+excluded by name), `mcp_operations`, a ticket comment, an audit record, a
+question put to a person, or a transcript. Removing a server in Settings deletes
+its stored credentials; re-adding it means storing them or signing in again.
+
+### What an agent can and cannot do
+
+- **No verb carries a credential.** `server_install`, `server_preview` and the rest
+  have no header, environment or token field, and never will: a `${NAME}`
+  reference written by an agent could send any variable in Volli's environment
+  to an endpoint the agent chose.
+- **An agent sees that credentials exist, not what they are.** `server_list` shows
+  each slot's name and kind (`header Authorization (stored secret)`), whether one
+  is missing, and the sign-in state — never a value, and not a reference's text.
+- **A sign-in is asked for, not performed.** When `server_install` or
+  `server_refresh` connects to a server that needs a sign-in, or a tool call in a
+  Session is refused for one, Volli puts a `confirm.mcp-sign-in` question to the
+  person driving through the Session's parked-question machinery — the same path
+  as `confirm.mcp-install`. *Allow* opens the browser; the call is retried once
+  the person has signed in, and the agent receives the call's result, or *The
+  person driving declined to sign in*, or why the sign-in did not complete.
+- **A missing or rejected key is asked for the same way.** `confirm.mcp-credential`
+  names the slot (`header Authorization`); the person adds or replaces the value
+  in Settings and allows the retry. If it is still missing, or still rejected,
+    the agent is told that. Calls blocked on the same server at the same time share
+  one question.
+- **A "no" is remembered.** Once the person declines, every later call in that
+  Session blocked on the same server for the same reason is answered "declined"
+  at once, with no new question, until the person stores a value or signs in.
+- **Each question names the endpoint** beside the server's name, because the
+  name is the agent's choice and allowing a sign-in opens whatever page that
+  endpoint's metadata names.
+- **Nobody watching is not nobody to ask.** In a structured Session the question
+  parks like any other, the Session reads as waiting on you, and an unattended
+  Run's notification fires for it as for any parked question. Only a call with
+  no question port at all — a verb reached without an attachment — gets the
+  plain result that a person must sign in or add the value in Settings, and the
+  server stays in *Needs sign-in*.
+- **An agent cannot redirect a person's credential.** Re-installing an existing
+  server with the same command or endpoint keeps the person's credential
+  settings. Re-installing a server that holds any — configured headers,
+  environment or OAuth settings, a stored secret, a sign-in — at a *different*
+  endpoint or command is **refused**, before anything is asked or connected:
+  carrying the credential along would send it where the agent chose, and
+  dropping it would destroy a person's sign-in on an agent's say-so. Install it
+  under a new id, or the person changes it in Settings. The configuration is
+  read again after the person confirms the install, so a credential they add in
+  Settings while the question is open is kept, not written over.
+- **An agent cannot remove a person's credentials.** `server_remove` refuses a
+  server that holds any (configured headers, environment or OAuth settings, a
+  stored secret, a sign-in): removing it deletes them. A person removes it in
+  Settings; an agent that only wants its tools out of new Sessions calls
+  `server_disable`.
+- `server_preview` never asks anyone: it reports that a sign-in is needed and that
+  `server_install` will ask, and previews what `server_install` would refuse as a
+  refusal.
 
 ## Recovering from a failed or regretted change
 
@@ -512,8 +770,9 @@ trust notice.
   - The host reads at most **32 MiB** of one result
     (`MCP_RESULT_HOST_MAX_BYTES`), counted over its text, image data and
     structured content before anything copies it. A larger result comes back to
-    the model as an error naming the limit. A local (stdio) server's messages
-    can be up to 9 MiB, enough for an 8 MiB result and its framing.
+    the model as an error naming the limit. One message from a server, local or
+    remote, can be up to 8 MiB plus 64 KiB (`MCP_STDIO_BUFFER_MAX_BYTES`),
+    enough for an 8 MiB result and its framing.
 
 These rules apply to MCP results only. `web_fetch` already returns at most
 25,000 characters of an extracted article, and saving the rest of a web page
@@ -526,8 +785,11 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 - Downloading, unpacking or verifying packages from npm, PyPI, OCI or anywhere
   else — VC-379.
 - SSE and WebSocket transports (see [Transports](#transports)).
+- The `2026-07-28` protocol revision for servers that speak only it — VC-479 (see
+  [The client and its protocol versions](#the-client-and-its-protocol-versions)).
 - A per-server working directory; the project root is always used.
-- Authenticated HTTP servers, custom headers, secret environment values.
+- `!command` credential values (see
+  [Headers and environment values](#headers-and-environment-values)).
 - Searching a remote registry for a server to install. `server_preview` connects to
   a server you already name; it does not go looking for one.
 - MCP resources, prompts, sampling and roots.
@@ -543,6 +805,10 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Settings owner | `apps/desktop/src/main/mcp/settings.ts` |
 | Discovery | `apps/desktop/src/main/mcp/discovery.ts` |
 | Client, transports, launch environment | `apps/desktop/src/main/mcp/client.ts` |
+| Credential references, value checks, OAuth client settings | `packages/shared/src/mcp-credentials.ts` |
+| Resolving references and secrets at connect time | `apps/desktop/src/main/mcp/credentials.ts` |
+| The user-only credential file | `apps/desktop/src/main/mcp/credential-store.ts` |
+| OAuth: connection tokens, refresh, sign-in, sign-out | `apps/desktop/src/main/mcp/oauth.ts` |
 | Per-attachment connection owner | `apps/desktop/src/main/mcp/session-host.ts` |
 | Result shape, cutting long results | `createMcpTool` in `packages/agent-runtime/src/pi/tools.ts` |
 | Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `apps/desktop/src/main/pi-tool-output.ts`, `apps/desktop/src/main/pi-session-orphans.ts` |
@@ -553,3 +819,6 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
 | Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
+| Server dialog, tool picker | `mcp-server-dialog.tsx`, `mcp-tool-picker.tsx`, `mcp-tools-model.ts` (same folder) |
+| Tool hints (display-only labels) | `sanitizeMcpToolHints` in `packages/shared/src/mcp.ts` |
+| Credential editor | `apps/desktop/src/renderer/src/components/settings/configure/mcp-credentials-editor.tsx` |

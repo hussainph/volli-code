@@ -3,10 +3,13 @@ import {
   MCP_TOOL_COUNT_MAX,
   MCP_TOOL_NAME_MAX_CHARS,
   sanitizeMcpToolDefinition,
+  sanitizeMcpToolHints,
   type McpCatalogTool,
   type McpJsonObject,
   type McpServerDraft,
 } from "@volli/shared";
+
+import { connectionProblemIn } from "./credentials";
 
 export interface McpProtocolTool {
   name: string;
@@ -14,9 +17,13 @@ export interface McpProtocolTool {
   inputSchema: unknown;
   /** The schema of the tool's `structuredContent`, when the server publishes one (VC-469). */
   outputSchema?: unknown;
+  /** A human-readable name, shown in Settings only (`sanitizeMcpToolHints`). */
+  title?: unknown;
+  /** The server's behaviour annotations, shown in Settings only (`sanitizeMcpToolHints`). */
+  annotations?: unknown;
 }
 
-/** SDK-free client seam used by discovery and live attachment hosts. */
+/** Client-library-free seam used by discovery and live attachment hosts. */
 export interface McpProtocolCallResult {
   content: readonly unknown[];
   structuredContent?: unknown;
@@ -112,29 +119,39 @@ export async function discoverMcpServer(
           `[mcp] ${input.server.name}: left off the output schema of ${bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS)} (${sanitized.outputSchemaRejected})`,
         );
       }
-      if (!sanitized.ok) {
-        return {
-          name: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),
-          description: bounded(tool.description ?? "", MCP_DESCRIPTION_MAX_CHARS),
-          enabled: false,
-          definition: null,
-          error: sanitized.reason,
-        };
-      }
-      return {
-        name: sanitized.definition.toolName,
-        description: sanitized.definition.description,
-        enabled: enabled.has(sanitized.definition.toolName),
-        definition: {
-          ...sanitized.definition,
-          inputSchema: sanitized.definition.inputSchema as McpJsonObject,
-        },
-        error: null,
-      };
+      // Display-only: a server's labels sort a catalog in Settings and are
+      // never part of the definition a Session freezes (see McpToolHints).
+      const hints = sanitizeMcpToolHints(tool);
+      const entry: McpCatalogTool = sanitized.ok
+        ? {
+            name: sanitized.definition.toolName,
+            description: sanitized.definition.description,
+            enabled: enabled.has(sanitized.definition.toolName),
+            definition: {
+              ...sanitized.definition,
+              inputSchema: sanitized.definition.inputSchema as McpJsonObject,
+            },
+            error: null,
+          }
+        : {
+            name: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),
+            description: bounded(tool.description ?? "", MCP_DESCRIPTION_MAX_CHARS),
+            enabled: false,
+            definition: null,
+            error: sanitized.reason,
+          };
+      if (hints !== undefined) entry.hints = hints;
+      return entry;
     });
   } catch (error) {
     if (input.signal.aborted) throw input.signal.reason;
     if (error instanceof Error && /duplicate tool|tool limit/i.test(error.message)) throw error;
+    // Volli's own sentences — a sign-in, a missing credential, an unsupported
+    // revision — say what to do, so they are passed through rather than
+    // flattened into the generic one below, which exists to keep a third
+    // party's error text out of view.
+    const problem = connectionProblemIn(error);
+    if (problem !== null) throw problem;
     throw new Error(`Could not discover tools from ${input.server.name}.`, { cause: error });
   } finally {
     await client?.close().catch(() => undefined);

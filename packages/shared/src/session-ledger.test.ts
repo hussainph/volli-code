@@ -5,6 +5,7 @@ import {
   assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -2209,5 +2210,9 @@ describe("the frozen ask interaction id derivations", () => {
     expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
     expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
     expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
+    // VC-470's credential question: it can follow a confirmation on the same
+    // tool call, so it must not share that confirmation's id.
+    expect(credentialAskInteractionId("call-1")).toBe("credential-ask:call-1");
+    expect(credentialAskInteractionId("x")).not.toBe(confirmAskInteractionId("x"));
   });
 });

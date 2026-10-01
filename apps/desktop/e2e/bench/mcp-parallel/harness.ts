@@ -294,14 +294,17 @@ export async function composeSession(scenario: {
   const hostTrace: ComposedSession["hostTrace"] = [];
   const sessionTrace: ComposedSession["sessionTrace"] = [];
   const attachment = dispatch.bind({
-    port: traced(host.port, hostTrace),
+    port: traced(host.rawPort, hostTrace),
     close: () => host.close(),
   });
+  // Match main: the raw protocol call is budgeted, and person-routing wraps
+  // that budget. Fixtures need no credentials and have nobody to ask.
+  const routed = host.routed(attachment.call);
   return {
     fixtures,
     host,
     budget: dispatch.budget,
-    port: traced({ call: attachment.call }, sessionTrace),
+    port: traced({ call: (request, signal) => routed.call(request, signal) }, sessionTrace),
     parallelMcpReads: dispatch.parallelMcpReads,
     definitions: dispatch.forNewSession(
       fixtures.map((server) => fixtureDefinition(server.id, server.id)),

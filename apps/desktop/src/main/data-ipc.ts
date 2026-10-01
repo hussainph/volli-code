@@ -62,6 +62,8 @@ import type {
   McpServerInput,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
@@ -511,6 +513,7 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
     // renderers do: coverage says whether an answer can be trusted at all, and
@@ -840,6 +843,7 @@ export function registerDataIpcHandlers(
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
       operations: listMcpOperations(db, input.projectId),
+      access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
     "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
@@ -847,6 +851,25 @@ export function registerDataIpcHandlers(
     "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
     "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
     "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
+    // A sign-in waits on the person's browser for up to five minutes. It is
+    // not tied to this request: the pane's Cancel stops it for everyone
+    // waiting on it, an agent's question included.
+    "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
+      // Only the fields a renderer may set: nothing it sends can stand in for
+      // the cancellation main owns.
+      const outcome = await mcpSettings.signIn({
+        projectId: input.projectId,
+        ...(input.serverId === undefined ? {} : { serverId: input.serverId }),
+        ...(input.server === undefined ? {} : { server: input.server }),
+        ...(input.secrets === undefined ? {} : { secrets: input.secrets }),
+      });
+      return outcome.ok
+        ? { ok: true, message: outcome.message }
+        : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
+    },
+    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
+    "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
+    "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());

@@ -523,6 +523,16 @@ export const CONFIRM_CAUSE_IDS = [
   "confirm.mcp-install",
   /** Deleting an MCP server, which breaks reattachment for older Sessions using it. */
   "confirm.mcp-remove",
+  /**
+   * Signing in to an MCP server (VC-470): allowing it opens the server's OAuth
+   * page in the person's browser, and the agent learns only whether it worked.
+   */
+  "confirm.mcp-sign-in",
+  /**
+   * An MCP server missing a credential only a person can supply (VC-470): the
+   * person adds it in Settings and allows the retry; the agent never sees it.
+   */
+  "confirm.mcp-credential",
 ] as const;
 
 export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
@@ -530,6 +540,17 @@ export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
 /** Whether a cause is a confirmation — an operation asking before it acts. */
 export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCauseId {
   return (CONFIRM_CAUSE_IDS as readonly string[]).includes(cause);
+}
+
+/**
+ * Whether a confirmation is a credential question (VC-470): a sign-in, or a
+ * value only a person can supply. These can follow another confirmation on
+ * the same tool call, so they are asked under their own interaction id.
+ */
+export function isCredentialConfirmCause(
+  cause: AuthorityDenialCause,
+): cause is "confirm.mcp-sign-in" | "confirm.mcp-credential" {
+  return cause === "confirm.mcp-sign-in" || cause === "confirm.mcp-credential";
 }
 
 /**

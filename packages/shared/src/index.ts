@@ -33,6 +33,7 @@ export * from "./agent-tool-surface";
 export * from "./code-mode";
 export * from "./code-mode-policy";
 export * from "./mcp";
+export * from "./mcp-credentials";
 export * from "./authority-config";
 export * from "./authority-policy";
 export * from "./web-address-policy";

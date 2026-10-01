@@ -16,6 +16,8 @@ function client(
     description?: string;
     inputSchema: unknown;
     outputSchema?: unknown;
+    title?: unknown;
+    annotations?: unknown;
   }[],
 ): McpProtocolClient & { close: ReturnType<typeof vi.fn> } {
   return {
@@ -77,6 +79,40 @@ describe("discoverMcpServer", () => {
       '[mcp] Fixture: left off the output schema of mistyped (output schema root type must be "object")',
     );
     warn.mockRestore();
+  });
+
+  it("keeps a server's title and read-only labels for Settings, never in the definition", async () => {
+    const catalog = await discoverMcpServer({
+      server,
+      enabledToolNames: [],
+      signal: new AbortController().signal,
+      open: async () =>
+        client([
+          {
+            name: "list_issues",
+            title: "List issues",
+            inputSchema: { type: "object" },
+            annotations: { readOnlyHint: true },
+          },
+          {
+            name: "delete_issue",
+            inputSchema: { type: "object" },
+            annotations: { readOnlyHint: false, destructiveHint: true },
+          },
+          { name: "plain", inputSchema: { type: "object" } },
+          { name: "broken", title: "Broken", inputSchema: { type: "string" } },
+        ]),
+      workspacePath: "/repo/worktree",
+    });
+
+    expect(catalog.map((tool) => [tool.name, tool.hints])).toEqual([
+      ["list_issues", { title: "List issues", readOnly: true }],
+      ["delete_issue", { readOnly: false, destructive: true }],
+      ["plain", undefined],
+      ["broken", { title: "Broken" }],
+    ]);
+    expect(catalog.some((tool) => "hints" in (tool.definition ?? {}))).toBe(false);
+    expect(JSON.stringify(catalog[0]?.definition)).not.toContain("List issues");
   });
 
   it("shows a bounded reason for each invalid definition without weakening its schema", async () => {

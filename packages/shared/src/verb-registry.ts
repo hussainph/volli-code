@@ -2596,7 +2596,7 @@ export const VERB_REGISTRY = [
       "Volli downloads nothing. A local server is a command that must already be on PATH — usually run through npx or uvx — and source, version and digest are recorded as provenance, never fetched or verified.",
       "Saving the same server id twice updates that row in place, so repeating an install cannot create a duplicate.",
       "Settings are written only after discovery succeeds. A first-time failure writes nothing at all; a failed update keeps the last working tool list and marks the server stale.",
-      "Authenticated servers are not supported yet: no header, no secret environment value, so a server needing an API key cannot be installed here.",
+      "Credentials are routed to the person: no field here carries a header, an environment value or a token. A server that needs a sign-in asks the person driving to sign in (confirm.mcp-sign-in); one that needs a key must be given it in Settings \u2192 Configure \u2192 MCP Servers.",
     ],
     effects: {
       durableWrites: [

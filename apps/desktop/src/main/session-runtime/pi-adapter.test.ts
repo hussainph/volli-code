@@ -1384,8 +1384,62 @@ describe("Pi native adapter attach", () => {
       new AbortController().signal,
     );
     expect(call).toHaveBeenCalledOnce();
+    // The attachment's own ask rides into the call (VC-470), so a call blocked
+    // on a sign-in can put the question to the person driving.
+    expect(call).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "call-1" }),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     await binding.release("requested");
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("routes an MCP sign-in question through Code Mode's call scope (VC-470 / VC-471)", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: () => ({
+        call: async (_request, signal, hostAsk) => {
+          const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
+          return { content: [{ type: "text", text: choice }], isError: false };
+        },
+        dispose: async () => undefined,
+      }),
+    });
+    const question = vi.fn();
+    const result = runtime.spec.mcp!.call(
+      { serverId: "fixture-1", toolName: "echo", arguments: {}, toolCallId: "call-12" },
+      new AbortController().signal,
+      {
+        question: async (performAsk) => {
+          question();
+          return performAsk();
+        },
+      },
+    );
+    await flush();
+    expect(question).toHaveBeenCalledOnce();
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    );
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await result).toEqual({ content: [{ type: "text", text: "allow" }], isError: false });
+    await binding.release("requested");
   });
 
   it("disposes the MCP attachment host when runtime setup fails", async () => {
@@ -2583,6 +2637,50 @@ describe("Pi native adapter escalation", () => {
     expect(await choice).toBe("refuse");
   });
 
+  /**
+   * VC-470: one `mcp_install` call confirms the install AND then asks the
+   * person to sign in. Under one id the second question would dedupe against
+   * the first and park where nobody can answer it.
+   */
+  it("asks a sign-in after an install confirmation on the same call as a second, answerable question (VC-470)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "mcp.install"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "installing" };
+      },
+    });
+    await runtime.spec.callVerb?.(
+      { verb: "mcp.install", input: { id: "sentry" }, toolCallId: "call-12" },
+      new AbortController().signal,
+    );
+    if (lent === undefined) throw new Error("The binding lent no ask");
+
+    const install = lent(installQuestion("confirm.mcp-install"), new AbortController().signal);
+    await flush();
+    await binding.dispatch(answerCommand("confirm-ask:call-12", ["once"]));
+    expect(await install).toBe("allow");
+
+    const signIn = lent(installQuestion("confirm.mcp-sign-in"), new AbortController().signal);
+    await flush();
+    expect(
+      sink.observations.filter((entry) => entry.kind === "interaction" && entry.state === "opened"),
+    ).toEqual([
+      expect.objectContaining({
+        interaction: expect.objectContaining({ id: "confirm-ask:call-12" }),
+      }),
+      expect.objectContaining({
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    ]);
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await signIn).toBe("allow");
+  });
+
   it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {
     const { binding, runtime, sink } = await attached();
 
@@ -3396,3 +3494,16 @@ describe("a departure written by the product reaches the next attachment's Snaps
     expect(fresh.binding.authority?.enforcement).toBe("enforce");
   });
 });
+
+/** One of the two questions a single `server_install` call can raise (VC-470). */
+function installQuestion(cause: "confirm.mcp-install" | "confirm.mcp-sign-in") {
+  return {
+    cause,
+    tool: "server_install",
+    toolCallId: "call-12",
+    turnId: null,
+    reason: cause,
+    trip: "confirm" as const,
+    overridable: true,
+  };
+}
