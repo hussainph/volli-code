@@ -1,0 +1,412 @@
+{
+  "model": "anthropic/claude-haiku-4-5",
+  "trials": 5,
+  "table": "| task           | arm           | correct | input tok | output tok | tool-result tok | model calls | direct calls | nested calls | elapsed | cost    | used codemode |\n|----------------|---------------|---------|-----------|------------|-----------------|-------------|--------------|--------------|---------|---------|---------------|\n| session-fanout | direct        | 5/5     | 9534      | 356        | 251             | 3.0         | 5.0          | 0.0          | 4.6s    | $0.0113 | 0/5           |\n| session-fanout | codemode      | 5/5     | 13605     | 356        | 251             | 3.0         | 5.0          | 0.0          | 6.2s    | $0.0068 | 0/5           |\n| session-fanout | codemode-only | 2/5     | 6753      | 298        | 32              | 2.0         | 1.0          | 5.0          | 5.1s    | $0.0083 | 5/5           |",
+  "spend": 0.1360124,
+  "results": [
+    {
+      "task": "session-fanout",
+      "arm": "direct",
+      "correct": true,
+      "inputTokens": 9534,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 4632.468416,
+      "costUsd": 0.011314,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode",
+      "correct": true,
+      "inputTokens": 13605,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 6303.796209000001,
+      "costUsd": 0.0068242,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode-only",
+      "correct": false,
+      "inputTokens": 6737,
+      "outputTokens": 285,
+      "toolResultTokens": 24,
+      "modelCalls": 2,
+      "directCalls": 1,
+      "nestedCalls": 5,
+      "codemodeCalls": 1,
+      "elapsedMs": 4228.5843749999985,
+      "costUsd": 0.008161999999999999,
+      "answer": "S\nS\nS\nS",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["S"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "direct",
+      "correct": true,
+      "inputTokens": 9551,
+      "outputTokens": 373,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 4583.081667000002,
+      "costUsd": 0.011415999999999999,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode",
+      "correct": true,
+      "inputTokens": 13605,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 4767.570167000002,
+      "costUsd": 0.0068242,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode-only",
+      "correct": false,
+      "inputTokens": 6753,
+      "outputTokens": 301,
+      "toolResultTokens": 32,
+      "modelCalls": 2,
+      "directCalls": 1,
+      "nestedCalls": 5,
+      "codemodeCalls": 1,
+      "elapsedMs": 5107.015583,
+      "costUsd": 0.008258,
+      "answer": "VC-101\nVC-102\nVC-103\nVC-104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["VC-101", "VC-102", "VC-103", "VC-104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "direct",
+      "correct": true,
+      "inputTokens": 9551,
+      "outputTokens": 373,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 4747.177042000003,
+      "costUsd": 0.011415999999999999,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode",
+      "correct": true,
+      "inputTokens": 13605,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 5168.057417000004,
+      "costUsd": 0.0068242,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode-only",
+      "correct": false,
+      "inputTokens": 6750,
+      "outputTokens": 298,
+      "toolResultTokens": 24,
+      "modelCalls": 2,
+      "directCalls": 1,
+      "nestedCalls": 5,
+      "codemodeCalls": 1,
+      "elapsedMs": 5273.444499999998,
+      "costUsd": 0.00824,
+      "answer": "S\nS\nS\nS",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["S"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "direct",
+      "correct": true,
+      "inputTokens": 9534,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 13556.461875,
+      "costUsd": 0.011314,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode",
+      "correct": true,
+      "inputTokens": 13605,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 6180.997458000005,
+      "costUsd": 0.0068242,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode-only",
+      "correct": true,
+      "inputTokens": 11738,
+      "outputTokens": 556,
+      "toolResultTokens": 525,
+      "modelCalls": 3,
+      "directCalls": 2,
+      "nestedCalls": 5,
+      "codemodeCalls": 2,
+      "elapsedMs": 7124.835749999998,
+      "costUsd": 0.011869900000000001,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "direct",
+      "correct": true,
+      "inputTokens": 9534,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 4569.7880000000005,
+      "costUsd": 0.011314,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode",
+      "correct": true,
+      "inputTokens": 13605,
+      "outputTokens": 356,
+      "toolResultTokens": 251,
+      "modelCalls": 3,
+      "directCalls": 5,
+      "nestedCalls": 0,
+      "codemodeCalls": 0,
+      "elapsedMs": 6171.737624999994,
+      "costUsd": 0.0069507,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": ["sa0101", "sa1102", "sa2103", "sa3104"]
+      }
+    },
+    {
+      "task": "session-fanout",
+      "arm": "codemode-only",
+      "correct": true,
+      "inputTokens": 6986,
+      "outputTokens": 295,
+      "toolResultTokens": 245,
+      "modelCalls": 2,
+      "directCalls": 1,
+      "nestedCalls": 5,
+      "codemodeCalls": 1,
+      "elapsedMs": 4038.724749999994,
+      "costUsd": 0.008461,
+      "answer": "sa0101\nsa1102\nsa2103\nsa3104",
+      "evidence": {
+        "started": {
+          "VC-101": "sa0101",
+          "VC-102": "sa1102",
+          "VC-103": "sa2103",
+          "VC-104": "sa3104"
+        },
+        "watched": [
+          "Started",
+          "Session",
+          "sa0101",
+          "on",
+          "VC-101.",
+          "It",
+          "runs",
+          "its",
+          "own;",
+          "it",
+          "does",
+          "not",
+          "move",
+          "the",
+          "Ticket.",
+          "Kickoff:",
+          "Run",
+          "test",
+          "suite",
+          "and",
+          "report",
+          "failures.",
+          "A",
+          "notice",
+          "arrives",
+          "here",
+          "when",
+          "first",
+          "turn",
+          "ends",
+          "signals",
+          "done",
+          "or",
+          "blocked",
+          "if",
+          "is",
+          "stopped.",
+          "sa1102",
+          "VC-102.",
+          "sa2103",
+          "VC-103.",
+          "sa3104",
+          "VC-104."
+        ]
+      }
+    }
+  ]
+}

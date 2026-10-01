@@ -5,6 +5,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import {
+  codeModeSurfaceFor,
   NON_CODING_TOOL_IDS,
   TODO_STATUSES,
   type RuntimeAskUserRequest,
@@ -1554,5 +1555,37 @@ describe("createTodoWriteTool", () => {
     expect(
       createSessionTools({ tools: { tools: ["read"] } }, null as never).map((tool) => tool.name),
     ).toEqual(["read"]);
+  });
+});
+
+describe("createSessionTools with Code Mode (VC-471)", () => {
+  const codeMode = codeModeSurfaceFor({ tools: ["read", "write"] });
+  const spec = {
+    tools: {
+      tools: ["read", "write"] as ("read" | "write")[],
+      codeMode: { ...codeMode, routes: { read: "code" as const, write: "both" as const } },
+    },
+  };
+
+  it("refuses to build a surface that names codemode with no Code Mode host", () => {
+    expect(() => createSessionTools(spec, null as never)).toThrow(
+      "This Session's surface names codemode, but no Code Mode host is wired.",
+    );
+  });
+
+  it("declares the routes' answer and hands Code Mode every other tool, with its durable id", () => {
+    const handed: string[] = [];
+    const declared = createSessionTools(spec, null as never, undefined, (_surface, tools) => {
+      handed.push(...tools.map((entry) => `${entry.id}=${entry.tool.name}`));
+      return {
+        name: "codemode",
+        label: "code",
+        description: "",
+        parameters: {} as never,
+        execute: async () => ({ content: [], details: undefined }),
+      };
+    });
+    expect(declared.map((tool) => tool.name)).toEqual(["write", "codemode"]);
+    expect(handed).toEqual(["read=read", "write=write"]);
   });
 });
