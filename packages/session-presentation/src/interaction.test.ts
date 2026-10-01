@@ -1,6 +1,5 @@
 import {
   askOffer,
-  encodeApprovalDetail,
   writeScope,
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -16,6 +15,7 @@ import {
   createSubmissionLatch,
   describeInteractionSent,
   indexOpenedInteractions,
+  approvalAnswerFailures,
   readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
@@ -1607,6 +1607,20 @@ describe("where a card draws", () => {
     // A row with no gate names no interaction — never the only open one by
     // adjacency, which would put a subagent's question on a parent's call.
     expect(interactionForApproval([gated], null)).toBe(null);
+    const retry = {
+      ...gated,
+      id: "approval-retry:1:call-1",
+      approval: {
+        asked: "write /outside/a",
+        because: "outside",
+        reason: "revoked",
+        stages: [],
+        held: null,
+      },
+    };
+    expect(interactionForApproval([other, retry], "call-1")).toBe(retry);
+    expect(footInteraction([retry], new Set(["call-1"]))).toBeNull();
+    expect(interactionForApproval([{ ...retry, approval: undefined }], "call-1")).toBeNull();
   });
 
   it("leaves the foot the oldest interaction no row is showing", () => {
@@ -1626,9 +1640,48 @@ describe("where a card draws", () => {
 });
 
 describe("the durable answer in scrollback", () => {
+  it("indexes only failed standing-grant mutation receipts for truthful allow-once copy", () => {
+    const receipt = {
+      id: "r",
+      commandId: "answer-1",
+      sequence: 1,
+      recordedAt: 1,
+      status: "rejected" as const,
+      code: "PI_APPROVAL_NOT_REMEMBERED",
+      detail: "disk full",
+    };
+    expect([
+      ...approvalAnswerFailures([
+        { event: null },
+        { event: { payload: { kind: "turn.started", attachmentId: "a", turnId: "t" } } },
+        {
+          event: {
+            payload: {
+              kind: "command.receipt.recorded",
+              receipt: { ...receipt, status: "unreconciled", detail: null },
+            },
+          },
+        },
+        {
+          event: {
+            payload: {
+              kind: "command.receipt.recorded",
+              receipt: { ...receipt, commandId: "answer-2", code: "OTHER" },
+            },
+          },
+        },
+        { event: { payload: { kind: "command.receipt.recorded", receipt } } },
+      ]),
+    ]).toEqual([
+      ["answer-2", "not-delivered"],
+      ["answer-1", "once"],
+    ]);
+  });
+
   it("indexes every interaction the log recorded opening", () => {
     const interaction = permission();
     const index = indexOpenedInteractions([
+      { event: null },
       { event: { payload: { kind: "turn.started", attachmentId: "a", turnId: "t" } } },
       { event: { payload: { kind: "interaction.opened", interaction } } },
     ]);
@@ -1803,19 +1856,44 @@ describe("describeInteractionResolution for an approval card (VC-480)", () => {
     attachmentId: "attach-1",
     kind: "permission",
     title: "Allow writing outside this workspace?",
-    detail: encodeApprovalDetail({
+    detail: null,
+    approval: {
       asked: "write /x",
       because: "b",
       reason: "r",
       stages: [],
       held: null,
-    }),
+    },
     options: offer.options,
     multiple: false,
     native: { id: null, detail: null },
   };
   const receipt = (optionIds: string[], response: string | null = null) =>
     describeInteractionResolution(card, { optionIds, response });
+
+  it.each(["ask-user:model", "ledger-hit:model"])(
+    "never identifies model approval-like ids as an approval (%s)",
+    (id) => {
+      const modelQuestion: RendererSessionInteraction = {
+        ...card,
+        id,
+        kind: "question",
+        approval: undefined,
+        title: "Where next?",
+        detail: "Model-authored question",
+        options: [{ id: "steer", label: "North", description: null }],
+      };
+      expect(isAskUserInteraction(modelQuestion)).toBe(true);
+      expect(
+        describeInteractionResolution(modelQuestion, { optionIds: ["steer"], response: null }),
+      ).toEqual({
+        verdict: "answered",
+        lead: "You answered",
+        subject: "Where next?",
+        trailer: "North",
+      });
+    },
+  );
 
   it("says what was remembered, and for how long", () => {
     expect(receipt(["once"])).toEqual({

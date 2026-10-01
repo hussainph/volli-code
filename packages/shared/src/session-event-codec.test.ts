@@ -2164,3 +2164,64 @@ describe("the renderer-side parse", () => {
     });
   });
 });
+
+describe("typed approval metadata", () => {
+  const approval = {
+    asked: "printf 'a\u241eb'",
+    because: "why\u241enow",
+    reason: "rule\u241etext",
+    stages: ["echo 'a\u241eb'", "tee /x"],
+    held: 1,
+    heldStages: [0, 1],
+  };
+
+  it.each([null, 1])("round-trips metadata without splitting any field (held=%s)", (held) => {
+    const original = { ...interaction, approval: { ...approval, held } };
+    const payload = { kind: "interaction.opened" as const, interaction: original };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionInteraction(original).approval).toEqual(original.approval);
+    expect(scrubSessionEventPayload(payload)).toMatchObject({
+      interaction: { approval: original.approval },
+    });
+  });
+
+  it("keeps older typed cards with only a single held-stage field", () => {
+    const { heldStages, ...olderApproval } = approval;
+    expect(heldStages).toEqual([0, 1]);
+    const payload = {
+      kind: "interaction.opened" as const,
+      interaction: { ...interaction, approval: olderApproval },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+  });
+
+  it("keeps historical and model questions without approval metadata", () => {
+    const opened = roundTrip({ kind: "interaction.opened", interaction });
+    expect(opened.kind === "interaction.opened" && "approval" in opened.interaction).toBe(false);
+  });
+
+  it.each([
+    null,
+    "forged",
+    { ...approval, asked: 1 },
+    { ...approval, because: null },
+    { ...approval, reason: false },
+    { ...approval, stages: "echo" },
+    { ...approval, stages: [1] },
+    { ...approval, held: "1" },
+    { ...approval, held: -1 },
+    { ...approval, held: 2 },
+    { ...approval, held: 0.5 },
+    { ...approval, heldStages: "0,1" },
+    { ...approval, heldStages: ["0"] },
+    { ...approval, heldStages: [-1] },
+    { ...approval, heldStages: [2] },
+  ])("rejects malformed approval metadata: %j", (invalid) => {
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "interaction.opened", interaction: { ...interaction, approval: invalid } },
+        "payload",
+      ),
+    ).toThrow(/approval/u);
+  });
+});

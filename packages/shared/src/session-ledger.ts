@@ -13,6 +13,7 @@ import type {
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import type { CodeModeSurface } from "./code-mode";
+import type { ApprovalDetail } from "./approvals";
 import type { McpToolDefinition } from "./mcp";
 import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
@@ -196,6 +197,8 @@ export interface SessionInteraction {
   kind: "permission" | "question";
   title: string;
   detail: string | null;
+  /** Approval card metadata written only by the authority adapter, never from model question options. */
+  approval?: ApprovalDetail;
   options: readonly SessionInteractionOption[];
   multiple: boolean;
   /**

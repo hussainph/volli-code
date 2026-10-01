@@ -49,6 +49,7 @@ import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import type { ApprovalDetail } from "./approvals";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
@@ -1656,6 +1657,9 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
     multiple: readBoolean(row.multiple, `${context}.multiple`),
     native: decodeNative(row.native, `${context}.native`),
   };
+  if (row.approval !== undefined) {
+    interaction.approval = decodeApprovalMetadata(row.approval, `${context}.approval`);
+  }
   // `prompts` is optional in both directions. A record written before an
   // interaction could carry per-question detail must decode back without the
   // key — not with an empty array, and not with one synthesised from the flat
@@ -1663,6 +1667,33 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
   // doing it here would persist a derived value on the next write.
   if (row.prompts === undefined) return interaction;
   return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
+}
+
+function decodeApprovalMetadata(value: unknown, context: string): ApprovalDetail {
+  const row = asRecord(value, context);
+  const stages = readStringList(row.stages, `${context}.stages`);
+  const held = readNullableInteger(row.held, `${context}.held`);
+  if (held !== null && (held < 0 || held >= stages.length)) {
+    throw new Error(`${context}.held must index a command stage`);
+  }
+  let heldStages: number[] | undefined;
+  if (row.heldStages !== undefined) {
+    if (!Array.isArray(row.heldStages)) throw new Error(`${context}.heldStages must be an array`);
+    heldStages = row.heldStages.map((entry, index) => {
+      const stage = readInteger(entry, `${context}.heldStages[${index}]`);
+      if (stage < 0 || stage >= stages.length)
+        throw new Error(`${context}.heldStages must index command stages`);
+      return stage;
+    });
+  }
+  return {
+    asked: readString(row.asked, `${context}.asked`),
+    because: readString(row.because, `${context}.because`),
+    reason: readString(row.reason, `${context}.reason`),
+    stages,
+    held,
+    ...(heldStages === undefined ? {} : { heldStages }),
+  };
 }
 
 function decodeInteractionResolution(

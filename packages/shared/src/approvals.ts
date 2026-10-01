@@ -382,12 +382,9 @@ export function steerMessage(message: string): string {
 export const DENIED_BY_PERSON =
   "The person denied this call. Carry on without it or try another way.";
 
-/* ------------------------------------------------- the card's detail on the wire */
+/* ------------------------------------------------- typed adapter-authored cards */
 
-/** Separates the sections of an approval card's detail. Never appears in a command. */
-const DETAIL_SEPARATOR = "\u241e";
-
-/** What an approval card shows. */
+/** What an authority-adapter approval card shows, carried as `SessionInteraction.approval`. */
 export interface ApprovalDetail {
   /** The call as asked: the command, or the tool and its path. */
   asked: string;
@@ -399,43 +396,33 @@ export interface ApprovalDetail {
   stages: readonly string[];
   /** Index of the stage held for approval, or null. */
   held: number | null;
+  /** All affected stages on an aggregate card; absent on older cards. */
+  heldStages?: readonly number[];
 }
 
-/**
- * An approval card's detail as the interaction's `detail` string. The Session
- * interaction has one text field and every surface that draws it goes through
- * the same card, so the structure rides in it and is read back by
- * {@link decodeApprovalDetail}.
- */
-export function encodeApprovalDetail(detail: ApprovalDetail): string {
-  return [
-    detail.asked,
-    detail.because,
-    detail.reason,
-    detail.held === null ? "" : String(detail.held),
-    ...detail.stages,
-  ].join(DETAIL_SEPARATOR);
+/** Adapter-authored metadata, never model option ids, identifies an approval. */
+export function isApprovalInteraction<T extends { approval?: ApprovalDetail }>(
+  interaction: T,
+): interaction is T & { approval: ApprovalDetail } {
+  return interaction.approval !== undefined;
 }
 
-export function decodeApprovalDetail(text: string | null): ApprovalDetail {
-  const [asked = "", because = "", reason = "", held = "", ...stages] = (text ?? "").split(
-    DETAIL_SEPARATOR,
-  );
-  const index = held === "" ? null : Number(held);
-  return {
-    asked,
-    because,
-    reason,
-    stages,
-    held: index !== null && Number.isInteger(index) ? index : null,
-  };
-}
-
-/** Whether an interaction is an approval card: it offers the deny-and-steer row. */
-export function isApprovalInteraction(interaction: {
-  options: readonly { id: string }[];
-}): boolean {
-  return interaction.options.some((option) => option.id === "steer");
+/** Stable shortcuts: omitting an unavailable grant never renumbers the other actions. */
+export function approvalActionDigit(optionId: string): number | null {
+  switch (optionId) {
+    case "once":
+      return 1;
+    case "session":
+      return 2;
+    case "project":
+      return 3;
+    case "reject":
+      return 4;
+    case "steer":
+      return 5;
+    default:
+      return null;
+  }
 }
 
 /* --------------------------------------------------------------- decisions */

@@ -10,6 +10,7 @@ import {
   type PolicyToolCall,
 } from "./authority";
 import { evaluate, violations } from "./authority-policy";
+import { approvalCovers, type ApprovalScope } from "./approvals";
 import type { CapabilityPolicy } from "./capability-policy";
 
 const WORKSPACE = "/Users/dev/code/volli";
@@ -60,6 +61,13 @@ function ruleOf(
 ): AuthorityRuleId | "allow" {
   const decision = decide(toolCall, overrides);
   return decision.outcome === "allow" ? "allow" : decision.rule;
+}
+
+function doesNotCover(approved: ApprovalScope, changed: ApprovalScope) {
+  expect(approved.key).not.toBeNull();
+  expect(approvalCovers({ operation: approved.operation, key: approved.key! }, changed)).toBe(
+    false,
+  );
 }
 
 describe("evaluate", () => {
@@ -1008,7 +1016,106 @@ describe("violations", () => {
     expect(config.find((violation) => violation.rule === "path.git-internals")?.scopes).toBeNull();
   });
 
-  it("names git in another tree by its shape, and holds the stage that made it", () => {
+  function gitApproval(
+    args: readonly string[],
+    workspacePath = WORKSPACE,
+    overrides: Partial<AuthoritySnapshot> = {},
+  ): ApprovalScope {
+    const found = violations(exec(segment("git", args)), snapshot(overrides), { workspacePath });
+    const scope = found.find((violation) => violation.rule.startsWith("command.git-"))?.scopes?.[0];
+    expect(scope).toBeDefined();
+    return scope!;
+  }
+
+  it("does not let the first escaping -C approve a later repository target", () => {
+    const approved = gitApproval(["-C", "/repo/first", "push"]);
+    for (const args of [
+      ["-C", "/repo/first", "-C", "/repo/second", "push"],
+      ["-C", "/repo/first", "--git-dir=/repo/second/.git", "push"],
+      ["-C", "/repo/first", "--work-tree", "/repo/second", "push"],
+    ]) {
+      doesNotCover(approved, gitApproval(args));
+    }
+  });
+
+  it("does not reuse relative git targets across workspace contexts", () => {
+    const args = ["-C", "../other", "push"];
+    doesNotCover(gitApproval(args, "/repo/first/ws"), gitApproval(args, "/repo/second/ws"));
+  });
+
+  it("retains every force spelling and value in git keys and summaries", () => {
+    const plain = gitApproval(["-C", "/repo/first", "push"]);
+    for (const flag of [
+      "--force-with-lease",
+      "--force-with-lease=refs/heads/main:abc123",
+      "--force-if-includes",
+      "-vf",
+      "-fv",
+      "--force=true",
+      "--delete=main",
+    ]) {
+      const forced = gitApproval(["-C", "/repo/first", "push", flag]);
+      doesNotCover(plain, forced);
+      expect(forced.key).toContain(flag);
+      expect(forced.summary).toContain(flag);
+    }
+    doesNotCover(
+      gitApproval(["-C", "/repo/first", "push", "--force-with-lease=main:abc123"]),
+      gitApproval(["-C", "/repo/first", "push", "--force-with-lease=main:def456"]),
+    );
+  });
+
+  it("binds exact git approvals to normalized paths, environment and earlier shell stages", () => {
+    const args = ["-C", "../other", "push"];
+    const scope = (toolCall: PolicyToolCall) => all(toolCall)[0].scopes![0];
+    const first = scope(exec(segment("git", args, { paths: ["/repo/first/other"] })));
+    const second = scope(exec(segment("git", args, { paths: ["/repo/second/other"] })));
+    doesNotCover(first, second);
+    doesNotCover(
+      scope(exec(segment("git", args, { env: ["GIT_DIR=/repo/first/.git"] }))),
+      scope(exec(segment("git", args, { env: ["GIT_DIR=/repo/second/.git"] }))),
+    );
+    doesNotCover(
+      scope(exec(segment("cd", ["/repo/first"]), segment("git", args))),
+      scope(exec(segment("cd", ["/repo/second"]), segment("git", args))),
+    );
+  });
+
+  it("does not collapse separate escaping git stages into one approval", () => {
+    const toolCall = exec(
+      segment("git", ["-C", "/repo/first", "push"]),
+      segment("git", ["-C", "/repo/second", "push"]),
+    );
+    const scopes = all(toolCall)[0].scopes!;
+    expect(scopes.map((scope) => scope.stage)).toEqual([0, 1]);
+    doesNotCover(scopes[0], scopes[1]);
+    expect(approvalCovers({ operation: scopes[0].operation, key: scopes[0].key! }, scopes[0])).toBe(
+      true,
+    );
+  });
+
+  it("preserves argument boundaries even when the raw display line is identical", () => {
+    const scope = (toolCall: PolicyToolCall) => all(toolCall)[0].scopes![0];
+    doesNotCover(
+      scope(exec(segment("git", ["-C", "/repo/first", "push", "origin main"]))),
+      scope(exec(segment("git", ["-C", "/repo/first", "push", "origin", "main"]))),
+    );
+  });
+
+  it("retains bundled destructive flags in Main checkout approvals", () => {
+    const main = { location: "main-checkout" } as const;
+    const clean = gitApproval(["clean", "-f"], WORKSPACE, main);
+    const recursive = gitApproval(["clean", "-fdx"], WORKSPACE, main);
+    doesNotCover(clean, recursive);
+    expect(recursive.key).toContain("-fdx");
+    expect(recursive.summary).toContain("-fdx");
+    doesNotCover(
+      gitApproval(["reset", "--hard", "HEAD~1"], WORKSPACE, main),
+      gitApproval(["reset", "--hard", "HEAD~2"], WORKSPACE, main),
+    );
+  });
+
+  it("names git in another tree by its complete call, and holds the stage that made it", () => {
     const [escape] = all(
       exec(
         segment("echo", ["hi"]),
@@ -1018,36 +1125,38 @@ describe("violations", () => {
     expect(escape.rule).toBe("command.git-escapes-workspace");
     expect(escape.scopes?.[0]).toMatchObject({
       operation: "git",
-      key: "git push --force -C /Users/dev/code/other",
+      key: expect.stringContaining("git -C /Users/dev/code/other push --force"),
       stage: 1,
     });
     const single = all(exec(segment("git", ["-C", "/Users/dev/code/other", "status"])));
     expect(single[0].scopes?.[0].stage).toBeUndefined();
-    expect(single[0].scopes?.[0].key).toBe("git status -C /Users/dev/code/other");
+    expect(single[0].scopes?.[0].key).toContain("git -C /Users/dev/code/other status");
     const bare = all(exec(segment("git", ["worktree", "add", "/Users/dev/code/other"])));
-    expect(bare[0].scopes?.[0].key).toBe("git worktree /Users/dev/code/other");
+    expect(bare[0].scopes?.[0].key).toContain("git worktree add /Users/dev/code/other");
     const none = all(exec(segment("git", ["-C", "/Users/dev/code/other"])));
-    expect(none[0].scopes?.[0].key).toBe("git -C /Users/dev/code/other");
+    expect(none[0].scopes?.[0].key).toContain("git -C /Users/dev/code/other");
   });
 
   it("skips the git stages that did not escape or discard", () => {
     const [escape] = all(
       exec(segment("git", ["status"]), segment("git", ["-C", "/Users/dev/code/other", "log"])),
     );
-    expect(escape.scopes?.map((scope) => scope.key)).toEqual(["git log -C /Users/dev/code/other"]);
+    expect(escape.scopes?.map((scope) => scope.key)).toEqual([
+      expect.stringContaining("git status && git -C /Users/dev/code/other log"),
+    ]);
     const [discard] = all(exec(segment("git", ["-C", "."]), segment("git", ["reset", "--hard"])), {
       location: "main-checkout",
     });
     expect(discard.scopes?.map((scope) => scope.stage)).toEqual([1]);
   });
 
-  it("names a discard by its shape in the Main checkout", () => {
+  it("names a discard by its complete call in the Main checkout", () => {
     const found = all(exec(segment("git", ["reset", "--hard"]), segment("ls")), {
       location: "main-checkout",
     });
     expect(found[0].rule).toBe("command.git-discards-work");
     expect(found[0].scopes?.[0]).toMatchObject({
-      key: "git reset --hard (Main checkout)",
+      key: expect.stringContaining("git reset --hard && ls"),
       stage: 0,
     });
     expect(

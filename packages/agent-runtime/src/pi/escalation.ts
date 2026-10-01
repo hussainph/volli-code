@@ -25,6 +25,7 @@ import {
   type ApprovalScope,
   type AuthorityDenialCause,
   type AuthorityFallback,
+  type PolicyViolation,
   type RuntimeApprovalHit,
   type RuntimeApprovals,
   type RuntimeAskChoice,
@@ -249,9 +250,11 @@ export class AuthorityEscalation {
    *     one rule can never carry a never-allowed one through with it.
    *  2. Each approvable violation is looked up in the remembered approvals,
    *     live. Covered is cleared, deterministically, with nobody asked.
-   *  3. The first one left is put to a person, once, and its answer clears it
-   *     or ends the call. An unattended Run parks here like an attended one:
-   *     there is no timeout and nothing here decides for a person.
+   *  3. All uncovered objections are put to a person in ONE card. An answer
+   *     clears exactly those objections or ends the call. After any wait, all
+   *     ledger-backed scopes are read again: a revoke while parked requires a
+   *     fresh card, never execution on a stale approval. An unattended Run parks
+   *     here like an attended one, with no timeout or answer invented for it.
    *
    * Nothing allows silently: a host with no one to ask refuses.
    */
@@ -264,7 +267,7 @@ export class AuthorityEscalation {
     const asked = call.asked ?? call.tool;
     // Written BEFORE the call runs or is refused, so history can say who
     // authorised every gated call. A host that cannot write it is told to say
-    // so; it never changes the outcome, which is already decided here.
+    // so by throwing. An audit failure must propagate before execution.
     const decided = (
       authoriser: ApprovalDecision["authoriser"],
       rule: string,
@@ -302,39 +305,78 @@ export class AuthorityEscalation {
         interrupt: false,
       };
     }
-    const hits: RuntimeApprovalHit[] = [];
-    for (const violation of found) {
+    // Explicit answers grant just the objections shown, including once-only
+    // ones. They do not implicitly grant scopes covered by the ledger when the
+    // card opened: those remain dependent on LIVE coverage after every wait.
+    const grantedScopes = new Set<ApprovalScope>();
+    const grantedUnscoped = new Set<PolicyViolation>();
+    for (;;) {
+      const hits: RuntimeApprovalHit[] = [];
       const uncovered: ApprovalScope[] = [];
-      for (const scope of violation.scopes ?? []) {
-        const hit = approvals.covers(scope);
-        if (hit === null) uncovered.push(scope);
-        else hits.push(hit);
+      const unscoped: PolicyViolation[] = [];
+      const reasons: string[] = [];
+      const objections: { cause: PolicyViolation["rule"]; reason: string }[] = [];
+      let first: PolicyViolation | undefined;
+      for (const violation of found) {
+        let needsAnswer = false;
+        if (violation.scopes === null) {
+          if (!grantedUnscoped.has(violation)) {
+            unscoped.push(violation);
+            needsAnswer = true;
+          }
+        } else {
+          for (const scope of violation.scopes) {
+            if (grantedScopes.has(scope)) continue;
+            const hit = approvals.covers(scope);
+            if (hit === null) {
+              uncovered.push(scope);
+              needsAnswer = true;
+            } else hits.push(hit);
+          }
+        }
+        if (needsAnswer) {
+          first ??= violation;
+          reasons.push(violation.reason);
+          objections.push({ cause: violation.rule, reason: violation.reason });
+        }
       }
-      if (violation.scopes !== null && uncovered.length === 0) continue;
-      const refused = {
-        outcome: "deny",
-        cause: violation.rule,
-        reason: violation.reason,
-      } as const;
+      if (first === undefined) {
+        // No await between this live ledger read, its audit, and permission to
+        // execute. Earlier snapshots never authorise the call or its receipt.
+        if (hits.length > 0) {
+          decided(
+            "policy:ledger",
+            found[0].rule,
+            hits.map((hit) => hit.summary).join("; "),
+            hits[0].approvalId,
+          );
+        }
+        return ALLOW;
+      }
+      const reason = reasons.join("; ");
+      const refused = { outcome: "deny", cause: first.rule, reason } as const;
       if (this.#ask === undefined) {
-        decided("user:deny", violation.rule, "Nobody was available to ask");
+        decided("user:deny", first.rule, "Nobody was available to ask");
         return { ...refused, record: true, interrupt: false };
       }
       const waitStartedAt = this.#measurementStartedAt();
       const answer = await this.#askUntilAnsweredOrAbandoned(
         this.#ask,
         {
-          cause: violation.rule,
+          cause: first.rule,
           tool: call.tool,
+          // The real call ID remains the correlation key. The host must assign
+          // a distinct interaction ID to each card, including revocation retries.
           toolCallId: call.toolCallId,
           turnId: call.turnId,
-          reason: violation.reason,
+          reason,
           trip: "approval",
           overridable: true,
           approval: {
             asked,
             ...(verdict.stages === undefined ? {} : { stages: verdict.stages }),
-            reason: violation.reason,
+            reason,
+            objections,
             scopes: uncovered,
           },
         },
@@ -344,7 +386,10 @@ export class AuthorityEscalation {
       if (answer.kind === "abandoned") return { ...refused, record: false, interrupt: false };
       if (answer.kind === "unavailable") return { ...refused, record: true, interrupt: false };
       const choice = answer.choice;
-      const what = uncovered.map((scope) => scope.summary).join("; ") || violation.reason;
+      const what = [
+        ...uncovered.map((scope) => scope.summary),
+        ...unscoped.map((violation) => violation.reason),
+      ].join("; ");
       if (choice === "allow" || choice === "allow-session" || choice === "allow-project") {
         decided(
           choice === "allow"
@@ -352,28 +397,19 @@ export class AuthorityEscalation {
             : choice === "allow-session"
               ? "user:session"
               : "user:project",
-          violation.rule,
+          first.rule,
           what,
         );
+        for (const scope of uncovered) grantedScopes.add(scope);
+        for (const violation of unscoped) grantedUnscoped.add(violation);
         continue;
       }
-      decided("user:deny", violation.rule, what);
+      decided("user:deny", first.rule, what);
       if (typeof choice === "object") {
         return { ...refused, reason: steerMessage(choice.message), record: true, interrupt: false };
       }
       return { ...refused, reason: DENIED_BY_PERSON, record: true, interrupt: choice === "stop" };
     }
-    // Everything the call needed was already approved: the ledger allowed it,
-    // deterministically, and nobody was asked.
-    if (hits.length > 0) {
-      decided(
-        "policy:ledger",
-        found[0].rule,
-        hits.map((hit) => hit.summary).join("; "),
-        hits[0].approvalId,
-      );
-    }
-    return ALLOW;
   }
 
   /** Decide one call, parking on a person when the counters say it is time. */

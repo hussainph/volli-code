@@ -394,9 +394,29 @@ describe("an approval card in an unattended Run (VC-480)", () => {
   const card = {
     id: "ask:call-1",
     title: "Allow writing outside this workspace?",
-    detail: "write  /Users/me/code/docs/a.md\u241ebecause\u241ereason\u241e",
+    approval: {
+      asked: "write  /Users/me/code/docs/a.md",
+      because: "because",
+      reason: "reason",
+      stages: [],
+      held: null,
+    },
     options: [{ id: "once" }, { id: "steer" }],
   };
+
+  it("does not present model question options as an authority approval", () => {
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("idle"));
+    h.watch.observe(
+      state("waiting", "Nightly sweep", SESSION_ID, [
+        { ...card, id: "ask-user:model", approval: undefined },
+      ]),
+    );
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]?.title).not.toContain("approval");
+    expect(h.notified[0]?.body).not.toContain("write  /Users/me/code/docs/a.md");
+  });
 
   it("says what needs approving and that the Run is paused until a person answers", () => {
     const h = harness({ attendance: "unattended" });

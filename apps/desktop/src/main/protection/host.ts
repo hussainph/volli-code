@@ -52,28 +52,33 @@ export function createProtection(input: ProtectionHostInput): PiProtection {
         insertDecision(db, { projectId, sessionId, decision, now: now() });
       } catch (error) {
         onError(error);
+        // No execution may proceed without its pre-execution decision record.
+        throw error;
       }
     },
     remember(grant) {
-      for (const scope of grant.scopes) {
-        if (scope.key === null) continue;
-        insertApproval(db, {
-          projectId,
-          scope: grant.scope,
-          sessionId: grant.scope === "session" ? sessionId : null,
-          approval: scope,
-          rule: grant.rule,
-          provenance: {
-            sessionId,
-            sessionTitle: input.sessionTitle,
-            ticketDisplayId: input.ticketDisplayId,
-            asked: grant.asked,
-            reason: grant.reason,
-            interactionId: grant.interactionId,
-          },
-          now: now(),
-        });
-      }
+      // A multi-scope answer is remembered in full or not at all.
+      db.transaction(() => {
+        for (const scope of grant.scopes) {
+          if (scope.key === null) continue;
+          insertApproval(db, {
+            projectId,
+            scope: grant.scope,
+            sessionId: grant.scope === "session" ? sessionId : null,
+            approval: scope,
+            rule: grant.rule,
+            provenance: {
+              sessionId,
+              sessionTitle: input.sessionTitle,
+              ticketDisplayId: input.ticketDisplayId,
+              asked: grant.asked,
+              reason: grant.reason,
+              interactionId: grant.interactionId,
+            },
+            now: now(),
+          });
+        }
+      })();
     },
   };
 }

@@ -122,6 +122,19 @@ describe("the protection host", () => {
     });
   });
 
+  it("rolls back every scope when a multi-scope grant cannot be saved", () => {
+    const { protection } = host("parent");
+    ctx.db.exec(`CREATE TRIGGER fail_second_approval BEFORE INSERT ON authority_approvals
+      WHEN NEW.operation = 'read' BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    expect(() =>
+      protection.remember({
+        ...grant("project"),
+        scopes: [...grant("project").scopes, readScope("/Users/me/.npmrc")],
+      }),
+    ).toThrow("disk full");
+    expect(listApprovals(ctx.db, projectId)).toEqual([]);
+  });
+
   it("skips a scope with nothing to remember", () => {
     const { protection } = host("parent");
     protection.remember({
@@ -167,15 +180,17 @@ describe("the protection host", () => {
       approvalId: null,
     });
     ctx.db.exec("DROP TABLE authority_decisions");
-    protection.decided({
-      toolCallId: "call-3",
-      tool: "write",
-      authoriser: "user:once",
-      rule: "r",
-      summary: "s",
-      asked: "a",
-      approvalId: null,
-    });
+    expect(() =>
+      protection.decided({
+        toolCallId: "call-3",
+        tool: "write",
+        authoriser: "user:once",
+        rule: "r",
+        summary: "s",
+        asked: "a",
+        approvalId: null,
+      }),
+    ).toThrow("no such table");
     expect(errors).toHaveLength(1);
   });
 
@@ -190,15 +205,17 @@ describe("the protection host", () => {
       sessionTitle: null,
       ticketDisplayId: null,
     });
-    protection.decided({
-      toolCallId: "c",
-      tool: "write",
-      authoriser: "rule:hard",
-      rule: "r",
-      summary: "s",
-      asked: "a",
-      approvalId: null,
-    });
+    expect(() =>
+      protection.decided({
+        toolCallId: "c",
+        tool: "write",
+        authoriser: "rule:hard",
+        rule: "r",
+        summary: "s",
+        asked: "a",
+        approvalId: null,
+      }),
+    ).toThrow();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

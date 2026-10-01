@@ -708,24 +708,23 @@ export function evaluate(
   return { outcome: "allow" };
 }
 
-/** Git's flags that make a subcommand destructive, so they belong to what a row covers. */
-const GIT_DESTRUCTIVE_FLAGS = new Set(["--force", "-f", "--hard", "-d", "-D", "--delete"]);
-
 /**
- * What a git approval is for: the subcommand, any destructive flag, and the
- * tree it is aimed at, so `push --force` into one repository is not `push`
- * into another. `escape` already names the subcommand for `worktree add` and
- * its kin, which is not repeated.
+ * Remember git only as this exact normalized call in this workspace. The first
+ * escaping argument is evidence for a refusal, not the effective repository:
+ * later -C/--git-dir/--work-tree options can change it, and relative paths depend
+ * on the workspace and earlier shell stages. Likewise, a list of destructive
+ * flags cannot safely summarize git's valued options and short-flag bundles.
+ *
+ * Keeping the complete call avoids guessing at git's grammar. JSON preserves
+ * argument boundaries, environment and resolved paths as well as the raw shell
+ * line; workspace binding prevents a project row crossing workspace contexts.
+ * This deliberately narrows reuse, including for Main-checkout discards. The
+ * stage remains part of the identity so one approval does not cover another
+ * git stage in the same line. The git operation keeps the full key visible in
+ * both card and ledger summaries.
  */
-function gitShape(args: readonly string[], escape: string): string {
-  const invocation = gitInvocation(args);
-  const flags =
-    invocation === null ? [] : invocation.rest.filter((arg) => GIT_DESTRUCTIVE_FLAGS.has(arg));
-  const subcommand =
-    invocation === null || escape.startsWith(`${invocation.subcommand} `)
-      ? []
-      : [invocation.subcommand];
-  return ["git", ...subcommand, ...flags, escape].join(" ");
+function exactGitScope(call: PolicyToolCall, context: PolicyContext, stage: number): ApprovalScope {
+  return gitScope(`git exactly ${JSON.stringify([context.workspacePath, call.command, stage])}`);
 }
 
 /** A write remembered as exactly this path: plumbing and Volli's own files never widen to a folder. */
@@ -781,19 +780,19 @@ const RULE_SCOPES: Partial<
       if (baseName(segment.program) !== "git") continue;
       const escape = gitTreeEscape(segment.args, context.workspacePath);
       if (escape === null) continue;
-      scopes.push({ ...gitScope(gitShape(segment.args, escape)), stage });
+      scopes.push({ ...exactGitScope(call, context, stage), stage });
     }
     return scopes;
   },
 
-  "command.git-discards-work": (call) => {
+  "command.git-discards-work": (call, _snapshot, context) => {
     const scopes: ApprovalScope[] = [];
     for (const [stage, segment] of segmentsOf(call).entries()) {
       if (baseName(segment.program) !== "git") continue;
       const invocation = gitInvocation(segment.args);
       const discard = invocation === null ? null : gitDiscard(invocation);
       if (discard !== null) {
-        scopes.push({ ...gitScope(`git ${discard} (Main checkout)`), stage });
+        scopes.push({ ...exactGitScope(call, context, stage), stage });
       }
     }
     return scopes;

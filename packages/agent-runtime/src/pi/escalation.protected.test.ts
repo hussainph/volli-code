@@ -146,18 +146,124 @@ describe("AuthorityEscalation in protection mode", () => {
     ]);
   });
 
-  it("asks once per approvable rule, clearing each in turn", async () => {
+  it("asks one card covering every uncovered objection, rather than reusing a call's card ID", async () => {
     const git: PolicyViolation = {
       rule: "command.git-escapes-workspace",
       reason: "git elsewhere",
       scopes: [gitScope("git push -C /x")],
     };
-    const ask = vi.fn(async () => "allow" as RuntimeAskChoice);
-    expect(await resolve(machine(approvals(), ask), denial([OUTSIDE, git]))).toEqual({
+    const requests: RuntimeAskRequest[] = [];
+    const port = approvals();
+    const ask = vi.fn(async (request: RuntimeAskRequest) => {
+      requests.push(request);
+      return "allow" as RuntimeAskChoice;
+    });
+    expect(await resolve(machine(port, ask), denial([OUTSIDE, git]))).toEqual({
       outcome: "allow",
     });
-    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(requests[0]).toMatchObject({
+      toolCallId: "call-1",
+      reason: "outside the workspace; git elsewhere",
+      approval: {
+        reason: "outside the workspace; git elsewhere",
+        scopes: [WRITE, gitScope("git push -C /x")],
+      },
+    });
+    expect(port.decisions).toEqual([
+      expect.objectContaining({
+        authoriser: "user:once",
+        summary: expect.stringContaining("git push"),
+      }),
+    ]);
   });
+
+  it("re-asks for a ledger-backed scope revoked while another scope's card was pending", async () => {
+    const other = writeScope("/Users/me/code/other/x/y/b.md");
+    const hits = new Map([[WRITE.target, { approvalId: "row-1", summary: "Write to x" }]]);
+    const port = approvals(hits);
+    const requests: RuntimeAskRequest[] = [];
+    const answer = Promise.withResolvers<RuntimeAskChoice>();
+    const ask = vi.fn(async (request: RuntimeAskRequest) => {
+      requests.push(request);
+      return requests.length === 1 ? answer.promise : "refuse";
+    });
+    const pending = resolve(machine(port, ask), denial([{ ...OUTSIDE, scopes: [WRITE, other] }]));
+    expect(requests[0].approval?.scopes).toEqual([other]);
+    hits.delete(WRITE.target);
+    answer.resolve("allow");
+    expect(await pending).toMatchObject({ outcome: "deny", record: true });
+    expect(requests.map((request) => request.approval?.scopes)).toEqual([[other], [WRITE]]);
+    expect(requests.map((request) => request.toolCallId)).toEqual(["call-1", "call-1"]);
+    expect(port.decisions.map((decision) => decision.authoriser)).toEqual([
+      "user:once",
+      "user:deny",
+    ]);
+  });
+
+  it("allows a newly revoked scope only after a fresh answer, without re-asking explicit once grants", async () => {
+    const other = commandScope("unrecognized command");
+    const hits = new Map([[WRITE.target, { approvalId: "row-1", summary: "Write to x" }]]);
+    const port = approvals(hits);
+    const requests: RuntimeAskRequest[] = [];
+    const ask = vi.fn(async (request: RuntimeAskRequest) => {
+      requests.push(request);
+      hits.clear();
+      return "allow" as RuntimeAskChoice;
+    });
+    expect(
+      await resolve(machine(port, ask), denial([{ ...OUTSIDE, scopes: [WRITE, other] }])),
+    ).toEqual({ outcome: "allow" });
+    expect(requests.map((request) => request.approval?.scopes)).toEqual([[other], [WRITE]]);
+    expect(port.decisions.map((decision) => decision.authoriser)).toEqual([
+      "user:once",
+      "user:once",
+    ]);
+  });
+
+  it("records the live replacement ledger row, not a stale hit from before the wait", async () => {
+    const other = writeScope("/Users/me/code/other/x/y/b.md");
+    const hits = new Map([[WRITE.target, { approvalId: "old-row", summary: "Old approval" }]]);
+    const port = approvals(hits);
+    const ask = vi.fn(async () => {
+      hits.set(WRITE.target, { approvalId: "new-row", summary: "New approval" });
+      return "allow" as RuntimeAskChoice;
+    });
+    expect(
+      await resolve(machine(port, ask), denial([{ ...OUTSIDE, scopes: [WRITE, other] }])),
+    ).toEqual({ outcome: "allow" });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(port.decisions[1]).toMatchObject({
+      authoriser: "policy:ledger",
+      approvalId: "new-row",
+      summary: "New approval",
+    });
+  });
+
+  it.each(["rule:hard", "user:once", "policy:ledger"])(
+    "propagates %s audit failure rather than returning permission to execute",
+    async (authoriser) => {
+      const failure = new Error("approval audit unavailable");
+      const port = approvals(
+        authoriser === "policy:ledger"
+          ? new Map([[WRITE.target, { approvalId: "row-1", summary: "Write to x" }]])
+          : undefined,
+      );
+      port.decided = () => {
+        throw failure;
+      };
+      const verdict =
+        authoriser === "rule:hard"
+          ? denial([{ rule: "path.credentials", reason: "reads ~/.ssh", scopes: null }])
+          : denial([OUTSIDE]);
+      await expect(
+        resolve(
+          machine(port, async () => "allow"),
+          verdict,
+        ),
+      ).rejects.toBe(failure);
+    },
+  );
 
   it("asks for a refusal that can only be allowed once, offering nothing to remember", async () => {
     const once: PolicyViolation = { ...OUTSIDE, scopes: null };

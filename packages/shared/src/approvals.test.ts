@@ -2,13 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   APPROVAL_AUTHORISERS,
+  approvalActionDigit,
   approvalCopy,
   approvalCovers,
   commandScope,
-  decodeApprovalDetail,
   describeApproval,
   DENIED_BY_PERSON,
-  encodeApprovalDetail,
   gitScope,
   hardRefusalCopy,
   hardRefusalMessage,
@@ -177,36 +176,21 @@ describe("copy", () => {
   });
 });
 
-describe("approval detail on the wire", () => {
-  it("round-trips the structure of a card", () => {
-    const detail = {
-      asked: "mkdir -p /x\nrm /y",
-      because: "this file is outside",
-      reason: "the rule's words",
-      stages: ["mkdir -p /x", "rm /y"],
-      held: 1,
-    };
-    expect(decodeApprovalDetail(encodeApprovalDetail(detail))).toEqual(detail);
+describe("approval metadata and actions", () => {
+  const approval = { asked: "a\u241eb", because: "b", reason: "r", stages: [], held: null };
+  it("recognises only adapter-produced approval metadata, regardless of model option ids", () => {
+    expect(isApprovalInteraction({ approval })).toBe(true);
+    const modelQuestion = { options: [{ id: "once" }, { id: "steer" }], approval: undefined };
+    expect(isApprovalInteraction(modelQuestion)).toBe(false);
+    expect(isApprovalInteraction({})).toBe(false);
   });
 
-  it("reads a missing or malformed detail as an empty card", () => {
-    expect(decodeApprovalDetail(null)).toEqual({
-      asked: "",
-      because: "",
-      reason: "",
-      stages: [],
-      held: null,
-    });
-    expect(decodeApprovalDetail("a\u241eb\u241ec\u241enope").held).toBeNull();
-    expect(
-      decodeApprovalDetail(
-        encodeApprovalDetail({ asked: "a", because: "", reason: "", stages: [], held: null }),
-      ).held,
-    ).toBeNull();
-  });
-
-  it("recognises an approval card by its deny-and-steer row", () => {
-    expect(isApprovalInteraction({ options: [{ id: "once" }, { id: "steer" }] })).toBe(true);
-    expect(isApprovalInteraction({ options: [{ id: "once" }, { id: "reject" }] })).toBe(false);
-  });
+  it.each([
+    ["once", 1],
+    ["session", 2],
+    ["project", 3],
+    ["reject", 4],
+    ["steer", 5],
+    ["other", null],
+  ] as const)("fixes %s to digit %s", (id, digit) => expect(approvalActionDigit(id)).toBe(digit));
 });

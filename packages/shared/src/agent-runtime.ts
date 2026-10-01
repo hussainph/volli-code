@@ -394,6 +394,8 @@ export interface RuntimeApprovalAsk {
   stages?: readonly string[];
   /** The rule that stopped it, in its own words, for the card's details. */
   reason?: string;
+  /** Every uncovered rule, so an aggregate card explains all the consent it asks for. */
+  objections?: readonly { cause: AuthorityDenialCause; reason: string }[];
   /**
    * What "allow for this Session" and "always allow" would remember, one scope
    * each. Empty when the refusal cannot be narrowed, so only "allow once" is
@@ -417,8 +419,8 @@ export interface RuntimeApprovals {
   covers(scope: ApprovalScope): RuntimeApprovalHit | null;
   /**
    * Records who authorised one gated call. Called BEFORE the call runs, once
-   * per decision; a host that cannot write it must not stop the call, but must
-   * say so.
+   * per decision. A host that cannot persist it must throw: execution fails
+   * closed without a pre-execution decision record.
    */
   decided(decision: ApprovalDecision): void;
 }

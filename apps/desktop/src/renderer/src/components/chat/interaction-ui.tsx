@@ -90,8 +90,9 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react";
 import {
-  decodeApprovalDetail,
+  approvalActionDigit,
   isApprovalInteraction,
+  type ApprovalDetail,
   type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionResolution,
@@ -281,7 +282,8 @@ export interface InteractionCardProps {
  * the mount decides where a card stands, never which one it is.
  */
 export function InteractionCard(props: InteractionCardProps) {
-  if (isApprovalInteraction(props.interaction)) return <ApprovalCard {...props} />;
+  if (isApprovalInteraction(props.interaction))
+    return <ApprovalCard {...props} interaction={props.interaction} />;
   return isAskUserInteraction(props.interaction) ? (
     <QuestionCard {...props} />
   ) : (
@@ -636,12 +638,12 @@ function ApprovalCard({
   resolving,
   ref,
   className,
-}: InteractionCardProps) {
+}: InteractionCardProps & {
+  interaction: RendererSessionInteraction & { approval: ApprovalDetail };
+}) {
   const { failed, send, commit } = useDelivery(interaction.id, onResolve);
-  const detail = React.useMemo(
-    () => decodeApprovalDetail(interaction.detail),
-    [interaction.detail],
-  );
+  const detail = interaction.approval;
+  const stageHeld = (index: number) => detail.heldStages?.includes(index) ?? index === detail.held;
   const [steering, setSteering] = React.useState(false);
   const [steer, setSteer] = React.useState("");
   const [open, setOpen] = React.useState(false);
@@ -679,7 +681,9 @@ function ApprovalCard({
         if (event.metaKey || event.ctrlKey || event.altKey) return;
         const target = event.target as HTMLElement;
         if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
-        const picked = options[Number(event.key) - 1];
+        const picked = /^[1-5]$/u.test(event.key)
+          ? options.find((option) => approvalActionDigit(option.id) === Number(event.key))
+          : undefined;
         if (picked) {
           event.preventDefault();
           answer(picked);
@@ -705,16 +709,14 @@ function ApprovalCard({
                   key={key}
                   className={cn(
                     "flex min-w-0 items-baseline gap-2 rounded-sm px-1",
-                    index === detail.held
-                      ? "bg-primary/10 text-foreground"
-                      : "text-muted-foreground",
+                    stageHeld(index) ? "bg-primary/10 text-foreground" : "text-muted-foreground",
                   )}
                 >
                   <span aria-hidden className="shrink-0 tabular-nums">
                     {index + 1}
                   </span>
                   <span className="min-w-0 truncate">{stage}</span>
-                  {index === detail.held ? (
+                  {stageHeld(index) ? (
                     <span className="ml-auto shrink-0 font-sans text-primary">held</span>
                   ) : null}
                 </li>
@@ -774,7 +776,7 @@ function ApprovalCard({
                 )}
               >
                 <span className={cn(OPTION_MARK, "bg-muted text-muted-foreground")}>
-                  {index + 1}
+                  {approvalActionDigit(option.id)}
                 </span>
                 <span className="text-sm text-foreground">{option.label}</span>
                 {option.description ? (

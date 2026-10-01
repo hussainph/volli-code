@@ -2281,7 +2281,26 @@ CREATE INDEX IF NOT EXISTS session_read_receipts_unread
 `;
 
 /**
- * `authority_approvals` — the remembered approvals of VC-480.
+ * Migration 053: a project's own decision model (VC-478).
+ *
+ * One nullable JSON column beside `session_model`, on 024's terms: `NULL` is
+ * "inherit the app-wide decision model", and a stored `{ "kind": "none" }` is
+ * a project that turned decision models off for itself — a choice, not an
+ * absence. The document is variable-shaped (none, a local server, a cloud
+ * model with its opt-in), so `json_valid` guards it and the reader re-checks
+ * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
+ * inherit; see `readDecisionModelColumn`).
+ *
+ * No credential is or can be stored here: a cloud setting names a provider and
+ * a model, and the key stays in Pi's own `auth.json`.
+ */
+const MIGRATION_053_PROJECT_DECISION_MODEL = `
+ALTER TABLE projects ADD COLUMN decision_model TEXT
+  CHECK (decision_model IS NULL OR json_valid(decision_model));
+`;
+
+/**
+ * Migration 054: `authority_approvals` — the remembered approvals of VC-480.
  *
  * One row per "allow for this Session" or "always allow in this project", with
  * where it came from. App-owned like `projects.authority_policy` and for the
@@ -2289,7 +2308,7 @@ CREATE INDEX IF NOT EXISTS session_read_receipts_unread
  * write it. Revoking is a soft delete (`revoked_at`), so Undo restores the same
  * row with the same provenance. A Session row dies with its Session.
  */
-const MIGRATION_053_AUTHORITY_APPROVALS = `
+const MIGRATION_054_AUTHORITY_APPROVALS = `
 CREATE TABLE IF NOT EXISTS authority_approvals (
   id                   TEXT PRIMARY KEY,
   project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -2609,7 +2628,8 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 54,
     name: "authority_approvals — remembered approvals, app-owned (VC-480)",
-    sql: MIGRATION_053_AUTHORITY_APPROVALS,
+    sql: MIGRATION_054_AUTHORITY_APPROVALS,
+    apply: applyMigration054AuthorityApprovals,
   },
 ];
 
@@ -2622,6 +2642,20 @@ function applyMigration053ProjectDecisionModel(db: Database.Database): void {
   const columns = db.pragma("table_info(projects)") as { name: string }[];
   if (columns.some(({ name }) => name === "decision_model")) return;
   db.exec(MIGRATION_053_PROJECT_DECISION_MODEL);
+}
+
+/**
+ * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
+ * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * Repair the skipped decision-model column before creating any missing ledger
+ * tables, without rewinding user_version or rebuilding populated tables.
+ */
+function applyMigration054AuthorityApprovals(db: Database.Database): void {
+  applyMigration053ProjectDecisionModel(db);
+  const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  const hasApprovals = tableExists.get("authority_approvals") !== undefined;
+  const hasDecisions = tableExists.get("authority_decisions") !== undefined;
+  if (!hasApprovals || !hasDecisions) db.exec(MIGRATION_054_AUTHORITY_APPROVALS);
 }
 
 /**

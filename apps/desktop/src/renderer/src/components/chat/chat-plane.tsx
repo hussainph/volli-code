@@ -1379,11 +1379,20 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
+      approvalFailures: session.approvalFailures,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, onOpenSession, resolving, session.openedInteractions],
+    [
+      answer,
+      interactions,
+      onOpenFile,
+      onOpenSession,
+      session.approvalFailures,
+      resolving,
+      session.openedInteractions,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1972,6 +1981,8 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
+  /** Mutation receipts for standing grants that could only be allowed once. */
+  approvalFailures?: ReadonlyMap<string, "once" | "not-delivered">;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
   open: readonly RendererSessionInteraction[];
   /** The ids with a decision in flight — one card in flight is not all of them. */
@@ -2392,8 +2403,14 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (answered) {
     const interaction = context.interactions.get(answered.interactionId);
+    const failure =
+      interaction?.approval === undefined ? undefined : context.approvalFailures?.get(first.id);
+    if (failure === "not-delivered")
+      return <p className="text-ui text-muted-foreground">Answer not delivered</p>;
+    const resolution =
+      failure === "once" ? { optionIds: ["once"], response: null } : answered.resolution;
     return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
+      <InteractionReceiptLine interaction={interaction} resolution={resolution} />
     ) : null;
   }
 

@@ -10,8 +10,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   askOffer,
-  encodeApprovalDetail,
   writeScope,
+  type ApprovalDetail,
   type RendererSessionInteraction,
   type SessionInteractionResolution,
 } from "@volli/shared";
@@ -22,10 +22,7 @@ import { InteractionCard } from "./interaction-ui";
 
 const SCOPE = writeScope("/Users/me/code/docs/guides/a.md");
 
-function card(
-  detail: Partial<Parameters<typeof encodeApprovalDetail>[0]> = {},
-  scopes = [SCOPE],
-): RendererSessionInteraction {
+function card(detail: Partial<ApprovalDetail> = {}, scopes = [SCOPE]): RendererSessionInteraction {
   const offer = askOffer({
     cause: "path.outside-workspace",
     tool: "write",
@@ -41,14 +38,15 @@ function card(
     attachmentId: "attach-1",
     kind: "permission",
     title: "Allow writing outside this workspace?",
-    detail: encodeApprovalDetail({
+    detail: null,
+    approval: {
       asked: "write  /Users/me/code/docs/guides/a.md",
       because: "this file is outside the Session's workspace, and protection is on.",
       reason: "/x is outside this Session's writable roots",
       stages: [],
       held: null,
       ...detail,
-    }),
+    },
     options: offer.options,
     multiple: false,
     native: { id: null, detail: null },
@@ -89,6 +87,103 @@ async function settle(): Promise<void> {
 }
 
 describe("ApprovalCard", () => {
+  it("keeps a model-authored ask_user with a steer option an ordinary question when Protection is off", async () => {
+    const onResolve = vi.fn();
+    const interaction = {
+      ...card(),
+      id: "ask-user:model-1",
+      kind: "question" as const,
+      approval: undefined,
+      title: "Where next?",
+      detail: "Model question",
+      options: [{ id: "steer", label: "Steer north", description: null }],
+    };
+    const host = mount(<InteractionCard interaction={interaction} onResolve={onResolve} />);
+    expect(host.querySelector("[data-slot='approval-card']")).toBeNull();
+    expect(host.textContent).not.toContain("Stopped because");
+    act(() => button(host, "Steer north").click());
+    await settle();
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Send answer");
+  });
+
+  it.each(["session", "project"])(
+    "never remaps hidden %s actions onto another digit",
+    async (hidden) => {
+      const onResolve = vi.fn();
+      const base = card();
+      const host = mount(
+        <InteractionCard
+          interaction={{ ...base, options: base.options.filter((option) => option.id !== hidden) }}
+          onResolve={onResolve}
+        />,
+      );
+      const form = host.querySelector("form")!;
+      act(() =>
+        form.dispatchEvent(
+          new KeyboardEvent("keydown", { key: hidden === "session" ? "2" : "3", bubbles: true }),
+        ),
+      );
+      await settle();
+      expect(onResolve).not.toHaveBeenCalled();
+      act(() => form.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true })));
+      await settle();
+      expect(onResolve).toHaveBeenCalledWith({
+        resolution: { optionIds: ["reject"], response: null },
+        message: null,
+      });
+      expect(button(host, "Deny and steer").textContent).toMatch(/^5/u);
+    },
+  );
+
+  it("keeps once=1, deny=4 and steer=5 when both remembered grants are unavailable", async () => {
+    const resolutions: SessionInteractionResolution[] = [];
+    const host = mount(
+      <InteractionCard
+        interaction={card({}, [])}
+        onResolve={({ resolution }) => void resolutions.push(resolution)}
+      />,
+    );
+    expect(button(host, "Allow once").textContent).toMatch(/^1/u);
+    expect(button(host, "DenyThe").textContent).toMatch(/^4/u);
+    expect(button(host, "Deny and steer").textContent).toMatch(/^5/u);
+    const form = host.querySelector("form")!;
+    act(() => {
+      for (const key of ["2", "3", "0", "6", "1e0"]) {
+        form.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }
+    });
+    await settle();
+    expect(resolutions).toEqual([]);
+    act(() => form.dispatchEvent(new KeyboardEvent("keydown", { key: "5", bubbles: true })));
+    expect(host.querySelector("textarea")).not.toBeNull();
+    expect(resolutions).toEqual([]);
+  });
+
+  it("preserves delimiter characters in every typed metadata field", () => {
+    const host = mount(
+      <InteractionCard
+        interaction={{
+          ...card(),
+          detail: null,
+          approval: {
+            asked: "printf 'a\u241eb'",
+            because: "policy\u241ereason",
+            reason: "rule\u241etext",
+            stages: ["echo 'a\u241eb'", "tee /x"],
+            held: 1,
+          },
+        }}
+        onResolve={() => undefined}
+      />,
+    );
+    expect(host.textContent).toContain("echo 'a\u241eb'");
+    expect(host.textContent).toContain("Stopped because policy\u241ereason");
+    act(() => button(host, "See details").click());
+    expect(host.textContent).toContain("printf 'a\u241eb'");
+    expect(host.textContent).toContain("rule\u241etext");
+  });
+
   it("says what the agent wants and why it was stopped, in Volli's words, with nothing preselected", () => {
     const host = mount(<InteractionCard interaction={card()} onResolve={() => undefined} />);
     expect(host.textContent).toContain("Allow writing outside this workspace?");
@@ -182,6 +277,23 @@ describe("ApprovalCard", () => {
     expect(host.textContent).toContain("/x is outside this Session's writable roots");
     act(() => button(host, "Hide details").click());
     expect(host.textContent).not.toContain("The rule that stopped it");
+  });
+
+  it("shows all objections and affected stages before an aggregate approval is answered", () => {
+    const interaction = card({
+      stages: ["write /outside/a", "git reset --hard", "echo done"],
+      held: 0,
+      heldStages: [0, 1],
+      because: "the write is outside the workspace. Also, git discards uncommitted changes.",
+    });
+    interaction.title = "Allow these actions?";
+    const host = mount(<InteractionCard interaction={interaction} onResolve={() => undefined} />);
+    expect(host.textContent).toContain("git discards uncommitted changes");
+    expect([...host.querySelectorAll("ol li")].map((stage) => stage.textContent)).toEqual([
+      "1write /outside/aheld",
+      "2git reset --hardheld",
+      "3echo done",
+    ]);
   });
 
   it("shows a compound command whole with the held stage marked", () => {

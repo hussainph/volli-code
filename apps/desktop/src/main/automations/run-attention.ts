@@ -62,7 +62,6 @@
  * to fail the command that triggered it.
  */
 import {
-  decodeApprovalDetail,
   isApprovalInteraction,
   sessionNotificationItem,
   sessionPersonNeed,
@@ -186,12 +185,8 @@ export function runAttentionTarget(
 
 /** The approval card this Session is parked on, if that is what it is waiting for. */
 function openApproval(projection: SessionProjection): { title: string; asked: string } | null {
-  const card = projection.interactions.active.find((interaction) =>
-    isApprovalInteraction(interaction),
-  );
-  return card === undefined
-    ? null
-    : { title: card.title, asked: decodeApprovalDetail(card.detail).asked };
+  const card = projection.interactions.active.find(isApprovalInteraction);
+  return card === undefined ? null : { title: card.title, asked: card.approval.asked };
 }
 
 export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionWatch {
