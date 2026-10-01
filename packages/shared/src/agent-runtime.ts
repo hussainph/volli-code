@@ -25,6 +25,7 @@ import type {
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import type { DecisionAnswered, DecisionMiss } from "./decision-model";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -1027,6 +1028,33 @@ export interface RuntimeShellPort {
 }
 
 /**
+ * What one `classify` call came to (VC-478): the decision, or the miss that
+ * says why there is none. Never a rejection for a decision not made — the
+ * host's decision port turns every such outcome into a miss, which the tool
+ * shows the model as an error result it can recover from by deciding itself.
+ */
+export type RuntimeClassifyOutcome =
+  | { kind: "answered"; answered: DecisionAnswered }
+  | { kind: "miss"; miss: DecisionMiss };
+
+/**
+ * Ask the Session's decision model typed questions about a JSON state
+ * (VC-478).
+ *
+ * The arguments are what the model said, unchecked: the host holds the
+ * bounds, and its answer for a request that breaks one is a miss naming the
+ * bound. The port is bound to its Session at attach, so the call carries no
+ * Session, no project and no purpose — those are the host's to state.
+ */
+export interface RuntimeClassifyPort {
+  classify(input: {
+    state: unknown;
+    questions: unknown;
+    signal: AbortSignal;
+  }): Promise<RuntimeClassifyOutcome>;
+}
+
+/**
  * What the workspace's own package state was when this attachment started —
  * the two {@link SessionEnvReport} facts an agent can act on.
  *
@@ -1239,6 +1267,13 @@ export interface SessionRuntimeSpec {
    */
   shell?: RuntimeShellPort;
   /**
+   * Ask the decision model, through the host's decision service (VC-478).
+   * Optional on {@link webFetch}'s terms: absence is what decides whether the
+   * model is offered `classify`, and the host wires it only for a Session
+   * whose frozen surface names the tool.
+   */
+  classify?: RuntimeClassifyPort;
+  /**
    * Call the exact server/tool identity behind this Session's frozen MCP
    * definitions. Main owns clients and transports; this typed port owns no
    * configuration and lets the model change none of it.
@@ -1333,7 +1368,15 @@ export interface RuntimeVerbResult {
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "mcp" | "callVerb"
+  | "tools"
+  | "askUser"
+  | "webFetch"
+  | "webSearch"
+  | "browser"
+  | "shell"
+  | "classify"
+  | "mcp"
+  | "callVerb"
 >;
 
 /**
@@ -1375,6 +1418,8 @@ export type SessionToolBinding =
   | { tool: "shell_start"; port: RuntimeShellPort }
   | { tool: "shell_output"; port: RuntimeShellPort }
   | { tool: "shell_kill"; port: RuntimeShellPort }
+  // The decision model (VC-478), one name and one port, on the web tools' terms.
+  | { tool: "classify"; port: RuntimeClassifyPort }
   | {
       tool: McpToolId;
       definition: McpToolDefinition;
@@ -1440,6 +1485,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
     browser_find: find === undefined ? null : { tool: "browser_find", port: find },
+    classify: spec.classify === undefined ? null : { tool: "classify", port: spec.classify },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

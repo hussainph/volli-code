@@ -133,7 +133,7 @@ afterEach(() => {
 const ready = async () => ({ type: "api_key" as const });
 
 describe("inspectPiModelAccess provider list (Pi 0.99)", () => {
-  it("leaves out a provider that lists only image or classifier models, and keeps an empty one", async () => {
+  it("lists a provider that serves decision models, leaves out an image-only one, and keeps an empty one", async () => {
     const snapshot = await inspectPiModelAccess(
       {
         models: fakeModels([
@@ -150,6 +150,12 @@ describe("inspectPiModelAccess provider list (Pi 0.99)", () => {
             other: [{ id: "jev-latest", type: "classifier" }],
           },
           {
+            provider: provider("pixels"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "flux", type: "image" }],
+          },
+          {
             provider: provider("dynamic"),
             checkAuth: async () => undefined,
             getAvailable: async () => [],
@@ -160,7 +166,37 @@ describe("inspectPiModelAccess provider list (Pi 0.99)", () => {
       () => 0,
     );
 
-    expect(snapshot.providers.map((entry) => entry.id)).toEqual(["chat", "dynamic"]);
+    // Decision models give a classifier-only provider something to sign in
+    // for (VC-478); an image-only one still has nothing to pick here.
+    expect(snapshot.providers.map((entry) => entry.id)).toEqual(["chat", "typesafe", "dynamic"]);
+    const typesafe = providersById(snapshot.providers)["typesafe"]!;
+    expect(typesafe.state).toBe("authentication-required");
+    expect(typesafe.recovery).toEqual({ kind: "sign-in" });
+    // Its classifier never reaches the chat catalog.
+    expect(snapshot.models.map((entry) => entry.modelId)).toEqual(["c"]);
+  });
+
+  it("reads a decision-only provider with a credential as available", async () => {
+    const snapshot = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("typesafe"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+        ]),
+        credentials: null,
+      },
+      () => 0,
+    );
+    expect(snapshot.providers[0]).toMatchObject({
+      id: "typesafe",
+      state: "available",
+      recovery: null,
+    });
+    expect(snapshot.models).toEqual([]);
   });
 });
 
