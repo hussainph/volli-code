@@ -61,10 +61,11 @@ import {
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createShellTool } from "./shell-tools";
 import { piContext } from "./pi-context";
-import { processReadImage } from "./read-image-processor";
+import { MAX_READ_IMAGE_BASE64_BYTES, processReadImage } from "./read-image-processor";
 import {
   cutMiddle,
   cutResultText,
+  formatBytes,
   toolOutputCut,
   type ToolOutputCut,
   type ToolOutputStore,
@@ -191,8 +192,11 @@ function markingSavedOutput(tool: AgentTool, output: ToolOutputStore): AgentTool
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      // Judged before the read, on the path as it resolves now, so a link
+      // re-pointed while the read runs cannot take the mark off.
+      const saved = output.holds((params as { path?: unknown }).path);
       const result = await tool.execute(toolCallId, params, signal, onUpdate);
-      if (!output.holds((params as { path?: unknown }).path)) return result;
+      if (!saved) return result;
       return {
         ...result,
         content: [{ type: "text", text: SAVED_TOOL_OUTPUT_WARNING }, ...result.content],
@@ -357,6 +361,33 @@ export interface McpToolResultDetails {
 
 type ResultBlock = AgentToolResult<McpToolResultDetails>["content"][number];
 
+/**
+ * One MCP image, within `read`'s bound (VC-469).
+ *
+ * The 256 KiB refusal this ticket removed was the only thing bounding an
+ * image's bytes, and a tool result stays in the sidecar and in every later
+ * request. An image already under the payload bound passes untouched, as it
+ * always did (the send-time guard still fits its dimensions); a larger one goes
+ * through the same pipeline `read` uses, which re-encodes it to fit or says it
+ * could not.
+ */
+async function boundedImage(block: { data: string; mimeType: string }): Promise<ResultBlock[]> {
+  if (block.data.length <= MAX_READ_IMAGE_BASE64_BYTES) {
+    return [{ type: "image", data: block.data, mimeType: block.mimeType }];
+  }
+  const fitted = await processReadImage(
+    Buffer.from(block.data, "base64"),
+    block.mimeType,
+    { autoResizeImages: true },
+    piContext(),
+  );
+  if (!fitted.ok) return [{ type: "text", text: fitted.message }];
+  return [
+    { type: "image", data: fitted.data, mimeType: fitted.mimeType },
+    ...fitted.hints.map((hint): ResultBlock => ({ type: "text", text: hint })),
+  ];
+}
+
 function isTextBlock(block: ResultBlock): block is { type: "text"; text: string } {
   return block.type === "text";
 }
@@ -420,12 +451,14 @@ export function createMcpTool(
         }
         const details: McpToolResultDetails = {};
         let structuredContent: McpJsonValue | undefined = result.structuredContent;
-        let blocks: ResultBlock[] = result.content.map((block): ResultBlock => {
-          if (block.type === "image") {
-            return { type: "image", data: block.data, mimeType: block.mimeType };
-          }
-          return { type: "text", text: block.text };
-        });
+        let blocks: ResultBlock[] = (
+          await Promise.all(
+            result.content.map(async (block): Promise<ResultBlock[]> => {
+              if (block.type === "image") return boundedImage(block);
+              return [{ type: "text", text: block.text }];
+            }),
+          )
+        ).flat();
         if (blocks.length === 0 && structuredContent !== undefined) {
           blocks = [{ type: "text", text: stableJson(structuredContent) }];
         }
@@ -472,7 +505,7 @@ export function createMcpTool(
         if (details.structuredContentOmittedBytes !== undefined) {
           blocks.push({
             type: "text",
-            text: `[The structured content, ${details.structuredContentOmittedBytes} bytes of JSON, is over the ${MCP_RESULT_MAX_BYTES}-byte limit on one result and was left off.]`,
+            text: `[The structured content (${formatBytes(details.structuredContentOmittedBytes)} of JSON) is over the ${formatBytes(MCP_RESULT_MAX_BYTES)} limit on one result and is not kept with it.]`,
           });
         }
         return {

@@ -246,9 +246,10 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
         (reply, messages) => {
           sent.push(messages);
           const shown = JSON.stringify(toolResultsIn(messages)[0]?.content);
-          savedPath = /\[Full output: (.+?) \(read it with offset\/limit\)\]/u.exec(
-            JSON.parse(shown)[1].text as string,
-          )![1]!;
+          savedPath =
+            /\[Full output: (.+?) \(read it with offset\/limit; the output starts at line 3\)\]/u.exec(
+              JSON.parse(shown)[1].text as string,
+            )![1]!;
           callTool(
             "read",
             { path: savedPath, offset: 8_000, limit: 2 },
@@ -289,5 +290,62 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     expect(JSON.stringify(read?.content)).toContain("row 07997 ");
     await handle.close();
     expect(existsSync(savedPath)).toBe(true);
+  });
+
+  it("lets a fresh attachment that carries the conversation read the earlier one's saved output", async () => {
+    const whole = Array.from(
+      { length: 4_096 },
+      (_, index) => `entry ${index} ${"-".repeat(40)}`,
+    ).join("\n");
+    const { spec, observations, sessionDataDir } = attachment(() => ({
+      content: [{ type: "text", text: whole }],
+      isError: false,
+    }));
+    let savedPath = "";
+    const first = createPiAgentRuntime({
+      sessionDataDir,
+      models: scriptedModels([
+        callTool(MCP_TOOL.providerName, { title: "Long" }, "tc-long"),
+        (reply, messages) => {
+          const shown = (toolResultsIn(messages)[0]!.content[1] as { text: string }).text;
+          savedPath = /\[Full output: (.+?) \(/u.exec(shown)![1]!;
+          say("Saved.")(reply, messages);
+        },
+      ]),
+    });
+    const earlier = await first.startSession(spec);
+    await earlier.submitUserMessage("File it.");
+    const recovery = earlier.recovery!;
+    await earlier.close();
+
+    const sent: (readonly Message[])[] = [];
+    const second = createPiAgentRuntime({
+      sessionDataDir,
+      models: scriptedModels([
+        callTool("read", { path: savedPath, offset: 2_000, limit: 1 }, "tc-carried-read"),
+        (reply, messages) => {
+          sent.push(messages);
+          say("Read it.")(reply, messages);
+        },
+      ]),
+    });
+    const later = await second.startSession({
+      ...spec,
+      identity: { ...spec.identity, attachmentId: "attachment-2" },
+      carry: { ...recovery, attachmentId: "attachment-1", workspacePath: spec.workspacePath },
+    });
+    await later.submitUserMessage("Read the middle of that.");
+
+    // Saved by the earlier attachment, outside this one's own directory, and
+    // still allowed by the enforcing gate and marked as untrusted.
+    expect(dirname(savedPath)).not.toBe(toolOutputDirectoryFor(later.recovery!.sessionFilePath));
+    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    const read = toolResultsIn(sent[0]!).find(
+      (message) => message.toolCallId === "tc-carried-read",
+    );
+    expect(read?.isError).toBe(false);
+    expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+    expect(JSON.stringify(read?.content)).toContain("entry 1997 ");
+    await later.close();
   });
 });

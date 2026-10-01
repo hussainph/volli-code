@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   constants,
   existsSync,
   mkdirSync,
@@ -237,6 +238,30 @@ describe("PiSessionOrphanService explicit reclaim", () => {
     expect(existsSync(orphanPath)).toBe(false);
     expect(existsSync(orphanOutput)).toBe(false);
     expect(existsSync(keptOutput)).toBe(true);
+  });
+
+  it("keeps the sidecar when its saved tool output will not go, so a later scan offers it again", async () => {
+    const path = writePiSession("output-stuck");
+    const output = path.replace(/\.jsonl$/u, ".tool-output");
+    mkdirSync(output);
+    writeFileSync(join(output, "tc-1.0a1b2c3d.txt"), "saved");
+    // A directory whose entries cannot be removed.
+    chmodSync(output, 0o500);
+    try {
+      const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
+      const scan = await service.scan();
+
+      const result = await service.reclaim({
+        scanRevision: scan.revision,
+        itemIds: [scan.candidates[0]!.itemId],
+      });
+
+      expect(result.removedCount).toBe(0);
+      expect(result.kept).toHaveLength(1);
+      expect(existsSync(path)).toBe(true);
+    } finally {
+      chmodSync(output, 0o700);
+    }
   });
 
   it("protects a session attached after scan and leaves its file", async () => {

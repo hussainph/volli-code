@@ -395,15 +395,20 @@ reads the same shape.
 
 | Part | What it holds |
 | --- | --- |
-| `content` | What the model reads: Volli's trust notice, then the server's text and images in order. A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. |
-| `structuredContent` | The server's `structuredContent`, unchanged. The model does not see it. The exception is a result with no content blocks at all: the model is then shown the structured content as JSON, since that is all the server sent. |
+| `content` | What the model reads: Volli's trust notice, then the server's text and images in order. A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. When long text is cut, all of the text comes first as one block, followed by the images. |
+| `structuredContent` | The server's `structuredContent`, unchanged. The model does not see it. The exception is a result with no content blocks at all: the model is then shown the structured content as JSON, since that is all the server sent. It can be missing even when the tool declares an output schema: the server sent none, or it was over the limit below. |
 | `isError` | `true` when the server marked the result as an error. The model gets it as an error result, and `structuredContent` and `details` are still kept. |
 | `details` | Notes from Volli about the result: how the text was cut and where it was saved (`output`), or the size of structured content that was dropped (`structuredContentOmittedBytes`). Usually empty. |
 
 A tool whose server publishes an output schema declares it as the tool's
 `outputSchema`. The schema is frozen with the rest of the tool's definition, so a
-Session keeps the schema it was born with. Sessions created before Volli 0.99
-have no output schemas and keep running without them.
+Session keeps the schema it was born with. Sessions created before VC-469 (the
+move to Pi 0.99) have no output schemas and keep running without them.
+
+An image larger than `read` allows (4.5 MiB of base64) is re-encoded to fit, the
+same way `read` handles an image file, or replaced by a one-line placeholder if
+it cannot be. A result stays in the Session's history and is resent with every
+later request, so its images are kept small.
 
 A call that never got an answer from the server (the connection failed, or the
 call was stopped) is a failed call, not an error result, and carries nothing
@@ -416,12 +421,14 @@ A result is never refused for being long. If its text is over
 of the text, with a `…N chars truncated…` marker between them. Pi and Codex use
 the same format. The full text is saved to a file, and the result gives the
 file's path so the model can `read` the middle in parts with `offset` and
-`limit`.
+`limit`. The output starts at line 3 of the file, after Volli's notice. `read`
+returns at most 50 KB of one line, so a result with longer lines (minified JSON,
+say) says so and suggests reading those lines in byte ranges from the shell.
 
 - **Where the files are.** In the Session's own storage, next to the Pi sidecar
   that holds its conversation:
-  `<userData>/pi-sessions/<workspace folder>/<sidecar name>.tool-output/`. Never
-  in `/tmp`. Each file starts with a line saying what it is and that its content
+  `<userData>/pi-sessions/<workspace folder>/<sidecar name without .jsonl>.tool-output/`.
+  Never in `/tmp`. Each file starts with a line saying what it is and that its content
   is untrusted data. Files are readable by your user account only.
 - **How long they are kept.** As long as the sidecar. Cleaning up an orphaned
   sidecar (Settings → Storage → *Pi session logs*) deletes its saved output too.
@@ -431,7 +438,10 @@ file's path so the model can `read` the middle in parts with `offset` and
   a notice that the file is untrusted data, so the warning is not lost when the
   model reads the rest of a result later. A Session whose authority is set to
   `enforce` may read its own saved output, but never write to it, even though
-  the files are outside its workspace.
+  the files are outside its workspace. That includes the output of an earlier
+  attachment whose conversation a new one carries forward. After a relaunch
+  resumes the newer attachment, reading the older attachment's files counts as
+  a read outside the workspace again, which the person can allow.
 - **Limits.** One file holds at most **8 MiB** of text (`MCP_RESULT_MAX_BYTES`).
   If the text is longer, the file holds the first 8 MiB and the result says how
   much of the total that is. One Session attachment saves at most **256 MiB**

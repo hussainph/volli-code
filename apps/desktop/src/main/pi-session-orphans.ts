@@ -139,11 +139,14 @@ export class PiSessionOrphanService {
         if (protectedIds.has(current.sessionId)) {
           throw new Error("The Pi session is now referenced by a Volli attachment");
         }
-        unlinkSync(candidate.path);
         // The long tool results that sidecar's conversation named (VC-469)
-        // live beside it and go with it; nothing else names them. `rmSync`
-        // does not follow a link standing in the directory's place.
+        // live beside it and go with it; nothing else names them. Removed
+        // FIRST: a directory that will not go keeps the sidecar too, so the
+        // item reads as kept and the next scan offers it again, where the
+        // other order would orphan the directory where no scan looks.
+        // `rmSync` does not follow a link standing in the directory's place.
         rmSync(toolOutputDirectoryFor(candidate.path), { recursive: true, force: true });
+        unlinkSync(candidate.path);
         removed.push(publicCandidate(candidate));
       } catch (error) {
         kept.push({ candidate: publicCandidate(candidate), reason: errorMessage(error) });

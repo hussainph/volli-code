@@ -16,6 +16,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   cutMiddle,
   cutResultText,
+  READ_LINE_MAX_BYTES,
   TOOL_OUTPUT_DIRECTORY_MAX_BYTES,
   toolOutputCut,
   toolOutputDirectoryFor,
@@ -50,7 +51,14 @@ describe("cutMiddle", () => {
       removedChars: 11,
       totalBytes: 21,
       totalLines: 2,
+      longestLineBytes: 10,
     });
+  });
+
+  it("counts lines as a reader does: a final newline ends a line, it does not start one", () => {
+    expect(cutMiddle("ab\ncdefgh\n", 4)).toMatchObject({ totalLines: 2, longestLineBytes: 6 });
+    expect(cutMiddle("\n\n\n\n\n\n", 4)).toMatchObject({ totalLines: 6, longestLineBytes: 0 });
+    expect(cutMiddle("x".repeat(9), 4)).toMatchObject({ totalLines: 1, longestLineBytes: 9 });
   });
 
   it("cuts on character boundaries, never through a multi-byte character", () => {
@@ -159,6 +167,39 @@ describe("ToolOutputStore", () => {
     expect(output.holds(undefined)).toBe(false);
   });
 
+  it("knows a carried attachment's files, and marks any saved output under the data directory", async () => {
+    const { root, workspace } = scratch();
+    const data = join(root, "sessions");
+    const own = join(data, "--ws--", "now.tool-output");
+    const carried = join(data, "--ws--", "earlier.tool-output");
+    const other = join(data, "--elsewhere--", "other.tool-output");
+    for (const directory of [carried, other]) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "x.txt"), "x");
+    }
+    writeFileSync(join(data, "--ws--", "not-output.txt"), "x");
+    const output = new ToolOutputStore({
+      directory: own,
+      carriedDirectories: [carried],
+      dataDirectory: data,
+      workspacePath: workspace,
+    });
+
+    expect(output.readableDirectories).toEqual([own, carried]);
+    expect(output.holds(join(carried, "x.txt"))).toBe(true);
+    // Marked, though not this Session's to read: any attachment's saved output.
+    expect(output.holds(join(other, "x.txt"))).toBe(true);
+    expect(output.holds(join(data, "--ws--", "not-output.txt"))).toBe(false);
+    expect(output.holds(join(workspace, "x.txt"))).toBe(false);
+    // A data directory that is not there marks nothing beyond the store's own.
+    const bare = new ToolOutputStore({
+      directory: own,
+      dataDirectory: join(root, "missing"),
+      workspacePath: workspace,
+    });
+    expect(bare.holds(join(other, "x.txt"))).toBe(false);
+  });
+
   it("holds nothing once a symlink stands where its directory was", async () => {
     const { root, workspace } = scratch();
     const elsewhere = join(root, "elsewhere");
@@ -193,7 +234,7 @@ describe("cutResultText and toolOutputCut", () => {
   it("names the file holding the whole text", () => {
     const save = { saved: true as const, path: "/p/x.txt", savedBytes: 30, totalBytes: 30 };
     expect(cutResultText(cut, save, 100)).toBe(
-      `Warning: truncated output (original token count: 8)\nTotal output lines: 1\n\n${cut.text}\n\n[Full output: /p/x.txt (read it with offset/limit)]`,
+      `Warning: truncated output (original token count: 8)\nTotal output lines: 1\n\n${cut.text}\n\n[Full output: /p/x.txt (read it with offset/limit; the output starts at line 3)]`,
     );
     expect(toolOutputCut(cut, save)).toEqual({
       totalBytes: 30,
@@ -212,8 +253,19 @@ describe("cutResultText and toolOutputCut", () => {
       totalBytes: 3 * 1_048_576,
     };
     expect(cutResultText(cut, capped, 2_048)).toContain(
-      "[The first 2.0 KiB of 3.0 MiB are saved to /p/x.txt (read it with offset/limit); the rest is past the 2.0 KiB limit on one result.]",
+      "[The first 2.0 KiB of 3.0 MiB are saved to /p/x.txt (read it with offset/limit; the output starts at line 3); the rest is past the 2.0 KiB limit on one result.]",
     );
+  });
+
+  it("points a line longer than read returns at the shell, when there is a file to read", () => {
+    const oneLine = cutMiddle("{".repeat(READ_LINE_MAX_BYTES + 1), 10)!;
+    const save = { saved: true as const, path: "/p/x.txt", savedBytes: 1, totalBytes: 1 };
+    expect(cutResultText(oneLine, save, MCP_RESULT_MAX_BYTES)).toContain(
+      `\n[Some lines are longer than read returns (50.0 KiB). Read those in byte ranges from the shell, for example: tail -c +<byte> <file> | head -c ${READ_LINE_MAX_BYTES}]`,
+    );
+    expect(cutResultText(cut, save, MCP_RESULT_MAX_BYTES)).not.toContain("Some lines");
+    const failed = { saved: false as const, reason: "no", totalBytes: 1 };
+    expect(cutResultText(oneLine, failed, MCP_RESULT_MAX_BYTES)).not.toContain("Some lines");
   });
 
   it("says why nothing was saved", () => {

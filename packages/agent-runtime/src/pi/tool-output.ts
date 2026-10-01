@@ -33,7 +33,7 @@
 
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { containsPath, errorMessage, MCP_RESULT_MAX_BYTES } from "@volli/shared";
 import { normalizeToolCall, resolveReadableRoot } from "../authority/normalize";
 
@@ -66,7 +66,15 @@ export interface MiddleCut {
   totalBytes: number;
   /** Lines in the whole text. */
   totalLines: number;
+  /** UTF-8 bytes of its longest line. */
+  longestLineBytes: number;
 }
+
+/**
+ * The longest line Pi's `read` returns: past it, `read` refuses the line and
+ * points at the shell. Pi's `DEFAULT_MAX_BYTES`, restated.
+ */
+export const READ_LINE_MAX_BYTES = 50 * 1_024;
 
 function isContinuationByte(byte: number | undefined): boolean {
   return byte !== undefined && (byte & 0xc0) === 0x80;
@@ -87,9 +95,15 @@ export function cutMiddle(text: string, maxBytes: number): MiddleCut | null {
   for (let index = headEnd; index < tailStart; index += 1) {
     if (!isContinuationByte(bytes[index])) removedChars += 1;
   }
-  let totalLines = 1;
-  for (let index = 0; index < bytes.length; index += 1) {
-    if (bytes[index] === 0x0a) totalLines += 1;
+  // A final newline ends the last line rather than starting another.
+  let totalLines = bytes[bytes.length - 1] === 0x0a ? 0 : 1;
+  let longestLineBytes = 0;
+  let lineStart = 0;
+  for (let index = 0; index <= bytes.length; index += 1) {
+    if (index < bytes.length && bytes[index] !== 0x0a) continue;
+    longestLineBytes = Math.max(longestLineBytes, index - lineStart);
+    lineStart = index + 1;
+    if (index < bytes.length) totalLines += 1;
   }
   const head = bytes.subarray(0, headEnd).toString("utf8");
   const tail = bytes.subarray(tailStart).toString("utf8");
@@ -98,6 +112,7 @@ export function cutMiddle(text: string, maxBytes: number): MiddleCut | null {
     removedChars,
     totalBytes: bytes.length,
     totalLines,
+    longestLineBytes,
   };
 }
 
@@ -123,6 +138,17 @@ export type ToolOutputSave =
 export interface ToolOutputStoreOptions {
   /** The attachment's own directory, from {@link toolOutputDirectoryFor}. */
   directory: string;
+  /**
+   * Directories of earlier attachments whose conversation this one carries
+   * (VC-457): their results name files there, so the Session may read them.
+   */
+  carriedDirectories?: readonly string[];
+  /**
+   * The runtime's data directory. A read of any saved output under it is
+   * marked untrusted, whichever attachment saved it: marking too much costs a
+   * sentence, marking too little drops the warning.
+   */
+  dataDirectory?: string;
   /** The Session workspace, which a relative `read` path resolves against. */
   workspacePath: string;
   /** Most text bytes in one file. */
@@ -131,7 +157,7 @@ export interface ToolOutputStoreOptions {
   directoryMaxBytes?: number;
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
@@ -155,6 +181,9 @@ function fileSegment(callId: string): string {
  */
 export class ToolOutputStore {
   readonly directory: string;
+  /** Where this Session may read saved output: its own directory, then any it carries. */
+  readonly readableDirectories: readonly string[];
+  readonly #dataDirectory: string | undefined;
   readonly #workspacePath: string;
   readonly #fileMaxBytes: number;
   readonly #directoryMaxBytes: number;
@@ -163,6 +192,8 @@ export class ToolOutputStore {
 
   constructor(options: ToolOutputStoreOptions) {
     this.directory = options.directory;
+    this.readableDirectories = [options.directory, ...(options.carriedDirectories ?? [])];
+    this.#dataDirectory = options.dataDirectory;
     this.#workspacePath = options.workspacePath;
     this.#fileMaxBytes = options.fileMaxBytes ?? MCP_RESULT_MAX_BYTES;
     this.#directoryMaxBytes = options.directoryMaxBytes ?? TOOL_OUTPUT_DIRECTORY_MAX_BYTES;
@@ -223,38 +254,58 @@ export class ToolOutputStore {
   }
 
   /**
-   * Whether a `read` tool's `path` argument opens a file this store saved.
+   * Whether a `read` tool's `path` argument opens saved tool output: a file in
+   * one of {@link readableDirectories}, or in any attachment's `.tool-output`
+   * directory under the data directory.
    *
    * Resolved the way the read tool and the authority gate resolve it — Pi's
    * own path normalization, the workspace as the base, symlinks followed — and
-   * compared against the directory only while that is a real directory, so a
+   * compared against a directory only while that is a real directory, so a
    * link planted in its place marks nothing.
    */
   holds(path: unknown): boolean {
-    const root = resolveReadableRoot(this.directory);
-    if (root === undefined) return false;
+    let read: string;
     try {
-      const call = normalizeToolCall({
+      read = normalizeToolCall({
         tool: "read",
         args: { path },
         workspacePath: this.#workspacePath,
-      });
-      return call.reads.some((read) => containsPath(root, read));
+      }).reads[0]!;
     } catch {
       return false;
     }
+    for (const directory of this.readableDirectories) {
+      const root = resolveReadableRoot(directory);
+      if (root !== undefined && containsPath(root, read)) return true;
+    }
+    const data =
+      this.#dataDirectory === undefined ? undefined : resolveReadableRoot(this.#dataDirectory);
+    if (data === undefined) return false;
+    const within = relative(data, read);
+    if (within.startsWith("..") || isAbsolute(within)) return false;
+    // `<data>/<workspace folder>/<sidecar>.tool-output/<file>`.
+    const parts = within.split(sep);
+    return parts.length >= 3 && parts[1]!.endsWith(TOOL_OUTPUT_DIRECTORY_SUFFIX);
   }
 }
 
 /** How the bound text and the file it points at read to the model. */
 export function cutResultText(cut: MiddleCut, save: ToolOutputSave, maxBytes: number): string {
   const tokens = Math.ceil(cut.totalBytes / 4);
+  // The file opens with Volli's two-line header, so the output starts at line 3.
+  const how = "read it with offset/limit; the output starts at line 3";
   const where = !save.saved
     ? `[The full output could not be saved: ${save.reason}.]`
     : save.savedBytes < save.totalBytes
-      ? `[The first ${formatBytes(save.savedBytes)} of ${formatBytes(save.totalBytes)} are saved to ${save.path} (read it with offset/limit); the rest is past the ${formatBytes(maxBytes)} limit on one result.]`
-      : `[Full output: ${save.path} (read it with offset/limit)]`;
-  return `Warning: truncated output (original token count: ${tokens})\nTotal output lines: ${cut.totalLines}\n\n${cut.text}\n\n${where}`;
+      ? `[The first ${formatBytes(save.savedBytes)} of ${formatBytes(save.totalBytes)} are saved to ${save.path} (${how}); the rest is past the ${formatBytes(maxBytes)} limit on one result.]`
+      : `[Full output: ${save.path} (${how})]`;
+  // `read` refuses a line past its own bound, and a long result is often one
+  // line (minified JSON). Say so here rather than let the model find out.
+  const longLines =
+    save.saved && cut.longestLineBytes > READ_LINE_MAX_BYTES
+      ? `\n[Some lines are longer than read returns (${formatBytes(READ_LINE_MAX_BYTES)}). Read those in byte ranges from the shell, for example: tail -c +<byte> <file> | head -c ${READ_LINE_MAX_BYTES}]`
+      : "";
+  return `Warning: truncated output (original token count: ${tokens})\nTotal output lines: ${cut.totalLines}\n\n${cut.text}\n\n${where}${longLines}`;
 }
 
 /** What a result whose text was cut records about the cut, beside its content. */

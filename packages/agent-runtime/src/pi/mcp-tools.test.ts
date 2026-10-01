@@ -10,6 +10,8 @@ import {
   type RuntimeMcpPort,
 } from "@volli/shared";
 
+import sharp from "sharp";
+import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
 import { ToolOutputStore } from "./tool-output";
 import { createSessionTools, MCP_UNTRUSTED_DATA_WARNING, SAVED_TOOL_OUTPUT_WARNING } from "./tools";
 
@@ -196,7 +198,10 @@ describe("MCP Pi tool wrapper", () => {
     expect(shown).toContain("line 16383 ");
     const path = result.details.output?.fullOutputPath;
     expect(path).toEqual(expect.stringContaining(join("session.tool-output", "call_1_MB.")));
-    expect(shown).toContain(`[Full output: ${path} (read it with offset/limit)]`);
+    expect(shown).toContain(
+      `[Full output: ${path} (read it with offset/limit; the output starts at line 3)]`,
+    );
+    expect(shown).not.toContain("Some lines");
     expect(result.details).toEqual({
       output: {
         totalBytes: Buffer.byteLength(whole),
@@ -256,8 +261,42 @@ describe("MCP Pi tool wrapper", () => {
       { type: "text", text: "ok" },
       {
         type: "text",
-        text: `[The structured content, ${bytes} bytes of JSON, is over the ${MCP_RESULT_MAX_BYTES}-byte limit on one result and was left off.]`,
+        text: "[The structured content (8.0 MiB of JSON) is over the 8.0 MiB limit on one result and is not kept with it.]",
       },
+    ]);
+  });
+
+  it("passes a small image untouched and fits one over read's bound the way read does", async () => {
+    const big = await sharp({
+      create: { width: 3_000, height: 3_000, channels: 3, background: "#3a7" },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    expect(big.toString("base64").length).toBeGreaterThan(MAX_READ_IMAGE_BASE64_BYTES);
+    const registered = tool({
+      call: async () => ({
+        content: [
+          { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+          { type: "image", data: big.toString("base64"), mimeType: "image/png" },
+          {
+            type: "image",
+            data: "x".repeat(MAX_READ_IMAGE_BASE64_BYTES + 4),
+            mimeType: "image/png",
+          },
+        ],
+        isError: false,
+      }),
+    });
+    const result = await registered.execute("call-images", {}, new AbortController().signal);
+
+    expect(result.content[1]).toEqual({ type: "image", data: "aGVsbG8=", mimeType: "image/png" });
+    const fitted = result.content[2] as { type: string; data: string; mimeType: string };
+    expect(fitted).toMatchObject({ type: "image", mimeType: "image/jpeg" });
+    expect(fitted.data.length).toBeLessThanOrEqual(MAX_READ_IMAGE_BASE64_BYTES);
+    expect(result.content.slice(3)).toEqual([
+      { type: "text", text: "[Image recompressed as JPEG to fit provider limits.]" },
+      { type: "text", text: expect.stringMatching(/^\[Image: original 3000x3000, displayed at /u) },
+      { type: "text", text: "[Image omitted: could not make a provider-safe copy.]" },
     ]);
   });
 

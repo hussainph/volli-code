@@ -2052,9 +2052,13 @@ async function attachSession(
     //
     // Long tool results are cut for the model and saved whole beside this
     // attachment's sidecar, so they live exactly as long as the conversation
-    // that names them (VC-469). The gate below lets the Session read them.
+    // that names them (VC-469). The gate below lets the Session read them, and
+    // the ones a carried conversation names: those were saved beside the
+    // earlier attachment's sidecar, which the carry has just proved is ours.
     const toolOutput = new ToolOutputStore({
       directory: toolOutputDirectoryFor(sidecarMetadata.path),
+      carriedDirectories: carried ? [toolOutputDirectoryFor(spec.carry!.sessionFilePath)] : [],
+      dataDirectory: host.sessionDataDir,
       workspacePath: spec.workspacePath,
     });
     const { tools, toolExecution } = applyToolDispatch(
@@ -2288,7 +2292,7 @@ async function attachSession(
           args,
           authority,
           workspacePath: spec.workspacePath,
-          readableRoots: [toolOutput.directory],
+          readableRoots: toolOutput.readableDirectories,
         });
         // Pi's own per-call signal is passed on rather than dropped: a question
         // this parks on has to lose to a cancelled run, and Pi re-reads that
