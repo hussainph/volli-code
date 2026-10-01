@@ -20,6 +20,7 @@ export function seed() {
 export const api = {
   ...appApi,
   browser: { list: async () => ({ ok: true, tabs: [] }) },
+  shells: { list: async () => ({ ok: true, shells: [] }) },
   protection: {
     approvals: async () => ({ ok: true, approvals: [...rows], passedRequestCount: 2 }),
     revoke: async (id: string) => ({
