@@ -56,6 +56,7 @@ import { Segmented } from "@renderer/components/ui/segmented";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Health } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
 import {
@@ -68,6 +69,7 @@ import {
 import { McpToolPicker } from "./mcp-tool-picker";
 import {
   changedTools,
+  endpointKey,
   endpointLabel,
   enabledToolNames,
   isSelectable,
@@ -157,6 +159,18 @@ export function provenanceLine(provenance: McpServerProvenance): string | null {
   return parts.length === 0 ? null : `${parts.join(" · ")} — recorded, not verified`;
 }
 
+/**
+ * The field a missing secret is typed into. Main reports a missing slot by its
+ * label (`header Authorization`, `env API_KEY`, `OAuth client secret`); the
+ * credential editor names the field `Authorization value`, `API_KEY value`,
+ * `Client secret value` — matched without case.
+ */
+function missingField(label: string): string {
+  return label === "OAuth client secret"
+    ? "Client secret value"
+    : `${label.slice(label.indexOf(" ") + 1)} value`;
+}
+
 /** The credentials a configuration names, as `Headers: A, B` — names only. */
 function credentialNames(transport: McpTransportConfig): string | null {
   const entries = transport.type === "stdio" ? transport.env : transport.headers;
@@ -191,9 +205,9 @@ export function McpServerDialog({
   onClose: () => void;
   onSaved: (server: McpServerRecord) => void;
   /** Sign a SAVED server in, out, or stop waiting — the pane owns those, for its rows too. */
-  onSignIn: (serverId: string) => Promise<void>;
-  onCancelSignIn: (serverId: string) => Promise<void>;
-  onSignOut: (serverId: string) => Promise<void>;
+  onSignIn: (serverId: string) => Promise<string | null>;
+  onCancelSignIn: (serverId: string) => Promise<string | null>;
+  onSignOut: (serverId: string) => Promise<string | null>;
   onAccessChanged: () => Promise<void>;
 }) {
   const saved = target.kind === "edit" ? target.server : null;
@@ -214,51 +228,67 @@ export function McpServerDialog({
     [saved],
   );
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(savedSelection);
+  /**
+   * The connection — name, endpoint, credentials — differs from what is saved.
+   * Cleared only by a save that lands: reading the tool list again does not
+   * make a changed connection a saved one.
+   */
+  const [connectionChanged, setConnectionChanged] = React.useState(false);
   /** The connection changed since the tool list beside it was read. */
   const [unread, setUnread] = React.useState(false);
   /** A tool list has been read for this connection (always, for a saved server). */
   const [discovered, setDiscovered] = React.useState(saved !== null);
   /** This dialog itself reached the server: only then does it say "Connected". */
   const [connectedHere, setConnectedHere] = React.useState(false);
+  /** The endpoint the tool list beside it was read from (`endpointKey`). */
+  const [catalogEndpoint, setCatalogEndpoint] = React.useState(() =>
+    saved === null ? null : endpointKey(saved.transport),
+  );
   const [busy, setBusy] = React.useState<null | "connect" | "save" | "sign-in">(null);
   const [error, setError] = React.useState<string | null>(null);
   const [blocked, setBlocked] = React.useState<McpConnectionBlock | null>(null);
   /** The draft id a sign-in is waiting on the browser for. */
   const [draftSigningIn, setDraftSigningIn] = React.useState<string | null>(null);
+  /** Bumped to put the caret in the tool filter (on open, and after a connect folds the fields). */
+  const [filterFocus, setFilterFocus] = React.useState(
+    target.kind === "edit" && target.section === "tools" ? 1 : 0,
+  );
 
   const transport = draft.transport;
   const suggested = suggestedServerName(transport);
+  const missing = access?.missingSecrets ?? [];
 
-  // Opened to fix a missing credential: the caret goes straight to the first
-  // value that is missing, which is the one thing the person came to type.
-  // Read once, on open: a later change to what is missing is not a reason to
-  // move the caret.
-  const [firstMissing] = React.useState(() =>
-    target.kind === "edit" && target.section === "connection"
-      ? access?.missingSecrets[0]
-      : undefined,
+  /**
+   * Where the caret goes when the connection fields appear: the endpoint for a
+   * new server or an Edit, or — opened to fix a missing credential — the first
+   * missing value, which is the one thing the person came to type.
+   */
+  const [fieldFocus, setFieldFocus] = React.useState<string | null>(() =>
+    target.kind === "add"
+      ? "endpoint"
+      : target.section === "connection" && missing.length > 0
+        ? missingField(missing[0]!)
+        : null,
   );
-  // Main reports a missing slot as its label, `header Authorization`; the
-  // editor names that slot's field `Authorization value`.
-  const focusField =
-    firstMissing === undefined
-      ? null
-      : `${firstMissing.slice(firstMissing.indexOf(" ") + 1)} value`;
   const toolChanges = changedTools(savedSelection, selected);
-  const dirty = saved === null || unread || toolChanges > 0;
+  const dirty = saved === null || connectionChanged || toolChanges > 0;
   const ready =
     (transport.type === "stdio" ? transport.command.trim() : transport.url.trim()).length > 0;
 
-  function changeConnection(update: (current: McpServerDraft) => McpServerDraft): void {
-    setDraft(update);
+  function changed(): void {
+    setConnectionChanged(true);
     setUnread(true);
     setBlocked(null);
   }
 
+  function changeConnection(update: (current: McpServerDraft) => McpServerDraft): void {
+    setDraft(update);
+    changed();
+  }
+
   function changeCredentials(next: EditorCredentials): void {
     setCredentials(next);
-    setUnread(true);
-    setBlocked(null);
+    changed();
   }
 
   function setTransport(type: McpTransportConfig["type"]): void {
@@ -270,6 +300,11 @@ export function McpServerDialog({
     setCatalog([]);
     setSelected(new Set());
     setDiscovered(false);
+  }
+
+  function editConnection(focus: string): void {
+    setFieldFocus(focus);
+    setEditing(true);
   }
 
   /** The draft as main should see it: a name, an id, its credentials, and typed secrets. */
@@ -287,11 +322,15 @@ export function McpServerDialog({
   }
 
   /**
-   * Read the tool list for the connection as it stands. Returns the catalog,
-   * or `null` when the server refused or could not be reached — with what it
-   * is waiting on, if a person can fix it.
+   * Read the tool list for the connection as it stands. Returns the catalog
+   * and the choice that carries over to it, or `null` when the server refused
+   * or could not be reached — with what it is waiting on, if a person can fix
+   * it.
    */
-  async function connect(): Promise<readonly McpCatalogTool[] | null> {
+  async function connect(): Promise<{
+    catalog: readonly McpCatalogTool[];
+    selected: Set<string>;
+  } | null> {
     setBusy("connect");
     const { server, secrets } = prepared();
     // The id and name are kept either way: a sign-in for this draft is filed
@@ -310,24 +349,32 @@ export function McpServerDialog({
       setBlocked(result.blocked ?? null);
       return null;
     }
+    // A tool still offered on the SAME endpoint keeps its choice. A different
+    // endpoint starts every tool off: the same name on another server is
+    // another tool, and nobody has seen this list yet.
+    const endpoint = endpointKey(server.transport);
+    const offered = new Set(result.catalog.filter(isSelectable).map((tool) => tool.name));
+    const carried = new Set(
+      endpoint === catalogEndpoint ? [...selected].filter((name) => offered.has(name)) : [],
+    );
     setError(null);
     setBlocked(null);
     setCatalog(result.catalog);
-    // A tool still offered keeps its choice; a new one starts off.
-    const offered = new Set(result.catalog.filter(isSelectable).map((tool) => tool.name));
-    setSelected((current) => new Set([...current].filter((name) => offered.has(name))));
+    setSelected(carried);
+    setCatalogEndpoint(endpoint);
     setDiscovered(true);
     setConnectedHere(true);
     setUnread(false);
-    // What answered is now the connection: its fields fold into the summary
-    // and the tools get the room.
+    // What answered is now the connection: its fields fold into the summary,
+    // the tools get the room, and the caret goes to their filter.
     setEditing(false);
-    return result.catalog;
+    setFilterFocus((current) => current + 1);
+    return { catalog: result.catalog, selected: carried };
   }
 
   async function save(): Promise<void> {
     setError(null);
-    if (saved !== null && !unread) {
+    if (saved !== null && !connectionChanged) {
       // Tools alone: no connection to make, nothing to read again.
       setBusy("save");
       const result = await window.api.mcp.setTools({
@@ -343,19 +390,18 @@ export function McpServerDialog({
       onSaved(result.server);
       return;
     }
-    let tools = catalog;
+    let chosen: ReadonlySet<string> = selected;
     if (unread || !discovered) {
       const read = await connect();
       if (read === null) return;
-      tools = read;
+      chosen = read.selected;
     }
-    const offered = new Set(tools.filter(isSelectable).map((tool) => tool.name));
     setBusy("save");
     const { server, secrets } = prepared();
     const result = await window.api.mcp.save({
       projectId: project.id,
       server,
-      enabledTools: [...selected].filter((name) => offered.has(name)),
+      enabledTools: [...chosen],
       ...(Object.keys(secrets).length === 0 ? {} : { secrets }),
     });
     setBusy(null);
@@ -390,29 +436,36 @@ export function McpServerDialog({
     }
     setError(null);
     setBlocked(null);
-    // Blocked on the sign-in, so straight on to the tools it was hiding.
+    // Blocked on the sign-in, so straight on to the tools it was hiding. The
+    // fields were locked while the browser was open, so this is still the
+    // draft that signed in.
     await connect();
   }
 
-  async function cancelDraftSignIn(): Promise<void> {
-    if (draftSigningIn === null) return;
+  async function cancelDraftSignIn(): Promise<string | null> {
+    if (draftSigningIn === null) return null;
     const result = await window.api.mcp.cancelSignIn({
       projectId: project.id,
       serverId: draftSigningIn,
     });
-    if (!result.ok) setError(result.error);
+    return result.ok ? null : result.error;
   }
 
   /**
    * Close without saving. A draft that was never saved may have been signed
-   * in to; whatever that stored is forgotten with it.
+   * in to; whatever that stored is forgotten with it. Refused while a save is
+   * in flight: forgetting a draft's sign-in under a save that then lands
+   * would add a server without the sign-in it was saved with.
    */
   async function close(): Promise<void> {
-    if (draftSigningIn !== null) await cancelDraftSignIn();
+    if (busy === "save") return;
+    const cancelled = await cancelDraftSignIn();
     onClose();
+    // The dialog is gone by now, so a failure is said where it stays visible.
+    if (cancelled !== null) toastError(cancelled);
     if (saved !== null || draft.id.length === 0) return;
     const result = await window.api.mcp.discardDraft({ projectId: project.id, serverId: draft.id });
-    if (!result.ok) setError(result.error);
+    if (!result.ok) toastError(result.error);
   }
 
   const health = saved === null ? null : serverHealth(saved, access, signingIn === saved.id);
@@ -421,8 +474,16 @@ export function McpServerDialog({
   const showTools = catalog.length > 0 || discovered;
   // A new server is added only once its tools have been read and chosen; a
   // saved one whose connection changed is read again as part of saving.
-  const saveLabel = saved === null ? "Add server" : unread ? "Connect and save" : "Save";
+  const saveLabel =
+    saved === null ? "Add server" : connectionChanged && unread ? "Connect and save" : "Save";
   const canSave = busy === null && ready && (saved === null ? discovered && !unread : dirty);
+
+  /** A saved server's sign-in act, run by the pane, with its failure said here. */
+  async function savedAct(act: (serverId: string) => Promise<string | null>): Promise<void> {
+    if (saved === null) return;
+    const failed = await act(saved.id);
+    setError(failed);
+  }
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : void close())}>
@@ -436,21 +497,28 @@ export function McpServerDialog({
         onInteractOutside={(event) => {
           if (dirty) event.preventDefault();
         }}
+        // Escape clears a typed filter first (the picker does that), never
+        // drops unsaved changes, and never closes under a save in flight.
+        // Cancel is the way to leave with changes unsaved.
+        onEscapeKeyDown={(event) => {
+          const from = event.target;
+          const filtering =
+            from instanceof HTMLInputElement && from.type === "search" && from.value !== "";
+          if (filtering || dirty || busy === "save") event.preventDefault();
+        }}
         // Focus is placed by the fields and the picker themselves (the URL
         // for a new server, the filter for a saved one's tools), not by Radix
         // on the first button it finds.
         onOpenAutoFocus={(event) => {
-          if (target.kind === "add" || target.section === "tools" || firstMissing !== undefined) {
-            event.preventDefault();
-          }
+          if (fieldFocus !== null || filterFocus > 0) event.preventDefault();
         }}
         // A new server has no status line until it connects, and nothing else
         // to describe it.
         {...(saved === null && !connectedHere ? { "aria-describedby": undefined } : {})}
       >
         <DialogHeader className="shrink-0 gap-1 border-b border-border/50 px-4 pt-4 pb-4">
-          <div className="flex items-center gap-2 pr-8">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/50 text-muted-foreground [&_svg]:size-4">
+          <div className="flex items-center gap-2 pr-6">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground [&_svg]:size-4">
               <TransportIcon type={saved?.transport.type ?? transport.type} />
             </span>
             <DialogTitle className="truncate">{title}</DialogTitle>
@@ -489,7 +557,7 @@ export function McpServerDialog({
                   variant="ghost"
                   aria-label={`Edit ${draft.name || suggested} connection`}
                   disabled={busy !== null}
-                  onClick={() => setEditing(true)}
+                  onClick={() => editConnection("endpoint")}
                 >
                   <PencilSimpleIcon />
                   Edit
@@ -504,10 +572,10 @@ export function McpServerDialog({
                 access={saved !== null && !unread ? access : undefined}
                 waiting={saved !== null && signingIn === saved.id}
                 busy={busy !== null || (signingIn !== null && signingIn !== saved?.id)}
-                onSignIn={() => saved !== null && void onSignIn(saved.id)}
-                onCancel={() => saved !== null && void onCancelSignIn(saved.id)}
-                onSignOut={() => saved !== null && void onSignOut(saved.id)}
-                onFix={() => setEditing(true)}
+                onSignIn={() => void savedAct(onSignIn)}
+                onCancel={() => void savedAct(onCancelSignIn)}
+                onSignOut={() => void savedAct(onSignOut)}
+                onFix={() => editConnection(missingField(missing[0] ?? ""))}
               />
             ) : (
               <ConnectionFields
@@ -515,11 +583,12 @@ export function McpServerDialog({
                   if (busy === null && ready) void connect();
                 }}
                 draft={draft}
-                focusField={focusField}
+                focusField={fieldFocus}
+                locked={busy !== null}
                 suggested={suggested}
                 credentials={credentials}
                 stored={saved === null ? new Set<string>() : storedSlots(saved, access)}
-                autoFocusName={target.kind === "add"}
+
                 onName={(name) => changeConnection((current) => ({ ...current, name }))}
                 onTransport={setTransport}
                 onTransportField={(next) =>
@@ -552,7 +621,7 @@ export function McpServerDialog({
                 tools={catalog}
                 selected={selected}
                 disabled={busy !== null}
-                focusFilter={target.kind === "add" || target.section === "tools"}
+                focusFilter={filterFocus}
                 onChange={setSelected}
               />
             </section>
@@ -562,7 +631,9 @@ export function McpServerDialog({
         <DialogFooter className="shrink-0 items-center border-t border-border/50 px-4 py-4 sm:justify-between">
           <div className="min-w-0 flex-1">
             {error === null ? (
-              <span className="text-ui text-muted-foreground" aria-live="polite">
+              // Not a live region: the picker's own count already announces
+              // each click, and two at once is noise.
+              <span className="text-ui text-muted-foreground">
                 {saved !== null && toolChanges > 0
                   ? `${toolChanges} tool ${toolChanges === 1 ? "change" : "changes"} not saved`
                   : null}
@@ -574,7 +645,12 @@ export function McpServerDialog({
             )}
           </div>
           <div className="flex shrink-0 gap-2">
-            <Button size="sm" variant="ghost" onClick={() => void close()}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy === "save"}
+              onClick={() => void close()}
+            >
               Cancel
             </Button>
             <Button size="sm" disabled={!canSave} onClick={() => void save()}>
@@ -672,10 +748,10 @@ function ConnectionFields({
   onSubmit,
   draft,
   focusField,
+  locked,
   suggested,
   credentials,
   stored,
-  autoFocusName,
   onName,
   onTransport,
   onTransportField,
@@ -684,26 +760,39 @@ function ConnectionFields({
   /** Enter in a field connects, as the button beside it would. */
   onSubmit: () => void;
   draft: McpServerDraft;
-  /** The accessible name of a field to put the caret in when these fields appear. */
+  /**
+   * Where the caret goes when these fields appear: `"endpoint"` for the URL
+   * or executable, or a field's accessible name (matched without case).
+   */
   focusField: string | null;
+  /**
+   * Nothing here can change while a connection, a sign-in or a save is in
+   * flight: the answer that comes back must be for the draft that was sent.
+   */
+  locked: boolean;
   suggested: string;
   credentials: EditorCredentials;
   stored: ReadonlySet<string>;
-  autoFocusName: boolean;
+
   onName: (name: string) => void;
   onTransport: (type: McpTransportConfig["type"]) => void;
   onTransportField: (transport: McpTransportConfig) => void;
   onCredentials: (next: EditorCredentials) => void;
 }) {
   const transport = draft.transport;
-  const root = React.useRef<HTMLDivElement>(null);
+  const root = React.useRef<HTMLFieldSetElement>(null);
   // Here rather than in the dialog: these fields render inside the dialog's
   // portal, which does not exist yet when the dialog's own effects run.
   React.useEffect(() => {
     if (focusField === null) return;
-    root.current
-      ?.querySelector<HTMLInputElement>(`input[aria-label="${CSS.escape(focusField)}"]`)
-      ?.focus();
+    const fields = [...(root.current?.querySelectorAll<HTMLInputElement>("input") ?? [])];
+    const field =
+      focusField === "endpoint"
+        ? fields.find((input) => input.id === "mcp-url" || input.id === "mcp-command")
+        : fields.find(
+            (input) => input.getAttribute("aria-label")?.toLowerCase() === focusField.toLowerCase(),
+          );
+    field?.focus();
   }, [focusField]);
   const name = (
     <div className="grid gap-1 sm:col-span-2">
@@ -721,10 +810,12 @@ function ConnectionFields({
   );
   return (
     // Enter in a one-line field connects. Not a <form>: every Button here is a
-    // plain <button>, which inside a form would submit it on a click.
-    <div
+    // plain <button>, which inside a form would submit it on a click. A
+    // fieldset, so `locked` disables every control in it at once.
+    <fieldset
       ref={root}
-      className="grid gap-4 sm:grid-cols-2"
+      disabled={locked}
+      className="grid min-w-0 gap-4 sm:grid-cols-2"
       onKeyDown={(event) => {
         if (
           event.key === "Enter" &&
@@ -754,7 +845,6 @@ function ConnectionFields({
             <Input
               id="mcp-command"
               className="font-mono"
-              autoFocus={autoFocusName}
               value={transport.command}
               placeholder="npx"
               onChange={(event) => onTransportField({ ...transport, command: event.target.value })}
@@ -762,11 +852,12 @@ function ConnectionFields({
           </div>
           <div className="grid gap-1">
             <label className="text-ui" htmlFor="mcp-args">
-              Arguments (one per line)
+              Arguments
             </label>
             <Textarea
               id="mcp-args"
               className="font-mono"
+              placeholder="One per line"
               value={transport.args.join("\n")}
               onChange={(event) =>
                 onTransportField({ ...transport, args: event.target.value.split("\n") })
@@ -783,7 +874,6 @@ function ConnectionFields({
             id="mcp-url"
             type="url"
             className="font-mono"
-            autoFocus={autoFocusName}
             value={transport.url}
             placeholder="https://example.com/mcp"
             onChange={(event) => onTransportField({ ...transport, url: event.target.value })}
@@ -798,7 +888,7 @@ function ConnectionFields({
         stored={stored}
         onChange={onCredentials}
       />
-    </div>
+    </fieldset>
   );
 }
 

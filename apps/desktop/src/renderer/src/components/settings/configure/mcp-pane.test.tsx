@@ -404,7 +404,6 @@ describe("opening a server", () => {
     await click(menuItem("Edit connection"));
     expect((document.body.querySelector("#mcp-command") as HTMLInputElement).value).toBe("node");
     await setValue("#mcp-server-name", "Edited fixture");
-    expect(button("Connect and save", dialog())).toBeDefined();
     await click(button("Connect and save", dialog()));
 
     expect(test).toHaveBeenCalledWith({
@@ -419,6 +418,149 @@ describe("opening a server", () => {
       }),
     );
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("saves a changed connection even after Connect has read it, never as a tools-only write", async () => {
+    const test = vi.fn(async () => ({ ok: true as const, catalog }));
+    const setTools = vi.fn();
+    const save = vi.fn(async (input: { server: McpServerRecord }) => ({
+      ok: true as const,
+      server: remote({ ...input.server }),
+    }));
+    await render({
+      list: listing(
+        [
+          remote({
+            transport: {
+              type: "streamable-http",
+              url: "https://api.example.com/mcp",
+              headers: [{ name: "Authorization", source: { kind: "secret" } }],
+            },
+          }),
+        ],
+        {
+          access: {
+            "remote-1": { signIn: "not-applicable", missingSecrets: ["header Authorization"] },
+          },
+        },
+      ),
+      test,
+      setTools,
+      save,
+    });
+
+    await click(button("Add credential"));
+    await setValue('input[aria-label="Authorization value"]', "Bearer typed");
+    // Enter connects, as the quickest route does.
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(test).toHaveBeenCalledTimes(1);
+    expect(button("Save", dialog()).disabled).toBe(false);
+
+    await click(checkbox("echo"));
+    await click(button("Save", dialog()));
+    expect(setTools).not.toHaveBeenCalled();
+    // Already read once: saved without a second connection first.
+    expect(test).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledTools: ["echo"],
+        secrets: { "header:authorization": "Bearer typed" },
+      }),
+    );
+  });
+
+  it("starts every tool off again when the endpoint changes", async () => {
+    const test = vi.fn(async () => ({ ok: true as const, catalog: [tool("echo")] }));
+    await render({
+      list: listing([remote({ catalog: [tool("echo", { enabled: true })] })]),
+      test,
+    });
+
+    await openMenu(labelled("More for Sentry"));
+    await click(menuItem("Edit connection"));
+    await setValue("#mcp-url", "https://other.example.com/mcp");
+    await click(button("Connect", dialog()));
+    expect(checkbox("echo").getAttribute("aria-checked")).toBe("false");
+
+    // Back to the endpoint the choice was made on keeps nothing either: the
+    // list on screen was read from the other one.
+    await click(labelled("Edit Sentry connection"));
+    await setValue("#mcp-url", "https://other.example.com/mcp");
+    await click(button("Connect again", dialog()));
+    expect(checkbox("echo").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("locks the fields while a connection is in flight", async () => {
+    let answer: ((value: unknown) => void) | undefined;
+    const test = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await render({ list: listing([]), test });
+
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.linear.app/mcp");
+    await click(button("Connect", dialog()));
+    expect((document.body.querySelector("fieldset") as HTMLFieldSetElement).disabled).toBe(true);
+    await act(async () => answer?.({ ok: true, catalog }));
+    expect(document.body.querySelector("fieldset")).toBeNull();
+  });
+
+  it("keeps unsaved changes from Escape, and from Cancel while a save is in flight", async () => {
+    let answer: ((value: unknown) => void) | undefined;
+    const setTools = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await render({ list: listing([record()]), setTools });
+
+    await click(labelled("Open Fixture"));
+    await click(checkbox("echo"));
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await click(button("Save", dialog()));
+    expect(button("Cancel", dialog()).disabled).toBe(true);
+    await act(async () => answer?.({ ok: true, server: record() }));
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("closes on Escape when nothing was changed", async () => {
+    await render({ list: listing([record()]) });
+
+    await click(labelled("Open Fixture"));
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("says a failed sign-out inside the dialog, not behind it", async () => {
+    const signOut = vi.fn(async () => ({ ok: false as const, error: "Could not sign out." }));
+    await render({
+      list: listing([remote()], {
+        access: { "remote-1": { signIn: "signed-in", missingSecrets: [] } },
+      }),
+      signOut,
+    });
+
+    await click(labelled("Open Sentry"));
+    await click(button("Sign out", dialog()));
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Could not sign out.");
   });
 
   it("closes without a word to main when nothing was changed", async () => {
@@ -445,7 +587,7 @@ describe("adding a server", () => {
     expect(button("Add server", dialog()).disabled).toBe(true);
     await click(button("Local (stdio)", dialog()));
     expect(text()).toContain("Executable");
-    expect(text()).toContain("Arguments (one per line)");
+    expect(text()).toContain("Arguments");
     expect(text()).not.toContain("Shell command");
     await setValue("#mcp-command", "node");
     await setValue("#mcp-args", "fixture.mjs\n--safe");

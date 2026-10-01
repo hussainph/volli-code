@@ -53,9 +53,17 @@ export function isSelectable(tool: McpCatalogTool): boolean {
  * name beside it — the name is what an agent and the audit log say, so it is
  * never hidden behind a friendlier word.
  */
-export function toolLabel(tool: McpCatalogTool): { title: string; name: string | null } {
+export function toolLabel(
+  tool: McpCatalogTool,
+  names: ReadonlySet<string> = new Set(),
+): { title: string; name: string | null } {
   const title = tool.hints?.title;
-  return title === undefined ? { title: tool.name, name: null } : { title, name: tool.name };
+  // A title that is another tool's name would put one tool's identity on
+  // another's row — `delete_all` titled "list_items" — so it is not used.
+  if (title === undefined || (names.has(title) && title !== tool.name)) {
+    return { title: tool.name, name: null };
+  }
+  return { title, name: tool.name };
 }
 
 /** Case-insensitive, over the name, the title and the description. */
@@ -64,6 +72,22 @@ export function matchesToolQuery(tool: McpCatalogTool, query: string): boolean {
   if (needle.length === 0) return true;
   return [tool.name, tool.hints?.title ?? "", tool.description].some((text) =>
     text.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * The tools the picker lists: those matching the query and, while *On* or
+ * *Off* is chosen, those that were on (or off) WHEN it was chosen. Membership
+ * is frozen at that moment so a row does not vanish from under the pointer
+ * the instant it is toggled. `null` lists everything that matches.
+ */
+export function listedTools(
+  catalog: readonly McpCatalogTool[],
+  query: string,
+  members: ReadonlySet<string> | null,
+): readonly McpCatalogTool[] {
+  return catalog.filter(
+    (tool) => matchesToolQuery(tool, query) && (members === null || members.has(tool.name)),
   );
 }
 
@@ -237,6 +261,18 @@ export function serverHealth(
 }
 
 /**
+ * What identifies a connection's ENDPOINT — a remote URL, or a local command
+ * and its arguments — as opposed to its name or credentials. Tools chosen on
+ * one endpoint are not carried to another: the same tool name on a different
+ * server is a different tool.
+ */
+export function endpointKey(transport: McpServerRecord["transport"]): string {
+  return transport.type === "stdio"
+    ? ["stdio", transport.command.trim(), ...transport.args.map((arg) => arg.trim())].join("\u0000")
+    : `http\u0000${transport.url.trim()}`;
+}
+
+/**
  * Where a server lives, as one short line: a remote server's host and path,
  * or a local server's command line.
  */
@@ -279,13 +315,16 @@ export function suggestedServerName(transport: McpServerRecord["transport"]): st
   } catch {
     return "";
   }
-  if (/^[\d.]+$/.test(host) || host.includes(":")) return "Local server";
+  if (host === "localhost" || host === "[::1]" || /^127(\.\d+){3}$/.test(host)) {
+    return "Local server";
+  }
+  // Any other address is its own best name: there is no word in it to pick.
+  if (/^[\d.]+$/.test(host) || host.startsWith("[")) return host;
   const labels = host.split(".");
   const meaningful = labels
     .slice(0, labels.length > 1 ? -1 : undefined)
     .filter((label) => !GENERIC_HOST_LABELS.has(label.toLowerCase()));
   // `split` always yields at least one label, so the fallback is never empty-handed.
   const pick = meaningful.at(-1) ?? labels[0]!;
-  if (pick.toLowerCase() === "localhost") return "Local server";
   return pick.length === 0 ? "" : pick[0]!.toUpperCase() + pick.slice(1);
 }

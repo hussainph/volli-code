@@ -121,14 +121,31 @@ export function McpPane({ project }: { project: Project }) {
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
   const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
   const [loading, setLoading] = React.useState(false);
-  /** Which row's action is running, so only that row waits on it. */
-  const [busy, setBusy] = React.useState<string | null>(null);
+  /**
+   * The servers with an action running. Per server, so one row finishing
+   * never frees another row that is still waiting on its own.
+   */
+  const [busy, setBusy] = React.useState<ReadonlySet<string>>(new Set());
   const [error, setError] = React.useState<string | null>(null);
   const [access, setAccess] = React.useState<Readonly<Record<string, McpServerAccess>>>({});
   /** The server a sign-in is waiting on the browser for. */
   const [signingIn, setSigningIn] = React.useState<string | null>(null);
   const [dialog, setDialog] = React.useState<McpServerDialogTarget | null>(null);
+  /**
+   * The server a removal is being confirmed for. Kept after the confirmation
+   * closes, so its title does not blank to "Remove ?" while it animates out.
+   */
   const [removing, setRemoving] = React.useState<McpServerRecord | null>(null);
+  const [confirming, setConfirming] = React.useState(false);
+
+  function hold(serverId: string, holding: boolean): void {
+    setBusy((current) => {
+      const next = new Set(current);
+      if (holding) next.add(serverId);
+      else next.delete(serverId);
+      return next;
+    });
+  }
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -172,40 +189,38 @@ export function McpPane({ project }: { project: Project }) {
         }
       : dialog;
 
-  /** Sign in in the browser. The row (or dialog) waits for the redirect; Cancel stops it. */
-  async function signIn(serverId: string): Promise<void> {
+  /**
+   * Sign in in the browser. The row (or dialog) waits for the redirect; Cancel
+   * stops it. These three return what went wrong rather than saying it, so
+   * the surface that asked — a row, or the dialog over it — says it where the
+   * person is looking.
+   */
+  async function signIn(serverId: string): Promise<string | null> {
     setSigningIn(serverId);
     const result = await window.api.mcp.signIn({ projectId: project.id, serverId });
     setSigningIn(null);
     await refreshAccess();
-    if (!result.ok) {
-      if (!result.cancelled) setError(result.error);
-      return;
-    }
-    setError(null);
+    return result.ok || result.cancelled ? null : result.error;
   }
 
-  async function cancelSignIn(serverId: string): Promise<void> {
+  async function cancelSignIn(serverId: string): Promise<string | null> {
     const result = await window.api.mcp.cancelSignIn({ projectId: project.id, serverId });
-    if (!result.ok) setError(result.error);
+    return result.ok ? null : result.error;
   }
 
-  async function signOut(serverId: string): Promise<void> {
-    setBusy(`sign-out:${serverId}`);
+  async function signOut(serverId: string): Promise<string | null> {
+    hold(serverId, true);
     const result = await window.api.mcp.signOut({ projectId: project.id, serverId });
-    setBusy(null);
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    setError(null);
+    hold(serverId, false);
+    if (!result.ok) return result.error;
     await refreshAccess();
+    return null;
   }
 
   async function refresh(server: McpServerRecord): Promise<void> {
-    setBusy(`refresh:${server.id}`);
+    hold(server.id, true);
     const result = await window.api.mcp.refresh({ projectId: project.id, serverId: server.id });
-    setBusy(null);
+    hold(server.id, false);
     if (result.server !== undefined)
       setServers((current) => replaceServer(current, result.server!));
     setError(result.ok ? null : result.error);
@@ -215,22 +230,28 @@ export function McpPane({ project }: { project: Project }) {
   async function toggleServer(server: McpServerRecord, enabled: boolean): Promise<void> {
     // The switch moves at once and moves back if main refuses: a toggle that
     // waits on a round trip before it moves reads as a toggle that missed.
-    setServers((current) => replaceServer(current, { ...server, enabled }));
-    setBusy(`enable:${server.id}`);
+    // Only `enabled` moves back, on whatever the record is by then.
+    const flip = (to: boolean) => (current: readonly McpServerRecord[]) =>
+      current.map((candidate) =>
+        candidate.id === server.id ? Object.assign({}, candidate, { enabled: to }) : candidate,
+      );
+    setServers(flip(enabled));
+    hold(server.id, true);
     const result = await window.api.mcp.setEnabled({
       projectId: project.id,
       serverId: server.id,
       enabled,
     });
-    setBusy(null);
-    setServers((current) => replaceServer(current, result.ok ? result.server : server));
+    hold(server.id, false);
+    if (result.ok) setServers((current) => replaceServer(current, result.server));
+    else setServers(flip(!enabled));
     setError(result.ok ? null : result.error);
   }
 
   async function remove(server: McpServerRecord): Promise<void> {
-    setBusy(`remove:${server.id}`);
+    hold(server.id, true);
     const result = await window.api.mcp.remove({ projectId: project.id, serverId: server.id });
-    setBusy(null);
+    hold(server.id, false);
     if (result.ok) {
       setServers((current) => current.filter((candidate) => candidate.id !== server.id));
       await refreshAccess();
@@ -284,18 +305,21 @@ export function McpPane({ project }: { project: Project }) {
                 <ServerRow
                   server={server}
                   access={access[server.id]}
-                  busy={busy !== null && busy.endsWith(`:${server.id}`)}
+                  busy={busy.has(server.id)}
                   signingIn={signingIn}
                   onOpen={(section) => {
                     setError(null);
                     setDialog({ kind: "edit", server, section });
                   }}
                   onToggle={(enabled) => void toggleServer(server, enabled)}
-                  onSignIn={() => void signIn(server.id)}
-                  onCancelSignIn={() => void cancelSignIn(server.id)}
-                  onSignOut={() => void signOut(server.id)}
+                  onSignIn={() => void signIn(server.id).then(setError)}
+                  onCancelSignIn={() => void cancelSignIn(server.id).then(setError)}
+                  onSignOut={() => void signOut(server.id).then(setError)}
                   onRefresh={() => void refresh(server)}
-                  onRemove={() => setRemoving(server)}
+                  onRemove={() => {
+                    setRemoving(server);
+                    setConfirming(true);
+                  }}
                 />
               </li>
             ))}
@@ -341,10 +365,7 @@ export function McpPane({ project }: { project: Project }) {
         />
       )}
 
-      <AlertDialog
-        open={removing !== null}
-        onOpenChange={(open) => (open ? undefined : setRemoving(null))}
-      >
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
@@ -359,7 +380,7 @@ export function McpPane({ project }: { project: Project }) {
               variant="destructive"
               onClick={() => {
                 if (removing !== null) void remove(removing);
-                setRemoving(null);
+                setConfirming(false);
               }}
             >
               Remove
@@ -400,13 +421,17 @@ function ServerRow({
   onRefresh: () => void;
   onRemove: () => void;
 }) {
+  const described = React.useId();
   const health = serverHealth(server, access, signingIn === server.id);
   const provenance = provenanceLine(server.provenance);
   const otherSignIn = signingIn !== null && signingIn !== server.id;
   return (
     <ListRow
       density="two-line"
+      // The name is what the row opens; its status, counts and anything wrong
+      // are read after it rather than hidden by the label.
       aria-label={`Open ${server.name}`}
+      aria-describedby={`${described}-status ${described}-detail`}
       onActivate={() => onOpen(health.fix === "credentials" ? "connection" : "tools")}
       leading={
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground [&_svg]:size-4">
@@ -415,7 +440,7 @@ function ServerRow({
       }
       primary={<span className="min-w-0 truncate text-ui font-medium">{server.name}</span>}
       secondary={
-        <span className="block min-w-0 text-ui text-muted-foreground">
+        <span id={`${described}-detail`} className="block min-w-0 text-ui text-muted-foreground">
           <span className="block truncate">
             {endpointLabel(server.transport)}
             {" · "}
@@ -432,7 +457,7 @@ function ServerRow({
         </span>
       }
       trailing={
-        <span className="shrink-0">
+        <span id={`${described}-status`} className="shrink-0">
           <Health state={health.state}>{health.label}</Health>
         </span>
       }

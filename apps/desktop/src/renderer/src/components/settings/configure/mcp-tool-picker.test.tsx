@@ -81,7 +81,7 @@ function Harness({
       serverName="Linear"
       tools={tools}
       selected={selected}
-      focusFilter
+      focusFilter={1}
       onChange={(next) => {
         onChange?.(next);
         setSelected(next);
@@ -170,12 +170,17 @@ describe("McpToolPicker", () => {
     await render();
 
     expect(state("Select all tools")).toBe("false");
-    await click(box("List issues"));
+    await click(box("List issues (list_issues)"));
     expect(state("Select all tools")).toBe("mixed");
     expect(state("Select all read-only tools")).toBe("mixed");
 
     await click(box("Select all tools"));
-    for (const label of ["List issues", "Get issue", "Create issue", "Delete issue"]) {
+    for (const label of [
+      "List issues (list_issues)",
+      "Get issue (get_issue)",
+      "Create issue (create_issue)",
+      "Delete issue (delete_issue)",
+    ]) {
       expect(state(label)).toBe("true");
     }
     expect(state("render_graph")).toBe("false");
@@ -184,7 +189,7 @@ describe("McpToolPicker", () => {
     expect(state("Select all tools")).toBe("true");
 
     await click(box("Select all tools"));
-    expect(state("Get issue")).toBe("false");
+    expect(state("Get issue (get_issue)")).toBe("false");
     expect(container!.textContent).toContain("0 of 4 on");
   });
 
@@ -192,12 +197,12 @@ describe("McpToolPicker", () => {
     await render();
 
     await click(box("Select all tools that can make changes"));
-    expect(state("Create issue")).toBe("true");
-    expect(state("Delete issue")).toBe("true");
-    expect(state("List issues")).toBe("false");
+    expect(state("Create issue (create_issue)")).toBe("true");
+    expect(state("Delete issue (delete_issue)")).toBe("true");
+    expect(state("List issues (list_issues)")).toBe("false");
 
     await click(box("Select all tools that can make changes"));
-    expect(state("Create issue")).toBe("false");
+    expect(state("Create issue (create_issue)")).toBe("false");
   });
 
   it("makes Select all mean the listed tools once a filter narrows them", async () => {
@@ -208,11 +213,11 @@ describe("McpToolPicker", () => {
     await filter("create");
     expect(container!.textContent).toContain("Select all 1 listed");
     await click(box("Select all listed tools"));
-    expect(state("Create issue")).toBe("true");
+    expect(state("Create issue (create_issue)")).toBe("true");
 
     await filter("");
-    expect(state("List issues")).toBe("false");
-    expect(state("Delete issue")).toBe("false");
+    expect(state("List issues (list_issues)")).toBe("false");
+    expect(state("Delete issue (delete_issue)")).toBe("false");
   });
 
   it("shows only what is on, or only what is off", async () => {
@@ -266,29 +271,93 @@ describe("McpToolPicker", () => {
     expect(view.textContent).toContain("0 of 0 on");
   });
 
-  it("walks the checkboxes with the arrow keys, Home and End", async () => {
+  it("is one Tab stop: arrows, Home and End walk every checkbox, Right and Left reach details", async () => {
     await render();
 
-    const first = box("Select all read-only tools");
+    const stops = () =>
+      [...container!.querySelectorAll<HTMLElement>('button[role="checkbox"]')].filter(
+        (candidate) => candidate.tabIndex === 0,
+      );
+    // One stop for the whole list, and it starts on Select all.
+    expect(stops()).toEqual([box("Select all tools")]);
+    const details = button("Show details for List issues");
+    expect(details.tabIndex).toBe(-1);
+
+    const first = box("Select all tools");
     await act(async () => first.focus());
     await key(first, "ArrowDown");
-    expect(document.activeElement).toBe(box("List issues"));
-    await key(box("List issues"), "ArrowUp");
+    expect(document.activeElement).toBe(box("Select all read-only tools"));
+    await key(document.activeElement as HTMLElement, "ArrowDown");
+    expect(document.activeElement).toBe(box("List issues (list_issues)"));
+    // The stop follows focus.
+    expect(stops()).toEqual([box("List issues (list_issues)")]);
+
+    await key(box("List issues (list_issues)"), "ArrowRight");
+    expect(document.activeElement).toBe(details);
+    await key(details, "ArrowLeft");
+    expect(document.activeElement).toBe(box("List issues (list_issues)"));
+
+    await key(box("List issues (list_issues)"), "ArrowUp");
+    expect(document.activeElement).toBe(box("Select all read-only tools"));
+    await key(document.activeElement as HTMLElement, "Home");
     expect(document.activeElement).toBe(first);
     await key(first, "ArrowUp");
     expect(document.activeElement).toBe(first);
     await key(first, "End");
-    expect(document.activeElement).toBe(box("Delete issue"));
-    await key(box("Delete issue"), "ArrowDown");
-    expect(document.activeElement).toBe(box("Delete issue"));
-    await key(box("Delete issue"), "Home");
-    expect(document.activeElement).toBe(first);
-    // Other keys, and keys from outside a checkbox, are left alone.
+    expect(document.activeElement).toBe(box("Delete issue (delete_issue)"));
+    await key(box("Delete issue (delete_issue)"), "ArrowDown");
+    expect(document.activeElement).toBe(box("Delete issue (delete_issue)"));
+    // A row with no details, and keys that mean nothing here, go nowhere.
+    await key(box("Select all tools"), "ArrowRight");
     await key(first, "a");
-    expect(document.activeElement).toBe(first);
-    const details = button("Show details for List issues");
-    await act(async () => details.focus());
-    await key(details, "ArrowDown");
-    expect(document.activeElement).toBe(details);
+    expect(document.activeElement).toBe(box("Delete issue (delete_issue)"));
+  });
+
+  it("keeps a toggled row in place while On or Off is chosen", async () => {
+    const view = await render(CATALOG, ["get_issue"]);
+
+    await click(button("On"));
+    await click(box("Get issue (get_issue)"));
+    expect(state("Get issue (get_issue)")).toBe("false");
+    expect(view.textContent).toContain("Get issue");
+    // Choosing again re-reads who is on.
+    await click(button("All"));
+    await click(button("On"));
+    expect(view.textContent).toContain("No tools match.");
+  });
+
+  it("clears a typed filter on Escape", async () => {
+    const view = await render();
+    await filter("create");
+    const input = view.querySelector('input[type="search"]') as HTMLInputElement;
+    await key(input, "Escape");
+    expect(input.value).toBe("");
+    expect(view.textContent).toContain("List issues");
+    // An empty filter leaves Escape alone.
+    await key(input, "Escape");
+    expect(input.value).toBe("");
+  });
+
+  it("never lets a server's title stand in for another tool's name", async () => {
+    await render([
+      tool("list_items", { title: "List items" }),
+      tool("delete_all", { title: "list_items" }),
+    ]);
+    expect(box("delete_all").getAttribute("aria-describedby")).not.toBeNull();
+    expect(container!.querySelector('[aria-label="list_items (delete_all)"]')).toBeNull();
+  });
+
+  it("toggles from the title line, but not from reading the description", async () => {
+    await render();
+    const title = [...container!.querySelectorAll("label")].find((label) =>
+      label.textContent?.startsWith("Get issue"),
+    )!;
+    await click(title);
+    expect(state("Get issue (get_issue)")).toBe("true");
+    const description = [...container!.querySelectorAll("span")].find(
+      (span) => span.textContent === "get_issue description",
+    )!;
+    await click(description);
+    expect(state("Get issue (get_issue)")).toBe("true");
   });
 });

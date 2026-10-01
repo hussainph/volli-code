@@ -5,9 +5,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   changedTools,
   enabledToolNames,
+  endpointKey,
   endpointLabel,
   groupTools,
   isSelectable,
+  listedTools,
   matchesToolQuery,
   selectionOf,
   serverHealth,
@@ -80,6 +82,25 @@ describe("finding tools", () => {
       name: "list_issues",
     });
     expect(toolLabel(tool("list_issues"))).toEqual({ title: "list_issues", name: null });
+  });
+
+  it("never lets a title borrow another tool's name", () => {
+    const others = new Set(["list_items", "delete_all"]);
+    expect(toolLabel(tool("delete_all", { hints: { title: "list_items" } }), others)).toEqual({
+      title: "delete_all",
+      name: null,
+    });
+    expect(toolLabel(tool("delete_all", { hints: { title: "Delete all" } }), others)).toEqual({
+      title: "Delete all",
+      name: "delete_all",
+    });
+  });
+
+  it("lists by frozen membership, so a toggled row stays where it was", () => {
+    const catalog = [tool("alpha"), tool("beta"), tool("gamma")];
+    expect(names(listedTools(catalog, "", null))).toEqual(["alpha", "beta", "gamma"]);
+    expect(names(listedTools(catalog, "", new Set(["beta", "gamma"])))).toEqual(["beta", "gamma"]);
+    expect(names(listedTools(catalog, "gam", new Set(["beta", "gamma"])))).toEqual(["gamma"]);
   });
 
   it("matches a query against the name, the title and the description, ignoring case", () => {
@@ -280,6 +301,18 @@ describe("where a server lives, and what to call it", () => {
     );
   });
 
+  it("keys a connection by its endpoint alone", () => {
+    expect(endpointKey({ type: "streamable-http", url: " https://a.example/mcp " })).toBe(
+      endpointKey({ type: "streamable-http", url: "https://a.example/mcp" }),
+    );
+    expect(endpointKey({ type: "stdio", command: "npx", args: ["a", "b"] })).not.toBe(
+      endpointKey({ type: "stdio", command: "npx", args: ["a b"] }),
+    );
+    expect(endpointKey({ type: "stdio", command: "x", args: [] })).not.toBe(
+      endpointKey({ type: "streamable-http", url: "x" }),
+    );
+  });
+
   it("names a remote server by the meaningful part of its host", () => {
     const named = namedRemote;
     expect(named("https://mcp.linear.app/mcp")).toBe("Linear");
@@ -289,6 +322,8 @@ describe("where a server lives, and what to call it", () => {
     expect(named("http://127.0.0.1:3000/mcp")).toBe("Local server");
     expect(named("http://[::1]:3000/mcp")).toBe("Local server");
     expect(named("http://localhost:3000/mcp")).toBe("Local server");
+    expect(named("https://10.1.2.3/mcp")).toBe("10.1.2.3");
+    expect(named("https://[2001:db8::1]/mcp")).toBe("[2001:db8::1]");
     expect(named("")).toBe("");
     expect(named("file:///tmp/server")).toBe("");
   });

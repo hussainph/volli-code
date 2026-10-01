@@ -21,6 +21,11 @@
  * it; its description is one line until a person opens the row, which also
  * lists the arguments the tool takes. The choice is held by the caller and
  * saved by the caller: this component never writes.
+ *
+ * THE KEYBOARD. The whole list is ONE Tab stop (a roving tabindex over every
+ * checkbox, Select all and the group boxes included): Up and Down walk it,
+ * Home and End jump, Space toggles, Right opens a tool's details button and
+ * Left comes back. Escape in the filter clears it before it closes anything.
  */
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -35,6 +40,7 @@ import { cn } from "@renderer/lib/utils";
 import {
   groupTools,
   isSelectable,
+  listedTools,
   selectionOf,
   toggleTool,
   toggleTools,
@@ -52,6 +58,24 @@ const SHOW_OPTIONS = [
   { key: "off", label: "Off" },
 ] as const satisfies readonly { key: McpToolShow; label: string }[];
 
+/** The attribute every roving stop carries, and what it is keyed by. */
+const ROVE = "data-rove";
+
+/**
+ * Give the list its one Tab stop: the stop keyed `holder`, or the first one
+ * that can be used. Every other checkbox, and every details button, is
+ * reached by the arrow keys instead.
+ */
+function dealTabStop(list: HTMLElement | null, holder: string | null): void {
+  const stops = [...(list?.querySelectorAll<HTMLButtonElement>(`[${ROVE}]`) ?? [])];
+  const usable = stops.filter((stop) => !stop.disabled);
+  const held = usable.find((stop) => stop.getAttribute(ROVE) === holder) ?? usable[0];
+  for (const stop of stops) stop.tabIndex = stop === held ? 0 : -1;
+  for (const details of list?.querySelectorAll<HTMLElement>("[data-details]") ?? []) {
+    details.tabIndex = -1;
+  }
+}
+
 function checkedState(selection: McpSelection): boolean | "indeterminate" {
   return selection === "all" ? true : selection === "some" ? "indeterminate" : false;
 }
@@ -61,23 +85,32 @@ export function McpToolPicker({
   tools,
   selected,
   disabled = false,
-  focusFilter = false,
+  focusFilter = 0,
   onChange,
 }: {
   serverName: string;
   tools: readonly McpCatalogTool[];
   selected: ReadonlySet<string>;
   disabled?: boolean;
-  /** Put the caret in the filter when the picker appears — it is where a long list is started. */
-  focusFilter?: boolean;
+  /**
+   * Put the caret in the filter — on mount when non-zero, and again each time
+   * the number changes. The filter is where a long list is started.
+   */
+  focusFilter?: number;
   onChange: (next: Set<string>) => void;
 }) {
   const root = React.useRef<HTMLDivElement>(null);
+  const list = React.useRef<HTMLDivElement>(null);
+  /** Which stop holds the list's one Tab stop, by its `data-rove` key. */
+  const active = React.useRef<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [show, setShow] = React.useState<McpToolShow>("all");
+  /** Who *On* or *Off* listed when it was chosen; `null` while *All* is. */
+  const [members, setMembers] = React.useState<ReadonlySet<string> | null>(null);
   const [open, setOpen] = React.useState<ReadonlySet<string>>(new Set());
 
-  const listed = visibleTools(tools, query, show, selected);
+  const names = React.useMemo(() => new Set(tools.map((tool) => tool.name)), [tools]);
+  const listed = listedTools(tools, query, members);
   const groups = groupTools(listed);
   const listedSelectable = listed.filter(isSelectable);
   const total = tools.filter(isSelectable).length;
@@ -86,8 +119,22 @@ export function McpToolPicker({
   const all = selectionOf(listedSelectable, selected);
 
   React.useEffect(() => {
-    if (focusFilter) root.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+    if (focusFilter > 0) {
+      root.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+    }
   }, [focusFilter]);
+
+  // One Tab stop for the whole list, re-dealt after every render because the
+  // rows themselves change with the filter. Nothing here is React state: the
+  // stop follows focus, and a re-render that moved it would fight the keyboard.
+  React.useLayoutEffect(() => dealTabStop(list.current, active.current));
+
+  function choose(next: McpToolShow): void {
+    setShow(next);
+    setMembers(
+      next === "all" ? null : new Set(visibleTools(tools, "", next, selected).map((t) => t.name)),
+    );
+  }
 
   function toggleOpen(name: string): void {
     setOpen((current) => {
@@ -98,25 +145,83 @@ export function McpToolPicker({
     });
   }
 
+  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
+    const target = event.target as HTMLElement;
+    const stops = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>(`[${ROVE}]:not(:disabled)`),
+    ];
+    if (event.key === "ArrowLeft" && target.hasAttribute("data-details")) {
+      event.preventDefault();
+      target.closest('[role="listitem"]')?.querySelector<HTMLElement>(`[${ROVE}]`)?.focus();
+      return;
+    }
+    const at = stops.indexOf(target as HTMLButtonElement);
+    if (at < 0) return;
+    if (event.key === "ArrowRight") {
+      const details = target
+        .closest('[role="listitem"]')
+        ?.querySelector<HTMLElement>("[data-details]");
+      if (details !== null && details !== undefined) {
+        event.preventDefault();
+        details.focus();
+      }
+      return;
+    }
+    const moves: Record<string, number> = {
+      ArrowDown: Math.min(stops.length - 1, at + 1),
+      ArrowUp: Math.max(0, at - 1),
+      Home: 0,
+      End: stops.length - 1,
+    };
+    const next = moves[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    // Focusing scrolls the list to it; nothing else has to.
+    stops[next]?.focus();
+  }
+
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex items-center gap-2">
+      <div
+        className="flex items-center gap-2"
+        onKeyDown={(event) => {
+          // Escape in a filter with text clears the text. The dialog around
+          // this list sees the same key first and stays open for it (its
+          // `onEscapeKeyDown`).
+          const target = event.target as HTMLInputElement;
+          if (event.key === "Escape" && target.type === "search" && query.length > 0) {
+            event.preventDefault();
+            setQuery("");
+          }
+        }}
+      >
         <TableSearch value={query} placeholder="Filter tools" onChange={setQuery} />
         <Segmented<McpToolShow>
           ariaLabel="Show tools"
           value={show}
           options={SHOW_OPTIONS}
-          onChange={setShow}
+          onChange={choose}
         />
         <span className="ml-auto text-ui text-muted-foreground tabular-nums" aria-live="polite">
           {on} of {total} on
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/50">
+      <div
+        ref={list}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/50"
+        onKeyDown={onKeyDown}
+        onFocus={(event) => {
+          const key = (event.target as HTMLElement).getAttribute(ROVE);
+          if (key === null) return;
+          active.current = key;
+          dealTabStop(list.current, key);
+        }}
+      >
         {listedSelectable.length === 0 ? null : (
           <label className="flex h-9 shrink-0 items-center gap-2 border-b border-border/50 px-2">
             <Checkbox
+              data-rove="all"
               aria-label={narrowed ? "Select all listed tools" : "Select all tools"}
               checked={checkedState(all)}
               disabled={disabled}
@@ -127,9 +232,9 @@ export function McpToolPicker({
             </span>
           </label>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1" onKeyDown={moveFocus}>
+        <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
           {listed.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-8 text-ui text-muted-foreground">
+            <div className="flex flex-col items-center gap-2 py-6 text-ui text-muted-foreground">
               <span>{tools.length === 0 ? "This server offers no tools." : "No tools match."}</span>
               {narrowed ? (
                 <Button
@@ -137,7 +242,7 @@ export function McpToolPicker({
                   variant="ghost"
                   onClick={() => {
                     setQuery("");
-                    setShow("all");
+                    choose("all");
                   }}
                 >
                   Show all tools
@@ -150,6 +255,7 @@ export function McpToolPicker({
                 key={group.key}
                 group={group}
                 serverName={serverName}
+                names={names}
                 selected={selected}
                 disabled={disabled}
                 open={open}
@@ -164,35 +270,10 @@ export function McpToolPicker({
   );
 }
 
-/**
- * Up and Down walk the checkboxes — groups and tools alike — and Home and End
- * jump to either end, so a forty-tool list is not forty Tabs. Space toggles
- * the focused one, as on any checkbox.
- */
-function moveFocus(event: React.KeyboardEvent<HTMLDivElement>): void {
-  const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
-  if (!keys.includes(event.key)) return;
-  const boxes = [
-    ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-      'button[role="checkbox"]:not(:disabled)',
-    ),
-  ];
-  const at = boxes.indexOf(document.activeElement as HTMLButtonElement);
-  if (at < 0 || boxes.length === 0) return;
-  event.preventDefault();
-  const next =
-    event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? boxes.length - 1
-        : Math.min(boxes.length - 1, Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)));
-  // Focusing scrolls the list to it; nothing else has to.
-  boxes[next]?.focus();
-}
-
 function ToolGroup({
   group,
   serverName,
+  names,
   selected,
   disabled,
   open,
@@ -201,6 +282,7 @@ function ToolGroup({
 }: {
   group: McpToolGroup;
   serverName: string;
+  names: ReadonlySet<string>;
   selected: ReadonlySet<string>;
   disabled: boolean;
   open: ReadonlySet<string>;
@@ -218,6 +300,7 @@ function ToolGroup({
           {selectable ? (
             <label className="flex items-center gap-2">
               <Checkbox
+                data-rove={`group:${group.key}`}
                 aria-label={
                   group.key === "read-only"
                     ? "Select all read-only tools"
@@ -251,6 +334,7 @@ function ToolGroup({
           <ToolRow
             key={tool.name}
             tool={tool}
+            names={names}
             on={selected.has(tool.name)}
             disabled={disabled}
             open={open.has(tool.name)}
@@ -265,6 +349,7 @@ function ToolGroup({
 
 function ToolRow({
   tool,
+  names,
   on,
   disabled,
   open,
@@ -272,16 +357,19 @@ function ToolRow({
   onToggle,
 }: {
   tool: McpCatalogTool;
+  names: ReadonlySet<string>;
   on: boolean;
   disabled: boolean;
   open: boolean;
   onToggleOpen: () => void;
   onToggle: () => void;
 }) {
-  const { title, name } = toolLabel(tool);
+  const describedBy = React.useId();
+  const { title, name } = toolLabel(tool, names);
   const selectable = isSelectable(tool);
   const parameters = toolParameters(tool);
   const detailed = tool.description.length > 0 || parameters.length > 0;
+  const destructive = tool.hints?.destructive === true;
   return (
     <div
       role="listitem"
@@ -290,40 +378,50 @@ function ToolRow({
         !selectable && "opacity-70",
       )}
     >
-      <label className="flex min-w-0 flex-1 items-start gap-2 px-1">
+      <div className="flex min-w-0 flex-1 items-start gap-2 px-1">
         {/* One text line tall, so the box centres on the title's line box
             rather than on the whole row. */}
         <span className="flex h-5 shrink-0 items-center">
           <Checkbox
-            aria-label={title}
+            data-rove={`tool:${tool.name}`}
+            id={`${describedBy}-box`}
+            // The exact name is always in the accessible name: a server's
+            // title is its own words, and the name is what an agent calls.
+            aria-label={name === null ? title : `${title} (${name})`}
+            aria-describedby={describedBy}
             checked={on && selectable}
             disabled={disabled || !selectable}
             onCheckedChange={onToggle}
           />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-baseline gap-2">
+          {/* Only the title line is the checkbox's label: clicking to read a
+              description must not change what a Session is offered. */}
+          <label htmlFor={`${describedBy}-box`} className="flex min-w-0 items-baseline gap-2">
             <span className="min-w-0 shrink truncate text-ui font-medium">{title}</span>
             {name === null ? null : (
               <code className="min-w-0 shrink-[2] truncate font-mono text-ui text-muted-foreground">
                 {name}
               </code>
             )}
-            {tool.hints?.destructive === true ? (
+            {destructive ? (
               <span className="shrink-0 text-label text-destructive uppercase">Destructive</span>
             ) : null}
+          </label>
+          <span id={describedBy} className="block">
+            {tool.error === null ? null : (
+              <span className="block text-ui text-destructive">{tool.error}</span>
+            )}
+            {destructive ? <span className="sr-only">Destructive. </span> : null}
+            {tool.description.length === 0 ? null : (
+              <span
+                className={cn("block text-ui text-muted-foreground", !open && "line-clamp-1")}
+                title={open ? undefined : tool.description}
+              >
+                {tool.description}
+              </span>
+            )}
           </span>
-          {tool.error === null ? null : (
-            <span className="block text-ui text-destructive">{tool.error}</span>
-          )}
-          {tool.description.length === 0 ? null : (
-            <span
-              className={cn("block text-ui text-muted-foreground", !open && "line-clamp-1")}
-              title={open ? undefined : tool.description}
-            >
-              {tool.description}
-            </span>
-          )}
           {open && parameters.length > 0 ? (
             <span className="mt-1 flex flex-wrap items-center gap-1">
               <span className="text-ui text-muted-foreground">Arguments</span>
@@ -340,12 +438,13 @@ function ToolRow({
             </span>
           ) : null}
         </span>
-      </label>
+      </div>
       {detailed ? (
         <Button
           size="icon-xs"
           variant="ghost"
           className="shrink-0"
+          data-details=""
           aria-expanded={open}
           aria-label={`${open ? "Hide" : "Show"} details for ${title}`}
           onClick={onToggleOpen}
