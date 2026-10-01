@@ -156,6 +156,7 @@ function WorkspaceTile({
           )}
           {signal !== null && (
             <span
+              aria-hidden
               className="pointer-events-none absolute right-0 bottom-0 flex size-4 items-center justify-center rounded-full bg-rail"
               data-workspace-signal={signal}
             >
@@ -167,7 +168,7 @@ function WorkspaceTile({
       <TooltipContent side="right" className="max-w-72">
         <div className="flex items-center justify-between gap-2 font-medium">
           <span>{workspace.name}</span>
-          <kbd className="shrink-0 text-label">⌘{index + 1}</kbd>
+          {index < 9 && <kbd className="shrink-0 text-label">⌘{index + 1}</kbd>}
         </div>
         <div className="text-ui">{workspaceSummaryLabel(workspace)}</div>
         <div className="text-label">
@@ -246,7 +247,7 @@ function Comparison({
                 key={session.id}
                 type="button"
                 data-session={session.id}
-                aria-label={`Open ${session.title}${session.unread ? " · unread" : ""}`}
+                aria-label={`Open ${session.title} · ${STATE_LABEL[session.state]} · ${session.scope}${session.unread ? " · unread" : ""}`}
                 onClick={() => onOpen(selected.id, session.id)}
                 className={cn(
                   "flex min-w-0 flex-col gap-1 rounded-lg p-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45",
@@ -270,7 +271,7 @@ function Comparison({
           {opened && (
             <div
               className="flex flex-col gap-2 rounded-lg border border-border bg-background p-4"
-              role="status"
+              role={material === "canvas" ? "status" : undefined}
             >
               <span className="text-label uppercase text-muted-foreground">
                 Conversation opened

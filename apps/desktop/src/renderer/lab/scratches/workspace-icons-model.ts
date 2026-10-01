@@ -70,6 +70,14 @@ const WORKSPACES: readonly WorkspaceFixture[] = [
     sessions: [
       { id: "c1", title: "Index the repository", scope: "CN-18", state: "working", unread: true },
       { id: "c2", title: "Prepare the checkout", scope: "CN-19", state: "setup", unread: false },
+      {
+        id: "c3",
+        title: "Indexing helper",
+        scope: "CN-18",
+        state: "waiting",
+        unread: true,
+        role: "subagent",
+      },
     ],
   },
   {
@@ -102,6 +110,13 @@ const WORKSPACES: readonly WorkspaceFixture[] = [
     appearance: null,
     sessions: [
       { id: "l1", title: "Completed migration", scope: "CP-12", state: "stopped", unread: false },
+      {
+        id: "l2",
+        title: "Interrupted compatibility check",
+        scope: "CP-14",
+        state: "interrupted",
+        unread: false,
+      },
     ],
   },
 ];

@@ -28,7 +28,8 @@ Do not rely on color alone for identity: inherited workspaces can have identical
 - Select Paper Trail: its unread stays. Open its Session: only that receipt clears, in both comparison panes.
 - Read Permission policy: its input mark stays lit; the other unread conversation remains unread.
 - Switch Light / Dark / Auto and edit the lab canvas. Paper Trail is pinned light; Archive inherits both. Notification marks keep the current window's tokens, not the thumbnail's local palette.
-- Use App and Reading stage widths, inspect matching initials, long names, the empty workspace, and the input/recovery collision on Cinder.
+- Use App and Reading stage widths, inspect matching initials, long names, the empty workspace, the recovery-only mark on Volli Companion, and the input/recovery collision on Cinder.
+- Canopy includes a waiting/unread helper behind its working parent: no helper row appears, and its wait/read receipt does not become a direct workspace notification.
 
 ## Before production adoption
 

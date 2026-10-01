@@ -65,6 +65,20 @@ describe("workspace icons scratch", () => {
     expect(tile("paper").querySelector("[data-workspace-signal]")).toBeNull();
     expect(tile("archive").querySelector("[data-workspace-unread]")).toBeNull();
     expect(tile("volli").getAttribute("aria-current")).toBe("page");
+    expect(host.querySelector('[data-session="v2"]')?.getAttribute("aria-label")).toBe(
+      "Open Permission policy · Needs input · VC-472 · unread",
+    );
+    expect(tile("long").querySelector('[data-workspace-signal="interrupted"]')).not.toBeNull();
+  });
+
+  it("hides fixture helpers without promoting their waits or unread into workspace notifications", async () => {
+    await act(async () => tile("canopy").click());
+    expect(tile("canopy").getAttribute("aria-label")).toBe("Canopy · 2 active · 1 unread");
+    expect(host.querySelector('[data-session="c3"]')).toBeNull();
+    expect(host.querySelectorAll("[data-session]")).toHaveLength(4);
+    expect(host.querySelector('[data-session="c1"]')?.getAttribute("aria-label")).toBe(
+      "Open Index the repository · Working · CN-18 · unread",
+    );
   });
 
   it("selects workspaces without marking anything read, and reads only an opened Session", async () => {
@@ -82,7 +96,7 @@ describe("workspace icons scratch", () => {
     }
     expect(host.querySelectorAll('[data-session="v2"][aria-label*="unread"]')).toHaveLength(0);
     expect(host.querySelectorAll('[data-session="v3"][aria-label*="unread"]')).toHaveLength(2);
-    expect(host.querySelectorAll('[role="status"]')).toHaveLength(2);
+    expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
   it("resets receipts and switches state scenarios without changing identity or selection", async () => {
