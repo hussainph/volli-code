@@ -16,7 +16,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -37,7 +37,18 @@ import {
   SANDBOX_PROTECTED_FILES,
   sandboxWriteCarveOuts,
 } from "@volli/shared";
+import { throughLinks } from "../authority/gate";
 import { NO_HOST_GIT } from "./host-git";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
+vi.mock("../authority/gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../authority/gate")>();
+  return { ...actual, throughLinks: vi.fn(actual.throughLinks) };
+});
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 
 type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
@@ -296,6 +307,155 @@ describe("ScopedExecutionEnv", () => {
         error: { code: "permission_denied" },
       });
     }
+    await env.cleanup();
+  });
+
+  it.each(["text", "binary"] as const)(
+    "refuses a credential inode swapped in after the %s read's path check",
+    async (kind) => {
+      const { worktree } = roots();
+      const home = realpathSync(mkdtempSync(join(tmpdir(), "volli-scoped-home-")));
+      mkdirSync(join(home, ".ssh"));
+      const key = join(home, ".ssh", "id_ed25519");
+      const parked = join(home, "parked-key");
+      const target = join(worktree, "inside.txt");
+      writeFileSync(key, "swap-secret");
+      // Give the credential two names before attach so its identity is indexed.
+      // Neither is in a writable root; the read initially asks for a benign file.
+      linkSync(key, parked);
+      const env = await ScopedExecutionEnv.create(worktree, { homeDir: home, git: null });
+      const actual = await vi.importActual<typeof import("../authority/gate")>("../authority/gate");
+      const checked = vi.mocked(throughLinks);
+      checked.mockImplementationOnce((policy, path) => {
+        const allowedName = actual.throughLinks(policy, path);
+        // Deterministic interleaving: the old inode has already been judged,
+        // but the content reader has not opened the path yet.
+        rmSync(target);
+        linkSync(key, target);
+        // The identity must be checked even if it has only one name at open.
+        rmSync(key);
+        rmSync(parked);
+        return allowedName;
+      });
+      try {
+        const result =
+          kind === "text"
+            ? await env.readTextFile("inside.txt")
+            : await env.readBinaryFile("inside.txt");
+        expect(result).toMatchObject({ ok: false, error: { code: "permission_denied" } });
+        expect(readFileSync(target, "utf8")).toBe("swap-secret");
+      } finally {
+        checked.mockReset();
+        await env.cleanup();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["text", "binary"] as const)(
+    "pins the %s read to the validated descriptor when its path is replaced",
+    async (kind) => {
+      const { worktree, outside } = roots();
+      const env = await ScopedExecutionEnv.create(worktree, { git: null });
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      let handle: FileHandle | undefined;
+      const mockedOpen = vi.mocked(open);
+      mockedOpen.mockImplementationOnce(async (...args) => {
+        handle = await actual.open(...args);
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const checked = await stat();
+          // After fstat, change the pathname to another inode. A second open
+          // would return the replacement, not the file we validated.
+          rmSync(join(worktree, "inside.txt"));
+          linkSync(outside, join(worktree, "inside.txt"));
+          return checked;
+        });
+        vi.spyOn(handle, "readFile");
+        vi.spyOn(handle, "close");
+        return handle;
+      });
+      try {
+        const result =
+          kind === "text"
+            ? await env.readTextFile("inside.txt")
+            : await env.readBinaryFile("inside.txt");
+        expect(result).toEqual({
+          ok: true,
+          value: kind === "text" ? "inside\n" : Buffer.from("inside\n"),
+        });
+        expect(handle?.stat).toHaveBeenCalledOnce();
+        expect(handle?.readFile).toHaveBeenCalledOnce();
+        expect(handle?.close).toHaveBeenCalledOnce();
+        expect(readFileSync(join(worktree, "inside.txt"), "utf8")).toBe("outside\n");
+      } finally {
+        mockedOpen.mockReset();
+        await env.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    ["ENOENT", "not_found"],
+    ["EACCES", "permission_denied"],
+    ["EPERM", "permission_denied"],
+    ["ELOOP", "permission_denied"],
+    ["ENOTDIR", "not_directory"],
+    ["EISDIR", "is_directory"],
+    ["EINVAL", "invalid"],
+    ["ABORT_ERR", "aborted"],
+    ["EIO", "unknown"],
+    [undefined, "unknown"],
+  ] as const)("preserves a contained read's %s error", async (code, expected) => {
+    const { worktree } = roots();
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
+    vi.mocked(open).mockRejectedValueOnce(Object.assign(new Error("read failed"), { code }));
+    try {
+      expect(await env.readTextFile("inside.txt")).toMatchObject({
+        ok: false,
+        error: { code: expected, path: join(env.cwd, "inside.txt") },
+      });
+    } finally {
+      vi.mocked(open).mockReset();
+      await env.cleanup();
+    }
+  });
+
+  it("refuses directory and special-file descriptors, and closes on cancellation after open", async () => {
+    const { worktree } = roots();
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
+    expect(await env.readTextFile(".")).toMatchObject({
+      ok: false,
+      error: { code: "is_directory" },
+    });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const controller = new AbortController();
+    const handles: FileHandle[] = [];
+    for (const special of [true, false]) {
+      vi.mocked(open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const checked = await stat();
+          if (special) vi.spyOn(checked, "isFile").mockReturnValue(false);
+          else controller.abort();
+          return checked;
+        });
+        vi.spyOn(handle, "close");
+        handles.push(handle);
+        return handle;
+      });
+      expect(await env.readBinaryFile("inside.txt", under(controller.signal))).toMatchObject({
+        ok: false,
+        error: { code: special ? "invalid" : "aborted" },
+      });
+    }
+    expect(await env.readTextFile("inside.txt", under(controller.signal))).toMatchObject({
+      ok: false,
+      error: { code: "aborted" },
+    });
+    for (const handle of handles) expect(handle.close).toHaveBeenCalledOnce();
+    vi.mocked(open).mockReset();
     await env.cleanup();
   });
 

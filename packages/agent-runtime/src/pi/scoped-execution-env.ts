@@ -33,6 +33,7 @@ import {
   capabilityRead,
   capabilityWrite,
   containsPath,
+  linkedAlias,
   sandboxWriteCarveOuts,
   type CapabilityPolicy,
   type RuntimeContainedLaunch,
@@ -589,12 +590,12 @@ async function prepareSandbox(
  * here reads the difference. Process execution stays fail-closed on its own
  * terms: {@link exec} proves SRT's boundary before it spawns anything.
  *
- * The file guard is userspace and checks before it opens, so a symlink swapped
- * in between the two is a seam the kernel does not share. The plan's slice 8 —
- * one enforcement layer, the seam closed — is where that goes; what this guard
- * does in the meantime is judge both the path as named and the path it
- * resolves to, so a link planted beforehand reaches nothing the target could
- * not.
+ * The file guard judges paths in userspace. Content reads additionally open
+ * once, validate the descriptor's device/inode against the denied-file index,
+ * and read that same descriptor, closing the indexed hard-link swap race.
+ * Parent-directory swaps reaching unindexed files remain a seam the kernel
+ * does not share; the plan's slice 8 owns descriptor-relative path resolution.
+ * Pre-planted links are judged both as named and as resolved.
  *
  * Pi 0.85 replaced every method's trailing `abortSignal?: AbortSignal` with a
  * required trailing chord `Context`, cancellation riding `context.abortSignal`.
@@ -746,6 +747,64 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   }
 
   /**
+   * Open once, judge the descriptor's device/inode, and read that descriptor.
+   * A pathname check alone races with rename/relink: the file opened a moment
+   * later may be an indexed credential, even if its other names were removed
+   * in the meantime. Never condition the identity check on current nlink.
+   * O_NOFOLLOW rejects a swapped final symlink; O_NONBLOCK lets us reject
+   * non-regular files without getting stuck opening a planted FIFO.
+   * Parent-directory resolution races remain slice 8's seam for unindexed
+   * private files, but an indexed credential cannot win this open/read race.
+   */
+  async #readContained(path: string, context: Context): Promise<Result<Buffer, FileError>> {
+    const guarded = await this.#guard(path, "read", context);
+    if (!guarded.ok) return guarded;
+    const { target, resolved } = guarded.value;
+    try {
+      const handle = await open(
+        resolved,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+      );
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile()) {
+          return err(
+            new FileError(
+              opened.isDirectory() ? "is_directory" : "invalid",
+              "A contained read requires a regular file.",
+              target,
+            ),
+          );
+        }
+        const verdict = capabilityRead(
+          this.policy,
+          linkedAlias(this.policy, resolved, `${opened.dev}:${opened.ino}`),
+        );
+        if (verdict.outcome === "deny") {
+          return err(new FileError("permission_denied", verdict.reason, target));
+        }
+        return { ok: true, value: await handle.readFile({ signal: context.abortSignal }) };
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      const cause = asError(error);
+      const code = (cause as NodeJS.ErrnoException).code;
+      const codes: Record<string, ConstructorParameters<typeof FileError>[0]> = {
+        ABORT_ERR: "aborted",
+        ENOENT: "not_found",
+        EACCES: "permission_denied",
+        EPERM: "permission_denied",
+        ELOOP: "permission_denied",
+        ENOTDIR: "not_directory",
+        EISDIR: "is_directory",
+        EINVAL: "invalid",
+      };
+      return err(new FileError(codes[code ?? ""] ?? "unknown", cause.message, target, cause));
+    }
+  }
+
+  /**
    * Create a write's missing parent directories one component at a time, then
    * open the file itself without following a link, and only write once the
    * open handle is a single-named regular file (VC-45 review, B1).
@@ -846,8 +905,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   }
 
   async readBinaryFile(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.readBinaryFile(guarded.value.target, context) : guarded;
+    return this.#readContained(path, context);
   }
 
   async fileInfo(path: string, context: Context = BACKGROUND_CONTEXT) {
@@ -856,8 +914,8 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   }
 
   async readTextFile(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.readTextFile(guarded.value.target, context) : guarded;
+    const read = await this.#readContained(path, context);
+    return read.ok ? ({ ok: true, value: read.value.toString("utf8") } as const) : read;
   }
 
   async writeFile(
