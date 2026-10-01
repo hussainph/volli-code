@@ -273,6 +273,12 @@ tool that fails is kept in the catalog **marked unusable with the reason**,
 rather than dropped. It cannot be selected. The rest of the server works
 normally.
 
+A tool's **output schema** is checked against the same schema limits, but a
+failing one does not make the tool unusable: the schema is left off and the
+tool works without it. An output schema only describes the structured half of a
+result (see [What a call returns](#what-a-call-returns)); the model never sees
+it.
+
 ### You removed a server and older Sessions now fail to reattach
 
 `serversForFrozenMcpTools` throws when a frozen tool's server is gone, so those
@@ -381,6 +387,64 @@ VOLLI_DEV_MCP_PARALLEL='{
   variable entirely. A value that does not parse is logged at launch and
   ignored.
 
+## What a call returns
+
+A call returns what the server sent, in the shape Pi 0.99 gives every tool
+result. Code that calls MCP tools for a model, such as Code Mode (VC-471),
+reads the same shape.
+
+| Part | What it holds |
+| --- | --- |
+| `content` | What the model reads: Volli's trust notice, then the server's text and images in order. A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. |
+| `structuredContent` | The server's `structuredContent`, unchanged. The model does not see it. The exception is a result with no content blocks at all: the model is then shown the structured content as JSON, since that is all the server sent. |
+| `isError` | `true` when the server marked the result as an error. The model gets it as an error result, and `structuredContent` and `details` are still kept. |
+| `details` | Notes from Volli about the result: how the text was cut and where it was saved (`output`), or the size of structured content that was dropped (`structuredContentOmittedBytes`). Usually empty. |
+
+A tool whose server publishes an output schema declares it as the tool's
+`outputSchema`. The schema is frozen with the rest of the tool's definition, so a
+Session keeps the schema it was born with. Sessions created before Volli 0.99
+have no output schemas and keep running without them.
+
+A call that never got an answer from the server (the connection failed, or the
+call was stopped) is a failed call, not an error result, and carries nothing
+the server said.
+
+### Long results
+
+A result is never refused for being long. If its text is over
+**20 KiB** (`MCP_RESULT_INLINE_MAX_BYTES`), the model gets the start and the end
+of the text, with a `…N chars truncated…` marker between them. Pi and Codex use
+the same format. The full text is saved to a file, and the result gives the
+file's path so the model can `read` the middle in parts with `offset` and
+`limit`.
+
+- **Where the files are.** In the Session's own storage, next to the Pi sidecar
+  that holds its conversation:
+  `<userData>/pi-sessions/<workspace folder>/<sidecar name>.tool-output/`. Never
+  in `/tmp`. Each file starts with a line saying what it is and that its content
+  is untrusted data. Files are readable by your user account only.
+- **How long they are kept.** As long as the sidecar. Cleaning up an orphaned
+  sidecar (Settings → Storage → *Pi session logs*) deletes its saved output too.
+  Like the sidecars, the files are not included in backups, because a tool
+  result can contain anything the server could see.
+- **Reading them back.** When `read` opens a saved file, its result starts with
+  a notice that the file is untrusted data, so the warning is not lost when the
+  model reads the rest of a result later. A Session whose authority is set to
+  `enforce` may read its own saved output, but never write to it, even though
+  the files are outside its workspace.
+- **Limits.** One file holds at most **8 MiB** of text (`MCP_RESULT_MAX_BYTES`).
+  If the text is longer, the file holds the first 8 MiB and the result says how
+  much of the total that is. One Session attachment saves at most **256 MiB**
+  (`TOOL_OUTPUT_DIRECTORY_MAX_BYTES`). After that, long results are still cut,
+  but not saved, and the result says why. Structured content over 8 MiB as JSON
+  is dropped from the result, and a note in the content gives its size.
+
+These rules apply to MCP results only. `web_fetch` already returns at most
+25,000 characters of an extracted article, and saving the rest of a web page
+would put untrusted page text in a file that `read` would later return without
+the per-read markers `web_fetch` wraps it in. `execute` keeps Pi's own handling:
+the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
+
 ## What is out of scope
 
 - Downloading, unpacking or verifying packages from npm, PyPI, OCI or anywhere
@@ -404,6 +468,8 @@ VOLLI_DEV_MCP_PARALLEL='{
 | Discovery | `apps/desktop/src/main/mcp/discovery.ts` |
 | Client, transports, launch environment | `apps/desktop/src/main/mcp/client.ts` |
 | Per-attachment connection owner | `apps/desktop/src/main/mcp/session-host.ts` |
+| Result shape, cutting long results | `createMcpTool` in `packages/agent-runtime/src/pi/tools.ts` |
+| Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `apps/desktop/src/main/pi-session-orphans.ts` |
 | Shared per-server bound | `packages/agent-runtime/src/mcp/server-budget.ts` |
 | Parallel-read marks | `withParallelReadEligibility` in `packages/shared/src/mcp.ts` |
 | Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |
