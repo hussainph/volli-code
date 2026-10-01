@@ -13,7 +13,12 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import {
+  createWorkspaceStore,
+  DEFAULT_WORKSPACE_UI,
+  useWorkspaceStore,
+} from "@renderer/stores/workspace";
+import { runKickoff } from "@renderer/components/board/new-ticket/submit";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -274,6 +279,86 @@ describe("startTicketChat", () => {
       text: "Begin the review",
     });
   });
+});
+
+describe("Create & start keeps the current workspace (VC-491)", () => {
+  it.each([
+    ["board", "home", "board", null, "p1"],
+    ["project file", "home", "file:README.md", null, "p1"],
+    ["project chat", "home", "chat:existing", null, "p1"],
+    ["another ticket", "home", "board", "existing-ticket", "p1"],
+    ["Configure", "configure", "board", null, "p1"],
+    ["another project", "home", "board", null, "p2"],
+  ] as const)(
+    "starts from %s without changing selection",
+    async (_name, nav, homeActiveTab, openTicketId, selectedProjectId) => {
+      const workspace = createWorkspaceStore({
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      });
+      const current = {
+        ...DEFAULT_WORKSPACE_UI,
+        nav,
+        homeActiveTab,
+        openTicketId,
+        selectedTicketId: openTicketId,
+      };
+      workspace.setState({ byProject: { p1: current, p2: DEFAULT_WORKSPACE_UI } });
+      vi.spyOn(useWorkspaceStore, "getState").mockImplementation(workspace.getState);
+      useProjectsStore.setState({ selectedProjectId });
+      const create = vi.fn(async () => "durable-1");
+      stubChatStore(create);
+      const enqueue = vi.fn();
+      const openChatTab = vi.fn();
+      useChatSessionsStore.setState({ enqueue, openChatTab });
+      const toastSuccess = vi.fn();
+      const history = workspace.getState().navHistory;
+
+      await expect(
+        runKickoff(
+          {
+            projectId: "p1",
+            ticketPrefix: "VC",
+            status: "backlog",
+            priority: "medium",
+            title: TICKET.title,
+            body: TICKET.body,
+            labels: [],
+            usesWorktree: true,
+            baseBranch: "main",
+          },
+          {
+            addTicket: vi.fn(async () => TICKET),
+            startChat: startTicketChat,
+            toastSuccess,
+            runAutomation: vi.fn(async () => {}),
+          },
+          {},
+        ),
+      ).resolves.toEqual({ created: true });
+
+      const after = workspace.getState();
+      // Only the NEW ticket's dormant tab is prepared. Every visible selection
+      // and the navigation history stay exactly where the person left them.
+      expect(after.byProject.p1).toEqual({
+        ...current,
+        ticketTabs: { t1: expect.objectContaining({ active: "chat:durable-1" }) },
+      });
+      expect(after.byProject.p2).toBe(DEFAULT_WORKSPACE_UI);
+      expect(after.navHistory).toBe(history);
+      expect(useProjectsStore.getState().selectedProjectId).toBe(selectedProjectId);
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "t1" }));
+      expect(openChatTab).toHaveBeenCalledWith("t1", "durable-1");
+      expect(enqueue).toHaveBeenCalledWith(
+        "durable-1",
+        expect.objectContaining({
+          text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+        }),
+      );
+      expect(toastSuccess).toHaveBeenCalledWith("VC-1 created");
+    },
+  );
 });
 
 describe("terminalCreateRequest", () => {

@@ -2,7 +2,7 @@
  * Acceptance smoke for the composer's "Create & start" — the product's magic
  * path, and after VC-56 a CHAT path rather than a terminal one.
  *
- * What the button does now (VC-56, subsuming VC-15):
+ * What the button does now (VC-56, subsuming VC-15; VC-491 stops the teleport):
  *   • the composer offers no terminal harness anywhere — the picker that chose
  *     which TUI a kickoff launched is gone with the launch it described;
  *   • its footer names the model and effort the Session will run on, seeded
@@ -10,10 +10,12 @@
  *     defaults), not the project one — as ONE control at the dialog's own
  *     width, where the three commits beside it leave no room for two (VC-382);
  *   • pressing it (or ⇧⌘↵) creates the ticket DIRECTLY in Doing regardless of
- *     the Status chip, opens the ticket workspace, and lands on a CHAT tab
- *     whose agent is already working;
- *   • with "Create more" ON the Session still starts, in the background, and
- *     the composer stays open with no navigation.
+ *     the Status chip and starts its CHAT Session — and NEVER navigates: the
+ *     underlying workspace stays put (VC-491). The Session's chat tab is
+ *     prepared on the ticket, so explicitly opening the ticket later lands on
+ *     the running agent;
+ *   • "Create more" no longer changes where the Session starts — it solely
+ *     decides whether the composer resets in place (stays open) or closes.
  *
  * HOW THE TURN PROVES THE BRIEF. Kickoff sends one stock instruction — "Begin
  * work on this ticket. Your assignment is the Ticket Brief above." — and never
@@ -35,6 +37,7 @@ import { join } from "node:path";
 import {
   activeTabLabel,
   assertProfileIsolated,
+  cardById,
   columnHasCard,
   createRunner,
   ensurePiAuthInto,
@@ -145,6 +148,52 @@ async function ticketsFor(page, projectId) {
   }, projectId);
 }
 
+/** Whether exactly one composer dialog is mounted right now. */
+async function composerOpen(page) {
+  return (await composer(page).count()) === 1;
+}
+
+/**
+ * VC-491's stay-put half, read after a settle window (a late navigation would
+ * still be one worth catching): the board is still the surface in front and no
+ * ticket workspace has mounted over it.
+ */
+async function boardStillInFront(page) {
+  await sleep(500);
+  const boardInFront = await page
+    .getByRole("button", { name: "New ticket", exact: true })
+    .isVisible();
+  return { boardInFront, noDetail: !(await detailOpen(page)) };
+}
+
+/** A ticket's durable Session listing, or null while none is recorded yet. */
+async function sessionsFor(page, ticketId) {
+  if (!ticketId) return null;
+  const listed = await page.evaluate(
+    (id) => window.api.sessions.listForTicket({ ticketId: id }),
+    ticketId,
+  );
+  return listed?.ok && listed.sessions.length > 0 ? listed.sessions : null;
+}
+
+/**
+ * Double-click a board card to open its ticket workspace — the explicit open a
+ * VC-491 kickoff no longer performs for the user (ticket-detail-smoke.mjs
+ * precedent, retries included).
+ */
+async function openCardDetail(page, displayId) {
+  for (let i = 0; i < 3; i += 1) {
+    await cardById(page, displayId).dblclick();
+    try {
+      await waitUntil("the ticket workspace to open", () => detailOpen(page), { timeout: 4000 });
+      return true;
+    } catch {
+      // fall through and retry
+    }
+  }
+  return false;
+}
+
 // ---- main ------------------------------------------------------------------
 
 async function main() {
@@ -223,11 +272,11 @@ async function main() {
       },
     );
 
-    // === 2. Create & start: Doing + workspace + a chat tab + a working agent ==
+    // === 2. Create & start: Doing + a durable Session, and no teleport ======
     const MARKER = "KICKOFF-READY-ALPHA42";
     await attempt(
       2,
-      "Create & start: ticket lands in Doing, the ticket workspace opens on a CHAT tab, and the agent answers from the Ticket Brief alone",
+      "Create & start: ticket lands in Doing, a Session starts without navigating — and explicitly opening the ticket lands on the prepared chat, whose agent answers from the Ticket Brief alone",
       async () => {
         const opened = await openComposerViaHeader(page);
         if (!opened || (await kickoffButton(page).count()) === 0) {
@@ -244,46 +293,86 @@ async function main() {
         const since = Date.now();
         await kickoffButton(page).click();
 
-        const detail = await waitUntil("ticket workspace opens", () => detailOpen(page), {
-          timeout: 8000,
-        })
+        // VC-491's foreground contract: the composer closes, and that is ALL
+        // that happens on screen — the board stays in front, no ticket
+        // workspace teleports in. The close lands once the create and the
+        // Session start resolve, hence the generous window.
+        const composerClosed = await waitUntil(
+          "the composer to close",
+          async () => !(await composerOpen(page)),
+          { timeout: 20000 },
+        )
           .then(() => true)
           .catch(() => false);
-        // The CHAT tab is the one in front. Chat tabs are untitled until their
-        // first delivered message names them; a kickoff names its Session up
-        // front, so the strip reads "Work on KO-n" rather than "Chat".
-        const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
-        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
-        const activeLabel = await waitUntil(
-          "the kickoff chat tab to be the active tab",
-          async () => {
-            const label = await activeTabLabel(page, TICKET_TAB_STRIP);
-            return label !== null && label.includes(`Work on ${displayId}`) ? label : null;
-          },
-          { timeout: 8000 },
-        )
-          .then((label) => label)
-          .catch(() => null);
+        const board = await boardStillInFront(page);
 
+        const seeded = await waitUntil(
+          "the created ticket to be readable",
+          async () => (await ticketsFor(page, projectId)).find((t) => t.title === title) ?? false,
+          { timeout: 8000 },
+        ).catch(() => null);
+        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
+        const inDoingDb = seeded?.status === "doing";
+        const inDoingBoard = seeded ? await columnHasCard(page, "Doing", displayId) : false;
+
+        // The durable Session is the evidence that work actually started — the
+        // screen deliberately shows none of it (VC-491).
+        const sessionStarted = seeded
+          ? await waitUntil(
+              "a Session recorded against the ticket",
+              async () => sessionsFor(page, seeded.id),
+              { timeout: 20000 },
+            )
+              .then(() => true)
+              .catch(() => false)
+          : false;
+
+        // The user drives the open now — the exact gesture this smoke repeats.
+        // The CHAT tab is the one in front when they do: startTicketChat
+        // prepared it at start time without navigating. Chat tabs are untitled
+        // until their first delivered message names them; a kickoff names its
+        // Session up front, so the strip reads "Work on KO-n" rather than "Chat".
+        let onChat = false;
+        if (seeded && displayId) {
+          const openedCard = await openCardDetail(page, displayId);
+          onChat =
+            openedCard &&
+            (await waitUntil(
+              "the prepared chat tab to be the active tab",
+              async () => {
+                const label = await activeTabLabel(page, TICKET_TAB_STRIP);
+                return label !== null && label.includes(`Work on ${displayId}`) ? label : null;
+              },
+              { timeout: 8000 },
+            )
+              .then(() => true)
+              .catch(() => false));
+        }
+
+        // With the workspace finally open, the one billed turn can be read.
         const { texts } = await waitForSettledReply(page, { since });
         const answered = texts.some((text) => text.includes(MARKER));
 
-        const inDoingDb = seeded?.status === "doing";
-        await goToBoard(page);
-        const inDoingBoard = seeded ? await columnHasCard(page, "Doing", displayId) : false;
-
-        const ok = detail && activeLabel !== null && answered && inDoingDb && inDoingBoard;
+        const ok =
+          composerClosed &&
+          board.boardInFront &&
+          board.noDetail &&
+          inDoingDb &&
+          inDoingBoard &&
+          sessionStarted &&
+          onChat &&
+          answered;
         return {
           ok,
-          detail: `workspace=${detail} activeTab=${JSON.stringify(activeLabel)} briefAnswered=${answered} doingDb=${inDoingDb} doingBoard=${inDoingBoard}`,
+          detail: `composerClosed=${composerClosed} boardInFront=${board.boardInFront} noNavigation=${board.noDetail} doingDb=${inDoingDb} doingBoard=${inDoingBoard} sessionStarted=${sessionStarted} preparedChatTab=${onChat} briefAnswered=${answered}`,
         };
       },
     );
 
-    // === 3. Create-more ON: background start, composer stays put =============
+    // === 3. Create-more ON: reset in place, still no navigation =============
     await attempt(
       3,
-      "Create-more ON + kickoff: the Session starts in the background, the composer stays open, and nothing navigates",
+      "Create-more ON + kickoff: the composer resets in place and stays open, nothing navigates, and the Session starts",
       async () => {
         await goToBoard(page);
         const opened = await openComposerViaHeader(page);
@@ -297,32 +386,39 @@ async function main() {
         await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");
         await kickoffButton(page).click();
 
-        // The durable Session is the evidence, not a visible tab: nothing
-        // navigated, so there is no strip to read. Poll the ticket's own
-        // Session listing over the same IPC the rail reads.
-        const started = await waitUntil(
+        // VC-491: where the Session starts no longer depends on this toggle —
+        // it solely decides reset-in-place vs close. With it on, the composer
+        // stays open with its fields cleared (the reset lands once the create
+        // and the Session start resolve), and nothing navigates: the durable
+        // Session is the evidence, not a visible tab.
+        const resetInPlace = await waitUntil(
+          "the composer to reset in place and stay open",
+          async () =>
+            (await composerOpen(page)) &&
+            (await titleInput(page)
+              .inputValue()
+              .catch(() => null)) === "",
+          { timeout: 20000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+        const board = await boardStillInFront(page);
+        const sessionStarted = await waitUntil(
           "a Session recorded against the background ticket",
           async () => {
             const ticket = (await ticketsFor(page, projectId)).find((t) => t.title === title);
-            if (!ticket) return null;
-            const listed = await page.evaluate(
-              (id) => window.api.sessions.listForTicket({ ticketId: id }),
-              ticket.id,
-            );
-            return listed?.ok && listed.sessions.length > 0 ? listed.sessions : null;
+            return sessionsFor(page, ticket?.id);
           },
           { timeout: 20000 },
         )
           .then(() => true)
           .catch(() => false);
-
-        const stillOpen = (await composer(page).count()) === 1;
-        const noDetail = !(await detailOpen(page));
         await closeAnyDialog(page);
 
+        const ok = resetInPlace && board.boardInFront && board.noDetail && sessionStarted;
         return {
-          ok: started && stillOpen && noDetail,
-          detail: `sessionStarted=${started} composerStillOpen=${stillOpen} noNavigation=${noDetail}`,
+          ok,
+          detail: `resetInPlace=${resetInPlace} boardInFront=${board.boardInFront} noNavigation=${board.noDetail} sessionStarted=${sessionStarted}`,
         };
       },
     );
@@ -330,7 +426,7 @@ async function main() {
     // === 4. ⇧⌘↵ is the kickoff chord =========================================
     await attempt(
       4,
-      "⇧⌘↵ kicks off: the ticket workspace opens on the chat tab, same as the button",
+      "⇧⌘↵ kicks off without navigating: composer closes, the board stays in front, and the Session exists",
       async () => {
         await goToBoard(page);
         const opened = await openComposerViaHeader(page);
@@ -342,19 +438,34 @@ async function main() {
         await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");
         await page.keyboard.press("Meta+Shift+Enter");
 
-        const detail = await waitUntil("ticket workspace opens after the chord", () =>
-          detailOpen(page),
+        // The chord is Create-&-start's keyboard form, so VC-491's contract is
+        // the button's: the composer closes, the board stays put, and the
+        // durable Session proves the start happened. (Attempt 3 left
+        // create-more ON, but its trailing Escape closed the composer and every
+        // open mounts it fresh — so this chord runs the default close path.)
+        const composerClosed = await waitUntil(
+          "the composer to close",
+          async () => !(await composerOpen(page)),
+          { timeout: 20000 },
         )
           .then(() => true)
           .catch(() => false);
-        const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
-        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
-        const label = await activeTabLabel(page, TICKET_TAB_STRIP);
-        const onChat = label !== null && label.includes(`Work on ${displayId}`);
+        const board = await boardStillInFront(page);
+        const sessionStarted = await waitUntil(
+          "a Session recorded against the chord ticket",
+          async () => {
+            const ticket = (await ticketsFor(page, projectId)).find((t) => t.title === title);
+            return sessionsFor(page, ticket?.id);
+          },
+          { timeout: 20000 },
+        )
+          .then(() => true)
+          .catch(() => false);
 
+        const ok = composerClosed && board.boardInFront && board.noDetail && sessionStarted;
         return {
-          ok: detail && onChat,
-          detail: `workspace=${detail} activeTab=${JSON.stringify(label)}`,
+          ok,
+          detail: `composerClosed=${composerClosed} boardInFront=${board.boardInFront} noNavigation=${board.noDetail} sessionStarted=${sessionStarted}`,
         };
       },
     );

@@ -6,6 +6,8 @@ import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/s
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
+import type { ComposerChips } from "./composer-chips";
+import { clearDraft } from "./draft";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { runPlainCreate, runKickoff, runCreateWithAutomation } from "./submit";
 
@@ -51,7 +53,11 @@ vi.mock("./submit", () => ({
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
   MonacoDocumentEditor: () => <textarea aria-label="Ticket description" />,
 }));
-vi.mock("./composer-chips", () => ({ ComposerChips: () => null }));
+vi.mock("./composer-chips", () => ({
+  ComposerChips: ({ createMore, onCreateMoreChange }: ComponentProps<typeof ComposerChips>) => (
+    <button onClick={() => onCreateMoreChange(!createMore)}>Create more</button>
+  ),
+}));
 vi.mock("./composer-breadcrumb", () => ({
   ComposerBreadcrumb: ({ projects, onRetarget }: ComponentProps<typeof ComposerBreadcrumb>) => (
     <button onClick={() => onRetarget(projects[1]!)}>Retarget</button>
@@ -175,9 +181,36 @@ it.each([false, true])(
     mocks.run.explicit = explicit;
     await chord(true);
     expect(runKickoff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
-      createMore: false,
       ...(explicit ? { model } : {}),
     });
+  },
+);
+it.each([false, true])(
+  "successful kickoff with Create more=%s only closes or resets the composer",
+  async (createMore) => {
+    const onClose = vi.fn();
+    vi.mocked(runKickoff).mockResolvedValueOnce({ created: true });
+    await act(async () =>
+      root.render(
+        <ComposerForm
+          initialProject={project}
+          expanded={false}
+          onToggleExpand={() => {}}
+          onClose={onClose}
+        />,
+      ),
+    );
+    if (createMore) await click("Create more");
+    await click("Submit");
+
+    expect(clearDraft).toHaveBeenCalledOnce();
+    expect(runKickoff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {});
+    if (createMore) {
+      expect(onClose).not.toHaveBeenCalled();
+      expect(host.querySelector("input")?.value).toBe("");
+    } else {
+      expect(onClose).toHaveBeenCalledOnce();
+    }
   },
 );
 
