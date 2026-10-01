@@ -36,7 +36,7 @@ export function createModelAutoSelect(options: {
       return setting.kind === "cloud" && decisionTargetFor(setting, "model.select").ok;
     },
 
-    async decide({ sessionId, projectId, request, tierHint, candidates }) {
+    async decide({ sessionId, projectId, request, tierHint, candidates, signal }) {
       const asked = autoSelectRequest({ request, tierHint }, candidates);
       if (asked === null) return null;
       return options.port.decide<AutoSelectPick | null>({
@@ -45,6 +45,7 @@ export function createModelAutoSelect(options: {
         projectId,
         state: asked.state,
         questions: asked.questions,
+        ...(signal === undefined ? {} : { signal }),
         use: (answered) => readAutoSelect(answered, candidates),
         fallback: () => null,
       });

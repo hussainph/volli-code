@@ -139,9 +139,9 @@ service is `apps/desktop/src/main/decision/auto-select.ts`, reached from
   Instructions, clipped to 6,000 characters) and, for a subagent, the tier its
   parent runs on. Nothing else about the Session is sent.
 - **Fallback.** The configured default is resolved first and stands for every
-  miss: unset, not opted in, timeout (2.5 s, the purpose's `timeoutMs`),
-  provider error, malformed answer, or a confidence below
-  `AUTO_SELECT_MIN_CONFIDENCE` (0.5). A miss is silent and, with no decision
+  miss: unset, not opted in, timeout (2.5 s for preparation and inference
+  together, the purpose's `timeoutMs`), provider error, malformed answer, or
+  a confidence below `AUTO_SELECT_MIN_CONFIDENCE` (0.5). A miss is silent and, with no decision
   model, costs one settings read.
 - **Cloud only, behind its own switch.** `model.select` is not in
   `DECISION_BASE_PURPOSES`, so choosing a cloud model never opts a person into
@@ -153,8 +153,10 @@ service is `apps/desktop/src/main/decision/auto-select.ts`, reached from
   usage is billed to it, cause `decision`, purpose `model.select`) and before
   the model is recorded. It is recorded in the `model.select` command and the
   `model.selected` event as `auto` (confidence and the top alternatives) and
-  projected as `modelAuto`; any later selection clears it. A Session that is
-  running never has its model changed by this.
+  projected as `modelAuto`; any later selection clears it. Replayed starts
+  restate their original birth command even after a manual override, and
+  concurrent replays share one decision through its durable write. A Session
+  that is running never has its model changed by this.
 - **Shown.** The model pill reads `Auto · <model>`, and its list leads with
   "Auto-picked <model> · <effort>" and one button per alternative.
 

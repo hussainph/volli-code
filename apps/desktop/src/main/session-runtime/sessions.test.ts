@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type {
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -1823,6 +1823,11 @@ describe("a decision model's choice of model, at birth (VC-432)", () => {
       autoSelect: { request: "x" },
     });
     expect(modelRecord(without.commands)).toEqual({ kind: "model.select", selection: MODEL });
+
+    const noHint = born({ readDefaultModel: tiers, autoSelect: port });
+    await noHint.sessions.create(startInput("operation-no-hint"));
+    expect(modelRecord(noHint.commands)).toEqual({ kind: "model.select", selection: MODEL });
+    expect(asked).toEqual([]);
   });
 
   it.each([
@@ -1906,8 +1911,14 @@ describe("a decision model's choice of model, at birth (VC-432)", () => {
     const { commands, sessions: door } = born({
       readDefaultModel: tiers,
       inspectModelAccess: async () => access,
-      // The Session this operation already minted carries its model and pick.
-      readModelAnchor: async () => ({ selection: FAST, tier: null, auto: recorded }),
+      // The person since changed its CURRENT model. A replay must restate
+      // the original command, not that later selection.
+      readModelAnchor: async () => ({ selection: DEEP, tier: "deep" }),
+      readBirthModel: async (sessionId, commandId) => {
+        expect(sessionId).toBe("session-1");
+        expect(commandId).toBe("operation-replayed:model");
+        return { selection: FAST, tier: null, auto: recorded };
+      },
       autoSelect: port,
     });
 
@@ -1929,7 +1940,7 @@ describe("a decision model's choice of model, at birth (VC-432)", () => {
     const { port } = pick({ available: () => false });
     const { commands, sessions: door } = born({
       readDefaultModel: tiers,
-      readModelAnchor: async () => ({ selection: DEEP, tier: "deep", auto: AUTO }),
+      readBirthModel: async () => ({ selection: DEEP, tier: "deep", auto: AUTO }),
       autoSelect: port,
     });
     await door.create({ ...startInput("operation-replayed-off"), autoSelect: { request: "x" } });
@@ -1939,6 +1950,131 @@ describe("a decision model's choice of model, at birth (VC-432)", () => {
       tier: "deep",
       auto: AUTO,
     });
+  });
+
+  it("falls back when the availability check throws, or the birth record cannot be read", async () => {
+    const { port } = pick({
+      available: () => {
+        throw new Error("settings unreadable");
+      },
+    });
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      readBirthModel: async () => {
+        throw new Error("projection unreadable");
+      },
+      autoSelect: port,
+    });
+    const created = await door.create({
+      ...startInput("operation-throws"),
+      autoSelect: { request: "x" },
+    });
+    expect(created.model).toEqual(MODEL);
+  });
+
+  it("bounds preparation and sends nothing if the catalog arrives after fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      const catalog = Promise.withResolvers<ModelAccessSnapshot>();
+      const { asked, port } = pick();
+      const { sessions: door } = born({
+        readDefaultModel: tiers,
+        inspectModelAccess: () => catalog.promise,
+        autoSelect: port,
+      });
+      const created = door.create({
+        ...startInput("operation-hung"),
+        autoSelect: { request: "x" },
+      });
+      await vi.advanceTimersByTimeAsync(2_500);
+      await expect(created).resolves.toMatchObject({ model: MODEL });
+      catalog.resolve(access);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(asked).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("withdraws slow inference at the deadline and ignores its late pick", async () => {
+    vi.useFakeTimers();
+    try {
+      const answer =
+        Promise.withResolvers<
+          Awaited<ReturnType<NonNullable<SessionsOptions["autoSelect"]>["decide"]>>
+        >();
+      let signal: AbortSignal | undefined;
+      const { port } = pick({
+        decide: async (input) => {
+          signal = input.signal;
+          return answer.promise;
+        },
+      });
+      const { commands, sessions: door } = born({
+        readDefaultModel: tiers,
+        inspectModelAccess: async () => access,
+        autoSelect: port,
+      });
+      const created = door.create({
+        ...startInput("operation-slow"),
+        autoSelect: { request: "x" },
+      });
+      await vi.advanceTimersByTimeAsync(2_500);
+      await expect(created).resolves.toMatchObject({ model: MODEL });
+      expect(signal?.aborted).toBe(true);
+      answer.resolve({ selection: DEEP, auto: AUTO });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(commands.filter((request) => request.command.kind === "model.select")).toEqual([
+        expect.objectContaining({ command: { kind: "model.select", selection: MODEL } }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets concurrent replays of one operation share one decision", async () => {
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    const input = { ...startInput("operation-concurrent"), autoSelect: { request: "x" } };
+    await Promise.all([door.create(input), door.create(input)]);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("shares a birth through a slow model-record write, not just through inference", async () => {
+    const written = Promise.withResolvers<void>();
+    const writing = Promise.withResolvers<void>();
+    const { asked, port } = pick();
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+      readBirthModel: async () => null,
+      runtime: {
+        command: async (request) => {
+          if (request.command.kind === "model.select") {
+            writing.resolve();
+            await written.promise;
+          }
+          return result(request);
+        },
+      },
+    });
+    const input = { ...startInput("operation-writing"), autoSelect: { request: "x" } };
+    const first = door.create(input);
+    await writing.promise;
+    const replay = door.create(input);
+    // Let the replay reach the birth while its durable write is pending.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(asked).toHaveLength(1);
+    written.resolve();
+    await expect(Promise.all([first, replay])).resolves.toEqual([
+      { sessionId: "session-1", model: DEEP },
+      { sessionId: "session-1", model: DEEP },
+    ]);
   });
 
   it("gives a subagent's decision the tier its parent runs on", async () => {

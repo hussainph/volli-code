@@ -14,6 +14,7 @@
  * what a client asks of it, plus the fold.
  */
 import {
+  AUTO_SELECT_MAX_REQUEST_CHARS,
   errorMessage,
   inlineImageBytesIn,
   isDefaultModelRequired,
@@ -404,7 +405,13 @@ export function createChatSessionsStore(
                 ? {}
                 : { model: provisional.model }),
               ...(provisional.modelIsDefault === true && staged.held[0] !== undefined
-                ? { autoSelect: { request: staged.held[0].text } }
+                ? {
+                    // Clipped here as the decision clips it: the hint is optional
+                    // and must never be what stops the create.
+                    autoSelect: {
+                      request: staged.held[0].text.slice(0, AUTO_SELECT_MAX_REQUEST_CHARS),
+                    },
+                  }
                 : {}),
             },
             // A provisional view owns no resident client yet. Wait until create

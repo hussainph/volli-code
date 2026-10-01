@@ -24,6 +24,7 @@ import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session
 import {
   AUTO_SELECT_TIERS,
   autoSelectCandidates,
+  DECISION_PURPOSE_POLICY,
   DEFAULT_MODEL_REQUIRED,
   defaultModelRequiredForTier,
   isAgentModelTier,
@@ -349,11 +350,6 @@ export type SessionModelOverride = {
 export interface SessionModelAnchor {
   readonly selection: ModelSelection | null;
   readonly tier: ModelTier | null;
-  /**
-   * The decision model's pick behind `selection`, when it chose it (VC-432).
-   * Read back only to state a replayed start's record exactly as it was.
-   */
-  readonly auto?: ModelAutoPick | undefined;
 }
 
 /**
@@ -440,6 +436,8 @@ export interface SessionAutoSelectPort {
     request: string;
     tierHint: AgentModelTier | null;
     candidates: readonly AutoSelectCandidate[];
+    /** The birth's whole deadline, preparation included. */
+    signal?: AbortSignal;
   }): Promise<AutoSelectPick | null>;
 }
 
@@ -535,6 +533,17 @@ export interface SessionsOptions {
    * Session's policy IS.
    */
   readModelAnchor(sessionId: string): Promise<SessionModelAnchor>;
+  /**
+   * The model record a start already wrote for this Session under this command
+   * id, exactly as written, or null when it wrote none (VC-432). A replayed
+   * start restates it: the engine refuses a replay whose intent differs, and
+   * the Session's CURRENT model is not what its birth recorded once a person
+   * has picked another.
+   */
+  readBirthModel?(
+    sessionId: string,
+    commandId: string,
+  ): Promise<{ selection: ModelSelection; tier: ModelTier | null; auto?: ModelAutoPick } | null>;
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
   /** Durable per-Session grants and ancestry, resolved and recorded at birth (VC-183, VC-9). */
@@ -668,7 +677,7 @@ function sameSelection(a: ModelSelection, b: ModelSelection): boolean {
 /**
  * Whether this start is the kind an automatic choice may apply to: it offered
  * a request and named no model, tier or reasoning level. Whether a decision
- * could actually run is {@link autoSelectWanted}'s further question.
+ * could actually run is the port's availability check.
  */
 function autoSelectOffered(options: SessionsOptions, input: SessionStartInput): boolean {
   const named = input.modelOverride;
@@ -678,13 +687,6 @@ function autoSelectOffered(options: SessionsOptions, input: SessionStartInput): 
     named?.model === undefined &&
     named?.tier === undefined &&
     named?.reasoningLevel === undefined
-  );
-}
-
-/** {@link autoSelectOffered}, and a decision for this project could run: one settings read. */
-function autoSelectWanted(options: SessionsOptions, input: SessionStartInput): boolean {
-  return (
-    autoSelectOffered(options, input) && (options.autoSelect?.available(input.projectId) ?? false)
   );
 }
 
@@ -708,9 +710,21 @@ async function autoSelectModel(
   sessionId: string,
 ): Promise<AutoSelectPick | null> {
   const port = options.autoSelect;
-  if (port === undefined || !autoSelectWanted(options, input)) return null;
-  const request = input.autoSelect?.request.trim() ?? "";
-  try {
+  if (port === undefined) return null;
+  const withdraw = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The whole refinement is bounded, preparation included: the decision
+  // service's own deadline starts only when it is asked, and the catalog read
+  // before it has none of its own.
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      withdraw.abort();
+      resolve(null);
+    }, DECISION_PURPOSE_POLICY["model.select"].timeoutMs);
+  });
+  const refinement = (async (): Promise<AutoSelectPick | null> => {
+    const request = input.autoSelect?.request.trim() ?? "";
+    if (!autoSelectOffered(options, input) || !port.available(input.projectId)) return null;
     const tiers = Object.fromEntries(
       await Promise.all(
         AUTO_SELECT_TIERS.map(async (tier) => [tier, await options.readDefaultModel(tier, null)]),
@@ -724,7 +738,11 @@ async function autoSelectModel(
         sameSelection(candidate.selection, configuredDefault) ||
         (runnable?.(candidate.selection) ?? false),
     );
-    return await port.decide({
+    // Preparation may finish after birth already fell back. Do not start a
+    // paid call after that deadline, and withdraw any call already in flight.
+    if (withdraw.signal.aborted) return null;
+    return port.decide({
+      signal: withdraw.signal,
       sessionId,
       projectId: input.projectId,
       request,
@@ -736,10 +754,17 @@ async function autoSelectModel(
           : null,
       candidates,
     });
+  })();
+  try {
+    return await Promise.race([refinement, deadline]);
   } catch {
     // The default stands. A person is not waiting on a refinement they did not
     // ask for, and the model they will see is the one the Session runs.
     return null;
+  } finally {
+    clearTimeout(timer);
+    // A refinement that outlived its deadline settles unobserved.
+    refinement.catch(() => undefined);
   }
 }
 
@@ -761,6 +786,8 @@ async function runnableSelections(
 
 /** Product-owned Session start commands over private adapter migration scaffolding. */
 export function createSessions(options: SessionsOptions): Sessions {
+  /** Birth choices in flight through their durable write, so concurrent replays agree. */
+  const autoBirths = new Map<string, Promise<ModelSelection>>();
   /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
   async function mint(
     input: SessionStartInput,
@@ -893,31 +920,45 @@ export function createSessions(options: SessionsOptions): Sessions {
     // A replayed start finds its Session already carrying a model, and states
     // that same record again: the engine refuses a replay whose intent
     // differs, and a second decision (or a miss) is exactly such a difference.
-    // Best-effort: a start that cannot read its own Session back is a start
-    // with nothing replayed, never a start that fails over a refinement.
-    const anchor = autoSelectOffered(options, input)
-      ? await options.readModelAnchor(created.sessionId).catch(() => null)
-      : null;
-    const replayed = anchor?.selection ?? null;
-    const picked =
-      replayed === null
-        ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
-        : null;
-    const chosen = replayed ?? picked?.selection ?? model;
-    const auto = replayed === null ? picked?.auto : anchor?.auto;
-    const tier =
-      replayed !== null
-        ? (anchor?.tier ?? undefined)
-        : picked !== null && !sameSelection(picked.selection, model)
-          ? undefined
-          : override?.tier;
-    await recordModelSelection(options.runtime, {
-      commandId: `${input.operationId}:model`,
-      sessionId: created.sessionId,
-      model: chosen,
-      ...(tier === undefined ? {} : { tier }),
-      ...(auto === undefined ? {} : { auto }),
-    });
+    // The record is read back only for a start that offered a request, and
+    // best-effort: a start that cannot read its own Session back is a start
+    // with nothing replayed, never one that fails over a refinement.
+    const offered = autoSelectOffered(options, input);
+    const recordBirthModel = async (): Promise<ModelSelection> => {
+      const modelCommandId = `${input.operationId}:model`;
+      const birth =
+        offered && options.readBirthModel !== undefined
+          ? await options.readBirthModel(created.sessionId, modelCommandId).catch(() => null)
+          : null;
+      const picked =
+        birth === null
+          ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
+          : null;
+      const chosen = birth?.selection ?? picked?.selection ?? model;
+      const auto = birth === null ? picked?.auto : birth.auto;
+      const tier =
+        birth !== null
+          ? (birth.tier ?? undefined)
+          : picked !== null && !sameSelection(picked.selection, model)
+            ? undefined
+            : override?.tier;
+      await recordModelSelection(options.runtime, {
+        commandId: modelCommandId,
+        sessionId: created.sessionId,
+        model: chosen,
+        ...(tier === undefined ? {} : { tier }),
+        ...(auto === undefined ? {} : { auto }),
+      });
+      return chosen;
+    };
+    // Share the read, decision AND write. Releasing at decision completion
+    // leaves a window where a replay sees no record and asks a second time.
+    let choosing = offered ? autoBirths.get(input.operationId) : undefined;
+    if (choosing === undefined) {
+      choosing = recordBirthModel().finally(() => autoBirths.delete(input.operationId));
+      if (offered) autoBirths.set(input.operationId, choosing);
+    }
+    const chosen = await choosing;
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
     // follows separately — and the record has to exist before whichever

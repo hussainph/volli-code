@@ -218,6 +218,13 @@ describe("where a call goes", () => {
     expect(offersClassifyTool(LOCAL)).toBe(true);
   });
 
+  it("never routes automatic model choice to a local server", () => {
+    expect(decisionTargetFor(LOCAL, "model.select")).toMatchObject({
+      ok: false,
+      miss: { reason: "unset" },
+    });
+  });
+
   it("goes to the cloud only for a purpose the opt-in names", () => {
     expect(decisionTargetFor(CLOUD, "agent.classify")).toEqual({
       ok: true,

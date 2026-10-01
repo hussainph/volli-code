@@ -584,6 +584,22 @@ describe("promoteChatSession", () => {
     expect(ticketStarts[0]).not.toHaveProperty("model");
   });
 
+  it("clips a very long first message before offering it, and keeps the whole message", async () => {
+    const { store, ticketStarts } = fixture();
+    openDraft();
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    useChatDraftsStore.getState().setProvisionalModel(DRAFT_ID, model, { fromDefault: true });
+    const long = "x".repeat(300_000);
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, { id: "m1", text: long });
+
+    await store.getState().promoteChatSession(DRAFT_ID);
+
+    expect(
+      (ticketStarts[0] as { autoSelect: { request: string } }).autoSelect.request,
+    ).toHaveLength(6_000);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held[0]?.text).toHaveLength(300_000);
+  });
+
   it("sends a person's own pick as the model, and offers nothing to the automatic choice", async () => {
     const { store, ticketStarts } = fixture();
     openDraft();

@@ -156,6 +156,32 @@ describe("the model.select port", () => {
     expect(idle.asked).toEqual([]);
   });
 
+  it("falls back if Settings switches to local after birth's availability check", async () => {
+    store(CLOUD_ON);
+    const fake = classifier({ choice: "option_2", confidence: 0.8 });
+    const { select } = port(fake.built);
+    expect(select.available(PROJECT)).toBe(true);
+    store({
+      kind: "local",
+      server: "llama-cpp",
+      baseUrl: "http://127.0.0.1:8080",
+      modelId: "default",
+    });
+    expect(await select.decide(input)).toBeNull();
+    expect(fake.asked).toEqual([]);
+  });
+
+  it("forwards withdrawal to the decision service without asking a classifier", async () => {
+    store(CLOUD_ON);
+    const fake = classifier({ choice: "option_2", confidence: 0.8 });
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      await port(fake.built).select.decide({ ...input, signal: controller.signal }),
+    ).toBeNull();
+    expect(fake.asked).toEqual([]);
+  });
+
   it("sends nothing when there is only one pair to choose", async () => {
     store(CLOUD_ON);
     const fake = classifier({ choice: "option_1", confidence: 1 });

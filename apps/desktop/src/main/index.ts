@@ -1937,10 +1937,16 @@ app.whenReady().then(async () => {
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readModelAnchor: async (sessionId) => {
             const { projection } = await sessionRuntime.projection({ sessionId });
+            return { selection: projection.modelSelection, tier: projection.modelTier };
+          },
+          readBirthModel: async (sessionId, commandId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            const intent = projection.commands?.find((command) => command.id === commandId)?.intent;
+            if (intent?.kind !== "model.select") return null;
             return {
-              selection: projection.modelSelection,
-              tier: projection.modelTier,
-              auto: projection.modelAuto,
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
             };
           },
           skills: sessionSkills,

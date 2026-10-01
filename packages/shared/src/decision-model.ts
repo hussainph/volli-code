@@ -382,6 +382,14 @@ export function decisionTargetFor(
         miss: decisionMiss("unset", "No decision model is configured (Settings → Models)."),
       };
     case "local":
+      // Automatic model choice is cloud-only (VC-432). Enforce that here as
+      // well as at birth: Settings can change while candidates are prepared.
+      if (purpose === "model.select") {
+        return {
+          ok: false,
+          miss: decisionMiss("unset", "Automatic model choice requires a cloud decision model."),
+        };
+      }
       return {
         ok: true,
         target: {
