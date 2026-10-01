@@ -14,11 +14,14 @@
 import {
   errorMessage,
   type Project,
+  type Canvas,
+  type WorkspaceIdentity,
   type ProjectRelinkAftermath,
   type ProjectRelinkRefusal,
 } from "@volli/shared";
 import type {
   AppStateSetResult,
+  ProjectCreateInput,
   ProjectCreateResult,
   ProjectFolderResult,
   ProjectMutationResult,
@@ -74,7 +77,7 @@ export function decodeProjectsUiState(raw: string | undefined): string | null {
 
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
-  create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
+  create(input: ProjectCreateInput): Promise<ProjectCreateResult>;
   update(input: {
     id: string;
     baseBranch: string | null;
@@ -172,7 +175,16 @@ interface ProjectsState {
    * Resolves `true` when a project was added or selected, `false` when the
    * question is now waiting to be answered.
    */
-  addProject(input: { path: string; defaultName: string }): Promise<boolean>;
+  addProject(input: { path: string; defaultName: string; onboard?: true }): Promise<boolean>;
+  /** A picked, adjudicated NEW folder. No project exists until the editor commits. */
+  newProjectDraft: NewProjectDraft | null;
+  creatingProject: boolean;
+  createDraftProject(input: {
+    name: string;
+    workspaceIdentity: WorkspaceIdentity;
+    themeCanvas: Canvas | null;
+  }): Promise<boolean>;
+  dismissNewProject(): void;
   /**
    * The pending "is this folder one of these projects?" question, or `null`.
    *
@@ -230,10 +242,18 @@ function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
  * there any more. They are the only projects a moved folder could belong to,
  * and the list is what turns a silent duplicate into a question.
  */
+export interface NewProjectDraft {
+  seed: string;
+  path: string;
+  defaultName: string;
+}
+
 export interface ProjectFolderClaim {
   path: string;
   defaultName: string;
   candidates: readonly Project[];
+  /** Native picker flow continues into identity onboarding only if this is NEW. */
+  onboard?: true;
 }
 
 /**
@@ -316,9 +336,13 @@ export function createProjectsStore(
      * project": one body, so a project born through the claim question is built
      * exactly like any other.
      */
-    async function createAndSelect(path: string, defaultName: string): Promise<boolean> {
+    async function createAndSelect(
+      path: string,
+      defaultName: string,
+      identity?: Pick<ProjectCreateInput, "workspaceIdentity" | "themeCanvas">,
+    ): Promise<boolean> {
       const result = await writeThrough("add project", (): Promise<ProjectCreateResult> =>
-        gateway.create({ path, name: defaultName }),
+        gateway.create({ path, name: defaultName, ...identity }),
       );
       if (!result) return false;
 
@@ -373,6 +397,8 @@ export function createProjectsStore(
       projects: [],
       selectedProjectId: null,
       folderClaim: null,
+      newProjectDraft: null,
+      creatingProject: false,
 
       hydrate(projects, selectedProjectId) {
         const previous = get().selectedProjectId;
@@ -386,23 +412,59 @@ export function createProjectsStore(
         set({ projects: projects.map((row) => (row.id === project.id ? project : row)) });
       },
 
-      async addProject({ path, defaultName }) {
+      async addProject({ path, defaultName, onboard }) {
         // A folder this renderer already tracks is not a claim question at all:
         // main answers the create with the existing project, which is the
         // established "you already have this one" path.
         const known = get().projects.some((project) => project.path === path);
         const candidates = known ? [] : await projectsWithMissingFolders();
         if (candidates.length > 0) {
-          set({ folderClaim: { path, defaultName, candidates } });
+          set({ folderClaim: { path, defaultName, candidates, ...(onboard ? { onboard } : {}) } });
+          return false;
+        }
+        if (onboard && !known) {
+          set({ newProjectDraft: { path, defaultName, seed: crypto.randomUUID() } });
           return false;
         }
         return createAndSelect(path, defaultName);
+      },
+
+      async createDraftProject(input) {
+        const draft = get().newProjectDraft;
+        if (!draft || get().creatingProject) return false;
+        const name = input.name.trim();
+        if (!name) return false;
+        set({ creatingProject: true });
+        try {
+          const created = await createAndSelect(draft.path, name, {
+            workspaceIdentity: input.workspaceIdentity,
+            themeCanvas: input.themeCanvas,
+          });
+          if (created && get().newProjectDraft?.seed === draft.seed) set({ newProjectDraft: null });
+          return created;
+        } finally {
+          set({ creatingProject: false });
+        }
+      },
+
+      dismissNewProject() {
+        if (!get().creatingProject) set({ newProjectDraft: null });
       },
 
       async resolveClaimAsNewProject() {
         const claim = get().folderClaim;
         if (claim === null) return;
         set({ folderClaim: null });
+        if (claim.onboard) {
+          set({
+            newProjectDraft: {
+              path: claim.path,
+              defaultName: claim.defaultName,
+              seed: crypto.randomUUID(),
+            },
+          });
+          return;
+        }
         await createAndSelect(claim.path, claim.defaultName);
       },
 

@@ -36,7 +36,13 @@ import {
 import { useThemeStore } from "@renderer/stores/theme";
 import { resolveActiveTheme } from "@renderer/theme/apply";
 
-import { proceduralStamp, type GlyphName, type IdentityChoice } from "./model";
+import {
+  proceduralStamp,
+  type GlyphName,
+  type IdentityChoice,
+  type StudioSurface,
+  type MonogramStyle,
+} from "@volli/shared";
 
 export const GLYPH_COMPONENTS = {
   code: CodeIcon,
@@ -66,8 +72,7 @@ export const GLYPH_COMPONENTS = {
 } satisfies Record<GlyphName, typeof CodeIcon>;
 
 export type StudioChoice = IdentityChoice;
-export type StudioSurface = "etched" | "porcelain" | "orbit" | "letterpress";
-export type MonogramStyle = "editorial" | "architect" | "woven";
+export type { StudioSurface, MonogramStyle } from "@volli/shared";
 export const SURFACES: Record<StudioSurface, string> = {
   etched: "Etched",
   porcelain: "Porcelain",
@@ -147,6 +152,9 @@ export function IdentityMark({
   const material = useMarkMaterial(canvas, appearance);
   const Glyph = choice.kind === "glyph" ? GLYPH_COMPONENTS[choice.name] : null;
   const letters = monogram(name);
+  const [failedImage, setFailedImage] = React.useState<string | null>(null);
+  const showInitials =
+    choice.kind === "initials" || (choice.kind === "custom" && choice.dataUrl === failedImage);
   return (
     <span
       className="studio-mark"
@@ -165,7 +173,7 @@ export function IdentityMark({
         {Glyph ? (
           <Glyph className="studio-glyph" weight={surface === "porcelain" ? "fill" : "regular"} />
         ) : null}
-        {choice.kind === "initials" && (
+        {showInitials && (
           <span className="studio-monogram">
             {monogramStyle === "woven" ? (
               <>
@@ -178,8 +186,16 @@ export function IdentityMark({
           </span>
         )}
         {choice.kind === "stamp" && <Stamp seed={choice.seed} variant={choice.variant} />}
-        {choice.kind === "custom" && (
-          <img className="studio-custom" src={choice.dataUrl} alt="" onError={onImageError} />
+        {choice.kind === "custom" && !showInitials && (
+          <img
+            className="studio-custom"
+            src={choice.dataUrl}
+            alt=""
+            onError={() => {
+              setFailedImage(choice.dataUrl);
+              onImageError?.();
+            }}
+          />
         )}
       </span>
       <span className="studio-mark-glint" />

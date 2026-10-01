@@ -14,13 +14,7 @@ import { DEFAULT_CANVAS, canvasBackground, type Canvas } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  DialogTrigger,
-} from "@renderer/components/ui/dialog";
+import { GlyphPicker } from "@renderer/components/workspace-identity/editor";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { sessionAttentionRank } from "@renderer/components/ui/session-activity-status";
 import {
@@ -40,7 +34,7 @@ import {
   type StudioChoice,
   type StudioSurface,
   type MonogramStyle,
-} from "../workspace-identity/marks";
+} from "@renderer/components/workspace-identity/marks";
 import {
   readWorkspaceSession,
   visibleWorkspaceSessions,
@@ -49,7 +43,7 @@ import {
   workspaceSummaryLabel,
   type WorkspaceFixture,
 } from "./workspace-icons-model";
-import "../workspace-identity/studio.css";
+import "@renderer/components/workspace-identity/studio.css";
 
 export const title = "Workspace atelier · a little character";
 export const note =
@@ -147,64 +141,6 @@ function PaletteSwatches({
         />
       ))}
     </div>
-  );
-}
-
-function GlyphPicker({
-  selected,
-  onChoose,
-}: {
-  selected: GlyphName | null;
-  onChoose(name: GlyphName, pointer: boolean): void;
-}) {
-  const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState("");
-  const glyphs = GLYPH_CATALOG.filter((glyph) =>
-    `${glyph.label} ${glyph.name} ${glyph.keywords.join(" ")}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="sm">
-          Browse marks <ArrowUpRightIcon className="size-3" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogTitle>Find your mark</DialogTitle>
-        <Input
-          aria-label="Find a glyph"
-          placeholder="Tree, orbit, book…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <div className="studio-glyph-grid" role="group" aria-label="Phosphor glyph library">
-          {glyphs.map((glyph) => {
-            const Glyph = GLYPH_COMPONENTS[glyph.name];
-            return (
-              <button
-                key={glyph.name}
-                type="button"
-                title={glyph.label}
-                aria-label={`Choose ${glyph.label}`}
-                aria-pressed={selected === glyph.name}
-                onClick={(event) => {
-                  onChoose(glyph.name, event.detail !== 0);
-                  setOpen(false);
-                }}
-              >
-                <Glyph />
-              </button>
-            );
-          })}
-        </div>
-        {glyphs.length === 0 && <p className="text-ui text-muted-foreground">No matching marks</p>}
-        <DialogDescription className="text-ui text-muted-foreground">
-          24 Phosphor marks. A small library with a lot of personality.
-        </DialogDescription>
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -1,3 +1,4 @@
+import { DEFAULT_CANVAS, type WorkspaceIdentity } from "@volli/shared";
 import { DATA_CHANNELS } from "./ipc-descriptors";
 import type { SessionListingRow, Ticket } from "@volli/shared";
 import type {
@@ -625,6 +626,136 @@ function deferredBranch(): {
   });
   return { promise, resolve };
 }
+
+describe("volli:project-create — authored onboarding identity", () => {
+  const workspaceIdentity: WorkspaceIdentity = {
+    choice: { kind: "stamp", seed: "picked-before-project-exists", variant: 3 },
+    surface: "porcelain",
+    monogramStyle: "woven",
+  };
+
+  it("atomically returns and persists identity/canvas and carries them through bootstrap and relink", async () => {
+    const path = freshProjectDir();
+    const result = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Canopy",
+      workspaceIdentity,
+      themeCanvas: DEFAULT_CANVAS,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      created: true,
+      project: { workspaceIdentity, themeCanvas: DEFAULT_CANVAS },
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(getProjectById(ctx.db, result.project.id)).toEqual(result.project);
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [result.project] },
+    });
+    const moved = freshProjectDir();
+    const relinked = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: result.project.id,
+      path: moved,
+    });
+    expect(relinked).toMatchObject({
+      ok: true,
+      project: {
+        id: result.project.id,
+        workspaceIdentity,
+        themeCanvas: DEFAULT_CANVAS,
+        path: moved,
+      },
+    });
+  });
+
+  it("rejects malformed identity or canvas before path detection or insertion", async () => {
+    handlers.clear();
+    const detectBaseBranch = vi.fn(async () => "main");
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    const path = freshProjectDir();
+    for (const fields of [
+      { workspaceIdentity: null },
+      { workspaceIdentity: {} },
+      {
+        workspaceIdentity: {
+          ...workspaceIdentity,
+          choice: { kind: "custom", dataUrl: "https://example.com/icon.png" },
+        },
+      },
+      { themeCanvas: {} },
+      { workspaceIdentity, themeCanvas: { ...DEFAULT_CANVAS, stops: [] } },
+    ]) {
+      expect(
+        await invoke<ProjectCreateResult>("volli:project-create", {
+          path,
+          name: "Canopy",
+          ...fields,
+        }),
+      ).toEqual({ ok: false, error: "Invalid project" });
+    }
+    expect(detectBaseBranch).not.toHaveBeenCalled();
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+  });
+
+  it("returns existing projects untouched, including a winner inserted during detection", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    const detectBaseBranch = vi.fn(() => branch.promise);
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    const attemptedIdentity: WorkspaceIdentity = {
+      choice: { kind: "glyph", name: "flame" },
+      surface: "orbit",
+      monogramStyle: "editorial",
+    };
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Loser",
+      workspaceIdentity: attemptedIdentity,
+      themeCanvas: null,
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledWith(path));
+    const winner = {
+      ...testProject({ path, name: "Canopy" }),
+      workspaceIdentity,
+      themeCanvas: DEFAULT_CANVAS,
+    };
+    insertProject(ctx.db, winner);
+    const saved = getProjectById(ctx.db, winner.id)!;
+    const before = ctx.db.prepare("SELECT * FROM projects WHERE id = ?").get(winner.id);
+    branch.resolve("wrong-branch");
+    expect(await pending).toEqual({ ok: true, created: false, project: saved });
+    expect(
+      await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path,
+        name: "Renamed?",
+        workspaceIdentity: attemptedIdentity,
+        themeCanvas: null,
+      }),
+    ).toEqual({ ok: true, created: false, project: saved });
+    expect(ctx.db.prepare("SELECT * FROM projects WHERE id = ?").get(winner.id)).toEqual(before);
+    expect(detectBaseBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not assign onboarding fields to an already tracked legacy project", async () => {
+    const { id, path } = createProjectWithPath();
+    const saved = getProjectById(ctx.db, id)!;
+    expect(
+      await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path,
+        name: "Canopy",
+        workspaceIdentity,
+        themeCanvas: DEFAULT_CANVAS,
+      }),
+    ).toEqual({ ok: true, created: false, project: saved });
+    expect(saved.workspaceIdentity).toBeNull();
+    expect(saved.themeCanvas).toBeNull();
+  });
+});
 
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
   it("uses the async detector by default without a test override", async () => {

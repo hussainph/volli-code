@@ -6,6 +6,8 @@ import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
+import { IdentityMark } from "@renderer/components/workspace-identity/marks";
+import "@renderer/components/workspace-identity/studio.css";
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
 import { RemoveProjectDialog } from "@renderer/components/rail/remove-project-dialog";
 import {
@@ -63,7 +65,13 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 <button
                   type="button"
                   onClick={() => select(project.id)}
-                  style={{ backgroundColor: projectColor(project.colorIndex) }}
+                  aria-label={project.name}
+                  aria-current={isSelected ? "true" : undefined}
+                  style={
+                    project.workspaceIdentity
+                      ? undefined
+                      : { backgroundColor: projectColor(project.colorIndex) }
+                  }
                   className={cn(
                     // `text-white` is ink on the PROJECT's own color, not on
                     // the page — `PROJECT_COLORS` is identity, not theme, so it
@@ -78,7 +86,19 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                       "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-transparent",
                   )}
                 >
-                  {monogram(project.name)}
+                  {project.workspaceIdentity ? (
+                    <IdentityMark
+                      choice={project.workspaceIdentity.choice}
+                      surface={project.workspaceIdentity.surface}
+                      monogramStyle={project.workspaceIdentity.monogramStyle}
+                      name={project.name}
+                      canvas={project.themeCanvas ?? null}
+                      appearance={project.themeAppearance ?? null}
+                      size="rail"
+                    />
+                  ) : (
+                    monogram(project.name)
+                  )}
                   <span
                     aria-hidden
                     className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"

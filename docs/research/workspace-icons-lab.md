@@ -8,7 +8,7 @@ This is a fixture-only prototype. It changes neither the shipped workspace rail 
 The creative follow-up lives at `/lab/#workspace-identity-studio` (“Workspace atelier · a little character”). Study 01 links to it; both remain independently reviewable.
 
 - Four material studies: **Etched** (a carved canvas keycap), **Porcelain** (a glyph in a circular inset), **Orbit** (a tiny planet with its own ring), and **Letterpress** (a printed identity seal).
-- A 24-mark Phosphor library with a searchable picker and three collision-aware, name-based suggestions. These suggestions are **local deterministic fixtures for a future Jev classifier**, not actual model output. No project name leaves the browser, no decision service is called, and the UI says so.
+- A 24-mark Phosphor library with a fuzzy searchable picker and three collision-aware, name-based suggestions. Suggestions and search are **local and deterministic**, not model output. No project name leaves the browser, no decision service is called, and there is no provider setup or inference cost.
 - Initials are treated as a first-class signature: Editorial, Architect, and Woven. Procedural mirrored stamps are keyed by the draft's stable identity plus an explicit variation, not the project name.
 - Local PNG/JPEG/WebP marks, limited to 2 MB and decoded before adoption. SVG and arbitrary remote URLs are not accepted. Replacing the choice or leaving the scratch cancels the meaning of an in-flight image read. The file input resets so the same file can be retried after a failure.
 - “Make it mine” commits the current name, mark, material, and canvas **only into the local rail rehearsal**. It creates or updates one fixture, never a real project. Editing the draft afterward does not change the saved mark. Renaming or requesting suggestions does not silently replace the selected glyph, and visiting another identity mode remembers the last choice in each mode.
@@ -16,7 +16,18 @@ The creative follow-up lives at `/lab/#workspace-identity-studio` (“Workspace 
 
 This deliberately stretches the visual language inside the lab: editorial display type, tactile frames, large preview objects, and whimsical orbital decoration. It does **not** stretch the notification meanings. The 36px rail rehearsal still separates identity, selection, unread, and Session state exactly as Study 01 does.
 
-For production, the Jev integration would need a registered decision purpose, bounded icon-name validation, explicit configured-provider policy, timeout/failure fallback to initials, and a saved identity choice with a human override. The catalogue and pure suggestion model are a prototype of the choice boundary, not a production adapter.
+## Production adoption — picked-folder onboarding
+
+The atelier now supplies the production creation editor, shared marks, and shared pure identity model. Preview the actual editor at modal scale in `/lab/#workspace-onboarding`; its folder and commit remain fixtures.
+
+- Both native directory-picker doors now adjudicate duplicate paths and missing-folder claims before opening the editor. A known folder selects its existing project. Relinking bypasses onboarding and retains the stored identity.
+- A genuinely new folder is an ephemeral draft: Cancel/Escape creates nothing. “Make it mine” atomically inserts the edited name, identity, and optional canvas. Failed creation keeps the draft for retry; busy creation blocks duplicate submissions, dismissal, and dropped images. A duplicate discovered during creation selects the existing project without overwriting its identity or canvas.
+- Migration 054 adds nullable `workspace_identity` JSON. Shared validation accepts only catalog glyphs, bounded stable stamp seeds/variants, initials, or local PNG/JPEG/WebP data URLs. Invalid persisted identities degrade to legacy monograms. Bootstrap and rescue export retain the identity.
+- Production uploads accept source rasters under 2 MB, decode and downscale to at most 128px per side, and encode a mark under 128 KB. Failed rendering falls back to initials. No SVG or remote image source is accepted.
+- Saved identities render on the real rail using their destination canvas and appearance. Legacy projects retain their original palette and monograms; selection rings, shortcuts, dragging, and context-menu actions remain unchanged. Identity editing after creation is not part of this slice.
+- Jev is intentionally absent: three name-based suggestions and subsequence-ranked glyph search run locally. A human explicitly chooses the mark; rename and suggestion refresh never overwrite it.
+
+Study 01’s unread/activity badge aggregation and selection-bar redesign remain lab-only. Production adoption here is creation-time identity, not a claim that the cross-workspace read/activity baseline is implemented.
 
 ## The questions the rail should answer
 
@@ -46,7 +57,7 @@ Do not rely on color alone for identity: inherited workspaces can have identical
 - Use App and Reading stage widths, inspect matching initials, long names, the empty workspace, the recovery-only mark on Volli Companion, and the input/recovery collision on Cinder.
 - Canopy includes a waiting/unread helper behind its working parent: no helper row appears, and its wait/read receipt does not become a direct workspace notification.
 
-## Before production adoption
+## Before production adoption of unread/activity cues
 
 - Establish a confirmed activity/read baseline for **all** workspaces. Current project listings are fetched on arrival; an unvisited workspace must not falsely read as quiet. Pending/failed baseline presentation is not implemented by this fixture scratch.
 - Aggregate project-level and Ticket Sessions using the existing attention/read projections. Helper work is represented by its parent; a helper wait must not direct a person to a nonexistent sidebar row. This scratch filters helper rows and assumes the parent's activity has already been projected.
@@ -55,4 +66,4 @@ Do not rely on color alone for identity: inherited workspaces can have identical
 - Derive thumbnails only on authored-theme/appearance changes; use one shared activity subscription and boundary timer, not per-tile PTY subscriptions or polling.
 - Review marks over the actual transparent canvas rail. This comparison uses the semantic `--rail` bed, so its opaque badge backing is not yet evidence that the production gradient seam is solved.
 
-The recommendation is provisional pending visual review, not a shipped design decision.
+The notification/selection comparison remains provisional; picked-folder identity onboarding is integrated independently.

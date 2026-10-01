@@ -118,6 +118,7 @@ import type {
   ValidAutomationRuntime,
   VenueReading,
   WorkspaceDependenciesStatus,
+  WorkspaceIdentity,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -132,6 +133,9 @@ import type {
 export interface ProjectCreateInput {
   path: string;
   name: string;
+  /** Captured before picking the folder; existing projects are never rewritten. */
+  workspaceIdentity?: WorkspaceIdentity;
+  themeCanvas?: Canvas | null;
 }
 
 export interface ProjectUpdateInput {

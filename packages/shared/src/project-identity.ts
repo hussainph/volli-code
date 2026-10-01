@@ -11,6 +11,7 @@ import type { DecisionModelSetting } from "./decision-model";
 import type { SkillModes } from "./skill";
 import type { Appearance, Canvas } from "./theme/canvas/types";
 import type { ProjectThemeOverride } from "./theme/project-override";
+import type { WorkspaceIdentity } from "./workspace-identity";
 
 /**
  * A tracked project. Mirrors the SQLite `projects` row shape (migration
@@ -44,6 +45,8 @@ export interface Project {
    * rather than 013's per-surface set.
    */
   themeCanvas?: Canvas | null;
+  /** Creation-time identity (migration 054); null keeps the legacy monogram. */
+  workspaceIdentity?: WorkspaceIdentity | null;
   /**
    * This workspace's own light/dark/auto choice (migration 014), or `null` to
    * inherit the global one. Scoped SEPARATELY from {@link themeCanvas}: one

@@ -58,6 +58,7 @@ export * from "./process-orphans";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";
+export * from "./workspace-identity";
 export * from "./project-relink";
 export * from "./prompt-template";
 export * from "./prompt-resource";

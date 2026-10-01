@@ -7,6 +7,7 @@ import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-d
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { FolderClaimDialog } from "@renderer/components/rail/folder-claim-dialog";
+import { NewProjectDialog } from "@renderer/components/rail/new-project-dialog";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { SessionDetailDialog } from "@renderer/components/sessions/session-detail-dialog";
 import {
@@ -917,6 +918,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           and the rail itself goes inert when it is hidden. Renders nothing
           until there is a question to answer. */}
       <FolderClaimDialog />
+      <NewProjectDialog />
       <UpdateInstallDialog />
     </SidebarProvider>
   );
