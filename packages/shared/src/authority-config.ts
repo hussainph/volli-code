@@ -19,7 +19,7 @@
  *
  * Say the limit of that honestly, because it is still a limit and not a
  * guarantee everywhere. VC-45 put the database — all of `userData` — in the
- * secrets denylist and outside every writable root, so the gate refuses a file
+ * denylist and outside every writable root, so the gate refuses a file
  * tool there and a Scoped Session's shell cannot reach it at the kernel
  * ({@link AuthorityPolicy.containment}). A Session running with containment
  * `off` still runs its shell as the user, and a shell command that names the
@@ -51,10 +51,12 @@ import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
  *
  * The three map onto the runtime seam exactly, which is why there is no fourth:
  *
- * - `off` — no Snapshot is constructed, so `SessionRuntimeSpec.authority` is
- *   absent, so Pi installs no `beforeToolCall`. The rule pack, the fallback
- *   thresholds and the escalation port are all unreachable rather than quietly
- *   permissive. This is what every Session ran under before this ticket.
+ * - `off` — no gate: `SessionRuntimeSpec.authority` is absent, so Pi installs
+ *   no `beforeToolCall`. The rule pack, the fallback thresholds and the
+ *   escalation port are all unreachable rather than quietly permissive. This is
+ *   what every Session ran under before VC-44. No Snapshot is constructed
+ *   either — unless the project chose `containment: "scoped"`, in which case
+ *   one is pinned to carry the walls (VC-45).
  * - `observe` — the Snapshot is built, pinned and durably recorded against the
  *   attachment, and the gate does not install. Nothing is refused. The pack's
  *   identity is on the record, so a later reader can say what a Session *would*
@@ -219,9 +221,9 @@ export interface AuthorityPolicy {
    * Whether this project's Sessions run behind walls — the capability axis,
    * independent of {@link enforcement} (VC-45). See {@link ContainmentMode}.
    *
-   * Only meaningful while enforcement is not `off`: `off` is the explicit
-   * bypass of BOTH axes (Codex's `--dangerously-bypass-approvals-and-sandbox`,
-   * not merely its approval policy), so it builds no Snapshot to carry walls on.
+   * Independent in both directions: walls with no rules (`enforcement: "off"`)
+   * is a posture a person may choose, and it pins a Snapshot whose only job is
+   * to carry the walls.
    */
   containment: ContainmentMode;
   /**
@@ -310,7 +312,7 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  * `enforce` a per-project decision that needs no build.
  *
  * VC-45 shipped the plan's slice 1 — one read policy for both layers — which
- * removes that reason: reads are machine-wide minus the secrets denylist, so the
+ * removes that reason: reads are machine-wide minus the denylist, so the
  * skill and the Main checkout are no longer refused, and `cat` and `read` get
  * the same answer for the same path. Whether `enforce` now becomes the default
  * is a product decision of its own (it installs a gate on every Session), and

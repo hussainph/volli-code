@@ -1074,7 +1074,7 @@ export interface RuntimeWorkspaceEnvironment {
  * What a project's policy says about the walls one Session runs behind (VC-45).
  *
  * Policy, not resolution: the runtime turns this into a `CapabilityPolicy` at
- * attach — the secrets denylist under the user's home, the git directory a
+ * attach — the denylist under the user's home, the git directory a
  * worktree commits into, the Session's own saved output — because only it can
  * read a filesystem. The same resolved policy then feeds the authority gate and,
  * when `containment` is `scoped`, the execution environment's file guard and

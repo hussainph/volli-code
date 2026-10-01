@@ -19,18 +19,20 @@
  * already made.
  *
  * Which fields a rule reads is where this layer's scope is really decided. The
- * two capability rules read the call against the attachment's
+ * capability rules read the call against the attachment's
  * {@link CapabilityPolicy} (VC-45), the same data a Scoped Session's walls are
- * compiled from, so the gate and the walls give one answer for one path:
+ * compiled from:
  *
- * - `path.secrets` judges reads, writes, redirects AND command operands against
- *   the secrets denylist. Operands are judged here, where the old read rule
- *   deliberately did not judge them, because the list is narrow: `cat
- *   ~/.ssh/id_rsa` is refused exactly as `read ~/.ssh/id_rsa` is, while `ls
- *   /usr/bin` and `/opt/homebrew/bin/node script.js` name nothing on it. That
- *   is slice 1's "same answer whichever tool asks", as far as a lexer can see;
- *   an operand that reaches a secret through a variable is the kernel's to
- *   refuse, in a Session that has one.
+ * - `path.credentials` and `path.private` judge reads, writes, redirects AND
+ *   command operands against the two tiers of the denylist. Operands are judged
+ *   here, where the old read rule deliberately did not judge them, because the
+ *   list is narrow: `cat ~/.ssh/id_rsa` is refused like `read ~/.ssh/id_rsa`,
+ *   while `ls /usr/bin` names nothing on it. The operand check is BEST-EFFORT,
+ *   and the docs say so: it is glob-aware (`~/.ss?/id*`), follows `cd` and
+ *   `-C` as far as the lexer sees them, and refuses a recursive reader handed a
+ *   directory above a denied entry — but a path in a variable, `$(…)` or an
+ *   inline interpreter never reaches it. For the file tools the answer is the
+ *   walls' answer; for the shell, only a Scoped Session's kernel guarantees it.
  * - `path.outside-workspace` judges writes — file-tool writes and a command's
  *   redirects — against the writable roots. Reads are machine-wide now, so the
  *   sibling repository, the pnpm store and `/usr/include` are ordinary reads.
@@ -106,13 +108,19 @@ import {
 } from "./authority";
 import {
   containsPath,
+  denialReason,
+  foldSegment,
   guardsPath,
+  hostDataReach,
   isDeviceSink,
   isGitPlumbingPath,
+  operandDenial,
   pathSegments,
   readDenial,
   writeDenial,
   type CapabilityPolicy,
+  type Denial,
+  type DenyTier,
 } from "./capability-policy";
 
 /**
@@ -145,7 +153,7 @@ function fold(value: string): string {
 
 /** The same components, case-folded, for the deny-list side of the split above. */
 function foldedSegments(path: string): string[] {
-  return pathSegments(path).map(fold);
+  return pathSegments(path).map(foldSegment);
 }
 
 /** Literal containment excluding the root itself. */
@@ -182,10 +190,14 @@ function segmentsOf(call: PolicyToolCall): readonly PolicyCommandSegment[] {
 function capabilityOf(context: PolicyContext): CapabilityPolicy {
   return (
     context.capability ?? {
-      readDeny: [],
+      credentialDeny: [],
+      privateDeny: [],
+      hostDataDeny: [],
       readAllow: [],
       writableRoots: [context.workspacePath],
+      protectedPaths: [],
       sandboxCarveOuts: false,
+      linkedFiles: {},
     }
   );
 }
@@ -217,14 +229,18 @@ function insideWritableRoot(context: PolicyContext, path: string): boolean {
 }
 
 /**
- * The directories `rm` may never name: every root's `.git` and `.volli`, and a
- * root that IS a git directory — a Ticket worktree's common git directory, which
- * holds every branch's objects.
+ * The directories `rm` may never name: every root's `.git` and `.volli`, and
+ * the git directory a root is a slice of — a Ticket worktree's common git
+ * directory, which holds every branch's objects.
  */
 function removalInternals(context: PolicyContext): string[] {
-  return capabilityOf(context).writableRoots.flatMap((root) =>
-    foldedSegments(root).at(-1) === ".git" ? [root] : [`${root}/.git`, `${root}/.volli`],
-  );
+  return capabilityOf(context).writableRoots.flatMap((root) => {
+    const segments = root.split("/");
+    const gitIndex = segments.map(foldSegment).lastIndexOf(".git");
+    return gitIndex === -1
+      ? [`${root}/.git`, `${root}/.volli`]
+      : [segments.slice(0, gitIndex + 1).join("/")];
+  });
 }
 
 /** Every path the call would create, modify, or delete. */
@@ -237,21 +253,184 @@ function rootedWrites(call: PolicyToolCall): string[] {
   return writtenPaths(call).filter((path) => !isDeviceSink(path));
 }
 
+/** Programs that read — or, for `ln`, link — everything under a directory they are handed. */
+const ALWAYS_RECURSIVE = new Set([
+  "rg",
+  "ag",
+  "ack",
+  "tar",
+  "bsdtar",
+  "gtar",
+  "rsync",
+  "ditto",
+  "ln",
+]);
+
+const GREP_PROGRAMS = new Set(["grep", "egrep", "fgrep", "ggrep"]);
+
 /**
- * Every path `path.secrets` judges, each with the denial that applies to it:
- * what the call reads and every operand a command names are reads, where a
- * Session's own grants count; what it writes is a write, where they do not.
+ * Whether a segment reads a directory operand's whole subtree, so an operand
+ * ABOVE a denied entry reaches it: `grep -r token ~` reads `~/.ssh`.
+ *
+ * The cheap, named cases only — `grep -r`, `rg`, `tar`, `cp -r`, `rsync`,
+ * `zip -r`, and `ln`, which can link a whole tree into the workspace for a
+ * later command to read through. A recursive reader this table does not name
+ * is one the gate does not see; the kernel is what refuses it, in a Session
+ * that has one.
  */
-function namedPaths(
-  call: PolicyToolCall,
-): { path: string; denial: (policy: CapabilityPolicy, path: string) => string | undefined }[] {
-  return [
-    ...[...call.reads, ...segmentsOf(call).flatMap((segment) => segment.paths)].map((path) => ({
-      path,
-      denial: readDenial,
-    })),
-    ...writtenPaths(call).map((path) => ({ path, denial: writeDenial })),
-  ];
+function readsRecursively(segment: PolicyCommandSegment): boolean {
+  const program = baseName(segment.program);
+  const { args } = segment;
+  if (ALWAYS_RECURSIVE.has(program)) return true;
+  if (GREP_PROGRAMS.has(program)) {
+    return (
+      hasShortFlag(args, "r") ||
+      hasShortFlag(args, "R") ||
+      args.some(
+        (arg) => arg.startsWith("--recursive") || arg.startsWith("--dereference-recursive"),
+      ) ||
+      args.includes("--directories=recurse")
+    );
+  }
+  if (program === "zip") return hasShortFlag(args, "r") || args.includes("--recurse-paths");
+  if (program === "cp") {
+    return (
+      hasShortFlag(args, "r") ||
+      hasShortFlag(args, "R") ||
+      hasShortFlag(args, "a") ||
+      args.includes("--recursive") ||
+      args.includes("--archive")
+    );
+  }
+  return false;
+}
+
+/**
+ * `security` subcommands that print or export keychain secrets. The keychain
+ * is credential material wherever its files are, and this is the one door to
+ * it that names no path.
+ */
+const KEYCHAIN_SECRET_SUBCOMMANDS = new Set([
+  "find-generic-password",
+  "find-internet-password",
+  "find-key",
+  "dump-keychain",
+  "export",
+  "export-item",
+]);
+
+function keychainRead(segment: PolicyCommandSegment): string | null {
+  if (baseName(segment.program) !== "security") return null;
+  const subcommand = fold(segment.args.find((arg) => !arg.startsWith("-")) ?? "");
+  return KEYCHAIN_SECRET_SUBCOMMANDS.has(subcommand) ? `security ${subcommand}` : null;
+}
+
+/**
+ * Programs that only read what they are handed, so naming the host's data is a
+ * read of it (`path.private`, approvable) rather than a possible change to it
+ * (`path.host-data`, never). Every program NOT here is assumed able to change
+ * an operand — `cp`, `mv`, `rm`, `sqlite3`, `sed`, an interpreter — because a
+ * shell operand carries no read/write mark and the cost of guessing wrong is a
+ * Session editing its own approvals.
+ */
+const READ_ONLY_PROGRAMS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "grep",
+  "egrep",
+  "fgrep",
+  "ggrep",
+  "rg",
+  "ag",
+  "ack",
+  "ls",
+  "stat",
+  "file",
+  "wc",
+  "du",
+  "od",
+  "hexdump",
+  "xxd",
+  "strings",
+  "md5",
+  "md5sum",
+  "shasum",
+  "sha1sum",
+  "sha256sum",
+  "diff",
+  "cmp",
+  "jq",
+  "cd",
+  "pushd",
+  "realpath",
+  "readlink",
+  "test",
+  "[",
+]);
+
+/** Programs whose change reaches everything under a directory they are handed. */
+function changesWholeTree(segment: PolicyCommandSegment): boolean {
+  const program = baseName(segment.program);
+  const { args } = segment;
+  if (program === "mv") return true;
+  if (program === "rm") {
+    return hasShortFlag(args, "r") || hasShortFlag(args, "R") || args.includes("--recursive");
+  }
+  if (["chmod", "chown", "chgrp", "chflags"].includes(program)) return hasShortFlag(args, "R");
+  return false;
+}
+
+/** One denylisted reach a call makes, and the sentence that refuses it. */
+interface NamedDenial {
+  tier: DenyTier;
+  reason: string;
+}
+
+/**
+ * Every denylisted path a call reaches, in the order a rule should cite them.
+ *
+ * What the call reads (file tools) is judged as a read, grants included; what
+ * it writes as a write, where grants do not count; every operand a command
+ * names through {@link operandDenial} — glob-aware, and recursive for the
+ * readers above — and, for a program that can change what it names, through
+ * {@link hostDataReach}. A keychain subcommand is a credential read with no
+ * path.
+ *
+ * Best-effort for a shell command, and said so in the docs: an operand hidden
+ * in a variable or `$(…)` never reaches here, nor does a path an inline
+ * interpreter (`python3 -c`, `osascript -e`) opens. The kernel refuses those in
+ * a Scoped Session; nothing does outside one.
+ */
+function namedDenials(call: PolicyToolCall, capability: CapabilityPolicy): NamedDenial[] {
+  const denials: NamedDenial[] = [];
+  for (const path of call.reads) pushNamed(denials, path, readDenial(capability, path));
+  for (const path of writtenPaths(call)) pushNamed(denials, path, writeDenial(capability, path));
+  for (const segment of segmentsOf(call)) {
+    const keychain = keychainRead(segment);
+    if (keychain !== null) {
+      denials.push({
+        tier: "credential",
+        reason: `${keychain} reads the macOS keychain, which holds credentials, so it is not available to a Session. If the task needs a secret, ask the user to provide it.`,
+      });
+    }
+    const recursive = readsRecursively(segment);
+    const changes = !READ_ONLY_PROGRAMS.has(baseName(segment.program));
+    const wholeTree = changesWholeTree(segment);
+    for (const path of segment.paths) {
+      if (changes) pushNamed(denials, path, hostDataReach(capability, path, wholeTree));
+      pushNamed(denials, path, operandDenial(capability, path, recursive));
+    }
+  }
+  return denials;
+}
+
+/** One path's denial, named for the model, when there is one. */
+function pushNamed(denials: NamedDenial[], path: string, denial: Denial | undefined): void {
+  if (denial !== undefined) denials.push({ tier: denial.tier, reason: denialReason(path, denial) });
 }
 
 /** Everything git and npm read as "off"; matching only `false` would leave `0` a bypass. */
@@ -540,16 +719,17 @@ type RuleCheck = (
  * itself — the same list the recorded pack hash is computed over.
  */
 const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
-  "path.secrets": (call, _snapshot, context) => {
-    const capability = capabilityOf(context);
-    for (const { path, denial } of namedPaths(call)) {
-      const deny = denial(capability, path);
-      if (deny !== undefined) {
-        return `${path} is inside ${deny}, which holds credentials or another party's data, so no tool may read or write it. Do not reach for it another way; if the task needs what is there, ask the user.`;
-      }
-    }
-    return null;
-  },
+  "path.credentials": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "credential")
+      ?.reason ?? null,
+
+  "path.host-data": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "host-data")
+      ?.reason ?? null,
+
+  "path.private": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "private")?.reason ??
+    null,
 
   "path.outside-workspace": (call, _snapshot, context) => {
     const roots = capabilityOf(context).writableRoots;

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  isOverridableAuthorityRule,
   type AuthorityRuleId,
   type AuthoritySnapshot,
   type PolicyCommandSegment,
@@ -16,17 +17,17 @@ const WORKSPACE = "/Users/dev/code/volli";
 const USER_DATA = "/Users/dev/Library/Application Support/Volli";
 const SAVED = `${USER_DATA}/pi-sessions/--ws--/s.tool-output`;
 
-/** A resolved policy shaped like the runtime's: secrets denied, own saved output carved back. */
+/** A resolved policy shaped like the runtime's: two tiers, own saved output carved back. */
+const COMMON = "/Users/dev/code/volli-main/.git";
 const CAPABILITY: CapabilityPolicy = {
-  readDeny: [
-    "/Users/dev/.ssh",
-    "/Users/dev/.zshrc",
-    "/Users/dev/Library/Application Support",
-    USER_DATA,
-  ],
+  credentialDeny: ["/Users/dev/.ssh", `${USER_DATA}/mcp-credentials.json`],
+  privateDeny: ["/Users/dev/.zshrc", "/Users/dev/Library/Application Support", USER_DATA],
+  hostDataDeny: [USER_DATA],
   readAllow: [SAVED],
-  writableRoots: [WORKSPACE, "/Users/dev/code/volli-main/.git", "/Users/dev/scratch"],
+  writableRoots: [WORKSPACE, `${COMMON}/objects`, `${COMMON}/worktrees/wt`, "/Users/dev/scratch"],
+  protectedPaths: [],
   sandboxCarveOuts: false,
+  linkedFiles: {},
 };
 
 function judgedWith(toolCall: PolicyToolCall): AuthorityRuleId | "allow" {
@@ -140,59 +141,129 @@ describe("tool identity", () => {
   });
 });
 
-describe("path.secrets", () => {
-  it("refuses reading a secret, whichever tool names it (VC-45 slice 1)", () => {
+describe("path.credentials and path.private", () => {
+  it("refuses a credential read whichever tool names it, citing the credential tier", () => {
     const read = evaluate(
       call({ tool: "read", reads: ["/Users/dev/.ssh/id_ed25519"] }),
       snapshot(),
-      {
-        workspacePath: WORKSPACE,
-        capability: CAPABILITY,
-      },
+      { workspacePath: WORKSPACE, capability: CAPABILITY },
     );
-    expect(read).toMatchObject({ outcome: "deny", rule: "path.secrets" });
+    expect(read).toMatchObject({ outcome: "deny", rule: "path.credentials" });
     expect(read.outcome === "deny" && read.reason).toContain("/Users/dev/.ssh");
     // The same path as a command operand, which the old read rule never judged.
     expect(
       judgedWith(
         exec(segment("cat", ["~/.ssh/id_ed25519"], { paths: ["/Users/dev/.ssh/id_ed25519"] })),
       ),
-    ).toBe("path.secrets");
-    // And as a write, which no root can make legitimate.
-    expect(judgedWith(exec(segment("echo", ["x"], { writes: ["/Users/dev/.zshrc"] })))).toBe(
-      "path.secrets",
+    ).toBe("path.credentials");
+    expect(judgedWith(call({ tool: "read", reads: [`${USER_DATA}/mcp-credentials.json`] }))).toBe(
+      "path.credentials",
     );
   });
 
-  it("refuses Volli's own data and another Session's saved output, and grants its own", () => {
+  it("refuses private data as its own, overridable rule", () => {
     expect(judgedWith(call({ tool: "read", reads: [`${USER_DATA}/volli.db`] }))).toBe(
-      "path.secrets",
+      "path.private",
     );
-    expect(judgedWith(call({ tool: "read", reads: [`${USER_DATA}/mcp-credentials.json`] }))).toBe(
-      "path.secrets",
+    expect(judgedWith(exec(segment("echo", ["x"], { writes: ["/Users/dev/.zshrc"] })))).toBe(
+      "path.private",
     );
     expect(
       judgedWith(
         call({ tool: "read", reads: [`${USER_DATA}/pi-sessions/--ws--/t.tool-output/x`] }),
       ),
-    ).toBe("path.secrets");
+    ).toBe("path.private");
     expect(judgedWith(call({ tool: "read", reads: [`${SAVED}/tc-1.0a1b2c3d.txt`] }))).toBe("allow");
     // A sibling of the grant is not inside it, and the grant is read-only.
     expect(judgedWith(call({ tool: "read", reads: [`${SAVED}-other/x.txt`] }))).toBe(
-      "path.secrets",
+      "path.private",
     );
+    // Writing the host's data is not private: no approval reaches it.
     expect(judgedWith(call({ tool: "write", writes: [`${SAVED}/tc-1.0a1b2c3d.txt`] }))).toBe(
-      "path.secrets",
+      "path.host-data",
     );
   });
 
-  it("judges secrets folded, so a case variant names the same store", () => {
-    expect(judgedWith(call({ tool: "read", reads: ["/Users/dev/.SSH/config"] }))).toBe(
-      "path.secrets",
+  it("refuses every change to the host's data beyond any approval, and only reads as private (VC-480)", () => {
+    // A command whose operands are the given paths, as the normalizer hands them over.
+    const runs = (program: string, args: readonly string[], paths: readonly string[]) =>
+      exec(segment(program, args, { paths }));
+    const db = `${USER_DATA}/volli.db`;
+    const support = "/Users/dev/Library/Application Support";
+    for (const toolCall of [
+      call({ tool: "write", writes: [db] }),
+      call({ tool: "edit", writes: [`${USER_DATA}/approvals.json`] }),
+      exec(segment("echo", ["x"], { writes: [`${db}-wal`] })),
+      runs("sqlite3", [db, "delete from approvals"], [db]),
+      runs("cp", ["evil.db", db], [`${WORKSPACE}/evil.db`, db]),
+      runs("rm", ["-rf", support], [support]),
+      runs("mv", [support, "/tmp/x"], [support, "/tmp/x"]),
+      runs("python3", [`${USER_DATA}/*.db`], [`${USER_DATA}/*.db`]),
+    ]) {
+      expect(judgedWith(toolCall)).toBe("path.host-data");
+    }
+    expect(isOverridableAuthorityRule("path.host-data")).toBe(false);
+    // A program that only reads what it names reads it: private, approvable.
+    expect(judgedWith(runs("cat", [db], [db]))).toBe("path.private");
+    // Above the data, only a whole-tree change reaches it.
+    expect(judgedWith(runs("touch", [`${support}/x`], [`${support}/x`]))).toBe("path.private");
+    expect(
+      judgedWith(runs("chmod", ["-R", "go-r", "/Users/dev/Library"], ["/Users/dev/Library"])),
+    ).toBe("path.host-data");
+    expect(judgedWith(runs("chown", ["me", "/Users/dev/Library"], ["/Users/dev/Library"]))).toBe(
+      "allow",
     );
   });
 
-  it("knows no secret when the caller resolved no policy", () => {
+  it("judges every spelling APFS resolves to the same store", () => {
+    for (const path of [
+      "/Users/dev/.SSH/config",
+      "/Users/dev/.sſh/config",
+      "/System/Volumes/Data/Users/dev/.ssh/config",
+    ]) {
+      expect(judgedWith(call({ tool: "read", reads: [path] })), path).toBe("path.credentials");
+    }
+  });
+
+  it("reaches through globs, recursive readers and links, as far as a lexer sees", () => {
+    const cases: [PolicyCommandSegment, AuthorityRuleId | "allow"][] = [
+      [segment("cat", ["$HOME/.ss?/id*"], { paths: ["/Users/dev/.ss?/id*"] }), "path.credentials"],
+      [segment("cat", ["~/.ss[h]/k"], { paths: ["/Users/dev/.ss[h]/k"] }), "path.credentials"],
+      [segment("grep", ["-r", "token", "~"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [segment("grep", ["--recursive", "t", "~"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [
+        segment("grep", ["--directories=recurse", "t", "~"], { paths: ["/Users/dev"] }),
+        "path.credentials",
+      ],
+      [segment("grep", ["token", "~"], { paths: ["/Users/dev"] }), "allow"],
+      [segment("rg", ["token", "~"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [segment("tar", ["-cf", "-", "."], { paths: ["/Users/dev"] }), "path.credentials"],
+      [segment("cp", ["-a", "~", "x"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [segment("cp", ["~", "x"], { paths: ["/Users/dev"] }), "allow"],
+      [segment("zip", ["-r", "z", "~"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [segment("zip", ["z", "~"], { paths: ["/Users/dev"] }), "allow"],
+      [segment("ln", ["-s", "~", "h"], { paths: ["/Users/dev"] }), "path.credentials"],
+      [
+        segment("rsync", ["-a", "/Users/dev/Library", "x"], { paths: ["/Users/dev/Library"] }),
+        "path.credentials",
+      ],
+      [
+        segment("rsync", ["-a", "AS", "x"], {
+          paths: ["/Users/dev/Library/Application Support/Other"],
+        }),
+        "path.private",
+      ],
+      [segment("security", ["find-generic-password", "-w", "-s", "x"]), "path.credentials"],
+      [segment("security", ["-q", "dump-keychain"]), "path.credentials"],
+      [segment("security", ["list-keychains"]), "allow"],
+      [segment("security", ["-h"]), "allow"],
+    ];
+    for (const [one, expected] of cases) {
+      expect(judgedWith(exec(one)), [one.program, ...one.args].join(" ")).toBe(expected);
+    }
+  });
+
+  it("knows no denylist when the caller resolved no policy", () => {
     expect(ruleOf(call({ tool: "read", reads: ["/Users/dev/.ssh/id_ed25519"] }))).toBe("allow");
   });
 });
@@ -580,11 +651,13 @@ describe("deleted rules", () => {
 });
 
 describe("metadata carved out of every writable root (VC-45 slice 2)", () => {
-  const COMMON = "/Users/dev/code/volli-main/.git";
-
-  it("refuses file-tool writes into a worktree's common git directory, which only git may write", () => {
-    for (const path of [`${COMMON}/hooks/pre-commit`, `${COMMON}/config`, `${COMMON}/HEAD`]) {
+  it("leaves a worktree's common git directory to git: file tools may not write its slices", () => {
+    for (const path of [`${COMMON}/objects/ab/cd`, `${COMMON}/worktrees/wt/HEAD`]) {
       expect(judgedWith(call({ tool: "write", writes: [path] }))).toBe("path.git-internals");
+    }
+    // Hooks, config and other branches' state are not in any root at all.
+    for (const path of [`${COMMON}/hooks/pre-commit`, `${COMMON}/config`, `${COMMON}/HEAD`]) {
+      expect(judgedWith(call({ tool: "write", writes: [path] }))).toBe("path.outside-workspace");
     }
   });
 
@@ -597,7 +670,9 @@ describe("metadata carved out of every writable root (VC-45 slice 2)", () => {
 
   it("refuses hook and config operands in any writable root, and leaves others alone", () => {
     expect(
-      judgedWith(exec(segment("cp", ["evil.sh", "x"], { paths: [`${COMMON}/hooks/pre-commit`] }))),
+      judgedWith(
+        exec(segment("cp", ["evil.sh", "x"], { paths: [`${WORKSPACE}/.git/hooks/pre-commit`] })),
+      ),
     ).toBe("path.git-internals");
     // Outside every root no write can land, so naming another repo's config is a read.
     expect(
@@ -1044,10 +1119,14 @@ describe("rule order", () => {
     });
     expect(ruleOf(outsideAndVolli)).toBe("path.outside-workspace");
 
-    // A secret outranks the root it is outside of: the reason names the store.
+    // A credential outranks the root it is outside of: the reason names the store.
     expect(judgedWith(call({ tool: "write", writes: ["/tmp/x", "/Users/dev/.ssh/config"] }))).toBe(
-      "path.secrets",
+      "path.credentials",
     );
+    // And outranks private data in the same call.
+    expect(
+      judgedWith(call({ tool: "read", reads: [`${USER_DATA}/volli.db`, "/Users/dev/.ssh/k"] })),
+    ).toBe("path.credentials");
   });
 
   it("checks every segment of a chain, not just the first", () => {

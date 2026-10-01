@@ -49,7 +49,7 @@ import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
-import { JUDGMENT_MODES } from "./authority-config";
+import { AUTHORITY_ENFORCEMENTS, JUDGMENT_MODES } from "./authority-config";
 import { CONTAINMENT_MODES } from "./capability-policy";
 import { errorMessage } from "./errors";
 import type { PresentedScheduledResume } from "./scheduled-resume";
@@ -1451,11 +1451,7 @@ function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnap
       ["worktree", "main-checkout"] as const,
       `${context}.location`,
     ),
-    enforcement: enumValue(
-      row.enforcement,
-      ["observe", "enforce"] as const,
-      `${context}.enforcement`,
-    ),
+    enforcement: enumValue(row.enforcement, AUTHORITY_ENFORCEMENTS, `${context}.enforcement`),
     containment:
       row.containment === undefined
         ? "off"

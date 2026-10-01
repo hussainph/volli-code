@@ -1231,8 +1231,19 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
       "payload.attachment.authority must be an object",
     );
     expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, enforcement: "off" } }),
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, enforcement: "bogus" },
+      }),
     ).toThrow("payload.attachment.authority.enforcement has an unsupported value");
+    // `off` is a value now: walls without rules pin a Snapshot (VC-45).
+    const wallsOnly = openedAttachment({
+      ...attachment,
+      authority: { ...recordedAuthority, enforcement: "off", containment: "scoped" },
+    });
+    expect(
+      wallsOnly.kind === "attachment.opened" && wallsOnly.attachment.authority?.enforcement,
+    ).toBe("off");
     expect(() =>
       openedAttachment({ ...attachment, authority: { ...recordedAuthority, mode: "manual" } }),
     ).toThrow("payload.attachment.authority.mode has an unsupported value");

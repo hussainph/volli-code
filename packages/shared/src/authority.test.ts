@@ -11,12 +11,14 @@ import {
   isOverridableAuthorityRule,
   NON_CODING_TOOL_IDS,
   OVERRIDABLE_AUTHORITY_RULES,
+  RULE_PACK_IDENTITY,
+  rulePackIdentity,
 } from "./authority";
 
 describe("hashRulePack", () => {
   it("is stable for the same rule list", () => {
     expect(hashRulePack(AUTHORITY_RULE_IDS)).toBe(hashRulePack([...AUTHORITY_RULE_IDS]));
-    expect(BUILTIN_RULE_PACK_HASH).toBe(hashRulePack(AUTHORITY_RULE_IDS));
+    expect(hashRulePack(AUTHORITY_RULE_IDS)).toBe(hashRulePack([...AUTHORITY_RULE_IDS]));
   });
 
   it("pins the built-in pack's hash as a literal, so a pack change is a decision and not a recomputation", () => {
@@ -25,11 +27,13 @@ describe("hashRulePack", () => {
     // and VC-44 is why it now matters: the hash is written into every
     // attachment's durable Authority Snapshot, so a pack that changed without
     // anyone noticing leaves every older denial citing a pack id that no longer
-    // corresponds to any pack that ever ran. Ten rules: `d5e3dd88` before VC-3
-    // deleted `tool.not-bundled`, `dca89a93` for the nine it left, and
-    // `e29cd0d8` since VC-45 added `path.secrets` at the head of the pack.
-    expect(AUTHORITY_RULE_IDS).toHaveLength(10);
-    expect(BUILTIN_RULE_PACK_HASH).toBe("e29cd0d8");
+    // corresponds to any pack that ever ran. `d5e3dd88` before VC-3 deleted
+    // `tool.not-bundled`, `dca89a93` for the nine it left; VC-45 added the two
+    // denylist tiers and `path.host-data`, and made overridability part of the
+    // identity.
+    expect(AUTHORITY_RULE_IDS).toHaveLength(12);
+    expect(BUILTIN_RULE_PACK_HASH).toBe(hashRulePack(RULE_PACK_IDENTITY));
+    expect(BUILTIN_RULE_PACK_HASH).toBe("31a8d17f");
   });
 
   it("changes when the pack is reordered, so pack order is part of its identity", () => {
@@ -64,15 +68,15 @@ describe("non-coding tool vocabulary", () => {
    * hash exists to make a changed pack undetectable in neither direction. The
    * literal is the independent source of truth: it came from the pack as it
    * stands, not from re-running the hash over whatever the list happens to say,
-   * which is what makes this test able to fail. It moved again, to `e29cd0d8`,
-   * when VC-45 added `path.secrets` — a different rule, not `tool.not-bundled`
-   * returning under a new name.
+   * which is what makes this test able to fail. It moved again with VC-45's
+   * `path.credentials`, `path.host-data` and `path.private` — different rules,
+   * not `tool.not-bundled` returning under a new name.
    *
    * Naming a tool below is still not a rule and still must not move it.
    */
   it("pins the built-in rule pack's identity, which moved when the pack lost a rule", () => {
-    expect(BUILTIN_RULE_PACK_HASH).toBe("e29cd0d8");
-    expect(AUTHORITY_RULE_IDS).toHaveLength(10);
+    expect(BUILTIN_RULE_PACK_HASH).toBe("31a8d17f");
+    expect(AUTHORITY_RULE_IDS).toHaveLength(12);
     expect(AUTHORITY_RULE_IDS).not.toContain("tool.not-bundled");
   });
 
@@ -135,13 +139,26 @@ describe("isOverridableAuthorityRule", () => {
     // onto the overridable side when it wired the gate — Seatbelt used to make
     // consent moot and no longer exists, and Volli's own skills index asks a
     // Session to read a personal-tier SKILL.md outside the workspace.
+    // VC-45 put the private tier of the denylist on the overridable side and
+    // kept credential reads off it: credentials never enter the model's context.
     expect([...OVERRIDABLE_AUTHORITY_RULES]).toEqual([
+      "path.private",
       "path.outside-workspace",
       "path.git-internals",
       "path.volli-internals",
       "command.git-escapes-workspace",
       "command.git-discards-work",
     ]);
+    expect(isOverridableAuthorityRule("path.credentials")).toBe(false);
+  });
+
+  it("counts overridability in the pack's identity, so changing it moves the hash", () => {
+    const flipped = ["path.credentials", ...OVERRIDABLE_AUTHORITY_RULES] as const;
+    expect(hashRulePack(rulePackIdentity(flipped))).not.toBe(BUILTIN_RULE_PACK_HASH);
+    expect(rulePackIdentity(flipped)[0]).toBe("path.credentials+override");
+    expect(RULE_PACK_IDENTITY[0]).toBe("path.credentials");
+    expect(RULE_PACK_IDENTITY[1]).toBe("path.host-data");
+    expect(RULE_PACK_IDENTITY[2]).toBe("path.private+override");
   });
 
   it("leaves every rule whose grant would outlive the Session unoverridable", () => {
