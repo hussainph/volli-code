@@ -14,7 +14,13 @@ import { DEFAULT_CANVAS, canvasBackground, type Canvas } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@renderer/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@renderer/components/ui/dialog";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { sessionAttentionRank } from "@renderer/components/ui/session-activity-status";
 import {
@@ -173,7 +179,7 @@ function GlyphPicker({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <div className="studio-glyph-grid" aria-label="Phosphor glyph library">
+        <div className="studio-glyph-grid" role="group" aria-label="Phosphor glyph library">
           {glyphs.map((glyph) => {
             const Glyph = GLYPH_COMPONENTS[glyph.name];
             return (
@@ -194,9 +200,9 @@ function GlyphPicker({
           })}
         </div>
         {glyphs.length === 0 && <p className="text-ui text-muted-foreground">No matching marks</p>}
-        <p className="text-ui text-muted-foreground">
+        <DialogDescription className="text-ui text-muted-foreground">
           24 Phosphor marks. A small library with a lot of personality.
-        </p>
+        </DialogDescription>
       </DialogContent>
     </Dialog>
   );
@@ -319,6 +325,7 @@ export default function WorkspaceIdentityStudio() {
       ]),
     ),
   );
+  const remembered = React.useRef<Partial<Record<StudioChoice["kind"], StudioChoice>>>({});
   const fileRead = React.useRef(0);
   React.useEffect(
     () => () => {
@@ -330,6 +337,7 @@ export default function WorkspaceIdentityStudio() {
 
   function change(next: StudioChoice, pointer: boolean) {
     fileRead.current += 1;
+    remembered.current[next.kind] = next;
     setChoice(next);
     setPointerChange(pointer);
     setRevision((value) => value + 1);
@@ -337,14 +345,16 @@ export default function WorkspaceIdentityStudio() {
     setImageError(null);
   }
   function chooseMode(kind: StudioChoice["kind"], pointer: boolean) {
+    remembered.current[choice.kind] = choice;
     change(
-      kind === "glyph"
-        ? { kind, name: candidates[0] ?? "sparkle" }
-        : kind === "stamp"
-          ? { kind, seed: DRAFT_ID, variant: 0 }
-          : kind === "custom"
-            ? { kind: "initials" }
-            : { kind },
+      remembered.current[kind] ??
+        (kind === "glyph"
+          ? { kind, name: candidates[0] ?? "sparkle" }
+          : kind === "stamp"
+            ? { kind, seed: DRAFT_ID, variant: 0 }
+            : kind === "custom"
+              ? { kind: "initials" }
+              : { kind }),
       pointer,
     );
     // The upload tab may precede choosing a file; it should not claim an image exists.
@@ -602,24 +612,26 @@ export default function WorkspaceIdentityStudio() {
                     </Button>
                   </div>
                   <div className="studio-stamp-variants">
-                    {[0, 1, 2].map((variant) => (
-                      <button
-                        key={variant}
-                        type="button"
-                        aria-label={`Choose stamp ${variant + 1}`}
-                        aria-pressed={choice.kind === "stamp" && choice.variant === variant}
-                        onClick={(event) =>
-                          change({ kind: "stamp", seed: DRAFT_ID, variant }, event.detail !== 0)
-                        }
-                      >
-                        <IdentityMark
-                          choice={{ kind: "stamp", seed: DRAFT_ID, variant }}
-                          name={name}
-                          canvas={canvas}
-                          surface="letterpress"
-                        />
-                      </button>
-                    ))}
+                    {[0, 1, choice.kind === "stamp" ? Math.max(2, choice.variant) : 2].map(
+                      (variant) => (
+                        <button
+                          key={variant}
+                          type="button"
+                          aria-label={`Choose stamp ${variant + 1}`}
+                          aria-pressed={choice.kind === "stamp" && choice.variant === variant}
+                          onClick={(event) =>
+                            change({ kind: "stamp", seed: DRAFT_ID, variant }, event.detail !== 0)
+                          }
+                        >
+                          <IdentityMark
+                            choice={{ kind: "stamp", seed: DRAFT_ID, variant }}
+                            name={name}
+                            canvas={canvas}
+                            surface="letterpress"
+                          />
+                        </button>
+                      ),
+                    )}
                   </div>
                   <p className="studio-caption">
                     Seeded by workspace identity, not its name. Rename it; the stamp stays.
@@ -642,7 +654,11 @@ export default function WorkspaceIdentityStudio() {
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
                       aria-label="Upload your mark"
-                      onChange={(event) => importImage(event.target.files?.[0])}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = ""; // Allow retrying the same file after a failure.
+                        importImage(file);
+                      }}
                     />
                   </label>
                   <p className="studio-caption">
@@ -698,8 +714,9 @@ export default function WorkspaceIdentityStudio() {
                 animateReveal={pointerChange}
                 revision={revision}
                 onImageError={() => {
+                  delete remembered.current.custom;
+                  change({ kind: "initials" }, false);
                   setImageError("This image could not be displayed. Try another file.");
-                  setChoice({ kind: "initials" });
                 }}
               />
               <h2 className="studio-hero-name">{name.trim() || "Your next great thing"}</h2>

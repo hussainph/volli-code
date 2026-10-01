@@ -137,8 +137,17 @@ describe("workspace atelier", () => {
     expect(hero().querySelector("svg")?.innerHTML).toBe(first);
     await click("Another stamp");
     expect(hero().querySelector("svg")?.innerHTML).not.toBe(first);
+    await click("Another stamp");
+    await click("Another stamp");
+    expect(hero().dataset.stampVariant).toBe("3");
+    expect(button("Choose stamp 4").getAttribute("aria-pressed")).toBe("true");
     await click("Use Orbit material");
     expect(hero().dataset.surface).toBe("orbit");
+    await click("Make it mine");
+    expect(tile("studio-draft").querySelector("svg rect")).not.toBeNull();
+    expect(
+      tile("studio-draft").querySelector(".studio-mark")?.getAttribute("data-stamp-variant"),
+    ).toBe("3");
   });
 
   it("mints only on explicit commit and keeps the saved mark stable while the draft changes", async () => {
@@ -182,6 +191,26 @@ describe("workspace atelier", () => {
     await click("Choose Coffee");
     expect(hero().dataset.glyph).toBe("coffee");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("remembers choices across mode visits and feeds saved glyphs into suggestions", async () => {
+    await click("Browse marks");
+    await click("Choose Coffee");
+    await click("Stamp");
+    await click("Another stamp");
+    await click("Icon");
+    expect(hero().dataset.glyph).toBe("coffee");
+    await click("Stamp");
+    expect(hero().dataset.stampVariant).toBe("1");
+    await click("Icon");
+    await name("Moon Lab");
+    await click("Choose suggested Moon");
+    await click("Make it mine");
+    await click("Suggest marks");
+    expect(host.querySelector(".studio-candidate")?.getAttribute("aria-label")).toBe(
+      "Choose suggested Atom",
+    );
+    expect(hero().dataset.glyph).toBe("moon");
   });
 
   it("gates reveal motion for keyboard, reduced motion, and the motion switch", async () => {
@@ -284,6 +313,13 @@ describe("workspace atelier", () => {
     expect(hero().dataset.identityKind).toBe("custom");
     expect(host.querySelector(".studio-hero-reveal")?.getAttribute("data-animate")).toBe("false");
     expect(button("Make it mine").disabled).toBe(false);
+    await click("Make it mine");
+    expect(tile("studio-draft").querySelector("img")?.getAttribute("src")).toBe(
+      "data:image/png;base64,aGVsbG8=",
+    );
+    await click("Initials");
+    await click("Your mark");
+    expect(hero().dataset.identityKind).toBe("custom");
     await upload(new File(["new image"], "second.png", { type: "image/png" }));
     await click("Initials");
     readers[1]!.result = "data:image/png;base64,bGF0ZQ==";
