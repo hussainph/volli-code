@@ -328,6 +328,33 @@ describe("refusals the client names (VC-470, structural since VC-479)", () => {
     ).rejects.toBeInstanceOf(McpProtocolEraError);
   });
 
+  it("names a structured HTTP refusal larger than pi-mcp's 8 KiB error-body prefix", async () => {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32022,
+        message: "x".repeat(9_000),
+        data: { supported: ["2026-07-28"], requested: "2025-11-25" },
+      },
+    });
+    expect(Buffer.byteLength(body)).toBeGreaterThan(8 * 1_024);
+    const fixture = await answering(400, body);
+
+    await expect(
+      openMcpProtocolClient(
+        {
+          id: "large-modern-refusal",
+          name: "Large modern refusal",
+          enabled: true,
+          transport: { type: "streamable-http", url: fixture.url },
+        },
+        process.cwd(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(McpProtocolEraError);
+  });
+
   it("does not infer an era from an HTTP body merely mentioning the modern revision", async () => {
     const fixture = await answering(400, "Upstream failed while contacting a 2026-07-28 server");
     await expect(

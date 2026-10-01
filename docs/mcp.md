@@ -270,8 +270,8 @@ Two things the SDK negotiated are gone, and both are worth naming:
   A server that speaks it *and* the earlier revisions (a "dual-era" server, which
   is what the official SDKs build by default) answers `initialize` and works as
   before. Modern-only discovery and calls remain **blocked on pi-mcp upstream**:
-  the installed and latest published release, `0.99.2`, and upstream main still
-  implement only the earlier handshake. Volli does not fork the client.
+  Volli pins `0.99.2`, and the newer published `1.0.0` still implements only the
+  earlier handshake. Volli does not fork the client.
   Since VC-479, Volli names a refusal only from a structured
   `UnsupportedProtocolVersionError` (JSON-RPC code `-32022`) whose
   `data.supported` string array contains `2026-07-28` and none of the revisions

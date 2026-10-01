@@ -507,7 +507,9 @@ function transportFor(
   }
   return cancellableHttpTransport({
     url: server.transport.url,
-    fetch: boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
+    fetch: classifyHttpVersionRefusalFetch(
+      boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
+    ),
     maxMessageBytes: MCP_HTTP_MESSAGE_MAX_BYTES,
     ...(auth === undefined ? {} : { authProvider: auth }),
   });
@@ -532,21 +534,18 @@ function modernOnlyVersionError(code: unknown, data: unknown): boolean {
   );
 }
 
-/**
- * Recognize pi-mcp's stdio JSON-RPC error, or a structured HTTP 400 error body.
- * HTTP validation errors may omit id (or use null), unlike stdio responses.
- * The body has already passed boundedFetch's message bound. This only names
- * a refused legacy handshake; transport-specific modern probing/fallback must
- * be implemented upstream in pi-mcp, not as a second client here.
- */
-function refusedAsModernOnly(error: unknown): boolean {
-  if (error instanceof McpError) return modernOnlyVersionError(error.code, error.data);
-  if (!(error instanceof McpHttpError) || error.status !== 400) return false;
+interface ModernOnlyHttpRefusal {
+  message: string;
+  data: unknown;
+}
+
+/** A valid JSON-RPC HTTP 400 refusal that advertises no version pi-mcp accepts. */
+function modernOnlyHttpRefusal(bodyText: string): ModernOnlyHttpRefusal | undefined {
   let body: unknown;
   try {
-    body = JSON.parse(error.body);
+    body = JSON.parse(bodyText);
   } catch {
-    return false;
+    return undefined;
   }
   if (
     !isRecord(body) ||
@@ -558,11 +557,65 @@ function refusedAsModernOnly(error: unknown): boolean {
       typeof body["id"] !== "string" &&
       !(typeof body["id"] === "number" && Number.isFinite(body["id"]))) ||
     !isRecord(body["error"]) ||
-    typeof body["error"]["message"] !== "string"
+    typeof body["error"]["message"] !== "string" ||
+    !modernOnlyVersionError(body["error"]["code"], body["error"]["data"])
   ) {
+    return undefined;
+  }
+  return { message: body["error"]["message"], data: body["error"]["data"] };
+}
+
+/** Only an initialize refusal is protocol-version negotiation, not a later HTTP error. */
+function isInitializeRequest(init: Parameters<McpFetch>[1]): boolean {
+  if (typeof init?.body !== "string") return false;
+  let request: unknown;
+  try {
+    request = JSON.parse(init.body);
+  } catch {
     return false;
   }
-  return modernOnlyVersionError(body["error"]["code"], body["error"]["data"]);
+  return (
+    isRecord(request) &&
+    request["jsonrpc"] === "2.0" &&
+    request["method"] === "initialize" &&
+    (typeof request["id"] === "string" ||
+      (typeof request["id"] === "number" && Number.isFinite(request["id"])))
+  );
+}
+
+/**
+ * pi-mcp currently truncates HTTP error bodies to 8 KiB before it constructs
+ * McpHttpError. Inspect this bounded response first so a valid structured
+ * version refusal larger than that library prefix is not lost. The outer
+ * boundedFetch still enforces Volli's 8 MiB message cap.
+ */
+function classifyHttpVersionRefusalFetch(base: McpFetch): McpFetch {
+  return async (input, init) => {
+    const response = await base(input, init);
+    if (response.status !== 400 || !isInitializeRequest(init)) return response;
+    let refusal: ModernOnlyHttpRefusal | undefined;
+    try {
+      refusal = modernOnlyHttpRefusal(await response.clone().text());
+    } catch {
+      return response;
+    }
+    if (refusal === undefined) return response;
+    await response.body?.cancel().catch(() => undefined);
+    throw new McpError(-32022, refusal.message, refusal.data);
+  };
+}
+
+/**
+ * Recognize pi-mcp's stdio JSON-RPC error, or a structured HTTP 400 error body.
+ * HTTP validation errors may omit id (or use null), unlike stdio responses.
+ * The body has already passed boundedFetch's message bound. This only names
+ * a refused legacy handshake; transport-specific modern probing/fallback must
+ * be implemented upstream in pi-mcp, not as a second client here.
+ */
+function refusedAsModernOnly(error: unknown): boolean {
+  if (error instanceof McpError) return modernOnlyVersionError(error.code, error.data);
+  if (!(error instanceof McpHttpError) || error.status !== 400) return false;
+  return modernOnlyHttpRefusal(error.body) !== undefined;
 }
 
 /**
