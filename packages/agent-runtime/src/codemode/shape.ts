@@ -12,6 +12,7 @@
  * | `bash`          | `{ output, exitCode, truncated, fullOutputPath? }`, any exit  |
  * | MCP tools       | `{ text, structuredContent?, isError, omittedImages }`        |
  * | Volli verbs     | `{ text, details? }`                                          |
+ * | schema-bearing Session tools | their native `structuredContent`                |
  * | everything else | its text                                                      |
  *
  * A call that failed rejects, with the same message a direct call would have
@@ -32,13 +33,14 @@ import { isMcpToolId, MCP_UNTRUSTED_DATA_WARNING_TEXT } from "./trust";
 /** A JSON Schema, as declarations render it. */
 export type JsonSchema = Record<string, unknown>;
 
-export type ToolKind = "bash" | "mcp" | "verb" | "text";
+export type ToolKind = "bash" | "mcp" | "verb" | "structured" | "text";
 
-/** Which shape a tool's results take, from the tool's wire name and what built it. */
-export function toolKind(name: string, isVerb: boolean): ToolKind {
+/** Which shape a tool's results take, from the frozen tool and its own schema. */
+export function toolKind(name: string, isVerb: boolean, outputSchema?: unknown): ToolKind {
   if (name === "bash") return "bash";
   if (isMcpToolId(name)) return "mcp";
   if (isVerb) return "verb";
+  if (typeof outputSchema === "object" && outputSchema !== null) return "structured";
   return "text";
 }
 
@@ -77,6 +79,8 @@ export function outputSchemaFor(kind: ToolKind, mcpOutputSchema?: unknown): Json
         },
         required: ["text"],
       };
+    case "structured":
+      return mcpOutputSchema as JsonSchema;
     case "text":
       return { type: "string" };
   }
@@ -180,6 +184,14 @@ export function shapeResult(
         value: typeof details === "object" && details !== null ? { text, details } : { text },
       };
     }
+    case "structured":
+      if (isError) return { ok: false, message: text };
+      if (result.structuredContent === undefined)
+        return {
+          ok: false,
+          message: "The tool declared an output schema but returned no structured content.",
+        };
+      return { ok: true, value: result.structuredContent };
     case "text":
       return isError ? { ok: false, message: text } : { ok: true, value: text };
   }

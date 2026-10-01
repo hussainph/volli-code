@@ -290,7 +290,10 @@ export function createCodeModeTool(
     isCodeCallable(entry.id, routeFor(host.surface, entry.id)),
   );
   const kinds = new Map<string, ToolKind>(
-    callable.map((entry) => [entry.tool.name, toolKind(entry.tool.name, entry.verb)]),
+    callable.map((entry) => [
+      entry.tool.name,
+      toolKind(entry.tool.name, entry.verb, entry.tool.outputSchema),
+    ]),
   );
   const listing: CallableTool[] = callable.map((entry) => {
     const route = routeFor(host.surface, entry.id);
@@ -299,7 +302,10 @@ export function createCodeModeTool(
       identifier: toCodemodeIdentifier(entry.tool.name),
       description: entry.mcp?.description ?? entry.tool.description,
       inputSchema: entry.tool.parameters as unknown as Record<string, unknown>,
-      outputSchema: outputSchemaFor(kinds.get(entry.tool.name)!, entry.mcp?.outputSchema),
+      outputSchema: outputSchemaFor(
+        kinds.get(entry.tool.name)!,
+        entry.mcp?.outputSchema ?? entry.tool.outputSchema,
+      ),
       namespace: namespaceOf(entry),
       listed: isListedRoute(route),
       declared: isDeclaredRoute(route),

@@ -917,6 +917,28 @@ describe("results", () => {
     ).toContain("Returned: Command timed out after 1 seconds");
   });
 
+  it("refuses a schema-bearing tool's missing structured result rather than changing its type", async () => {
+    const f = fixture({
+      tools: [
+        {
+          ...resultTool("classify", {
+            content: [{ type: "text", text: "display only" }],
+            details: undefined,
+          }),
+          outputSchema: { type: "object", properties: { answers: { type: "object" } } },
+        },
+      ],
+    });
+    const result = await run(
+      f,
+      "try { await tools.classify({}); } catch (error) { return error.message; }",
+    );
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain(
+      "The tool declared an output schema but returned no structured content.",
+    );
+  });
+
   it("gives an MCP tool its server's text, structured content and error flag, and no images", async () => {
     const definition: McpToolDefinition = {
       serverId: "srv",

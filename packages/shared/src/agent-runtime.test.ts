@@ -263,7 +263,7 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-5, -2)).toEqual([
+    expect(NON_CODING_TOOL_IDS.slice(-6, -3)).toEqual([
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -310,7 +310,7 @@ describe("sessionToolIds", () => {
   it("appends classify last, exactly when the decision port is wired (VC-478)", () => {
     // After the Browser search, so every Session frozen before decision
     // models existed keeps every position and its Cache Prefix.
-    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("classify");
+    expect(NON_CODING_TOOL_IDS.at(-2)).toBe("classify");
     expect(
       sessionToolIds({ tools: { tools: [] }, classify: classifyPort, shell: shellPort }),
     ).toEqual(["shell_start", "shell_output", "shell_kill", "classify"]);
@@ -395,6 +395,7 @@ describe("sessionToolIds", () => {
             webSearch: port,
             browser: browserEveryPortFixture,
             shell: shellPort,
+            classify: classifyPort,
           }),
         }),
       },

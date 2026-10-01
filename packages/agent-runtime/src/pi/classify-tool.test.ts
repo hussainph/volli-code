@@ -1,10 +1,17 @@
-import type { DecisionAnswered, RuntimeClassifyOutcome, RuntimeClassifyPort } from "@volli/shared";
+import {
+  codeModeSurfaceFor,
+  type DecisionAnswered,
+  type RuntimeClassifyOutcome,
+  type RuntimeClassifyPort,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createDecisionService } from "../decision/service";
 import { FIXTURE_SECRET, fixtureModels } from "../decision/fixture.test-support";
 import { piDecisionClassifier } from "./classifier";
 import { createSessionTools } from "./tools";
+import { createCodeModeTool } from "../codemode/tool";
+import { CodeModeJournal } from "../codemode/journal";
 import {
   answerLine,
   CLASSIFY_DESCRIPTION,
@@ -191,6 +198,81 @@ describe("classify on the Session's surface", () => {
       ),
     ).toEqual(["classify"]);
     expect(createSessionTools({ tools: { tools: [] } }, {} as never)).toEqual([]);
+  });
+});
+
+function surface(port: RuntimeClassifyPort, route: "both" | "code") {
+  return createSessionTools(
+    {
+      tools: {
+        tools: [],
+        codeMode: { ...codeModeSurfaceFor({ tools: ["classify"] }), routes: { classify: route } },
+      },
+      classify: port,
+    },
+    null as never,
+    undefined,
+    (codeMode, tools) =>
+      createCodeModeTool({
+        surface: codeMode,
+        tools,
+        gate: () => undefined,
+        observe: async () => {},
+        journal: new CodeModeJournal(),
+      }),
+  );
+}
+
+describe("classify through Code Mode (VC-471 / VC-478)", () => {
+  it("routes the real classify tool on both and code, with typed answers for a loop", async () => {
+    for (const route of ["both", "code"] as const) {
+      const seen: Array<{ state: unknown; questions: unknown; signal: AbortSignal }> = [];
+      const tools = surface(portAnswering({ kind: "answered", answered: ANSWERED }, seen), route);
+      expect(tools.map((tool) => tool.name)).toEqual(
+        route === "both" ? ["classify", "codemode"] : ["codemode"],
+      );
+      const code = tools.at(-1)!;
+      expect(code.description).toContain("answers:");
+      expect(code.description).toContain("elapsedMs: number");
+      const result = await code.execute(`classify-${route}`, {
+        code: `
+        const values = [];
+        for (const state of [{ title: "one" }, { title: "two" }]) {
+          const result = await tools.classify({ state, questions: ${JSON.stringify(ARGS.questions)} });
+          values.push(result.answers.approved.value);
+        }
+        return values;
+      `,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining("Returned: [true,true]"),
+      });
+      expect(seen.map((call) => call.state)).toEqual([{ title: "one" }, { title: "two" }]);
+      expect(seen.every((call) => call.signal instanceof AbortSignal)).toBe(true);
+    }
+  });
+
+  it("rejects a decision miss explicitly rather than handing a script success-shaped text", async () => {
+    const [code] = surface(
+      portAnswering({
+        kind: "miss",
+        miss: { status: "error", reason: "invalid-request", message: "bad question" },
+      }),
+      "code",
+    );
+    const result = await code!.execute("classify-miss", {
+      code: `
+      try { await tools.classify(${JSON.stringify(ARGS)}); }
+      catch (error) { return error.message; }
+    `,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("No decision was made: bad question"),
+    });
   });
 });
 
