@@ -8,6 +8,9 @@
  *    later turns do not, until something re-arms it.
  * 3. A verdict raised mid-turn rides with that turn's end; a stop ends the
  *    watch; the watcher's own stop drops everything it watched.
+ * 3b. A turn end with subagents pending is deferred and keeps the arm; other
+ *    changes say the target is waiting; the watcher's own `session_stop` is
+ *    not echoed back (VC-485).
  * 4. A watched Ticket reports moves, comments and signals — except the
  *    watcher's own — with every other author's words enveloped.
  * 5. A notice for a watcher between attachments waits for its next one.
@@ -65,6 +68,7 @@ function harness(
   const streamListeners: ((emission: SessionStreamEmission) => void)[] = [];
   const ledgers = new Map<string, SessionEvent[]>();
   let live = options.live ?? true;
+  const pending = new Map<string, string[]>();
   let releases = 0;
   let ids = 0;
   const ports: WatchesPorts = {
@@ -124,6 +128,7 @@ function harness(
           }),
         }),
     readComment: (commentId) => (commentId === "gone" ? null : `comment ${commentId}`),
+    pendingSubagents: (sessionId) => pending.get(sessionId) ?? [],
     newId: () => `n${++ids}`,
     report: (message) => reports.push(message),
     setTimeout: (callback, ms) => {
@@ -173,6 +178,9 @@ function harness(
     timers,
     reports,
     streamListeners,
+    setPending: (sessionId: string, children: string[]) => {
+      pending.set(sessionId, children);
+    },
     setLive: (value: boolean) => {
       live = value;
     },
@@ -304,7 +312,7 @@ describe("watching a Session", () => {
     expect(h.watches.watching(WATCHER).sessions).toEqual([]);
   });
 
-  it("words an interrupted turn, and a stop made by the watcher or the watchdog", async () => {
+  it("words an interrupted turn, and a stop made by the watchdog or another Session", async () => {
     const h = harness();
     watchTarget(h);
     h.session(TARGET, 1, { kind: "turn.interrupted", attachmentId: "a", turnId: "t" });
@@ -312,27 +320,112 @@ describe("watching a Session", () => {
     expect(h.notices()[0]!.text).toMatch(/was interrupted mid-turn; its work did not finish/);
 
     watchTarget(h);
-    h.session(TARGET, 2, {
-      kind: "session.stopped",
-      reason: null,
-      by: { kind: "session", sessionId: WATCHER },
-    });
+    h.session(TARGET, 2, { kind: "session.stopped", reason: null, by: { kind: "watchdog" } });
     await h.flush();
-    expect(h.notices()[1]!.text).toContain("was stopped by you;");
+    expect(h.notices()[1]!.text).toContain("was stopped by Volli's watchdog;");
 
     watchTarget(h);
-    h.session(TARGET, 3, { kind: "session.stopped", reason: null, by: { kind: "watchdog" } });
-    await h.flush();
-    expect(h.notices()[2]!.text).toContain("was stopped by Volli's watchdog;");
-
-    watchTarget(h);
-    h.session(TARGET, 4, {
+    h.session(TARGET, 3, {
       kind: "session.stopped",
       reason: null,
       by: { kind: "session", sessionId: OTHER },
     });
     await h.flush();
-    expect(h.notices()[3]!.text).toContain("was stopped by Session cccccccc;");
+    expect(h.notices()[2]!.text).toContain("was stopped by Session cccccccc;");
+  });
+
+  it("does not echo the watcher's own session_stop, but still ends the watch (VC-485)", async () => {
+    const h = harness();
+    watchTarget(h);
+    h.session(TARGET, 1, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: WATCHER },
+    });
+    await h.flush();
+    expect(h.notices()).toEqual([]);
+    expect(h.timers).toEqual([]);
+    expect(h.watches.watching(WATCHER).sessions).toEqual([]);
+
+    // The watch is gone: a later turn end of that target is not news.
+    completeTurn(h, 2);
+    await h.flush();
+    expect(h.notices()).toEqual([]);
+  });
+
+  it("still reports a stop by the user or another Session (VC-485)", async () => {
+    const h = harness();
+    watchTarget(h);
+    h.session(TARGET, 1, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+    await h.flush();
+    expect(h.notices()[0]!.text).toContain("was stopped by the user;");
+
+    watchTarget(h);
+    h.session(TARGET, 2, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: OTHER },
+    });
+    await h.flush();
+    expect(h.notices()[1]!.text).toContain("was stopped by Session cccccccc;");
+  });
+
+  it("defers a turn end while the target has subagents pending, and keeps the arm (VC-485)", async () => {
+    const h = harness({ answers: { r1: "first", r2: "all done" } });
+    watchTarget(h);
+    h.setPending(TARGET, ["1a2b3c4d-0000", "5e6f7a8b-0000"]);
+
+    completeTurn(h, 1, "r1");
+    await h.flush();
+    expect(h.notices()).toEqual([]);
+    expect(h.timers).toEqual([]);
+    expect(h.watches.watching(WATCHER).sessions).toEqual([{ id: TARGET, turnArmed: true }]);
+
+    // One child answers; the target's next turn ends with one still pending.
+    h.setPending(TARGET, ["5e6f7a8b-0000"]);
+    completeTurn(h, 4, "r1");
+    await h.flush();
+    expect(h.notices()).toEqual([]);
+
+    // The last child answered: this turn end is the real one.
+    h.setPending(TARGET, []);
+    completeTurn(h, 7, "r2");
+    await h.flush();
+    expect(h.notices()).toHaveLength(1);
+    const text = h.notices()[0]!.text;
+    expect(text).toContain('- Session bbbbbbbb ("Fix auth") finished its turn.');
+    expect(text).not.toContain("waiting on");
+    expect(text).toContain("all done");
+    expect(h.watches.watching(WATCHER).sessions).toEqual([{ id: TARGET, turnArmed: false }]);
+  });
+
+  it("delivers an interrupted turn at once, naming the subagents still pending (VC-485)", async () => {
+    const h = harness();
+    watchTarget(h);
+    h.setPending(TARGET, ["1a2b3c4d-0000", "5e6f7a8b-0000"]);
+    h.session(TARGET, 1, { kind: "turn.interrupted", attachmentId: "a", turnId: "t" });
+    await h.flush();
+    const text = h.notices()[0]!.text;
+    expect(text).toMatch(/was interrupted mid-turn/);
+    expect(text).toContain("  It is waiting on 2 subagents: 1a2b3c4d, 5e6f7a8b.");
+    expect(h.watches.watching(WATCHER).sessions).toEqual([{ id: TARGET, turnArmed: false }]);
+  });
+
+  it("carries the waiting line on a verdict raised while subagents are pending (VC-485)", async () => {
+    const h = harness();
+    h.watches.watchSession({
+      watcherSessionId: WATCHER,
+      targetSessionId: TARGET,
+      title: null,
+      kinds: ALL_SESSION,
+      armTurn: false,
+    });
+    h.setPending(TARGET, ["1a2b3c4d-0000"]);
+    h.session(TARGET, 1, { kind: "session.signaled", signal: "done", reason: null });
+    await h.flush();
+    const text = h.notices()[0]!.text;
+    expect(text).toContain("- Session bbbbbbbb signaled done.");
+    expect(text).toContain("  It is waiting on 1 subagent: 1a2b3c4d.");
   });
 
   it("honours policy kinds, ignores self-watch and empty kinds, and merges a second arming", async () => {

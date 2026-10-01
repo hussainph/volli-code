@@ -31,7 +31,11 @@ import { TicketTabStrip, type TicketTabDescriptor } from "./ticket-tabs";
 
 const noop = (): void => {};
 
-const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+const RUN: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: "Nightly sweep",
+};
 const CHILD: SessionProvenance = {
   kind: "session",
   parentSessionId: "session-parent",
@@ -173,7 +177,7 @@ describe("a ticket Session tab's provenance", () => {
   // The pre-Run window: the launch event says `automation` and the Run record
   // that would name it has not landed. The bolt still draws.
   it("says an Automation started it even when nothing can name which", async () => {
-    seed({ "session-run": { kind: "automation", automationName: null } });
+    seed({ "session-run": { kind: "automation", automationRunId: null, automationName: null } });
 
     const html = await mount([BODY, CHAT]);
 

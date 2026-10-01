@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "./session-origin";
 /**
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
@@ -165,6 +166,9 @@ export type ChatWaitingReason = "question" | "permission" | "auth";
  * structured adapter's own domain, read through the Session Engine directly).
  */
 export interface ChatSessionRecord {
+  /** Optional only for older clients/fixtures; main always projects these. */
+  latestTurnOrigin?: SessionOrigin | null;
+  resumedAfterStop?: boolean;
   sessionId: string;
   title: string;
   projectId: string;

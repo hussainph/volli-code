@@ -2141,3 +2141,106 @@ describe("listAttachedSessions (VC-403)", () => {
     ).resolves.toEqual([]);
   });
 });
+
+describe("origin storage and checkpoint upgrade", () => {
+  it("extracts command origin for slim folds and invalidates v2 checkpoints", async () => {
+    const { ledger, control, projectId } = setup();
+    const origin = {
+      kind: "automation",
+      automationRunId: "run-exact",
+      automationName: "Review",
+    } as const;
+    const created = await control.createSession({
+      commandId: "origin-create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance: {
+        ...provenance,
+        source: { ...provenance.source, detail: { sessionOrigin: origin } },
+      },
+    });
+    await control.observe({
+      id: "origin-attachment",
+      sessionId: created.session.id,
+      occurredAt: 20,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "origin-a",
+        sessionId: created.session.id,
+        adapterId: "pi",
+        venue: provenance.venue,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+    await control.submit({
+      commandId: "origin-stop",
+      sessionId: created.session.id,
+      provenance,
+      intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
+    });
+    await ledger.transaction((tx) => {
+      const sequence = tx.latestEventSequence(created.session.id) + 1;
+      const command = {
+        id: "origin-submit",
+        sessionId: created.session.id,
+        createdAt: 30,
+        intent: {
+          kind: "message.submit" as const,
+          reference: { id: "message", mediaType: null, digest: null },
+        },
+        route: null,
+      };
+      tx.saveCommand(command);
+      tx.appendEvent({
+        id: "origin-command",
+        sessionId: created.session.id,
+        sequence,
+        occurredAt: 30,
+        recordedAt: 30,
+        commandId: command.id,
+        provenance: {
+          ...provenance,
+          source: { ...provenance.source, detail: { sessionOrigin: origin } },
+        },
+        payload: { kind: "command.recorded", command },
+      });
+      tx.appendEvent({
+        id: "origin-turn",
+        sessionId: created.session.id,
+        sequence: sequence + 1,
+        occurredAt: 31,
+        recordedAt: 31,
+        provenance,
+        attachmentId: "origin-a",
+        commandId: null,
+        payload: { kind: "turn.started", attachmentId: "origin-a", turnId: "origin-t" },
+      });
+    });
+    const audit = await control.listEvents({ sessionId: created.session.id });
+    await ledger.transaction((tx) => {
+      const slim = tx.listProjectionEvents({ sessionId: created.session.id });
+      expect(slim[0]?.commandOrigin).toEqual(origin);
+      expect("provenance" in slim[0]!).toBe(false);
+      expect(audit[0]?.provenance.source.detail).toEqual({ sessionOrigin: origin });
+      const checkpoint = createSessionProjectionCheckpoint(created.session, audit);
+      expect(checkpoint.version).toBe(3);
+      tx.saveProjectionCheckpoint(checkpoint);
+    });
+    ctx.db
+      .prepare("UPDATE session_projection_checkpoints SET schema_version = 2 WHERE session_id = ?")
+      .run(created.session.id);
+    await ledger.transaction((tx) =>
+      expect(tx.getProjectionCheckpoint(created.session.id)).toBeNull(),
+    );
+    const rebuilt = await control.getSession({ sessionId: created.session.id });
+    expect(rebuilt?.latestTurnOrigin).toEqual(origin);
+    expect(rebuilt?.resumptions).toEqual([{ turnId: "origin-t", origin, startedAt: 31 }]);
+    expect(rebuilt).toEqual(createSessionProjectionCheckpoint(created.session, audit).projection);
+  });
+});

@@ -89,7 +89,11 @@ describe("closeStaleAttachments", () => {
         attachmentId: "attachment-1",
         occurredAt: 1_700_000_000_000,
         provenance: {
-          source: { kind: "system", id: "desktop-recovery", detail: null },
+          source: {
+            kind: "system",
+            id: "desktop-recovery",
+            detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+          },
           venue: { id: "local", kind: "local" },
         },
         attention: {
@@ -107,7 +111,11 @@ describe("closeStaleAttachments", () => {
         attachmentId: "attachment-1",
         occurredAt: 1_700_000_000_000,
         provenance: {
-          source: { kind: "system", id: "desktop-recovery", detail: null },
+          source: {
+            kind: "system",
+            id: "desktop-recovery",
+            detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+          },
           venue: { id: "local", kind: "local" },
         },
         outcome: "interrupted",

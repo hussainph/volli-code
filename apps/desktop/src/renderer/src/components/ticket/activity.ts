@@ -1,3 +1,4 @@
+import { formatSessionOrigin } from "@volli/shared";
 /**
  * Pure logic behind the ticket Activity feed (ticket-detail-mvp step 4): merge
  * the append-only event log with the comment work-log into one chronological
@@ -70,6 +71,7 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "pr_opened",
   "created",
   "session_started",
+  "session_resumed",
   "retitled",
   "priority_changed",
   "harness_changed",
@@ -295,7 +297,11 @@ export function describeEvent(
     // one ran, and inventing a name from a second lookup would let the timeline
     // and the Run record disagree. The Session's own row says which — this line
     // only has to stop reading as a person.
+    case "session_resumed":
+      return `session resumed by ${formatSessionOrigin(payload.origin)}`;
     case "session_started":
+      if (payload.origin !== undefined)
+        return `${formatSessionOrigin(payload.origin)} started a session`;
       if (actor === "automation") return "an Automation started a session";
       if (actor === "session") return "an agent started a session";
       return "started a session";

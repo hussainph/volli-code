@@ -24,7 +24,11 @@ import { HOME_BOARD_TAB, HomeTabStrip, type HomeTabDescriptor } from "./home-tab
 
 const noop = (): void => {};
 
-const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+const RUN: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: "Nightly sweep",
+};
 
 const TERMINAL_TAB: SessionTab = {
   sessionId: "session-run",

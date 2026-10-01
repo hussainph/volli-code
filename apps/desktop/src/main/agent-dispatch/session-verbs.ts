@@ -18,6 +18,10 @@ import {
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
   errorMessage,
+  pendingSubagentIds,
+  isSessionListState,
+  SESSION_LIST_STATES,
+  sessionUsageWindowSince,
   sessionInterruptionReason,
   shortSessionId,
   todoListMarkdown,
@@ -26,6 +30,7 @@ import type {
   AgentRequest,
   AgentResponse,
   SessionProjection,
+  SessionProvenance,
   SessionRecord,
   SessionTodoList,
   SessionUsageSummary,
@@ -39,11 +44,18 @@ import {
 import { createTicketCommentCommand } from "../ticket-commands";
 import { withTicketWake } from "../ticket-wake";
 import { getTicket } from "../db/tickets-repo";
+import {
+  readSessionProvenance,
+  readSessionProvenances,
+  type SessionProvenanceQuery,
+} from "../db/session-provenance-repo";
+import { readSessionUsageWindow } from "./cost-verb";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
+import { publicSessionOrigin, publicTurnHandle } from "./wire";
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller
@@ -127,7 +139,28 @@ export async function sessionListVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, sessionEngine, now } = context;
+  const { options, projects, envSession, now } = context;
+  const window = readSessionUsageWindow(request.args["since"]);
+  if (window === "invalid")
+    return failure(
+      "INVALID_REQUEST",
+      "since must be an RFC 3339 instant or a look-back like 7d, 24h or 90m.",
+    );
+  const states = request.args["state"];
+  if (
+    states !== undefined &&
+    (!Array.isArray(states) || states.length === 0 || !states.every(isSessionListState))
+  ) {
+    return failure(
+      "INVALID_REQUEST",
+      `Unknown session state (valid: ${SESSION_LIST_STATES.join(", ")}).`,
+    );
+  }
+  const observedAt = now();
+  const since =
+    window === null
+      ? observedAt - 24 * 60 * 60 * 1000
+      : sessionUsageWindowSince(window, observedAt);
   const ticketSelector = request.args["ticket"];
   const ticketResolution =
     ticketSelector === undefined
@@ -159,6 +192,7 @@ export async function sessionListVerb(
   // (VC-403): both loaders share the one memoized listing this pays for.
   const projections = await context.loadProjections();
   const sessions = await context.loadSessions();
+  const chatRecords = projections.map((p) => chatSessionRecord(p));
   // What each Session consumed, off the fold above. Keyed by full id because
   // that is what both halves of the listing hold; the short handle is only
   // ever an output.
@@ -186,8 +220,8 @@ export async function sessionListVerb(
         harness: effectiveHarnessId(session),
         // Terminal rows have no structured activity state, but their durable
         // last event is still the liveness age a fleet reader needs.
-        lastActivityAgeMs: Math.max(0, now() - session.lastActivityAt),
-        ageMs: Math.max(0, now() - session.createdAt),
+        lastActivityAgeMs: Math.max(0, observedAt - session.lastActivityAt),
+        ageMs: Math.max(0, observedAt - session.createdAt),
       };
       // Assigned rather than spread (oxc(no-map-spread)); the target is a
       // fresh literal on every row, so this is still copy-on-write.
@@ -199,10 +233,10 @@ export async function sessionListVerb(
   // terminal row above; only structured-only Sessions land here. The
   // addressable snapshot (identify/peek/rename) stays terminal-only:
   // a chat has no PTY to peek and exports no VOLLI_SESSION of its own.
-  const chatRows = (
-    await sessionEngine.listSessions({ projectId: project.id, scope: "all" })
-  ).flatMap((projection) => {
-    if (terminalSessionRecord(projection) !== null) return [];
+  const chatSources = new Map<object, SessionProvenanceQuery>();
+  const chatRows = projections.flatMap((projection) => {
+    if (projection.session.projectId !== project.id || terminalSessionRecord(projection) !== null)
+      return [];
     const record = chatSessionRecord(projection);
     if (ticketResolution?.ok && record.ticketId !== ticketResolution.ticket.id) return [];
     const ticket = record.ticketId ? getTicket(options.db, record.ticketId) : undefined;
@@ -230,16 +264,217 @@ export async function sessionListVerb(
       // a `stopped` row that was interrupted on the way down says `stopped`
       // and hands the caller no second, older reason.
       interruptedReason: interruptedReason(record, projection),
+      ...chatOrchestrationCells(projection, chatRecords),
       // Age of the newest durable fact, against the caller's clock — beside
       // `ageMs` (age since creation), which stays for sorting what is old.
-      lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
-      ageMs: Math.max(0, now() - record.createdAt),
+      lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
+      ageMs: Math.max(0, observedAt - record.createdAt),
     };
+    chatSources.set(row, { sessionId: record.sessionId, ticketId: record.ticketId });
     return [
       Object.assign(row, modelCells(projection), usageCells(usageById.get(record.sessionId))),
     ];
   });
-  return { v: 1, ok: true, data: { sessions: [...projectSessions, ...chatRows] } };
+  // Explicit scope/state filters define the roster being asked about. The
+  // hidden count is only older rows removed by the window, so its recovery
+  // hint stays true even when --state is present.
+  const scoped = [...projectSessions, ...chatRows].filter(
+    (row) => states === undefined || states.some((state) => state === row.status),
+  );
+  const visible = scoped.filter(
+    (row) =>
+      request.args["all"] === true ||
+      ["working", "waiting", "interrupted", "running"].includes(row.status) ||
+      row.lastActivityAgeMs <= observedAt - since,
+  );
+  // The old concatenation had no recency order; newest durable activity first.
+  visible.sort((a, b) => a.lastActivityAgeMs - b.lastActivityAgeMs);
+  // Who started each chat row, asked once for the rows actually returned: the
+  // roster's older Sessions pay nothing for an answer nobody reads.
+  const shown = visible.flatMap((row) => {
+    const source = chatSources.get(row);
+    return source === undefined ? [] : [{ row, source }];
+  });
+  const startedBy = readSessionProvenances(
+    options.db,
+    shown.map(({ source }) => source),
+  );
+  for (const { row, source } of shown) {
+    Object.assign(row, { startedBy: publicStartedBy(startedBy(source.sessionId), false) });
+  }
+  return { v: 1, ok: true, data: { sessions: visible, hidden: scoped.length - visible.length } };
+}
+
+/**
+ * Shared list/peek/show cells for a chat Session's orchestration state: the
+ * subagents it still waits on, and who asked for its latest turn.
+ *
+ * `latestTurn` is `null` until a turn has begun. After that `origin` is `null`
+ * only for a turn whose door recorded none — a legacy fact, so unknown and
+ * never the user — and `resumedAfterStop` says the turn followed a stop.
+ */
+function chatOrchestrationCells(
+  projection: SessionProjection,
+  records: readonly ReturnType<typeof chatSessionRecord>[],
+): Record<string, unknown> {
+  return {
+    pendingSubagents: pendingSubagentIds(projection.session.id, records),
+    latestTurn:
+      projection.latestTurnId === null
+        ? null
+        : {
+            origin: publicSessionOrigin(projection.latestTurnOrigin),
+            resumedAfterStop: projection.resumedAfterStop,
+          },
+  };
+}
+
+/**
+ * Who started a Session, as the wire carries it. `withTitle` adds the starting
+ * parent's title — wanted by the one-Session reads, left off a list row where
+ * a fleet of children would repeat it once each.
+ */
+function publicStartedBy(
+  provenance: SessionProvenance,
+  withTitle: boolean,
+): Record<string, unknown> {
+  switch (provenance.kind) {
+    case "user":
+      return { kind: "user" };
+    case "automation":
+      return {
+        kind: "automation",
+        automationName: provenance.automationName,
+        automationRunId: provenance.automationRunId,
+      };
+    case "session":
+      return {
+        kind: "session",
+        parentSessionId: shortSessionId(provenance.parentSessionId),
+        ...(withTitle ? { parentTitle: provenance.parentTitle } : {}),
+      };
+  }
+}
+
+/** `volli session show` — metadata without spending a transcript read. */
+export async function sessionShowVerb(
+  context: AgentCommandContext,
+  request: AgentRequest,
+): Promise<AgentResponse> {
+  const { options, projects, now } = context;
+  const projections = await context.loadProjections();
+  const terminals = await context.loadSessions();
+  const resolved = sessionForPublicId(terminals, request.args["id"]);
+  if (!resolved.ok && !isSessionNotFound(resolved.response)) return resolved.response;
+  const observedAt = now();
+  const identityCells = (session: {
+    id: string;
+    projectId: string;
+    ticketId: string | null;
+    title: string;
+    createdAt: number;
+    lastActivityAt: number;
+  }) => {
+    const project = projects.find((entry) => entry.id === session.projectId);
+    const ticket = session.ticketId === null ? undefined : getTicket(options.db, session.ticketId);
+    return {
+      id: shortSessionId(session.id),
+      title: session.title,
+      project: project?.name ?? null,
+      ticket: ticket && project ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null,
+      ageMs: Math.max(0, observedAt - session.createdAt),
+      lastActivityAgeMs: Math.max(0, observedAt - session.lastActivityAt),
+    };
+  };
+  if (resolved.ok) {
+    const terminal = resolved.session;
+    const projection = projections.find((p) => p.session.id === terminal.id);
+    return {
+      v: 1,
+      ok: true,
+      data: Object.assign(
+        identityCells(terminal),
+        {
+          kind: terminal.ticketId === null ? "project" : "ticket",
+          status: terminal.endedAt === null ? "running" : "exited",
+          harness: effectiveHarnessId(terminal),
+        },
+        usageCells(projection?.usage),
+      ),
+    };
+  }
+  const chat = chatProjectionForPublicId(projections, request.args["id"]);
+  if (!chat.ok) return chat.response;
+  const projection = chat.projection;
+  const record = chatSessionRecord(projection);
+  const id = record.sessionId;
+  const base = Object.assign(identityCells({ ...record, id }), {
+    kind: "chat",
+    status: record.activity,
+  });
+  const records = projections.map((p) => chatSessionRecord(p));
+  const provenance = readSessionProvenance(options.db, {
+    sessionId: id,
+    ticketId: record.ticketId,
+  });
+  const provenanceOf = readSessionProvenances(
+    options.db,
+    records.map((r) => ({ sessionId: r.sessionId, ticketId: r.ticketId })),
+  );
+  const summary = (child: ReturnType<typeof chatSessionRecord>) => {
+    const terminalChild = terminals.find((s) => s.id === child.sessionId);
+    return {
+      id: shortSessionId(child.sessionId),
+      title: child.title,
+      role: child.role,
+      status: terminalChild
+        ? terminalChild.endedAt === null
+          ? "running"
+          : "exited"
+        : child.activity,
+    };
+  };
+  const parent = records.find((r) => r.sessionId === record.parentSessionId);
+  const children = records
+    .filter((r) => {
+      const startedBy = provenanceOf(r.sessionId);
+      return (
+        (r.role === "subagent" && r.parentSessionId === id) ||
+        (startedBy.kind === "session" && startedBy.parentSessionId === id)
+      );
+    })
+    .toSorted((a, b) => a.createdAt - b.createdAt)
+    .map(summary);
+  return {
+    v: 1,
+    ok: true,
+    data: Object.assign(
+      base,
+      {
+        role: record.role,
+        waitingOn: record.waitingOn,
+        interruptedReason: interruptedReason(record, projection),
+        startedBy: publicStartedBy(provenance, true),
+        parentSession:
+          record.parentSessionId === null
+            ? null
+            : parent
+              ? summary(parent)
+              : { id: shortSessionId(record.parentSessionId), title: null },
+        children,
+      },
+      chatOrchestrationCells(projection, records),
+      {
+        // Oldest first, uncapped: the text renderer decides how many to print.
+        resumptions: projection.resumptions.map(({ turnId, origin }) => ({
+          turn: publicTurnHandle(turnId),
+          origin: publicSessionOrigin(origin),
+        })),
+      },
+      modelCells(projection),
+      usageCells(projection.usage),
+    ),
+  };
 }
 
 /**
@@ -331,7 +566,8 @@ export async function sessionPeekVerb(
   // caller's mistake either way, and answering it from the other half of
   // the id space would hide the collision rather than report it.
   if (!isSessionNotFound(resolved.response)) return resolved.response;
-  const chat = chatProjectionForPublicId(await context.loadProjections(), request.args["id"]);
+  const projections = await context.loadProjections();
+  const chat = chatProjectionForPublicId(projections, request.args["id"]);
   if (!chat.ok) return chat.response;
   const record = chatSessionRecord(chat.projection);
   const tail = await readSessionTranscriptTail(
@@ -356,6 +592,17 @@ export async function sessionPeekVerb(
       waitingOn: record.waitingOn,
       // See `session list` — the state word's reason, on the same guard.
       interruptedReason: interruptedReason(record, chat.projection),
+      ...chatOrchestrationCells(
+        chat.projection,
+        projections.map((p) => chatSessionRecord(p)),
+      ),
+      startedBy: publicStartedBy(
+        readSessionProvenance(options.db, {
+          sessionId: record.sessionId,
+          ticketId: record.ticketId,
+        }),
+        false,
+      ),
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
       turns: tail.turns,
       turnDepth: tail.turnDepth,
@@ -461,9 +708,15 @@ async function recordSessionSignal(
     intent: { kind: "session.signal", signal, reason },
     // `adapter`/`terminal` predates structured callers; kept as-is so a
     // replayed ledger reads one vocabulary. Nothing routes or renders on
-    // this source today (`session.signal` routes to no adapter).
+    // this source today (`session.signal` routes to no adapter). The detail is
+    // the new part: the signal is this Session's own act, and the origin says
+    // so in the one place every other door records who asked.
     provenance: {
-      source: { kind: "adapter", id: "terminal", detail: null },
+      source: {
+        kind: "adapter",
+        id: "terminal",
+        detail: { sessionOrigin: { kind: "session", sessionId: envSession.id } },
+      },
       venue: { id: "local", kind: "local" },
     },
   });

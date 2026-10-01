@@ -49,6 +49,7 @@ import {
   sessionListVerb,
   sessionAnswerVerb,
   sessionPeekVerb,
+  sessionShowVerb,
 } from "./session-verbs";
 import {
   ticketCommentVerb,
@@ -146,6 +147,7 @@ export const AGENT_VERB_TABLE: {
   // usage projection — no Session history is folded to price a pass.
   cost: { handle: costVerb, envSession: "resolve" },
   "session.list": { handle: sessionListVerb, envSession: "resolve" },
+  "session.show": { handle: sessionShowVerb, envSession: "resolve" },
   // The one verb that reads BOTH halves of the roster (VC-79), off one fold
   // rather than by listing the world twice.
   "session.peek": { handle: sessionPeekVerb, envSession: "resolve" },

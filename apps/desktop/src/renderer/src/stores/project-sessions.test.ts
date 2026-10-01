@@ -127,7 +127,11 @@ describe("project-sessions store", () => {
   // `record.sessionId`, and getting that backwards would file a mark under an id
   // no surface ever asks for — a bolt that silently never draws.
   it("keeps who started each Session, keyed by the id its own shape answers to", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     const child = {
       kind: "session",
       parentSessionId: "session-parent",
@@ -158,7 +162,11 @@ describe("project-sessions store", () => {
   // any baseline fetch has seen it, so the fold has to carry the mark — a push
   // that dropped it would leave the newest Run as the one row with no bolt.
   it("folds a pushed row's provenance in, and leaves the resting case absent", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     stubList([]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
@@ -532,7 +540,7 @@ describe("childSessionIds", () => {
         "child-a": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         "child-b": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         cousin: { kind: "session", parentSessionId: "other", parentTitle: null },
-        parent: { kind: "automation", automationName: "Nightly" },
+        parent: { kind: "automation", automationRunId: null, automationName: "Nightly" },
       },
     };
 
@@ -559,7 +567,9 @@ describe("mergedProjectSessionRows", () => {
       p1: {
         terminal: [record({ id: "t-one", projectId: "p1" })],
         chat: [chatRecord({ sessionId: "c-one", projectId: "p1" })],
-        provenance: { "c-one": { kind: "automation", automationName: "Nightly" } },
+        provenance: {
+          "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
+        },
       },
       p2: {
         terminal: [record({ id: "t-two", projectId: "p2" })],
@@ -580,7 +590,7 @@ describe("mergedProjectSessionRows", () => {
     expect(merged.terminal.map((row) => row.id)).toEqual(["t-one", "t-two"]);
     expect(merged.chat.map((row) => row.sessionId)).toEqual(["c-one", "c-two"]);
     expect(merged.provenance).toEqual({
-      "c-one": { kind: "automation", automationName: "Nightly" },
+      "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
       "t-two": { kind: "session", parentSessionId: "c-one", parentTitle: null },
     });
   });

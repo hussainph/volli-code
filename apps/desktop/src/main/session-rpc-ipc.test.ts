@@ -278,7 +278,12 @@ describe("registerSessionRpcIpcHandlers", () => {
     // The reason is the router's to state, not the renderer's: this transport
     // is the user seam, and abandonment is all it can honestly report.
     expect(fixture.calls.cancelled).toEqual([
-      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
+      {
+        sessionId: "session-1",
+        interactionId: "question-1",
+        reason: "abandoned",
+        origin: { kind: "user" },
+      },
     ]);
     await registration.close();
   });

@@ -1,3 +1,4 @@
+import { readSessionOrigin, type SessionOrigin } from "./session-origin";
 /**
  * The durable, harness-agnostic facts that make up a Session's local history.
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
@@ -932,6 +933,9 @@ export interface SessionAttachmentFailure {
  * event can still be passed wherever this is accepted.
  */
 export interface SessionProjectionEvent {
+  /** Slim fold readers carry only origin, not full native provenance. */
+  commandOrigin?: SessionOrigin | null;
+  provenance?: SessionEventProvenance;
   id: string;
   sessionId: string;
   sequence: number;
@@ -1543,9 +1547,22 @@ export interface SessionInteractionProjection {
  * modifiers make that a compile error instead, on both sides of an RPC seam
  * where a runtime freeze does not survive the copy.
  */
+/** A turn that opened after a stop, in the Session's own ledger order. */
+export interface SessionTurnResumption {
+  readonly turnId: string;
+  readonly origin: SessionOrigin | null;
+  readonly startedAt: number;
+}
+
 export interface SessionProjection {
   readonly session: Session;
   readonly status: "open" | "archived";
+  readonly latestTurnId: string | null;
+  readonly latestTurnOrigin: SessionOrigin | null;
+  /** A stop fact occurred after the previous turn began, before this one. */
+  readonly resumedAfterStop: boolean;
+  /** Retained so a coalesced observer cannot lose an intermediate resume. */
+  readonly resumptions: readonly SessionTurnResumption[];
   readonly commands: readonly SessionCommand[];
   readonly receipts: readonly CommandReceipt[];
   /** Latest unresolved executor.start intent; it exists before an attachment is observable. */
@@ -1658,9 +1675,11 @@ export interface SessionProjectionCheckpoint {
   pendingExecutorStarts: readonly SessionCommand[];
   /** Unrounded sum of every priced `usage.recorded` fact through the cursor. */
   usageCostUsdExact: number | null;
+  stopSinceLastTurn: boolean;
+  pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
 }
 
-export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
+export const SESSION_PROJECTION_CHECKPOINT_VERSION = 3 as const;
 
 export interface SessionProjectionCheckpointValidationOptions {
   /** Reject a checkpoint that belongs to another Session. */
@@ -1818,6 +1837,14 @@ function foldSessionProjection(
   let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
   let modelTier: ModelTier | null = base?.modelTier ?? null;
   let modelAuto: ModelAutoPick | null = base?.modelAuto ?? null;
+  const resumptions: SessionTurnResumption[] = [...(base?.resumptions ?? [])];
+  let latestTurnId = base?.latestTurnId ?? null;
+  let latestTurnOrigin = base?.latestTurnOrigin ?? null;
+  let resumedAfterStop = base?.resumedAfterStop ?? false;
+  let stopSinceLastTurn = checkpoint?.stopSinceLastTurn ?? false;
+  const pendingTurnCommands = new Map(
+    checkpoint?.pendingTurnCommands.map(({ commandId, origin }) => [commandId, origin]) ?? [],
+  );
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
   let authorityDenials = base?.authorityDenials ?? 0;
@@ -1861,6 +1888,25 @@ function foldSessionProjection(
     switch (event.payload.kind) {
       case "command.recorded":
         commands.push(event.payload.command);
+        if (
+          (event.payload.command.intent.kind === "message.submit" &&
+            (!turnActive || stopSinceLastTurn)) ||
+          event.payload.command.intent.kind === "executor.retry"
+        ) {
+          const detail = event.provenance?.source.detail;
+          const origin =
+            event.commandOrigin ??
+            readSessionOrigin(
+              typeof detail === "object" && detail !== null && !Array.isArray(detail)
+                ? (detail as Record<string, unknown>).sessionOrigin
+                : null,
+            );
+          // Receipts record acceptance, not whether delivery opened a turn.
+          // A submit during active work joins that turn; only outstanding
+          // openers compete for the next start. Retain each independently so
+          // rejecting one cannot erase another's attribution.
+          pendingTurnCommands.set(event.payload.command.id, origin);
+        }
         if (event.payload.command.intent.kind === "executor.start") {
           pendingExecutorStarts.set(event.payload.command.id, event.payload.command);
         }
@@ -1886,6 +1932,7 @@ function foldSessionProjection(
         };
         break;
       case "session.stopped":
+        stopSinceLastTurn = true;
         stopped = {
           at: event.occurredAt,
           reason: event.payload.reason,
@@ -2002,6 +2049,8 @@ function foldSessionProjection(
         break;
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
+        if (event.payload.receipt.status === "rejected")
+          pendingTurnCommands.delete(event.payload.receipt.commandId);
         if (event.payload.receipt.status === "rejected") {
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
         }
@@ -2015,6 +2064,18 @@ function foldSessionProjection(
       // latch "working" durably, forever, on the strength of a turn nobody is
       // running any more.
       case "turn.started":
+        latestTurnId = event.payload.turnId;
+        latestTurnOrigin =
+          pendingTurnCommands.size === 1 ? [...pendingTurnCommands.values()][0]! : null;
+        resumedAfterStop = stopSinceLastTurn;
+        if (resumedAfterStop)
+          resumptions.push({
+            turnId: latestTurnId,
+            origin: latestTurnOrigin,
+            startedAt: event.occurredAt,
+          });
+        stopSinceLastTurn = false;
+        pendingTurnCommands.clear();
         turnActive = true;
         // The outcome is about the latest turn, and this one has none yet.
         lastTurnOutcome = null;
@@ -2106,6 +2167,10 @@ function foldSessionProjection(
     modelTier,
     ...(modelAuto === null ? {} : { modelAuto }),
     turnActive,
+    latestTurnId,
+    latestTurnOrigin,
+    resumedAfterStop,
+    resumptions,
     lastTurnOutcome,
     authorityDenials,
     // `usageSummary` supplies exact counters, bases and token totals. Money is
@@ -2127,6 +2192,11 @@ function foldSessionProjection(
     projection,
     pendingExecutorStarts: [...pendingExecutorStarts.values()],
     usageCostUsdExact: usageSummary.pricedRequestCount === 0 ? null : usageCostUsdExact,
+    stopSinceLastTurn,
+    pendingTurnCommands: [...pendingTurnCommands].map(([commandId, origin]) => ({
+      commandId,
+      origin,
+    })),
   };
 }
 

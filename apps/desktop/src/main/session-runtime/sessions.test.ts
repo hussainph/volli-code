@@ -434,9 +434,15 @@ describe("Sessions", () => {
         ticketId: "ticket-1",
         sessionId: "session-1",
         actor: { kind: "session", sessionId: "driver-session", ticketId: "ticket-9" },
+        origin: { kind: "session", sessionId: "driver-session" },
       },
       // A start with no threaded actor is the human's.
-      { ticketId: "ticket-1", sessionId: "session-1", actor: { kind: "user" } },
+      {
+        ticketId: "ticket-1",
+        sessionId: "session-1",
+        actor: { kind: "user" },
+        origin: { kind: "user" },
+      },
     ]);
   });
 

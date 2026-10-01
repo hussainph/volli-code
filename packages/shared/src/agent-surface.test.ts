@@ -304,6 +304,16 @@ describe("parseColumnToken", () => {
   it("normalizes both public review spellings to the domain status", () => {
     expect(parseColumnToken("needs-review")).toEqual({ ok: true, status: "needs_review" });
     expect(parseColumnToken("review")).toEqual({ ok: true, status: "needs_review" });
+    for (const spelling of [
+      "Needs Review",
+      "NEEDS_REVIEW",
+      "needs_review",
+      "Needs-Review",
+      " Review ",
+    ]) {
+      expect(parseColumnToken(spelling)).toEqual({ ok: true, status: "needs_review" });
+    }
+    expect(parseColumnToken("Doing")).toEqual({ ok: true, status: "doing" });
   });
 
   it("accepts each direct column token and rejects unknown tokens", () => {

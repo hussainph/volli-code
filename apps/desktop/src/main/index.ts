@@ -128,6 +128,11 @@ import {
 } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
+import {
+  catchUpSessionResumptions,
+  observeSessionResumptions,
+} from "./session-runtime/session-resumptions";
+import type { SessionOrigin } from "@volli/shared";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { readAutomationRunAttendance } from "./db/automations-repo";
 import {
@@ -1027,6 +1032,11 @@ app.whenReady().then(async () => {
           readOf: (sessionId) => readSessionUnread(watchedDb, sessionId),
           listOpenNativeBindings: () => listOpenNativeBindings(),
           observe: (projection) => {
+            observeSessionResumptions(watchedDb, projection, {
+              publish: broadcastDataChanged,
+              report: (error) =>
+                console.error("[volli] failed to record Session resumption:", errorMessage(error)),
+            });
             runAttention?.observe(projection);
             // A schedule made (or settled) anywhere reaches the timer here.
             scheduledResumeHost?.observe(projection);
@@ -2104,8 +2114,14 @@ app.whenReady().then(async () => {
           // door derived. Once per Session and not once per call (VC-162), now
           // that a replayed tool call can mint through it twice — the guard
           // lives with the ledger that can answer whether it already happened.
-          recordSessionStarted: ({ ticketId, sessionId, actor }) => {
-            recordSessionStartedOnce(sessionDb, { ticketId, sessionId, now: Date.now(), actor });
+          recordSessionStarted: ({ ticketId, sessionId, actor, origin }) => {
+            recordSessionStartedOnce(sessionDb, {
+              ticketId,
+              sessionId,
+              now: Date.now(),
+              actor,
+              origin,
+            });
           },
         })
       : null;
@@ -2243,7 +2259,11 @@ app.whenReady().then(async () => {
               sessionId,
               intent: { kind: "session.retitle", title },
               provenance: {
-                source: { kind: "system", id: "auto-title", detail: null },
+                source: {
+                  kind: "system",
+                  id: "auto-title",
+                  detail: { sessionOrigin: { kind: "volli", reason: "auto-title" } },
+                },
                 venue: { id: "local", kind: "local" },
               },
             });
@@ -2301,13 +2321,16 @@ app.whenReady().then(async () => {
           text,
           commandId,
           messageId,
+          origin,
         }: {
           sessionId: string;
           text: string;
           commandId: string;
           messageId: string;
+          origin?: SessionOrigin;
         }): Promise<void> => {
           await sessionRuntime.command({
+            origin,
             commandId,
             sessionId,
             command: {
@@ -2386,6 +2409,9 @@ app.whenReady().then(async () => {
       sessionEngine,
       readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
       readComment: (commentId) => getComment(db, commentId)?.body ?? null,
+      // A watched Session that ends a turn with subagents still running is
+      // between turns, not done (VC-485).
+      pendingSubagents: (sessionId) => delegations?.liveChildren(sessionId) ?? [],
     });
     return watches;
   };
@@ -2722,6 +2748,19 @@ app.whenReady().then(async () => {
       }
     }
   }
+  // A quit before the activity watch's 60ms flush must not lose Ticket history.
+  // Off the boot critical path; the indexed kind scan only folds resume candidates.
+  if (dbHandle.ok && sessionEngine !== null) {
+    const db = dbHandle.db;
+    const engine = sessionEngine;
+    setImmediate(() => {
+      void catchUpSessionResumptions(db, engine, {
+        publish: broadcastDataChanged,
+        report: (error) =>
+          console.error("[volli] failed to catch up Session resumptions:", errorMessage(error)),
+      });
+    });
+  }
   // After recovery (see the host's construction above). Not awaited: the first
   // pass may fire a resume whose run takes minutes, and boot does not wait on
   // it. A wake from sleep looks again at once rather than on the next tick.
@@ -3033,8 +3072,9 @@ app.whenReady().then(async () => {
           // The composer's message shape, with the Run's durable command/message
           // ids rather than freshly minted ones. A crash after dispatch is then
           // a Session-runtime replay, never a duplicate first turn.
-          deliverInstructions: ({ sessionId, commandId, messageId, text, resources }) =>
+          deliverInstructions: ({ sessionId, commandId, messageId, text, resources, origin }) =>
             sessionRuntime.command({
+              origin,
               commandId,
               sessionId,
               command: {
@@ -3460,6 +3500,7 @@ app.whenReady().then(async () => {
         const delivered = await sessionRuntime.command({
           commandId,
           sessionId: notice.sessionId,
+          origin: { kind: "volli", reason: "browser-notice" },
           command: {
             kind: "message.submit",
             delivery: "steer",
@@ -4074,11 +4115,13 @@ app.whenReady().then(async () => {
                   text,
                   commandId,
                   messageId,
+                  origin,
                 }: {
                   sessionId: string;
                   text: string;
                   commandId: string;
                   messageId: string;
+                  origin?: SessionOrigin;
                 }) => {
                   // Both ids come from the caller's operation, never from
                   // `randomUUID()` (VC-162). The Session Engine deduplicates a
@@ -4087,6 +4130,7 @@ app.whenReady().then(async () => {
                   // lands one message — which is what makes a replayed tool
                   // call idempotent rather than merely unlikely to repeat.
                   await sessionRuntime.command({
+                    origin,
                     commandId,
                     sessionId,
                     command: {

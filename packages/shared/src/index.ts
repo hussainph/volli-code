@@ -49,6 +49,7 @@ export * from "./markdown-image";
 export * from "./ticket-events";
 export * from "./ticket-await";
 export * from "./session-await";
+export * from "./pending-subagents";
 export * from "./untrusted-content";
 export * from "./change-set";
 export * from "./worktree-collisions";
@@ -113,3 +114,5 @@ export * from "./theme/ghostty-overlay";
 export * from "./theme/app-state";
 export * from "./theme/project-override";
 export * from "./theme/editor-themes";
+
+export * from "./session-origin";

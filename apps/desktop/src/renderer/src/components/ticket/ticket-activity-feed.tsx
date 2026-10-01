@@ -90,6 +90,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   attachment_added: PaperclipIcon,
   attachment_removed: TrashSimpleIcon,
   session_started: PlayCircleIcon,
+  session_resumed: PlayCircleIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */

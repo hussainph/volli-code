@@ -101,6 +101,10 @@ function projection(id: string, overrides: Partial<SessionProjection> = {}): Ses
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments: [attachment],
@@ -444,6 +448,19 @@ async function completeChildTurn(
   await h.emit(child, from + 2, { kind: "turn.completed", attachmentId: "a", turnId });
 }
 
+const kickoffRejection = (commandId: string): SessionEvent["payload"] => ({
+  kind: "command.receipt.recorded",
+  receipt: {
+    id: "r",
+    commandId,
+    sequence: 4,
+    recordedAt: 4,
+    status: "rejected",
+    code: "refused",
+    detail: "No live executor",
+  },
+});
+
 describe("delegate — the child is a real Session, and the parent keeps working", () => {
   it("returns before the kickoff turn ends, with the watcher parked first", async () => {
     const h = harness();
@@ -464,7 +481,11 @@ describe("delegate — the child is a real Session, and the parent keeps working
     // The kickoff was sent — marked as the parent's delegation — and its turn
     // is still open: the call came back anyway.
     expect(h.kickoffs).toHaveLength(1);
-    expect(h.kickoffs[0]).toMatchObject({ sessionId: CHILD, commandId: `${PARENT}:tc-1:kickoff` });
+    expect(h.kickoffs[0]).toMatchObject({
+      sessionId: CHILD,
+      commandId: `${PARENT}:tc-1:kickoff`,
+      origin: { kind: "session", sessionId: PARENT },
+    });
     expect(h.kickoffs[0]?.text).toContain("Find where the auth token is refreshed");
     expect(h.kickoffs[0]?.text).toContain("Delegated task");
     expect(h.kickoffTurns).toHaveLength(1);
@@ -481,6 +502,24 @@ describe("delegate — the child is a real Session, and the parent keeps working
     h.kickoffTurns[0]!.reject(new Error("PI_EMPTY_MESSAGE"));
     await new Promise((resolve) => setImmediate(resolve));
     expect(h.reports).toEqual([expect.stringContaining("was not delivered: PI_EMPTY_MESSAGE")]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(JSON.stringify(h.parentCommands()[0])).toContain('"state":"failed"');
+  });
+
+  it("settles only a rejected kickoff receipt, not another command's rejection", async () => {
+    const h = harness();
+    await h.delegate();
+    await h.emit(CHILD, 4, kickoffRejection("unrelated"));
+    expect(h.delegations.liveChildren(PARENT)).toEqual([CHILD]);
+    expect(h.parentCommands()).toHaveLength(0);
+    await h.emit(CHILD, 5, kickoffRejection(`${PARENT}:tc-1:kickoff`));
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(JSON.stringify(h.parentCommands()[0])).toContain('"state":"failed"');
+    h.kickoffTurns[0]!.reject(new Error("refused"));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.parentCommands()).toHaveLength(1);
   });
 
   it("steers a notice into the parent when the child's first turn completes, naming the read command when no store can read the answer", async () => {

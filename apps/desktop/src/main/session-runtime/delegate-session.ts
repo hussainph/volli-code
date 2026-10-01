@@ -579,7 +579,13 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       async (emission) => {
         if (state.settled || !isSessionStreamFrame(emission)) return;
         const payload = emission.event.payload;
-        const outcome = outcomeOf(payload);
+        const outcome =
+          payload.kind === "command.receipt.recorded" &&
+          payload.receipt.status === "rejected" &&
+          payload.receipt.commandId === kickoffIds(entry.operationId).commandId &&
+          !state.resumed
+            ? "failed"
+            : outcomeOf(payload);
         if (outcome === null) return;
         await settle(state, outcome, payload.kind === "session.stopped" ? payload.by : null);
       },
@@ -654,11 +660,19 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
             text: `${delegatedTaskMarker(parent.sessionId)}\n\n${input.task}`,
             commandId: ids.commandId,
             messageId: ids.messageId,
+            origin: { kind: "session", sessionId: parent.sessionId },
           }),
         )
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
           report(
             `delegated task for subagent ${shortSessionId(started.sessionId)} was not delivered: ${errorText(error)}`,
+          );
+          const child = live.get(started.sessionId);
+          if (child !== undefined && !child.resumed) await settle(child, "failed");
+        })
+        .catch((error: unknown) => {
+          report(
+            `could not notify parent of failed subagent ${shortSessionId(started.sessionId)}: ${errorText(error)}`,
           );
         });
       return {

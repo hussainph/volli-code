@@ -153,8 +153,9 @@ export type ColumnTokenResult =
   | { ok: false; code: "INVALID_COLUMN"; message: string };
 
 export function parseColumnToken(value: string): ColumnTokenResult {
-  if ((COLUMN_TOKENS as readonly string[]).includes(value)) {
-    return { ok: true, status: COLUMN_TOKEN_STATUS[value as ColumnToken] };
+  const token = value.trim().toLowerCase().replace(/[ _]+/g, "-");
+  if ((COLUMN_TOKENS as readonly string[]).includes(token)) {
+    return { ok: true, status: COLUMN_TOKEN_STATUS[token as ColumnToken] };
   }
   return {
     ok: false,

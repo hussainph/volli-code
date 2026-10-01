@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 /**
  * The one Session-start module: how a structured Session begins, whatever its
  * Role. The Role is stated once, by the caller, as {@link SessionStartInput.role}
@@ -285,6 +286,7 @@ export interface SessionStartInput {
    * passes its `requestActor` result. Never self-declared by a caller.
    */
   actor?: TicketEventActor;
+  origin?: SessionOrigin;
   modelOverride?: SessionModelOverride;
   /**
    * The request this Session is being born to carry, offered to the decision
@@ -501,6 +503,7 @@ export interface Sessions {
 export interface SessionAttachInput {
   operationId: string;
   sessionId: string;
+  origin?: SessionOrigin;
 }
 
 /**
@@ -595,6 +598,7 @@ export interface SessionsOptions {
     ticketId: string;
     sessionId: string;
     actor: TicketEventActor;
+    origin?: SessionOrigin;
   }): void;
 }
 
@@ -921,6 +925,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     const createIdentity = () =>
       options.runtime.command({
         commandId: sessionCreateCommandId(input.operationId),
+        origin: birthOrigin(input),
         command: {
           kind: "session.create",
           projectId: input.projectId,
@@ -964,6 +969,7 @@ export function createSessions(options: SessionsOptions): Sessions {
             ticketId: input.ticketId,
             sessionId: created.sessionId,
             actor: input.actor ?? { kind: "user" },
+            origin: birthOrigin(input),
           });
         }
         // The tier the override named rides beside the resolved model (VC-259):
@@ -1020,6 +1026,7 @@ export function createSessions(options: SessionsOptions): Sessions {
                 : override?.tier;
           await recordModelSelection(options.runtime, {
             commandId: modelCommandId,
+            origin: birthOrigin(input),
             sessionId: created.sessionId,
             model: chosen,
             ...(tier === undefined ? {} : { tier }),
@@ -1078,6 +1085,8 @@ export function createSessions(options: SessionsOptions): Sessions {
         options.runtime,
         input.operationId,
         created.sessionId,
+        "fresh",
+        birthOrigin(input),
       );
       return { ...attached, model: created.model };
     },
@@ -1101,6 +1110,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         );
         await recordModelSelection(options.runtime, {
           commandId: modelBackfillCommandId(input.sessionId),
+          origin: input.origin ?? { kind: "user" },
           sessionId: input.sessionId,
           model,
         });
@@ -1116,6 +1126,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         input.operationId,
         input.sessionId,
         "context_replay",
+        input.origin ?? { kind: "user" },
       );
     },
   };
@@ -1139,9 +1150,11 @@ async function attachStructuredSession(
   operationId: string,
   sessionId: string,
   continuity: "fresh" | "context_replay" = "fresh",
+  origin?: SessionOrigin,
 ): Promise<SessionStartResult> {
   const attached = await runtime.command({
     commandId: `${operationId}:start`,
+    origin,
     sessionId,
     command: { kind: "adapter.attach", continuity },
   });
@@ -1166,10 +1179,12 @@ async function recordModelSelection(
     model: ModelSelection;
     tier?: ModelTier;
     auto?: ModelAutoPick;
+    origin?: SessionOrigin;
   },
 ): Promise<void> {
   const selected = await runtime.command({
     commandId: input.commandId,
+    origin: input.origin,
     sessionId: input.sessionId,
     command: {
       kind: "model.select",
@@ -1185,4 +1200,14 @@ async function recordModelSelection(
       input.sessionId,
     );
   }
+}
+
+/** Birth attribution comes from the door; legacy automation callers stay unknown. */
+function birthOrigin(input: SessionStartInput): SessionOrigin | undefined {
+  if (input.origin !== undefined) return input.origin;
+  if (input.parentSessionId !== undefined)
+    return { kind: "session", sessionId: input.parentSessionId };
+  if (input.actor?.kind === "session") return { kind: "session", sessionId: input.actor.sessionId };
+  if (input.actor === undefined || input.actor.kind === "user") return { kind: "user" };
+  return undefined;
 }

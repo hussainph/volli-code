@@ -1425,7 +1425,7 @@ export function registerDataIpcHandlers(
         sessionId: input.sessionId,
         intent: { kind: "session.retitle", title: input.title.trim() },
         provenance: {
-          source: { kind: "user", id: "renderer", detail: null },
+          source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
           venue: { id: "local", kind: "local" },
         },
       });

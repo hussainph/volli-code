@@ -2409,6 +2409,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         activity: "idle",
         waitingOn: null,
         outcome: null,
+        latestTurnOrigin: null,
+        resumedAfterStop: false,
         lastActivityAt: 500,
         bornTicketless: false,
         role: "ticket",
@@ -2589,6 +2591,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     );
     expect(provenanceById.get(runSession)).toEqual({
       kind: "automation",
+      automationRunId: expect.any(String),
       automationName: "Nightly sweep",
     });
     expect(provenanceById.get(delegated)).toEqual({

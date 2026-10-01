@@ -30,6 +30,10 @@ function projectionWith(
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments,
@@ -111,6 +115,8 @@ describe("chatSessionRecord", () => {
       activity: "idle",
       waitingOn: null,
       outcome: null,
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
       lastActivityAt: 1,
       bornTicketless: true,
       role: "project",
@@ -131,6 +137,8 @@ describe("chatSessionRecord", () => {
       activity: "idle",
       waitingOn: null,
       outcome: null,
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
       lastActivityAt: 1,
       bornTicketless: true,
       role: "project",
@@ -214,6 +222,8 @@ describe("chatSessionRecord outcome", () => {
     expect(chatSessionRecord(projectionWith([structuredAttachment()]))).toMatchObject({
       activity: "idle",
       outcome: null,
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
     });
     for (const lastTurnOutcome of ["completed", "failed"] as const) {
       expect(

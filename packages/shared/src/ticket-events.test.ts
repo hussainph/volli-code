@@ -41,6 +41,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "attachment_added",
       "attachment_removed",
       "session_started",
+      "session_resumed",
     ]);
   });
 
@@ -81,6 +82,7 @@ describe("TicketEventPayload", () => {
       { kind: "attachment_added", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "attachment_removed", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "session_started", sessionId: "session-1" },
+      { kind: "session_resumed", sessionId: "session-1", turnId: "turn-1", origin: null },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

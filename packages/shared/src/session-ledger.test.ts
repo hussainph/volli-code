@@ -1306,7 +1306,7 @@ describe("Session projection checkpoints", () => {
     const checkpoint = createSessionProjectionCheckpoint(session, []);
     expect(checkpoint.compatibility).toBe(SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY);
     const invalid = [
-      { ...checkpoint, version: 2 as typeof checkpoint.version },
+      { ...checkpoint, version: 1 as typeof checkpoint.version },
       { ...checkpoint, compatibility: "session-event-kinds:retired" },
       { ...checkpoint, projection: undefined },
       { ...checkpoint, sessionId: "another-session" },
@@ -2214,5 +2214,166 @@ describe("the frozen ask interaction id derivations", () => {
     // tool call, so it must not share that confirmation's id.
     expect(credentialAskInteractionId("call-1")).toBe("credential-ask:call-1");
     expect(credentialAskInteractionId("x")).not.toBe(confirmAskInteractionId("x"));
+  });
+});
+
+describe("turn origins and stopped resumption", () => {
+  function messageCommand(
+    sequence: number,
+    origin?: import("./session-origin").SessionOrigin,
+    kind: "message.submit" | "executor.retry" = "message.submit",
+  ): SessionEvent {
+    return {
+      ...event(sequence, {
+        kind: "command.recorded",
+        command: {
+          id: `c${sequence}`,
+          sessionId: session.id,
+          createdAt: sequence,
+          intent:
+            kind === "message.submit"
+              ? { kind, reference: { id: "message", mediaType: null, digest: null } }
+              : { kind, attachmentId: "a" },
+          route: null,
+        },
+      }),
+      provenance: {
+        ...systemProvenance,
+        source: {
+          ...systemProvenance.source,
+          detail: origin === undefined ? null : { sessionOrigin: origin },
+        },
+      },
+    };
+  }
+  const turn = (sequence: number) =>
+    event(sequence, { kind: "turn.started", attachmentId: "a", turnId: `t${sequence}` });
+  const stop = (sequence: number) =>
+    event(sequence, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+  it("reads legacy events as unknown, not user, and does not invent a resume", () => {
+    expect(projectSession(session, [messageCommand(1), turn(2)])).toMatchObject({
+      latestTurnId: "t2",
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
+    });
+    expect(projectSession(session, [turn(1)])).toMatchObject({
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
+    });
+  });
+  it("retains exact origin and stop chronology through every checkpoint split", () => {
+    const origin = { kind: "session", sessionId: "parent" } as const;
+    const events = [
+      messageCommand(1, { kind: "user" }),
+      turn(2),
+      stop(3),
+      messageCommand(4, origin),
+      turn(5),
+    ];
+    const full = projectSession(session, events);
+    expect(full.resumptions).toEqual([{ turnId: "t5", origin, startedAt: turn(5).occurredAt }]);
+    expect(full).toMatchObject({
+      latestTurnOrigin: origin,
+      latestTurnId: "t5",
+      resumedAfterStop: true,
+    });
+    for (let split = 0; split <= events.length; split++) {
+      const prefix = createSessionProjectionCheckpoint(session, events.slice(0, split));
+      expect(advanceSessionProjection(prefix, events.slice(split)).projection).toEqual(full);
+    }
+    expect(
+      projectSession(session, [
+        ...events,
+        messageCommand(6, { kind: "user" }, "executor.retry"),
+        turn(7),
+      ]),
+    ).toMatchObject({ latestTurnOrigin: { kind: "user" }, resumedAfterStop: false });
+  });
+  it("does not carry a mid-turn notice steer into a user's resumption", () => {
+    const events = [
+      messageCommand(1, { kind: "user" }),
+      turn(2),
+      messageCommand(3, { kind: "volli", reason: "watch-notice" }),
+      event(4, { kind: "turn.completed", attachmentId: "a", turnId: "t2" }),
+      stop(5),
+      messageCommand(6, { kind: "user" }),
+      turn(7),
+    ];
+    expect(projectSession(session, events).latestTurnOrigin).toEqual({ kind: "user" });
+    for (let split = 0; split <= events.length; split++) {
+      expect(
+        advanceSessionProjection(
+          createSessionProjectionCheckpoint(session, events.slice(0, split)),
+          events.slice(split),
+        ).projection,
+      ).toEqual(projectSession(session, events));
+    }
+  });
+  it("removes only a rejected competitor and leaves genuine competition unknown", () => {
+    const candidates = [
+      messageCommand(1, { kind: "user" }),
+      messageCommand(2, { kind: "volli", reason: "watch-notice" }),
+    ];
+    const rejection = event(3, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: "r",
+        commandId: "c2",
+        sequence: 3,
+        recordedAt: 3,
+        status: "rejected",
+        code: "refused",
+        detail: null,
+      },
+    });
+    for (const events of [
+      [...candidates, rejection, turn(4)],
+      [...candidates, turn(4)],
+    ]) {
+      expect(projectSession(session, events).latestTurnOrigin).toEqual(
+        events.length === 4 ? { kind: "user" } : null,
+      );
+      for (let split = 0; split <= events.length; split++) {
+        expect(
+          advanceSessionProjection(
+            createSessionProjectionCheckpoint(session, events.slice(0, split)),
+            events.slice(split),
+          ).projection,
+        ).toEqual(projectSession(session, events));
+      }
+    }
+  });
+  it("uses slim origins, ignores rejected opening commands, and does not reuse attribution", () => {
+    const command = messageCommand(1);
+    command.commandOrigin = { kind: "volli", reason: "watch-notice" };
+    expect(projectSession(session, [command, turn(2), turn(3)]).latestTurnOrigin).toBeNull();
+    expect(projectSession(session, [command, turn(2)]).latestTurnOrigin).toEqual(
+      command.commandOrigin,
+    );
+    expect(
+      projectSession(session, [command, messageCommand(2, { kind: "user" }), turn(3)])
+        .latestTurnOrigin,
+    ).toBeNull();
+    const rejection = event(2, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: "r",
+        commandId: "c1",
+        sequence: 2,
+        recordedAt: 21,
+        status: "rejected",
+        code: "refused",
+        detail: "no",
+      },
+    });
+    expect(projectSession(session, [command, rejection, turn(3)]).latestTurnOrigin).toBeNull();
+    // Untrusted native detail is not origin evidence.
+    for (const detail of [[], "user", {}, null]) {
+      const old = messageCommand(1);
+      old.provenance = { ...systemProvenance, source: { ...systemProvenance.source, detail } };
+      expect(projectSession(session, [old, turn(2)]).latestTurnOrigin).toBeNull();
+    }
+    const slim = { ...command, provenance: undefined, commandOrigin: undefined };
+    expect(projectSession(session, [slim, turn(2)]).latestTurnOrigin).toBeNull();
   });
 });

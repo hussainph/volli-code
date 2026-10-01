@@ -10,13 +10,21 @@ import {
   type SessionProvenance,
 } from "./session-provenance";
 
-const AUTOMATION: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+const AUTOMATION: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: "Nightly sweep",
+};
 /**
  * A Run whose Automation cannot be named: an Unbound Run, or one whose
  * `automation_runs` row had not landed when the app stopped. The mark treats
  * the two alike — see `SessionProvenance`.
  */
-const UNNAMED: SessionProvenance = { kind: "automation", automationName: null };
+const UNNAMED: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: null,
+};
 const PARENT: SessionProvenance = {
   kind: "session",
   parentSessionId: "session-parent",

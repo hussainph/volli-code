@@ -8,8 +8,8 @@
  */
 
 import type Database from "better-sqlite3";
-import { displayTicketId, shortSessionId, TICKET_STATUSES } from "@volli/shared";
-import type { Project, Ticket } from "@volli/shared";
+import { displayTicketId, readSessionOrigin, shortSessionId, TICKET_STATUSES } from "@volli/shared";
+import type { Project, SessionOrigin, Ticket } from "@volli/shared";
 
 import { listTicketEvents } from "../db/events-repo";
 import { getTicket, listTicketsByProject } from "../db/tickets-repo";
@@ -52,6 +52,36 @@ export function boardData(db: Database.Database, project: Project): Record<strin
   };
 }
 
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Session a stored event payload cites, as the short public handle every
+ * verb addresses it by. Only a minted UUID is shortened — payload text that
+ * merely sits where an id should be is passed through, so a malformed fact
+ * stays visible as malformed rather than being truncated into something that
+ * looks valid. (Ids Volli itself holds are always shortened outright.)
+ */
+function publicEventSession(sessionId: string): string {
+  return SESSION_UUID.test(sessionId) ? shortSessionId(sessionId) : sessionId;
+}
+
+/**
+ * Who asked for work, with the one Session id it can name shortened to its
+ * public handle. Everything else is verbatim: a Run id is not a Session handle
+ * and is the only way to find the Run. `null` stays `null`, because a legacy
+ * fact that recorded no origin is unknown — never a person.
+ */
+export function publicSessionOrigin(origin: SessionOrigin | null): SessionOrigin | null {
+  return origin?.kind === "session"
+    ? { kind: "session", sessionId: shortSessionId(origin.sessionId) }
+    : origin;
+}
+
+/** A turn id is internal; the first eight characters correlate it across surfaces. */
+export function publicTurnHandle(turnId: string): string {
+  return turnId.slice(0, 8);
+}
+
 export function publicEvent(
   db: Database.Database,
   projects: readonly Project[],
@@ -64,14 +94,26 @@ export function publicEvent(
     ? projects.find(({ id }) => id === contextTicket.projectId)
     : undefined;
   // Internal ids never cross the socket: a comment's row id is dropped, and a
-  // session_started's cited Session travels as the short public handle — the
-  // same one `session list` prints and `session peek` addresses.
+  // Session a launch or resume event cites travels as the short public handle
+  // — the same one `session list` prints and `session peek` addresses — in
+  // `session`, and so does any Session its `origin` names.
   const payload =
     event.payload.kind === "commented"
       ? { kind: "commented" }
       : event.payload.kind === "session_started"
-        ? { kind: "session_started", session: shortSessionId(event.payload.sessionId) }
-        : event.payload;
+        ? {
+            kind: "session_started",
+            session: publicEventSession(event.payload.sessionId),
+            ...publicLaunchOrigin(event.payload.origin),
+          }
+        : event.payload.kind === "session_resumed"
+          ? {
+              kind: "session_resumed",
+              session: publicEventSession(event.payload.sessionId),
+              turn: publicTurnHandle(event.payload.turnId),
+              origin: publicSessionOrigin(readSessionOrigin(event.payload.origin)),
+            }
+          : event.payload;
   return {
     actor: event.actor,
     actorContext: event.actorContext
@@ -86,4 +128,10 @@ export function publicEvent(
     payload,
     createdAt: event.createdAt,
   };
+}
+
+/** A launch's origin when it recorded a readable one; legacy launches carry none. */
+function publicLaunchOrigin(stored: unknown): { origin?: SessionOrigin } {
+  const origin = publicSessionOrigin(readSessionOrigin(stored));
+  return origin === null ? {} : { origin };
 }

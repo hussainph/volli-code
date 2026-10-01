@@ -1,3 +1,4 @@
+import { readSessionOrigin } from "@volli/shared";
 import { assertSessionEvent, assertSessionProjectionCheckpoint } from "@volli/shared";
 import type {
   CommandReceipt,
@@ -132,7 +133,20 @@ class InMemorySessionLedger implements SessionLedger {
         // to skip and no cheaper read to offer. Dropping the field anyway keeps
         // it honest about what a fold is allowed to see, so a reducer that
         // started reading provenance would fail here and not only in SQLite.
-        return this.#listEvents(query).map(({ provenance: _provenance, ...event }) => event);
+        return this.#listEvents(query).map(({ provenance, ...event }) => {
+          const detail = provenance.source.detail;
+          // Assigned rather than spread (oxc(no-map-spread)): the rest
+          // destructure above already made `event` this call's own copy.
+          return event.payload.kind === "command.recorded"
+            ? Object.assign(event, {
+                commandOrigin: readSessionOrigin(
+                  typeof detail === "object" && detail !== null && !Array.isArray(detail)
+                    ? (detail as Record<string, unknown>).sessionOrigin
+                    : null,
+                ),
+              })
+            : event;
+        });
       },
       latestEventSequence: (sessionId) => {
         assertOpen();

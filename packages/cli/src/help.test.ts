@@ -12,7 +12,7 @@ const estTokens = (text: string): number => Math.floor(text.length / 4);
 const PUBLISHED_COMMANDS = REFERENCE_VERBS.map((entry) => cliVerbName(entry.key));
 
 describe("bareHelpText", () => {
-  it("is a complete, grouped, footered reference under the 3,400-char budget", () => {
+  it("is a complete, grouped, footered reference under the 3,500-char budget", () => {
     const text = bareHelpText();
     // Budget is a tested contract (spec section 6): fail fast on drift.
     //
@@ -26,8 +26,9 @@ describe("bareHelpText", () => {
     // the tool schema as its only discovery surface); it was rejected because
     // a Ticket Session does NOT hold these verbs and so has no schema to read,
     // which is exactly the reader "a wrong door beats no door" is written for.
-    expect(text.length).toBeLessThanOrEqual(3400);
-    expect(estTokens(text)).toBeLessThanOrEqual(850);
+    // VC-485 adds session show and discoverable fleet/body flags.
+    expect(text.length).toBeLessThanOrEqual(3500);
+    expect(estTokens(text)).toBeLessThanOrEqual(875);
     for (const group of ["Read", "Write", "Session", "App"]) {
       expect(text).toContain(`${group}\n`);
     }

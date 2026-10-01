@@ -28,6 +28,24 @@
  *   the turn's end land inside one coalescing window they share a notice, and
  *   when they do not, the verdict is not held back for a turn end that may
  *   never come. A stop ends the watch.
+ *
+ *   A turn end is not always "done". A target that ended its turn while its
+ *   own `session_delegate` subagents still run gets a new turn by itself when
+ *   each one's answer lands, so the end of such a turn is DEFERRED: nothing is
+ *   enqueued and the arm is kept, and the watcher hears the first turn end at
+ *   which the target has no subagent pending — when it is actually done. An
+ *   interrupted turn is a failure and is never deferred. Any other change
+ *   delivered while the target still has subagents pending (an interruption, a
+ *   verdict) says so, naming them, so the watcher need not peek to find out.
+ *   The pending set is read when the change is seen: a child that settled just
+ *   before the parent's turn ended already counts as done, so the watcher may
+ *   hear a turn end that the child's answer notice is about to follow with one
+ *   more turn. That is accepted rather than raced.
+ *
+ *   A stop the watcher made itself (`session_stop`) ends the watch and is NOT
+ *   reported back: the tool result already confirmed it, and the echo would
+ *   cost the watcher a turn. A stop by anyone else — the person, the
+ *   watchdog, another Session — is reported.
  * - A **Ticket** (`ticket-wake.ts`). Moves, comments and signals, for as long
  *   as the watch lives, except those the watcher made itself: a Board Session
  *   commenting on a Ticket it watches is not news to it.
@@ -105,6 +123,12 @@ export interface WatchesPorts {
   readTranscriptArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   /** A Ticket comment's body, or null when it was deleted before delivery. */
   readComment: (commentId: string) => string | null;
+  /**
+   * The `session_delegate` subagents of a Session that have not answered yet:
+   * full Session ids, in start order. Absent means none — a build without a
+   * delegation host never defers a turn end.
+   */
+  pendingSubagents?: (sessionId: string) => readonly string[];
   newId?: () => string;
   report?: (message: string) => void;
   coalesceMs?: number;
@@ -186,12 +210,23 @@ function sessionLabel(targetSessionId: string, title: string | null): string {
     : `Session ${handle} (${JSON.stringify(title)})`;
 }
 
-function stoppedBy(by: SessionStopActor, watcherSessionId: string): string {
+/**
+ * Who stopped a watched Session. A stop by the watcher itself is never worded
+ * here: {@link onSessionWake} does not report it.
+ */
+function stoppedBy(by: SessionStopActor): string {
   if (by.kind === "user") return "by the user";
   if (by.kind === "watchdog") return "by Volli's watchdog";
-  return by.sessionId === watcherSessionId
-    ? "by you"
-    : `by Session ${shortSessionId(by.sessionId)}`;
+  return `by Session ${shortSessionId(by.sessionId)}`;
+}
+
+/** The line that tells a watcher its target is not finished, only between turns. */
+function waitingLine(pending: readonly string[]): string[] {
+  if (pending.length === 0) return [];
+  const names = pending.map((id) => shortSessionId(id)).join(", ");
+  return [
+    `  It is waiting on ${pending.length} ${pending.length === 1 ? "subagent" : "subagents"}: ${names}.`,
+  ];
 }
 
 function ticketActor(event: TicketEvent, watcherSessionId: string): string {
@@ -211,6 +246,7 @@ export function createWatches(ports: WatchesPorts): Watches {
   const coalesceMs = ports.coalesceMs ?? WATCH_COALESCE_MS;
   const setTimer = ports.setTimeout ?? ((callback, ms) => setTimeout(callback, ms));
   const clearTimer = ports.clearTimeout ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
+  const pendingSubagents = ports.pendingSubagents ?? (() => []);
   const watchers = new Map<string, Watcher>();
 
   function watcherFor(sessionId: string): Watcher {
@@ -317,13 +353,10 @@ export function createWatches(ports: WatchesPorts): Watches {
     );
   }
 
-  function sessionChange(
-    watcher: Watcher,
-    watch: SessionWatch,
-    event: SessionEvent,
-  ): Change | null {
+  function sessionChange(watch: SessionWatch, event: SessionEvent): Change | null {
     const payload = event.payload;
     const label = sessionLabel(watch.targetSessionId, watch.title);
+    const waiting = () => waitingLine(pendingSubagents(watch.targetSessionId));
     const base = {
       subject: "session" as const,
       id: watch.targetSessionId,
@@ -333,7 +366,7 @@ export function createWatches(ports: WatchesPorts): Watches {
       case "turn.completed":
         return {
           event: { ...base, fact: "turn-completed", detail: null },
-          lines: [`- ${label} finished its turn.`],
+          lines: [`- ${label} finished its turn.`, ...waiting()],
           answerOf: watch.targetSessionId,
         };
       case "turn.interrupted":
@@ -341,6 +374,7 @@ export function createWatches(ports: WatchesPorts): Watches {
           event: { ...base, fact: "turn-interrupted", detail: null },
           lines: [
             `- ${label} was interrupted mid-turn; its work did not finish. session_send can continue it while its executor is available; otherwise a person can reattach it in the app.`,
+            ...waiting(),
           ],
           answerOf: watch.targetSessionId,
         };
@@ -353,6 +387,7 @@ export function createWatches(ports: WatchesPorts): Watches {
           },
           lines: [
             `- ${label} signaled ${payload.signal}.`,
+            ...waiting(),
             ...(payload.reason !== null && payload.reason.trim().length > 0
               ? untrustedProse("signal reason", payload.reason)
               : []),
@@ -362,7 +397,7 @@ export function createWatches(ports: WatchesPorts): Watches {
         return {
           event: { ...base, fact: "stopped", detail: null },
           lines: [
-            `- ${label} was stopped ${stoppedBy(payload.by, watcher.sessionId)}; its work has ended and this watch with it.`,
+            `- ${label} was stopped ${stoppedBy(payload.by)}; its work has ended and this watch with it.`,
             ...(payload.reason !== null && payload.reason.trim().length > 0
               ? untrustedProse("stop reason", payload.reason)
               : []),
@@ -391,17 +426,27 @@ export function createWatches(ports: WatchesPorts): Watches {
         case "turn.completed":
         case "turn.interrupted": {
           if (!watch.turnArmed || !watch.kinds.has("turn")) break;
+          // Between turns, not done: the target's subagents will open its next
+          // turn. Keep the arm so the end that really is the end is heard.
+          if (payload.kind === "turn.completed" && pendingSubagents(event.sessionId).length > 0) {
+            break;
+          }
           watch.turnArmed = false;
-          enqueue(watcher, [sessionChange(watcher, watch, event)!]);
+          enqueue(watcher, [sessionChange(watch, event)!]);
           break;
         }
         case "session.signaled": {
-          if (watch.kinds.has("verdict")) enqueue(watcher, [sessionChange(watcher, watch, event)!]);
+          if (watch.kinds.has("verdict")) enqueue(watcher, [sessionChange(watch, event)!]);
           break;
         }
         case "session.stopped": {
           watcher.sessions.delete(event.sessionId);
-          if (watch.kinds.has("stopped")) enqueue(watcher, [sessionChange(watcher, watch, event)!]);
+          // The watcher's own `session_stop` was confirmed by its tool result.
+          const bySelf =
+            payload.by.kind === "session" && payload.by.sessionId === watcher.sessionId;
+          if (watch.kinds.has("stopped") && !bySelf) {
+            enqueue(watcher, [sessionChange(watch, event)!]);
+          }
           prune(watcher);
           break;
         }

@@ -52,7 +52,7 @@ import { projectForCreate, ticketForDisplayId } from "./resolution";
  * doors are not the same door: the parser guards typed argv, and this guards
  * whatever a process wrote to the socket.
  */
-function readWindow(value: unknown): SessionUsageWindow | null | "invalid" {
+export function readSessionUsageWindow(value: unknown): SessionUsageWindow | null | "invalid" {
   if (value === undefined) return null;
   if (typeof value !== "object" || value === null) return "invalid";
   const window = value as Partial<SessionUsageWindow>;
@@ -182,7 +182,7 @@ export async function costVerb(
   }
   const groupBy = groupByArg;
 
-  const window = readWindow(request.args["since"]);
+  const window = readSessionUsageWindow(request.args["since"]);
   if (window === "invalid") {
     return failure(
       "INVALID_REQUEST",

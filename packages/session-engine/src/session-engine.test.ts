@@ -1366,7 +1366,7 @@ describe("SessionEngine creation and explicit commands", () => {
       },
     };
     const invalid = [
-      { ...checkpoint, version: 2 },
+      { ...checkpoint, version: 1 },
       { ...checkpoint, sessionId: "another-session" },
       missingProjection,
       { ...checkpoint, throughSequence: 0.5 },

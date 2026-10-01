@@ -27,10 +27,8 @@
  * started the Session even if the Run projection never lands. A normal Project
  * Session has no such relation and remains person-started.
  *
- * The crash-window answers intentionally carry `automationName: null`. The
- * completed Run row is still the record that names an Automation; the fallback
- * proves only the party, which is enough to keep the bolt and Run-scoped live
- * treatment honest without guessing.
+ * New launch commands/events retain the Run id and name before insertion.
+ * Older crash-window records prove only the party and keep both fields null.
  *
  * ── ONE QUESTION, TWO SIZES ───────────────────────────────────────────────
  * {@link readSessionProvenances} answers a whole roster from set-based queries
@@ -46,7 +44,12 @@
  * below are the whole surface.
  */
 import type Database from "better-sqlite3";
-import { PERSON_STARTED, type SessionProvenance } from "@volli/shared";
+import {
+  PERSON_STARTED,
+  readSessionOrigin,
+  type SessionOrigin,
+  type SessionProvenance,
+} from "@volli/shared";
 
 import { prepared } from "./prepared";
 
@@ -149,7 +152,10 @@ export function readSessionProvenances(
   // ── 1. completed Runs ───────────────────────────────────────────────────
   // `automation_runs.session_id` is not unique, so a Session can carry more
   // than one Run row; the earliest is the one that started it.
-  const runOf = new Map<string, Ranked<{ automationName: string | null }>>();
+  const runOf = new Map<
+    string,
+    Ranked<{ automationName: string | null; automationRunId: string }>
+  >();
   for (const row of prepared<
     [string],
     { session_id: string; automation_name: string | null; created_at: number; id: string }
@@ -159,10 +165,17 @@ export function readSessionProvenances(
        FROM automation_runs
       WHERE session_id IN (SELECT value FROM json_each(?))`,
   ).iterate(idList(pending.keys()))) {
-    keepEarliest(runOf, row.session_id, row, { automationName: row.automation_name });
+    keepEarliest(runOf, row.session_id, row, {
+      automationName: row.automation_name,
+      automationRunId: row.id,
+    });
   }
   for (const [sessionId, run] of runOf) {
-    answers.set(sessionId, { kind: "automation", automationName: run.value.automationName });
+    answers.set(sessionId, {
+      kind: "automation",
+      automationName: run.value.automationName,
+      automationRunId: run.value.automationRunId,
+    });
     pending.delete(sessionId);
   }
   if (pending.size === 0) return lookup;
@@ -171,9 +184,10 @@ export function readSessionProvenances(
   // Its accepted Run marked the stable create command before mint, but the
   // projection that names the Automation has not landed (and after a crash may
   // never land).
-  for (const row of prepared<[string], { session_id: string }>(
+  for (const row of prepared<[string], { session_id: string; origin: string | null }>(
     db,
-    `SELECT command.session_id AS session_id
+    `SELECT command.session_id AS session_id,
+            (SELECT json_extract(p.provenance, '$.source.detail.sessionOrigin') FROM session_events e JOIN session_provenances p ON p.id = e.provenance_id WHERE e.command_id = command.id AND json_extract(e.payload, '$.kind') = 'command.recorded' LIMIT 1) AS origin
        FROM session_commands AS command
        JOIN automation_session_mint_intents AS mint
          ON mint.session_create_command_id = command.id
@@ -182,7 +196,12 @@ export function readSessionProvenances(
     // Any marker proves the party; there is nothing to rank, because the
     // answer carries no name to choose between.
     if (!pending.has(row.session_id)) continue;
-    answers.set(row.session_id, { kind: "automation", automationName: null });
+    const origin = storedOrigin(row.origin);
+    answers.set(row.session_id, {
+      kind: "automation",
+      automationName: origin?.kind === "automation" ? origin.automationName : null,
+      automationRunId: origin?.kind === "automation" ? origin.automationRunId : null,
+    });
     pending.delete(row.session_id);
   }
 
@@ -193,23 +212,36 @@ export function readSessionProvenances(
   for (const [sessionId, ticketId] of pending) {
     if (ticketId !== null) ticketOf.set(sessionId, ticketId);
   }
-  if (ticketOf.size === 0) return lookup;
+  const parentOf = new Map<string, string>();
+  for (const row of prepared<[string], { id: string; parent_session_id: string }>(
+    db,
+    "SELECT id, parent_session_id FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND parent_session_id IS NOT NULL",
+  ).iterate(idList(pending.keys()))) {
+    parentOf.set(row.id, row.parent_session_id);
+  }
 
   // ── 3. the Ticket's launch event ────────────────────────────────────────
   // Scoped by Ticket for the same reason the single read is: the index makes
   // it a seek per Ticket, and the payload comparison then runs over that
   // Ticket's events rather than the table.
-  const launchOf = new Map<string, Ranked<{ actor: string }>>();
+  const launchOf = new Map<string, Ranked<{ actor: string; origin: SessionOrigin | null }>>();
   const tickets = new Set(ticketOf.values());
   for (const row of prepared<
     [string],
     // `json_extract` answers with whatever the payload holds, including `null`
     // for a launch event this build cannot read. The column is therefore
     // `unknown` and narrowed below rather than asserted to be a string.
-    { ticket_id: string; session_id: unknown; actor: string; created_at: number; id: string }
+    {
+      ticket_id: string;
+      session_id: unknown;
+      actor: string;
+      origin: string | null;
+      created_at: number;
+      id: string;
+    }
   >(
     db,
-    `SELECT ticket_id, json_extract(payload, '$.sessionId') AS session_id, actor, created_at, id
+    `SELECT ticket_id, json_extract(payload, '$.sessionId') AS session_id, actor, json_extract(payload, '$.origin') AS origin, created_at, id
        FROM ticket_events
       WHERE ticket_id IN (SELECT value FROM json_each(?))
         AND kind = 'session_started'`,
@@ -220,16 +252,23 @@ export function readSessionProvenances(
     // RECORDED ON. Matching the payload alone would let an event on one Ticket
     // answer for a Session sitting on another.
     if (ticketOf.get(sessionId) !== row.ticket_id) continue;
-    keepEarliest(launchOf, sessionId, row, { actor: row.actor });
+    keepEarliest(launchOf, sessionId, row, {
+      actor: row.actor,
+      origin: storedOrigin(row.origin),
+    });
   }
-  const parentOf = new Map<string, string>();
   for (const [sessionId, launch] of launchOf) {
     const launcher = launchActorOf(launch.value.actor);
     if (launcher === null) continue;
     // The pre-Run window: the launch says an Automation, and the record that
     // would name it is not there (or never will be). The bolt still draws.
     if (launcher.kind === "automation") {
-      answers.set(sessionId, { kind: "automation", automationName: null });
+      const origin = launch.value.origin;
+      answers.set(sessionId, {
+        kind: "automation",
+        automationName: origin?.kind === "automation" ? origin.automationName : null,
+        automationRunId: origin?.kind === "automation" ? origin.automationRunId : null,
+      });
       continue;
     }
     parentOf.set(sessionId, launcher.sessionId);
@@ -370,4 +409,14 @@ function launchActorOf(actor: string): LaunchActor | null {
   if (candidate.kind === "automation") return { kind: "automation" };
   if (candidate.kind !== "session" || typeof candidate.sessionId !== "string") return null;
   return { kind: "session", sessionId: candidate.sessionId };
+}
+
+/** JSON extraction can return a scalar from malformed or older launch data. */
+function storedOrigin(value: unknown): SessionOrigin | null {
+  if (typeof value !== "string") return null;
+  try {
+    return readSessionOrigin(JSON.parse(value));
+  } catch {
+    return null;
+  }
 }

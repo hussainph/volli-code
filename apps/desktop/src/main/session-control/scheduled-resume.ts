@@ -149,6 +149,7 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
   ): Promise<void> {
     const sessionId = projection.session.id;
     const result = await ports.command({
+      origin: { kind: "volli", reason: "scheduled-resume" },
       commandId: scheduledResumeSettleCommandId(scheduleId),
       sessionId,
       command: { kind: "resume.settle", scheduleId, outcome },
@@ -186,6 +187,7 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
       let outcome: ScheduledResumeOutcome;
       try {
         const result = await ports.command({
+          origin: { kind: "volli", reason: "scheduled-resume" },
           commandId: retry.retryCommandId,
           sessionId: retry.sessionId,
           command: { kind: "executor.retry", attachmentId: retry.attachmentId },

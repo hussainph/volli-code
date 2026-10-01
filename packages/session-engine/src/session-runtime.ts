@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
@@ -193,13 +194,14 @@ export type SessionClientCommand =
    */
   | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
 
-export type SessionRuntimeCommandRequest =
+export type SessionRuntimeCommandRequest = { origin?: SessionOrigin } & (
   | { commandId: string; command: Extract<SessionClientCommand, { kind: "session.create" }> }
   | {
       commandId: string;
       sessionId: string;
       command: Exclude<SessionClientCommand, { kind: "session.create" }>;
-    };
+    }
+);
 
 type ExistingSessionCommandRequest = Extract<SessionRuntimeCommandRequest, { sessionId: string }>;
 type AttachCommandRequest = ExistingSessionCommandRequest & {
@@ -334,6 +336,7 @@ type DeliveredSessionRuntimeCommandResult = SessionRuntimeCommandResult & {
 };
 
 export interface CancelInteractionRequest {
+  origin?: SessionOrigin;
   sessionId: string;
   interactionId: string;
   /** Required: an interaction that stops waiting always states why it stopped. */
@@ -848,7 +851,8 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
     this.#assertOpen();
-    const signature = stableJson(request);
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = stableJson(intentRequest);
     const existing = this.#inFlight.get(request.commandId);
     if (existing) {
       if (existing.signature !== signature) {
@@ -965,7 +969,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         parentSessionId: request.command.parentSessionId,
         title: request.command.title,
         requestedSessionId: request.command.requestedSessionId ?? null,
-        provenance: userProvenance(null),
+        provenance: userProvenance(null, request.origin),
       });
       await this.#publish([result.commandEvent, result.event, result.receiptEvent]);
       return {
@@ -1034,10 +1038,14 @@ class DefaultSessionRuntime implements SessionRuntime {
       provenance:
         request.command.kind === "resume.settle"
           ? {
-              source: { kind: "system", id: SCHEDULED_RESUME_SOURCE_ID, detail: null },
+              source: {
+                kind: "system",
+                id: SCHEDULED_RESUME_SOURCE_ID,
+                detail: request.origin === undefined ? null : { sessionOrigin: request.origin },
+              },
               venue: location.venue,
             }
-          : userProvenance(location.venue),
+          : userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     return this.#result(request.sessionId, submitted.command, submitted.receipt);
@@ -1058,7 +1066,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         ...(request.command.tier === undefined ? {} : { tier: request.command.tier }),
         ...(request.command.auto === undefined ? {} : { auto: request.command.auto }),
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
@@ -1138,7 +1146,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         adapterId: adapter.id,
         continuity: request.command.continuity,
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1349,7 +1357,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         SessionCommand["intent"],
         { kind: "executor.start" }
       >,
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     if (replayed.receipt)
       return this.#result(request.sessionId, replayed.command, replayed.receipt);
@@ -1453,7 +1461,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "message.submit", reference: artifact },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1626,7 +1634,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: input.intent,
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1685,7 +1693,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "executor.retry", attachmentId },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
@@ -1857,7 +1865,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         resolution: request.command.resolution,
         reference: resolutionArtifact,
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1948,7 +1956,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       sessionId: request.sessionId,
       attachmentId: interaction.attachmentId,
       occurredAt: this.ports.clock.now(),
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
       kind: "interaction.cancelled",
       interactionId: interaction.id,
       reason: request.reason,
@@ -1979,7 +1987,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "executor.stop", attachmentId: request.command.attachmentId },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -2061,7 +2069,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         SessionCommand["intent"],
         { kind: "session.create" }
       >,
-      provenance: userProvenance(input.binding.venue),
+      provenance: userProvenance(input.binding.venue, input.request.origin),
     });
     const receipt = replayed.receipt ?? priorReceipt;
     if (!receipt) return null;
@@ -3473,8 +3481,18 @@ function foldHistory(
   };
 }
 
-function userProvenance(venue: SessionExecutionVenue | null): SessionEventProvenance {
-  return { source: { kind: "user", id: "session-client", detail: null }, venue };
+function userProvenance(
+  venue: SessionExecutionVenue | null,
+  origin?: SessionOrigin,
+): SessionEventProvenance {
+  return {
+    source: {
+      kind: "user",
+      id: "session-client",
+      detail: origin === undefined ? null : { sessionOrigin: origin },
+    },
+    venue,
+  };
 }
 
 function adapterProvenance(

@@ -3,6 +3,8 @@ import {
   HARNESS_VOCABULARY,
   HELP_TOPIC_NAMES,
   isSessionUsageGrouping,
+  isSessionListState,
+  SESSION_LIST_STATES,
   isTicketPriority,
   isTicketSignalKind,
   isTicketSignalVerdict,
@@ -158,6 +160,16 @@ const usageWindowValue: ValueParser = (raw, token) => {
     : { ok: true, value: window };
 };
 
+const sessionStatesValue: ValueParser = (raw) => {
+  const states = raw.split(",");
+  return states.every(isSessionListState)
+    ? { ok: true, value: states }
+    : {
+        ok: false,
+        message: `Unknown session state ${JSON.stringify(raw)} (valid: ${SESSION_LIST_STATES.join(", ")})`,
+      };
+};
+
 const usageGroupingValue: ValueParser = (raw) =>
   isSessionUsageGrouping(raw)
     ? { ok: true, value: raw }
@@ -260,6 +272,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       // explicit --events still wins, so callers can ask for comments plus a
       // small event tail without losing the ordinary full-ticket shape.
       "--comments-only": { kind: "flag", key: "commentsOnly", value: true },
+      "--full": { kind: "flag", key: "full", value: true },
     },
     finalize: (args) => {
       if (args["commentsOnly"] !== true) return null;
@@ -269,7 +282,10 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
     },
   },
   "ticket.events": {
-    options: { "--limit": { kind: "value", key: "limit", parse: positiveIntValue } },
+    options: {
+      "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+      "--full": { kind: "flag", key: "full", value: true },
+    },
   },
   "ticket.create": {
     options: {
@@ -303,6 +319,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
         bump: "bodyMode",
       },
       "--body-file": { kind: "value", key: "bodyFile", bump: "bodyMode" },
+      "--append-file": { kind: "value", key: "appendFile", bump: "bodyMode" },
       "--append": {
         kind: "value",
         key: "bodyMutation",
@@ -425,8 +442,12 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
     options: {
       "--project": { kind: "value", key: "project" },
       "--ticket": { kind: "value", key: "ticket" },
+      "--all": { kind: "flag", key: "all", value: true },
+      "--state": { kind: "value", key: "state", parse: sessionStatesValue },
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
     },
   },
+  "session.show": { options: {} },
   "session.peek": {
     options: { "--lines": { kind: "value", key: "lines", parse: positiveIntValue } },
   },
@@ -563,29 +584,42 @@ function parseVerb(route: VerbRoute, rest: readonly string[]): CliParseResult {
   let json = false;
   const counters: Record<string, number> = {};
   for (; index < rest.length; index += 1) {
-    const token = rest[index]!;
-    if (token === "--json") {
+    const typedToken = rest[index]!;
+    const equals = typedToken.indexOf("=");
+    const token = equals > 0 ? typedToken.slice(0, equals) : typedToken;
+    const inlineValue = equals > 0 ? typedToken.slice(equals + 1) : undefined;
+    if (typedToken === "--json") {
       json = true;
       continue;
     }
     const option = mechanics.options[token];
-    if (option === undefined) return usage(unknownOptionMessage(entry, token));
+    if (option === undefined || (inlineValue !== undefined && option.kind === "flag")) {
+      return usage(unknownOptionMessage(entry, typedToken));
+    }
 
     if (option.kind === "flag") {
       args[option.key] = option.value;
     } else if (option.kind === "multi") {
       const parts: string[] = [];
       for (let offset = 0; offset < option.count; offset += 1) {
-        const raw = rest[index + 1 + offset];
-        if (raw === undefined || raw.startsWith("--")) return usage(option.missingMessage);
+        const raw =
+          inlineValue !== undefined && offset === 0
+            ? inlineValue
+            : rest[index + 1 + offset - (inlineValue === undefined ? 0 : 1)];
+        if (
+          raw === undefined ||
+          (raw.startsWith("--") && !(inlineValue !== undefined && offset === 0))
+        )
+          return usage(option.missingMessage);
         parts.push(raw);
       }
       Object.assign(args, option.build(parts));
-      index += option.count;
+      index += option.count - (inlineValue === undefined ? 0 : 1);
     } else {
-      const raw = rest[index + 1];
-      if (raw === undefined || raw.startsWith("--")) return usage(`${token} requires a value`);
-      index += 1;
+      const raw = inlineValue ?? rest[index + 1];
+      if (raw === undefined || (inlineValue === undefined && raw.startsWith("--")))
+        return usage(`${token} requires a value`);
+      if (inlineValue === undefined) index += 1;
       if (option.kind === "repeated") {
         const list = (args[option.key] as string[] | undefined) ?? [];
         list.push(raw);

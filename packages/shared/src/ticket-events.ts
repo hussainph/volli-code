@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "./session-origin";
 /**
  * The append-only ticket event log (`ticket_events` table, migration 001):
  * every mutation records one event in the same transaction as its row
@@ -90,6 +91,7 @@ export const TICKET_EVENT_KINDS = [
   // started Session; surfaces shorten the id before showing it (full Session
   // UUIDs never cross the socket).
   "session_started",
+  "session_resumed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -173,7 +175,8 @@ export type TicketEventPayload =
   | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
-  | { kind: "session_started"; sessionId: string };
+  | { kind: "session_started"; sessionId: string; origin?: SessionOrigin }
+  | { kind: "session_resumed"; sessionId: string; turnId: string; origin: SessionOrigin | null };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

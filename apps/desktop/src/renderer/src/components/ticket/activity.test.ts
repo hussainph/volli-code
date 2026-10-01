@@ -271,6 +271,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "pr_opened",
       "created",
       "session_started",
+      "session_resumed",
       "retitled",
       "priority_changed",
       "harness_changed",
@@ -479,5 +480,28 @@ describe("buildActivityFeed", () => {
       { kind: "bunch", at: 100 },
       { kind: "comment", at: 200 },
     ]);
+  });
+});
+
+describe("Session origin history", () => {
+  it("names new start and resume origins without guessing legacy attribution", () => {
+    expect(
+      describeEvent({
+        kind: "session_started",
+        sessionId: "s",
+        origin: { kind: "automation", automationRunId: "123456789", automationName: "Review" },
+      }),
+    ).toBe('Automation "Review" (run 12345678) started a session');
+    expect(
+      describeEvent({
+        kind: "session_resumed",
+        sessionId: "s",
+        turnId: "t",
+        origin: { kind: "user" },
+      }),
+    ).toBe("session resumed by the user");
+    expect(
+      describeEvent({ kind: "session_resumed", sessionId: "s", turnId: "t", origin: null }),
+    ).toBe("session resumed by an unknown origin");
   });
 });

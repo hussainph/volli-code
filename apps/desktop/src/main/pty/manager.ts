@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -177,9 +178,13 @@ interface Session {
 
 const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
-function terminalSystemProvenance() {
+function terminalSystemProvenance(origin?: SessionOrigin) {
   return {
-    source: { kind: "system" as const, id: "desktop-terminal", detail: null },
+    source: {
+      kind: "system" as const,
+      id: "desktop-terminal",
+      detail: origin === undefined ? null : { sessionOrigin: origin },
+    },
     venue: TERMINAL_VENUE,
   };
 }
@@ -414,7 +419,7 @@ export class PtyManager {
           role: roleImpliedByTicket(scope.ticketId),
           parentSessionId: null,
           title: scope.title,
-          provenance: terminalSystemProvenance(),
+          provenance: terminalSystemProvenance({ kind: "user" }),
         });
         sessionId = created.session.id;
       } else {
@@ -471,7 +476,7 @@ export class PtyManager {
           adapterId: "terminal",
           continuity: scope.resume === null ? "fresh" : "native_resume",
         },
-        provenance: terminalSystemProvenance(),
+        provenance: terminalSystemProvenance({ kind: "user" }),
       });
       startCommandId = start.command.id;
     } catch (error) {
@@ -1187,7 +1192,7 @@ export class PtyManager {
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
-          provenance: terminalSystemProvenance(),
+          provenance: terminalSystemProvenance({ kind: "volli", reason: "supervision" }),
         });
         if (command.receipt !== null) continue;
         session.pty.write("\x1b");

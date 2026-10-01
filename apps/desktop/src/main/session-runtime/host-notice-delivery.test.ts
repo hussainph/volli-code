@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SessionRuntimeCommandRequest, SessionStreamEmission } from "@volli/session-engine";
 import { sessionHostNoticeMetadata } from "@volli/shared";
-import type { SessionEvent, SessionProjection } from "@volli/shared";
+import type { SessionEvent, SessionProjection, SessionHostNotice } from "@volli/shared";
 
 import { cutAtCodePoint, deliverHostNotice } from "./host-notice-delivery";
 import type { HostNoticeDeliveryPorts } from "./host-notice-delivery";
@@ -43,6 +43,7 @@ function settleMicrotasks(): Promise<unknown> {
 
 function harness(options: {
   live?: boolean;
+  notice?: SessionHostNotice;
   stopped?: boolean;
   /** Frames `subscribe` replays before it returns — the race. */
   replay?: SessionStreamEmission[];
@@ -86,10 +87,12 @@ function harness(options: {
     commandId: "c",
     messageId: "m",
     text: "hello",
-    metadata: sessionHostNoticeMetadata({
-      kind: "watch",
-      events: [{ subject: "ticket", id: "t", label: "VC-1", fact: "ticket-moved", detail: null }],
-    }),
+    metadata: sessionHostNoticeMetadata(
+      options.notice ?? {
+        kind: "watch",
+        events: [{ subject: "ticket", id: "t", label: "VC-1", fact: "ticket-moved", detail: null }],
+      },
+    ),
     label: "test notice",
   };
   return {
@@ -107,6 +110,7 @@ describe("deliverHostNotice", () => {
     const live = harness({ live: true });
     expect(await live.deliver()).toBe("delivered");
     expect(live.commands).toHaveLength(1);
+    expect(live.commands[0]).toMatchObject({ origin: { kind: "volli", reason: "watch-notice" } });
     const stopped = harness({ stopped: true });
     expect(await stopped.deliver()).toBe("reader-stopped");
     expect(stopped.reports).toEqual([expect.stringMatching(/is stopped/)]);
@@ -164,5 +168,22 @@ describe("cutAtCodePoint", () => {
     // "a" then U+1F600 (two UTF-16 units): a cut at 2 would split it.
     expect(cutAtCodePoint("a😀b", 2)).toBe("a");
     expect(cutAtCodePoint("a😀b", 3)).toBe("a😀");
+  });
+});
+
+describe("notice origins", () => {
+  it("attributes subagent answers to Volli, not the parent or child Session", async () => {
+    const h = harness({
+      live: true,
+      notice: {
+        kind: "subagent",
+        childSessionId: "child",
+        title: "Review",
+        state: "completed",
+        reason: null,
+      },
+    });
+    await h.deliver();
+    expect(h.commands[0]).toMatchObject({ origin: { kind: "volli", reason: "subagent-notice" } });
   });
 });

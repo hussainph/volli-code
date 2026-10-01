@@ -236,7 +236,7 @@ describe("identity", () => {
   it("carries what the row's dropped `title` attribute used to say (D1)", () => {
     render({
       row: row({
-        provenance: { kind: "automation", automationName: "Nightly triage" },
+        provenance: { kind: "automation", automationRunId: null, automationName: "Nightly triage" },
       }),
     });
     const line = container.querySelector("[data-peek-identity]")?.textContent ?? "";

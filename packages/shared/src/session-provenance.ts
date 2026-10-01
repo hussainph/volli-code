@@ -51,7 +51,8 @@ export type SessionProvenance =
        *
        * - An Unbound Run — one that carried its own Instructions and named no
        *   Automation, so there is nothing afterwards to name.
-       * - A Run whose `automation_runs` row has not landed yet. The Session and
+       * - A legacy Run whose launch did not record its origin and whose
+       *   `automation_runs` row has not landed yet. The Session and
        *   its `session_started` event are durable one step before that row is
        *   written, so a crash in between leaves a Session that is provably a
        *   Run's without anything on disk that can say whose
@@ -61,6 +62,7 @@ export type SessionProvenance =
        * printed a guess here would be worse than one that prints nothing.
        */
       automationName: string | null;
+      automationRunId: string | null;
     }
   | {
       kind: "session";

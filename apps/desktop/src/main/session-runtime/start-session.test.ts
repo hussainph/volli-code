@@ -163,6 +163,7 @@ describe("startSessionOperation", () => {
         role: "ticket",
         title: "Work on VC-1",
         actor: { kind: "session", sessionId: "caller", ticketId: null },
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
   });
@@ -192,6 +193,7 @@ describe("startSessionOperation", () => {
         text: DEFAULT_KICKOFF_MESSAGE,
         commandId: "generated-1:kickoff",
         messageId: "generated-1:kickoff-message",
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
   });
@@ -213,6 +215,7 @@ describe("startSessionOperation", () => {
         text: "Validate VC-52 before release",
         commandId: "generated-1:kickoff",
         messageId: "generated-1:kickoff-message",
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
     expect(fixture.startInputs[0]).toMatchObject({
