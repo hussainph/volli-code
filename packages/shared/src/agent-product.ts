@@ -122,6 +122,16 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-457",
+    build: "VC-478",
+    added: [
+      "classify — ask the configured decision model typed questions about a JSON state: choice (one option key of several), score (a level on a scale, lowest first) or bool (yes or no). It answers with probabilities and a confidence from 0 to 1, never text, as structured content beside a short text line, so a script can read answers.<name>. Use it for decisions that repeat — labelling or triaging many items, checking which state a page or element is in, filtering inside a loop — and not for anything needing open-ended reasoning or written output. A Session has it only when a person configured a decision model before the Session was created, and a cloud one only with their opt-in. When it reports no decision (the model was turned off, is slow, or failed), decide yourself.",
+    ],
+    changed: [],
+    fixed: [],
+    removed: [],
+  },
+  {
     baseline: "VC-364",
     build: "VC-457",
     added: [
