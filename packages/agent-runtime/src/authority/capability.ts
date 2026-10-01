@@ -29,6 +29,7 @@ import {
   SYSTEM_CREDENTIAL_PATHS,
   type CapabilityPolicy,
 } from "@volli/shared";
+import { policyFilesystem } from "./policy-filesystem";
 import { resolvePathForPolicy } from "./vendor/paths";
 
 export interface CapabilityResolution {
@@ -85,9 +86,9 @@ export interface CapabilityResolution {
   linkIndexTimeoutMs?: number;
 }
 
-/** Absolute, link-free and spelled as stored, or the lexical form when nothing resolves. */
+/** Absolute, link-free and spelled as stored; only an absent prefix permits lexical fallback. */
 function canonical(path: string): string {
-  return resolvePathForPolicy(path) ?? resolve(path);
+  return resolvePathForPolicy(path, { refuseOnError: true }) ?? resolve(path);
 }
 
 /**
@@ -105,42 +106,26 @@ function bothSpellings(path: string): string[] {
 
 /** A grant's canonical root, or undefined when the root itself is a symlink. */
 function grantRoot(path: string): string | undefined {
-  try {
-    if (lstatSync(path).isSymbolicLink()) return undefined;
-  } catch {
-    // Absent: the grant covers it once it exists.
-  }
+  if (policyFilesystem(path, "lstat", () => lstatSync(path))?.isSymbolicLink()) return undefined;
   return join(canonical(dirname(resolve(path))), basename(path));
 }
 
-/** The names in a directory, or none when it cannot be listed. */
+/** The names in a directory, or none when it is absent. */
 function entriesOf(directory: string): { name: string; isDirectory: boolean }[] {
-  try {
-    return readdirSync(directory, { withFileTypes: true }).map((entry) => ({
-      name: entry.name,
-      isDirectory: entry.isDirectory(),
-    }));
-  } catch {
-    return [];
-  }
+  return (
+    policyFilesystem(directory, "list directory", () =>
+      readdirSync(directory, { withFileTypes: true }),
+    ) ?? []
+  ).map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }));
 }
 
 function exists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
+  return policyFilesystem(path, "lstat", () => lstatSync(path)) !== undefined;
 }
 
 /** A dotfile that is really a link to a directory is a dot-directory, judged by name. */
 function linksToDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
+  return policyFilesystem(path, "stat", () => statSync(path))?.isDirectory() ?? false;
 }
 
 /**
@@ -258,28 +243,25 @@ export interface WorktreeGit {
  * workspace, and for anything that does not read as a linked worktree.
  */
 export function worktreeGitOf(workspacePath: string): WorktreeGit | undefined {
-  let pointer: string;
-  try {
-    pointer = readFileSync(join(workspacePath, ".git"), "utf8");
-  } catch {
+  const pointerPath = join(workspacePath, ".git");
+  if (policyFilesystem(pointerPath, "lstat", () => lstatSync(pointerPath))?.isDirectory())
     return undefined;
-  }
+  const pointer = policyFilesystem(pointerPath, "read file", () =>
+    readFileSync(pointerPath, "utf8"),
+  );
+  if (pointer === undefined) return undefined;
   const match = /^gitdir:\s*(.+)$/mu.exec(pointer);
   if (match === null) return undefined;
   const gitDir = canonical(resolve(workspacePath, match[1]!.trim()));
-  let common: string;
-  try {
-    common = readFileSync(join(gitDir, "commondir"), "utf8").trim();
-  } catch {
-    return undefined;
-  }
-  let branch: string | null = null;
-  try {
-    const head = /^ref:\s*refs\/heads\/(.+)$/mu.exec(readFileSync(join(gitDir, "HEAD"), "utf8"));
-    branch = head === null ? null : head[1]!.trim();
-  } catch {
-    branch = null;
-  }
+  const commonPath = join(gitDir, "commondir");
+  const common = policyFilesystem(commonPath, "read file", () =>
+    readFileSync(commonPath, "utf8"),
+  )?.trim();
+  if (common === undefined) return undefined;
+  const headPath = join(gitDir, "HEAD");
+  const headText = policyFilesystem(headPath, "read file", () => readFileSync(headPath, "utf8"));
+  const head = headText === undefined ? null : /^ref:\s*refs\/heads\/(.+)$/mu.exec(headText);
+  const branch = head === null ? null : head[1]!.trim();
   return {
     gitDir,
     commonDir: canonical(isAbsolute(common) ? common : resolve(gitDir, common)),
@@ -330,13 +312,10 @@ function worktreeRoots(git: WorktreeGit): string[] {
  * directories, whose HEAD and index belong to other Sessions.
  */
 function protectedPathsOf(workspace: string): string[] {
-  let entry;
-  try {
-    entry = lstatSync(join(workspace, ".git"));
-  } catch {
-    return [];
-  }
-  return entry.isDirectory() ? [join(workspace, ".git", "worktrees")] : [join(workspace, ".git")];
+  const path = join(workspace, ".git");
+  const entry = policyFilesystem(path, "lstat", () => lstatSync(path));
+  if (entry === undefined) return [];
+  return entry.isDirectory() ? [join(workspace, ".git", "worktrees")] : [path];
 }
 
 /** Finite attach cost; an incomplete index refuses attachment rather than opening a wall. */
@@ -344,28 +323,10 @@ const LINK_INDEX_BUDGET = 65_536;
 const ALIAS_INDEX_BUDGET = 250_000;
 const LINK_INDEX_TIMEOUT_MS = 5_000;
 
-/** Missing paths are harmless; incomplete scans must never yield an attachment policy. */
-function scanFailure(error: unknown, folder: string): void {
-  const code = (error as NodeJS.ErrnoException).code;
-  if (code === "ENOENT" || code === "ENOTDIR") return;
-  if (code === "EACCES" || code === "EPERM") {
-    throw new Error(
-      `Cannot scan folder "${folder}" because permission was denied; refusing Scoped attachment.`,
-      { cause: error },
-    );
-  }
-  throw error;
-}
-
 function fileIdentity(path: string): { identity: string; path: string } | undefined {
-  try {
-    const entry = lstatSync(path);
-    if (!entry.isFile() || entry.nlink < 2) return undefined;
-    return { identity: `${entry.dev}:${entry.ino}`, path };
-  } catch (error) {
-    scanFailure(error, dirname(path));
-    return undefined;
-  }
+  const entry = policyFilesystem(path, "lstat", () => lstatSync(path));
+  if (entry === undefined || !entry.isFile() || entry.nlink < 2) return undefined;
+  return { identity: `${entry.dev}:${entry.ino}`, path };
 }
 
 /**
@@ -395,30 +356,17 @@ function walkLinkedFiles(
   };
   const visit = (path: string): void => {
     check();
-    let entry;
-    try {
-      entry = lstatSync(path);
-    } catch (error) {
-      scanFailure(error, dirname(path));
-      return;
-    }
+    const entry = policyFilesystem(path, "lstat", () => lstatSync(path));
+    if (entry === undefined) return;
     if (entry.isFile() && entry.nlink > 1) found(`${entry.dev}:${entry.ino}`, path);
     if (!entry.isDirectory()) return;
-    let directory;
+    const directory = policyFilesystem(path, "open directory", () => opendirSync(path));
+    if (directory === undefined) return;
+    const read = () => policyFilesystem(path, "read directory", () => directory.readSync()) ?? null;
     try {
-      directory = opendirSync(path);
-    } catch (error) {
-      scanFailure(error, path);
-      return;
-    }
-    try {
-      for (let child = directory.readSync(); child !== null; child = directory.readSync()) {
-        visit(join(path, child.name));
-      }
-    } catch (error) {
-      scanFailure(error, path);
+      for (let child = read(); child !== null; child = read()) visit(join(path, child.name));
     } finally {
-      directory.closeSync();
+      policyFilesystem(path, "close directory", () => directory.closeSync());
     }
   };
   const distinct = unique(roots);

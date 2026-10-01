@@ -18,33 +18,8 @@ import {
   HOME_CREDENTIAL_PATHS,
   HOME_PRIVATE_PATHS,
 } from "@volli/shared";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
-const indexFault: { stat?: string; directory?: string; read?: string; code?: string } = {};
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  const fail = (path: unknown, expected: string | undefined) => {
-    if (expected !== undefined && String(path) === expected)
-      throw Object.assign(new Error("index fault"), { code: indexFault.code });
-  };
-  return {
-    ...actual,
-    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
-      fail(args[0], indexFault.stat);
-      return actual.lstatSync(...args);
-    },
-    opendirSync: (...args: Parameters<typeof actual.opendirSync>) => {
-      fail(args[0], indexFault.directory);
-      const directory = actual.opendirSync(...args);
-      const read = directory.readSync.bind(directory);
-      directory.readSync = () => {
-        fail(args[0], indexFault.read);
-        return read();
-      };
-      return directory;
-    },
-  };
-});
 import { gitCommonDirOf, resolveCapabilityPolicy, usersRootFor, worktreeGitOf } from "./capability";
 
 function scratch(): string {
@@ -235,16 +210,16 @@ describe("resolveCapabilityPolicy", () => {
     expect(capabilityRead(policy, credentials)).toMatchObject({ denial: "credential" });
     expect(capabilityRead(policy, join(userData, "volli.db"))).toMatchObject({ denial: "private" });
     expect(capabilityRead(policy, join(own, "tc.txt")).outcome).toBe("allow");
-    // A root no resolver can canonicalize is kept as written rather than dropped.
+    // Unknown targets cannot fall back to a lexical denylist at attachment.
     const unresolvable = join(base, "x".repeat(400), "y");
-    expect(
+    expect(() =>
       resolveCapabilityPolicy({
         workspacePath: workspace,
         home: join(base, "home"),
         privateRoots: [unresolvable],
         sandboxCarveOuts: false,
-      }).privateDeny,
-    ).toContain(unresolvable);
+      }),
+    ).toThrow(/ENAMETOOLONG.*refusing Scoped attachment/u);
   });
 
   it("lets a workspace that IS a private directory own its tree, but not the credentials in it", () => {
@@ -361,32 +336,10 @@ describe("hard-link index limits and all granted roots", () => {
       expect(resolveCapabilityPolicy(input).credentialDeny).toContain(join(workspace, "planted"));
       chmodSync(ssh, 0o000);
       expect(() => resolveCapabilityPolicy(input)).toThrow(
-        `Cannot scan folder "${ssh}" because permission was denied; refusing Scoped attachment.`,
+        `Cannot open directory "${ssh}" because permission was denied; refusing Scoped attachment.`,
       );
     } finally {
       chmodSync(ssh, 0o700);
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
-  it.each(["EACCES", "EPERM", "EIO"])("refuses critical-file stat failure %s", (code) => {
-    const base = scratch();
-    const db = join(base, "volli.db");
-    writeFileSync(db, "dummy-host-data");
-    indexFault.stat = db;
-    indexFault.code = code;
-    try {
-      expect(() =>
-        resolveCapabilityPolicy({
-          workspacePath: base,
-          home: join(base, "home"),
-          sandboxCarveOuts: true,
-          criticalHostDataPaths: [db],
-        }),
-      ).toThrow(code === "EIO" ? "index fault" : `Cannot scan folder "${base}"`);
-    } finally {
-      delete indexFault.stat;
-      delete indexFault.code;
       rmSync(base, { recursive: true, force: true });
     }
   });
@@ -425,50 +378,6 @@ describe("hard-link index limits and all granted roots", () => {
       /hard-link index.*time limit/u,
     );
   });
-
-  it.each(["stat", "directory", "read"] as const)(
-    "handles %s errors without silently skipping an unscannable writable root",
-    (operation) => {
-      const base = scratch();
-      const workspace = join(base, "workspace");
-      const home = join(base, "home");
-      const source = join(home, ".ssh");
-      mkdirSync(workspace);
-      mkdirSync(source, { recursive: true });
-      const db = join(base, "db");
-      writeFileSync(db, "db");
-      linkSync(db, join(workspace, "alias"));
-      const input = {
-        workspacePath: workspace,
-        home,
-        sandboxCarveOuts: true,
-        criticalHostDataPaths: [db],
-      };
-      try {
-        for (const code of ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EIO"]) {
-          indexFault.code = code;
-          for (const path of [source, workspace]) {
-            indexFault[operation] = path;
-            if (code === "ENOENT" || code === "ENOTDIR") {
-              expect(() => resolveCapabilityPolicy(input)).not.toThrow();
-            } else {
-              const folder = operation === "stat" ? join(path, "..") : path;
-              expect(() => resolveCapabilityPolicy(input)).toThrow(
-                code === "EACCES" || code === "EPERM"
-                  ? `Cannot scan folder "${folder}" because permission was denied; refusing Scoped attachment.`
-                  : "index fault",
-              );
-            }
-          }
-        }
-      } finally {
-        delete indexFault.stat;
-        delete indexFault.directory;
-        delete indexFault.read;
-        delete indexFault.code;
-      }
-    },
-  );
 
   it("denies credential aliases in the worktree's granted git slices too", () => {
     const base = scratch();

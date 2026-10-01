@@ -70,7 +70,13 @@ to path resolution.
 - **`resolvePathForPolicy` refuses instead of falling back.** Upstream callers
   write `resolvePathForPolicy(p) ?? p`, so an unresolvable path is checked in
   its raw form. Here undefined propagates and the call is blocked: the
-  normalizer treats "cannot say what file this is" as a refusal.
+  normalizer treats "cannot say what file this is" as a refusal. Attachment uses
+  its explicit `refuseOnError` mode: filesystem failures propagate with the
+  affected path, rather than allowing `canonical` to fall back to a lexical
+  denylist. All resolver probes share `../policy-filesystem.ts` with credential
+  discovery, critical-file indexing, grant checks and source/alias walks.
+  Only ENOENT, and ENOTDIR on a path lookup (never a directory operation),
+  represent harmless absence; every other error refuses Scoped attachment.
 - **The resolver walks component by component, as the kernel does (VC-45).**
   Upstream resolves the nearest existing ancestor and joins a dangling link's
   target lexically, so `x -> s/../LaunchAgents/x.plist` beside `s ->

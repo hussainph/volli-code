@@ -12407,7 +12407,7 @@ describe("Scoped Sessions (VC-45)", () => {
           capability: { containment: "scoped", writableRoots: [] },
         }),
       ).rejects.toThrow(
-        `Cannot scan folder "${ssh}" because permission was denied; refusing Scoped attachment.`,
+        `Cannot open directory "${ssh}" because permission was denied; refusing Scoped attachment.`,
       );
       expect(executionEnvFactory).not.toHaveBeenCalled();
     } finally {

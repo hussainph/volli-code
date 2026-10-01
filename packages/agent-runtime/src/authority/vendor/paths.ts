@@ -19,6 +19,7 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { policyFilesystem } from "../policy-filesystem";
 
 /** The invoking user's home directory, read once, as upstream reads it. */
 export const HOME = homedir();
@@ -136,7 +137,21 @@ const MAX_LINKS = 32;
  * normalization form all collapse to one spelling, so a policy comparing
  * components compares what the kernel compares.
  */
-export function resolvePathForPolicy(path: string): string | undefined {
+export function resolvePathForPolicy(
+  path: string,
+  options: { refuseOnError?: boolean } = {},
+): string | undefined {
+  try {
+    return resolveFilesystemPath(path);
+  } catch (error) {
+    // Tool operands are refused via undefined. Attachment must propagate the
+    // same failure, never fall back to a lexical denylist with unknown targets.
+    if (options.refuseOnError) throw error;
+    return undefined;
+  }
+}
+
+function resolveFilesystemPath(path: string): string | undefined {
   // Absolutized but NOT normalized: a lexical `..` is exactly the bug the walk exists to avoid.
   const queue = (isAbsolute(path) ? path : `${process.cwd()}/${path}`).split("/").filter(Boolean);
   const resolved: string[] = [];
@@ -157,12 +172,8 @@ export function resolvePathForPolicy(path: string): string | undefined {
       continue;
     }
     const candidate = `/${[...resolved, component].join("/")}`;
-    let entry;
-    try {
-      entry = lstatSync(candidate);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+    const entry = policyFilesystem(candidate, "lstat", () => lstatSync(candidate));
+    if (entry === undefined) {
       existing = resolved.length;
       resolved.push(component);
       continue;
@@ -172,26 +183,19 @@ export function resolvePathForPolicy(path: string): string | undefined {
       continue;
     }
     links += 1;
-    if (links > MAX_LINKS) return undefined;
-    let target: string;
-    try {
-      target = readlinkSync(candidate);
-    } catch {
-      /* v8 ignore next -- lstat reported a link an instant ago; readlink fails only if it vanished in between, and an unreadable link is an unresolvable path. */
-      return undefined;
+    if (links > MAX_LINKS) {
+      throw new Error(
+        `Cannot resolve "${path}" because too many symbolic links were followed; refusing Scoped attachment.`,
+      );
     }
+    const target = policyFilesystem(candidate, "readlink", () => readlinkSync(candidate));
+    if (target === undefined) return undefined;
     if (isAbsolute(target)) resolved.length = 0;
     queue.unshift(...target.split("/").filter(Boolean));
   }
   const real = existing ?? resolved.length;
-  try {
-    // The prefix the walk saw exist, spelled as stored; the rest as named.
-    return resolve(
-      realpathSync.native(`/${resolved.slice(0, real).join("/")}`),
-      ...resolved.slice(real),
-    );
-  } catch {
-    /* v8 ignore next -- every component of this prefix was lstat'ed above; it fails only if one vanished since. */
-    return undefined;
-  }
+  // The prefix the walk saw exist, spelled as stored; the rest as named.
+  const prefix = `/${resolved.slice(0, real).join("/")}`;
+  const stored = policyFilesystem(prefix, "realpath", () => realpathSync.native(prefix));
+  return stored === undefined ? undefined : resolve(stored, ...resolved.slice(real));
 }
