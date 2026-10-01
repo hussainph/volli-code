@@ -157,6 +157,22 @@ const loading = () => container?.querySelector('[data-testid="chat-transcript-lo
 const emptyState = () => container?.querySelector('[data-testid="empty-visual-picker"]') ?? null;
 
 describe("a chat with no messages on screen", () => {
+  it("shows Auto ahead of an inherited tier for an automatic pick", async () => {
+    await mountPlane(
+      chatStore({
+        projection: {
+          ...READY_PROJECTION,
+          modelSelection: { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" },
+          modelTier: "deep",
+          modelAuto: { confidence: 0.8, alternatives: [] },
+        } as unknown as typeof READY_PROJECTION,
+      }),
+    );
+    const pill = container?.querySelector('[data-testid="model-pill"]');
+    expect(pill?.textContent).toContain("Auto");
+    expect(pill?.textContent).not.toContain("Deep");
+  });
+
   it("holds the transcript's box while the history read is still in flight", async () => {
     await mountPlane(chatStore({ projection: null }));
     expect(loading()).not.toBeNull();

@@ -22,14 +22,21 @@
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
 import {
+  AUTO_SELECT_TIERS,
+  autoSelectCandidates,
+  DECISION_PURPOSE_POLICY,
   DEFAULT_MODEL_REQUIRED,
   defaultModelRequiredForTier,
   isAgentModelTier,
   modelPurposeForRole,
 } from "@volli/shared";
 import type {
+  AgentModelTier,
+  AutoSelectCandidate,
+  AutoSelectPick,
   CodeModeBirth,
   ModelAccessSnapshot,
+  ModelAutoPick,
   ModelSelection,
   McpToolDefinition,
   ModelTier,
@@ -280,6 +287,15 @@ export interface SessionStartInput {
   actor?: TicketEventActor;
   modelOverride?: SessionModelOverride;
   /**
+   * The request this Session is being born to carry, offered to the decision
+   * model that may choose its model (VC-432). Honoured only when the start
+   * names NO model, tier or reasoning level — a caller that said what it wants
+   * is never second-guessed — and only when a decision model is configured and
+   * permitted, so an absent or ignored hint changes nothing. The text is the
+   * first message, a delegated task or an Automation's Instructions.
+   */
+  autoSelect?: { request: string };
+  /**
    * Trusted in-process ancestry from a Ticket caller's claimed `session.start`.
    * The renderer's create schema cannot name it; only the bound tool door may
    * pass this birth context through the shared facade.
@@ -416,6 +432,34 @@ export function anchoredOnParent(
   };
 }
 
+/**
+ * What a start reaches to let a decision model choose its model (VC-432).
+ * Both halves are the composition root's: the desktop answers them from the
+ * decision service and its settings.
+ */
+export interface SessionAutoSelectPort {
+  /**
+   * Whether a decision for this project could run at all: a model is
+   * configured and, in the cloud, opted into for `model.select`. One database
+   * read, so a start with no decision model pays for nothing else.
+   */
+  available(projectId: string): boolean;
+  /**
+   * The pick among `candidates` for this request, or null for every way a
+   * decision is not made or not trusted: unset, slow, wrong, or below the
+   * confidence threshold. Never rejects; null is "keep the default".
+   */
+  decide(input: {
+    sessionId: string;
+    projectId: string;
+    request: string;
+    tierHint: AgentModelTier | null;
+    candidates: readonly AutoSelectCandidate[];
+    /** The birth's whole deadline, preparation included. */
+    signal?: AbortSignal;
+  }): Promise<AutoSelectPick | null>;
+}
+
 /** The durable identity a create-only call resolves — nothing about an executor. */
 export interface SessionCreateResult {
   sessionId: string;
@@ -450,6 +494,8 @@ export interface Sessions {
    * is no wrong namespace left to catch.
    */
   attach(input: SessionAttachInput): Promise<SessionStartResult>;
+  /** Also guards runtime-context backfill when attachment bypasses this facade. */
+  waitForBirth?(sessionId: string): Promise<void>;
 }
 
 export interface SessionAttachInput {
@@ -508,6 +554,19 @@ export interface SessionsOptions {
    * Session's policy IS.
    */
   readModelAnchor(sessionId: string): Promise<SessionModelAnchor>;
+  /**
+   * The model record a start already wrote for this Session under this command
+   * id, exactly as written, or null when it wrote none (VC-432). A replayed
+   * start restates it: the engine refuses a replay whose intent differs, and
+   * the Session's CURRENT model is not what its birth recorded once a person
+   * has picked another.
+   */
+  readBirthModel?(
+    sessionId: string,
+    commandId: string,
+  ): Promise<{ selection: ModelSelection; tier: ModelTier | null; auto?: ModelAutoPick } | null>;
+  /** Canonical command history, independent of the current projection. */
+  readBirthModelFromLedger?: SessionsOptions["readBirthModel"];
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
   /** Durable per-Session grants and ancestry, resolved and recorded at birth (VC-183, VC-9). */
@@ -519,6 +578,11 @@ export interface SessionsOptions {
    * runtime inspection.
    */
   inspectModelAccess?(): Promise<ModelAccessSnapshot>;
+  /**
+   * The decision model's say over a start that named no model (VC-432). Absent
+   * means nothing is ever auto-picked.
+   */
+  autoSelect?: SessionAutoSelectPort;
   /**
    * Records the `session_started` ticket event. Living in `mint` — the one
    * shared creation path under BOTH `create` (the renderer's optimistic open)
@@ -625,8 +689,151 @@ async function resolveModelSelection(
   return { providerId: model.providerId, modelId: model.modelId, reasoningLevel };
 }
 
+function sameSelection(a: ModelSelection, b: ModelSelection): boolean {
+  return (
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId &&
+    a.reasoningLevel === b.reasoningLevel
+  );
+}
+
+/**
+ * Whether this start is the kind an automatic choice may apply to: it offered
+ * a request and named no model, tier or reasoning level. Whether a decision
+ * could actually run is the port's availability check.
+ */
+function autoSelectOffered(options: SessionsOptions, input: SessionStartInput): boolean {
+  const named = input.modelOverride;
+  return (
+    options.autoSelect !== undefined &&
+    (input.autoSelect?.request.trim() ?? "") !== "" &&
+    named?.model === undefined &&
+    named?.tier === undefined &&
+    named?.reasoningLevel === undefined
+  );
+}
+
+/**
+ * The decision model's pick for a start that named no model (VC-432), or null
+ * to keep `configuredDefault`.
+ *
+ * Quiet on every miss, by design: no port, nothing to carry, a caller that
+ * named a model, tier or level, a decision model not configured or not
+ * permitted, fewer than two approved pairs, a catalog that cannot be read, a
+ * slow or unsure answer — each is the configured default, with nothing said
+ * and nothing awaited beyond the decision's own short deadline. Only the
+ * person's approved pairs are ever offered: the default and each agent tier's
+ * configured model, held to what Model Access says can run right now.
+ */
+async function autoSelectModel(
+  options: SessionsOptions,
+  input: SessionStartInput,
+  configuredDefault: ModelSelection,
+  parentAnchor: SessionModelAnchor | null,
+  sessionId: string,
+): Promise<AutoSelectPick | null> {
+  const port = options.autoSelect;
+  if (port === undefined) return null;
+  const withdraw = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The whole refinement is bounded, preparation included: the decision
+  // service's own deadline starts only when it is asked, and the catalog read
+  // before it has none of its own.
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      withdraw.abort();
+      resolve(null);
+    }, DECISION_PURPOSE_POLICY["model.select"].timeoutMs);
+  });
+  const refinement = (async (): Promise<AutoSelectPick | null> => {
+    const request = input.autoSelect?.request.trim() ?? "";
+    if (!autoSelectOffered(options, input) || !port.available(input.projectId)) return null;
+    const tiers = Object.fromEntries(
+      await Promise.all(
+        AUTO_SELECT_TIERS.map(async (tier) => [tier, await options.readDefaultModel(tier, null)]),
+      ),
+    ) as Partial<Record<AgentModelTier, ModelSelection | null>>;
+    const approved = autoSelectCandidates(configuredDefault, tiers);
+    if (approved.length < 2) return null;
+    const runnable = await runnableSelections(options);
+    const candidates = approved.filter(
+      (candidate) =>
+        sameSelection(candidate.selection, configuredDefault) ||
+        (runnable?.(candidate.selection) ?? false),
+    );
+    // Preparation may finish after birth already fell back. Do not start a
+    // paid call after that deadline, and withdraw any call already in flight.
+    if (withdraw.signal.aborted) return null;
+    return port.decide({
+      signal: withdraw.signal,
+      sessionId,
+      projectId: input.projectId,
+      request,
+      tierHint:
+        parentAnchor?.tier !== null &&
+        parentAnchor?.tier !== undefined &&
+        isAgentModelTier(parentAnchor.tier)
+          ? parentAnchor.tier
+          : null,
+      candidates,
+    });
+  })();
+  try {
+    return await Promise.race([refinement, deadline]);
+  } catch {
+    // The default stands. A person is not waiting on a refinement they did not
+    // ask for, and the model they will see is the one the Session runs.
+    return null;
+  } finally {
+    clearTimeout(timer);
+    // A refinement that outlived its deadline settles unobserved.
+    refinement.catch(() => undefined);
+  }
+}
+
+/** Whether Model Access can run a selection right now, or null when it cannot be asked. */
+async function runnableSelections(
+  options: SessionsOptions,
+): Promise<((selection: ModelSelection) => boolean) | null> {
+  if (options.inspectModelAccess === undefined) return null;
+  const access = await options.inspectModelAccess();
+  return (selection) =>
+    access.models.some(
+      (model) =>
+        model.providerId === selection.providerId &&
+        model.modelId === selection.modelId &&
+        model.state === "available" &&
+        model.reasoningLevels.includes(selection.reasoningLevel),
+    );
+}
+
 /** Product-owned Session start commands over private adapter migration scaffolding. */
 export function createSessions(options: SessionsOptions): Sessions {
+  // Publish the id before any birth writes, and release only after ALL of
+  // them. A failed birth stays latched: it is incomplete, not a legacy Session.
+  const births = new Map<
+    string,
+    {
+      sessionId: string | null;
+      failed: boolean;
+      published: ReturnType<typeof Promise.withResolvers<void>>;
+      complete: Promise<SessionCreateResult & { model: ModelSelection }>;
+    }
+  >();
+  const sessionBirths = new Map<string, Promise<SessionCreateResult & { model: ModelSelection }>>();
+  async function waitForBirth(sessionId: string): Promise<void> {
+    const known = sessionBirths.get(sessionId);
+    if (known !== undefined) {
+      await known;
+      return;
+    }
+    // Snapshot: a different birth added while we wait must not hold this attach.
+    const pending = [...births.values()];
+    for (const birth of pending) {
+      await birth.published.promise;
+      if (birth.sessionId === sessionId) await birth.complete;
+    }
+  }
   /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
   async function mint(
     input: SessionStartInput,
@@ -661,13 +868,14 @@ export function createSessions(options: SessionsOptions): Sessions {
     // the one creation path under both `create` and `start`. A second start
     // path that minted a subagent would otherwise get its parent's ports and
     // silently miss its parent's model.
-    const override =
+    const parentAnchor =
       input.parentSessionId === undefined
+        ? null
+        : await options.readModelAnchor(input.parentSessionId);
+    const override =
+      parentAnchor === null
         ? input.modelOverride
-        : anchoredOnParent(
-            input.modelOverride,
-            await options.readModelAnchor(input.parentSessionId),
-          );
+        : anchoredOnParent(input.modelOverride, parentAnchor);
     const model = await resolveModelSelection(options, override, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
@@ -709,73 +917,156 @@ export function createSessions(options: SessionsOptions): Sessions {
         ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
         : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
     const classify = (await options.toolSurface.resolveClassify?.(input.projectId)) ?? false;
-    // Code Mode decides once, here, from this Session's own model (VC-471).
-    const codeMode = options.toolSurface.codeModeAt?.(model, mcpTools);
-    const toolSurface = options.toolSurface.resolve(
-      role,
-      grants.grants,
-      within === null ? undefined : within,
-      mcpTools,
-      codeMode,
-      classify,
-    );
-    const created = await options.runtime.command({
-      commandId: sessionCreateCommandId(input.operationId),
-      command: {
-        kind: "session.create",
-        projectId: input.projectId,
-        ticketId: input.ticketId,
-        role,
-        parentSessionId: input.parentSessionId ?? null,
-        title: input.title,
-        // The client-minted id rides only this intent (VC-358); a legacy
-        // caller that names none omits the key entirely, so its durable
-        // create intent is byte-identical to what it always wrote.
-        ...(input.requestedSessionId === undefined
-          ? {}
-          : { requestedSessionId: input.requestedSessionId }),
-      },
-    });
-    // The Session now exists durably, so planner history says so — whatever
-    // the model record or a later attach do next, the app carries the recovery.
-    if (input.ticketId !== null) {
-      options.recordSessionStarted?.({
-        ticketId: input.ticketId,
-        sessionId: created.sessionId,
-        actor: input.actor ?? { kind: "user" },
+
+    const createIdentity = () =>
+      options.runtime.command({
+        commandId: sessionCreateCommandId(input.operationId),
+        command: {
+          kind: "session.create",
+          projectId: input.projectId,
+          ticketId: input.ticketId,
+          role,
+          parentSessionId: input.parentSessionId ?? null,
+          title: input.title,
+          // Keep legacy intent byte-identical when the caller names no id.
+          ...(input.requestedSessionId === undefined
+            ? {}
+            : { requestedSessionId: input.requestedSessionId }),
+        },
       });
+    const existing = births.get(input.operationId);
+    if (existing !== undefined && !existing.failed) {
+      // Still validate create intent: coalescing cannot bless a reused command
+      // id whose project, title or requested Session differs.
+      await createIdentity();
+      return existing.complete;
     }
-    // The tier the override named rides beside the resolved model (VC-259):
-    // provenance for the pin, so the Session header and `session list` can say
-    // "Fast · <model>". It is the RESOLVED override's tier, not the caller's,
-    // so a subagent that inherited a rung records the rung it inherited — both
-    // for the header and because that is what its own children read next
-    // (VC-431).
-    const tier = override?.tier;
-    await recordModelSelection(options.runtime, {
-      commandId: `${input.operationId}:model`,
-      sessionId: created.sessionId,
-      model,
-      ...(tier === undefined ? {} : { tier }),
-    });
-    // Durable inside MINT, not beside the attach: VC-16 split the start so a
-    // chat can open optimistically — `create` lands the tab and `attach`
-    // follows separately — and the record has to exist before whichever
-    // attach eventually composes the system prompt from it. The grant reaches
-    // the store first: a tool surface without its scope would be a capability
-    // that the door could not honestly bound.
-    if (resources.length > 0) await options.skills.record(created.sessionId, resources);
-    options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(
-      created.sessionId,
-      toolSurface,
-      mcpTools,
-      codeMode === undefined ? {} : { codeMode },
-    );
-    return { sessionId: created.sessionId, model };
+    const published = Promise.withResolvers<void>();
+    const birthLatch = {
+      sessionId: null as string | null,
+      failed: false,
+      published,
+      complete: Promise.resolve().then(finishBirth),
+    };
+    births.set(input.operationId, birthLatch);
+    return birthLatch.complete;
+
+    async function finishBirth(): Promise<SessionCreateResult & { model: ModelSelection }> {
+      try {
+        const created = await createIdentity();
+        birthLatch.sessionId = created.sessionId;
+        sessionBirths.set(created.sessionId, birthLatch.complete);
+        published.resolve();
+        // The Session now exists durably, so planner history says so — whatever
+        // the model record or a later attach do next, the app carries the recovery.
+        if (input.ticketId !== null) {
+          options.recordSessionStarted?.({
+            ticketId: input.ticketId,
+            sessionId: created.sessionId,
+            actor: input.actor ?? { kind: "user" },
+          });
+        }
+        // The tier the override named rides beside the resolved model (VC-259):
+        // provenance for the pin, so the Session header and `session list` can say
+        // "Fast · <model>". It is the RESOLVED override's tier, not the caller's,
+        // so a subagent that inherited a rung records the rung it inherited — both
+        // for the header and because that is what its own children read next
+        // (VC-431).
+        //
+        // VC-432: a start that named nothing may have its model chosen by the
+        // decision model, once, here at birth. The configured default resolved
+        // above IS the fallback, so every miss lands exactly where a start with no
+        // decision model would have. A pick that is the default itself keeps the
+        // default's tier provenance; any other pick is an exact model.
+        //
+        // A replayed start finds its Session already carrying a model, and states
+        // that same record again: the engine refuses a replay whose intent
+        // differs, and a second decision (or a miss) is exactly such a difference.
+        // Unavailable history is NOT empty history. Recover the original command
+        // from the canonical ledger; if both reads fail, do not ask again.
+        const offered = autoSelectOffered(options, input);
+        const recordBirthModel = async (): Promise<ModelSelection> => {
+          const modelCommandId = `${input.operationId}:model`;
+          let historyAvailable = true;
+          const read = options.readBirthModel ?? options.readBirthModelFromLedger;
+          const birth =
+            offered && read !== undefined
+              ? await read(created.sessionId, modelCommandId).catch(async () => {
+                  if (options.readBirthModelFromLedger !== undefined) {
+                    try {
+                      return await options.readBirthModelFromLedger(
+                        created.sessionId,
+                        modelCommandId,
+                      );
+                    } catch {
+                      /* No history means no second inference. */
+                    }
+                  }
+                  historyAvailable = false;
+                  return null;
+                })
+              : null;
+          const picked =
+            birth === null && historyAvailable
+              ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
+              : null;
+          const chosen = birth?.selection ?? picked?.selection ?? model;
+          const auto = birth === null ? picked?.auto : birth.auto;
+          const tier =
+            birth !== null
+              ? (birth.tier ?? undefined)
+              : picked !== null && !sameSelection(picked.selection, model)
+                ? undefined
+                : override?.tier;
+          await recordModelSelection(options.runtime, {
+            commandId: modelCommandId,
+            sessionId: created.sessionId,
+            model: chosen,
+            ...(tier === undefined ? {} : { tier }),
+            ...(auto === undefined ? {} : { auto }),
+          });
+          return chosen;
+        };
+        const chosen = await recordBirthModel();
+        // Code Mode must use the actual birth model, not the default that an
+        // automatic choice replaced. This write is inside the same birth latch.
+        const codeMode = options.toolSurface.codeModeAt?.(chosen, mcpTools);
+        const toolSurface = options.toolSurface.resolve(
+          role,
+          grants.grants,
+          within === null ? undefined : within,
+          mcpTools,
+          codeMode,
+          classify,
+        );
+        // Durable inside MINT, not beside the attach: VC-16 split the start so a
+        // chat can open optimistically — `create` lands the tab and `attach`
+        // follows separately — and the record has to exist before whichever
+        // attach eventually composes the system prompt from it. The grant reaches
+        // the store first: a tool surface without its scope would be a capability
+        // that the door could not honestly bound.
+        if (resources.length > 0) await options.skills.record(created.sessionId, resources);
+        options.grants.recordBirth(created.sessionId, grants);
+        await options.toolSurface.record(
+          created.sessionId,
+          toolSurface,
+          mcpTools,
+          codeMode === undefined ? {} : { codeMode },
+        );
+        births.delete(input.operationId);
+        sessionBirths.delete(created.sessionId);
+        return { sessionId: created.sessionId, model: chosen };
+      } catch (error) {
+        birthLatch.failed = true;
+        throw error;
+      } finally {
+        published.resolve();
+      }
+    }
   }
 
   return {
+    waitForBirth,
     async create(input) {
       const created = await mint(input);
       return { sessionId: created.sessionId, model: created.model };
@@ -792,6 +1083,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     },
 
     async attach(input) {
+      await waitForBirth(input.sessionId);
       // One rule for every Session: nothing recorded gets the default recorded
       // at attach. Only a Session born before the model policy existed can
       // reach the branch in real data — every mint above records at birth — so
@@ -868,7 +1160,13 @@ function attachmentReady(result: SessionRuntimeCommandResult): boolean {
 /** Record the Session's model policy durably, or refuse before anything attaches. */
 async function recordModelSelection(
   runtime: StructuredSessionCommands,
-  input: { commandId: string; sessionId: string; model: ModelSelection; tier?: ModelTier },
+  input: {
+    commandId: string;
+    sessionId: string;
+    model: ModelSelection;
+    tier?: ModelTier;
+    auto?: ModelAutoPick;
+  },
 ): Promise<void> {
   const selected = await runtime.command({
     commandId: input.commandId,
@@ -877,6 +1175,7 @@ async function recordModelSelection(
       kind: "model.select",
       selection: input.model,
       ...(input.tier === undefined ? {} : { tier: input.tier }),
+      ...(input.auto === undefined ? {} : { auto: input.auto }),
     },
   });
   if (selected.receipt?.status !== "completed") {

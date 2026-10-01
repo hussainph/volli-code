@@ -167,6 +167,16 @@ describe("startSessionOperation", () => {
     ]);
   });
 
+  it("offers the caller's own message to an automatic model choice, and the stock kickoff nothing (VC-432)", async () => {
+    const fixture = harness();
+
+    await start(fixture, { message: "Fix the flaky login test" });
+    await start(fixture, { operationId: "generated-2" });
+
+    expect(fixture.startInputs[0]?.autoSelect).toEqual({ request: "Fix the flaky login test" });
+    expect(fixture.startInputs[1]).not.toHaveProperty("autoSelect");
+  });
+
   it("submits the default kickoff turn once the attach is ready", async () => {
     const fixture = harness();
 

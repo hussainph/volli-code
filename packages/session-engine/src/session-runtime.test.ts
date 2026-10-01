@@ -348,6 +348,37 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
+  it("records a decision model's pick and why with the selection (VC-432)", async () => {
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "command-create-auto",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        parentSessionId: null,
+        title: null,
+      },
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+    const auto = { confidence: 0.9, alternatives: [] };
+
+    await runtime.command({
+      commandId: "command-select-auto",
+      sessionId: created.sessionId,
+      command: { kind: "model.select", selection, auto },
+    });
+
+    await expect(runtime.projection({ sessionId: created.sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: selection, modelAuto: auto },
+    });
+  });
+
   it("applies an idle live model selection before committing its durable policy", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

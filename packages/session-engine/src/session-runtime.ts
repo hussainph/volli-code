@@ -9,6 +9,7 @@ import type {
   CommandReceipt,
   CommandRefusalSeverity,
   CompactionWorkReason,
+  ModelAutoPick,
   ModelSelection,
   ModelTier,
   ObservabilitySink,
@@ -172,7 +173,8 @@ export type SessionClientCommand =
       variant?: string | null;
     }
   /** `tier`: the named tier this selection resolved from, when a start named one (VC-259). */
-  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier }
+  /** `auto`: the decision model's pick and why, when it chose this selection at birth (VC-432). */
+  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string | null }
@@ -1054,6 +1056,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "model.select",
         selection: request.command.selection,
         ...(request.command.tier === undefined ? {} : { tier: request.command.tier }),
+        ...(request.command.auto === undefined ? {} : { auto: request.command.auto }),
       },
       provenance: userProvenance(location.venue),
     });

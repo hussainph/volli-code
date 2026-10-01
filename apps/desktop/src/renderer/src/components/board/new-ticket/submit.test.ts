@@ -138,6 +138,7 @@ describe("runKickoff", () => {
       title: "Work on VC-42",
       refineTitle: true,
       message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+      autoSelect: { request: "A ticket\n\nthe body" },
       model: MODEL,
     });
   });
@@ -188,6 +189,7 @@ describe("runKickoff", () => {
       title: "Work on VC-7",
       refineTitle: true,
       message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+      autoSelect: { request: "A ticket" },
     });
   });
 
@@ -200,6 +202,25 @@ describe("runKickoff", () => {
 
     expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", expect.anything());
     expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("offers the ticket task, not the generic kickoff, for model selection", async () => {
+    const deps = fakeDeps({
+      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
+    });
+    await runKickoff(
+      fields({ title: "Fix the database race", body: "Reproduce concurrent writes." }),
+      deps,
+      { createMore: false },
+    );
+    expect(deps.startChat).toHaveBeenCalledWith(
+      "p1",
+      "tk",
+      expect.objectContaining({
+        autoSelect: { request: "Fix the database race\n\nReproduce concurrent writes." },
+      }),
+    );
+    expect(vi.mocked(deps.startChat).mock.calls[0]![2]).not.toHaveProperty("model");
   });
 
   it("still navigates (foreground) when the Session start fails, so the user can retry there", async () => {

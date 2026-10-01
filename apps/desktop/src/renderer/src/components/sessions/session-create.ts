@@ -303,6 +303,8 @@ export interface ChatBoot {
    * configured default — every surface but the composer's Create & start.
    */
   model?: ModelSelection;
+  /** Request offered to the birth decision, without changing the opening turn. */
+  autoSelect?: { request: string };
   /**
    * Skips the Chat Draft and creates a Session immediately (VC-358).
    *
@@ -450,6 +452,8 @@ export interface TicketChatStart {
   refineTitle?: true;
   /** The model policy to record; absent leaves the Ticket default. */
   model?: ModelSelection;
+  /** Ticket task text for immediate birth's optional model decision. */
+  autoSelect?: { request: string };
   /**
    * An opening turn, queued the moment the Session is addressable.
    *
@@ -477,12 +481,13 @@ export interface TicketChatStart {
 export async function startTicketChat(
   projectId: string,
   ticketId: string,
-  { skills, title, refineTitle, model, message }: TicketChatStart = {},
+  { skills, title, refineTitle, model, message, autoSelect }: TicketChatStart = {},
 ): Promise<string | null> {
   const sessionId = await bootChatSession(ticketScope(projectId, ticketId), {
     skills,
     title,
     model,
+    autoSelect,
     // A kickoff carries its opening message, so it is a Session from the start.
     createsSessionNow: message !== undefined,
     land: (booted, isSession) => {
@@ -524,7 +529,7 @@ function newMessageId(): string {
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, title, model, land, createsSessionNow = false }: ChatBoot,
+  { skills, title, model, land, createsSessionNow = false, autoSelect }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
@@ -558,6 +563,7 @@ export async function bootChatSession(
         title: title ?? null,
         ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
         ...(model === undefined ? {} : { model }),
+        ...(autoSelect === undefined ? {} : { autoSelect }),
       });
       if (sessionId === null) return null;
       // The owner may have been removed while `session.create` was in flight;

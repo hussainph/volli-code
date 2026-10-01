@@ -147,6 +147,20 @@ const payloads = samples(
     selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
     tier: "fast",
   },
+  // A decision model's pick at birth (VC-432) writes its provenance beside it.
+  {
+    kind: "model.selected",
+    selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+    auto: {
+      confidence: 0.64,
+      alternatives: [
+        {
+          selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+          probability: 0.21,
+        },
+      ],
+    },
+  },
   { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
   // The attach-time skill record: names + whole delivered bodies, so a
   // recovery re-attach composes the prompt the first attach composed.
@@ -538,6 +552,19 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
         tier: "deep",
       },
+      {
+        kind: "model.select",
+        selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
+        auto: {
+          confidence: 0.64,
+          alternatives: [
+            {
+              selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+              probability: 0.21,
+            },
+          ],
+        },
+      },
       { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
@@ -875,6 +902,30 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.tier has an unsupported value");
+    // Provenance is held to its shape too: a probability is a number in [0, 1].
+    const selection = { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" };
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 2, alternatives: [] } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.confidence must be a number between 0 and 1");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 0.5, alternatives: "x" } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "model.selected",
+          selection,
+          auto: { confidence: 0.5, alternatives: [{ selection, probability: "high" }] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives[0].probability must be a number between 0 and 1");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },

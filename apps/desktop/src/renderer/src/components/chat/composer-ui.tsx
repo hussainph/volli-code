@@ -98,7 +98,7 @@ import {
   type SessionContextUsage,
   type TakenQueued,
 } from "@volli/session-presentation";
-import type { BlobLinkView } from "@volli/shared";
+import type { BlobLinkView, ModelAutoPick } from "@volli/shared";
 import {
   AttachmentStrip,
   AttachmentThumbRow,
@@ -172,6 +172,12 @@ export interface SessionComposerProps {
    * model this Session sends to.
    */
   selectionTier?: string | null;
+  /**
+   * Present when a decision model chose this Session's model at birth
+   * (VC-432): the pill says so and its list offers the alternatives it passed
+   * over. Absent for every model a person or a caller named.
+   */
+  selectionAuto?: ModelAutoPick | null;
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
   modelChoiceDisabled?: boolean;
@@ -354,6 +360,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   selection,
   selectionProviderLabel,
   selectionTier = null,
+  selectionAuto = null,
   onSelectionChange,
   modelChoiceDisabled = false,
   working,
@@ -615,6 +622,7 @@ export const SessionComposer = React.memo(function SessionComposer({
               selection={selection}
               selectionProviderLabel={selectionProviderLabel}
               selectionTier={selectionTier}
+              selectionAuto={selectionAuto}
               disabled={modelChoiceDisabled}
               onChange={onSelectionChange}
               open={modelPickerOpen}
@@ -1665,6 +1673,7 @@ export function ModelPill({
   selection,
   selectionProviderLabel,
   selectionTier = null,
+  selectionAuto = null,
   disabled,
   onChange,
   open: openProp,
@@ -1677,6 +1686,8 @@ export function ModelPill({
   selectionProviderLabel?: string;
   /** The tier the selection resolved from, as its label, or null — see {@link SessionComposerProps}. */
   selectionTier?: string | null;
+  /** The decision model's pick and the options it passed over, or null — see {@link SessionComposerProps}. */
+  selectionAuto?: ModelAutoPick | null;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
   /** Controlled open, for the caller that opens this list by typing (`/model`). */
@@ -1865,6 +1876,17 @@ export function ModelPill({
           />
           <span className="min-w-0 break-words">{identity}</span>
         </div>
+        {selectionAuto === null ? null : (
+          <AutoPickLine
+            models={models}
+            selection={selection}
+            auto={selectionAuto}
+            onPick={(next) => {
+              onChange(next);
+              setOpen(false);
+            }}
+          />
+        )}
         {compact && compactEffort !== undefined ? (
           <div
             data-testid="combined-model-effort"
@@ -1980,6 +2002,51 @@ export function ModelPill({
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * "Auto-picked Opus · high", and the options the decision model passed over, as
+ * one press each to override it (VC-432). The same facts the Session recorded
+ * at birth; nothing here asks the decision model again.
+ */
+function AutoPickLine({
+  models,
+  selection,
+  auto,
+  onPick,
+}: {
+  models: readonly ComposerModel[];
+  selection: ComposerModelSelection;
+  auto: ModelAutoPick;
+  onPick(next: ComposerModelSelection): void;
+}) {
+  const name = (value: ComposerModelSelection) =>
+    `${selectedModel(models, value)?.label ?? value.modelId} · ${value.reasoningLevel}`;
+  return (
+    <div
+      data-testid="model-pill-auto"
+      className="flex flex-col gap-1 border-b px-2 py-1 text-ui text-muted-foreground"
+    >
+      <span>Auto-picked {name(selection)}</span>
+      {auto.alternatives.length === 0 ? null : (
+        <span className="flex flex-wrap gap-1">
+          {auto.alternatives.map((alternative) => (
+            <Button
+              key={`${alternative.selection.providerId}/${alternative.selection.modelId}/${alternative.selection.reasoningLevel}`}
+              type="button"
+              size="xs"
+              variant="outline"
+              data-testid="model-pill-auto-alternative"
+              title={`${Math.round(alternative.probability * 100)}%`}
+              onClick={() => onPick(alternative.selection)}
+            >
+              {name(alternative.selection)}
+            </Button>
+          ))}
+        </span>
+      )}
+    </div>
   );
 }
 

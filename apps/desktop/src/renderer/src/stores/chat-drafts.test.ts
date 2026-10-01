@@ -313,6 +313,38 @@ describe("provisional chat", () => {
     expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
   });
 
+  it("marks a model frozen from the default, and a person's pick replaces the mark (VC-432)", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    store.getState().setProvisionalModel("draft-1", model, { fromDefault: true });
+    expect(store.getState().drafts["draft-1"]?.provisional?.modelIsDefault).toBe(true);
+
+    store.getState().setProvisionalModel("draft-1", { ...model, modelId: "opus" });
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      model: { ...model, modelId: "opus" },
+    });
+    expect(store.getState().drafts["draft-1"]?.provisional).not.toHaveProperty("modelIsDefault");
+  });
+
+  it("keeps the default-frozen mark across a relaunch", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    first
+      .getState()
+      .setProvisionalModel(
+        "draft-1",
+        { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
+        { fromDefault: true },
+      );
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional?.modelIsDefault).toBe(true);
+  });
+
   it("amends only the named held message while a captured import finishes", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().holdMessage("draft-1", { id: "m1", text: "first" });

@@ -139,6 +139,28 @@ describe("bootChatSession", () => {
     expect(useChatDraftsStore.getState().drafts).toEqual({});
   });
 
+  it.each([
+    undefined,
+    { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" } as const,
+  ])(
+    "offers ticket task text at immediate birth, preserving explicit picks (%s)",
+    async (model) => {
+      const create = vi.fn(async () => "durable-1");
+      stubChatStore(create);
+      await startTicketChat("p1", "t1", {
+        message: "Begin work on this ticket.",
+        autoSelect: { request: "Fix the database race\n\nReproduce concurrent writes." },
+        ...(model === undefined ? {} : { model }),
+      });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          autoSelect: { request: "Fix the database race\n\nReproduce concurrent writes." },
+          ...(model === undefined ? {} : { model }),
+        }),
+      );
+    },
+  );
+
   it("holds one immediate create per owner, and hands the second nothing", async () => {
     let release!: (sessionId: string) => void;
     const create = vi.fn(() => new Promise<string | null>((resolve) => (release = resolve)));

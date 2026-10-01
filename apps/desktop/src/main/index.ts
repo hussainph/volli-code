@@ -173,6 +173,7 @@ import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
@@ -1625,6 +1626,7 @@ app.whenReady().then(async () => {
           // recorded once before the first runtime construction; every later
           // attach reuses those exact bytes.
           resolveRuntimeContext: async (sessionId) => {
+            await sessions?.waitForBirth?.(sessionId);
             if (sessionEngine === null) return null;
             const projection = await sessionEngine.getSession({ sessionId });
             const attaching = projection?.session;
@@ -2003,6 +2005,33 @@ app.whenReady().then(async () => {
             const { projection } = await sessionRuntime.projection({ sessionId });
             return { selection: projection.modelSelection, tier: projection.modelTier };
           },
+          readBirthModel: async (sessionId, commandId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            const intent = projection.commands?.find((command) => command.id === commandId)?.intent;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
+          readBirthModelFromLedger: async (sessionId, commandId) => {
+            const events = await sessionEngine!.listEvents({ sessionId });
+            const recorded = events.find(
+              (event) =>
+                event.payload.kind === "command.recorded" && event.payload.command.id === commandId,
+            );
+            const intent =
+              recorded?.payload.kind === "command.recorded"
+                ? recorded.payload.command.intent
+                : null;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,
@@ -2010,6 +2039,16 @@ app.whenReady().then(async () => {
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // A start that named no model may have one chosen from the person's
+          // approved pairs by the decision model (VC-432), once, at birth.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                autoSelect: createModelAutoSelect({
+                  db: sessionDb,
+                  port: desktopDecisions.port,
+                }),
+              }),
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
