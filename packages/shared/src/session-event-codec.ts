@@ -44,6 +44,7 @@ import {
 } from "./agent-runtime";
 import type { ModelSelection, PromptResource, SessionRole } from "./agent-runtime";
 import { MODEL_TIERS } from "./model-access-policy";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
@@ -179,6 +180,7 @@ const codecs = {
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
       ...decodeModelTier(record.tier, `${context}.tier`),
+      ...decodeModelAuto(record.auto, `${context}.auto`),
     }),
     scrub: (payload) => payload,
   },
@@ -907,6 +909,7 @@ export interface SessionPresentationProjection extends Pick<
   | "signal"
   | "modelSelection"
   | "modelTier"
+  | "modelAuto"
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
@@ -1018,6 +1021,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         kind,
         selection: decodeModelSelection(row.selection, `${context}.selection`),
         ...decodeModelTier(row.tier, `${context}.tier`),
+        ...decodeModelAuto(row.auto, `${context}.auto`),
       };
     case "executor.start":
       return {
@@ -1410,6 +1414,35 @@ function decodeModelSelection(value: unknown, context: string): ModelSelection {
  */
 function decodeModelTier(value: unknown, context: string): { tier?: ModelTier } {
   return value === undefined ? {} : { tier: enumValue(value, MODEL_TIERS, context) };
+}
+
+/**
+ * The optional automatic-choice provenance beside a model selection (VC-432),
+ * as a spreadable fragment: absent stays absent, so every record written
+ * before it decodes to the object it always did.
+ */
+function readProbability(item: unknown, at: string): number {
+  if (typeof item !== "number" || !Number.isFinite(item) || item < 0 || item > 1) {
+    throw new Error(`${at} must be a number between 0 and 1`);
+  }
+  return item;
+}
+
+function decodeModelAuto(value: unknown, context: string): { auto?: ModelAutoPick } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  return {
+    auto: {
+      confidence: readProbability(row.confidence, `${context}.confidence`),
+      alternatives: readArray(row.alternatives, `${context}.alternatives`, (item, at) => {
+        const alternative = asRecord(item, at);
+        return {
+          selection: decodeModelSelection(alternative.selection, `${at}.selection`),
+          probability: readProbability(alternative.probability, `${at}.probability`),
+        };
+      }),
+    },
+  };
 }
 
 function decodeAttachment(value: unknown, context: string): SessionAttachment {
@@ -1814,13 +1847,6 @@ const REVIEW_MISS_REASONS = [
   "provider-error",
   "malformed-answer",
 ] as const satisfies readonly DecisionMissReason[];
-
-function readProbability(value: unknown, context: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`${context} must be a probability in [0, 1]`);
-  }
-  return value;
-}
 
 function readReviewAnswers(
   value: unknown,

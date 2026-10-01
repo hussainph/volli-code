@@ -6,6 +6,8 @@ import {
   AUTHORITY_REASON_SOURCES,
   authorityReasonSource,
   authorityOptInExtensionKey,
+  autoPickOn,
+  autoPickSetting,
   catalogEntry,
   catalogGroups,
   cloudLabel,
@@ -105,7 +107,7 @@ describe("the decision model control's model", () => {
     ).toEqual(["Alpha", "OpenCode Zen"]);
   });
 
-  it("writes a cloud choice with an opt-in for every purpose this build has", () => {
+  it("writes a cloud choice with the purposes the first opt-in dialog names", () => {
     expect(cloudSetting(ZEN, 42)).toEqual({
       kind: "cloud",
       providerId: "opencode",
@@ -148,6 +150,16 @@ describe("the decision model control's model", () => {
       optIn: { acceptedAt: 42, purposes: ["agent.classify", "authority.judge"] },
     });
     expect(legacy.optIn.purposes).toEqual(["agent.classify"]);
+    expect(autoPickSetting(legacy, true, 43)).toMatchObject({
+      optIn: { acceptedAt: 43, purposes: ["agent.classify", "model.select"] },
+    });
+    const selector = {
+      ...legacy,
+      optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(selector, 44)).toMatchObject({
+      optIn: { acceptedAt: 44, purposes: ["agent.classify", "authority.judge", "model.select"] },
+    });
     const authorityOnly = {
       ...cloud(JEV),
       optIn: { acceptedAt: 1, purposes: ["authority.judge"] as const },
@@ -191,5 +203,24 @@ describe("the decision model control's model", () => {
   it("prices a model as a person reads it", () => {
     expect(priceLabel(JEV)).toBe("Free");
     expect(priceLabel(ZEN)).toBe("$0.042/M input");
+  });
+});
+
+describe("automatic model choice (VC-432)", () => {
+  it("is off after the first opt-in and on once the switch extends it", () => {
+    const first = cloudSetting(JEV, 1);
+    expect(autoPickOn(first)).toBe(false);
+    const on = autoPickSetting(first, true, 9)!;
+    expect(autoPickOn(on)).toBe(true);
+    expect(on).toMatchObject({
+      optIn: { acceptedAt: 9, purposes: ["agent.classify", "authority.judge", "model.select"] },
+    });
+    expect(autoPickOn(autoPickSetting(on, false, 10)!)).toBe(false);
+  });
+
+  it("is nothing for a model that is not in the cloud", () => {
+    expect(autoPickOn({ kind: "none" })).toBe(false);
+    expect(autoPickOn(localSetting("", ""))).toBe(false);
+    expect(autoPickSetting(localSetting("", ""), true, 1)).toBeNull();
   });
 });

@@ -117,6 +117,13 @@ export interface ProvisionalChatDraft {
   title: string | null;
   model?: ModelSelection;
   /**
+   * Set when {@link model} is only the configured default the composer froze
+   * at Send (VC-432), not a model a person picked. Promotion then leaves the
+   * model unnamed and offers the first message to the automatic choice instead,
+   * so a decision model may pick; a person's own pick is never second-guessed.
+   */
+  modelIsDefault?: true;
+  /**
    * How far this Draft has got towards being a Session. Its vocabulary lives
    * in `@volli/shared` because main reads the same persisted envelope at boot
    * and must recognise exactly the same set — see
@@ -172,7 +179,11 @@ export interface ChatDraftsState {
    * composer's picker is stood down for that same window rather than
    * accepting a change it would have to discard.
    */
-  setProvisionalModel(sessionId: string, model: ModelSelection): void;
+  setProvisionalModel(
+    sessionId: string,
+    model: ModelSelection,
+    options?: { fromDefault?: boolean },
+  ): void;
   /** Records that create landed, so a failed Blob transfer can resume honestly. */
   markProvisionalSessionCreated(sessionId: string): void;
   /** Replaces ownerless attachment views with the Session links promotion created. */
@@ -417,7 +428,18 @@ function readProvisionalChatDraft(value: unknown): ProvisionalChatDraft | undefi
     phase,
     ...(skills.length > 0 ? { skills } : {}),
     ...(model === null ? {} : { model }),
+    ...(model !== null && value.modelIsDefault === true ? { modelIsDefault: true as const } : {}),
   };
+}
+
+/** A Draft's launch record with its model set — a pick, or the default frozen at Send. */
+function withProvisionalModel(
+  provisional: ProvisionalChatDraft,
+  model: ModelSelection,
+  fromDefault: boolean,
+): ProvisionalChatDraft {
+  const { modelIsDefault: _previous, ...rest } = provisional;
+  return { ...rest, model, ...(fromDefault ? { modelIsDefault: true as const } : {}) };
 }
 
 function isChatDraft(value: unknown): value is {
@@ -561,7 +583,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
                 },
               };
             }),
-          setProvisionalModel: (sessionId, model) =>
+          setProvisionalModel: (sessionId, model, options) =>
             set((state) => {
               const draft = state.drafts[sessionId];
               if (
@@ -575,7 +597,11 @@ export function createChatDraftsStore(storage?: StateStorage) {
                   ...state.drafts,
                   [sessionId]: {
                     ...draft,
-                    provisional: { ...draft.provisional, model },
+                    provisional: withProvisionalModel(
+                      draft.provisional,
+                      model,
+                      options?.fromDefault === true,
+                    ),
                     touchedAt: Date.now(),
                   },
                 },

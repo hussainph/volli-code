@@ -125,6 +125,13 @@ export interface SessionCreateInput {
     model?: { providerId: string; modelId: string };
     reasoningLevel?: ReasoningLevel;
   };
+  /**
+   * The first message this chat is being born to carry (VC-432), offered to
+   * the decision model that may choose its model. Used only when the create
+   * names no `modelOverride` and a decision model is configured and permitted;
+   * otherwise ignored. Never stored.
+   */
+  autoSelect?: { request: string };
 }
 
 export interface SessionAttachInput {
@@ -772,6 +779,9 @@ export function createSessionRouter() {
             // Same reason, for the same door: a Session's model policy is
             // recorded by the create and never revisited by the attach.
             modelOverride: modelOverrideSchema,
+            // The first message, for automatic model choice (VC-432). The
+            // decision clips what it reads; this bounds what crosses the edge.
+            autoSelect: z.object({ request: z.string().max(200_000) }).optional(),
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -1112,6 +1122,7 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.signal !== undefined) projection.signal = source.signal;
   if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
   if (source.modelTier !== undefined) projection.modelTier = source.modelTier;
+  if (source.modelAuto !== undefined) projection.modelAuto = source.modelAuto;
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;

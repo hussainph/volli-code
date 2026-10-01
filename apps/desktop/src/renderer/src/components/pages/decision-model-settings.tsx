@@ -49,6 +49,8 @@ import {
   cloudOptionKey,
   cloudSetting,
   cloudStatus,
+  autoPickOn,
+  autoPickSetting,
   DECISION_MODES,
   DEFAULT_LOCAL_DECISION_MODEL_ID,
   decisionMode,
@@ -90,6 +92,7 @@ import {
   SelectValue,
 } from "@renderer/components/ui/select";
 import { StatusDot } from "@renderer/components/ui/status-dot";
+import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
@@ -264,6 +267,69 @@ function CloudOptInExtension({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * "Pick a model for new Sessions", one switch (VC-432). Turning it on is the
+ * one moment a cloud opt-in is extended: the dialog says what the purpose
+ * sends, and Allow is what writes. Turning it off writes at once.
+ */
+function AutoPickRow({
+  setting,
+  catalog,
+  busy,
+  testId,
+  onChange,
+}: {
+  setting: Extract<DecisionModelSetting, { kind: "cloud" }>;
+  catalog: readonly DecisionModelCatalogEntry[];
+  busy: boolean;
+  testId: string;
+  onChange(next: DecisionModelSetting): void;
+}) {
+  const [asking, setAsking] = React.useState(false);
+  const label = settingLabel(setting, catalog);
+  return (
+    <PrefRow label="Pick models automatically" testId={testId}>
+      <Switch
+        aria-label="Let the decision model choose a model and reasoning level for each new Session"
+        checked={autoPickOn(setting)}
+        disabled={busy}
+        onCheckedChange={(enabled) => {
+          if (enabled) {
+            setAsking(true);
+            return;
+          }
+          const next = autoPickSetting(setting, false, Date.now());
+          if (next !== null) onChange(next);
+        }}
+      />
+      <AlertDialog open={asking} onOpenChange={(open) => (open ? undefined : setAsking(false))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Let {label} choose models?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {decisionCloudDisclosure(label, ["model.select"])} Switch it off at any time to stop;
+              a Session that is already running never changes model.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setAsking(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid={`${testId}-allow`}
+              onClick={() => {
+                setAsking(false);
+                const next = autoPickSetting(setting, true, Date.now());
+                if (next !== null) onChange(next);
+              }}
+            >
+              Allow
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </PrefRow>
   );
 }
 
@@ -592,6 +658,15 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
               {decisionCloudDisclosure(settingLabel(global, view.catalog), global.optIn.purposes)}
             </p>
           ) : null}
+          {global.kind === "cloud" && draftMode === null ? (
+            <AutoPickRow
+              setting={global}
+              catalog={view.catalog}
+              busy={busy}
+              testId="decision-model-auto-pick"
+              onChange={(next) => void save(next)}
+            />
+          ) : null}
         </>
       ) : null}
 
@@ -692,78 +767,91 @@ export function ProjectDecisionModelRow({
   }
 
   return (
-    <PrefRow
-      label="Decision model"
-      testId="project-decision-model"
-      // The same trust boundary the app-wide page keeps on screen, for the
-      // opt-in that applies here (this project's own, or the one it inherits)
-      // and only for the purposes that opt-in covers.
-      description={
-        effective.kind === "cloud" ? (
-          <span data-testid="project-decision-model-sends">
-            {decisionCloudDisclosure(
-              settingLabel(effective, view.catalog),
-              effective.optIn.purposes,
-            )}
-          </span>
-        ) : undefined
-      }
-    >
-      <OverrideControl
+    <>
+      <PrefRow
         label="Decision model"
-        inheritedValue={settingLabel(view.global, view.catalog)}
-        overridden={override !== null}
-        disabled={busy}
-        onRevert={() => void save(null)}
+        testId="project-decision-model"
+        // The same trust boundary the app-wide page keeps on screen, for the
+        // opt-in that applies here (this project's own, or the one it inherits)
+        // and only for the purposes that opt-in covers.
+        description={
+          effective.kind === "cloud" ? (
+            <span data-testid="project-decision-model-sends">
+              {decisionCloudDisclosure(
+                settingLabel(effective, view.catalog),
+                effective.optIn.purposes,
+              )}
+            </span>
+          ) : undefined
+        }
       >
-        <Select
-          value={optionValue(effective)}
+        <OverrideControl
+          label="Decision model"
+          inheritedValue={settingLabel(view.global, view.catalog)}
+          overridden={override !== null}
           disabled={busy}
-          onValueChange={(value) => {
-            if (value === NONE_VALUE) {
-              void save({ kind: "none" });
-              return;
-            }
-            if (value === LOCAL_VALUE) {
-              // The server Settings names, or the default one.
-              void save(
-                view.global.kind === "local"
-                  ? view.global
-                  : localSetting(DEFAULT_LOCAL_DECISION_URL, ""),
-              );
-              return;
-            }
-            setAsking(entryForKey(view.catalog, value));
-          }}
+          onRevert={() => void save(null)}
         >
-          <SelectTrigger className={CONTROL_W.lg}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE_VALUE}>None</SelectItem>
-            <SelectItem value={LOCAL_VALUE}>
-              {view.global.kind === "local"
-                ? settingLabel(view.global, view.catalog)
-                : "Local server"}
-            </SelectItem>
-            <CloudItems catalog={view.catalog} />
-          </SelectContent>
-        </Select>
-      </OverrideControl>
-      <CloudOptInDialog
-        entry={asking}
-        onCancel={() => setAsking(null)}
-        onAllow={(entry) => {
-          setAsking(null);
-          void save(cloudSetting(entry, Date.now()));
-        }}
-      />
+          <Select
+            value={optionValue(effective)}
+            disabled={busy}
+            onValueChange={(value) => {
+              if (value === NONE_VALUE) {
+                void save({ kind: "none" });
+                return;
+              }
+              if (value === LOCAL_VALUE) {
+                // The server Settings names, or the default one.
+                void save(
+                  view.global.kind === "local"
+                    ? view.global
+                    : localSetting(DEFAULT_LOCAL_DECISION_URL, ""),
+                );
+                return;
+              }
+              setAsking(entryForKey(view.catalog, value));
+            }}
+          >
+            <SelectTrigger className={CONTROL_W.lg}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE_VALUE}>None</SelectItem>
+              <SelectItem value={LOCAL_VALUE}>
+                {view.global.kind === "local"
+                  ? settingLabel(view.global, view.catalog)
+                  : "Local server"}
+              </SelectItem>
+              <CloudItems catalog={view.catalog} />
+            </SelectContent>
+          </Select>
+        </OverrideControl>
+        <CloudOptInDialog
+          entry={asking}
+          onCancel={() => setAsking(null)}
+          onAllow={(entry) => {
+            setAsking(null);
+            void save(cloudSetting(entry, Date.now()));
+          }}
+        />
+      </PrefRow>
       <CloudOptInExtension
         setting={override}
         catalog={view.catalog}
         projectId={project.id}
         onAllow={save}
       />
-    </PrefRow>
+      {override?.kind === "cloud" ? (
+        // Only a project's own cloud model has a switch here; one that inherits
+        // follows the app-wide switch above it.
+        <AutoPickRow
+          setting={override}
+          catalog={view.catalog}
+          busy={busy}
+          testId="project-decision-model-auto-pick"
+          onChange={(next) => void save(next)}
+        />
+      ) : null}
+    </>
   );
 }

@@ -328,6 +328,7 @@ export default function ComposerStatesScratch() {
                 models: MODELS,
                 tiers: TIERS,
                 selection: TICKET_SELECTION,
+                explicit: false,
                 setSelection: () => undefined,
               }}
               launch={{ kind: "kickoff" }}

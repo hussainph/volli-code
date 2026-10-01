@@ -109,6 +109,32 @@ The classify tool is added only to Sessions created while a decision model is
 set. Turning one on does not add the tool to Sessions that already exist.
 Decision calls are counted in each Session's usage and in `volli cost`.
 
+### Picking models automatically
+
+With a **Cloud** decision model, **Pick models automatically** is a switch
+under it, off by default. Turn it on and Volli asks once, saying what is sent:
+the first message of a new chat, a delegated task or an Automation run, along
+with the models you have set up. From then on, a new Session that was not told
+which model to use has one chosen from the models you already set up in
+**Settings → Models** (the Session's default and your Fast, Deep, Ticket
+Sessions and Board chats rows), each at the reasoning level you gave it.
+
+- It applies to a new chat sent with the default model, to `session_start` and
+  `session_delegate` calls that name no model, tier or reasoning level, and to
+  Automations that do not pin a Runtime. A model or tier you or an agent name is
+  never overridden.
+- The choice is made once, when the Session is created. A Session that is
+  already running never changes model.
+- If the decision model is unavailable, slow or unsure, the Session uses your
+  default model, with no message and no delay.
+- The Session's model picker says **Auto-picked** with the model and effort,
+  and lists the alternatives it passed over, so you can switch to one in a
+  press.
+
+Choose a different model or turn the switch off at any time. A project that
+has its own Cloud decision model has its own switch in **Configure →
+Sessions**.
+
 ## Automatic compaction
 
 **Automatic compaction** is on by default. When a Session's conversation nears

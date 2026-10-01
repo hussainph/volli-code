@@ -117,6 +117,53 @@ after five seconds. (A decision that timed out is still recorded; the audit
 wait is not part of the call's own deadline.) `agent.classify` is not audited:
 routine agent calls get usage records, not per-call ledger facts.
 
+### Automatic model choice (`model.select`, VC-432)
+
+Every place Volli picks a model without one being named asks one `choice`
+question over the person's approved model-and-effort pairs: a new chat sent
+with the default model, `session_start` and `session_delegate` with no `model`,
+`tier` or `reasoning`, and an Automation Run whose definition pins no Runtime.
+The pure half is `@volli/shared`'s `model-auto-select.ts` (candidates, the
+question, reading the answer, the confidence threshold); the join to the
+service is `apps/desktop/src/main/decision/auto-select.ts`, reached from
+`createSessions`' `mint`, the one creation path under every door.
+
+- **Candidates.** The configured default for this start (the project pin or
+  the Role's tier, or a subagent's parent anchor) plus the `fast`, `deep`,
+  `ticket` and `global` tiers' models at the levels they were saved with,
+  deduplicated, and held to what Model Access can run right now. `visual` is
+  left out (a decision reads text). Fewer than two pairs means nothing is
+  asked or sent. Each option's criterion says what its effort suits and which
+  tier rows it serves.
+- **Input.** The request text (first message, delegated task or Automation
+  Instructions, clipped to 6,000 characters) and, for a subagent, the tier its
+  parent runs on. Nothing else about the Session is sent.
+- **Fallback.** The configured default is resolved first and stands for every
+  miss: unset, not opted in, timeout (2.5 s for preparation and inference
+  together, the purpose's `timeoutMs`), provider error, malformed answer, or
+  a confidence below `AUTO_SELECT_MIN_CONFIDENCE` (0.5). A miss is silent and, with no decision
+  model, costs one settings read.
+- **Cloud only, behind its own switch.** `model.select` is not in
+  `DECISION_BASE_PURPOSES`, so choosing a cloud model never opts a person into
+  it. **Pick models automatically** (Settings → Models → Decision model, and a
+  project's own cloud row) asks once and extends the opt-in with
+  `withDecisionPurpose`; switching off removes only that purpose. A local
+  decision model is not used for this purpose yet.
+- **Once, at birth.** The choice is made after the Session row exists (so its
+  usage is billed to it, cause `decision`, purpose `model.select`) and before
+  the model is recorded. It is recorded in the `model.select` command and the
+  `model.selected` event as `auto` (confidence and the top alternatives) and
+  projected as `modelAuto`; any later selection clears it. Replayed starts
+  restate their original birth command even after a manual override, and
+  concurrent replays share one decision through its durable write. A Session
+  that is running never has its model changed by this.
+- **Shown.** The model pill reads `Auto · <model>`, and its list leads with
+  "Auto-picked <model> · <effort>" and one button per alternative.
+
+Not built here: per-effort variants of one model beyond what a tier row saves,
+the measurement of auto-picked against default (owner: after release), and a
+local backend.
+
 ### Adding a purpose (VC-28, VC-432)
 
 1. Add the name to `DECISION_PURPOSES` and its row to
@@ -125,13 +172,15 @@ routine agent calls get usage records, not per-call ledger facts.
    - `authority.judge` (VC-28): audited, a timeout of a few seconds, and a
      fallback of "ask the person" — never allow.
    - `model.select` (VC-432): not audited, a short timeout, and a fallback of
-     the configured default.
+     the configured default. Built; see above.
 2. For an audited purpose, wire `recordDecision` in `desktop.ts` to a durable
    Session fact.
 3. Call `port.decide({ purpose, … })` with a fallback. Existing cloud opt-ins
    do not cover the new purpose, so it is refused as `not-opted-in` until the
-   person opts in again. Settings does not yet ask for that on its own; it
-   moves to the ticket that adds the purpose (VC-28).
+   person opts in again. A purpose outside `DECISION_BASE_PURPOSES` is asked
+   for by its own switch, once, which extends the opt-in
+   (`withDecisionPurpose`); `model.select` is the first. VC-28 can add its row
+   the same way.
 
 ## The `classify` tool
 

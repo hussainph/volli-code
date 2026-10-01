@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { Automation, BlobLinkView, Project } from "@volli/shared";
+import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
@@ -22,7 +22,13 @@ const mocks = vi.hoisted(() => ({
     clear: () => {},
     reset: () => {},
   },
-  run: { models: [], tiers: [], selection: null, setSelection: () => {} },
+  run: {
+    models: [],
+    tiers: [],
+    selection: null as ModelSelection | null,
+    explicit: false,
+    setSelection: () => {},
+  },
   branches: { status: "loading" },
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
@@ -106,6 +112,8 @@ beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.clearAllMocks();
   mocks.attachments.attachments = [];
+  mocks.run.selection = null;
+  mocks.run.explicit = false;
   mocks.offer.ready = true;
   mocks.offer.groups = [
     { status: "doing", label: "Doing", current: false, automations: [automation] },
@@ -155,6 +163,24 @@ it("sends the default primary action through kickoff, by click and by ⇧⌘Ente
   expect(runKickoff).toHaveBeenCalledTimes(2);
   expect(runPlainCreate).not.toHaveBeenCalled();
 });
+it.each([false, true])(
+  "only sends a model when the person chose it (explicit=%s)",
+  async (explicit) => {
+    const model: ModelSelection = {
+      providerId: "anthropic",
+      modelId: "opus",
+      reasoningLevel: "high",
+    };
+    mocks.run.selection = model;
+    mocks.run.explicit = explicit;
+    await chord(true);
+    expect(runKickoff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      createMore: false,
+      ...(explicit ? { model } : {}),
+    });
+  },
+);
+
 it("gives plain creation its own button and the unmodified chord", async () => {
   await click("Create");
   await chord();

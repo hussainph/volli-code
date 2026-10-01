@@ -6,8 +6,9 @@
  */
 
 import {
-  DECISION_PURPOSES,
+  DECISION_BASE_PURPOSES,
   DEFAULT_LOCAL_DECISION_URL,
+  withDecisionPurpose,
   type DecisionModelCatalogEntry,
   type DecisionModelSetting,
 } from "@volli/shared";
@@ -111,8 +112,10 @@ export function catalogGroups(catalog: readonly DecisionModelCatalogEntry[]): re
 }
 
 /**
- * The cloud setting a person's opt-in writes, for every purpose this build
- * has. `acceptedAt` is stamped again by main; this value is the renderer's
+ * The cloud setting a person's opt-in writes: the purposes the first dialog
+ * names. A feature with its own switch (`model.select`) is not among them and
+ * extends the opt-in when that switch is turned on ({@link autoPickSetting}).
+ * `acceptedAt` is stamped again by main; this value is the renderer's
  * statement that the person pressed Allow.
  */
 export function cloudSetting(
@@ -123,7 +126,7 @@ export function cloudSetting(
     kind: "cloud",
     providerId: entry.providerId,
     modelId: entry.modelId,
-    optIn: { acceptedAt: now, purposes: [...DECISION_PURPOSES] },
+    optIn: { acceptedAt: now, purposes: [...DECISION_BASE_PURPOSES] },
   };
 }
 
@@ -151,15 +154,27 @@ export function extendAuthorityCloudOptIn(
   setting: Extract<DecisionModelSetting, { kind: "cloud" }>,
   now: number,
 ): DecisionModelSetting {
-  return {
-    ...setting,
-    optIn: {
-      acceptedAt: now,
-      purposes: DECISION_PURPOSES.filter(
-        (purpose) => purpose === "authority.judge" || setting.optIn.purposes.includes(purpose),
-      ),
-    },
-  };
+  return withDecisionPurpose(setting, "authority.judge", true, now)!;
+}
+
+/** Whether a setting lets a decision model choose models for new Sessions. */
+export function autoPickOn(setting: DecisionModelSetting): boolean {
+  return setting.kind === "cloud" && setting.optIn.purposes.includes("model.select");
+}
+
+/**
+ * The cloud setting with automatic model choice switched on or off, or null
+ * when it is not a cloud setting. Switching on is what extends the opt-in, so
+ * the caller asks the person first.
+ */
+export function autoPickSetting(
+  setting: DecisionModelSetting,
+  enabled: boolean,
+  now: number,
+): DecisionModelSetting | null {
+  return setting.kind === "cloud"
+    ? withDecisionPurpose(setting, "model.select", enabled, now)
+    : null;
 }
 
 /** A local setting from what the fields hold, with the defaults filling blanks. */

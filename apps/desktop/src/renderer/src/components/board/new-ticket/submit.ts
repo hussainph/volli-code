@@ -96,6 +96,8 @@ export interface KickoffChat {
    * configuration state it is.
    */
   model?: ModelSelection;
+  /** Actual task text, never the generic opening turn. */
+  autoSelect?: { request: string };
 }
 
 /** The effectful callbacks the orchestration drives; the React layer wires these to the stores. */
@@ -221,6 +223,7 @@ export async function runKickoff(
     title: autoTitleFromKickoff(DEFAULT_KICKOFF_MESSAGE, displayId),
     refineTitle: true,
     message: DEFAULT_KICKOFF_MESSAGE,
+    autoSelect: { request: [fields.title.trim(), fields.body.trim()].filter(Boolean).join("\n\n") },
     ...(opts.model === undefined ? {} : { model: opts.model }),
   };
 

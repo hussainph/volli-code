@@ -608,6 +608,14 @@ describe("delegate — the child is a real Session, and the parent keeps working
     ]);
   });
 
+  it("offers the task to an automatic model choice (VC-432)", async () => {
+    const h = harness();
+
+    await h.delegate("tc-task", "Find the flaky test");
+
+    expect(h.starts[0]?.autoSelect).toEqual({ request: "Find the flaky test" });
+  });
+
   it("does not cap live children, and replays one tool call as one child, one watcher, one kickoff id", async () => {
     const h = harness();
     for (let index = 0; index < 5; index += 1) {

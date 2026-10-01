@@ -49,8 +49,20 @@ import { classifyWebAddress } from "./web-address-policy";
  * timeout and whether it needs an audit trail — and nothing else in the port
  * changes. VC-28 adds `authority.judge` (audited); VC-432 adds `model.select`.
  */
-export const DECISION_PURPOSES = ["agent.classify", "authority.judge"] as const;
+export const DECISION_PURPOSES = ["agent.classify", "authority.judge", "model.select"] as const;
 export type DecisionPurpose = (typeof DECISION_PURPOSES)[number];
+
+/**
+ * The purposes a cloud model's first opt-in covers. A purpose outside this set
+ * is a feature a person switches on by itself (`model.select`, VC-432): choosing
+ * a cloud decision model must not also start sending every new chat's first
+ * message to it, so the opt-in dialog names only these and the feature's own
+ * switch extends the opt-in once, when it is turned on.
+ */
+export const DECISION_BASE_PURPOSES: readonly DecisionPurpose[] = Object.freeze([
+  "agent.classify",
+  "authority.judge",
+]);
 
 export function isDecisionPurpose(value: unknown): value is DecisionPurpose {
   return typeof value === "string" && (DECISION_PURPOSES as readonly string[]).includes(value);
@@ -94,6 +106,15 @@ export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionP
       sends: "the user's messages and the bare tool call, with secrets redacted",
       timeoutMs: 3_000,
       audit: true,
+    }),
+    // A new Session waits on this one, so it gets seconds, not the tool's
+    // half minute; past it the Session starts on its configured default.
+    "model.select": Object.freeze({
+      label: "Automatic model choice",
+      sends:
+        "the first message of a new chat, a delegated task or an Automation run, with the models you have set up",
+      timeoutMs: 2_500,
+      audit: false,
     }),
   });
 
@@ -250,10 +271,32 @@ export function resolveDecisionModelSetting(
   return project ?? global;
 }
 
+/**
+ * A cloud setting with one purpose switched on or off. Turning a purpose on is
+ * the person's act, so the opt-in is re-stamped (main re-stamps it again with
+ * its own clock); turning one off keeps the rest, and refuses to leave an
+ * opt-in that covers nothing, which would not be a setting at all.
+ */
+export function withDecisionPurpose(
+  setting: Extract<DecisionModelSetting, { kind: "cloud" }>,
+  purpose: DecisionPurpose,
+  enabled: boolean,
+  now: number,
+): Extract<DecisionModelSetting, { kind: "cloud" }> | null {
+  const next = DECISION_PURPOSES.filter((candidate) =>
+    candidate === purpose ? enabled : setting.optIn.purposes.includes(candidate),
+  );
+  if (next.length === 0) return null;
+  return {
+    ...setting,
+    optIn: { acceptedAt: enabled ? now : setting.optIn.acceptedAt, purposes: next },
+  };
+}
+
 /** What a cloud model's opt-in says, read out before a person agrees to it. */
 export function decisionCloudDisclosure(
   modelLabel: string,
-  purposes: readonly DecisionPurpose[] = DECISION_PURPOSES,
+  purposes: readonly DecisionPurpose[] = DECISION_BASE_PURPOSES,
 ): string {
   const clauses = purposes.map((purpose) => DECISION_PURPOSE_POLICY[purpose].sends);
   return `${modelLabel} runs off this Mac. Using it sends ${clauses.join("; and ")}.`;
@@ -348,12 +391,18 @@ export function decisionTargetFor(
         miss: decisionMiss("unset", "No decision model is configured (Settings → Models)."),
       };
     case "local":
-      // Authority review uses Pi's cloud classifier only (VC-28). A local
-      // setting still serves agent.classify; it cannot silently become a judge.
+      // These host-policy purposes are cloud-only. Local settings still
+      // serve agent.classify without silently becoming a judge or selector.
       if (purpose === "authority.judge") {
         return {
           ok: false,
           miss: decisionMiss("unset", "Authority review needs a cloud decision model."),
+        };
+      }
+      if (purpose === "model.select") {
+        return {
+          ok: false,
+          miss: decisionMiss("unset", "Automatic model choice requires a cloud decision model."),
         };
       }
       return {

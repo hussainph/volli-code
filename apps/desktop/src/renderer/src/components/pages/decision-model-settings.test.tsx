@@ -329,6 +329,10 @@ async function unmount(): Promise<void> {
   container = null;
 }
 
+function disclosure(): string | null | undefined {
+  return document.querySelector('[data-testid="decision-model-sends"]')?.textContent;
+}
+
 function extensionDialog(): Element | null {
   return document.querySelector('[role="alertdialog"]');
 }
@@ -363,6 +367,32 @@ describe("extending an existing cloud opt-in", () => {
     await unmount();
     await render(<DecisionModelSettings onSignIn={() => undefined} />);
     expect(extensionDialog()).toBeNull();
+  });
+
+  it("extends authority without removing model selection and discloses only opted-in purposes", async () => {
+    const { set } = stubApi({
+      ...LEGACY_CLOUD,
+      optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] },
+    });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(disclosure()).toContain("first message of a new chat");
+    expect(disclosure()).not.toContain("bare tool call");
+    await act(async () => button("Allow tool-call review").click());
+    expect(set).toHaveBeenLastCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        optIn: {
+          acceptedAt: expect.any(Number),
+          purposes: ["agent.classify", "authority.judge", "model.select"],
+        },
+      }),
+    );
+    expect(disclosure()).toContain("bare tool call");
+    expect(disclosure()).toContain("first message of a new chat");
+    await unmount();
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+    expect(switchEl().getAttribute("aria-checked")).toBe("true");
   });
 
   it("persists a decline without changing the opt-in, and does not nag on remount", async () => {
@@ -469,5 +499,114 @@ describe("the cloud opt-in", () => {
     expect(onAllow).not.toHaveBeenCalled();
     await act(async () => button("Allow").click());
     expect(onAllow).toHaveBeenCalledWith(ZEN);
+  });
+});
+
+const switchEl = (): HTMLButtonElement =>
+  document.querySelector<HTMLButtonElement>('[data-testid="decision-model-auto-pick"] button')!;
+
+describe("Pick models automatically (VC-432)", () => {
+  const cloud = {
+    kind: "cloud",
+    providerId: "opencode",
+    modelId: "jev-1.13-free",
+  } as const;
+
+  it("is off by default, and turning it on asks once before extending the opt-in", async () => {
+    const { set } = stubApi({ ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify"] } });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(switchEl().getAttribute("aria-checked")).toBe("false");
+    await act(async () => switchEl().click());
+    // Asked, and nothing written yet; the dialog says what this purpose sends.
+    expect(set).not.toHaveBeenCalled();
+    expect(document.body.textContent).toMatch(/choose models\?/);
+    expect(document.body.textContent).toMatch(/first message of a new chat/);
+    await act(async () => button("Cancel").click());
+    expect(set).not.toHaveBeenCalled();
+
+    await act(async () => switchEl().click());
+    await act(async () => button("Allow").click());
+    expect(set).toHaveBeenCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        kind: "cloud",
+        optIn: expect.objectContaining({ purposes: ["agent.classify", "model.select"] }),
+      }),
+    );
+  });
+
+  it("extends and withdraws model selection without changing authority consent", async () => {
+    const { set } = stubApi(cloudSetting(ZEN, 1));
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(disclosure()).toContain("bare tool call");
+    expect(disclosure()).not.toContain("first message of a new chat");
+    await act(async () => switchEl().click());
+    expect(extensionDialog()?.textContent).toContain("first message of a new chat");
+    expect(extensionDialog()?.textContent).not.toContain("bare tool call");
+    expect(set).not.toHaveBeenCalled();
+    await act(async () => button("Allow").click());
+    expect(set).toHaveBeenLastCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        optIn: {
+          acceptedAt: expect.any(Number),
+          purposes: ["agent.classify", "authority.judge", "model.select"],
+        },
+      }),
+    );
+    expect(disclosure()).toContain("first message of a new chat");
+    await act(async () => switchEl().click());
+    expect(set).toHaveBeenLastCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        optIn: expect.objectContaining({ purposes: ["agent.classify", "authority.judge"] }),
+      }),
+    );
+    expect(disclosure()).toContain("bare tool call");
+    expect(disclosure()).not.toContain("first message of a new chat");
+  });
+
+  it("turns off at once, keeping the rest of the opt-in", async () => {
+    const { set } = stubApi({
+      ...cloud,
+      optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] },
+    });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(switchEl().getAttribute("aria-checked")).toBe("true");
+    await act(async () => switchEl().click());
+    expect(set).toHaveBeenCalledWith(
+      { scope: "global" },
+      expect.objectContaining({ optIn: expect.objectContaining({ purposes: ["agent.classify"] }) }),
+    );
+  });
+
+  it("has no switch without a cloud model", async () => {
+    stubApi({ kind: "none" });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(document.querySelector('[data-testid="decision-model-auto-pick"]')).toBeNull();
+  });
+
+  it("is on a project's own cloud model, and absent while it inherits", async () => {
+    const project = { id: "project-1" } as Project;
+    const { set } = stubApi(
+      { ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify"] } },
+      { ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] } },
+    );
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    const own = document.querySelector<HTMLButtonElement>(
+      '[data-testid="project-decision-model-auto-pick"] button',
+    )!;
+    expect(own.getAttribute("aria-checked")).toBe("true");
+    await act(async () => own.click());
+    expect(set).toHaveBeenCalledWith(
+      { scope: "project", projectId: "project-1" },
+      expect.objectContaining({ optIn: expect.objectContaining({ purposes: ["agent.classify"] }) }),
+    );
+    await act(async () => root?.unmount());
+    container?.remove();
+
+    stubApi({ ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] } });
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(document.querySelector('[data-testid="project-decision-model-auto-pick"]')).toBeNull();
   });
 });
