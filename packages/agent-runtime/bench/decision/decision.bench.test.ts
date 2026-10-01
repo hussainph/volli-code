@@ -20,7 +20,7 @@ import {
 } from "../../src/decision/fixture.test-support";
 import { piDecisionClassifier } from "../../src/pi/classifier";
 import { decisionTable } from "./report";
-import { chatPrompt, runClassify } from "./runner";
+import { chatPrompt, runClassify, scoreBatchLabels } from "./runner";
 import { decisionTasks } from "./tasks";
 
 describe("the decision benchmark harness", () => {
@@ -96,5 +96,70 @@ describe("the decision benchmark harness", () => {
     const prompt = chatPrompt(triage!, triage!.items[0]!);
     expect(prompt).toContain('"message"');
     expect(prompt).toContain("billing:");
+  });
+
+  it("scores a chat-batch reply by item index, an array reply positionally", () => {
+    const [, triage] = decisionTasks({ browser: 0, triage: 4, control: 0 });
+    const want = triage!.items.map((item) => item.expected["category"]);
+    expect(want).toHaveLength(4);
+    // Object reply, the shape the prompt asks for: every item scored by its
+    // own index, all correct.
+    expect(
+      scoreBatchLabels(
+        triage!,
+        Object.fromEntries(want.map((category, index) => [String(index), category])),
+      ),
+    ).toEqual({ correct: 4, failed: 0 });
+    // A wrong label at 0 and a missing index at 1 fail alone: the later
+    // labels are still read from their own indices, not shifted. The wrong
+    // label is an incorrect answer, not a failure; only the missing index
+    // failed.
+    expect(
+      scoreBatchLabels(triage!, { "0": "not-a-category", "2": want[2], "3": want[3] }),
+    ).toEqual({
+      correct: 2,
+      failed: 1,
+    });
+    // Array reply, the older shape: still accepted, scored positionally.
+    expect(scoreBatchLabels(triage!, want)).toEqual({ correct: 4, failed: 0 });
+    // A short array fails the items it leaves unlabelled.
+    expect(scoreBatchLabels(triage!, [want[0]])).toEqual({ correct: 1, failed: 3 });
+    // No labels at all: every item failed, none scored.
+    expect(scoreBatchLabels(triage!, undefined)).toEqual({ correct: 0, failed: 4 });
+  });
+
+  it("records no latency for a decision that failed, and no valid trials when all of them did", async () => {
+    const [browser] = decisionTasks({ browser: 7, triage: 0, control: 0 });
+    const failing = createDecisionService({
+      resolveSetting: () => ({
+        kind: "cloud",
+        providerId: FIXTURE_PROVIDER,
+        modelId: FIXTURE_MODEL,
+        optIn: { acceptedAt: 1, purposes: ["agent.classify"] },
+      }),
+      classifier: piDecisionClassifier(fixtureModels({ answer: () => ({ stopReason: "error" }) })),
+    });
+    const run = await runClassify(browser!, {
+      port: failing,
+      model: `${FIXTURE_PROVIDER}/${FIXTURE_MODEL}`,
+      concurrency: 4,
+      usage: [],
+    });
+    // Every decision came back a miss: all failed, none is a latency.
+    expect(run).toMatchObject({ decisions: 7, failed: 7, correct: 0 });
+    expect(run.latencies).toHaveLength(0);
+    // And the report says so: the medians are emptied to "—", and the row
+    // reads 1 trial, 0 valid.
+    const row = decisionTable([run])
+      .split("\n")
+      .find((line) => line.includes("| classify |"));
+    const cells = row!
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell) => cell.length > 0);
+    expect(cells[6]).toBe("—"); // p50/decision
+    expect(cells[7]).toBe("—"); // wall
+    expect(cells.at(-2)).toBe("1"); // trials
+    expect(cells.at(-1)).toBe("0"); // valid trials
   });
 });

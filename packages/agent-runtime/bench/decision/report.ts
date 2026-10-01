@@ -21,13 +21,25 @@ function count(value: number): string {
   return Number.isFinite(value) ? Math.round(value).toLocaleString("en-US") : "—";
 }
 
+function pct(value: number): string {
+  return Number.isFinite(value) ? `${value.toFixed(1)}%` : "—";
+}
+
 function usd(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
   if (value === 0) return "$0";
   return value < 0.01 ? `$${value.toFixed(5)}` : `$${value.toFixed(4)}`;
 }
 
-/** One row per task × arm: the medians of every trial's totals. */
+/**
+ * One row per task × arm: the medians of every trial's totals.
+ *
+ * A trial whose every decision failed measured error round trips, not
+ * decisions: it stays in `trials` and the `failed` median, but is left out of
+ * the medians for correct, p50, wall, tokens and cost. The `valid trials`
+ * column counts the trials those medians rest on — a trial with at least one
+ * answered decision.
+ */
 export function decisionTable(runs: readonly ArmRun[]): string {
   const groups = new Map<string, ArmRun[]>();
   for (const run of runs) {
@@ -38,10 +50,11 @@ export function decisionTable(runs: readonly ArmRun[]): string {
   }
   const rows = [...groups.values()].map((trials) => {
     const first = trials[0]!;
-    const accuracy = median(trials.map((trial) => (trial.correct / trial.asked) * 100));
+    const valid = trials.filter((trial) => trial.decisions - trial.failed > 0);
+    const accuracy = median(valid.map((trial) => (trial.correct / trial.asked) * 100));
     const failed = median(trials.map((trial) => trial.failed));
-    const perDecision = median(trials.flatMap((trial) => trial.latencies));
-    const costs = trials.map((trial) => trial.costUsd);
+    const perDecision = median(valid.flatMap((trial) => trial.latencies));
+    const costs = valid.map((trial) => trial.costUsd);
     const cost = costs.some((value) => value === null)
       ? null
       : median(costs.map((value) => value as number));
@@ -51,14 +64,15 @@ export function decisionTable(runs: readonly ArmRun[]): string {
       first.arm,
       first.model,
       String(first.decisions),
-      `${accuracy.toFixed(1)}%`,
+      pct(accuracy),
       count(failed),
       first.arm === "chat-batch" ? "—" : ms(perDecision),
-      ms(median(trials.map((trial) => trial.wallMs))),
-      localTokens ? "n/a" : count(median(trials.map((trial) => trial.inputTokens))),
-      localTokens ? "n/a" : count(median(trials.map((trial) => trial.outputTokens))),
+      ms(median(valid.map((trial) => trial.wallMs))),
+      localTokens ? "n/a" : count(median(valid.map((trial) => trial.inputTokens))),
+      localTokens ? "n/a" : count(median(valid.map((trial) => trial.outputTokens))),
       usd(cost),
       String(trials.length),
+      String(valid.length),
     ];
   });
   return table(
@@ -75,6 +89,7 @@ export function decisionTable(runs: readonly ArmRun[]): string {
       "output tok",
       "cost",
       "trials",
+      "valid trials",
     ],
     rows,
   );

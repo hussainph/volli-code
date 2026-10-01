@@ -43,7 +43,7 @@ export interface ArmRun {
   asked: number;
   /** Decisions that came back with no usable answer (error, timeout, unparsable). */
   failed: number;
-  /** Per-decision latency, ms. Empty for the batch arm, which has one call. */
+  /** Per-decision latency in ms, answered decisions only: an error round trip is not a decision. Empty for the batch arm, which has one call. */
   latencies: number[];
   wallMs: number;
   inputTokens: number;
@@ -189,11 +189,17 @@ export async function runChat(task: DecisionTask, options: ChatOptions): Promise
       },
       options.reasoning === undefined ? {} : { reasoning: options.reasoning },
     );
-    latencies.push(performance.now() - begun);
     meterChat(meter, reply.usage);
     const answers = reply.stopReason === "error" ? null : firstJson(textOf(reply));
-    if (answers === null) failed += 1;
-    else correct += score(item.expected, answers);
+    if (answers === null) {
+      failed += 1;
+    } else {
+      // A decision that came back with no usable answer is a failure, not a
+      // latency: an error round trip in `latencies` would put the median on
+      // the cheapest way to fail.
+      latencies.push(performance.now() - begun);
+      correct += score(item.expected, answers);
+    }
   });
   return {
     task: task.id,
@@ -209,6 +215,34 @@ export async function runChat(task: DecisionTask, options: ChatOptions): Promise
   };
 }
 
+/**
+ * Scores a chat-batch reply's `labels` against a task's known answers.
+ *
+ * The reply is asked for an object keyed by item index — one missing label
+ * fails only its own item, instead of shifting every later one onto the
+ * wrong answers. An array reply, the shape an earlier prompt asked for, is
+ * still accepted and scored positionally; a short array or a missing index
+ * fails the item it leaves unlabelled.
+ */
+export function scoreBatchLabels(
+  task: DecisionTask,
+  labels: unknown,
+): { correct: number; failed: number } {
+  const id = Object.keys(task.questions)[0]!;
+  let correct = 0;
+  let failed = 0;
+  task.items.forEach((item, index) => {
+    const label = Array.isArray(labels)
+      ? labels[index]
+      : typeof labels === "object" && labels !== null
+        ? (labels as Record<string, unknown>)[String(index)]
+        : undefined;
+    if (label === undefined) failed += 1;
+    else correct += score(item.expected, { [id]: label });
+  });
+  return { correct, failed };
+}
+
 /** Arm `chat-batch`: every item labelled in one chat call. */
 export async function runChatBatch(task: DecisionTask, options: ChatOptions): Promise<ArmRun> {
   const meter: Meter = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
@@ -220,7 +254,9 @@ export async function runChatBatch(task: DecisionTask, options: ChatOptions): Pr
     "Question, for every item:",
     describeQuestion(id, question),
     "",
-    `Reply as {"labels": [...]} with one ${question.type === "bool" ? "true|false" : "key"} per item, in item order.`,
+    `Reply as {"labels": {"0": "<key>", "1": "<key>", ...}} with one ${
+      question.type === "bool" ? "true|false" : "key"
+    } per item, keyed by item index.`,
   ].join("\n");
   const started = performance.now();
   const reply = await options.models.completeSimple(
@@ -234,13 +270,7 @@ export async function runChatBatch(task: DecisionTask, options: ChatOptions): Pr
   const wallMs = performance.now() - started;
   meterChat(meter, reply.usage);
   const labels = firstJson(textOf(reply))?.["labels"];
-  let correct = 0;
-  let failed = 0;
-  task.items.forEach((item, index) => {
-    const label = Array.isArray(labels) ? labels[index] : undefined;
-    if (label === undefined) failed += 1;
-    else correct += score(item.expected, { [id]: label });
-  });
+  const { correct, failed } = scoreBatchLabels(task, labels);
   return {
     task: task.id,
     arm: "chat-batch",
@@ -311,11 +341,13 @@ export async function runClassify(task: DecisionTask, options: ClassifyOptions):
       use: (answered) => ({ answered }),
       fallback: (miss) => ({ miss }),
     });
-    latencies.push(performance.now() - begun);
+    // The same rule as the chat arm: a missed decision is a failure, and no
+    // latency, or the median would sit on the fallback's fast path.
     if ("miss" in outcome) {
       failed += 1;
       return;
     }
+    latencies.push(performance.now() - begun);
     const plain = Object.fromEntries(
       Object.entries(outcome.answered.answers).map(([id, answer]) => [
         id,
