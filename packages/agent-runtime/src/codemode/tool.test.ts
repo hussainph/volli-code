@@ -414,6 +414,93 @@ describe("scheduling", () => {
     expect(trace).toEqual(["write start, 0 reads active"]);
   });
 
+  it("judges a queued read only after an earlier exclusive mutation finishes", async () => {
+    const trace: string[] = [];
+    let workspacePath = true;
+    const queued = Promise.withResolvers<void>();
+    const write = textTool("write", async () => {
+      trace.push("write started");
+      // Hold the mutation until the later read has reached the host, then
+      // yield so it can queue. Its gate must not see the old workspace path.
+      await queued.promise;
+      await sleep(0);
+      workspacePath = false;
+      trace.push("write finished");
+      return "retargeted the path outside the workspace";
+    });
+    const read = textTool("read", () => {
+      trace.push("read executed");
+      return "must not be read";
+    });
+    const gate: NonNullable<AgentLoopConfig["beforeToolCall"]> = async ({ toolCall }) => {
+      trace.push(`judge ${toolCall.name}: ${workspacePath ? "workspace" : "outside"}`);
+      return toolCall.name === "read" && !workspacePath
+        ? { block: true, reason: "path is now outside the workspace" }
+        : undefined;
+    };
+    const f = fixture({ tools: [write, read], gate });
+    const observe = f.host.observe;
+    f.host.observe = async (event) => {
+      await observe(event);
+      if (event.type === "tool_execution_start" && event.toolName === "read") queued.resolve();
+    };
+    const { text, details, isError } = await run(
+      f,
+      `return (await Promise.allSettled([tools.write({}), tools.read({ path: "link/file" })]))
+        .map((one) => one.status === "fulfilled" ? "ok" : one.reason.message);`,
+    );
+    expect(trace).toEqual([
+      "judge write: workspace",
+      "write started",
+      "write finished",
+      "judge read: outside",
+    ]);
+    expect(isError).toBe(false);
+    expect(text).toContain('Returned: ["ok","path is now outside the workspace"]');
+    expect(details.nestedCalls.calls.map((call) => call.status)).toEqual(["ok", "error"]);
+  });
+
+  it("propagates a failed judgment without executing or fabricating a cancellation", async () => {
+    let executed = 0;
+    const f = fixture({
+      tools: [textTool("write", () => String(++executed))],
+      gate: async () => {
+        throw new Error("judgment failed before approval");
+      },
+    });
+    const { text, details, isError } = await run(f, "return await tools.write({});");
+    expect(executed).toBe(0);
+    expect(isError).toBe(true);
+    expect(text).toContain("judgment failed before approval");
+    expect(details.error).toBe("script");
+    expect(details.nestedCalls.calls[0]?.status).toBe("error");
+  });
+
+  it("does not disguise an unexpected host failure as slot-admission cancellation", async () => {
+    let executed = 0;
+    const tool = textTool("write", () => String(++executed));
+    const f = fixture({ tools: [tool] });
+    const observe = f.host.observe;
+    f.host.observe = async (event) => {
+      await observe(event);
+      if (event.type === "tool_execution_start") {
+        // Host metadata disappears after inventory and activity were built,
+        // before Pi can prepare the call. This is not an aborted signal.
+        Object.defineProperty(tool, "name", {
+          get: () => {
+            throw new Error("host tool metadata unavailable");
+          },
+        });
+      }
+    };
+    const { text, details, isError } = await run(f, "return await tools.write({});");
+    expect(executed).toBe(0);
+    expect(isError).toBe(true);
+    expect(text).toContain("host tool metadata unavailable");
+    expect(text).not.toContain("Operation aborted");
+    expect(details.nestedCalls.calls[0]?.status).toBe("unfinished");
+  });
+
   it("makes a partial failure explicit and keeps the rest", async () => {
     const f = fixture({
       tools: [
@@ -793,7 +880,14 @@ describe("cancellation", () => {
       seen.push("write ran");
       return "wrote";
     });
-    const f = fixture({ tools: [slow, write] });
+    const judged: string[] = [];
+    const f = fixture({
+      tools: [slow, write],
+      gate: async ({ toolCall }) => {
+        judged.push(toolCall.name);
+        return undefined;
+      },
+    });
     const { details } = await run(
       f,
       "await Promise.allSettled([tools.bash({ command: 'sleep 30' }), tools.write({})]); return 1;",
@@ -801,7 +895,18 @@ describe("cancellation", () => {
       controller.signal,
     );
     expect(seen).toEqual(["bash started", "bash aborted"]);
+    expect(judged).toEqual(["bash"]);
     expect(details.error).toBe("aborted");
+    expect(details.nestedCalls.calls.map((call) => call.status)).toEqual([
+      "unfinished",
+      "unfinished",
+    ]);
+    expect(details.nestedCalls.complete).toBe(false);
+    // Cancellation before admission still closes every activity it opened.
+    expect(f.events.filter((event) => event.type === "tool_execution_start")).toHaveLength(2);
+    const ends = f.events.filter((event) => event.type === "tool_execution_end");
+    expect(ends).toHaveLength(2);
+    expect(ends.every((event) => event.isError)).toBe(true);
   });
 
   it("runs nothing for a call whose turn was already cancelled", async () => {

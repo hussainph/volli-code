@@ -20,6 +20,7 @@ import {
   evaluate,
   violations as allViolations,
   type PolicyViolation,
+  isOverridableAuthorityRule,
   type AuthorityDenialCause,
   type AuthoritySnapshot,
   type PolicyToolCall,
@@ -39,6 +40,27 @@ export type AuthorityVerdict =
 
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
 
+/** Hard denies precede the Tier-1/2 skips; shell chains remain one action. */
+export function authorityClassifierEligible(input: {
+  tool: string;
+  args: unknown;
+  workspacePath: string;
+  verdict: AuthorityVerdict;
+}): boolean {
+  if (input.verdict.outcome === "deny" && !isOverridableAuthorityRule(input.verdict.cause))
+    return false;
+  if (input.tool === "read") return false;
+  if (input.tool !== "edit" && input.tool !== "write") return true;
+  try {
+    const root = resolveWorkspaceRoot(input.workspacePath);
+    const call = normalizeToolCall({ ...input, workspacePath: root });
+    return !call.writes.every((path) => path === root || path.startsWith(`${root}/`));
+  } catch {
+    // A malformed/unresolvable call cannot acquire a deterministic skip.
+    return true;
+  }
+}
+
 /** What the Session's authority makes of one call, before it runs. */
 export function authorityVerdict(input: {
   tool: string;
@@ -53,6 +75,8 @@ export function authorityVerdict(input: {
   readableRoots?: readonly string[];
   /** Enumerate objections for approval cards; absent preserves the main gate. */
   protection?: boolean;
+  /** Per-call review must not let an overridable rule mask a hard deny. */
+  hardDeniesFirst?: boolean;
 }): AuthorityVerdict {
   let workspacePath: string;
   let call: PolicyToolCall;
@@ -69,10 +93,15 @@ export function authorityVerdict(input: {
   const readableRoots = (input.readableRoots ?? []).flatMap(
     (root) => resolveReadableRoot(root) ?? [],
   );
-  const decision = evaluate(call, input.authority, {
-    workspacePath,
-    ...(readableRoots.length === 0 ? {} : { readableRoots }),
-  });
+  const decision = evaluate(
+    call,
+    input.authority,
+    {
+      workspacePath,
+      ...(readableRoots.length === 0 ? {} : { readableRoots }),
+    },
+    { hardDeniesFirst: input.hardDeniesFirst },
+  );
   if (decision.outcome === "allow") return ALLOW;
   return {
     outcome: "deny",

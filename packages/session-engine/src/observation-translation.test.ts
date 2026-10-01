@@ -1018,6 +1018,38 @@ describe("live observation translation", () => {
     expect(sink.observations).toEqual([]);
   });
 
+  it("translates classifier reviews without touching overlays and propagates write failures", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const review: Extract<RuntimeObservation, { kind: "authority-review" }> = {
+      kind: "authority-review",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow",
+      authoriser: "classifier",
+      wouldFlag: true,
+      reason: "Outside the request.",
+      category: "external",
+      answers: null,
+      missReason: null,
+      thresholds: { allow: 0.95, flag: 0.05 },
+    };
+    await translator.translate(review, sink.emit);
+    expect(sink.observations).toEqual([
+      {
+        ...review,
+        kind: "authority.reviewed",
+        id: "pi:authority-review:attachment-1:1",
+        occurredAt: 1000,
+      },
+    ]);
+    // The Session ledger, not executor-native recovery, replays verdicts.
+    expect(translator.replay(review)).toEqual([]);
+    sink.failNext();
+    await expect(translator.translate(review, sink.emit)).rejects.toThrow("sink unavailable");
+  });
+
   it("translates a denied authority observation into a durable authority.denied fact", async () => {
     const { translate, sink } = composition();
 

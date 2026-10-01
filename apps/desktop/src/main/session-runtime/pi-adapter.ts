@@ -534,6 +534,9 @@ export interface PiAdapterOptions {
    * cannot attach — the record promised a tool this launch cannot answer.
    */
   resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
+  /** Authority review is host policy, not an agent tool capability. */
+  decisions?: import("@volli/shared").DecisionPort;
+  authorityReason?: SessionRuntimeSpec["authorityReason"];
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -900,6 +903,8 @@ function piNativeAdapter(
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
         }),
+        decisions: options.decisions,
+        authorityReason: options.authorityReason,
         classify: options.resolveClassifyPort?.({
           sessionId: spec.sessionId,
           projectId: context.projectId,
@@ -1004,6 +1009,8 @@ interface PiBindingOptions {
   shell: DesktopShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
+  decisions: import("@volli/shared").DecisionPort | undefined;
+  authorityReason: SessionRuntimeSpec["authorityReason"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -1026,6 +1033,8 @@ class PiBinding implements BindingHandle {
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
+  readonly #decisions: import("@volli/shared").DecisionPort | undefined;
+  readonly #authorityReason: SessionRuntimeSpec["authorityReason"];
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1063,6 +1072,8 @@ class PiBinding implements BindingHandle {
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
+    this.#decisions = options.decisions;
+    this.#authorityReason = options.authorityReason;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1230,26 +1241,13 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // The Snapshot reaches the runtime only when it is meant to bind, which
-      // is what makes `enforcement` real rather than advisory (VC-44). Pi
-      // installs `beforeToolCall` on this field's PRESENCE, so:
-      //
-      //   off      → no Snapshot at all      → absent → no gate
-      //   observe  → Snapshot, recorded only → absent → no gate
-      //   enforce  → Snapshot, handed over   → present → gate installs
-      //
-      // `observe` is deliberately absent here rather than present-and-permissive.
-      // A gate that installs and allows everything would still normalize every
-      // call — resolving paths, lexing shells — and could still refuse one it
-      // could not read (`call.unreadable` fails closed by design). That is a real
-      // behaviour change bought for a record nothing writes yet. The Snapshot is
-      // still pinned and still durable, through `authority` above, which is what
-      // this slice owes. VC-28 v0 adds the recording gate that gives `observe`
-      // its second half.
+      // Off installs no gate. Observe installs VC-28's behavior-neutral shadow
+      // review; enforce retains rule-pack gating. The pinned Snapshot records
+      // which posture this attachment uses, independent of tool capability.
       //
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
-      ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      ...(this.#authority === null ? {} : { authority: this.#authority }),
       // Protection mode rides only a gate that binds. `covers` is the read
       // port and nothing else; the runtime cannot author a row (VC-480).
       ...(this.#authority?.enforcement === "enforce" &&
@@ -1271,6 +1269,8 @@ class PiBinding implements BindingHandle {
             },
           }
         : {}),
+      ...(this.#decisions === undefined ? {} : { decisions: this.#decisions }),
+      ...(this.#authorityReason === undefined ? {} : { authorityReason: this.#authorityReason }),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,

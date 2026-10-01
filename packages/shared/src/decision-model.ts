@@ -49,7 +49,7 @@ import { classifyWebAddress } from "./web-address-policy";
  * timeout and whether it needs an audit trail — and nothing else in the port
  * changes. VC-28 adds `authority.judge` (audited); VC-432 adds `model.select`.
  */
-export const DECISION_PURPOSES = ["agent.classify", "model.select"] as const;
+export const DECISION_PURPOSES = ["agent.classify", "authority.judge", "model.select"] as const;
 export type DecisionPurpose = (typeof DECISION_PURPOSES)[number];
 
 /**
@@ -59,7 +59,10 @@ export type DecisionPurpose = (typeof DECISION_PURPOSES)[number];
  * message to it, so the opt-in dialog names only these and the feature's own
  * switch extends the opt-in once, when it is turned on.
  */
-export const DECISION_BASE_PURPOSES: readonly DecisionPurpose[] = Object.freeze(["agent.classify"]);
+export const DECISION_BASE_PURPOSES: readonly DecisionPurpose[] = Object.freeze([
+  "agent.classify",
+  "authority.judge",
+]);
 
 export function isDecisionPurpose(value: unknown): value is DecisionPurpose {
   return typeof value === "string" && (DECISION_PURPOSES as readonly string[]).includes(value);
@@ -97,6 +100,12 @@ export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionP
         "whatever an agent passes the classify tool: Session text, tool results and page content",
       timeoutMs: 30_000,
       audit: false,
+    }),
+    "authority.judge": Object.freeze({
+      label: "Per-call authority review",
+      sends: "the user's messages and the bare tool call, with secrets redacted",
+      timeoutMs: 3_000,
+      audit: true,
     }),
     // A new Session waits on this one, so it gets seconds, not the tool's
     // half minute; past it the Session starts on its configured default.
@@ -382,8 +391,14 @@ export function decisionTargetFor(
         miss: decisionMiss("unset", "No decision model is configured (Settings → Models)."),
       };
     case "local":
-      // Automatic model choice is cloud-only (VC-432). Enforce that here as
-      // well as at birth: Settings can change while candidates are prepared.
+      // These host-policy purposes are cloud-only. Local settings still
+      // serve agent.classify without silently becoming a judge or selector.
+      if (purpose === "authority.judge") {
+        return {
+          ok: false,
+          miss: decisionMiss("unset", "Authority review needs a cloud decision model."),
+        };
+      }
       if (purpose === "model.select") {
         return {
           ok: false,

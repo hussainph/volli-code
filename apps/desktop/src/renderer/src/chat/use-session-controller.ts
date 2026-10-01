@@ -32,6 +32,7 @@ import {
   type LiveTranscriptCompaction,
   type MessageDelivery,
   type QueuedMessage,
+  type TranscriptAuthorityReview,
   type TranscriptCompaction,
   type TranscriptReasoningDrop,
 } from "@volli/session-presentation";
@@ -44,6 +45,7 @@ const NO_FRAMES: readonly ChatSessionFrame[] = [];
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
 const NO_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
+const NO_AUTHORITY_REVIEWS: readonly TranscriptAuthorityReview[] = [];
 const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
 
 /**
@@ -103,6 +105,7 @@ export interface SessionView {
   compactions: readonly TranscriptCompaction[];
   /** Every provider recovery notice, anchored beside the Turn it affected. */
   reasoningDrops: readonly TranscriptReasoningDrop[];
+  authorityReviews: readonly TranscriptAuthorityReview[];
   /** The summary currently being generated, absent once its durable result lands. */
   liveCompaction: LiveTranscriptCompaction | null;
 }
@@ -200,6 +203,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.reasoningDrops ?? NO_REASONING_DROPS,
   );
+  const authorityReviews = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.authorityReviews ?? NO_AUTHORITY_REVIEWS,
+  );
   const liveCompaction = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
@@ -220,10 +227,12 @@ export function useSessionController(
       promptResources,
       compactions,
       reasoningDrops,
+      authorityReviews,
       liveCompaction,
     }),
     [
       approvalFailures,
+      authorityReviews,
       compactions,
       deliverable,
       durableMessages,

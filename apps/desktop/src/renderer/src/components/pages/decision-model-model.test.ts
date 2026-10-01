@@ -2,6 +2,10 @@ import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/sha
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AUTHORITY_REASON_SOURCE_KEY,
+  AUTHORITY_REASON_SOURCES,
+  authorityReasonSource,
+  authorityOptInExtensionKey,
   autoPickOn,
   autoPickSetting,
   catalogEntry,
@@ -13,6 +17,7 @@ import {
   decisionMode,
   DEFAULT_LOCAL_DECISION_MODEL_ID,
   entryForKey,
+  extendAuthorityCloudOptIn,
   localSetting,
   priceLabel,
   settingLabel,
@@ -47,22 +52,23 @@ function cloud(ref: { providerId: string; modelId: string }) {
   return cloudSetting(ref, 1) as Extract<DecisionModelSetting, { kind: "cloud" }>;
 }
 
-describe("automatic model choice (VC-432)", () => {
-  it("is off after the first opt-in and on once the switch extends it", () => {
-    const first = cloudSetting(JEV, 1);
-    expect(autoPickOn(first)).toBe(false);
-    const on = autoPickSetting(first, true, 9)!;
-    expect(autoPickOn(on)).toBe(true);
-    expect(on).toMatchObject({
-      optIn: { acceptedAt: 9, purposes: ["agent.classify", "model.select"] },
-    });
-    expect(autoPickOn(autoPickSetting(on, false, 10)!)).toBe(false);
+describe("the block reason choice", () => {
+  it("defaults an unset key to utility and reads the two persisted JSON choices", () => {
+    expect(AUTHORITY_REASON_SOURCE_KEY).toBe("volli:authority-reason-source");
+    expect(AUTHORITY_REASON_SOURCES.map((option) => option.label)).toEqual([
+      "Utility model",
+      "Risk category",
+    ]);
+    expect(authorityReasonSource(undefined)).toBe("utility");
+    expect(authorityReasonSource(JSON.stringify("utility"))).toBe("utility");
+    expect(authorityReasonSource(JSON.stringify("category"))).toBe("category");
   });
 
-  it("is nothing for a model that is not in the cloud", () => {
-    expect(autoPickOn({ kind: "none" })).toBe(false);
-    expect(autoPickOn(localSetting("", ""))).toBe(false);
-    expect(autoPickSetting(localSetting("", ""), true, 1)).toBeNull();
+  it("does not hide malformed or unknown saved choices", () => {
+    expect(() => authorityReasonSource("")).toThrow();
+    expect(() => authorityReasonSource("not json")).toThrow();
+    expect(() => authorityReasonSource(JSON.stringify("other"))).toThrow("invalid");
+    expect(() => authorityReasonSource("null")).toThrow("invalid");
   });
 });
 
@@ -101,12 +107,65 @@ describe("the decision model control's model", () => {
     ).toEqual(["Alpha", "OpenCode Zen"]);
   });
 
-  it("writes a cloud choice with an opt-in for every purpose this build has", () => {
+  it("writes a cloud choice with the purposes the first opt-in dialog names", () => {
     expect(cloudSetting(ZEN, 42)).toEqual({
       kind: "cloud",
       providerId: "opencode",
       modelId: "jev-1.13",
-      optIn: { acceptedAt: 42, purposes: ["agent.classify"] },
+      optIn: { acceptedAt: 42, purposes: ["agent.classify", "authority.judge"] },
+    });
+  });
+
+  it("asks once per scope and existing cloud agreement, never for local, none or inherit", () => {
+    const legacy = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["agent.classify"] as const },
+    };
+    const globalKey = authorityOptInExtensionKey(legacy, null);
+    expect(globalKey).toContain("authority.judge");
+    expect(authorityOptInExtensionKey(legacy, "project-1")).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey(legacy, "project-2")).not.toBe(
+      authorityOptInExtensionKey(legacy, "project-1"),
+    );
+    expect(authorityOptInExtensionKey({ ...legacy, modelId: "other" }, null)).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey({ ...legacy, providerId: "other" }, null)).not.toBe(
+      globalKey,
+    );
+    expect(
+      authorityOptInExtensionKey({ ...legacy, optIn: { ...legacy.optIn, acceptedAt: 2 } }, null),
+    ).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey(cloud(JEV), null)).toBeNull();
+    expect(authorityOptInExtensionKey(null, "project-1")).toBeNull();
+    expect(authorityOptInExtensionKey({ kind: "none" }, null)).toBeNull();
+    expect(authorityOptInExtensionKey(localSetting("", ""), null)).toBeNull();
+  });
+
+  it("extends just the disclosed authority purpose and preserves the original model", () => {
+    const legacy = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["agent.classify"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(legacy, 42)).toEqual({
+      ...legacy,
+      optIn: { acceptedAt: 42, purposes: ["agent.classify", "authority.judge"] },
+    });
+    expect(legacy.optIn.purposes).toEqual(["agent.classify"]);
+    expect(autoPickSetting(legacy, true, 43)).toMatchObject({
+      optIn: { acceptedAt: 43, purposes: ["agent.classify", "model.select"] },
+    });
+    const selector = {
+      ...legacy,
+      optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(selector, 44)).toMatchObject({
+      optIn: { acceptedAt: 44, purposes: ["agent.classify", "authority.judge", "model.select"] },
+    });
+    const authorityOnly = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["authority.judge"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(authorityOnly, 42)).toMatchObject({
+      optIn: { acceptedAt: 42, purposes: ["authority.judge"] },
     });
   });
 
@@ -144,5 +203,24 @@ describe("the decision model control's model", () => {
   it("prices a model as a person reads it", () => {
     expect(priceLabel(JEV)).toBe("Free");
     expect(priceLabel(ZEN)).toBe("$0.042/M input");
+  });
+});
+
+describe("automatic model choice (VC-432)", () => {
+  it("is off after the first opt-in and on once the switch extends it", () => {
+    const first = cloudSetting(JEV, 1);
+    expect(autoPickOn(first)).toBe(false);
+    const on = autoPickSetting(first, true, 9)!;
+    expect(autoPickOn(on)).toBe(true);
+    expect(on).toMatchObject({
+      optIn: { acceptedAt: 9, purposes: ["agent.classify", "authority.judge", "model.select"] },
+    });
+    expect(autoPickOn(autoPickSetting(on, false, 10)!)).toBe(false);
+  });
+
+  it("is nothing for a model that is not in the cloud", () => {
+    expect(autoPickOn({ kind: "none" })).toBe(false);
+    expect(autoPickOn(localSetting("", ""))).toBe(false);
+    expect(autoPickSetting(localSetting("", ""), true, 1)).toBeNull();
   });
 });
