@@ -76,7 +76,7 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import { authorityVerdict } from "../authority/gate";
+import { authorityVerdict, describeCall } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
@@ -2365,6 +2365,7 @@ async function attachSession(
           : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
         signal: spec.signal,
         now: host.now,
+        ...(spec.approvals === undefined ? {} : { approvals: spec.approvals }),
       });
       return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
@@ -2373,6 +2374,7 @@ async function attachSession(
           authority,
           workspacePath: spec.workspacePath,
           readableRoots: toolOutput.readableDirectories,
+          ...(spec.approvals === undefined ? {} : { protection: true }),
         });
         // The program a `codemode` call carries is not itself an act: every
         // call it makes is judged on its own, through this same gate (VC-471).
@@ -2396,6 +2398,7 @@ async function attachSession(
           verdict,
           tool: toolCall.name,
           toolCallId: toolCall.id,
+          asked: describeCall(toolCall.name, args),
           turnId,
           signal,
         });

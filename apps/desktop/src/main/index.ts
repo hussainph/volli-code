@@ -183,6 +183,9 @@ import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { createProtection } from "./protection/host";
+import { registerProtectionIpcHandlers } from "./protection/ipc";
+import { protectionExperimentEnabled } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -1722,6 +1725,7 @@ app.whenReady().then(async () => {
               // settings; the newly recorded backfill is deliberately empty.
               mcpTools = [];
             }
+            const authorityPolicy = getProjectAuthorityPolicy(dbHandle.db, project.id);
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
@@ -1737,7 +1741,37 @@ app.whenReady().then(async () => {
               // never lands mid-turn. A rehydrated attachment ignores this and
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
-              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              authorityPolicy,
+              // Protection mode (VC-480): only with the experiment on AND this
+              // project protected. Absent, the runtime never learns approvals
+              // exist and nothing about authority changes.
+              ...(protectionExperimentEnabled(dbHandle.db) &&
+              authorityPolicy.enforcement === "enforce"
+                ? {
+                    protection: createProtection({
+                      db: dbHandle.db,
+                      now: () => Date.now(),
+                      projectId: project.id,
+                      sessionId,
+                      // A delegated subagent reads its parent's live "this
+                      // Session" approvals; nothing it adds ever flows back.
+                      inheritedFrom:
+                        attaching.role === "subagent" && attaching.parentSessionId !== null
+                          ? [attaching.parentSessionId]
+                          : [],
+                      sessionTitle: attaching.title ?? null,
+                      ticketDisplayId: (() => {
+                        const owned =
+                          attaching.ticketId === null
+                            ? undefined
+                            : getTicket(dbHandle.db, attaching.ticketId);
+                        return owned === undefined
+                          ? null
+                          : displayTicketId(project.ticketPrefix, owned.ticketNumber);
+                      })(),
+                    }),
+                  }
+                : {}),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
               // this one attachment.
@@ -2495,6 +2529,12 @@ app.whenReady().then(async () => {
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing
   // instrumentation belongs.
+  registerProtectionIpcHandlers(
+    dbHandle.ok ? dbHandle.db : null,
+    dbHandle.ok
+      ? undefined
+      : `Protection settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   registerAgentObservabilityIpcHandlers(
     agentObservability,
     dbHandle.ok

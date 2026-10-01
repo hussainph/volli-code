@@ -25,19 +25,24 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   codeModeSurfaceFor,
+  decodeApprovalDetail,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
   mcpProviderToolName,
   resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
+  writeScope,
   type AgentRuntime,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type McpToolDefinition,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
+  type ApprovalDecision,
+  type ApprovalScope,
   type PromptResource,
+  type RuntimeAskChoice,
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
@@ -54,6 +59,8 @@ import {
   createPiRuntimeHost,
   PI_ADAPTER_ID,
   type PiAdapterOptions,
+  type PiProtection,
+  type PiProtectionGrant,
   type PiRuntimeContext,
 } from "./pi-adapter";
 
@@ -285,7 +292,7 @@ function askRequest(overrides: Partial<RuntimeAskRequest> = {}): RuntimeAskReque
 }
 
 /** How one ask ended. */
-type AskOutcome = { answered: string } | { failed: string };
+type AskOutcome = { answered: RuntimeAskChoice } | { failed: string };
 
 /**
  * Escalate the way the runtime does, and read the result the way it reads it.
@@ -3507,3 +3514,248 @@ function installQuestion(cause: "confirm.mcp-install" | "confirm.mcp-sign-in") {
     overridable: true,
   };
 }
+function fakeProtection(hit: boolean = false): {
+  protection: PiProtection;
+  grants: PiProtectionGrant[];
+  decisions: ApprovalDecision[];
+  order: string[];
+} {
+  const grants: PiProtectionGrant[] = [];
+  const decisions: ApprovalDecision[] = [];
+  const order: string[] = [];
+  return {
+    grants,
+    decisions,
+    order,
+    protection: {
+      covers: (scope: ApprovalScope) =>
+        hit ? { approvalId: "row-1", summary: scope.summary } : null,
+      decided: (decision) => void decisions.push(decision),
+      remember: (grant) => {
+        order.push("remember");
+        grants.push(grant);
+      },
+    },
+  };
+}
+
+describe("Protection mode (VC-480)", () => {
+  const WRITE = writeScope("/Users/me/code/docs/guides/a.md");
+
+  async function protectedAttach(protection: PiProtection | undefined, enforcement = "enforce") {
+    return attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        authorityPolicy: resolveAuthorityPolicy({ enforcement: enforcement as "enforce" }),
+        ...(protection === undefined ? {} : { protection }),
+      }),
+    });
+  }
+
+  function approvalRequest(scopes: readonly ApprovalScope[] = [WRITE]): RuntimeAskRequest {
+    return askRequest({
+      cause: "path.outside-workspace",
+      trip: "approval",
+      reason: "outside the workspace",
+      approval: {
+        asked: "write  /Users/me/code/docs/guides/a.md",
+        reason: "outside the workspace",
+        scopes,
+      },
+    });
+  }
+
+  function askApproval(runtime: FakeRuntime, request = approvalRequest()): Promise<AskOutcome> {
+    const port = runtime.spec.ask;
+    if (port === undefined) throw new Error("no ask port");
+    return port(request, new AbortController().signal).then(
+      (answered): AskOutcome => ({ answered }),
+      (error: unknown): AskOutcome => ({ failed: errorMessage(error) }),
+    );
+  }
+
+  it("hands the runtime a read port only when the experiment is on and the gate binds", async () => {
+    const on = await protectedAttach(fakeProtection().protection);
+    expect(on.runtime.spec.approvals).toBeDefined();
+    expect(Object.keys(on.runtime.spec.approvals ?? {}).toSorted()).toEqual(["covers", "decided"]);
+    const off = await protectedAttach(undefined);
+    expect(off.runtime.spec.approvals).toBeUndefined();
+    const observing = await protectedAttach(fakeProtection().protection, "observe");
+    expect(observing.runtime.spec.approvals).toBeUndefined();
+  });
+
+  it("opens the five-choice card in Volli's words and writes the row before the runtime hears", async () => {
+    const fake = fakeProtection();
+    const { binding, runtime, sink } = await protectedAttach(fake.protection);
+
+    const answer = askApproval(runtime);
+    await flush();
+
+    const opened = sink.observations[0];
+    if (opened.kind !== "interaction" || opened.state !== "opened") throw new Error("not opened");
+    expect(opened.interaction).toMatchObject({
+      id: ASK_INTERACTION_ID,
+      kind: "permission",
+      title: "Allow writing outside this workspace?",
+    });
+    expect(opened.interaction.options.map((option) => option.id)).toEqual([
+      "once",
+      "session",
+      "project",
+      "reject",
+      "steer",
+    ]);
+    expect(opened.interaction.prompts?.[0]).toMatchObject({ custom: true });
+    expect(decodeApprovalDetail(opened.interaction.detail)).toMatchObject({
+      asked: "write  /Users/me/code/docs/guides/a.md",
+      because: "this file is outside the Session's workspace, and protection is on.",
+      reason: "outside the workspace",
+    });
+    fake.order.length = 0;
+    void answer.then(() => fake.order.push("settled"));
+
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["project"]));
+
+    expect(await answer).toEqual({ answered: "allow-project" });
+    expect(fake.order).toEqual(["remember", "settled"]);
+    expect(fake.grants).toEqual([
+      {
+        scope: "project",
+        scopes: [WRITE],
+        rule: "path.outside-workspace",
+        asked: "write  /Users/me/code/docs/guides/a.md",
+        reason: "outside the workspace",
+        interactionId: ASK_INTERACTION_ID,
+      },
+    ]);
+  });
+
+  it("remembers nothing for allow once, deny, or a steer, and carries a steer's words", async () => {
+    const fake = fakeProtection();
+    const { binding, runtime } = await protectedAttach(fake.protection);
+
+    const once = askApproval(runtime);
+    await flush();
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"], "c1"));
+    expect(await once).toEqual({ answered: "allow" });
+
+    const steered = askApproval(runtime);
+    await flush();
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["steer"], "c2", "write it to /tmp"));
+    expect(await steered).toEqual({ answered: { kind: "steer", message: "write it to /tmp" } });
+
+    const denied = askApproval(runtime);
+    await flush();
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["reject"], "c3"));
+    expect(await denied).toEqual({ answered: "refuse" });
+
+    expect(fake.grants).toEqual([]);
+  });
+
+  it("still allows the one call when the row could not be written, and the card simply returns later", async () => {
+    const fake = fakeProtection();
+    fake.protection.remember = () => {
+      throw new Error("disk full");
+    };
+    const { binding, runtime } = await protectedAttach(fake.protection);
+    const answer = askApproval(runtime);
+    await flush();
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["session"]));
+    expect(await answer).toEqual({ answered: "allow-session" });
+  });
+
+  it("leaves one quiet line after a ledger hit, opened and answered in the same breath", async () => {
+    const fake = fakeProtection(true);
+    const { runtime, sink } = await protectedAttach(fake.protection);
+    runtime.spec.approvals?.decided({
+      toolCallId: "call-9",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "path.outside-workspace",
+      summary: "Write to /Users/me/code/docs/guides",
+      asked: "write  /Users/me/code/docs/guides/b.md",
+      approvalId: "row-1",
+    });
+    await flush();
+    expect(fake.decisions).toHaveLength(1);
+    expect(sink.observations).toEqual([
+      expect.objectContaining({
+        state: "opened",
+        interaction: expect.objectContaining({
+          id: "ledger-hit:call-9",
+          title: "Allowed by your earlier approval: Write to /Users/me/code/docs/guides",
+        }),
+      }),
+      expect.objectContaining({
+        state: "resolved",
+        interactionId: "ledger-hit:call-9",
+        resolution: { optionIds: ["ledger"], response: null },
+      }),
+    ]);
+    runtime.spec.approvals?.decided({
+      toolCallId: "call-10",
+      tool: "write",
+      authoriser: "user:once",
+      rule: "path.outside-workspace",
+      summary: "x",
+      asked: "y",
+      approvalId: null,
+    });
+    await flush();
+    expect(sink.observations).toHaveLength(2);
+  });
+
+  it("does not let a failed receipt line change the decision it reports", async () => {
+    const fake = fakeProtection(true);
+    const { runtime, sink } = await protectedAttach(fake.protection);
+    sink.emitFailure = new Error("ledger closed");
+    runtime.spec.approvals?.decided({
+      toolCallId: "call-9",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "r",
+      summary: "s",
+      asked: "a",
+      approvalId: "row-1",
+    });
+    await flush();
+    expect(fake.decisions).toHaveLength(1);
+  });
+
+  it("is not answered by another Session's message, and a restart brings the card back unresolved", async () => {
+    const fake = fakeProtection();
+    const { binding, runtime } = await protectedAttach(fake.protection);
+    const answer = askApproval(runtime);
+    await flush();
+
+    // A steering or session_send message is a message, never a verdict.
+    await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-steer",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("yes, allow it, always"),
+      delivery: "steer",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+    await flush();
+    const pending = await Promise.race([answer, flush().then(() => "pending" as const)]);
+    expect(pending).toBe("pending");
+    expect(fake.grants).toEqual([]);
+
+    // The process goes away mid-question: the parked ask is withdrawn, so the
+    // call is never allowed and no row is written.
+    await binding.release("requested");
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(fake.grants).toEqual([]);
+
+    // A new attachment after the restart knows of no question: an answer to the
+    // old card is rejected rather than executed.
+    const fresh = await protectedAttach(fake.protection);
+    const receipt = await fresh.binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["project"]));
+    expect(receipt).toMatchObject({ status: "rejected" });
+    expect(fake.grants).toEqual([]);
+  });
+});

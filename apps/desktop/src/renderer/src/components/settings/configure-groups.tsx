@@ -7,6 +7,12 @@
  * appeared on both pages with no way to tell which one won.
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
+ *
+ * The Protection experiment (VC-480) swaps what the Authority entry draws, not
+ * where it sits: the same key, so a selection survives the switch flipping,
+ * labelled "Protection" and drawing `ProtectionPane` while it is on, and exactly
+ * the Authority entry while it is off. The flag arrives as an argument rather
+ * than a store read so the page that owns the rail re-derives it reactively.
  */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
@@ -22,11 +28,72 @@ import type { PrefGroup } from "@renderer/components/settings/kit";
 import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
+import { ProtectionPane } from "./configure/protection-pane";
 import { SessionsPane } from "./configure/sessions-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
 
-export function configureGroups(project: Project): readonly PrefGroup[] {
+/**
+ * The Authority entry's search terms. Held apart because the Protection
+ * experiment extends them: the rail matches a lowercased SUBSTRING of a stored
+ * term, so every label the Protection page draws needs one here too.
+ */
+const AUTHORITY_KEYWORDS: readonly string[] = [
+  "authority",
+  "permission",
+  "permissions",
+  "policy",
+  "enforce",
+  "observe",
+  "sandbox",
+  "guardrail",
+  "approval",
+  "escalation",
+  "denial",
+  "transcript",
+  "peek",
+  "auto mode",
+  // The row labels, so rail search finds the page from what is on
+  // it — `settings-search-smoke.mjs` walks every visible label and
+  // holds this list to that contract.
+  "rule enforcement",
+  "containment",
+  // The whole label, em dash included, because the rail matches a
+  // lowercased SUBSTRING of a stored term: "decision mode" alone
+  // could not be found by someone typing what the row says. VC-285
+  // renamed this row from "Who judges the rest" and the old term
+  // went with it — a keyword for a label nobody can see finds
+  // nothing and hides the one that is missing.
+  "decision mode \u2014 not active yet",
+  "ask me after",
+  "or after, in total",
+  "you can read",
+  "an authenticated session can read",
+  "an unauthenticated caller can read",
+];
+
+/**
+ * What the Protection page adds, only while it is the page drawn — a term for
+ * a page nobody can see would land a search on one that cannot answer it. The
+ * section titles are whole, for the same substring reason as above.
+ */
+const PROTECTION_KEYWORDS: readonly string[] = [
+  "protection",
+  "protect",
+  "protection is on",
+  "protection is off",
+  "approved actions",
+  "approvals",
+  "ledger",
+  "revoke",
+  "advanced",
+  "transcripts a session can read",
+];
+
+export function configureGroups(
+  project: Project,
+  { protection = false }: { protection?: boolean } = {},
+): readonly PrefGroup[] {
   return [
     {
       key: "agent",
@@ -104,41 +171,16 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           // that writes authority policy — no agent verb projects it, by
           // design (VC-172).
           key: "authority",
-          label: "Authority",
+          label: protection ? "Protection" : "Authority",
           icon: ShieldCheckIcon,
-          keywords: [
-            "authority",
-            "permission",
-            "permissions",
-            "policy",
-            "enforce",
-            "observe",
-            "sandbox",
-            "guardrail",
-            "approval",
-            "escalation",
-            "denial",
-            "transcript",
-            "peek",
-            "auto mode",
-            // The row labels, so rail search finds the page from what is on
-            // it — `settings-search-smoke.mjs` walks every visible label and
-            // holds this list to that contract.
-            "rule enforcement",
-            // The whole label, em dash included, because the rail matches a
-            // lowercased SUBSTRING of a stored term: "decision mode" alone
-            // could not be found by someone typing what the row says. VC-285
-            // renamed this row from "Who judges the rest" and the old term
-            // went with it — a keyword for a label nobody can see finds
-            // nothing and hides the one that is missing.
-            "decision mode \u2014 not active yet",
-            "ask me after",
-            "or after, in total",
-            "you can read",
-            "an authenticated session can read",
-            "an unauthenticated caller can read",
-          ],
-          content: <AuthorityPane project={project} />,
+          keywords: protection
+            ? [...AUTHORITY_KEYWORDS, ...PROTECTION_KEYWORDS]
+            : AUTHORITY_KEYWORDS,
+          content: protection ? (
+            <ProtectionPane project={project} />
+          ) : (
+            <AuthorityPane project={project} />
+          ),
         },
       ],
     },

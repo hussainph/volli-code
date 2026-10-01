@@ -16,9 +16,17 @@
  */
 
 import {
+  DENIED_BY_PERSON,
+  hardRefusalCopy,
+  hardRefusalMessage,
   isOverridableAuthorityRule,
+  steerMessage,
+  type ApprovalDecision,
+  type ApprovalScope,
   type AuthorityDenialCause,
   type AuthorityFallback,
+  type RuntimeApprovalHit,
+  type RuntimeApprovals,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
   type RuntimeAskTrip,
@@ -81,6 +89,8 @@ export interface AuthorityEscalationInput {
   ask?: AskPort;
   /** The attachment's own cancellation, distinct from any one call's. */
   signal?: AbortSignal;
+  /** Protection mode (VC-480): see {@link AuthorityEscalation.resolveProtected}. */
+  approvals?: RuntimeApprovals;
   /** Clock for an approval wait measurement; a broken clock costs only that measurement. */
   now?: () => number;
 }
@@ -91,6 +101,8 @@ export interface AuthorityCall {
   tool: string;
   /** The runtime's own id for this call, so a question can be shown against it. */
   toolCallId: string;
+  /** The call as a card would show it (VC-480). Display only. */
+  asked?: string;
   turnId: string | null;
   /**
    * Pi's cancellation for the run this call belongs to, handed to
@@ -146,6 +158,7 @@ export class AuthorityEscalation {
   readonly #ask: AskPort | undefined;
   readonly #signal: AbortSignal | undefined;
   readonly #now: () => number;
+  readonly #approvals: RuntimeApprovals | undefined;
   /** Local tool-call correlation; consumed immediately by the runtime's side channel. */
   #waitDurationByToolCallId = new Map<string, number>();
 
@@ -208,6 +221,7 @@ export class AuthorityEscalation {
     this.#ask = input.ask;
     this.#signal = input.signal;
     this.#now = input.now ?? Date.now;
+    this.#approvals = input.approvals;
     this.#sessionDenials = denialCount(input.priorDenials);
     this.#sessionTrip = this.#sessionInterval;
   }
@@ -225,8 +239,146 @@ export class AuthorityEscalation {
     return duration;
   }
 
+  /**
+   * Decide one call in protection mode (VC-480): no counters, no thresholds.
+   *
+   * The funnel, in order:
+   *  1. A refusal no person may clear — or one the Session's own walls repeat,
+   *     or one whose violations were not enumerated — is explained and never
+   *     asked about. It is checked across EVERY violation first, so a "yes" to
+   *     one rule can never carry a never-allowed one through with it.
+   *  2. Each approvable violation is looked up in the remembered approvals,
+   *     live. Covered is cleared, deterministically, with nobody asked.
+   *  3. The first one left is put to a person, once, and its answer clears it
+   *     or ends the call. An unattended Run parks here like an attended one:
+   *     there is no timeout and nothing here decides for a person.
+   *
+   * Nothing allows silently: a host with no one to ask refuses.
+   */
+  async resolveProtected(call: AuthorityCall): Promise<AuthorityDisposition> {
+    const verdict = call.verdict;
+    if (verdict.outcome === "allow") return ALLOW;
+    const approvals = this.#approvals;
+    const found = verdict.violations;
+    const hard = found?.find((violation) => !isOverridableAuthorityRule(violation.rule));
+    const asked = call.asked ?? call.tool;
+    // Written BEFORE the call runs or is refused, so history can say who
+    // authorised every gated call. A host that cannot write it is told to say
+    // so; it never changes the outcome, which is already decided here.
+    const decided = (
+      authoriser: ApprovalDecision["authoriser"],
+      rule: string,
+      summary: string,
+      approvalId: string | null = null,
+    ): void => {
+      approvals?.decided({
+        toolCallId: call.toolCallId,
+        tool: call.tool,
+        authoriser,
+        rule,
+        summary,
+        asked,
+        approvalId,
+      });
+    };
+    if (found === undefined || approvals === undefined || hard !== undefined) {
+      const cause = hard?.rule ?? verdict.cause;
+      decided("rule:hard", cause, hardRefusalCopy(cause).heading);
+      return {
+        outcome: "deny",
+        reason: hardRefusalMessage(cause, hard?.reason ?? verdict.reason),
+        cause,
+        record: true,
+        interrupt: false,
+      };
+    }
+    if (verdict.walled === true) {
+      decided("rule:hard", verdict.cause, "Blocked by this Session's sandbox");
+      return {
+        outcome: "deny",
+        reason: verdict.reason,
+        cause: verdict.cause,
+        record: true,
+        interrupt: false,
+      };
+    }
+    const hits: RuntimeApprovalHit[] = [];
+    for (const violation of found) {
+      const uncovered: ApprovalScope[] = [];
+      for (const scope of violation.scopes ?? []) {
+        const hit = approvals.covers(scope);
+        if (hit === null) uncovered.push(scope);
+        else hits.push(hit);
+      }
+      if (violation.scopes !== null && uncovered.length === 0) continue;
+      const refused = {
+        outcome: "deny",
+        cause: violation.rule,
+        reason: violation.reason,
+      } as const;
+      if (this.#ask === undefined) {
+        decided("user:deny", violation.rule, "Nobody was available to ask");
+        return { ...refused, record: true, interrupt: false };
+      }
+      const waitStartedAt = this.#measurementStartedAt();
+      const answer = await this.#askUntilAnsweredOrAbandoned(
+        this.#ask,
+        {
+          cause: violation.rule,
+          tool: call.tool,
+          toolCallId: call.toolCallId,
+          turnId: call.turnId,
+          reason: violation.reason,
+          trip: "approval",
+          overridable: true,
+          approval: {
+            asked,
+            ...(verdict.stages === undefined ? {} : { stages: verdict.stages }),
+            reason: violation.reason,
+            scopes: uncovered,
+          },
+        },
+        call.signal,
+      );
+      this.#recordWaitDuration(call.toolCallId, waitStartedAt);
+      if (answer.kind === "abandoned") return { ...refused, record: false, interrupt: false };
+      if (answer.kind === "unavailable") return { ...refused, record: true, interrupt: false };
+      const choice = answer.choice;
+      const what = uncovered.map((scope) => scope.summary).join("; ") || violation.reason;
+      if (choice === "allow" || choice === "allow-session" || choice === "allow-project") {
+        decided(
+          choice === "allow"
+            ? "user:once"
+            : choice === "allow-session"
+              ? "user:session"
+              : "user:project",
+          violation.rule,
+          what,
+        );
+        continue;
+      }
+      decided("user:deny", violation.rule, what);
+      if (typeof choice === "object") {
+        return { ...refused, reason: steerMessage(choice.message), record: true, interrupt: false };
+      }
+      return { ...refused, reason: DENIED_BY_PERSON, record: true, interrupt: choice === "stop" };
+    }
+    // Everything the call needed was already approved: the ledger allowed it,
+    // deterministically, and nobody was asked.
+    if (hits.length > 0) {
+      decided(
+        "policy:ledger",
+        found[0]?.rule ?? verdict.cause,
+        hits.map((hit) => hit.summary).join("; "),
+        hits[0].approvalId,
+      );
+    }
+    return ALLOW;
+  }
+
   /** Decide one call, parking on a person when the counters say it is time. */
   async resolve(call: AuthorityCall): Promise<AuthorityDisposition> {
+    if (this.#approvals !== undefined) return this.resolveProtected(call);
     const verdict = call.verdict;
     if (verdict.outcome === "allow") {
       this.#consecutiveDenials = 0;

@@ -20,6 +20,8 @@
  */
 import {
   askInteractionId,
+  decodeApprovalDetail,
+  isApprovalInteraction,
   readInteractionAnswers,
   readInteractionPrompts,
   SESSION_ESCALATION_CONTINUE_ID,
@@ -1062,10 +1064,55 @@ const RECEIPT_LEADS: Record<InteractionReceipt["verdict"], string> = {
   stopped: "You stopped the turn at",
 };
 
+/**
+ * The receipt an approval card (VC-480) leaves, in its own words rather than
+ * the generic permission vocabulary: what was remembered, and for how long.
+ * A ledger hit is the same card answered by an earlier approval, in one line.
+ */
+function describeApprovalResolution(
+  interaction: RendererSessionInteraction,
+  resolution: SessionInteractionResolution,
+): InteractionReceipt {
+  const detail = decodeApprovalDetail(interaction.detail);
+  const chosen = new Set(resolution.optionIds.map((id) => id.toLowerCase()));
+  const said = (resolution.response ?? "").trim().replaceAll(/\s+/gu, " ");
+  if (chosen.has("ledger")) {
+    return {
+      verdict: "standing",
+      lead: "Allowed by your earlier approval:",
+      subject:
+        interaction.options.find((option) => option.id === "ledger")?.description ?? detail.asked,
+      trailer: null,
+    };
+  }
+  const subject = interaction.title.replace(/^Allow /u, "").replace(/\?$/u, "");
+  if (chosen.has("steer")) {
+    return {
+      verdict: "rejected",
+      lead: "You denied",
+      subject,
+      trailer: said === "" ? null : `\u201c${said}\u201d`,
+    };
+  }
+  if (chosen.has("project")) {
+    return { verdict: "standing", lead: "You allowed", subject, trailer: "always in this project" };
+  }
+  if (chosen.has("session")) {
+    return { verdict: "standing", lead: "You allowed", subject, trailer: "for this Session" };
+  }
+  if (chosen.has("once")) {
+    return { verdict: "allowed", lead: "You allowed", subject, trailer: "once" };
+  }
+  return { verdict: "rejected", lead: "You denied", subject, trailer: null };
+}
+
 export function describeInteractionResolution(
   interaction: RendererSessionInteraction,
   resolution: SessionInteractionResolution,
 ): InteractionReceipt {
+  if (isApprovalInteraction(interaction) || interaction.id.startsWith("ledger-hit:")) {
+    return describeApprovalResolution(interaction, resolution);
+  }
   const prompts = readInteractionPrompts(interaction);
   const answers = readInteractionAnswers(interaction, resolution);
   // Each answer's ids are read against its *own* question's options, which is

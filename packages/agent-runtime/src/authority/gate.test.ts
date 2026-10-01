@@ -8,7 +8,7 @@ import {
   type CodingToolId,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { authorityVerdict } from "./gate";
+import { authorityVerdict, describeCall } from "./gate";
 
 function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot {
   return {
@@ -329,5 +329,57 @@ describe("authorityVerdict", () => {
         "could not be checked against the Session's authority",
       );
     }
+  });
+});
+
+describe("protection mode (VC-480)", () => {
+  it("carries every violation and the command's stages only when asked to", () => {
+    const { raw } = workspace();
+    const args = { command: "true && echo x > /tmp/volli-protect/out && launchctl list" };
+    const plain = authorityVerdict({
+      tool: "bash",
+      args,
+      authority: snapshot(),
+      workspacePath: raw,
+    });
+    expect(plain.outcome === "deny" && plain.violations).toBeUndefined();
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args,
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.violations?.map((violation) => violation.rule)).toEqual([
+      "path.outside-workspace",
+      "command.persistence",
+    ]);
+    expect(verdict.stages).toEqual(["true", "echo x", "launchctl list"]);
+  });
+
+  it("leaves a single command's stages off", () => {
+    const { raw } = workspace();
+    const verdict = authorityVerdict({
+      tool: "write",
+      args: { path: "/tmp/volli-protect/out", content: "x" },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.stages).toBeUndefined();
+    expect(verdict.violations?.[0].rule).toBe("path.outside-workspace");
+  });
+});
+
+describe("describeCall", () => {
+  it("shows a command as typed and a file tool as its path", () => {
+    expect(describeCall("execute", { command: "git push" })).toBe("git push");
+    expect(describeCall("write", { path: "/a/b" })).toBe("write  /a/b");
+    expect(describeCall("edit", { file_path: "/a/c" })).toBe("edit  /a/c");
+    expect(describeCall("read", { filePath: "/a/d" })).toBe("read  /a/d");
+    expect(describeCall("read", {})).toBe("read");
+    expect(describeCall("read", null)).toBe("read");
   });
 });

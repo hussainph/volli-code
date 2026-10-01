@@ -73,8 +73,10 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  approvalCopy,
   askChoice,
   askOffer,
+  encodeApprovalDetail,
   askInteractionId,
   askUserInteractionId,
   budgetAskInteractionId,
@@ -104,6 +106,9 @@ import {
   type PromptResource,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
+  type ApprovalDecision,
+  type ApprovalScope,
+  type RuntimeApprovalHit,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
@@ -226,8 +231,39 @@ function piAuthoritySnapshot(
   };
 }
 
+/**
+ * One answer that asks to be remembered (VC-480), as main hands it to the
+ * ledger. Everything the row's provenance needs beyond this is already known
+ * to the port: the Session, its project, its Ticket.
+ */
+export interface PiProtectionGrant {
+  scope: "session" | "project";
+  scopes: readonly ApprovalScope[];
+  rule: string;
+  asked: string;
+  reason: string;
+  interactionId: string;
+}
+
+/**
+ * Protection mode for one attachment (VC-480): the remembered approvals it may
+ * read and the one door that writes them.
+ *
+ * Present only when the experiment is switched on AND the project is
+ * protected, resolved per attach by main. `covers` reads live on every call and
+ * counts the use; `remember` runs in main, from the person's answer, BEFORE the
+ * runtime is told — the runtime holds no way to write a row.
+ */
+export interface PiProtection {
+  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
+  decided(decision: ApprovalDecision): void;
+  remember(grant: PiProtectionGrant): void;
+}
+
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
+  /** Protection mode, or absent (VC-480). */
+  protection?: PiProtection;
   projectId: string;
   /**
    * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
@@ -1203,6 +1239,19 @@ class PiBinding implements BindingHandle {
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
       ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      // Protection mode rides only a gate that binds. `covers` is the read
+      // port and nothing else; the runtime cannot author a row (VC-480).
+      ...(this.#authority?.enforcement === "enforce" && this.#context.protection !== undefined
+        ? {
+            approvals: {
+              covers: (scope) => this.#context.protection!.covers(scope),
+              decided: (decision) => {
+                this.#context.protection!.decided(decision);
+                if (decision.authoriser === "policy:ledger") void this.#showLedgerHit(decision);
+              },
+            },
+          }
+        : {}),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,
@@ -1588,6 +1637,7 @@ class PiBinding implements BindingHandle {
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
     const offer = askOffer(request);
+    const approval = request.approval;
     // Three frozen derivations, chosen by cause: a budget question keeps its
     // own `budget-ask:` segment and a confirmation its `confirm-ask:` one, so
     // that a gate ask and either of them about ONE tool call can never mint one
@@ -1611,10 +1661,34 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: offer.kind,
-        title: askTitle(request),
-        detail: request.reason,
+        title: approval === undefined ? askTitle(request) : approvalCopy(request.cause).title,
+        detail:
+          approval === undefined
+            ? request.reason
+            : encodeApprovalDetail({
+                asked: approval.asked,
+                because: approvalCopy(request.cause).because,
+                reason: approval.reason ?? request.reason,
+                stages: approval.stages ?? [],
+                held: approval.scopes.find((scope) => scope.stage !== undefined)?.stage ?? null,
+              }),
         options: offer.options,
         multiple: false,
+        // An approval card takes free text: that is what "Deny and steer" sends.
+        ...(approval === undefined
+          ? {}
+          : {
+              prompts: [
+                {
+                  id: DEFAULT_INTERACTION_PROMPT_ID,
+                  label: approvalCopy(request.cause).title,
+                  detail: null,
+                  options: offer.options,
+                  multiple: false,
+                  custom: true,
+                },
+              ],
+            }),
         // `prompts` is left off rather than written out. A record without them
         // is read as the one question its flat fields ask, and stating that
         // single prompt here would be the same derivation made twice — once
@@ -1637,6 +1711,48 @@ class PiBinding implements BindingHandle {
     if (signal.aborted) withdraw();
     else signal.addEventListener("abort", withdraw, { once: true });
     return parked.settle.promise;
+  }
+
+  /**
+   * The one quiet line a ledger hit leaves in the Session (VC-480): "Allowed by
+   * your earlier approval: …". It is an interaction opened and answered in the
+   * same breath, so it draws as the receipt line every answered card leaves and
+   * needs no new transcript element; it is never a question and asks nobody.
+   * Cosmetic by construction: a failure to write it is swallowed, because the
+   * decision it reports is already recorded and the call is already allowed.
+   */
+  async #showLedgerHit(decision: ApprovalDecision): Promise<void> {
+    const id = `ledger-hit:${decision.toolCallId}`;
+    const option = {
+      id: "ledger",
+      label: "Allowed by your earlier approval",
+      description: decision.summary,
+    };
+    try {
+      await this.#observe({
+        kind: "interaction",
+        state: "opened",
+        occurredAt: this.#now(),
+        interaction: {
+          id,
+          kind: "permission",
+          title: `Allowed by your earlier approval: ${decision.summary}`,
+          detail: decision.asked,
+          options: [option],
+          multiple: false,
+          native: this.#native,
+        },
+      });
+      await this.#observe({
+        kind: "interaction",
+        state: "resolved",
+        occurredAt: this.#now(),
+        interactionId: id,
+        resolution: { optionIds: [option.id], response: null },
+      });
+    } catch {
+      // See above: a missing receipt line costs a sentence, never a decision.
+    }
   }
 
   /**
@@ -1743,7 +1859,25 @@ class PiBinding implements BindingHandle {
     if (parked === undefined) return false;
     // `askChoice` is the runtime's own private reading of a decision the ledger
     // already holds in the person's own option ids.
-    parked.settle.resolve(askChoice(parked.request, resolution.optionIds));
+    const choice = askChoice(parked.request, resolution.optionIds, resolution.response);
+    // The row is written BEFORE the runtime hears the answer (VC-480): the next
+    // call may arrive the instant this one resolves, and it must find it.
+    if (choice === "allow-session" || choice === "allow-project") {
+      try {
+        this.#context.protection?.remember({
+          scope: choice === "allow-session" ? "session" : "project",
+          scopes: parked.request.approval?.scopes ?? [],
+          rule: parked.request.cause,
+          asked: parked.request.approval?.asked ?? parked.request.tool,
+          reason: parked.request.reason,
+          interactionId,
+        });
+      } catch {
+        // A row that could not be written must not become a silent "always":
+        // this one call is still allowed, and the card will simply come back.
+      }
+    }
+    parked.settle.resolve(choice);
     return true;
   }
 

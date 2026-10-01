@@ -19,6 +19,7 @@ import {
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import { codeModeSurfaceFor } from "./code-mode";
+import { commandScope, gitScope, writeScope } from "./approvals";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -515,5 +516,78 @@ describe("UtilityCompletionError", () => {
   // Null means nothing reached a provider, never that a request was free.
   it("carries null for a failure that was never billed", () => {
     expect(new UtilityCompletionError("not in this runtime's catalog", null).usage).toBeNull();
+  });
+});
+
+describe("the approval card's offer and answer", () => {
+  const pathAsk = askRequest({
+    trip: "approval",
+    approval: {
+      asked: "write /a/b/c/d/e.md",
+      scopes: [writeScope("/Users/me/code/docs/guides/e.md")],
+    },
+  });
+  const gitAsk = askRequest({
+    trip: "approval",
+    approval: { asked: "git push", scopes: [gitScope("git push -C /x")] },
+  });
+  const wrappedAsk = askRequest({
+    trip: "approval",
+    approval: { asked: "bash -c x", scopes: [commandScope("bash -c x")] },
+  });
+  const onceOnly = askRequest({ trip: "approval", approval: { asked: "x", scopes: [] } });
+
+  it("offers all five choices, each naming what it will remember", () => {
+    const offer = askOffer(pathAsk);
+    expect(offer.kind).toBe("permission");
+    expect(offer.options.map((option) => option.id)).toEqual([
+      "once",
+      "session",
+      "project",
+      "reject",
+      "steer",
+    ]);
+    expect(offer.options[1].description).toContain("Write to /Users/me/code/docs/guides");
+    expect(offer.options[2].description).toContain("for every Session");
+  });
+
+  it("never offers a project-wide rule for a command it cannot read inside", () => {
+    expect(askOffer(wrappedAsk).options.map((option) => option.id)).toEqual([
+      "once",
+      "session",
+      "reject",
+      "steer",
+    ]);
+    expect(askChoice(wrappedAsk, ["project"])).toBe("refuse");
+  });
+
+  it("offers only once, deny and steer when nothing can be remembered", () => {
+    expect(askOffer(onceOnly).options.map((option) => option.id)).toEqual([
+      "once",
+      "reject",
+      "steer",
+    ]);
+    expect(askChoice(onceOnly, ["session"])).toBe("refuse");
+    expect(askChoice(onceOnly, ["project"])).toBe("refuse");
+  });
+
+  it("reads each answer, failing to a refusal", () => {
+    expect(askChoice(pathAsk, ["once"])).toBe("allow");
+    expect(askChoice(pathAsk, ["session"])).toBe("allow-session");
+    expect(askChoice(pathAsk, ["project"])).toBe("allow-project");
+    expect(askChoice(gitAsk, ["project"])).toBe("allow-project");
+    expect(askChoice(pathAsk, ["reject"])).toBe("refuse");
+    expect(askChoice(pathAsk, ["once", "reject"])).toBe("refuse");
+    expect(askChoice(pathAsk, [])).toBe("refuse");
+    expect(askChoice(pathAsk, ["something-stale"])).toBe("refuse");
+  });
+
+  it("turns a steer into the person's words, and a wordless steer into a plain denial", () => {
+    expect(askChoice(pathAsk, ["steer"], "  use /tmp instead ")).toEqual({
+      kind: "steer",
+      message: "use /tmp instead",
+    });
+    expect(askChoice(pathAsk, ["steer"], "   ")).toBe("refuse");
+    expect(askChoice(pathAsk, ["steer"])).toBe("refuse");
   });
 });

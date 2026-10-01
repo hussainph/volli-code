@@ -17,6 +17,7 @@ import type {
   BrowserTrace,
   Appearance,
   ArchivedTicket,
+  AuthorityApproval,
   AutoReapPolicy,
   BrowserTabHolder,
   OrphanProcessCandidate,
@@ -1792,6 +1793,39 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- protection (VC-480) ---------------------------------------------------
+
+/**
+ * The Protection experiment and its remembered approvals.
+ *
+ * App-only, and the agent has no door to any of it: no verb projects these, the
+ * socket does not carry them, and the rows live in the app-owned database the
+ * governed Session cannot write. The renderer lists and revokes; rows are
+ * WRITTEN only in main, from a person's answer on a card.
+ */
+export interface VolliProtectionIpcContract {
+  /** Whether the experiment is switched on. Off by default. */
+  "volli:protection-get": { args: []; result: Result<{ enabled: boolean }> };
+  "volli:protection-set": { args: [enabled: boolean]; result: Result<{ enabled: boolean }> };
+  /** A project's live remembered approvals, newest first. */
+  "volli:protection-approvals": {
+    args: [projectId: string];
+    result: Result<{ approvals: AuthorityApproval[] }>;
+  };
+  /** Soft-deletes one row; the next matching call asks again. */
+  "volli:protection-revoke": {
+    args: [approvalId: string];
+    result: Result<{ approval: AuthorityApproval }>;
+  };
+  /** Undo of a revoke: the same row, id and provenance. */
+  "volli:protection-restore": {
+    args: [approvalId: string];
+    result: Result<{ approval: AuthorityApproval }>;
+  };
+}
+
+export type ProtectionIpcChannel = keyof VolliProtectionIpcContract;
+
 // ---- notifications (VC-295) ------------------------------------------------
 
 /**
@@ -2742,6 +2776,7 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliProtectionIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
     VolliAutomationIpcContract,

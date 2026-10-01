@@ -18,6 +18,8 @@
 import {
   errorMessage,
   evaluate,
+  violations as allViolations,
+  type PolicyViolation,
   type AuthorityDenialCause,
   type AuthoritySnapshot,
   type PolicyToolCall,
@@ -27,7 +29,7 @@ import { normalizeToolCall, resolveReadableRoot, resolveWorkspaceRoot } from "./
 /** Allow, or a refusal named well enough to count and to record. */
 export type AuthorityVerdict =
   | { outcome: "allow" }
-  | { outcome: "deny"; cause: AuthorityDenialCause; reason: string };
+  | { outcome: "deny"; cause: AuthorityDenialCause; reason: string; violations?: readonly PolicyViolation[]; stages?: readonly string[] };
 
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
 
@@ -43,6 +45,7 @@ export function authorityVerdict(input: {
    * exist yet, or that is not a real directory, grants nothing.
    */
   readableRoots?: readonly string[];
+  protection?: boolean;
 }): AuthorityVerdict {
   let workspacePath: string;
   let call: PolicyToolCall;
@@ -64,5 +67,24 @@ export function authorityVerdict(input: {
     ...(readableRoots.length === 0 ? {} : { readableRoots }),
   });
   if (decision.outcome === "allow") return ALLOW;
-  return { outcome: "deny", cause: decision.rule, reason: decision.reason };
+  return { outcome: "deny", cause: decision.rule, reason: decision.reason,
+    ...(input.protection === true ? {
+      violations: allViolations(call, input.authority, { workspacePath, readableRoots }),
+      ...((call.command?.segments.length ?? 0) > 1 ? { stages: call.command!.segments.map((segment) => [segment.program, ...segment.args].join(" ")) } : {}),
+    } : {}),
+  };
+}
+
+/**
+ * The call as an approval card shows it: the command itself, or the tool and
+ * the path it names. Best effort and display-only; nothing is decided from it.
+ */
+export function describeCall(tool: string, args: unknown): string {
+  if (typeof args === "object" && args !== null) {
+    const record = args as Record<string, unknown>;
+    if (typeof record.command === "string") return record.command;
+    const path = record.path ?? record.file_path ?? record.filePath;
+    if (typeof path === "string") return `${tool}  ${path}`;
+  }
+  return tool;
 }

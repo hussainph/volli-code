@@ -28,6 +28,7 @@ import {
 import { isExternalAppId } from "./external-apps";
 import type {
   AgentObservabilityIpcChannel,
+  ProtectionIpcChannel,
   BrowserIpcChannel,
   AutomationIpcChannel,
   CliIpcChannel,
@@ -2106,6 +2107,40 @@ export const AGENT_OBSERVABILITY_IPC: {
 export const AGENT_OBSERVABILITY_CHANNELS = Object.keys(
   AGENT_OBSERVABILITY_IPC,
 ) as readonly AgentObservabilityIpcChannel[];
+
+// ---- protection descriptor table (VC-480) --------------------------------
+
+export const PROTECTION_IPC: {
+  readonly [C in ProtectionIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:protection-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:protection-set": {
+    guard: (args): args is IpcArgs<"volli:protection-set"> =>
+      args.length === 1 && typeof args[0] === "boolean",
+    invalidError: "Invalid request",
+  },
+  "volli:protection-approvals": {
+    guard: (args): args is IpcArgs<"volli:protection-approvals"> =>
+      args.length === 1 && typeof args[0] === "string" && args[0] !== "",
+    invalidError: "Invalid request",
+  },
+  "volli:protection-revoke": {
+    guard: (args): args is IpcArgs<"volli:protection-revoke"> =>
+      args.length === 1 && typeof args[0] === "string" && args[0] !== "",
+    invalidError: "Invalid request",
+  },
+  "volli:protection-restore": {
+    guard: (args): args is IpcArgs<"volli:protection-restore"> =>
+      args.length === 1 && typeof args[0] === "string" && args[0] !== "",
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the protection surface owns, derived — never hand-synced. */
+export const PROTECTION_CHANNELS = Object.keys(PROTECTION_IPC) as readonly ProtectionIpcChannel[];
 
 // ---- notification descriptor table (VC-295) -------------------------------
 // The guard is the shape check; WHICH categories exist is the service's

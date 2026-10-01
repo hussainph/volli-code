@@ -60,6 +60,7 @@ import {
   type McpToolDefinition,
   type ObservabilityEvent,
   type CompactionObservation,
+  type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeMcpCall,
   type ProviderAttemptEvent,
@@ -3124,6 +3125,97 @@ describe("startSession", () => {
     // observation: history must not hold a denial for a call that then ran.
     expect(exec).toHaveBeenCalledOnce();
     expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("asks on the first approvable refusal in protection mode, and a ledger hit never asks again", async () => {
+    const hits = new Set<string>();
+    const decisions: string[] = [];
+    const ask = vi.fn(async () => {
+      hits.add("git discard");
+      return "allow-session" as const;
+    });
+    const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+    attachment.spec.authority = {
+      ...attachment.spec.authority,
+      fallback: { consecutiveDenials: 99, sessionDenials: 99 },
+    };
+    attachment.spec.approvals = {
+      covers: (scope) =>
+        hits.has("git discard") ? { approvalId: "row-1", summary: scope.summary } : null,
+      decided: (decision) => void decisions.push(decision.authoriser),
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Done.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree twice.");
+    await handle.close();
+
+    expect(ask).toHaveBeenCalledOnce();
+    expect((ask.mock.calls[0] as unknown as [RuntimeAskRequest])[0]).toMatchObject({
+      trip: "approval",
+      approval: { asked: "git reset --hard" },
+    });
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(decisions).toEqual(["user:session", "policy:ledger"]);
+    expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("refuses a never-allowed call in protection mode with the plain explanation and no question", async () => {
+    const ask = vi.fn(async () => "allow" as const);
+    const decisions: string[] = [];
+    const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+    attachment.spec.approvals = {
+      covers: () => null,
+      decided: (decision) => void decisions.push(decision.authoriser),
+    };
+    let toolResultContext: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "launchctl load /tmp/x.plist" });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Install it.");
+    await handle.close();
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+    expect(decisions).toEqual(["rule:hard"]);
+    expect(JSON.stringify(toolResultContext?.messages)).toContain(
+      "Never allowed: programs that outlive the Session",
+    );
   });
 
   it("records an allowed authority decision only through observability, split from tool execution", async () => {

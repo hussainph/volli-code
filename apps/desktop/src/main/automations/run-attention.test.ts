@@ -109,8 +109,9 @@ function state(
   kind: "idle" | "waiting" | "error" | "stopped",
   title: string | null = "Nightly sweep",
   sessionId = SESSION_ID,
+  open: readonly Record<string, unknown>[] = [{ id: "ask-1", options: [] }],
 ): SessionProjection {
-  const interactions = { active: kind === "waiting" ? [{ id: "ask-1" }] : [], all: [] };
+  const interactions = { active: kind === "waiting" ? open : [], all: [] };
   const active = kind === "error" ? [{ id: "a1", kind: "configuration_invalid" }] : [];
   // `primary` as the ledger folds it — the newest active attention — because
   // that is the row the chat plane draws and the item a click lands on.
@@ -386,6 +387,41 @@ describe("createRunAttentionWatch", () => {
       console.warn = original;
     }
     expect(warnings).toHaveLength(1);
+  });
+});
+
+describe("an approval card in an unattended Run (VC-480)", () => {
+  const card = {
+    id: "ask:call-1",
+    title: "Allow writing outside this workspace?",
+    detail: "write  /Users/me/code/docs/a.md\u241ebecause\u241ereason\u241e",
+    options: [{ id: "once" }, { id: "steer" }],
+  };
+
+  it("says what needs approving and that the Run is paused until a person answers", () => {
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("idle"));
+    h.watch.observe(state("waiting", "Nightly sweep", SESSION_ID, [card]));
+    expect(h.notified.map(({ title, body }) => ({ title, body }))).toEqual([
+      {
+        title: "An Automation needs your approval",
+        body: "Nightly sweep needs approval for writing outside this workspace: write  /Users/me/code/docs/a.md. It's paused until you answer.",
+      },
+    ]);
+    expect(h.notified[0]?.target).toMatchObject({ interactionId: "ask:call-1" });
+  });
+
+  it("does not read the quiet line a ledger hit leaves as a person being needed", () => {
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("idle"));
+    h.watch.observe(
+      state("waiting", "Nightly sweep", SESSION_ID, [{ id: "ledger-hit:call-2", options: [] }]),
+    );
+    expect(h.notified).toEqual([]);
+    h.watch.observe(state("waiting", "Nightly sweep", SESSION_ID, [card]));
+    expect(h.notified).toHaveLength(1);
   });
 });
 

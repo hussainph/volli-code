@@ -89,10 +89,12 @@ import {
   WarningIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
-import type {
-  RendererSessionInteraction,
-  SessionInteractionOption,
-  SessionInteractionResolution,
+import {
+  decodeApprovalDetail,
+  isApprovalInteraction,
+  type RendererSessionInteraction,
+  type SessionInteractionOption,
+  type SessionInteractionResolution,
 } from "@volli/shared";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
@@ -279,6 +281,7 @@ export interface InteractionCardProps {
  * the mount decides where a card stands, never which one it is.
  */
 export function InteractionCard(props: InteractionCardProps) {
+  if (isApprovalInteraction(props.interaction)) return <ApprovalCard {...props} />;
   return isAskUserInteraction(props.interaction) ? (
     <QuestionCard {...props} />
   ) : (
@@ -595,6 +598,244 @@ function DecisionCard({
             {interactionSubmitLabel(interaction, draft)}
           </Button>
         </div>
+      </div>
+    </form>
+  );
+}
+
+/** Stages with a key that survives the same stage appearing twice (`make && make`). */
+function keyedStages(stages: readonly string[]): { stage: string; key: string }[] {
+  const seen = new Map<string, number>();
+  return stages.map((stage) => {
+    const nth = (seen.get(stage) ?? 0) + 1;
+    seen.set(stage, nth);
+    return { stage, key: `${stage}#${nth}` };
+  });
+}
+
+/* ------------------------------------------------------- the approval card */
+
+/**
+ * The card Protection raises when a call needs a person (VC-480): what the
+ * agent wants to do, why it was stopped, and up to five ways to answer.
+ *
+ * Everything on it is written by Volli from the call and the rule — the title
+ * is the rule's, the sentence under it is the rule's, and the rows name exactly
+ * what a "remember" answer will store. The agent's own words appear nowhere
+ * here except inside the call itself, in monospace, because that is the thing
+ * being authorized; text an agent wrote can never read as Volli's question.
+ *
+ * Nothing is preselected and one click or the digit on the row answers. "Deny
+ * and steer" is the one row that opens a field in place instead of answering:
+ * its words go back to the agent as the reason the call was refused.
+ */
+function ApprovalCard({
+  interaction,
+  onResolve,
+  onWithdraw,
+  resolving,
+  ref,
+  className,
+}: InteractionCardProps) {
+  const { failed, send, commit } = useDelivery(interaction.id, onResolve);
+  const detail = React.useMemo(
+    () => decodeApprovalDetail(interaction.detail),
+    [interaction.detail],
+  );
+  const [steering, setSteering] = React.useState(false);
+  const [steer, setSteer] = React.useState("");
+  const [open, setOpen] = React.useState(false);
+  const withdraw = onWithdraw ? () => commit(null, () => onWithdraw()) : undefined;
+  const options = interaction.options;
+  const steerOption = options.find((option) => option.id === "steer");
+
+  const answer = (option: SessionInteractionOption) => {
+    if (resolving) return;
+    if (option.id === "steer") {
+      setSteering(true);
+      return;
+    }
+    send({ resolution: { optionIds: [option.id], response: null }, message: null });
+  };
+  const sendSteer = () => {
+    const words = steer.trim();
+    if (resolving || words === "" || !steerOption) return;
+    send({ resolution: { optionIds: [steerOption.id], response: words }, message: null });
+  };
+
+  return (
+    <form
+      ref={ref}
+      tabIndex={-1}
+      aria-label={interaction.title}
+      data-slot="approval-card"
+      onSubmit={(event) => {
+        event.preventDefault();
+        sendSteer();
+      }}
+      onKeyDown={(event) => {
+        withdrawOnEscape(withdraw, resolving)(event);
+        if (event.defaultPrevented || steering) return;
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const target = event.target as HTMLElement;
+        if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
+        const picked = options[Number(event.key) - 1];
+        if (picked) {
+          event.preventDefault();
+          answer(picked);
+        }
+      }}
+      className={cn(
+        "pointer-events-auto overflow-hidden outline-none",
+        COMPOSER_STACK_SHELL,
+        className,
+      )}
+    >
+      <div className="flex items-start gap-2 px-4 pt-4">
+        <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-balance text-foreground">{interaction.title}</p>
+          {detail.stages.length > 1 && detail.held !== null ? (
+            <ol
+              className="mt-1 flex flex-col gap-0.5 font-mono text-ui"
+              aria-label="Command stages"
+            >
+              {keyedStages(detail.stages).map(({ stage, key }, index) => (
+                <li
+                  key={key}
+                  className={cn(
+                    "flex min-w-0 items-baseline gap-2 rounded px-1",
+                    index === detail.held
+                      ? "bg-primary/10 text-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  <span aria-hidden className="shrink-0 tabular-nums">
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 truncate">{stage}</span>
+                  {index === detail.held ? (
+                    <span className="ml-auto shrink-0 font-sans text-primary">held</span>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <pre className="mt-1 max-h-24 overflow-y-auto font-mono text-ui whitespace-pre-wrap break-words text-foreground">
+              {detail.asked}
+            </pre>
+          )}
+          {detail.because ? (
+            <p className="mt-1 text-ui text-muted-foreground">Stopped because {detail.because}</p>
+          ) : null}
+          {open ? (
+            <dl className="mt-2 space-y-1 text-ui">
+              <dt className="text-muted-foreground">The full call</dt>
+              <dd>
+                <pre className="max-h-32 overflow-y-auto font-mono whitespace-pre-wrap break-words text-foreground">
+                  {detail.asked}
+                </pre>
+              </dd>
+              {detail.reason ? (
+                <>
+                  <dt className="text-muted-foreground">The rule that stopped it</dt>
+                  <dd className="break-words text-foreground">{detail.reason}</dd>
+                </>
+              ) : null}
+            </dl>
+          ) : null}
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+            className="mt-1 text-ui text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:underline"
+          >
+            {open ? "Hide details" : "See details"}
+          </button>
+        </div>
+      </div>
+
+      <div className="px-2 pt-2" role="group" aria-label="Choices">
+        {options.map((option, index) => {
+          const quiet = option.id === "reject" || option.id === "steer";
+          return (
+            <React.Fragment key={option.id}>
+              {quiet && !options.slice(0, index).some((other) => other.id === "reject") ? (
+                <div aria-hidden className="mx-2 my-1 border-t border-border/70" />
+              ) : null}
+              <button
+                type="button"
+                disabled={resolving}
+                onClick={() => answer(option)}
+                className={cn(
+                  OPTION_ROW,
+                  "w-full hover:bg-accent focus-visible:bg-accent",
+                  option.id === "steer" && steering ? "bg-accent" : null,
+                )}
+              >
+                <span className={cn(OPTION_MARK, "bg-muted text-muted-foreground")}>
+                  {index + 1}
+                </span>
+                <span className="text-sm text-foreground">{option.label}</span>
+                {option.description ? (
+                  <span className="min-w-0 truncate text-ui text-muted-foreground">
+                    {option.description}
+                  </span>
+                ) : null}
+                <AnswerArrow focus="group-focus-visible:opacity-100" />
+              </button>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {steering ? (
+        <div className="flex flex-col gap-2 px-4 pt-2">
+          <Textarea
+            autoFocus
+            value={steer}
+            disabled={resolving}
+            aria-label="Tell the agent what to do instead"
+            placeholder="Tell the agent what to do instead"
+            onChange={(event) => setSteer(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                sendSteer();
+              }
+            }}
+          />
+          <div className="flex justify-end">
+            <Button type="submit" size="sm" disabled={resolving || steer.trim() === ""}>
+              Deny and send
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div
+        data-slot="interaction-footer"
+        className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-border/70 px-4 py-2"
+      >
+        {withdraw ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            disabled={resolving}
+            onClick={withdraw}
+          >
+            <XCircleIcon className="size-3.5" />
+            {withdrawLabel(interaction)}
+          </Button>
+        ) : null}
+        {failed ? (
+          <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <span className="min-w-0 truncate">Not delivered</span>
+          </span>
+        ) : null}
       </div>
     </form>
   );

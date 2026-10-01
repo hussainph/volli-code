@@ -76,6 +76,8 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "keep the sidebar open",
             "sidebar",
             "rail",
+            "protection (experimental)",
+            "protection",
           ],
           content: <GeneralPane />,
         },

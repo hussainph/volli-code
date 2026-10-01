@@ -27,6 +27,7 @@ import type {
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { DecisionAnswered, DecisionMiss } from "./decision-model";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import { projectRememberable, type ApprovalDecision, type ApprovalScope } from "./approvals";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -379,7 +380,54 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
  * allowance and escalate a Session that was never refused anything. The same
  * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm" | "approval";
+
+/** What an approval card is about (VC-480). */
+export interface RuntimeApprovalAsk {
+  /** The call as the card shows it: the command, or the tool and its path. */
+  asked: string;
+  /**
+   * A compound shell command's stages, in order, when it has more than one
+   * (`a && b && rm x`). The card shows the whole line with the held stage —
+   * `scopes[].stage` — highlighted.
+   */
+  stages?: readonly string[];
+  /** The rule that stopped it, in its own words, for the card's details. */
+  reason?: string;
+  /**
+   * What "allow for this Session" and "always allow" would remember, one scope
+   * each. Empty when the refusal cannot be narrowed, so only "allow once" is
+   * offered beside the denials.
+   */
+  scopes: readonly ApprovalScope[];
+}
+
+/**
+ * The remembered approvals a Session reads (VC-480).
+ *
+ * A read port and nothing more, which is the point: rows are written by main,
+ * from the person's answer, and the runtime has no way to author one.
+ */
+export interface RuntimeApprovals {
+  /**
+   * The approval that covers this scope right now, or null. Read live on every
+   * call, never cached, so a revoke applies from the very next call. The host
+   * counts the use.
+   */
+  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
+  /**
+   * Records who authorised one gated call. Called BEFORE the call runs, once
+   * per decision; a host that cannot write it must not stop the call, but must
+   * say so.
+   */
+  decided(decision: ApprovalDecision): void;
+}
+
+/** A remembered approval that allowed a scope. */
+export interface RuntimeApprovalHit {
+  approvalId: string;
+  summary: string;
+}
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -410,6 +458,11 @@ export interface RuntimeAskRequest {
   reason: string;
   trip: RuntimeAskTrip;
   /**
+   * Present on a protection ask (VC-480): what the call wants to do and what
+   * a "remember this" answer would store. Absent on every other ask.
+   */
+  approval?: RuntimeApprovalAsk;
+  /**
    * Whether a person may overrule this refusal.
    *
    * Not "could the call run if this layer stood aside" — for the hard-deny rules
@@ -437,7 +490,16 @@ export interface RuntimeAskRequest {
  * reserves both of those for the durable Session Interaction vocabulary, and
  * this is the runtime's private reading of a decision that is recorded there.
  */
-export type RuntimeAskChoice = "allow" | "refuse" | "stop";
+export type RuntimeAskChoice =
+  | "allow"
+  | "refuse"
+  | "stop"
+  /** Allow, and the host has already remembered it for this Session (VC-480). */
+  | "allow-session"
+  /** Allow, and the host has already remembered it for the project (VC-480). */
+  | "allow-project"
+  /** Deny, and tell the agent what to do instead (VC-480). */
+  | { kind: "steer"; message: string };
 
 /** What one escalation puts in front of a person. */
 export interface RuntimeAskOffer {
@@ -469,6 +531,7 @@ const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
  * Attention: it has a consequence either way.
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
+  if (request.approval !== undefined) return approvalOffer(request.approval);
   if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
@@ -489,7 +552,9 @@ export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
 export function askChoice(
   request: RuntimeAskRequest,
   optionIds: readonly string[],
+  response: string | null = null,
 ): RuntimeAskChoice {
+  if (request.approval !== undefined) return approvalChoice(request.approval, optionIds, response);
   // Refusal is read first, so an answer carrying both a grant and a refusal
   // resolves toward the state the call was already in. A multi-select that
   // accumulated `once` and `reject` together is incoherent, and resolving an
@@ -500,6 +565,81 @@ export function askChoice(
     return chosen.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
   }
   return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
+}
+
+/** The ids an approval card's rows answer with. */
+export const APPROVAL_OPTION_IDS = {
+  once: "once",
+  session: "session",
+  project: "project",
+  deny: "reject",
+  steer: "steer",
+} as const;
+
+/** The five choices of the approval card, fewer when nothing can be remembered. */
+function approvalOffer(approval: RuntimeApprovalAsk): RuntimeAskOffer {
+  const what = approval.scopes.map((scope) => scope.summary).join("; ");
+  const remembers = approval.scopes.length > 0;
+  return {
+    kind: "permission",
+    options: [
+      { id: APPROVAL_OPTION_IDS.once, label: "Allow once", description: "Just this call" },
+      ...(remembers
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.session,
+              label: "Allow for this Session",
+              description: `${what} for the rest of this Session`,
+            },
+          ]
+        : []),
+      // Only where a safe scope exists: a path, or a git shape. A command Volli
+      // cannot read inside is never remembered project-wide.
+      ...(projectRememberable(approval.scopes)
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.project,
+              label: "Always allow in this project",
+              description: `${what} for every Session`,
+            },
+          ]
+        : []),
+      {
+        id: APPROVAL_OPTION_IDS.deny,
+        label: "Deny",
+        description: "The agent is told no and carries on",
+      },
+      {
+        id: APPROVAL_OPTION_IDS.steer,
+        label: "Deny and steer\u2026",
+        description: "Tell the agent what to do instead",
+      },
+    ],
+  };
+}
+
+/**
+ * Read an approval card's answer. Fails to a refusal like {@link askChoice};
+ * `session` and `project` mean nothing for a refusal that offered nothing to
+ * remember, and a steer with no words is a plain denial.
+ */
+function approvalChoice(
+  approval: RuntimeApprovalAsk,
+  optionIds: readonly string[],
+  response: string | null,
+): RuntimeAskChoice {
+  const chosen = optionIds.map((id) => id.toLowerCase());
+  if (chosen.includes(APPROVAL_OPTION_IDS.steer)) {
+    const message = (response ?? "").trim();
+    return message === "" ? "refuse" : { kind: "steer", message };
+  }
+  if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
+  const remembers = approval.scopes.length > 0;
+  if (projectRememberable(approval.scopes) && chosen.includes(APPROVAL_OPTION_IDS.project)) {
+    return "allow-project";
+  }
+  if (remembers && chosen.includes(APPROVAL_OPTION_IDS.session)) return "allow-session";
+  return chosen.includes(APPROVAL_OPTION_IDS.once) ? "allow" : "refuse";
 }
 
 /** One answer the model thought worth offering. */
@@ -1189,6 +1329,14 @@ export interface SessionRuntimeSpec {
    * mid-wait loses the question while the runtime is still blocked on it.
    */
   ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
+  /**
+   * Protection mode (VC-480). Present, and the gate changes shape: a refusal a
+   * person may clear is looked up here first and, when no approval covers it,
+   * put to a person on the first hit; a refusal no one may clear is explained
+   * and never asked about. Absent, every ask follows the fallback thresholds
+   * exactly as before.
+   */
+  approvals?: RuntimeApprovals;
   /**
    * Let the model ask a person, and block its call until they answer.
    *

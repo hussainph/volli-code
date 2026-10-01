@@ -2280,6 +2280,55 @@ CREATE INDEX IF NOT EXISTS session_read_receipts_unread
   WHERE unread_since IS NOT NULL;
 `;
 
+/**
+ * `authority_approvals` — the remembered approvals of VC-480.
+ *
+ * One row per "allow for this Session" or "always allow in this project", with
+ * where it came from. App-owned like `projects.authority_policy` and for the
+ * same reason: no verb or tool exposes it, so the Session it governs cannot
+ * write it. Revoking is a soft delete (`revoked_at`), so Undo restores the same
+ * row with the same provenance. A Session row dies with its Session.
+ */
+const MIGRATION_053_AUTHORITY_APPROVALS = `
+CREATE TABLE IF NOT EXISTS authority_approvals (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope                TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+  session_id           TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  operation            TEXT NOT NULL,
+  key                  TEXT NOT NULL,
+  rule                 TEXT NOT NULL,
+  provenance           TEXT NOT NULL CHECK (json_valid(provenance)),
+  created_at           INTEGER NOT NULL,
+  use_count            INTEGER NOT NULL DEFAULT 0,
+  last_used_at         INTEGER,
+  last_used_session_id TEXT,
+  revoked_at           INTEGER,
+  CHECK ((scope = 'session') = (session_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS authority_approvals_project
+  ON authority_approvals(project_id)
+  WHERE revoked_at IS NULL;
+
+-- Who authorised every gated call, written before the call ran (VC-480). The
+-- activity log's raw material: append-only, one row per decision.
+CREATE TABLE IF NOT EXISTS authority_decisions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  tool         TEXT NOT NULL,
+  authoriser   TEXT NOT NULL,
+  rule         TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  asked        TEXT NOT NULL,
+  approval_id  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS authority_decisions_session
+  ON authority_decisions(session_id, created_at);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2556,6 +2605,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "projects.decision_model — a project's own decision model, NULL = inherit (VC-478)",
     sql: MIGRATION_053_PROJECT_DECISION_MODEL,
     apply: applyMigration053ProjectDecisionModel,
+  },
+  {
+    version: 54,
+    name: "authority_approvals — remembered approvals, app-owned (VC-480)",
+    sql: MIGRATION_053_AUTHORITY_APPROVALS,
   },
 ];
 

@@ -1,4 +1,7 @@
 import {
+  askOffer,
+  encodeApprovalDetail,
+  writeScope,
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
   type RendererSessionInteraction,
@@ -1781,5 +1784,89 @@ describe("the durable answer in scrollback", () => {
         parts: [{ type: "data-interaction-resolution", data: { optionIds: [], response: null } }],
       }),
     ).toEqual({ interactionId: "question:q1", resolution: { optionIds: [], response: null } });
+  });
+});
+
+describe("describeInteractionResolution for an approval card (VC-480)", () => {
+  const offer = askOffer({
+    cause: "path.outside-workspace",
+    tool: "write",
+    toolCallId: "call-1",
+    turnId: null,
+    reason: "outside",
+    trip: "approval",
+    overridable: true,
+    approval: { asked: "write /x", scopes: [writeScope("/Users/me/code/docs/guides/a.md")] },
+  });
+  const card: RendererSessionInteraction = {
+    id: "ask:call-1",
+    attachmentId: "attach-1",
+    kind: "permission",
+    title: "Allow writing outside this workspace?",
+    detail: encodeApprovalDetail({
+      asked: "write /x",
+      because: "b",
+      reason: "r",
+      stages: [],
+      held: null,
+    }),
+    options: offer.options,
+    multiple: false,
+    native: { id: null, detail: null },
+  };
+  const receipt = (optionIds: string[], response: string | null = null) =>
+    describeInteractionResolution(card, { optionIds, response });
+
+  it("says what was remembered, and for how long", () => {
+    expect(receipt(["once"])).toEqual({
+      verdict: "allowed",
+      lead: "You allowed",
+      subject: "writing outside this workspace",
+      trailer: "once",
+    });
+    expect(receipt(["session"])).toMatchObject({
+      verdict: "standing",
+      trailer: "for this Session",
+    });
+    expect(receipt(["project"])).toMatchObject({
+      verdict: "standing",
+      trailer: "always in this project",
+    });
+  });
+
+  it("records a denial, with the person's words when they steered", () => {
+    expect(receipt(["reject"])).toMatchObject({
+      verdict: "rejected",
+      lead: "You denied",
+      trailer: null,
+    });
+    expect(receipt(["steer"], "  use\n/tmp ")).toMatchObject({
+      verdict: "rejected",
+      trailer: "\u201cuse /tmp\u201d",
+    });
+    expect(receipt(["steer"])).toMatchObject({ trailer: null });
+    expect(receipt([])).toMatchObject({ verdict: "rejected" });
+  });
+
+  it("reads a ledger hit as one quiet line naming the earlier approval", () => {
+    const hit: RendererSessionInteraction = {
+      ...card,
+      id: "ledger-hit:call-2",
+      options: [
+        { id: "ledger", label: "Allowed by your earlier approval", description: "Write to /a" },
+      ],
+    };
+    expect(describeInteractionResolution(hit, { optionIds: ["ledger"], response: null })).toEqual({
+      verdict: "standing",
+      lead: "Allowed by your earlier approval:",
+      subject: "Write to /a",
+      trailer: null,
+    });
+    expect(
+      describeInteractionResolution(
+        { ...hit, options: [{ id: "ledger", label: "x", description: null }] },
+        { optionIds: ["ledger"], response: null },
+      ).subject,
+    ).toBe("write /x");
   });
 });

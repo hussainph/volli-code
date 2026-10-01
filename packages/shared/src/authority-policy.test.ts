@@ -9,7 +9,8 @@ import {
   type PolicyDecision,
   type PolicyToolCall,
 } from "./authority";
-import { evaluate } from "./authority-policy";
+import { evaluate, violations } from "./authority-policy";
+import type { CapabilityPolicy } from "./capability-policy";
 
 const WORKSPACE = "/Users/dev/code/volli";
 
@@ -949,5 +950,161 @@ describe("rule order", () => {
         ),
       ),
     ).toBe("allow");
+  });
+});
+
+describe("violations", () => {
+  const OTHER = "/Users/dev/code/other/docs/guides";
+
+  function all(toolCall: PolicyToolCall, overrides: Partial<AuthoritySnapshot> = {}) {
+    return violations(toolCall, snapshot(overrides), {
+      workspacePath: WORKSPACE,
+      capability: CAPABILITY,
+    });
+  }
+
+  it("lists nothing for a call no rule objects to", () => {
+    expect(all(call({ tool: "read", reads: [`${WORKSPACE}/a.ts`] }))).toEqual([]);
+  });
+
+  it("names a write outside the workspace by its folder, once per distinct target", () => {
+    const [violation] = all(
+      call({ tool: "write", writes: [`${OTHER}/a.md`, `${OTHER}/a.md`, `${OTHER}/b.md`] }),
+    );
+    expect(violation.rule).toBe("path.outside-workspace");
+    expect(violation.scopes?.map((scope) => [scope.operation, scope.key, scope.target])).toEqual([
+      ["write", OTHER, `${OTHER}/a.md`],
+      ["write", OTHER, `${OTHER}/b.md`],
+    ]);
+  });
+
+  it("names a private read exactly, and an operand of a program that may change it not at all", () => {
+    const read = all(call({ tool: "read", reads: ["/Users/dev/.zshrc"] }));
+    expect(read[0].rule).toBe("path.private");
+    expect(read[0].scopes?.map((scope) => [scope.operation, scope.key])).toEqual([
+      ["read", "/Users/dev/.zshrc"],
+    ]);
+    const cat = all(exec(segment("cat", ["/Users/dev/.zshrc"], { paths: ["/Users/dev/.zshrc"] })));
+    expect(cat[0].scopes?.[0].operation).toBe("read");
+    const copy = all(
+      exec(segment("cp", ["/Users/dev/.zshrc", "x"], { paths: ["/Users/dev/.zshrc"] })),
+    );
+    expect(copy.find((violation) => violation.rule === "path.private")?.scopes).toBeNull();
+    const write = all(call({ tool: "write", writes: ["/Users/dev/.zshrc"] }));
+    expect(write.find((violation) => violation.rule === "path.private")?.scopes).toBeNull();
+  });
+
+  it("keeps plumbing and Volli's own files exact, and git config writes once-only", () => {
+    const hook = all(call({ tool: "write", writes: [`${WORKSPACE}/.git/hooks/pre-commit`] }));
+    const internals = hook.find((violation) => violation.rule === "path.git-internals");
+    expect(internals?.scopes?.map((scope) => scope.key)).toEqual([
+      `${WORKSPACE}/.git/hooks/pre-commit`,
+    ]);
+    const volli = all(call({ tool: "write", writes: [`${WORKSPACE}/.volli/state.json`] }));
+    expect(
+      volli.find((violation) => violation.rule === "path.volli-internals")?.scopes?.[0].key,
+    ).toBe(`${WORKSPACE}/.volli/state.json`);
+    const config = all(exec(segment("git", ["config", "core.editor", "vim"])));
+    expect(config.find((violation) => violation.rule === "path.git-internals")?.scopes).toBeNull();
+  });
+
+  it("names git in another tree by its shape, and holds the stage that made it", () => {
+    const [escape] = all(
+      exec(
+        segment("echo", ["hi"]),
+        segment("git", ["-C", "/Users/dev/code/other", "push", "--force"]),
+      ),
+    );
+    expect(escape.rule).toBe("command.git-escapes-workspace");
+    expect(escape.scopes?.[0]).toMatchObject({
+      operation: "git",
+      key: "git push --force -C /Users/dev/code/other",
+      stage: 1,
+    });
+    const single = all(exec(segment("git", ["-C", "/Users/dev/code/other", "status"])));
+    expect(single[0].scopes?.[0].stage).toBeUndefined();
+    expect(single[0].scopes?.[0].key).toBe("git status -C /Users/dev/code/other");
+    const bare = all(exec(segment("git", ["worktree", "add", "/Users/dev/code/other"])));
+    expect(bare[0].scopes?.[0].key).toBe("git worktree /Users/dev/code/other");
+    const none = all(exec(segment("git", ["-C", "/Users/dev/code/other"])));
+    expect(none[0].scopes?.[0].key).toBe("git -C /Users/dev/code/other");
+  });
+
+  it("skips the git stages that did not escape or discard", () => {
+    const [escape] = all(
+      exec(segment("git", ["status"]), segment("git", ["-C", "/Users/dev/code/other", "log"])),
+    );
+    expect(escape.scopes?.map((scope) => scope.key)).toEqual(["git log -C /Users/dev/code/other"]);
+    const [discard] = all(exec(segment("git", ["-C", "."]), segment("git", ["reset", "--hard"])), {
+      location: "main-checkout",
+    });
+    expect(discard.scopes?.map((scope) => scope.stage)).toEqual([1]);
+  });
+
+  it("names a discard by its shape in the Main checkout", () => {
+    const found = all(exec(segment("git", ["reset", "--hard"]), segment("ls")), {
+      location: "main-checkout",
+    });
+    expect(found[0].rule).toBe("command.git-discards-work");
+    expect(found[0].scopes?.[0]).toMatchObject({
+      key: "git reset --hard (Main checkout)",
+      stage: 0,
+    });
+    expect(
+      all(exec(segment("ls"), segment("git", ["status"])), { location: "main-checkout" }),
+    ).toEqual([]);
+  });
+
+  it("stamps the stage of a path a later segment writes", () => {
+    const found = all(
+      exec(segment("true"), segment("mkdir", ["-p", OTHER], { writes: [`${OTHER}/x`] })),
+    );
+    expect(found[0].scopes?.[0].stage).toBe(1);
+    const plain = all(call({ tool: "write", writes: [`${OTHER}/x`] }));
+    expect(plain[0].scopes?.[0].stage).toBeUndefined();
+  });
+
+  it("remembers a command it cannot read inside only as itself", () => {
+    const raw = call({
+      command: {
+        raw: "bash -c 'echo x > /tmp/out/y/z/w'",
+        segments: [segment("bash", ["-c", "echo x"], { writes: ["/tmp/out/y/z/w"] })],
+      },
+    });
+    const found = all(raw);
+    expect(found[0].rule).toBe("path.outside-workspace");
+    expect(found[0].scopes).toEqual([
+      expect.objectContaining({ operation: "command", key: "bash -c 'echo x > /tmp/out/y/z/w'" }),
+    ]);
+  });
+
+  it("holds no stage for a wrapped command, which is approved as a whole", () => {
+    const found = all(
+      call({
+        command: {
+          raw: "true && bash -c x",
+          segments: [segment("true"), segment("bash", ["-c", "x"], { writes: ["/tmp/a/b/c/d"] })],
+        },
+      }),
+    );
+    expect(found[0].scopes?.[0]).toMatchObject({ operation: "command" });
+    expect(found[0].scopes?.[0].stage).toBeUndefined();
+  });
+
+  it("lists every objection, so a hard rule cannot ride behind an approvable one", () => {
+    const found = all(
+      exec(
+        segment("tee", ["/Users/dev/code/other/a/b/c.txt"], {
+          writes: ["/Users/dev/code/other/a/b/c.txt"],
+        }),
+        segment("launchctl", ["load", "x"]),
+      ),
+    );
+    expect(found.map((violation) => violation.rule)).toEqual([
+      "path.outside-workspace",
+      "command.persistence",
+    ]);
+    expect(found[1].scopes).toBeNull();
+    expect(isOverridableAuthorityRule(found[1].rule)).toBe(false);
   });
 });
