@@ -381,8 +381,8 @@ they are listed so the index accounts for every module in the bundle.
   detect-node-es@1.1.0  MIT  [bundled into a chunk]
   devlop@1.1.0  MIT  [bundled into a chunk]
   diff@8.0.4  BSD-3-Clause  [bundled into a chunk]
-  dompurify@3.4.14  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
-  dompurify@3.4.8  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
+  dompurify@3.4.15  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
+  dompurify@3.4.16  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   ecdsa-sig-formatter@1.0.11  Apache-2.0  [bundled into a chunk]
   electron@44.0.0  MIT  [build-time source]
   electron-updater@6.8.9  MIT  [node_modules tree]
@@ -396,7 +396,7 @@ they are listed so the index accounts for every module in the bundle.
   extend@3.0.2  MIT  [bundled into a chunk]
   fast-deep-equal@3.1.3  MIT  [bundled into a chunk]
   fast-sha256@1.3.0  Unlicense  [bundled into a chunk]
-  fast-uri@3.1.3  BSD-3-Clause  [bundled into a chunk]
+  fast-uri@3.1.8  BSD-3-Clause  [bundled into a chunk]
   fetch-blob@3.2.0  MIT  [bundled into a chunk]
   formdata-polyfill@4.0.10  MIT  [bundled into a chunk]
   framer-motion@13.1.1  MIT  [bundled into a chunk]
@@ -438,7 +438,7 @@ they are listed so the index accounts for every module in the bundle.
   is-plain-obj@4.1.0  MIT  [bundled into a chunk]
   is-potential-custom-element-name@1.0.1  MIT  [node_modules tree]
   isexe@2.0.0  ISC  [bundled into a chunk]
-  js-yaml@4.3.1  MIT  [node_modules tree]
+  js-yaml@4.3.2  MIT  [node_modules tree]
   jsdom@30.0.1  MIT  [node_modules tree]
   json-bigint@1.0.0  MIT  [bundled into a chunk]
   json-schema@0.4.0  (AFL-2.1 OR BSD-3-Clause)  [bundled into a chunk]
@@ -481,7 +481,7 @@ they are listed so the index accounts for every module in the bundle.
   mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0  MIT  [bundled into a chunk]
   mdast-util-to-string@4.0.0  MIT  [bundled into a chunk]
   mdn-data@2.27.1  CC0-1.0  [node_modules tree]
-  mermaid@11.16.0  MIT  [bundled into a chunk]
+  mermaid@11.16.1  MIT  [bundled into a chunk]
   micromark@4.0.2  MIT  [bundled into a chunk]
   micromark-core-commonmark@2.0.3  MIT  [bundled into a chunk]
   micromark-extension-cjk-friendly@2.0.1  MIT  [bundled into a chunk]
@@ -513,7 +513,7 @@ they are listed so the index accounts for every module in the bundle.
   micromark-util-subtokenize@2.1.0  MIT  [bundled into a chunk]
   micromark-util-symbol@2.0.1  MIT  [bundled into a chunk]
   micromark-util-types@2.0.2  MIT  [bundled into a chunk]
-  monaco-editor@0.56.0  MIT  [bundled into a chunk]
+  monaco-editor@0.57.0  MIT  [bundled into a chunk]
   motion@13.1.1  MIT  [bundled into a chunk]
   motion-dom@13.1.1  MIT  [bundled into a chunk]
   motion-utils@13.0.0  MIT  [bundled into a chunk]
@@ -608,8 +608,8 @@ they are listed so the index accounts for every module in the bundle.
   tw-animate-css@1.4.0  MIT  [build-time source]
   typebox@1.3.27  MIT  [bundled into a chunk]
   typescript@7.0.2  Apache-2.0  [bundled into a chunk]
-  undici@7.29.0  MIT  [node_modules tree]
-  undici@8.10.0  MIT  [node_modules tree]
+  undici@7.29.1  MIT  [node_modules tree]
+  undici@8.10.2  MIT  [node_modules tree]
   undici-types@8.3.0  MIT  [bundled into a chunk]
   unified@11.0.5  MIT  [bundled into a chunk]
   unist-util-is@6.0.1  MIT  [bundled into a chunk]
@@ -6420,7 +6420,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: dompurify@3.4.14, dompurify@3.4.8
+Packages: dompurify@3.4.15, dompurify@3.4.16
 SPDX: (MPL-2.0 OR Apache-2.0)
 File: LICENSE
 File: LICENSE-MPL
@@ -7448,7 +7448,7 @@ For more information, please refer to <http://unlicense.org>
 
 
 =========================================================================================================
-Packages: fast-uri@3.1.3
+Packages: fast-uri@3.1.8
 SPDX: BSD-3-Clause
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -7974,7 +7974,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
 =========================================================================================================
-Packages: js-yaml@4.3.1
+Packages: js-yaml@4.3.2
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8961,7 +8961,7 @@ For more information, please see
 
 
 =========================================================================================================
-Packages: mermaid@11.16.0
+Packages: mermaid@11.16.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -9123,7 +9123,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: monaco-editor@0.56.0
+Packages: monaco-editor@0.57.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -11723,7 +11723,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: undici@7.29.0, undici@8.10.0, undici-types@8.3.0
+Packages: undici@7.29.1, undici@8.10.2, undici-types@8.3.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -12941,6 +12941,6 @@ manifest, not a conclusion about obligations — that review is tracked separate
 and apps/desktop/notices/README.md records what is open.
 
   @img/sharp-libvips-darwin-arm64@1.3.3 — LGPL-3.0-or-later
-  dompurify@3.4.14 — (MPL-2.0 OR Apache-2.0)
-  dompurify@3.4.8 — (MPL-2.0 OR Apache-2.0)
+  dompurify@3.4.15 — (MPL-2.0 OR Apache-2.0)
+  dompurify@3.4.16 — (MPL-2.0 OR Apache-2.0)
   node-forge@1.4.0 — (BSD-3-Clause OR GPL-2.0)
