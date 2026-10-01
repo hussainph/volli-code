@@ -702,6 +702,33 @@ describe("McpPane — sign-in and credentials (VC-470)", () => {
     });
   });
 
+  it("offers OAuth client settings only to a remote server without its own Authorization header", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [
+        remote(),
+        remote({
+          id: "keyed",
+          name: "Keyed",
+          transport: {
+            type: "streamable-http",
+            url: "https://api.example.com/mcp",
+            headers: [{ name: "Authorization", source: { kind: "secret" } }],
+          },
+        }),
+      ],
+      operations: [],
+      access: {},
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    await click(labelled("Edit Sentry"));
+    expect(container!.querySelector('button[aria-label="Show OAuth client"]')).not.toBeNull();
+    await click(labelled("Edit Keyed"));
+    expect(container!.querySelector('button[aria-label="Show OAuth client"]')).toBeNull();
+  });
+
   it("adds an environment reference to a local server", async () => {
     const list = vi.fn(async () => ({
       ok: true as const,

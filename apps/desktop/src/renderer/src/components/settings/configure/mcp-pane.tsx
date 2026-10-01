@@ -837,7 +837,9 @@ function SignInAction({
   onCancel: () => void;
   onSignOut: () => void;
 }) {
-  if (!signsIn(server)) return null;
+  // An empty slot the size of the control, so every row's Edit, Refresh and
+  // Remove stay in the same columns whether or not a server signs in.
+  if (!signsIn(server)) return <span aria-hidden className="size-5 shrink-0" />;
   if (waiting) {
     return (
       <Button

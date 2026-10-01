@@ -149,7 +149,10 @@ export function applyCredentials(
   }
   const headers = toEntries(credentials.headers);
   collect("header", credentials.headers);
-  const draft = credentials.oauth;
+  // OAuth settings apply only to a server without its own Authorization header.
+  const draft = headers.some((entry) => entry.name.toLowerCase() === "authorization")
+    ? EMPTY_OAUTH
+    : credentials.oauth;
   const oauth: McpOAuthClientConfig = {};
   if (draft.clientId.trim().length > 0) oauth.clientId = draft.clientId.trim();
   if (draft.secretKind !== "none" && oauth.clientId !== undefined) {
@@ -447,6 +450,11 @@ export function McpCredentialsEditor({
       />
     );
   }
+  // A server carrying its own Authorization header does not sign in, so its
+  // OAuth settings would configure nothing; they are not offered.
+  const signsIn = !credentials.headers.some(
+    (row) => row.name.trim().toLowerCase() === "authorization",
+  );
   return (
     <>
       <CredentialRows
@@ -455,11 +463,13 @@ export function McpCredentialsEditor({
         stored={stored}
         onChange={(headers) => onChange({ ...credentials, headers })}
       />
-      <OAuthClientFields
-        oauth={credentials.oauth}
-        stored={stored.has(MCP_OAUTH_CLIENT_SECRET_SLOT)}
-        onChange={(oauth) => onChange({ ...credentials, oauth })}
-      />
+      {signsIn ? (
+        <OAuthClientFields
+          oauth={credentials.oauth}
+          stored={stored.has(MCP_OAUTH_CLIENT_SECRET_SLOT)}
+          onChange={(oauth) => onChange({ ...credentials, oauth })}
+        />
+      ) : null}
     </>
   );
 }
