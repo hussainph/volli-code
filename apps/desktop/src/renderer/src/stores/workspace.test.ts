@@ -453,6 +453,33 @@ describe("setBoardSort", () => {
   });
 });
 
+describe("recordResolvedHomeTab", () => {
+  it("records a fallback without selecting its pane or changing front tabs", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "chat:old");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["chat:old"],
+    });
+    const split = store.getState().byProject["project-a"]!.homeSplitView;
+    store.getState().recordResolvedHomeTab("project-a", "chat:resolved");
+    expect(store.getState().byProject["project-a"]!.homeActiveTab).toBe("chat:resolved");
+    expect(store.getState().byProject["project-a"]!.homeSplitView).toBe(split);
+    const settled = store.getState();
+    store.getState().recordResolvedHomeTab("project-a", "chat:resolved");
+    expect(store.getState()).toBe(settled);
+  });
+
+  it("keeps the default receipt a no-op and records an unsplit non-default", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const empty = store.getState();
+    store.getState().recordResolvedHomeTab("project-a", HOME_BOARD_TAB_ID);
+    expect(store.getState()).toBe(empty);
+    store.getState().recordResolvedHomeTab("project-a", "chat:resolved");
+    expect(store.getState().byProject["project-a"]!.homeActiveTab).toBe("chat:resolved");
+    expect(store.getState().byProject["project-a"]!.homeSplitView).toBeUndefined();
+  });
+});
+
 describe("setHomeActiveTab", () => {
   it("defaults to the Board tab for an untouched project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -3756,6 +3783,135 @@ const snap = (
   projectId,
   nav,
   openTicketId,
+});
+
+describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483)", (surface) => {
+  const claim = (store: Store, tabId: string, paneId: string, activate: boolean) => {
+    if (surface === "Home") {
+      store.getState().claimHomeTabInPane("project-a", tabId, paneId, activate);
+    } else {
+      store.getState().claimTicketTabInPane("project-a", "ticket-1", tabId, paneId, activate);
+    }
+  };
+  const split = (store: Store) => {
+    if (surface === "Home") {
+      store.getState().splitHomePane("project-a", "root", "right", {
+        surfaceTabIds: ["browser:foreground"],
+      });
+    } else {
+      store.getState().splitTicketPane("project-a", "ticket-1", "root", "right", {
+        surfaceTabIds: ["browser:foreground"],
+      });
+    }
+  };
+  const focus = (store: Store, paneId: string) => {
+    if (surface === "Home") store.getState().focusHomePane("project-a", paneId);
+    else store.getState().focusTicketPane("project-a", "ticket-1", paneId);
+  };
+  const activate = (store: Store, tabId: string) => {
+    if (surface === "Home") store.getState().setHomeActiveTab("project-a", tabId);
+    else store.getState().setTicketActiveTab("project-a", "ticket-1", tabId);
+  };
+  const readSplit = (store: Store) => (surface === "Home" ? homeSplit(store) : ticketSplit(store));
+  const readActive = (store: Store) =>
+    surface === "Home"
+      ? store.getState().byProject["project-a"]?.homeActiveTab
+      : store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active;
+
+  it("persists a contentful draft's claim without stealing unrelated browser focus", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage, paneMinter());
+    activate(store, "browser:foreground");
+    split(store);
+    focus(store, "root");
+    const before = rootBranch(readSplit(store)).first;
+
+    claim(store, "chat:draft", "n1", true);
+
+    expect(readSplit(store)?.focusedPaneId).toBe("root");
+    expect(rootBranch(readSplit(store)).first).toBe(before);
+    expect(panesOf(readSplit(store))[1]).toEqual(["n1", ["chat:draft"], "chat:draft"]);
+    expect(readActive(store)).toBe("browser:foreground");
+    const restored = createWorkspaceStore(storage);
+    expect(readSplit(restored)).toEqual(readSplit(store));
+    expect(readActive(restored)).toBe("browser:foreground");
+  });
+
+  it("claims an inactive draft without replacing its pane's front or surface active tab", () => {
+    const store = splitStore();
+    split(store);
+    claim(store, "browser:neighbor", "n1", true);
+    focus(store, "root");
+    const beforeActive = readActive(store);
+
+    claim(store, "chat:inactive", "n1", false);
+
+    expect(panesOf(readSplit(store))[1]).toEqual([
+      "n1",
+      ["browser:neighbor", "chat:inactive"],
+      "browser:neighbor",
+    ]);
+    expect(readSplit(store)?.focusedPaneId).toBe("root");
+    expect(readActive(store)).toBe(beforeActive);
+  });
+
+  it("keeps an inactive claim's empty front null, including while that pane is focused", () => {
+    const store = splitStore();
+    activate(store, "browser:foreground");
+    split(store);
+
+    claim(store, "chat:inactive", "n1", false);
+
+    expect(panesOf(readSplit(store))[1]).toEqual(["n1", ["chat:inactive"], null]);
+    expect(readSplit(store)?.focusedPaneId).toBe("n1");
+    expect(readActive(store)).toBe("browser:foreground");
+  });
+
+  it("updates the surface projection when activating a claim in the focused pane", () => {
+    const store = splitStore();
+    split(store);
+
+    claim(store, "chat:draft", "n1", true);
+
+    expect(readSplit(store)?.focusedPaneId).toBe("n1");
+    expect(readActive(store)).toBe("chat:draft");
+  });
+
+  it("leaves already-claimed tabs and invalid destinations unchanged by identity", () => {
+    const store = splitStore();
+    split(store);
+    claim(store, "chat:draft", "n1", true);
+    const before = store.getState();
+
+    claim(store, "chat:draft", "root", true);
+    claim(store, "chat:draft", "n1", false);
+    claim(store, "browser:foreground", "root", true);
+    claim(store, "chat:other", "gone", true);
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("does nothing for inactive unsplit claims, without materializing records", () => {
+    const store = splitStore();
+    const empty = store.getState();
+    claim(store, "chat:draft", "root", false);
+    expect(store.getState()).toBe(empty);
+    activate(store, "browser:foreground");
+    const before = store.getState();
+    claim(store, "chat:draft", "gone", false);
+    expect(store.getState()).toBe(before);
+    expect(readSplit(store)).toBeNull();
+  });
+
+  it("uses ordinary surface activation for active unsplit claims", () => {
+    const store = splitStore();
+    claim(store, "chat:draft", "gone", true);
+    expect(readActive(store)).toBe("chat:draft");
+    expect(readSplit(store)).toBeNull();
+    const before = store.getState();
+    claim(store, "chat:draft", "root", true);
+    expect(store.getState()).toBe(before);
+  });
 });
 
 describe("navHistory", () => {

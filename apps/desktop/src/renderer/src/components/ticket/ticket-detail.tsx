@@ -14,7 +14,6 @@ import {
   type ResolvedSplitViewPane,
   type Ticket,
 } from "@volli/shared";
-import { BROWSER_START_URL } from "../../../../browser-start-page";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { BrowserPane } from "@renderer/components/browser/browser-pane";
@@ -69,6 +68,7 @@ import {
 } from "@renderer/hooks/use-materialized-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
+import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
@@ -300,19 +300,25 @@ export function TicketDetail({
       useWorkspaceStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView ?? null,
     [projectId, ticket.id],
   );
+  const claimProvisionalTab = React.useCallback(
+    (tabId: string, paneId: string, front: boolean) =>
+      useWorkspaceStore.getState().claimTicketTabInPane(projectId, ticket.id, tabId, paneId, front),
+    [projectId, ticket.id],
+  );
   // Everything this workspace needs to know about its Chat Drafts, and the
   // rule about them, in one place shared with Home (VC-358).
   const {
     activeOverrideTabId: provisionalTabId,
-    activeOverridePaneId,
     overlaySplitView,
     emptyTabIds: emptyProvisionalTabIds,
     guardLayoutWrites,
     releaseActive,
-    shouldCommitActive,
     takeActive,
     titles: draftChatTitles,
-  } = useProvisionalChatTabs(ticket.id, openChatIds, readSplitView);
+  } = useProvisionalChatTabs(ticket.id, openChatIds, {
+    readSplitView,
+    claimTab: claimProvisionalTab,
+  });
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
@@ -761,30 +767,6 @@ export function TicketDetail({
     [releaseActive, setTicketActiveTab, projectId, takeActive, ticket.id],
   );
 
-  // Empty Draft focus is renderer-only. The first content makes the Draft a
-  // relaunchable workspace tab under the same id; promotion later changes only
-  // its kind, never its identity or pane assignment.
-  React.useEffect(() => {
-    if (provisionalTabId === null || !shouldCommitActive) return;
-    // Preserve the focused pane the renderer-only overlay used before this tab
-    // crossed into persisted workspace layout.
-    if (splitView !== null) {
-      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, activeOverridePaneId);
-    }
-    setTicketActiveTab(projectId, ticket.id, provisionalTabId);
-    releaseActive();
-  }, [
-    activeOverridePaneId,
-    projectId,
-    provisionalTabId,
-    releaseActive,
-    shouldCommitActive,
-    setTicketActiveTab,
-    moveTicketTabToPane,
-    splitView,
-    ticket.id,
-  ]);
-
   // The `@file` index + create/open wiring, shared by the Doc body editor and
   // every open markdown file tab so any of them can reference (and create) files.
   // @file chips open persistent tabs (decision #33); Files-panel glances use
@@ -1178,23 +1160,10 @@ export function TicketDetail({
   // Opens the tab first and asks where to go second — see the note on Home's
   // twin. The `window.prompt` this replaces throws in Electron by definition,
   // and threw from outside the try, so the press was swallowed whole.
-  const createBrowser = React.useCallback(async () => {
-    try {
-      const result = await browserApi.open({
-        projectId,
-        ticketId: ticket.id,
-        url: BROWSER_START_URL,
-      });
-      if (!result.ok) {
-        toastError(`Could not open Browser Tab: ${result.error}`);
-        return;
-      }
-      useBrowserTabsStore.getState().receive(result.tab);
-      setActiveTab(browserTabId(result.tab.tabId));
-    } catch (reason) {
-      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
-    }
-  }, [browserApi, projectId, setActiveTab, ticket.id]);
+  const createBrowser = React.useCallback(
+    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
+    [browserApi, projectId, setActiveTab, ticket.id],
+  );
 
   // Mints one durable chat Session on this ticket and opens its tab, through
   // the same boot guard the terminal path uses: one create per ticket at a

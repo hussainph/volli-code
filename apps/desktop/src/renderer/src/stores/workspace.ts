@@ -34,6 +34,7 @@ import {
   activateFile,
   activateTab,
   activeTabInSplitView,
+  claimTabInPane,
   closeFile,
   closePane,
   DEFAULT_TICKET_SORT,
@@ -719,6 +720,8 @@ interface WorkspaceState {
    * "the Board tab means the plain board" lives.
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
+  /** Renderer fallback receipt, not a tab selection: never moves pane focus. */
+  recordResolvedHomeTab(projectId: string, tabId: string): void;
   /** Preview a Main-checkout file and bring its Home tab to the front atomically. */
   previewHomeFile(projectId: string, relPath: string): void;
   /** Pin a Main-checkout file and bring its Home tab to the front atomically. */
@@ -918,6 +921,20 @@ interface WorkspaceState {
     paneId: string,
     edge: SplitViewEdge,
     opts?: { tabId?: string; surfaceTabIds?: readonly string[] },
+  ): void;
+  /**
+   * Claim a newly contentful draft in its pane without moving focus. `activate`
+   * only fronts it inside that pane; while unsplit it activates the surface
+   * tab, or does nothing when false (draft restore owns reachability).
+   */
+  claimHomeTabInPane(projectId: string, tabId: string, paneId: string, activate: boolean): void;
+  /** {@link WorkspaceState.claimHomeTabInPane} for a ticket workspace. */
+  claimTicketTabInPane(
+    projectId: string,
+    ticketId: string,
+    tabId: string,
+    paneId: string,
+    activate: boolean,
   ): void;
   /** Move a Home tab into `paneId` (a centre-zone drop, or another pane's strip). */
   moveHomeTabToPane(projectId: string, tabId: string, paneId: string): void;
@@ -1501,6 +1518,17 @@ export function createWorkspaceStore(
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
               ...homeSplitWrite(split),
+            });
+          });
+        },
+
+        recordResolvedHomeTab(projectId, tabId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (current.homeActiveTab === tabId) return state;
+            return patchWorkspace(state, projectId, {
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
             });
           });
         },
@@ -2092,6 +2120,30 @@ export function createWorkspaceStore(
               },
             });
           });
+        },
+
+        claimHomeTabInPane(projectId, tabId, paneId, activate) {
+          if ((get().byProject[projectId]?.homeSplitView ?? null) === null) {
+            if (activate) get().setHomeActiveTab(projectId, tabId);
+            return;
+          }
+          set((state) =>
+            applyHomeSplit(state, projectId, (split) =>
+              claimTabInPane(split, tabId, paneId, activate),
+            ),
+          );
+        },
+
+        claimTicketTabInPane(projectId, ticketId, tabId, paneId, activate) {
+          if ((get().byProject[projectId]?.ticketTabs[ticketId]?.splitView ?? null) === null) {
+            if (activate) get().setTicketActiveTab(projectId, ticketId, tabId);
+            return;
+          }
+          set((state) =>
+            applyTicketSplit(state, projectId, ticketId, (split) =>
+              claimTabInPane(split, tabId, paneId, activate),
+            ),
+          );
         },
 
         moveHomeTabToPane(projectId, tabId, paneId) {
