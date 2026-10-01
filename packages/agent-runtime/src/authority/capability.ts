@@ -51,6 +51,13 @@ export interface CapabilityResolution {
   /** The host's own credential files, in the credential tier: `mcp-credentials.json`. */
   credentialPaths?: readonly string[];
   /**
+   * The small set of live host files whose contents determine Volli's state or
+   * authority: the database and SQLite sidecars, plus the MCP credential store.
+   * Their device/inode identities are captured at attach so a pre-planted hard
+   * link inside the workspace cannot make Seatbelt's path matching miss them.
+   */
+  criticalHostDataPaths?: readonly string[];
+  /**
    * Read-only grants inside the private tier: this Session's own saved tool
    * output (VC-469), what the host exposes on purpose (the directory the
    * `volli` shim lives in), and the user's global git excludes and attributes
@@ -327,8 +334,18 @@ function protectedPathsOf(workspace: string): string[] {
   return entry.isDirectory() ? [join(workspace, ".git", "worktrees")] : [join(workspace, ".git")];
 }
 
-/** How many filesystem entries the hard-link index may visit at one attach. */
+/** How many filesystem entries the general hard-link index may visit at one attach. */
 const LINK_INDEX_BUDGET = 4_096;
+
+function fileIdentity(path: string): { identity: string; path: string } | undefined {
+  try {
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.nlink < 2) return undefined;
+    return { identity: `${entry.dev}:${entry.ino}`, path };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Every multiply-linked file inside the denied trees worth walking, as
@@ -362,6 +379,47 @@ function linkedFilesIn(roots: readonly string[], limit: number): Record<string, 
   };
   for (const root of roots) visit(root);
   return linked;
+}
+
+/**
+ * Literal workspace names sharing an inode with a critical host file.
+ *
+ * This walk is deliberately unbudgeted. A budget would make "Volli's own data
+ * is never writable" depend on where an alias sorts in a large repository.
+ * It runs once per attachment, does not follow symbolic links, and stats files
+ * only while looking for one of the handful of critical identities.
+ */
+function criticalHostAliases(
+  workspace: string,
+  criticalPaths: readonly string[],
+): { aliases: string[]; linkedFiles: Record<string, string> } {
+  const critical = new Map<string, string>();
+  for (const path of criticalPaths.map(canonical)) {
+    const file = fileIdentity(path);
+    if (file !== undefined) critical.set(file.identity, file.path);
+  }
+  if (critical.size === 0) return { aliases: [], linkedFiles: {} };
+
+  const aliases: string[] = [];
+  const visit = (path: string): void => {
+    let entry;
+    try {
+      entry = lstatSync(path);
+      /* v8 ignore start -- an entry removed between its directory listing and this stat is skipped; the race is not reproducible on demand. */
+    } catch {
+      return;
+      /* v8 ignore stop */
+    }
+    if (entry.isFile() && entry.nlink > 1) {
+      const source = critical.get(`${entry.dev}:${entry.ino}`);
+      if (source !== undefined && path !== source) aliases.push(path);
+      return;
+    }
+    if (!entry.isDirectory()) return;
+    for (const child of entriesOf(path)) visit(join(path, child.name));
+  };
+  visit(workspace);
+  return { aliases: unique(aliases), linkedFiles: Object.fromEntries(critical) };
 }
 
 /** Whether `inner` lies strictly inside `outer`. */
@@ -439,6 +497,7 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
           denies.some((deny) => strictlyInside(outer, deny) && containsPath(deny, inner)),
       ),
   );
+  const criticalLinks = criticalHostAliases(workspace, input.criticalHostDataPaths ?? []);
   return {
     credentialDeny,
     privateDeny,
@@ -447,9 +506,13 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
     writableRoots,
     protectedPaths: protectedPathsOf(workspace),
     sandboxCarveOuts: input.sandboxCarveOuts,
-    linkedFiles: linkedFilesIn(
-      [...credentialDeny, ...homeDotfiles(home)],
-      input.linkIndexBudget ?? LINK_INDEX_BUDGET,
-    ),
+    hostDataAliases: criticalLinks.aliases,
+    linkedFiles: {
+      ...linkedFilesIn(
+        [...credentialDeny, ...homeDotfiles(home)],
+        input.linkIndexBudget ?? LINK_INDEX_BUDGET,
+      ),
+      ...criticalLinks.linkedFiles,
+    },
   };
 }

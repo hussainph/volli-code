@@ -1447,6 +1447,16 @@ app.whenReady().then(async () => {
           // reads on purpose — the `volli` shim lives there.
           hostPrivateRoots: [...new Set([app.getPath("userData"), dirname(dbPath)])],
           hostCredentialPaths: [join(app.getPath("userData"), "mcp-credentials.json")],
+          // Policy, approvals and every durable authority record live in the
+          // database. Capture the live SQLite files and the separate MCP token
+          // store by inode at attach, so a workspace hard link cannot give the
+          // contained shell a writable alias Seatbelt would otherwise miss.
+          hostCriticalDataPaths: [
+            dbPath,
+            `${dbPath}-wal`,
+            `${dbPath}-shm`,
+            join(app.getPath("userData"), "mcp-credentials.json"),
+          ],
           hostExposedPaths: [runtimePaths.binDir],
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the

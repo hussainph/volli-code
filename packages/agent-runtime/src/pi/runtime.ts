@@ -291,6 +291,12 @@ export interface PiRuntimeHostOptions {
    */
   hostCredentialPaths?: readonly string[];
   /**
+   * Live files whose inode identity must remain protected through hard-link
+   * aliases in a Session workspace: the Volli database and SQLite sidecars,
+   * plus the MCP credential store.
+   */
+  hostCriticalDataPaths?: readonly string[];
+  /**
    * Paths inside {@link hostPrivateRoots} the host exposes to its Sessions on
    * purpose, read-only: the directory the `volli` shim lives in, so a Scoped
    * Session's shell can still run the CLI it is told to use.
@@ -433,6 +439,7 @@ interface PiRuntimeHost {
   executionEnvFactory: ExecutionEnvFactory;
   hostPrivateRoots: readonly string[];
   hostCredentialPaths: readonly string[];
+  hostCriticalDataPaths: readonly string[];
   hostExposedPaths: readonly string[];
   retryBackoffMs: (attempt: number) => number;
   connectivity: ConnectivityPort;
@@ -504,6 +511,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
             })),
     hostPrivateRoots: options.hostPrivateRoots ?? [],
     hostCredentialPaths: options.hostCredentialPaths ?? [],
+    hostCriticalDataPaths: options.hostCriticalDataPaths ?? [],
     hostExposedPaths: options.hostExposedPaths ?? [],
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     connectivity: options.connectivity ?? ALWAYS_ONLINE,
@@ -2191,6 +2199,7 @@ async function attachSession(
       runtimeRoots: scratchDirectory === undefined ? [] : [scratchDirectory],
       privateRoots: [...host.hostPrivateRoots, host.sessionDataDir],
       credentialPaths: host.hostCredentialPaths,
+      criticalHostDataPaths: host.hostCriticalDataPaths,
       grants: [
         ...toolOutput.readableDirectories,
         ...host.hostExposedPaths,

@@ -50,7 +50,11 @@ anywhere on your Mac except two groups of files:
 A Session can never change Volli’s own data: its database, its policy and
 approvals, its stored MCP credentials, or any Session’s records. No approval
 unlocks that, so approving a request can never let a Session edit its own
-approvals or policy. Reading the database is private data, as above.
+approvals or policy. At attachment, Volli also records the live database,
+SQLite WAL and shared-memory files, and MCP credential store by device and
+inode. If a hard link to one already exists in the workspace, the shell’s
+sandbox denies that literal name too; file tools refuse every multiply-linked
+write. Reading the database is private data, as above.
 
 A Session writes only in its workspace. A ticket worktree can also write the
 parts of its repository’s Git directory its own commits need: objects, its own
@@ -76,9 +80,10 @@ refused outright.
 
 Containment works whatever **Rule enforcement** is set to: **Off** turns off the
 rules, not the sandbox. In a Scoped Session, macOS itself refuses credentials
-and private data, under any spelling of the path, so approving a read there
-changes nothing. Editor and agent configuration such as `.vscode/`, `.mcp.json`
-and shell profiles is read-only as well.
+and private data, under any spelling of the path, and blocks the keychain
+services, so approving a read there changes nothing. Editor and agent
+configuration such as `.vscode/`, `.mcp.json` and shell profiles is read-only
+as well.
 
 A Scoped Session has no network access, so commands such as `pnpm install`,
 `git fetch` and `git push` fail inside it. Run those commands yourself, or keep
@@ -119,20 +124,27 @@ boundary.
 
 Known limits, even in a Scoped Session:
 
-- **Hard links.** A hard link to a credential that existed before the Session
-  started reads through the sandbox, which matches paths, not files. The file
-  tools recognise hard links to credentials and to top-level dotfiles; a
-  hard link into any other private folder is not recognised.
+- **Hard-link reads.** A hard link to a credential that existed before the
+  Session started reads through the sandbox, which matches paths, not files.
+  The file tools recognise hard links to credentials and to top-level dotfiles;
+  a hard link into any other private folder is not recognised. This read limit
+  does not apply to writes through aliases of Volli’s live database, SQLite
+  sidecars or MCP credential store: those workspace names are denied at attach.
 - **Concurrent swaps.** The file tools check a write’s path, then open it
   without following links. A command running at the same moment can still
   swap a parent folder for a link in between; closing that window is planned.
 - **Copies elsewhere.** A credential copied out of its folder, for example
   into a dotfiles repository’s Git history, is protected only where it is
   listed.
-- **The keychain service.** The sandbox blocks the keychain files, not macOS’s
-  keychain service. In **Enforce**, the rules refuse the `security` commands
-  that read keychain items; otherwise, macOS’s own keychain access prompts are
-  what stand between a command and an item.
+- **Hidden shell operands.** The rules cannot inspect a path hidden in a shell
+  variable, a `$(…)` or a script. Scoped containment still enforces filesystem
+  boundaries around the command.
+
+In **Enforce**, the `security` command is denied as credential access, including
+interactive mode and commands fed on stdin. Only `find-certificate`,
+`verify-cert` and `dump-trust-settings` are allowed, because they inspect public
+certificate or trust material rather than passwords, private keys or identities.
+A Scoped Session also cannot connect to the macOS keychain services.
 
 See [Settings and configuration](/guides/settings/) for the difference between
 app-wide Settings and project Configure options.

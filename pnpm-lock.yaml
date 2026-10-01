@@ -32,6 +32,7 @@ overrides:
 packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
+  '@anthropic-ai/sandbox-runtime@0.0.74': df8431a6f8de8a5b6aef65bb064387ab09419fcc7b50dce9b800ff1d4e4f8764
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-agent-core@0.99.2': f3265a13753dcbe6e52c900535aed325dc0fdc2215a51d494dd62ec92c70c4c0
 
@@ -390,7 +391,7 @@ importers:
     dependencies:
       '@anthropic-ai/sandbox-runtime':
         specifier: 0.0.74
-        version: 0.0.74
+        version: 0.0.74(patch_hash=df8431a6f8de8a5b6aef65bb064387ab09419fcc7b50dce9b800ff1d4e4f8764)
       '@earendil-works/pi-agent-core':
         specifier: 0.99.2
         version: 0.99.2(patch_hash=f3265a13753dcbe6e52c900535aed325dc0fdc2215a51d494dd62ec92c70c4c0)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.21.3)(zod@4.4.3)
@@ -7650,7 +7651,7 @@ snapshots:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.0
 
-  '@anthropic-ai/sandbox-runtime@0.0.74':
+  '@anthropic-ai/sandbox-runtime@0.0.74(patch_hash=df8431a6f8de8a5b6aef65bb064387ab09419fcc7b50dce9b800ff1d4e4f8764)':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0

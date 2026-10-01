@@ -51,6 +51,8 @@ import {
 import { gitVariables, NO_HOST_GIT, readHostGitSettings, type HostGitSettings } from "./host-git";
 
 const KILL_GRACE_MS = 250;
+/** Keychain IPC doors SRT otherwise opens in every macOS profile. */
+const KEYCHAIN_MACH_SERVICES = ["com.apple.SecurityServer", "com.apple.securityd.xpc"] as const;
 /** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
 const SPILL_PREFIX = "bash-";
 const SPILL_SUFFIX = ".log";
@@ -181,7 +183,11 @@ function processSandboxConfig(unixSockets: readonly string[]): SandboxRuntimeCon
       allowAllUnixSockets: false,
       allowLocalBinding: false,
       allowMachLookup: [],
-    },
+      // Volli's SRT patch appends these denials after SRT's built-in allows.
+      // Without the ordering, `security -i` reaches the keychain service even
+      // though every keychain file is unreadable by path.
+      denyMachLookup: [...KEYCHAIN_MACH_SERVICES],
+    } as SandboxRuntimeConfig["network"] & { denyMachLookup: string[] },
     filesystem: {
       denyRead: [],
       allowRead: [],
@@ -486,6 +492,9 @@ function perCommandSandboxConfig(
         "/private/tmp/claude",
         ...roots.flatMap((root) => sandboxWriteCarveOuts(root, policy.sandboxCarveOuts)),
         ...policy.protectedPaths,
+        // Seatbelt matches path names, not inodes. These are workspace names
+        // discovered at attach that share an inode with a live Volli data file.
+        ...policy.hostDataAliases,
         // A credential or the host's data wherever it meets a root, in either
         // direction; a private entry only strictly inside one, so a root equal
         // to it — a workspace that IS `~/.pi` — keeps its own tree.

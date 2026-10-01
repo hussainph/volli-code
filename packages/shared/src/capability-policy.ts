@@ -305,6 +305,12 @@ export interface CapabilityPolicy {
    */
   readonly sandboxCarveOuts: boolean;
   /**
+   * Literal names inside the workspace that share an inode with one of the
+   * host's critical live files. Seatbelt matches paths rather than inodes, so
+   * these names are explicit write denials in every command profile.
+   */
+  readonly hostDataAliases: readonly string[];
+  /**
    * Hard links into the denylist the resolver indexed, as `"<device>:<inode>"`
    * to the denied path that file also has. A second name for a credential is
    * the credential; Seatbelt matches names and cannot see this, so the file

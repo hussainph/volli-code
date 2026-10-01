@@ -258,6 +258,30 @@ describe("authorityVerdict", () => {
     }
   });
 
+  it("treats a workspace hard link to Volli's database as host data", () => {
+    const { raw, real } = workspace();
+    const userData = join(real, "..", "userData");
+    mkdirSync(userData);
+    const db = join(userData, "volli.db");
+    writeFileSync(db, "authority");
+    linkSync(db, join(real, "cache.db"));
+    const capability = resolveCapabilityPolicy({
+      workspacePath: raw,
+      privateRoots: [userData],
+      criticalHostDataPaths: [db],
+      sandboxCarveOuts: true,
+    });
+
+    for (const [tool, args] of [
+      ["write", { path: "cache.db", content: "changed" }],
+      ["bash", { command: "printf changed > cache.db" }],
+    ] as const) {
+      expect(
+        authorityVerdict({ tool, args, authority: snapshot(), workspacePath: raw, capability }),
+      ).toMatchObject({ outcome: "deny", cause: "path.host-data" });
+    }
+  });
+
   it("marks an overridable refusal the Session's own walls repeat, so nobody is asked a moot question", () => {
     const { raw } = workspace();
     const capability = resolveCapabilityPolicy({ workspacePath: raw, sandboxCarveOuts: true });

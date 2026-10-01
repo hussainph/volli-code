@@ -44,6 +44,7 @@ function policy(overrides: Partial<CapabilityPolicy> = {}): CapabilityPolicy {
     writableRoots: [WORKSPACE, `${HOME}/code/p/.git/objects`],
     protectedPaths: [`${WORKSPACE}/.git`],
     sandboxCarveOuts: false,
+    hostDataAliases: [],
     linkedFiles: {},
     ...overrides,
   };

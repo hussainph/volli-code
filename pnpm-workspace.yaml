@@ -102,6 +102,10 @@ packageExtensions:
       vite: "catalog:"
 
 patchedDependencies:
+  # SRT's macOS profile unconditionally allows the two keychain Mach services.
+  # Add a host deny list emitted after those built-in allows, so Volli can close
+  # the keychain service without changing SRT's defaults for other consumers.
+  "@anthropic-ai/sandbox-runtime@0.0.74": patches/@anthropic-ai__sandbox-runtime@0.0.74.patch
   "@dnd-kit/core@6.3.1": patches/@dnd-kit__core@6.3.1.patch
   # Adds an optional `estimateMessage` seam to pi's compaction entry points
   # (`prepareCompaction` / `findCutPoint`), which otherwise hardcode pi's own

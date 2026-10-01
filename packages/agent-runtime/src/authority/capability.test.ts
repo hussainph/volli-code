@@ -276,6 +276,40 @@ describe("resolveCapabilityPolicy", () => {
       }).linkedFiles,
     ).toEqual({});
   });
+
+  it("records workspace aliases of critical Volli data independently of the general link budget", () => {
+    const base = scratch();
+    const workspace = join(base, "workspace");
+    const userData = join(base, "userData");
+    mkdirSync(join(workspace, "nested"), { recursive: true });
+    mkdirSync(userData);
+    const db = join(userData, "volli.db");
+    const alias = join(workspace, "nested", "cache.db");
+    const singleton = join(userData, "singleton.json");
+    const localCritical = join(workspace, "local-critical.db");
+    const unrelated = join(workspace, "unrelated.txt");
+    writeFileSync(db, "authority");
+    writeFileSync(singleton, "one name");
+    writeFileSync(localCritical, "local");
+    writeFileSync(unrelated, "ordinary");
+    linkSync(db, alias);
+    // Cover both non-matching workspace links and a critical source whose
+    // second name is outside the workspace: neither is a literal alias to deny.
+    linkSync(unrelated, join(workspace, "unrelated-too.txt"));
+    linkSync(localCritical, join(base, "local-critical-outside.db"));
+
+    const policy = resolveCapabilityPolicy({
+      workspacePath: workspace,
+      home: join(base, "home"),
+      privateRoots: [userData],
+      criticalHostDataPaths: [db, `${db}-wal`, `${db}-shm`, singleton, localCritical],
+      sandboxCarveOuts: true,
+      linkIndexBudget: 0,
+    });
+    const linked = lstatSync(alias);
+    expect(policy.hostDataAliases).toEqual([alias]);
+    expect(policy.linkedFiles[`${linked.dev}:${linked.ino}`]).toBe(db);
+  });
 });
 
 describe("a Ticket worktree's repository", () => {

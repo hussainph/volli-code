@@ -197,6 +197,7 @@ function capabilityOf(context: PolicyContext): CapabilityPolicy {
       writableRoots: [context.workspacePath],
       protectedPaths: [],
       sandboxCarveOuts: false,
+      hostDataAliases: [],
       linkedFiles: {},
     }
   );
@@ -306,23 +307,35 @@ function readsRecursively(segment: PolicyCommandSegment): boolean {
 }
 
 /**
- * `security` subcommands that print or export keychain secrets. The keychain
- * is credential material wherever its files are, and this is the one door to
- * it that names no path.
+ * The only `security` commands a Session may run. Certificates and trust
+ * settings are public verification material; these commands inspect them and
+ * cannot return a password, private key, identity, or authorization right.
+ * Everything else is denied rather than trying to keep a complete blacklist
+ * of a tool whose interactive mode accepts commands on stdin.
  */
-const KEYCHAIN_SECRET_SUBCOMMANDS = new Set([
-  "find-generic-password",
-  "find-internet-password",
-  "find-key",
-  "dump-keychain",
-  "export",
-  "export-item",
+const SAFE_SECURITY_SUBCOMMANDS = new Set([
+  "find-certificate",
+  "verify-cert",
+  "dump-trust-settings",
 ]);
 
-function keychainRead(segment: PolicyCommandSegment): string | null {
+/**
+ * A safely recognizable `security` subcommand. Only verbosity flags may come
+ * first. `-i` and `-p` are intentionally not parsed: both enter interactive
+ * mode, so even a safe-looking later word could be a prompt or stdin command.
+ */
+function securitySubcommand(args: readonly string[]): string | null {
+  let index = 0;
+  while (/^-[qv]+$/u.test(args[index] ?? "")) index += 1;
+  const subcommand = args[index];
+  return subcommand === undefined || subcommand.startsWith("-") ? null : fold(subcommand);
+}
+
+function keychainAccess(segment: PolicyCommandSegment): string | null {
   if (baseName(segment.program) !== "security") return null;
-  const subcommand = fold(segment.args.find((arg) => !arg.startsWith("-")) ?? "");
-  return KEYCHAIN_SECRET_SUBCOMMANDS.has(subcommand) ? `security ${subcommand}` : null;
+  const subcommand = securitySubcommand(segment.args);
+  if (subcommand !== null && SAFE_SECURITY_SUBCOMMANDS.has(subcommand)) return null;
+  return subcommand === null ? "security interactive mode" : `security ${subcommand}`;
 }
 
 /**
@@ -410,11 +423,11 @@ function namedDenials(call: PolicyToolCall, capability: CapabilityPolicy): Named
   for (const path of call.reads) pushNamed(denials, path, readDenial(capability, path));
   for (const path of writtenPaths(call)) pushNamed(denials, path, writeDenial(capability, path));
   for (const segment of segmentsOf(call)) {
-    const keychain = keychainRead(segment);
+    const keychain = keychainAccess(segment);
     if (keychain !== null) {
       denials.push({
         tier: "credential",
-        reason: `${keychain} reads the macOS keychain, which holds credentials, so it is not available to a Session. If the task needs a secret, ask the user to provide it.`,
+        reason: `${keychain} can access the macOS keychain, which holds credentials, so it is not available to a Session. Only certificate and trust inspection commands are allowed. If the task needs a secret, ask the user to provide it.`,
       });
     }
     const recursive = readsRecursively(segment);

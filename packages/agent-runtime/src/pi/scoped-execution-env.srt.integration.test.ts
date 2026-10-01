@@ -178,6 +178,28 @@ describe.skipIf(!enabled)(
         expect(environment.output).not.toContain(credential);
         expect(existsSync(hookMarker)).toBe(false);
 
+        // SRT normally opens both keychain Mach services. Volli's profile patch
+        // appends explicit denials after those built-in allows, while leaving
+        // ordinary certificate consumers alive: Node can construct a TLS
+        // context, git can initialize an HTTPS remote request and reach the
+        // expected network wall, and no `security` command reaches keychain.
+        const keychain = await ran(env, "/usr/bin/security list-keychains");
+        expect(keychain.exitCode).not.toBe(0);
+        const interactiveKeychain = await ran(
+          env,
+          "printf 'list-keychains\\n' | /usr/bin/security -i",
+        );
+        expect(interactiveKeychain.exitCode).not.toBe(0);
+        await expect(
+          ran(
+            env,
+            `${JSON.stringify(process.execPath)} -e ${JSON.stringify("require('node:tls').createSecureContext(); process.stdout.write('tls-ok')")}`,
+          ),
+        ).resolves.toMatchObject({ output: "tls-ok", exitCode: 0 });
+        const gitHttps = await ran(env, "git ls-remote https://github.com/git/git.git HEAD");
+        expect(gitHttps.exitCode).not.toBe(0);
+        expect(gitHttps.output).not.toMatch(/SecurityServer|securityd|keychain/iu);
+
         expectDenied(await ran(env, "/bin/cat ../private/outside-secret.txt"), secret);
         expectDenied(await ran(env, "printf overwrite > ../private/outside-secret.txt"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
@@ -649,7 +671,9 @@ describe.skipIf(!enabled)(
       await mkdir(worktree);
       await mkdir(join(userData, "pi-sessions"), { recursive: true });
       const db = join(userData, "volli.db");
+      const dbAlias = join(worktree, "cache.db");
       await writeFile(db, "db");
+      linkSync(db, dbAlias);
       const env = await ScopedExecutionEnv.create(
         worktree,
         scoped({
@@ -657,13 +681,14 @@ describe.skipIf(!enabled)(
             workspacePath: worktree,
             writableRoots: [userData, join(userData, "pi-sessions")],
             privateRoots: [userData],
+            criticalHostDataPaths: [db, `${db}-wal`, `${db}-shm`],
             sandboxCarveOuts: true,
           }),
           git: null,
         }),
       );
       try {
-        for (const target of [db, `${db}-wal`, join(userData, "pi-sessions", "x.jsonl")]) {
+        for (const target of [db, `${db}-wal`, join(userData, "pi-sessions", "x.jsonl"), dbAlias]) {
           const before = existsSync(target) ? readFileSync(target, "utf8") : null;
           const shell = await ran(env, `printf written > ${JSON.stringify(target)}`);
           expect(shell.exitCode === 0, target).toBe(false);

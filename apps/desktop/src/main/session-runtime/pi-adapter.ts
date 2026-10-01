@@ -407,6 +407,8 @@ export interface PiAdapterOptions {
   hostPrivateRoots?: PiRuntimeHostOptions["hostPrivateRoots"];
   /** See `PiRuntimeHostOptions.hostCredentialPaths`: the MCP token store, in the credential tier. */
   hostCredentialPaths?: PiRuntimeHostOptions["hostCredentialPaths"];
+  /** See `PiRuntimeHostOptions.hostCriticalDataPaths`: live authority files protected through hard links. */
+  hostCriticalDataPaths?: PiRuntimeHostOptions["hostCriticalDataPaths"];
   /** See `PiRuntimeHostOptions.hostExposedPaths`: the CLI's bin dir, readable inside the denylist. */
   hostExposedPaths?: PiRuntimeHostOptions["hostExposedPaths"];
   /**
@@ -767,6 +769,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.hostCredentialPaths === undefined
       ? {}
       : { hostCredentialPaths: options.hostCredentialPaths }),
+    ...(options.hostCriticalDataPaths === undefined
+      ? {}
+      : { hostCriticalDataPaths: options.hostCriticalDataPaths }),
     ...(options.hostExposedPaths === undefined
       ? {}
       : { hostExposedPaths: options.hostExposedPaths }),

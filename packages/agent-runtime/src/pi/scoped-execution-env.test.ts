@@ -667,6 +667,7 @@ describe("ScopedExecutionEnv", () => {
       writableRoots: [worktree, "/repo/.git/objects"],
       protectedPaths: [`${worktree}/.git`],
       sandboxCarveOuts: true,
+      hostDataAliases: [`${worktree}/host-data-alias.db`],
       linkedFiles: {},
     };
     const srt = sandbox();
@@ -692,6 +693,7 @@ describe("ScopedExecutionEnv", () => {
         `${worktree}/.env-secrets`,
         `${worktree}/private-notes`,
         `${worktree}/.git`,
+        `${worktree}/host-data-alias.db`,
         "/repo/.git/objects/host",
       ]),
     );
@@ -725,6 +727,9 @@ describe("ScopedExecutionEnv", () => {
     });
     await expect(env.prepareProcessExecution()).resolves.toEqual({ ok: true, value: undefined });
     expect(srt.getConfig()?.network.allowUnixSockets).toEqual(["/data/volli.sock"]);
+    expect(srt.getConfig()?.network).toMatchObject({
+      denyMachLookup: ["com.apple.SecurityServer", "com.apple.securityd.xpc"],
+    });
 
     const other = await ScopedExecutionEnv.create(worktree, { sandbox: srt, git: null });
     await expect(other.prepareProcessExecution()).resolves.toMatchObject({

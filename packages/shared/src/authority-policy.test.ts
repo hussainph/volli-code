@@ -27,6 +27,7 @@ const CAPABILITY: CapabilityPolicy = {
   writableRoots: [WORKSPACE, `${COMMON}/objects`, `${COMMON}/worktrees/wt`, "/Users/dev/scratch"],
   protectedPaths: [],
   sandboxCarveOuts: false,
+  hostDataAliases: [],
   linkedFiles: {},
 };
 
@@ -255,8 +256,17 @@ describe("path.credentials and path.private", () => {
       ],
       [segment("security", ["find-generic-password", "-w", "-s", "x"]), "path.credentials"],
       [segment("security", ["-q", "dump-keychain"]), "path.credentials"],
-      [segment("security", ["list-keychains"]), "allow"],
-      [segment("security", ["-h"]), "allow"],
+      [segment("security", ["list-keychains"]), "path.credentials"],
+      [segment("security", ["-h"]), "path.credentials"],
+      [segment("security", []), "path.credentials"],
+      [segment("security", ["-i"]), "path.credentials"],
+      [
+        segment("security", ["-p", "find-certificate", "find-generic-password"]),
+        "path.credentials",
+      ],
+      [segment("security", ["find-certificate", "-a"]), "allow"],
+      [segment("security", ["-qv", "verify-cert", "-c", "cert.pem"]), "allow"],
+      [segment("security", ["dump-trust-settings"]), "allow"],
     ];
     for (const [one, expected] of cases) {
       expect(judgedWith(exec(one)), [one.program, ...one.args].join(" ")).toBe(expected);
