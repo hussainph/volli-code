@@ -145,18 +145,23 @@ describe("resolvePathForPolicy", () => {
     expect(resolvePathForPolicy(join(raw, "ws", "dotted"))).toBe(join(real, "out/Caches/new.txt"));
   });
 
-  it("spells an existing prefix as the filesystem stores it", () => {
-    const { raw, real } = workspace();
-    mkdirSync(join(raw, ".ssh"));
-    // APFS folds case and normalization; these name the same directory, and so does the policy.
-    for (const spelling of [".SSH", ".sſh", ".ssh".normalize("NFD")]) {
-      expect(resolvePathForPolicy(join(raw, spelling, "id_rsa"))).toBe(join(real, ".ssh/id_rsa"));
-    }
-  });
+  // APFS's folding; a case-sensitive Linux volume stores `.SSH` as a different name.
+  it.skipIf(process.platform !== "darwin")(
+    "spells an existing prefix as the filesystem stores it",
+    () => {
+      const { raw, real } = workspace();
+      mkdirSync(join(raw, ".ssh"));
+      // APFS folds case and normalization; these name the same directory, and so does the policy.
+      for (const spelling of [".SSH", ".sſh", ".ssh".normalize("NFD")]) {
+        expect(resolvePathForPolicy(join(raw, spelling, "id_rsa"))).toBe(join(real, ".ssh/id_rsa"));
+      }
+    },
+  );
 
   it("refuses a path too long to spell, even when most of it does not exist", () => {
     const { raw } = workspace();
-    const deep = join(raw, "missing", ...Array.from({ length: 6 }, () => "x".repeat(200)));
+    // Past PATH_MAX everywhere: 1,024 on macOS, 4,096 on Linux.
+    const deep = join(raw, "missing", ...Array.from({ length: 25 }, () => "x".repeat(200)));
     expect(resolvePathForPolicy(deep)).toBeUndefined();
   });
 
