@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { VERB_REGISTRY, type VerbToolField } from "./verb-registry";
+import { VERB_REGISTRY, type VerbEntry, type VerbToolField } from "./verb-registry";
 
 import {
   checkDecisionRequest,
@@ -427,7 +427,7 @@ describe("credentials are routed to the person", () => {
   const SECRETISH = /api.?key|token|secret|credential|password/i;
 
   it("offers no agent verb that configures a decision model or carries a key", () => {
-    for (const verb of VERB_REGISTRY) {
+    for (const verb of VERB_REGISTRY as readonly VerbEntry[]) {
       expect(verb.key).not.toMatch(/decision|classif/i);
       const names = [
         ...fieldNames(verb.tool?.input ?? [], verb.key),
