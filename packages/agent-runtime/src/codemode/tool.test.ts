@@ -236,6 +236,31 @@ describe("limits", () => {
     expect(text).toContain("has made its 3 calls; no more are run");
   });
 
+  it("stops a program that keeps calling past its limit", async () => {
+    let calls = 0;
+    const f = fixture({
+      tools: [textTool("effect", () => String(++calls))],
+      limits: { maxNestedCalls: 2 },
+    });
+    const { details, text } = await run(
+      f,
+      "while (true) { try { await tools.effect({}); } catch (error) {} }",
+    );
+    expect(calls).toBe(2);
+    expect(details.error).toBe("limit");
+    expect(text).toContain("kept calling past its 2-call limit");
+  });
+
+  it("fails a program whose output passes what the host will hold", async () => {
+    const f = fixture({ tools: [textTool("echo", () => "hi")] });
+    const { details, text } = await run(
+      f,
+      `const chunk = "x".repeat(1024 * 1024); while (true) text(chunk);`,
+    );
+    expect(details.error).toBe("script");
+    expect(text).toContain("output passed its limit");
+  });
+
   it("cuts long output in the middle and saves it whole", async () => {
     const root = mkdtempSync(join(tmpdir(), "volli-codemode-output-"));
     const output = new ToolOutputStore({ directory: join(root, "out"), workspacePath: root });

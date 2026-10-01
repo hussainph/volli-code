@@ -48,6 +48,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   CODE_MODE_TOOL_ID,
+  MCP_RESULT_MAX_BYTES,
   isCodeCallableRoute,
   isDeclaredRoute,
   isListedRoute,
@@ -131,7 +132,7 @@ export interface CodeModeHost {
 export interface CodeModeDetails {
   status: "completed" | "failed";
   /** Why a failed run failed. */
-  error?: "check" | "script" | "timeout" | "aborted" | "sandbox" | "replay";
+  error?: "check" | "script" | "timeout" | "aborted" | "sandbox" | "replay" | "limit";
   /** Active running time, in milliseconds. */
   activeMs: number;
   /** Time the run spent paused on judgement — a person answering, at the most. */
@@ -154,6 +155,21 @@ const NODE_API =
   /\b(?:require|process|fs|__dirname|fetch|setTimeout|setInterval|Buffer|module) is not defined/u;
 const NODE_API_HINT =
   "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`.";
+
+/**
+ * The most program output the host holds, in characters: what one saved
+ * result file can hold. Past it the run fails (the sandbox patch's
+ * `maxOutputChars`), so a program printing in a loop cannot grow Electron
+ * main's memory for the length of its deadline.
+ */
+export const MAX_HELD_OUTPUT_CHARS = MCP_RESULT_MAX_BYTES;
+
+/**
+ * Calls past the nested-call limit that still reject inside the program
+ * before the run is stopped. A program may catch the first refusal and
+ * return what it has; one that keeps calling is looping on it.
+ */
+const CALLS_PAST_LIMIT = 10;
 
 /** Records kept per run in the result; the rest are counted, not listed. */
 const MAX_RECORDED_CALLS = 50;
@@ -300,7 +316,7 @@ interface CallRecord {
 /** Why a run stopped, when something outside the program stopped it. */
 class RunStop extends Error {
   constructor(
-    readonly kind: "timeout" | "aborted" | "replay",
+    readonly kind: "timeout" | "aborted" | "replay" | "limit",
     message: string,
   ) {
     super(message);
@@ -385,6 +401,14 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     issued += 1;
     const position = issued;
     if (position > limits.maxNestedCalls) {
+      if (position > limits.maxNestedCalls + CALLS_PAST_LIMIT) {
+        stop(
+          new RunStop(
+            "limit",
+            `The program kept calling past its ${limits.maxNestedCalls}-call limit and was stopped.`,
+          ),
+        );
+      }
       throw new Error(
         `This program has made its ${limits.maxNestedCalls} calls; no more are run. Return what you have.`,
       );
@@ -510,6 +534,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     // person is being asked; the sandbox's would not.
     timeoutMs: Number.POSITIVE_INFINITY,
     memoryLimitBytes: limits.memoryLimitBytes,
+    maxOutputChars: MAX_HELD_OUTPUT_CHARS,
     ...(host.sandbox?.wasmPath === undefined
       ? {}
       : { wasm: loadQuickJSWasm(host.sandbox.wasmPath) }),
