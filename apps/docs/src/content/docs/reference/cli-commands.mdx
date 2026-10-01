@@ -72,13 +72,14 @@ what an Automation's **Runtime** or an agent's `session_start` tool expects.
 
 ```sh
 volli cost [--ticket <id>] [--session <handle>] [--project <name>] [--all-projects]
-           [--since <when>] [--group-by ticket|session|model|day]
+           [--since <when>] [--group-by ticket|session|model|day|cause]
 ```
 
 What Sessions consumed: tokens, cost, and cache class. This is Volli's own
 measurement of its Sessions, not a provider account balance or an invoice. `~`
 marks a catalogue estimate, `+` a total that is only partly priced, and `—` a
-total that nothing could be priced for.
+total that nothing could be priced for. `--group-by cause` separates chat
+replies, compaction, utility work such as chat names, and decision-model calls.
 
 ## Tickets
 

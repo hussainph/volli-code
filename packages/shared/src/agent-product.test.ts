@@ -62,11 +62,20 @@ describe("agent product guidance", () => {
     expect(entry!.changed.join("\n")).toContain("session done");
   });
 
-  it("records the move from awaits to event-driven notices (VC-457)", () => {
+  it("records the classify tool and when a Session has it (VC-478)", () => {
     // The newest build heads the record, and this is where that pin lives now.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-478");
+    expect(entry).toMatchObject({ baseline: "VC-457" });
+    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    const added = entry!.added.join("\n");
+    for (const word of ["classify", "choice", "score", "bool", "opt-in", "decide yourself"]) {
+      expect(added).toContain(word);
+    }
+  });
+
+  it("records the move from awaits to event-driven notices (VC-457)", () => {
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-457");
     expect(entry).toMatchObject({ baseline: "VC-364" });
-    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
     expect(entry!.added.join("\n")).toContain("watch");
     const changed = entry!.changed.join("\n");
     for (const word of ["final message", "session_start", "session_send", "automation_run"]) {
@@ -100,7 +109,7 @@ describe("agent product guidance", () => {
   it("records browser_find and stable Browser refs (VC-364)", () => {
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-364");
     expect(entry).toMatchObject({ baseline: "VC-324" });
-    expect(AGENT_CAPABILITY_CHANGES[1]).toBe(entry);
+    expect(AGENT_CAPABILITY_CHANGES[2]).toBe(entry);
     expect(entry!.added.join("\n")).toContain("browser_find");
     const changed = entry!.changed.join("\n");
     for (const word of ["[new]", "generation", "latest read"]) expect(changed).toContain(word);

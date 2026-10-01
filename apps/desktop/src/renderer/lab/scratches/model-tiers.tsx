@@ -32,6 +32,8 @@ import {
   visualModelProblem,
 } from "@volli/shared";
 import type {
+  DecisionModelCatalogEntry,
+  DecisionModelSetting,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
@@ -49,7 +51,65 @@ export const title = "Model tiers · Settings, picker Defaults, Automation runti
 export const note = "Six slots on three surfaces — flat tier list, unset rows, the Visual refusal";
 
 export const seed = seedApp;
-export const api = appApi;
+
+/* ---------------------------------------------------------- decision model */
+
+/**
+ * The Decision model section (VC-478) over an in-memory store: a signed-in
+ * TypeSafe, an OpenCode Zen that still needs its key, and a local server that
+ * "answers" the connection test. Choose Cloud → a Zen model to see the opt-in
+ * and the Needs setup row; Local → Test to see a result.
+ */
+const DECISION_CATALOG: readonly DecisionModelCatalogEntry[] = [
+  {
+    providerId: "typesafe",
+    providerLabel: "TypeSafe",
+    modelId: "jev-latest",
+    label: "Jev",
+    state: "available",
+    inputUsdPerMillion: 0,
+    contextWindow: 64_000,
+  },
+  {
+    providerId: "opencode",
+    providerLabel: "OpenCode Zen",
+    modelId: "jev-1.13",
+    label: "Jev 1.13",
+    state: "needs-setup",
+    inputUsdPerMillion: 0.042,
+    contextWindow: 32_000,
+  },
+  {
+    providerId: "opencode",
+    providerLabel: "OpenCode Zen",
+    modelId: "jev-1.13-free",
+    label: "Jev 1.13 Free",
+    state: "needs-setup",
+    inputUsdPerMillion: 0,
+    contextWindow: 32_000,
+  },
+];
+let decisionGlobal: DecisionModelSetting = { kind: "none" };
+const decisionView = () => ({ global: decisionGlobal, catalog: DECISION_CATALOG });
+
+export const api = {
+  ...appApi,
+  decisionModel: {
+    get: () => Promise.resolve({ ok: true, settings: decisionView() }),
+    set: (_scope: unknown, setting: DecisionModelSetting | null) => {
+      if (setting !== null) decisionGlobal = setting;
+      return Promise.resolve({ ok: true, settings: decisionView() });
+    },
+    test: (setting: DecisionModelSetting) =>
+      Promise.resolve({
+        ok: true,
+        test:
+          setting.kind === "local"
+            ? { ok: true, elapsedMs: 184, probability: 0.97 }
+            : { ok: false, elapsedMs: 0, message: "Sign in to the provider first." },
+      }),
+  },
+};
 
 /* ------------------------------------------------------------ model access */
 

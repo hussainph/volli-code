@@ -169,6 +169,8 @@ import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { createDesktopDecisions } from "./decision/desktop";
+import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
 import {
@@ -1099,6 +1101,37 @@ app.whenReady().then(async () => {
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  // Decision models (VC-478): the host decision service every feature that
+  // asks a classifier goes through, the `classify` tool's per-Session port,
+  // and the Settings owner. Built over the same Pi collection as chat, so a
+  // cloud classifier's key is the one a person signed in with under Model
+  // Access. Its usage is billed into the Session it was asked for, as
+  // `usage.recorded` with cause `decision` and the purpose in the provenance.
+  const desktopDecisions =
+    dbHandle.ok && piModelAccess !== null
+      ? createDesktopDecisions({
+          db: dbHandle.db,
+          models: piModelAccess.models,
+          catalogReady: piModelAccess.catalogReady,
+          recordUsage: async (sessionId, usage, purpose) => {
+            if (sessionEngine === null) return;
+            await sessionEngine.observe({
+              // A fresh id per call: every decision is its own bill.
+              id: `usage:decision:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "decision-service", detail: { purpose } },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
+        })
+      : null;
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -1152,7 +1185,7 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants, within, mcpTools = []) => {
+          resolve: (role, grants, within, mcpTools = [], classify = false) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -1200,6 +1233,11 @@ app.whenReady().then(async () => {
                   // before it keeps its list and is handed a port without
                   // `find`.
                   "browser_find",
+                  // The decision model (VC-478), appended last for the same
+                  // reason, and only for a Session born with one configured:
+                  // `resolveClassify` answered that at birth, and the record
+                  // keeps the answer for the Session's whole life.
+                  ...(classify ? (["classify"] as const) : []),
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1215,6 +1253,8 @@ app.whenReady().then(async () => {
           // tool (VC-454).
           resolveMcp: (projectId) =>
             mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
+          resolveClassify: (projectId) =>
+            desktopDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
@@ -1443,6 +1483,15 @@ app.whenReady().then(async () => {
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
             }),
+          // The Session's decision port (VC-478), bound to the Session and its
+          // project at attach. Membership is the frozen record's; this only
+          // answers it. Absent when the database never opened.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
+                  desktopDecisions.classifyPort(scope),
+              }),
           resolveMcpPort:
             mcpSettings === null
               ? undefined
@@ -2251,6 +2300,12 @@ app.whenReady().then(async () => {
   registerWebAccessIpcHandlers(
     webAccess,
     dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
+  );
+  // Decision models (VC-478): the setting, the cloud catalog with each
+  // provider's sign-in state, and the connection test. No key crosses it.
+  registerDecisionModelIpcHandlers(
+    desktopDecisions,
+    dbHandle.ok ? undefined : `Decision models are unavailable. ${dbHandle.error}`,
   );
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing

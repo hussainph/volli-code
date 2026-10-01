@@ -364,6 +364,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/model-access-refresh-model.ts",
         "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
+        // What the Decision model controls write and say (VC-478). In the gate
+        // because the cloud choice it builds IS the person's opt-in record,
+        // and a status that read "ready" for a provider nobody signed in to
+        // would send them to a model that can only answer "needs setup".
+        "src/components/pages/decision-model-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",

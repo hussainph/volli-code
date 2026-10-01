@@ -14,6 +14,7 @@ import {
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
   type RuntimeShellPort,
+  type RuntimeClassifyPort,
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
@@ -175,6 +176,9 @@ const browserEveryPortFixture: RuntimeBrowserPort = { ...browserHoldPortFixture,
  */
 const shellPort: RuntimeShellPort = { start: port, output: port, kill: port };
 
+/** Stands in for a wired decision port (VC-478). Presence only. */
+const classifyPort: RuntimeClassifyPort = { classify: port };
+
 /**
  * The verb port, which unlike the three above decides no membership — the
  * bundle does. Kept apart because it has a return type the others do not.
@@ -258,7 +262,7 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-4, -1)).toEqual([
+    expect(NON_CODING_TOOL_IDS.slice(-5, -2)).toEqual([
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -289,13 +293,26 @@ describe("sessionToolIds", () => {
       "shell_kill",
       "browser_find",
     ]);
-    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("browser_find");
+    expect(NON_CODING_TOOL_IDS.at(-2)).toBe("browser_find");
     expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).not.toContain(
       "browser_find",
     );
     expect(browserFindPort(undefined)).toBeUndefined();
     expect(browserFindPort(browserPort)).toBeUndefined();
     expect(browserFindPort(browserEveryPortFixture)).toBe(browserEveryPortFixture);
+  });
+
+  it("appends classify last, exactly when the decision port is wired (VC-478)", () => {
+    // After the Browser search, so every Session frozen before decision
+    // models existed keeps every position and its Cache Prefix.
+    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("classify");
+    expect(
+      sessionToolIds({ tools: { tools: [] }, classify: classifyPort, shell: shellPort }),
+    ).toEqual(["shell_start", "shell_output", "shell_kill", "classify"]);
+    expect(sessionToolIds({ tools: { tools: [] }, shell: shellPort })).not.toContain("classify");
+    expect(sessionToolBindings({ tools: { tools: [] }, classify: classifyPort })).toEqual([
+      { tool: "classify", port: classifyPort },
+    ]);
   });
 
   it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
@@ -368,6 +385,7 @@ describe("sessionToolIds", () => {
       webSearch: port,
       browser: browserEveryPortFixture,
       shell: shellPort,
+      classify: classifyPort,
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
