@@ -31,16 +31,20 @@
  *
  * Nothing here is ever logged, and no error this module raises quotes a value.
  */
+import { randomBytes } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
+  constants,
   fchmodSync,
   fstatSync,
+  fsyncSync,
   openSync,
   readFileSync,
   renameSync,
-  writeFileSync,
+  rmSync,
+  writeSync,
 } from "node:fs";
+import { dirname } from "node:path";
 
 /** pi-mcp's persisted OAuth state, minus the two fields that live only in memory. */
 export interface McpStoredOAuthState {
@@ -73,6 +77,11 @@ export interface McpServerCredentialRecord {
   secrets?: Readonly<Record<string, string>>;
   oauth?: McpStoredOAuthState;
   signInRequired?: McpSignInRequirement;
+  /**
+   * The loopback port Volli chose for the redirect when it registered the
+   * stored client — Volli's own record, never the registration's answer.
+   */
+  callbackPort?: number;
 }
 
 /** The store every MCP credential reader and writer goes through. */
@@ -96,6 +105,13 @@ export interface McpCredentialStore {
    * and a refresh must not tear down a working connection.
    */
   revision(serverId: string): number;
+  /**
+   * A counter that moves whenever anything a person could have provided
+   * changes: a stored secret, or the sign-in (tokens, registration). A refusal
+   * being recorded does not move it. An attachment remembers a person's
+   * "no" against this, and asks again only once it has moved.
+   */
+  accessRevision(serverId: string): number;
 }
 
 interface StoreFile {
@@ -118,9 +134,22 @@ function sameSecrets(
   return JSON.stringify(left?.secrets ?? {}) === JSON.stringify(right?.secrets ?? {});
 }
 
+function sameAccess(
+  left: McpServerCredentialRecord | undefined,
+  right: McpServerCredentialRecord | undefined,
+): boolean {
+  return (
+    sameSecrets(left, right) &&
+    JSON.stringify(left?.oauth?.tokens ?? null) === JSON.stringify(right?.oauth?.tokens ?? null) &&
+    JSON.stringify(left?.oauth?.clientInformation ?? null) ===
+      JSON.stringify(right?.oauth?.clientInformation ?? null)
+  );
+}
+
 /** Shared bookkeeping for both stores: records, revisions, and the empty-record rule. */
 abstract class RecordStore implements McpCredentialStore {
   readonly #revisions = new Map<string, number>();
+  readonly #accessRevisions = new Map<string, number>();
 
   protected abstract records(): Record<string, McpServerCredentialRecord>;
   protected abstract persist(records: Record<string, McpServerCredentialRecord>): void;
@@ -150,6 +179,9 @@ abstract class RecordStore implements McpCredentialStore {
     if (!sameSecrets(current, kept)) {
       this.#revisions.set(serverId, this.revision(serverId) + 1);
     }
+    if (!sameAccess(current, kept)) {
+      this.#accessRevisions.set(serverId, this.accessRevision(serverId) + 1);
+    }
   }
 
   delete(serverId: string): void {
@@ -158,6 +190,10 @@ abstract class RecordStore implements McpCredentialStore {
 
   revision(serverId: string): number {
     return this.#revisions.get(serverId) ?? 0;
+  }
+
+  accessRevision(serverId: string): number {
+    return this.#accessRevisions.get(serverId) ?? 0;
   }
 }
 
@@ -214,29 +250,62 @@ export class FileMcpCredentialStore extends RecordStore {
 
   protected persist(records: Record<string, McpServerCredentialRecord>): void {
     const file: StoreFile = { version: 1, servers: records };
-    const temporary = `${this.#path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(file, null, 2)}\n`, {
-      mode: MCP_CREDENTIAL_FILE_MODE,
-    });
-    // A umask can only narrow the mode `writeFileSync` asked for; chmod pins it
-    // exactly, in case the temporary name already existed with wider bits.
-    chmodSync(temporary, MCP_CREDENTIAL_FILE_MODE);
-    renameSync(temporary, this.#path);
+    // A fresh name, created exclusively and never through a symlink: nothing
+    // planted at a predictable temporary path can receive the credentials.
+    const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    const fd = openSync(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      MCP_CREDENTIAL_FILE_MODE,
+    );
+    try {
+      writeSync(fd, `${JSON.stringify(file, null, 2)}\n`);
+      // A umask can only narrow the mode asked for; this pins it exactly.
+      fchmodSync(fd, MCP_CREDENTIAL_FILE_MODE);
+      // On disk before it replaces the old file: a power cut must leave the
+      // previous credentials or the new ones, never an empty file.
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      renameSync(temporary, this.#path);
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
+    // And the rename itself, which lives in the directory.
+    try {
+      const directory = openSync(dirname(this.#path), "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    } catch {
+      // Not every filesystem lets a directory be synced; the file itself is.
+    }
     this.#cache = records;
   }
 
   #load(): Record<string, McpServerCredentialRecord> {
     // One open file, checked and read through the same descriptor: no window
     // in which the path could be swapped between the check and the read.
+    // Never through a symlink: a link planted at this path would otherwise
+    // decide where Volli reads credentials from — and, after the next write
+    // renamed over it, nothing else; it is moved aside like any file this
+    // build cannot read.
     let fd: number;
     try {
-      fd = openSync(this.#path, "r");
+      fd = openSync(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw error;
+      return this.#moveAside();
     }
     try {
-      if ((fstatSync(fd).mode & 0o077) !== 0) fchmodSync(fd, MCP_CREDENTIAL_FILE_MODE);
+      const stat = fstatSync(fd);
+      if (!stat.isFile()) throw new Error("not a file");
+      if ((stat.mode & 0o077) !== 0) fchmodSync(fd, MCP_CREDENTIAL_FILE_MODE);
       const parsed = JSON.parse(readFileSync(fd, "utf8")) as unknown;
       if (
         parsed === null ||
@@ -249,18 +318,22 @@ export class FileMcpCredentialStore extends RecordStore {
       }
       return (parsed as StoreFile).servers;
     } catch {
-      const aside = `${this.#path}.unreadable`;
-      try {
-        renameSync(this.#path, aside);
-      } catch {
-        // Nothing more to do: the next write replaces it.
-      }
-      console.warn(
-        `[volli] MCP credential file ${this.#path} could not be read; moved aside to ${aside}. Sign in again or re-enter the stored values in Settings.`,
-      );
-      return {};
+      return this.#moveAside();
     } finally {
       closeSync(fd);
     }
+  }
+
+  #moveAside(): Record<string, McpServerCredentialRecord> {
+    const aside = `${this.#path}.unreadable`;
+    try {
+      renameSync(this.#path, aside);
+    } catch {
+      // Nothing more to do: the next write replaces it.
+    }
+    console.warn(
+      `[volli] MCP credential file ${this.#path} could not be read; moved aside to ${aside}. Sign in again or re-enter the stored values in Settings.`,
+    );
+    return {};
   }
 }

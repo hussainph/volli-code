@@ -54,4 +54,16 @@ server.registerTool("fixture_large", { description: "Returns about 1.1 MB of tex
   content: [{ type: "text", text: "x".repeat(1_100_000) }],
 }));
 
+// Past the 8 MiB bound: the client must refuse it at once, not time out.
+server.registerTool(
+  "fixture_too_large",
+  { description: "Returns more than the message bound" },
+  async () => ({ content: [{ type: "text", text: "z".repeat(9 * 1024 * 1024) }] }),
+);
+// Exits on its own after answering, leaving its helper (see --pid-file) behind.
+server.registerTool("fixture_exit", { description: "Exits after answering" }, async () => {
+  setTimeout(() => process.exit(0), 50);
+  return { content: [{ type: "text", text: "exiting" }] };
+});
+
 await server.connect(new StdioServerTransport());

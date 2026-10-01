@@ -1484,11 +1484,17 @@ app.whenReady().then(async () => {
                     // value a person adds while it runs (VC-470).
                     open: mcpSettings.opener(),
                     credentialsRevision: (serverId) => mcpSettings.credentials.revision(serverId),
+                    accessRevision: (serverId) => mcpSettings.credentials.accessRevision(serverId),
+                    // Signed in against the stored row, but only while it still
+                    // names the endpoint this Session's question names.
                     signIn: (server, signal) =>
                       mcpSettings.signIn({
                         projectId: scope.projectId,
                         serverId: server.id,
                         signal,
+                        ...(server.transport.type === "streamable-http"
+                          ? { expectedUrl: server.transport.url }
+                          : {}),
                       }),
                   });
                   // Behind the one per-server budget (VC-454): over-budget

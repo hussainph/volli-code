@@ -845,10 +845,7 @@ export function registerDataIpcHandlers(
         ? { ok: true, message: outcome.message }
         : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
     },
-    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => {
-      mcpSettings.cancelSignIn(input);
-      return { ok: true as const };
-    },
+    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
     "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
     "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
 

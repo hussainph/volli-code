@@ -1080,6 +1080,14 @@ export async function mcpRemoveTool(
   if (existing === undefined) {
     return refusal(`No MCP server ${id.value} in this project, so nothing was removed.`);
   }
+  // Removing a server deletes the credentials a person set up for it, and
+  // that is not an agent's call to make (VC-470): the person does it in
+  // Settings, or the agent only disables it.
+  if (holdsPersonCredentials(found.mcp, existing)) {
+    return refusal(
+      `${existing.name} (id ${existing.id}) holds credentials a person set up, and removing it would delete them, so an agent cannot remove it. Nothing was removed. A person can remove it in Settings \u2192 Configure \u2192 MCP Servers; to keep its tools out of new Sessions, call server_disable instead.`,
+    );
+  }
   const warning = mcpRemovalWarning(existing.name);
 
   if (!isApply(request.input)) {

@@ -391,6 +391,18 @@ describe("sanitizeMcpServerDraft", () => {
       { type: "streamable-http", url: "https://example.test/mcp", oauth: { callbackPort: 0 } },
       "port",
     ],
+    [
+      {
+        type: "streamable-http",
+        url: "http://example.test/mcp",
+        headers: [{ name: "X-Key", source: { kind: "secret" } }],
+      },
+      "only sent over https",
+    ],
+    [
+      { type: "streamable-http", url: "http://example.test/mcp", oauth: { clientId: "c" } },
+      "only sent over https",
+    ],
   ])("rejects malformed credential configuration %#", (transport, reason) => {
     const result = sanitizeMcpServerDraft(serverCandidate({ transport }));
     expect(result.ok).toBe(false);
@@ -700,6 +712,7 @@ describe("mcpRemovalWarning", () => {
 
     expect(warning).toContain("Files");
     expect(warning).toContain("fail to reattach");
-    expect(warning).toContain("mcp_disable");
+    expect(warning).toContain("server_disable");
+    expect(warning).toMatch(/cannot be removed by an agent at all/);
   });
 });

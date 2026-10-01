@@ -23,6 +23,17 @@ export interface OAuthFixtureOptions {
   expiresIn?: number;
   /** Never answer a refresh-token request: an authorization server that hangs. */
   hangRefresh?: boolean;
+  /**
+   * RFC 9207: `correct` sends `iss` on the redirect and advertises it, `wrong`
+   * sends another issuer's, `withheld` advertises it but sends none.
+   */
+  iss?: "correct" | "wrong" | "withheld";
+  /** `code_challenge_methods_supported`; `null` leaves it out of the metadata. */
+  pkceMethods?: readonly string[] | null;
+  /** Advertise this authorization endpoint instead of the fixture's own. */
+  authorizationEndpoint?: string;
+  /** Whether `/mcp` demands a token. Default true. */
+  requireAuth?: boolean;
 }
 
 interface Grant {
@@ -148,7 +159,10 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
     const header = request.headers.authorization ?? "";
     seen.authorizationHeaders.push(header);
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-    const grant = access.get(token);
+    const grant =
+      options.requireAuth === false
+        ? { clientId: "anonymous", scope: "read admin" }
+        : access.get(token);
     const text = await readBody(request);
     if (grant === undefined) {
       challenge(response);
@@ -218,12 +232,17 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
     if (url.pathname === "/.well-known/oauth-authorization-server") {
       json(response, 200, {
         issuer: base,
-        authorization_endpoint: `${base}/authorize`,
+        authorization_endpoint: options.authorizationEndpoint ?? `${base}/authorize`,
         token_endpoint: `${base}/token`,
         ...(dynamic ? { registration_endpoint: `${base}/register` } : {}),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256"],
+        ...(options.pkceMethods === null
+          ? {}
+          : { code_challenge_methods_supported: options.pkceMethods ?? ["S256"] }),
+        ...(options.iss === undefined
+          ? {}
+          : { authorization_response_iss_parameter_supported: true }),
         token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
       });
       return;
@@ -260,6 +279,8 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
       const target = new URL(redirectUri);
       target.searchParams.set("code", code);
       target.searchParams.set("state", url.searchParams.get("state") ?? "");
+      if (options.iss === "correct") target.searchParams.set("iss", base);
+      if (options.iss === "wrong") target.searchParams.set("iss", "https://other-issuer.example");
       response.writeHead(302, { location: target.href }).end();
       return;
     }

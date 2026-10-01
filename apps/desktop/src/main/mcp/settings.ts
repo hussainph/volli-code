@@ -325,6 +325,17 @@ export class McpSettingsService {
       // noticed by nobody, and acceptance 6 promises a cancelled install leaves
       // NO partial configuration — not "almost none".
       signal.throwIfAborted();
+      // Compare-and-swap against the row this save started from. Discovery
+      // takes seconds; a person saving the same server in Settings meanwhile
+      // (a header added, a secret stored) must not be written over by a save
+      // that never saw it — nor have that secret pruned by `#keepSecrets`.
+      const latest = getMcpServer(this.#db, prepared.server.id);
+      if ((latest?.updatedAt ?? null) !== (existing?.updatedAt ?? null)) {
+        return {
+          ok: false,
+          error: `${prepared.server.name} was changed while this was connecting, so nothing was written. Retry to use the current configuration.`,
+        };
+      }
       const invalid = catalog.filter((tool) => tool.definition === null);
       if (existing !== undefined && invalid.length > 0) {
         throw new Error(
@@ -398,6 +409,13 @@ export class McpSettingsService {
     server?: unknown;
     secrets?: unknown;
     signal?: AbortSignal;
+    /**
+     * The endpoint the caller named to the person — a running Session's
+     * frozen snapshot. A saved server whose stored endpoint now differs is
+     * refused rather than signed in to: the person allowed a sign-in to the
+     * address they were shown, not to whatever the row says now.
+     */
+    expectedUrl?: string;
   }): Promise<McpSignInOutcome> {
     const signal = input.signal ?? new AbortController().signal;
     let server: McpServerDraft;
@@ -407,6 +425,15 @@ export class McpSettingsService {
       if (!owned.ok) return { ok: false, cancelled: false, message: owned.error };
       const prepared = this.#prepare(input.projectId, owned.server);
       if (!prepared.ok) return { ok: false, cancelled: false, message: prepared.error };
+      const stored =
+        prepared.server.transport.type === "streamable-http" ? prepared.server.transport.url : "";
+      if (input.expectedUrl !== undefined && stored !== input.expectedUrl) {
+        return {
+          ok: false,
+          cancelled: false,
+          message: `${prepared.server.name}'s address changed since this Session started, so Volli did not sign in to either one. Review it in Settings \u2192 Configure \u2192 MCP Servers.`,
+        };
+      }
       server = prepared.server;
       workspacePath = prepared.workspacePath;
     } else {
@@ -438,8 +465,15 @@ export class McpSettingsService {
   }
 
   /** Stop a sign-in waiting on the browser, for everyone waiting on it. */
-  cancelSignIn(input: { projectId: string; serverId: string }): void {
+  cancelSignIn(input: { projectId: string; serverId: string }): McpMutationResult {
+    // A saved server is cancelled only from its own project; an editor
+    // draft has no row yet, and its id is the pane's own.
+    const existing = getMcpServer(this.#db, input.serverId);
+    if (existing !== undefined && existing.projectId !== input.projectId) {
+      return { ok: false, error: "MCP server not found." };
+    }
     this.#oauth.cancelSignIn(input.serverId);
+    return { ok: true };
   }
 
   /** Delete a server's stored OAuth tokens and registration. Secrets stay. */

@@ -48,6 +48,8 @@ describe("real MCP transport fixtures", () => {
       }),
       expect.objectContaining({ name: "fixture_env" }),
       expect.objectContaining({ name: "fixture_large" }),
+      expect.objectContaining({ name: "fixture_too_large" }),
+      expect.objectContaining({ name: "fixture_exit" }),
     ]);
     await expect(
       client.callTool({
@@ -280,7 +282,9 @@ describe("message size bounds (VC-469's 8 MiB outer bound, on pi-mcp)", () => {
       respond({ "content-type": "application/json", "content-length": String(body.length) }),
       1_000,
     );
-    await expect(declared("http://127.0.0.1/mcp")).rejects.toThrow("exceeds 1000 bytes");
+    await expect(declared("http://127.0.0.1/mcp")).rejects.toThrow(
+      "larger than the 1000-byte limit",
+    );
 
     const chunked = boundedFetch(
       vi.fn(
@@ -293,7 +297,7 @@ describe("message size bounds (VC-469's 8 MiB outer bound, on pi-mcp)", () => {
       1_000,
     );
     await expect((await chunked("http://127.0.0.1/mcp")).text()).rejects.toThrow(
-      "exceeds 1000 bytes",
+      "larger than the 1000-byte limit",
     );
 
     const small = boundedFetch(respond({ "content-type": "application/json" }), 10_000);
@@ -301,6 +305,22 @@ describe("message size bounds (VC-469's 8 MiB outer bound, on pi-mcp)", () => {
 
     const stream = boundedFetch(respond({ "content-type": "text/event-stream" }), 1_000);
     await expect((await stream("http://127.0.0.1/mcp")).text()).resolves.toHaveLength(body.length);
+
+    // An error answer labelled as an event stream is read whole by the
+    // transport, so it is bounded like any body.
+    const erroring = boundedFetch(
+      vi.fn(
+        async () =>
+          new Response(new Blob([body]).stream(), {
+            status: 500,
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+      1_000,
+    );
+    await expect((await erroring("http://127.0.0.1/mcp")).text()).rejects.toThrow(
+      "larger than the 1000-byte limit",
+    );
 
     const empty = boundedFetch(async () => new Response(null, { status: 202 }), 1);
     expect((await empty("http://127.0.0.1/mcp")).status).toBe(202);

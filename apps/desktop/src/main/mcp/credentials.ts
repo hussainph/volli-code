@@ -91,6 +91,28 @@ export class McpSignInRequiredError extends McpConnectionProblem {
   }
 }
 
+/** One message from the server was over the size bound; the connection was dropped. */
+export class McpMessageTooLargeError extends McpConnectionProblem {
+  constructor(serverName: string, maxBytes: number) {
+    const limit =
+      maxBytes >= 1_024 * 1_024
+        ? `${Math.round(maxBytes / (1_024 * 1_024))} MiB`
+        : `${maxBytes}-byte`;
+    super(`${serverName} sent a message larger than the ${limit} limit, so Volli dropped it.`);
+    this.name = "McpMessageTooLargeError";
+  }
+}
+
+/** A credential would cross plain http to another host, so it was not sent. */
+export class McpInsecureEndpointError extends McpConnectionProblem {
+  constructor(serverName: string, reason: string) {
+    super(
+      `${serverName}'s endpoint is plain http, so Volli did not send it the credential: ${reason}.`,
+    );
+    this.name = "McpInsecureEndpointError";
+  }
+}
+
 /** The server speaks only an MCP revision this client cannot (see `client.ts`). */
 export class McpProtocolEraError extends McpConnectionProblem {
   constructor(serverName: string) {

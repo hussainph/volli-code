@@ -727,6 +727,46 @@ describe("McpSessionHost — calls blocked on a person (VC-470)", () => {
     await rejected.close();
   });
 
+  it("remembers a person's no for this attachment until they provide something, then asks again", async () => {
+    let access = 0;
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () => {
+        throw new McpCredentialMissingError("Fixture", ["env API_KEY"]);
+      },
+      accessRevision: () => access,
+    });
+    const ask = vi.fn(async () => "refuse" as const);
+    const declined = {
+      content: [
+        {
+          type: "text",
+          text: "The person driving declined to add env API_KEY for Fixture, so lookup was not called.",
+        },
+      ],
+      isError: true,
+    };
+
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    // An agent retrying in a loop gets the same answer, and no new card.
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    expect(ask).toHaveBeenCalledOnce();
+
+    // The person stores something: the next blocked call may ask again.
+    access = 1;
+    await host.port.call(call, new AbortController().signal, ask);
+    expect(ask).toHaveBeenCalledTimes(2);
+    await host.close();
+  });
+
   it("retires an idle client opened before a person replaced a stored value", async () => {
     let revision = 0;
     const clients: McpProtocolClient[] = [];

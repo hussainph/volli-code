@@ -261,8 +261,15 @@ SIGKILL to the **whole group** — so a server started through `npx` or `uvx`,
 whose launcher keeps the real server as a child, leaves nothing behind. On app
 quit every open connection is closed the same way after the Sessions have
 closed, and if the process exits without closing one, the client's exit hook
-SIGTERMs every group it started. `stdio-lifecycle.test.ts` checks all three with
-real processes, `npx` included.
+SIGTERMs every group it started. Two gaps in the client are closed on Volli's
+side: a server that had already exited leaves helpers in its group, and a group
+member that ignores SIGTERM after the server has gone gets no SIGKILL. After
+every close, whatever is still in the group gets SIGTERM, a two-second grace,
+then SIGKILL. `stdio-lifecycle.test.ts` checks all of this with real processes,
+`npx` included.
+
+A message over the 8 MiB bound is refused at once with an error that says so,
+rather than leaving the call to wait out its 30 seconds.
 
 ## Credentials and sign-in
 
@@ -275,6 +282,19 @@ stores a credential value. Only a person adds one, in **Settings → Configure �
 MCP Servers**, and only a person signs in. When an agent's work needs one, the
 agent raises a question that reaches the person; the person acts; the agent is
 told the outcome — signed in, declined, or still missing — and never the value.
+
+That promise holds **at the tool surface**: no verb, tool result, question or
+record carries a value. It is not a sandbox. A Session with full access runs
+its shell as you, and your user can read `mcp-credentials.json` (see below), so
+such a Session's commands could read it too — exactly as they could read
+`~/.pi/agent/auth.json` or any other file you can. A Scoped Session's commands
+run behind Seatbelt with your home directory in `denyRead`, which covers the
+file.
+
+**Credentials only travel over https**, or over plain http to this machine. A
+header, a bearer token or a sign-in sent in clear to another host is readable
+by anyone on the path, so Settings refuses to save credentials for such an
+endpoint (and says why), and Volli refuses to sign in to one.
 
 ### Signing in (OAuth)
 
@@ -291,14 +311,25 @@ press *Cancel sign-in*) for the browser to come back to a temporary server on
   (protected-resource and authorization-server metadata);
 - registers itself with it as *Volli Code* (dynamic client registration), or
   uses a **pre-registered client** you configured;
-- uses PKCE (S256) for the authorization code;
+- uses PKCE (S256) for the authorization code, and refuses an authorization
+  server whose metadata does not say it supports S256 — MCP requires the
+  client to check;
+- opens only an https authorization page (plain http only when the MCP server
+  is itself on this machine);
+- checks the `iss` the browser comes back with against the authorization
+  server it started with (RFC 9207), whenever one is sent or the server says
+  it always sends one — Sentry, Linear and GitHub all do;
+- listens for the redirect on a port it chose itself, reusing that port for a
+  client it registered, never one named by the authorization server;
 - refreshes the access token by itself when the server rejects it, sharing one
   refresh between concurrent requests;
 - signs in again for more scope when the server asks for it (`403
   insufficient_scope`): the row shows *Needs sign-in* again, and signing in
   requests what was granted plus what was asked for (step-up).
 
-*Sign out* deletes the stored tokens and the client registration. Every request
+*Sign out* stops a sign-in still in progress, deletes the stored tokens and the
+client registration, and asks the authorization server to revoke the tokens
+when it advertises a revocation endpoint (best effort). Every request
 Volli makes to an authorization server has a 10-second limit and a 1 MiB limit
 on its answer, so one that stops answering fails a call rather than holding
 every call to that server behind it.
@@ -317,7 +348,11 @@ server advertises.
 a Session already running uses a refreshed token, or the token from a sign-in
 a person just completed, on its very next call, without being reattached. Its
 frozen tool list does not change: signing in, like installing, affects which
-tools are offered only to Sessions created afterwards.
+tools are offered only to Sessions created afterwards. A Session signs in only
+to the address it was started with: if the stored server has since been
+pointed elsewhere, its sign-in question is answered "this server's address
+changed since the Session started; review it in Settings" and neither address
+is signed in to.
 
 ### Headers and environment values
 
@@ -370,7 +405,10 @@ by a stored secret, which runs nothing.
 ### Where credentials are kept
 
 In `mcp-credentials.json` beside the profile database (`<userData>/` in the
-app), written whole and renamed into place with mode `0600`. Not the macOS
+app), mode `0600`: written whole to a fresh temporary file (created exclusively,
+never through a symlink), flushed to disk, then renamed into place, so a power
+cut leaves the old file or the new one. A symlink found at the path is never
+read through. Not the macOS
 keychain, for the reasons in
 `docs/research/env-credential-ux-architecture-review.md`: keychain access raised
 a prompt whenever the build's signature changed, and every peer (Pi's own
@@ -380,8 +418,8 @@ lives only in the memory of the sign-in that made it.
 
 Credentials never reach the project database, a backup bundle (the file is
 excluded by name), `mcp_operations`, a ticket comment, an audit record, a
-question put to a person, or a transcript. Removing a server deletes its stored
-credentials; re-adding it means storing them or signing in again.
+question put to a person, or a transcript. Removing a server in Settings deletes
+its stored credentials; re-adding it means storing them or signing in again.
 
 ### What an agent can and cannot do
 
@@ -402,13 +440,19 @@ credentials; re-adding it means storing them or signing in again.
 - **A missing or rejected key is asked for the same way.** `confirm.mcp-credential`
   names the slot (`header Authorization`); the person adds or replaces the value
   in Settings and allows the retry. If it is still missing, or still rejected,
-  the agent is told that. Calls blocked on the same server at the same time share
+    the agent is told that. Calls blocked on the same server at the same time share
   one question.
+- **A "no" is remembered.** Once the person declines, every later call in that
+  Session blocked on the same server for the same reason is answered "declined"
+  at once, with no new question, until the person stores a value or signs in.
 - **Each question names the endpoint** beside the server's name, because the
   name is the agent's choice and allowing a sign-in opens whatever page that
   endpoint's metadata names.
-- **Unattended, it is told plainly.** A Session with nobody to ask gets a
-  result saying a person must sign in or add the value in Settings, and the
+- **Nobody watching is not nobody to ask.** In a structured Session the question
+  parks like any other, the Session reads as waiting on you, and an unattended
+  Run's notification fires for it as for any parked question. Only a call with
+  no question port at all — a verb reached without an attachment — gets the
+  plain result that a person must sign in or add the value in Settings, and the
   server stays in *Needs sign-in*.
 - **An agent cannot redirect a person's credential.** Re-installing an existing
   server with the same command or endpoint keeps the person's credential
@@ -416,12 +460,18 @@ credentials; re-adding it means storing them or signing in again.
   environment or OAuth settings, a stored secret, a sign-in — at a *different*
   endpoint or command is **refused**, before anything is asked or connected:
   carrying the credential along would send it where the agent chose, and
-    dropping it would destroy a person's sign-in on an agent's say-so. Install it
+  dropping it would destroy a person's sign-in on an agent's say-so. Install it
   under a new id, or the person changes it in Settings. The configuration is
   read again after the person confirms the install, so a credential they add in
   Settings while the question is open is kept, not written over.
+- **An agent cannot remove a person's credentials.** `server_remove` refuses a
+  server that holds any (configured headers, environment or OAuth settings, a
+  stored secret, a sign-in): removing it deletes them. A person removes it in
+  Settings; an agent that only wants its tools out of new Sessions calls
+  `server_disable`.
 - `server_preview` never asks anyone: it reports that a sign-in is needed and that
-  `server_install` will ask.
+  `server_install` will ask, and previews what `server_install` would refuse as a
+  refusal.
 
 ## Recovering from a failed or regretted change
 
@@ -569,7 +619,7 @@ VOLLI_DEV_MCP_PARALLEL='{
 - Downloading, unpacking or verifying packages from npm, PyPI, OCI or anywhere
   else — VC-379.
 - SSE and WebSocket transports (see [Transports](#transports)).
-- The `2026-07-28` protocol revision for servers that speak only it (see
+- The `2026-07-28` protocol revision for servers that speak only it — VC-479 (see
   [The client and its protocol versions](#the-client-and-its-protocol-versions)).
 - A per-server working directory; the project root is always used.
 - `!command` credential values (see

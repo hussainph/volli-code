@@ -1,11 +1,14 @@
 import {
   chmodSync,
+  existsSync,
+  lstatSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
-  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +74,37 @@ describe("FileMcpCredentialStore", () => {
   });
 });
 
+describe("FileMcpCredentialStore and symlinks", () => {
+  it("does not read credentials through a symlink planted at its path, and writes a real file in its place", () => {
+    const path = join(dir, "mcp-credentials.json");
+    const elsewhere = join(dir, "attacker-controlled.json");
+    writeFileSync(
+      elsewhere,
+      JSON.stringify({ version: 1, servers: { s: { secrets: { "env:A": "planted" } } } }),
+    );
+    symlinkSync(elsewhere, path);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const store = new FileMcpCredentialStore(path);
+    expect(store.read("s")).toBeUndefined();
+    store.update("s", () => ({ secrets: { "env:A": "mine" } }));
+
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(lstatSync(path).mode & 0o777).toBe(0o600);
+    // The planted target was neither read into the store nor written to.
+    expect(readFileSync(elsewhere, "utf8")).toContain("planted");
+    expect(readFileSync(elsewhere, "utf8")).not.toContain("mine");
+    expect(new FileMcpCredentialStore(path).read("s")).toEqual({ secrets: { "env:A": "mine" } });
+  });
+
+  it("leaves no temporary file behind", () => {
+    const store = new FileMcpCredentialStore(join(dir, "mcp-credentials.json"));
+    store.update("s", () => ({ secrets: { "env:A": "1" } }));
+    store.update("s", () => ({ secrets: { "env:A": "2" } }));
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
 describe("credential records", () => {
   it("drops an emptied record, hands out copies, and moves the revision only when secrets change", () => {
     const store = new MemoryMcpCredentialStore();
@@ -93,6 +127,16 @@ describe("credential records", () => {
     expect(store.revision("s")).toBe(2);
     store.update("s", (current) => ({ ...current, oauth: undefined }));
     expect(store.read("s")).toBeUndefined();
+
+    // Only what a person could provide moves the access revision: a recorded
+    // refusal does not.
+    const access = store.accessRevision("u");
+    store.update("u", () => ({
+      signInRequired: { at: 1, serverUrl: "https://x/", insufficientScope: false },
+    }));
+    expect(store.accessRevision("u")).toBe(access);
+    store.update("u", (current) => ({ ...current, secrets: { "env:C": "3" } }));
+    expect(store.accessRevision("u")).toBe(access + 1);
 
     store.update("t", () => ({ secrets: { "env:B": "2" } }));
     store.delete("t");

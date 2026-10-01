@@ -296,6 +296,29 @@ export function sanitizeMcpCredentialEntries(
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/** Whether a URL names this machine: `localhost`, `127.0.0.1` or `[::1]`. */
+export function isMcpLoopbackUrl(url: URL): boolean {
+  return LOOPBACK_HOSTS.has(url.hostname);
+}
+
+/**
+ * Whether Volli may send a credential to this endpoint: https, or plain http
+ * to this machine.
+ *
+ * A header, a bearer token or a sign-in over plain http to another host is a
+ * credential anyone on the path can read and replay, so Volli refuses to send
+ * one — the configuration that would need it is refused when it is saved, and
+ * a sign-in is refused before it starts.
+ */
+export function mcpEndpointMayCarryCredentials(url: string): boolean {
+  const parsed = new URL(url);
+  return parsed.protocol === "https:" || (parsed.protocol === "http:" && isMcpLoopbackUrl(parsed));
+}
+
+/** Why an endpoint may not carry credentials, as Settings and a refusal say it. */
+export const MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL =
+  "credentials are only sent over https, or over http to this machine, because anyone on the path can read them otherwise";
+
 export type McpOAuthClientSanitization =
   | { ok: true; oauth: McpOAuthClientConfig | undefined }
   | { ok: false; reason: string };

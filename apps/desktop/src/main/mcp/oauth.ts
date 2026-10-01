@@ -51,7 +51,10 @@ import {
   type OAuthTokens,
 } from "@earendil-works/pi-mcp/oauth";
 import {
+  isMcpLoopbackUrl,
   MCP_CONNECTION_TIMEOUT_MS,
+  MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL,
+  mcpEndpointMayCarryCredentials,
   mcpServerUsesOAuth,
   type McpOAuthClientConfig,
   type McpServerDraft,
@@ -93,6 +96,9 @@ export interface McpOAuthServer {
 export function mcpOAuthServer(server: McpServerDraft): McpOAuthServer | null {
   const transport = server.transport;
   if (transport.type !== "streamable-http" || !mcpServerUsesOAuth(transport.headers)) return null;
+  // A bearer token over plain http to another host is readable by anyone on
+  // the path: such a server is never given one, and never signed in to.
+  if (!mcpEndpointMayCarryCredentials(transport.url)) return null;
   return {
     id: server.id,
     name: server.name,
@@ -189,6 +195,9 @@ function signInFailure(serverName: string, error: unknown): string {
     (error instanceof Error && /dynamic client registration/i.test(error.message))
   ) {
     return `${serverName}'s authorization server would not register Volli as a client. If it needs a pre-registered client, add its client id under OAuth in Settings \u2192 Configure \u2192 MCP Servers.`;
+  }
+  if (error instanceof Error && /PKCE S256/.test(error.message)) {
+    return `${serverName}'s authorization server does not say it supports PKCE with S256, which MCP requires, so Volli did not sign in.`;
   }
   if (error instanceof OAuthIssuerMismatchError) {
     return `${serverName}'s authorization server identified itself inconsistently, so Volli stopped the sign-in.`;
@@ -299,7 +308,8 @@ export class McpOAuthBroker {
     if (oauth === null) return;
     const requirement = this.#requirement(oauth);
     if (requirement === undefined || requirement.insufficientScope) return;
-    if (this.#tokens(oauth) === undefined) return;
+    // Got through — with a token, or because the server no longer asks for
+    // one. Either way the refusal is not outstanding.
     this.#store.update(server.id, (current) => ({ ...current, signInRequired: undefined }));
   }
 
@@ -321,11 +331,45 @@ export class McpOAuthBroker {
 
   /** Delete a server's tokens and registration. Stored secrets are a different act. */
   signOut(serverId: string): void {
+    // A sign-in still waiting on the browser would only put back what this
+    // deletes.
+    this.cancelSignIn(serverId);
+    const oauth = this.#store.read(serverId)?.oauth;
     this.#store.update(serverId, (current) =>
       current === undefined
         ? undefined
-        : { ...current, oauth: undefined, signInRequired: undefined },
+        : { ...current, oauth: undefined, signInRequired: undefined, callbackPort: undefined },
     );
+    if (oauth !== undefined) void this.#revoke(oauth);
+  }
+
+  /**
+   * Ask the authorization server to forget the grant, when it says how (RFC
+   * 7009). Best effort and after the fact: the tokens are already gone from
+   * this machine, which is what signing out promises; a server that does not
+   * answer leaves them to expire.
+   */
+  async #revoke(oauth: McpStoredOAuthState): Promise<void> {
+    const metadata = oauth.discovery?.["authorizationServerMetadata"] as
+      | { revocation_endpoint?: unknown }
+      | undefined;
+    const endpoint = metadata?.revocation_endpoint;
+    const clientId = (oauth.clientInformation as { client_id?: unknown } | undefined)?.client_id;
+    if (typeof endpoint !== "string" || typeof clientId !== "string") return;
+    if (!URL.canParse(endpoint) || !mcpEndpointMayCarryCredentials(endpoint)) return;
+    for (const [hint, token] of [
+      ["refresh_token", oauth.tokens?.["refresh_token"]],
+      ["access_token", oauth.tokens?.access_token],
+    ] as const) {
+      if (typeof token !== "string") continue;
+      await this.#fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token, token_type_hint: hint, client_id: clientId }),
+      })
+        .then((response) => response.body?.cancel())
+        .catch(() => undefined);
+    }
   }
 
   /**
@@ -423,6 +467,16 @@ export class McpOAuthBroker {
       probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
     },
   ): Promise<McpSignInOutcome> {
+    if (
+      server.transport.type === "streamable-http" &&
+      !mcpEndpointMayCarryCredentials(server.transport.url)
+    ) {
+      return {
+        ok: false,
+        cancelled: false,
+        message: `${server.name} is a plain http endpoint, so Volli will not sign in to it: ${MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL}.`,
+      };
+    }
     const target = mcpOAuthServer(server);
     if (target === null) {
       return {
@@ -439,7 +493,12 @@ export class McpOAuthBroker {
         target.oauth?.clientSecret,
         options.sources,
       );
-      callback = await this.#listen(server.id, target);
+      const clientIdBefore = (
+        this.#store.read(server.id)?.oauth?.clientInformation as { client_id?: unknown } | undefined
+      )?.client_id;
+      const listening = await this.#listen(server.id, target);
+      callback = listening.server;
+      const listenedOnAnyPort = listening.chosenByVolli;
       let authorizationUrl: URL | undefined;
       const provider = new McpOAuthProvider({
         serverUrl: target.url,
@@ -491,11 +550,33 @@ export class McpOAuthBroker {
       if (outcome === "REDIRECT") {
         const url = authorizationUrl;
         if (url === undefined) throw new Error("no authorization URL");
-        if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback(url.hostname))) {
+        // https, or plain http only when the MCP server is itself on this
+        // machine: a remote server has no business sending the person to a
+        // page on their own loopback interface.
+        const loopbackPage =
+          url.protocol === "http:" &&
+          isLoopback(url.hostname) &&
+          isMcpLoopbackUrl(new URL(target.url));
+        if (url.protocol !== "https:" && !loopbackPage) {
           return {
             ok: false,
             cancelled: false,
             message: `${server.name}'s authorization page is not an https address, so Volli did not open it.`,
+          };
+        }
+        // MCP 2025-11-25 requires a client to confirm the authorization server
+        // supports PKCE with S256 before it authorizes, and to refuse if it
+        // does not say so. pi-mcp refuses only when the list is present and
+        // lacks S256; an absent list is refused here.
+        const metadata = this.#store.read(server.id)?.oauth?.discovery?.[
+          "authorizationServerMetadata"
+        ] as { code_challenge_methods_supported?: unknown } | undefined;
+        const methods = metadata?.code_challenge_methods_supported;
+        if (!Array.isArray(methods) || !methods.includes("S256")) {
+          return {
+            ok: false,
+            cancelled: false,
+            message: `${server.name}'s authorization server does not say it supports PKCE with S256, which MCP requires, so Volli did not sign in.`,
           };
         }
         // Discovery and registration watch no signal of their own: a Cancel
@@ -507,7 +588,7 @@ export class McpOAuthBroker {
         waiting.catch(() => undefined);
         options.signal.throwIfAborted();
         await this.#openExternal(url.href);
-        const { code } = await untilAborted(waiting, options.signal, () => {
+        const { code, iss } = await untilAborted(waiting, options.signal, () => {
           void callback?.close().catch(() => undefined);
         }).catch((error: unknown) => {
           if (options.signal.aborted) throw error;
@@ -517,6 +598,30 @@ export class McpOAuthBroker {
               : `The sign-in to ${server.name} was not completed in the browser.`,
           );
         });
+        // RFC 9207: the redirect names the authorization server that issued
+        // the code. When it does, or when the server said it always will, it
+        // must be the one this sign-in discovered — otherwise a code from
+        // another authorization server (a mix-up attack) would be exchanged
+        // with this one's client.
+        const discovered = this.#store.read(server.id)?.oauth?.discovery?.[
+          "authorizationServerMetadata"
+        ] as
+          | { issuer?: unknown; authorization_response_iss_parameter_supported?: unknown }
+          | undefined;
+        if (
+          iss !== undefined ||
+          discovered?.authorization_response_iss_parameter_supported === true
+        ) {
+          const trim = (value: unknown): string =>
+            typeof value === "string" ? value.replace(/\/$/, "") : "";
+          if (iss === undefined || trim(iss) !== trim(discovered?.issuer)) {
+            return {
+              ok: false,
+              cancelled: false,
+              message: `${server.name}'s sign-in came back from an authorization server other than the one it started with, so Volli did not finish it.`,
+            };
+          }
+        }
         await authorizeMcp(provider, {
           serverUrl: target.url,
           authorizationCode: code,
@@ -525,7 +630,24 @@ export class McpOAuthBroker {
       }
 
       // The tokens are in; the refusal they answer is not outstanding any more.
-      this.#store.update(server.id, (current) => ({ ...current, signInRequired: undefined }));
+      // A client Volli registered in this sign-in was registered with this
+      // callback's port: remember it as Volli's own choice, so the next
+      // sign-in can listen there for an authorization server that compares
+      // redirect URIs exactly.
+      const registeredNow =
+        target.oauth?.clientId === undefined &&
+        clientIdBefore !==
+          (
+            this.#store.read(server.id)?.oauth?.clientInformation as
+              | { client_id?: unknown }
+              | undefined
+          )?.client_id;
+      const port = Number(new URL(callback.redirectUrl).port);
+      this.#store.update(server.id, (current) => ({
+        ...current,
+        signInRequired: undefined,
+        ...(registeredNow && listenedOnAnyPort ? { callbackPort: port } : {}),
+      }));
       await options.probe(this.connectionAuth(target, options.sources), options.signal);
       return {
         ok: true,
@@ -557,35 +679,33 @@ export class McpOAuthBroker {
    * Start the loopback redirect server.
    *
    * With no port configured, a client Volli registered before is listened for
-   * on the port its registration named, when that port is free: RFC 8252 says
-   * an authorization server must accept any loopback port, and most do, but a
-   * strict one compares the whole registered redirect URI. A taken port falls
-   * back to any free one.
+   * on the port Volli itself chose when it registered that client — recorded
+   * by Volli, never read from the authorization server's registration answer,
+   * which a hostile server could fill with any port on this machine. RFC 8252
+   * says an authorization server must accept any loopback port, and most do,
+   * but a strict one compares the whole redirect URI. A taken port falls back
+   * to any free one.
    */
-  async #listen(serverId: string, target: McpOAuthServer): Promise<OAuthCallbackServer> {
+  async #listen(
+    serverId: string,
+    target: McpOAuthServer,
+  ): Promise<{ server: OAuthCallbackServer; chosenByVolli: boolean }> {
     const options = mcpOAuthCallbackOptions(target.oauth, this.#timeoutMs);
-    const registered = (
-      this.#store.read(serverId)?.oauth?.clientInformation as
-        | { redirect_uris?: unknown }
-        | undefined
-    )?.redirect_uris;
-    if (
-      options.port === 0 &&
-      target.oauth?.callbackUrl === undefined &&
-      Array.isArray(registered)
-    ) {
-      const previous = registered.find((uri): uri is string => typeof uri === "string");
-      const port =
-        previous === undefined || !URL.canParse(previous) ? NaN : Number(new URL(previous).port);
-      if (Number.isInteger(port) && port > 0) {
-        try {
-          return await OAuthCallbackServer.listen({ ...options, port });
-        } catch {
-          // Taken: any free port, as RFC 8252 allows.
-        }
+    if (options.port !== 0 || target.oauth?.callbackUrl !== undefined) {
+      return { server: await OAuthCallbackServer.listen(options), chosenByVolli: false };
+    }
+    const recorded = this.#store.read(serverId)?.callbackPort;
+    if (recorded !== undefined) {
+      try {
+        return {
+          server: await OAuthCallbackServer.listen({ ...options, port: recorded }),
+          chosenByVolli: true,
+        };
+      } catch {
+        // Taken: any free port, as RFC 8252 allows.
       }
     }
-    return OAuthCallbackServer.listen(options);
+    return { server: await OAuthCallbackServer.listen(options), chosenByVolli: true };
   }
 
   /**
@@ -681,7 +801,10 @@ export class McpOAuthBroker {
 
   async #refreshOnce(server: McpOAuthServer, sources: McpCredentialSources): Promise<void> {
     const fetch = this.#fetch;
-    const stored = this.#store.read(server.id)?.oauth;
+    const read = this.#store.read(server.id)?.oauth;
+    // Only a grant for this very endpoint is refreshed with this endpoint's
+    // client: state recorded for another URL under the same id is not ours.
+    const stored = read?.serverUrl === String(new URL(server.url)) ? read : undefined;
     const refreshToken = stored?.tokens?.["refresh_token"];
     const discovery = stored?.discovery;
     const clientSecret = resolveMcpOAuthClientSecret(server, server.oauth?.clientSecret, sources);

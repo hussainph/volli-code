@@ -11,6 +11,7 @@ import {
   mcpCredentialSlot,
   mcpCredentialSlotLabel,
   mcpCredentialValueProblem,
+  mcpEndpointMayCarryCredentials,
   mcpSecretSlots,
   mcpServerUsesOAuth,
   resolveMcpCredentialTemplate,
@@ -216,6 +217,17 @@ describe("sanitizeMcpOAuthClient", () => {
     const result = sanitizeMcpOAuthClient(raw);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain(reason);
+  });
+});
+
+describe("mcpEndpointMayCarryCredentials", () => {
+  it("allows https anywhere and plain http only to this machine", () => {
+    expect(mcpEndpointMayCarryCredentials("https://mcp.example.com/mcp")).toBe(true);
+    expect(mcpEndpointMayCarryCredentials("http://127.0.0.1:3000/mcp")).toBe(true);
+    expect(mcpEndpointMayCarryCredentials("http://localhost/mcp")).toBe(true);
+    expect(mcpEndpointMayCarryCredentials("http://[::1]/mcp")).toBe(true);
+    expect(mcpEndpointMayCarryCredentials("http://mcp.example.com/mcp")).toBe(false);
+    expect(mcpEndpointMayCarryCredentials("ftp://127.0.0.1/mcp")).toBe(false);
   });
 });
 

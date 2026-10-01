@@ -16,6 +16,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   mcpCredentialSlot,
+  mcpEndpointMayCarryCredentials,
   type McpCredentialEntry,
   type McpCredentialFamily,
   type McpCredentialSource,
@@ -431,11 +432,14 @@ function OAuthClientFields({
 /** The editor's credential controls for the transport being edited. */
 export function McpCredentialsEditor({
   transport,
+  url,
   credentials,
   stored,
   onChange,
 }: {
   transport: McpTransportConfig["type"];
+  /** The remote endpoint as typed; a plain-http one to another host carries no credential. */
+  url?: string;
   credentials: EditorCredentials;
   /** Slots that already hold a stored secret on the saved server. */
   stored: ReadonlySet<string>;
@@ -456,8 +460,16 @@ export function McpCredentialsEditor({
   const signsIn = !credentials.headers.some(
     (row) => row.name.trim().toLowerCase() === "authorization",
   );
+  // A trust boundary the controls cannot show, so it is said once: a plain
+  // http endpoint on another host is never sent a credential.
+  const plain = url !== undefined && URL.canParse(url) && !mcpEndpointMayCarryCredentials(url);
   return (
     <>
+      {plain ? (
+        <p className="text-ui text-muted-foreground sm:col-span-2">
+          Credentials are only sent over https, or to this machine.
+        </p>
+      ) : null}
       <CredentialRows
         family="header"
         rows={credentials.headers}

@@ -6,6 +6,8 @@
 import Ajv2020 from "ajv/dist/2020.js";
 
 import {
+  MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL,
+  mcpEndpointMayCarryCredentials,
   sanitizeMcpCredentialEntries,
   sanitizeMcpOAuthClient,
   type McpCredentialEntry,
@@ -532,6 +534,12 @@ export function sanitizeMcpServerDraft(input: {
     if (!headers.ok) return headers;
     const oauth = sanitizeMcpOAuthClient(transport["oauth"]);
     if (!oauth.ok) return oauth;
+    if (
+      (headers.entries.length > 0 || oauth.oauth !== undefined) &&
+      !mcpEndpointMayCarryCredentials(url.toString())
+    ) {
+      return { ok: false, reason: MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL };
+    }
     return {
       ok: true,
       server: {
@@ -691,7 +699,8 @@ export function mcpRemovalWarning(serverName: string): string {
   return [
     `Removing ${serverName} deletes its configuration.`,
     `Any older Session that was born holding one of ${serverName}'s tools will fail to reattach afterwards, because the transport its frozen tool needs no longer exists.`,
-    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
+    "A server holding credentials a person set up \u2014 a header, an environment value, a stored secret or a sign-in \u2014 cannot be removed by an agent at all: removing it deletes them, so only a person can, in Settings \u2192 Configure \u2192 MCP Servers.",
   ].join(" ");
 }
 

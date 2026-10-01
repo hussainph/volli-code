@@ -718,6 +718,7 @@ export function McpPane({ project }: { project: Project }) {
             )}
             <McpCredentialsEditor
               transport={transport.type}
+              {...(transport.type === "streamable-http" ? { url: transport.url } : {})}
               credentials={credentials}
               stored={
                 editingId === null

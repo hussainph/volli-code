@@ -49,6 +49,8 @@ import {
 import {
   MCP_CALL_TIMEOUT_MS,
   MCP_CONNECTION_TIMEOUT_MS,
+  MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL,
+  mcpEndpointMayCarryCredentials,
   mcpServerUsesOAuth,
   sanitizeMcpServerDraft,
   type McpServerDraft,
@@ -59,6 +61,8 @@ import {
   connectionProblemIn,
   McpConnectionProblem,
   McpCredentialRejectedError,
+  McpInsecureEndpointError,
+  McpMessageTooLargeError,
   McpProtocolEraError,
   McpSignInRequiredError,
   resolveMcpCredentialEntries,
@@ -216,7 +220,15 @@ export function isMcpTransportFailure(error: unknown): boolean {
 }
 
 /** A pi-mcp client narrowed behind the port the rest of Electron main consumes. */
-export function protocolClientForConnectedClient(client: CloseableMcpClient): McpProtocolClient {
+export function protocolClientForConnectedClient(
+  client: CloseableMcpClient,
+  hooks: {
+    /** Why the connection was dropped from underneath, when Volli dropped it. */
+    dropped?: () => Error | undefined;
+    /** Runs after the client has closed: the stdio process-group backstop. */
+    afterClose?: () => Promise<void>;
+  } = {},
+): McpProtocolClient {
   let closed = false;
   return {
     async listTools(signal) {
@@ -256,14 +268,23 @@ export function protocolClientForConnectedClient(client: CloseableMcpClient): Mc
         );
       } catch (error) {
         // The caller's own abort is never the transport failing.
-        if (signal.aborted || !isMcpTransportFailure(error)) throw error;
+        if (signal.aborted) throw error;
+        // Dropped by Volli for a message over the bound: the connection is
+        // gone, and the reason is Volli's to say rather than a silent timeout.
+        const dropped = hooks.dropped?.();
+        if (dropped !== undefined) throw new McpTransportFailure({ cause: dropped });
+        if (!isMcpTransportFailure(error)) throw error;
         throw new McpTransportFailure({ cause: error });
       }
     },
     async close() {
       if (closed) return;
       closed = true;
-      await client.close();
+      try {
+        await client.close();
+      } finally {
+        await hooks.afterClose?.();
+      }
     },
   };
 }
@@ -317,6 +338,9 @@ export function credentialFetch(
   return async (input, init) => {
     let target = new URL(String(input));
     if (target.href !== endpoint.href) return base(input, init);
+    if (!mcpEndpointMayCarryCredentials(endpoint.href)) {
+      throw new McpInsecureEndpointError(server.name, MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL);
+    }
     const values = resolveMcpCredentialEntries(server, "header", entries, sources());
     const headers = new Headers(init?.headers);
     for (const [name, value] of Object.entries(values)) headers.set(name, value);
@@ -346,13 +370,16 @@ const BODILESS_STATUSES = new Set([101, 204, 205, 304]);
  * an undeclared one stops the read at the bound.
  */
 export function boundedFetch(base: McpFetch, maxBytes: number): McpFetch {
-  const tooLarge = (): Error => new Error(`MCP response exceeds ${maxBytes} bytes`);
+  const tooLarge = (): Error => new McpMessageTooLargeError("The server", maxBytes);
   return async (input, init) => {
     const response = await base(input, init);
     const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    // An event stream is exempt only when it is one: a 2xx. An error answer
+    // labelled `text/event-stream` is read whole by the transport, so it is
+    // bounded like any other body.
     if (
       response.body === null ||
-      type === "text/event-stream" ||
+      (type === "text/event-stream" && response.ok) ||
       BODILESS_STATUSES.has(response.status)
     ) {
       return response;
@@ -458,6 +485,46 @@ export function classifyMcpConnectionError(
   return error;
 }
 
+/**
+ * After a stdio client has closed, end whatever is still in the server's
+ * process group.
+ *
+ * pi-mcp signals the group when the server exits after stdin closes, but not
+ * when the server had already exited (its helpers keep running), and it sends
+ * no SIGKILL after that SIGTERM. This closes both gaps from Volli's side: if
+ * anything is left in the group, SIGTERM, a short grace, then SIGKILL. The
+ * group id is the server's own pid (pi-mcp starts it as a group leader); a
+ * group with no members left answers ESRCH and is left alone, which keeps the
+ * window for a reused id to the moment between the check and the signal.
+ */
+export async function endProcessGroup(group: number, graceMs = 2_000): Promise<void> {
+  if (process.platform === "win32") return;
+  const alive = (): boolean => {
+    try {
+      process.kill(-group, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!alive()) return;
+  try {
+    process.kill(-group, "SIGTERM");
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!alive()) return;
+  }
+  try {
+    process.kill(-group, "SIGKILL");
+  } catch {
+    // Gone between the check and the signal.
+  }
+}
+
 /** Build the opener every MCP connection in main goes through. */
 export function createMcpProtocolClientOpener(
   credentials: McpConnectionCredentials = {
@@ -484,14 +551,31 @@ export function createMcpProtocolClientOpener(
       void client.close().catch(() => undefined);
     };
     deadline.signal.addEventListener("abort", stop, { once: true });
+    // pi-mcp reports a stdio line over the bound as an error event and drops
+    // it, leaving the request it answered to wait out its whole deadline. The
+    // stream is no longer trustworthy past that point, so the connection is
+    // closed at once and every waiting call learns why.
+    let dropped: Error | undefined;
+    client.onError((error) => {
+      if (dropped !== undefined || !/^MCP stdio message exceeds \d+ bytes$/.test(error.message)) {
+        return;
+      }
+      dropped = new McpMessageTooLargeError(server.name, MCP_STDIO_BUFFER_MAX_BYTES);
+      void client.close().catch(() => undefined);
+    });
     try {
       await client.connect(transport);
       deadline.signal.throwIfAborted();
       credentials.onConnected?.(server);
-      return protocolClientForConnectedClient(client);
+      const group = transport instanceof StdioTransport ? transport.pid : undefined;
+      return protocolClientForConnectedClient(client, {
+        dropped: () => dropped,
+        ...(group === undefined ? {} : { afterClose: () => endProcessGroup(group) }),
+      });
     } catch (error) {
       await client.close().catch(() => undefined);
       if (signal.aborted) throw signal.reason;
+      if (dropped !== undefined) throw dropped;
       if (error instanceof McpConnectionProblem) throw error;
       throw classifyMcpConnectionError(error, server);
     } finally {

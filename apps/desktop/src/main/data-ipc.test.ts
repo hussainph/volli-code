@@ -499,6 +499,7 @@ describe("MCP sign-in IPC (VC-470)", () => {
     const signIn = vi.fn(() => finish.promise);
     const cancelSignIn = vi.fn(() => {
       finish.resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." });
+      return { ok: true };
     });
     const signOut = vi.fn(() => ({ ok: true }));
     const discardDraft = vi.fn(() => ({ ok: true }));

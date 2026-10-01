@@ -729,6 +729,22 @@ describe("McpPane — sign-in and credentials (VC-470)", () => {
     expect(container!.querySelector('button[aria-label="Show OAuth client"]')).toBeNull();
   });
 
+  it("says once that a plain-http endpoint on another host carries no credential", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [
+        remote({ transport: { type: "streamable-http", url: "http://mcp.example.com/mcp" } }),
+      ],
+      operations: [],
+      access: {},
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    await click(labelled("Edit Sentry"));
+    expect(container!.textContent).toContain("Credentials are only sent over https");
+  });
+
   it("adds an environment reference to a local server", async () => {
     const list = vi.fn(async () => ({
       ok: true as const,

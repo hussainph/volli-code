@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { McpServerDraft, RuntimeAskChoice, RuntimeAskRequest } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { putMcpServer } from "../db/mcp-servers-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { FileMcpCredentialStore } from "./credential-store";
@@ -97,6 +98,21 @@ function remote(
     enabled: true,
     transport: { type: "streamable-http", url, ...(oauth === undefined ? {} : { oauth }) },
   };
+}
+
+/** A saved server row, as Settings would leave it. */
+function seedServer(server: McpServerDraft): void {
+  putMcpServer(ctx.db, {
+    ...server,
+    projectId: "p1",
+    provenance: { source: null, registryType: null, version: null, digest: null },
+    catalog: [],
+    stale: false,
+    error: null,
+    refreshedAt: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  });
 }
 
 /** Every row of every table, as text — where a token must never appear. */
@@ -479,6 +495,135 @@ describe("signing in — scope, time limits and who may stop it", () => {
 
     await expect(wait).resolves.toMatchObject({ ok: false, cancelled: true });
     await vi.waitFor(() => expect(h.broker.signingIn(server.id)).toBe(false));
+  });
+});
+
+describe("signing in — what Volli refuses", () => {
+  it.each([
+    ["correct", true],
+    ["wrong", false],
+    ["withheld", false],
+  ] as const)("checks the RFC 9207 issuer on the redirect (%s)", async (iss, signsIn) => {
+    fixture = await startOAuthFixture({ iss });
+    const h = harness();
+
+    const outcome = await h.settings.signIn({ projectId: "p1", server: remote(fixture.mcpUrl) });
+
+    if (signsIn) {
+      expect(outcome).toEqual({ ok: true, message: "Signed in to Fixture OAuth." });
+    } else {
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("authorization server other than the one it started with"),
+      });
+      // The code was never exchanged.
+      expect(fixture.seen.tokenGrants).toEqual([]);
+    }
+  });
+
+  it("refuses an authorization server that does not say it supports PKCE with S256, before any browser opens", async () => {
+    for (const pkceMethods of [null, ["plain"]] as const) {
+      fixture = await startOAuthFixture({ pkceMethods });
+      const h = harness();
+
+      const outcome = await h.settings.signIn({ projectId: "p1", server: remote(fixture.mcpUrl) });
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("PKCE with S256"),
+      });
+      expect(h.opened).toEqual([]);
+      await fixture.close();
+      fixture = null;
+    }
+  });
+
+  it("never hands a non-https authorization page to the browser", async () => {
+    fixture = await startOAuthFixture({
+      authorizationEndpoint: "http://auth.example.test/authorize",
+    });
+    const h = harness();
+
+    const outcome = await h.settings.signIn({ projectId: "p1", server: remote(fixture.mcpUrl) });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("not an https address"),
+    });
+    expect(h.opened).toEqual([]);
+  });
+
+  it("refuses to sign in to a plain-http endpoint on another host, before any request", async () => {
+    const h = harness();
+    const outcome = await h.settings.signIn({
+      projectId: "p1",
+      server: remote("http://mcp.example.test/mcp"),
+    });
+    expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining("plain http") });
+    expect(h.opened).toEqual([]);
+  });
+
+  it("refuses a Session's sign-in when the stored address no longer matches the one it was started with", async () => {
+    fixture = await startOAuthFixture();
+    const h = harness();
+    const frozen = await signedInServer(h, remote(fixture.mcpUrl));
+    h.settings.signOut({ projectId: "p1", serverId: frozen.id });
+    // Someone re-points the stored row; the running Session still holds the old address.
+    const moved = await startOAuthFixture();
+    putMcpServer(ctx.db, { ...frozen, transport: { type: "streamable-http", url: moved.mcpUrl } });
+    const host = new McpSessionHost({
+      workspacePath: "/repo/project",
+      servers: [frozen],
+      open: h.settings.opener(),
+      signIn: (target, signal) =>
+        h.settings.signIn({
+          projectId: "p1",
+          serverId: target.id,
+          signal,
+          ...(target.transport.type === "streamable-http"
+            ? { expectedUrl: target.transport.url }
+            : {}),
+        }),
+    });
+    hosts.push(host);
+    const { ask } = asking("allow");
+    const openedBefore = h.opened.length;
+
+    const result = await host.port.call(call("whoami"), new AbortController().signal, ask);
+
+    expect(JSON.stringify(result.content)).toMatch(/address changed since this Session started/);
+    expect(h.opened).toHaveLength(openedBefore);
+    expect(moved.seen.authorizations).toEqual([]);
+    await moved.close();
+  });
+
+  it("cancels a sign-in still waiting on the browser when the person signs out", async () => {
+    fixture = await startOAuthFixture();
+    const browserOpened = Promise.withResolvers<void>();
+    const h = harness({ browser: async () => browserOpened.resolve() });
+    const server = remote(fixture.mcpUrl);
+    seedServer(server);
+
+    const waiting = h.settings.signIn({ projectId: "p1", serverId: server.id });
+    await browserOpened.promise;
+    h.settings.signOut({ projectId: "p1", serverId: server.id });
+
+    await expect(waiting).resolves.toMatchObject({ ok: false, cancelled: true });
+  });
+
+  it("clears needs-sign-in once the server connects without asking for one", async () => {
+    fixture = await startOAuthFixture({ requireAuth: false });
+    const h = harness();
+    const server = remote(fixture.mcpUrl);
+    h.broker.markRefused(
+      { id: server.id, name: server.name, url: fixture.mcpUrl },
+      { insufficientScope: false },
+    );
+    expect(h.broker.signInState(server)).toBe("needs-sign-in");
+
+    await expect(h.settings.test({ projectId: "p1", server })).resolves.toMatchObject({ ok: true });
+
+    expect(h.broker.signInState(server)).toBe("signed-out");
   });
 });
 

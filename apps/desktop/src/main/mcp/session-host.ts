@@ -13,7 +13,7 @@ import {
 } from "@volli/shared";
 
 import { classifyMcpConnectionError, openMcpProtocolClient } from "./client";
-import { mcpConnectionBlock } from "./credentials";
+import { connectionProblemIn, mcpConnectionBlock } from "./credentials";
 import {
   McpTransportFailure,
   type McpProtocolClient,
@@ -75,6 +75,11 @@ export interface McpSessionHostOptions {
    * reattaching it.
    */
   credentialsRevision?: (serverId: string) => number;
+  /**
+   * Moves when anything a person could provide changes — a stored secret, a
+   * sign-in. A person's "no" is remembered against it for this attachment.
+   */
+  accessRevision?: (serverId: string) => number;
   /** Run a person's sign-in for one server, once they have allowed it. */
   signIn?: (server: McpServerDraft, signal: AbortSignal) => Promise<McpSignInOutcome>;
 }
@@ -330,6 +335,14 @@ export class McpSessionHost {
   readonly #clients = new Map<string, ClientEntry>();
   /** Questions in front of the person, by server and kind, shared by parallel calls. */
   readonly #deciding = new Map<string, Promise<RouteDecision>>();
+  /**
+   * A person's "no", by server and kind, with the access revision it was given
+   * against. A call blocked on the same thing is answered "declined" at once
+   * until the person provides something — a sign-in, a stored value — so an
+   * agent retrying in a loop cannot turn one refusal into a stream of cards.
+   */
+  readonly #declined = new Map<string, number>();
+  readonly #accessRevision: (serverId: string) => number;
   /** Retired clients still draining or closing; owned here so `close()` can reach them. */
   readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
@@ -341,6 +354,7 @@ export class McpSessionHost {
     this.#open = options.open ?? openMcpProtocolClient;
     this.#revision = options.credentialsRevision ?? (() => 0);
     this.#signIn = options.signIn;
+    this.#accessRevision = options.accessRevision ?? (() => 0);
     this.rawPort = { call: (request, signal) => this.#call(request, signal) };
     this.port = this.routed(this.rawPort.call);
     LIVE_HOSTS.add(this);
@@ -418,11 +432,14 @@ export class McpSessionHost {
       // the person is asked outside any bound on this call.
       const block = mcpConnectionBlock(classifyMcpConnectionError(error, server));
       if (block !== undefined) throw new McpCallBlocked(block);
+      // A failure Volli wrote (a message over the size bound, say) is said;
+      // a third party's own error text is not.
+      const problem = connectionProblemIn(error);
       return {
         content: [
           {
             type: "text",
-            text: `MCP server ${safeSummary(server.name, "configured")} call failed.`,
+            text: `MCP server ${safeSummary(server.name, "configured")} call failed.${problem === null ? "" : ` ${problem.message}`}`,
           },
         ],
         isError: true,
@@ -490,12 +507,21 @@ export class McpSessionHost {
     ask: McpHostAsk | undefined,
   ): Promise<RouteDecision> {
     const key = `${server.id}\u0000${block.kind}`;
+    if (this.#declined.get(key) === this.#accessRevision(server.id)) {
+      return Promise.resolve({ kind: "declined" });
+    }
     let pending = this.#deciding.get(key);
     const joined = pending !== undefined;
     if (pending === undefined) {
-      const created = this.#ask(server, block, request, signal, ask).finally(() => {
-        if (this.#deciding.get(key) === created) this.#deciding.delete(key);
-      });
+      const revision = this.#accessRevision(server.id);
+      const created = this.#ask(server, block, request, signal, ask)
+        .then((decision) => {
+          if (decision.kind === "declined") this.#declined.set(key, revision);
+          return decision;
+        })
+        .finally(() => {
+          if (this.#deciding.get(key) === created) this.#deciding.delete(key);
+        });
       // Observed here as well as by whoever waits, so a rejection that lands
       // after every waiter has stopped waiting is never an unhandled one.
       created.catch(() => undefined);

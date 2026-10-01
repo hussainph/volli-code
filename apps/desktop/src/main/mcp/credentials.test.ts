@@ -597,6 +597,77 @@ describe("an agent's install meets what a person set up", () => {
     expect(JSON.stringify(result)).not.toContain(value);
   });
 
+  it("refuses an agent's removal of a server holding a person's credentials; Settings still removes it", async () => {
+    const h = harness();
+    seed({
+      id: "keyed",
+      name: "Keyed",
+      enabled: true,
+      transport: {
+        type: "streamable-http",
+        url: "https://api.example.com/mcp",
+        headers: [{ name: "Authorization", source: { kind: "secret" } }],
+      },
+    });
+    h.store.update("keyed", () => ({ secrets: { "header:authorization": "kept" } }));
+    const { ask, seen } = asking({ "confirm.mcp-remove": "allow" });
+
+    const preview = await h.verb("mcp.remove", { server: "keyed" });
+    const applied = await h.verb("mcp.remove", { server: "keyed", confirm: "apply" }, ask);
+
+    for (const result of [preview, applied]) {
+      expect(result.text).toMatch(/an agent cannot remove it\. Nothing was removed/);
+      expect(result.text).toContain("server_disable");
+    }
+    expect(seen).toEqual([]);
+    expect(getMcpServer(ctx.db, "keyed")).toBeDefined();
+    expect(h.store.read("keyed")?.secrets).toEqual({ "header:authorization": "kept" });
+
+    expect(h.settings.remove({ projectId: "p1", serverId: "keyed" })).toEqual({ ok: true });
+    expect(h.store.read("keyed")).toBeUndefined();
+  });
+
+  it("does not write over a Settings edit made while a save was connecting", async () => {
+    const fixture = await headerServer("anything-goes");
+    const h = harness();
+    const plain: McpServerDraft = {
+      id: "racy",
+      name: "Racy",
+      enabled: true,
+      transport: { type: "streamable-http", url: fixture.url },
+    };
+    seed(plain);
+    // The person saves a new header while the agent's save is discovering.
+    const slow = new McpSettingsService({
+      db: ctx.db,
+      credentials: h.store,
+      open: async () => {
+        putMcpServer(ctx.db, {
+          ...getMcpServer(ctx.db, "racy")!,
+          transport: {
+            type: "streamable-http",
+            url: fixture.url,
+            headers: [{ name: "Authorization", source: { kind: "secret" } }],
+          },
+          updatedAt: 2,
+        });
+        h.store.update("racy", () => ({ secrets: { "header:authorization": "fresh" } }));
+        return { listTools: async () => [], callTool: vi.fn(), close: async () => undefined };
+      },
+    });
+
+    const result = await slow.save({ projectId: "p1", server: plain, enabledTools: [] });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("was changed while this was connecting"),
+    });
+    expect(getMcpServer(ctx.db, "racy")?.transport).toMatchObject({
+      headers: [{ name: "Authorization", source: { kind: "secret" } }],
+    });
+    expect(h.store.read("racy")?.secrets).toEqual({ "header:authorization": "fresh" });
+  });
+
   it("refuses a re-target when only a sign-in is stored, and allows it when only a refusal is", async () => {
     const elsewhere = await headerServer("unused");
     const h = harness();

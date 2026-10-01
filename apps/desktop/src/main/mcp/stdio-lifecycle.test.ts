@@ -215,6 +215,50 @@ describe.skipIf(process.platform === "win32")("stdio MCP server lifecycle", () =
     );
   });
 
+  it("ends a server's leftover helpers when the server had already exited on its own", async () => {
+    const pidFile = join(dir, "exited-pids.json");
+    const attachment = host({
+      id: "stdio",
+      name: "Exits",
+      enabled: true,
+      transport: {
+        type: "stdio",
+        command: process.execPath,
+        args: [SERVER, "--pid-file", pidFile],
+      },
+    });
+    await attachment.port.call({ ...call, toolName: "fixture_exit" }, new AbortController().signal);
+    const { server, sleeper } = pids(pidFile);
+    expect(await until(() => !alive(server))).toBe(true);
+    // pi-mcp signals the group only when it closes a live server: the helper
+    // is still running here.
+    expect(alive(sleeper)).toBe(true);
+
+    await attachment.close();
+
+    expect(await until(() => !alive(sleeper))).toBe(true);
+  });
+
+  it("refuses a stdio message over the bound at once, saying so, rather than waiting out the call", async () => {
+    const attachment = host({
+      id: "stdio",
+      name: "Huge",
+      enabled: true,
+      transport: { type: "stdio", command: process.execPath, args: [SERVER] },
+    });
+    const started = Date.now();
+
+    const result = await attachment.port.call(
+      { ...call, toolName: "fixture_too_large" },
+      new AbortController().signal,
+    );
+    await attachment.close();
+
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("larger than the 8 MiB limit");
+  }, 30_000);
+
   it("starts a local server in the project root with only the allowlist and the person's own env entries", async () => {
     process.env["VOLLI_TEST_PARENT_ONLY"] = "must-not-leak";
     try {
