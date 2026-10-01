@@ -233,6 +233,9 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "pi session logs",
             "orphaned logs",
             "orphaned pi logs",
+            // Long MCP results saved beside the Session (VC-469).
+            "saved tool output",
+            "tool output",
             // The orphan PROCESS sweep (VC-341). "memory" and "reap" are here
             // because they are what a person actually types when a fan is loud
             // and they are looking for what to stop.

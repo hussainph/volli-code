@@ -43,6 +43,10 @@ describe("the Storage category's search index", () => {
     expect(terms).toContain("orphaned logs");
   });
 
+  it("finds the saved tool output row by the label on screen (VC-469)", () => {
+    expect(keywordsFor("storage").map((term) => term.toLowerCase())).toContain("saved tool output");
+  });
+
   it("finds every label the Running processes section draws (VC-341)", () => {
     // The three strings that section puts on screen. The rail matches a
     // lowercased substring, so each visible label must be inside some term.
