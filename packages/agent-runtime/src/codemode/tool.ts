@@ -312,6 +312,7 @@ export function createCodeModeTool(
         kinds.get(entry.tool.name)!,
         entry.mcp?.outputSchema ?? entry.detailsSchema ?? entry.tool.outputSchema,
       ),
+      ...(kinds.get(entry.tool.name) === "structured" ? { nativeStructuredOutput: true } : {}),
       namespace: namespaceOf(entry),
       listed: isListedRoute(route),
       declared: isDeclaredRoute(route),

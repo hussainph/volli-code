@@ -38,6 +38,8 @@ export interface CallableTool {
   description: string;
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
+  /** A Session tool's native structured answer, rather than a generic result wrapper. */
+  nativeStructuredOutput?: boolean;
   /** `volli` for the Session's own tools, `mcp:<serverId>` for one server's. */
   namespace: string;
   /** Rendered in the description (`both`, `code`), or found by search (`deferred`). */
@@ -142,6 +144,7 @@ function isTypedSchema(schema: unknown): boolean {
  * `details` are typed, or an MCP tool whose structured content is.
  */
 function specificOutput(tool: CallableTool): string | undefined {
+  if (tool.nativeStructuredOutput === true) return schemaToType(tool.outputSchema);
   const properties = tool.outputSchema["properties"];
   if (typeof properties !== "object" || properties === null) return undefined;
   const { details, structuredContent } = properties as Record<string, unknown>;
@@ -211,7 +214,7 @@ export function describeCodeMode(input: {
     }`,
     "`code` is an async function body: `await tools.<name>(args)`; run independent calls together with `Promise.all` or `Promise.allSettled` (reads overlap, other calls run one at a time in order); print with `text(value)` or `console.log`; `return` a value. There is no `require`, `fs`, `process`, network or timers — only the tools.",
     "Each call is checked exactly as a direct call. One that needs a person's approval pauses the program; a refused or failed call throws its reason.",
-    "Results: `bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; MCP tools → { text, structuredContent?, isError, omittedImages }; Volli verbs → { text, details? }; other tools → their text. No images.",
+    "Results: `bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; MCP tools → { text, structuredContent?, isError, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; other tools → their text. No images.",
     `Per run: ${input.limits.maxNestedCalls} calls, ${seconds} s of running time (waiting on a person is free), ${formatBytes(input.limits.maxOutputBytes)} of output (the rest is saved). A first line \`// @options: {"timeout_ms": 30000, "max_output_tokens": 2000}\` lowers them. The program is checked whole before anything runs.`,
     "A run that called a web, Browser or MCP tool, or read another agent's words, returns its output inside untrusted-content markers.",
     ...(has("bash") && has("read") ? EXAMPLE : []),
