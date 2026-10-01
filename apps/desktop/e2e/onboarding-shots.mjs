@@ -47,7 +47,6 @@ import { join } from "node:path";
 import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,
-  cardById,
   createRunner,
   ensurePiAuthInto,
   launch,
@@ -58,11 +57,14 @@ import {
   seedDefaultModel,
   seedProjects,
   sleep,
-  tabStrip,
-  TICKET_TAB_STRIP,
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  openTicketCard,
+  preparedChatSelected,
+  ticketWorkspaceOpen,
+} from "./lib/kickoff-support.mjs";
 
 /**
  * Where the numbered PNGs land. An explicit argument wins; otherwise a
@@ -111,29 +113,6 @@ async function capture(page, name) {
 }
 
 const firstRunLine = (page, text) => page.getByText(text, { exact: true });
-
-/**
- * Double-click a board card to open its ticket workspace (ticket-detail-smoke.mjs
- * precedent, retries included). VC-491 took the automatic teleport away — a
- * kickoff leaves the user on the underlying workspace — so the walkthrough
- * drives the open itself, the way the user now does.
- */
-async function openTicketCard(page, displayId) {
-  for (let i = 0; i < 3; i += 1) {
-    await cardById(page, displayId).dblclick();
-    try {
-      await waitUntil(
-        "the ticket workspace to open",
-        async () => (await tabStrip(page, TICKET_TAB_STRIP).getByRole("tab").count()) >= 1,
-        { timeout: 4000 },
-      );
-      return true;
-    } catch {
-      // fall through and retry
-    }
-  }
-  return false;
-}
 
 try {
   await assertProfileIsolated(app, userDataDir);
@@ -308,24 +287,47 @@ try {
         async () => (await page.locator('[data-testid="new-ticket-composer"]').count()) === 0,
         { timeout: 30000 },
       );
+      if (
+        !(await page.getByRole("button", { name: "New ticket", exact: true }).isVisible()) ||
+        (await ticketWorkspaceOpen(page))
+      ) {
+        throw new Error("kickoff navigated away from the Board before explicit open");
+      }
       const { byName } = await readSeededProjects(page);
       const project = byName[PROJECT.name];
       if (!project) throw new Error("seeded project missing after import");
-      const displayId = await page.evaluate(
+      const created = await page.evaluate(
         async ({ projectId, title, prefix }) => {
           const boot = await window.api.data.bootstrap();
           if (!boot.ok) return null;
           const ticket = (boot.data.ticketsByProject?.[projectId] ?? []).find(
             (t) => t.title === title,
           );
-          return ticket ? `${prefix}-${ticket.ticketNumber}` : null;
+          return ticket ? { id: ticket.id, displayId: `${prefix}-${ticket.ticketNumber}` } : null;
         },
         { projectId: project.id, title: TICKET_TITLE, prefix: project.ticketPrefix },
       );
-      if (!displayId) throw new Error("created ticket not found after kickoff");
-      if (!(await openTicketCard(page, displayId))) {
+      if (!created) throw new Error("created ticket not found after kickoff");
+      const sessionId = await waitUntil(
+        "the created ticket's chat Session id",
+        async () => {
+          const listed = await page.evaluate(
+            (id) => window.api.sessions.listForTicket({ ticketId: id }),
+            created.id,
+          );
+          if (!listed.ok) throw new Error(`Session listing failed: ${JSON.stringify(listed)}`);
+          return listed.sessions.find((row) => row.kind === "chat")?.record.sessionId;
+        },
+        { timeout: 20000 },
+      );
+      if (!(await openTicketCard(page, created.displayId))) {
         throw new Error("ticket workspace did not open after double-click");
       }
+      await waitUntil(
+        "the expected Session's prepared chat to be selected",
+        () => preparedChatSelected(page, sessionId),
+        { timeout: 8000 },
+      );
       await sleep(2500);
       return capture(page, "09-kickoff-workspace.png");
     },
