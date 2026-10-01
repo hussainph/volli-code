@@ -8,7 +8,7 @@ import {
   type CodingToolId,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { authorityVerdict } from "./gate";
+import { authorityClassifierEligible, authorityVerdict } from "./gate";
 
 function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot {
   return {
@@ -41,6 +41,46 @@ function workspace(): { raw: string; real: string } {
   symlinkSync(real, raw);
   return { raw, real };
 }
+
+describe("classifier routing order", () => {
+  it("checks hard denial before read and workspace edit skips", () => {
+    const { raw } = workspace();
+    for (const tool of ["read", "edit", "write", "bash"]) {
+      expect(
+        authorityClassifierEligible({
+          tool,
+          args: { path: "MARKER.txt" },
+          workspacePath: raw,
+          verdict: { outcome: "deny", cause: "command.persistence", reason: "hard" },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("skips only reads and edits whose real paths are within the workspace", () => {
+    const { raw, real } = workspace();
+    const eligible = (tool: string, args: unknown, verdict = { outcome: "allow" as const }) =>
+      authorityClassifierEligible({ tool, args, workspacePath: raw, verdict });
+    expect(eligible("read", { path: "/outside/file" })).toBe(false);
+    expect(eligible("edit", { path: "MARKER.txt" })).toBe(false);
+    expect(eligible("write", { path: real })).toBe(false);
+    expect(eligible("write", { path: "/outside/file" })).toBe(true);
+    expect(eligible("bash", { command: "a && b" })).toBe(true);
+    expect(eligible("web_fetch", { url: "https://example.com" })).toBe(true);
+    expect(eligible("edit", {})).toBe(true);
+    const link = join(real, "outside");
+    symlinkSync(tmpdir(), link);
+    expect(eligible("edit", { path: join(link, "external.txt") })).toBe(true);
+    expect(
+      authorityClassifierEligible({
+        tool: "bash",
+        args: { command: "git reset --hard" },
+        workspacePath: raw,
+        verdict: { outcome: "deny", cause: "command.git-discards-work", reason: "soft" },
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("authorityVerdict", () => {
   it("stands aside for work the Session's authority permits", () => {

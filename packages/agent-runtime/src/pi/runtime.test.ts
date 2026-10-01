@@ -57,6 +57,8 @@ import {
   SKILL_POLICY_DEFAULT,
   UtilityCompletionError,
   type AuthoritySnapshot,
+  type DecisionCall,
+  type DecisionPort,
   type McpToolDefinition,
   type ObservabilityEvent,
   type CompactionObservation,
@@ -2820,6 +2822,156 @@ describe("startSession", () => {
     // fallback thresholds never trip and the ask port is unreachable.
     expect(ask).not.toHaveBeenCalled();
     expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("records a shadow flag before execution without changing the call or asking", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const calls: DecisionCall<unknown>[] = [];
+    const decisions: DecisionPort = {
+      async decide<T>(call: DecisionCall<T>): Promise<T> {
+        calls.push(call);
+        return call.use({
+          model: { where: "cloud", providerId: "typesafe", modelId: "jev" },
+          elapsedMs: 1,
+          answers: {
+            authorised: { type: "bool", probability: 0.01, value: false, confidence: 0.98 },
+            risk: {
+              type: "choice",
+              choice: "external",
+              probabilities: {
+                safe: 0.01,
+                destructive: 0,
+                disclosure: 0,
+                security: 0,
+                external: 0.99,
+                uncertain: 0,
+              },
+              confidence: 0.988,
+            },
+          },
+        });
+      },
+    };
+    const entered = Promise.withResolvers<void>();
+    const written = Promise.withResolvers<void>();
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "TOOL OUTPUT MUST NOT REACH JUDGE", stderr: "", exitCode: 0 },
+    }));
+    const ask = vi.fn(async () => "refuse" as const);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () =>
+        ({
+          cwd: attachment.worktreePath,
+          exec,
+          cleanup: async () => undefined,
+        }) as unknown as ExecutionEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("ASSISTANT RATIONALE MUST NOT REACH JUDGE");
+            emit.toolCall("bash", { command: "printf first && printf second" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.toolCall("bash", { command: "printf third" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      authority: { ...attachment.spec.authority, enforcement: "observe", judgmentMode: "auto" },
+      decisions,
+      ask,
+      observer: async (observation) => {
+        attachment.observations.push(observation);
+        if (observation.kind === "authority-review" && calls.length === 1) {
+          entered.resolve();
+          await written.promise;
+        }
+      },
+    });
+    const submitted = handle.submitUserMessage("Run my commands", "queue", "shadow-user-1");
+    await entered.promise;
+    expect(exec).not.toHaveBeenCalled();
+    written.resolve();
+    await submitted;
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(ask).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.state)).toEqual([
+      {
+        userMessages: ["Run my commands"],
+        call: { tool: "bash", args: { command: "printf first && printf second" } },
+      },
+      {
+        userMessages: ["Run my commands"],
+        call: { tool: "bash", args: { command: "printf third" } },
+      },
+    ]);
+    expect(
+      attachment.observations.filter((observation) => observation.kind === "authority-review"),
+    ).toEqual([
+      expect.objectContaining({
+        mode: "shadow",
+        wouldFlag: true,
+        authoriser: "classifier",
+        missReason: null,
+      }),
+      expect.objectContaining({
+        mode: "shadow",
+        wouldFlag: true,
+        authoriser: "classifier",
+        missReason: null,
+      }),
+    ]);
+    expect(kinds(attachment.observations)).not.toContain("authority");
+    await handle.close();
+  });
+
+  it("records an unset pre-routing shadow miss and still executes exactly once", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () =>
+        ({
+          cwd: attachment.worktreePath,
+          exec,
+          cleanup: async () => undefined,
+        }) as unknown as ExecutionEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "printf hi" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      authority: { ...attachment.spec.authority, enforcement: "observe" },
+    });
+    await handle.submitUserMessage("Run it");
+    await handle.close();
+    expect(exec).toHaveBeenCalledOnce();
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({ kind: "authority-review", missReason: "unset", wouldFlag: null }),
+    );
   });
 
   it("gives the default environment Pi's own unscoped file verbs", async () => {

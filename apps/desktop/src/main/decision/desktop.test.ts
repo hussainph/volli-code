@@ -132,6 +132,62 @@ function decisions(overrides: Partial<DesktopDecisionsOptions> = {}) {
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+describe("authority review audit", () => {
+  const judge = (built: ReturnType<typeof createDesktopDecisions>) =>
+    built.port.decide({
+      purpose: "authority.judge",
+      sessionId: "session-1",
+      state: { call: { tool: "bash", args: { command: "printf hi" } }, userMessages: ["Run it"] },
+      questions: QUESTIONS,
+      use: () => "allowed",
+      fallback: (miss) => miss.reason,
+    });
+  it("cannot release a verdict until its durable audit lands", async () => {
+    const entered = Promise.withResolvers<void>();
+    const written = Promise.withResolvers<void>();
+    const { built } = decisions({
+      recordDecision: async (fact) => {
+        expect(fact).toMatchObject({
+          purpose: "authority.judge",
+          sessionId: "session-1",
+          outcome: { kind: "answered" },
+        });
+        entered.resolve();
+        await written.promise;
+      },
+    });
+    await built.set(
+      { scope: "global" },
+      { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["agent.classify", "authority.judge"] } },
+    );
+    let settled = false;
+    const pending = judge(built).then((value) => {
+      settled = true;
+      return value;
+    });
+    await entered.promise;
+    expect(settled).toBe(false);
+    written.resolve();
+    expect(await pending).toBe("allowed");
+  });
+  it("uses misses, never allowance, for absent or failing recorders and old opt-ins", async () => {
+    const { built } = decisions();
+    await built.set({ scope: "global" }, CLOUD);
+    expect(await judge(built)).toBe("not-opted-in");
+    await built.set(
+      { scope: "global" },
+      { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["authority.judge"] } },
+    );
+    expect(await judge(built)).toBe("unaudited");
+    const broken = decisions({
+      recordDecision: async () => {
+        throw new Error("disk full");
+      },
+    }).built;
+    expect(await judge(broken)).toBe("unaudited");
+  });
+});
+
 describe("the decision model setting", () => {
   it("is none until a person chooses one, and reads a damaged row as none", () => {
     expect(readGlobalDecisionModel(fixture.db)).toEqual({ kind: "none" });

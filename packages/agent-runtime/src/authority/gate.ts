@@ -18,6 +18,7 @@
 import {
   errorMessage,
   evaluate,
+  isOverridableAuthorityRule,
   type AuthorityDenialCause,
   type AuthoritySnapshot,
   type PolicyToolCall,
@@ -30,6 +31,27 @@ export type AuthorityVerdict =
   | { outcome: "deny"; cause: AuthorityDenialCause; reason: string };
 
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
+
+/** Hard denies precede the Tier-1/2 skips; shell chains remain one action. */
+export function authorityClassifierEligible(input: {
+  tool: string;
+  args: unknown;
+  workspacePath: string;
+  verdict: AuthorityVerdict;
+}): boolean {
+  if (input.verdict.outcome === "deny" && !isOverridableAuthorityRule(input.verdict.cause))
+    return false;
+  if (input.tool === "read") return false;
+  if (input.tool !== "edit" && input.tool !== "write") return true;
+  try {
+    const root = resolveWorkspaceRoot(input.workspacePath);
+    const call = normalizeToolCall({ ...input, workspacePath: root });
+    return !call.writes.every((path) => path === root || path.startsWith(`${root}/`));
+  } catch {
+    // A malformed/unresolvable call cannot acquire a deterministic skip.
+    return true;
+  }
+}
 
 /** What the Session's authority makes of one call, before it runs. */
 export function authorityVerdict(input: {

@@ -49,7 +49,7 @@ import { classifyWebAddress } from "./web-address-policy";
  * timeout and whether it needs an audit trail — and nothing else in the port
  * changes. VC-28 adds `authority.judge` (audited); VC-432 adds `model.select`.
  */
-export const DECISION_PURPOSES = ["agent.classify"] as const;
+export const DECISION_PURPOSES = ["agent.classify", "authority.judge"] as const;
 export type DecisionPurpose = (typeof DECISION_PURPOSES)[number];
 
 export function isDecisionPurpose(value: unknown): value is DecisionPurpose {
@@ -88,6 +88,12 @@ export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionP
         "whatever an agent passes the classify tool: Session text, tool results and page content",
       timeoutMs: 30_000,
       audit: false,
+    }),
+    "authority.judge": Object.freeze({
+      label: "Per-call authority review",
+      sends: "the user's messages and the bare tool call, with secrets redacted",
+      timeoutMs: 3_000,
+      audit: true,
     }),
   });
 
@@ -342,6 +348,14 @@ export function decisionTargetFor(
         miss: decisionMiss("unset", "No decision model is configured (Settings → Models)."),
       };
     case "local":
+      // Authority review uses Pi's cloud classifier only (VC-28). A local
+      // setting still serves agent.classify; it cannot silently become a judge.
+      if (purpose === "authority.judge") {
+        return {
+          ok: false,
+          miss: decisionMiss("unset", "Authority review needs a cloud decision model."),
+        };
+      }
       return {
         ok: true,
         target: {

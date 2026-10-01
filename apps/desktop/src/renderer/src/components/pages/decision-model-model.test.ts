@@ -2,6 +2,7 @@ import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/sha
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  authorityOptInExtensionKey,
   catalogEntry,
   catalogGroups,
   cloudLabel,
@@ -11,6 +12,7 @@ import {
   decisionMode,
   DEFAULT_LOCAL_DECISION_MODEL_ID,
   entryForKey,
+  extendAuthorityCloudOptIn,
   localSetting,
   priceLabel,
   settingLabel,
@@ -85,7 +87,50 @@ describe("the decision model control's model", () => {
       kind: "cloud",
       providerId: "opencode",
       modelId: "jev-1.13",
-      optIn: { acceptedAt: 42, purposes: ["agent.classify"] },
+      optIn: { acceptedAt: 42, purposes: ["agent.classify", "authority.judge"] },
+    });
+  });
+
+  it("asks once per scope and existing cloud agreement, never for local, none or inherit", () => {
+    const legacy = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["agent.classify"] as const },
+    };
+    const globalKey = authorityOptInExtensionKey(legacy, null);
+    expect(globalKey).toContain("authority.judge");
+    expect(authorityOptInExtensionKey(legacy, "project-1")).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey(legacy, "project-2")).not.toBe(
+      authorityOptInExtensionKey(legacy, "project-1"),
+    );
+    expect(authorityOptInExtensionKey({ ...legacy, modelId: "other" }, null)).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey({ ...legacy, providerId: "other" }, null)).not.toBe(
+      globalKey,
+    );
+    expect(
+      authorityOptInExtensionKey({ ...legacy, optIn: { ...legacy.optIn, acceptedAt: 2 } }, null),
+    ).not.toBe(globalKey);
+    expect(authorityOptInExtensionKey(cloud(JEV), null)).toBeNull();
+    expect(authorityOptInExtensionKey(null, "project-1")).toBeNull();
+    expect(authorityOptInExtensionKey({ kind: "none" }, null)).toBeNull();
+    expect(authorityOptInExtensionKey(localSetting("", ""), null)).toBeNull();
+  });
+
+  it("extends just the disclosed authority purpose and preserves the original model", () => {
+    const legacy = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["agent.classify"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(legacy, 42)).toEqual({
+      ...legacy,
+      optIn: { acceptedAt: 42, purposes: ["agent.classify", "authority.judge"] },
+    });
+    expect(legacy.optIn.purposes).toEqual(["agent.classify"]);
+    const authorityOnly = {
+      ...cloud(JEV),
+      optIn: { acceptedAt: 1, purposes: ["authority.judge"] as const },
+    };
+    expect(extendAuthorityCloudOptIn(authorityOnly, 42)).toMatchObject({
+      optIn: { acceptedAt: 42, purposes: ["authority.judge"] },
     });
   });
 

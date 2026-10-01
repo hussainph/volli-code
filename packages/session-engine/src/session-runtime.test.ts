@@ -950,6 +950,43 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
+  it("persists classifier reviews under system provenance, not executor attribution or denial counts", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const review = {
+      kind: "authority-review" as const,
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow" as const,
+      authoriser: "classifier" as const,
+      wouldFlag: true,
+      reason: "Outside the request.",
+      category: "external",
+      answers: null,
+      missReason: null,
+      thresholds: { allow: 0.95, flag: 0.05 },
+    };
+    await adapter.emit(review);
+    const snapshot = await runtime.snapshot({ sessionId });
+    const fact = snapshot.frames.find(({ event }) => event.payload.kind === "authority.reviewed");
+    expect(fact?.event.attachmentId).toBe(attachmentId);
+    expect(fact?.event.payload).toEqual({ ...review, kind: "authority.reviewed", attachmentId });
+    expect(fact?.event.provenance).toEqual({
+      source: { kind: "system", id: "authority-classifier", detail: null },
+      venue: snapshot.projection.liveExecutor!.venue,
+    });
+    expect(snapshot.projection.authorityDenials).toBe(0);
+    // A fresh snapshot reads the same durable fact, not a transcript artifact.
+    expect(
+      (await runtime.snapshot({ sessionId })).frames.find(
+        ({ event }) => event.payload.kind === "authority.reviewed",
+      ),
+    ).toEqual(fact);
+    expect(fact?.transcript).toBeNull();
+  });
+
   it("records a provider reasoning drop as a durable Session Event", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

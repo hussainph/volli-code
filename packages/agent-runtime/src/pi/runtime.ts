@@ -74,7 +74,8 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import { authorityVerdict } from "../authority/gate";
+import { authorityClassifierEligible, authorityVerdict } from "../authority/gate";
+import { AUTHORITY_JUDGE_THRESHOLDS, judgeAuthorityCall } from "../authority/judge";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
@@ -1070,6 +1071,8 @@ interface AcceptedMessageCommandMarker {
   delivery: "prompt" | "queue" | "steer";
   turnId: string;
   message: UserMessage;
+  /** Unframed user text, never the Runtime Brief or activated skill prose (VC-28). */
+  authorityUserText?: string;
   /** Typed identity for message resources; absent on markers written before VC-181. */
   resources?: readonly PromptResource[];
 }
@@ -1804,6 +1807,15 @@ async function attachSession(
       } => marker.kind !== "command-accepted",
     );
     assertUniqueAcceptedCommands(recoveredMarkers);
+    // Older markers have no separable user input: omit rather than giving the
+    // judge a Runtime Brief, skill instructions or assistant summaries.
+    const authorityUserMessages = recoveredMarkers.flatMap((marker) =>
+      marker.kind === "command-accepted" &&
+      marker.operation === "message.submit" &&
+      typeof marker.authorityUserText === "string"
+        ? [marker.authorityUserText]
+        : [],
+    );
     const messageMarkerCounts = new Map<string, number>();
     for (const observation of recoveredObservations) {
       if (observation.kind !== "message-settled") continue;
@@ -2215,6 +2227,7 @@ async function attachSession(
       operation: "message.submit";
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
+      authorityUserText: string;
       resources: readonly PromptResource[];
     };
     type PendingRetryDelivery = {
@@ -2259,7 +2272,10 @@ async function attachSession(
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
     ): Promise<boolean> => {
-      if (delivery?.operation === "message.submit") rememberResources(delivery.resources);
+      if (delivery?.operation === "message.submit") {
+        rememberResources(delivery.resources);
+        authorityUserMessages.push(delivery.authorityUserText);
+      }
       if (!delivery?.commandId) return false;
       if (delivery.operation === "message.submit") {
         await persistObservation({
@@ -2269,6 +2285,7 @@ async function attachSession(
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
           message: durableMessage(delivery.message) as UserMessage,
+          authorityUserText: delivery.authorityUserText,
           // Always present on new markers, including `[]`, so recovery can
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
@@ -2327,6 +2344,47 @@ async function attachSession(
           workspacePath: spec.workspacePath,
           readableRoots: toolOutput.readableDirectories,
         });
+        // VC-480 hook: an explicit ledger allowance belongs here, after hard
+        // denies and deterministic skips, before invoking the classifier.
+        if (
+          authorityClassifierEligible({
+            tool: toolCall.name,
+            args,
+            workspacePath: spec.workspacePath,
+            verdict,
+          })
+        ) {
+          const review = await judgeAuthorityCall({
+            decisions: spec.decisions,
+            sessionId: spec.identity.sessionId,
+            projectId: spec.identity.projectId,
+            // Full user-message history, not compacted assistant summaries or
+            // re-injected resource messages. No tool outputs or descriptions.
+            userMessages: authorityUserMessages,
+            tool: toolCall.name,
+            args,
+            signal,
+          });
+          await commitObservation({
+            kind: "authority-review",
+            turnId,
+            toolCallId: toolCall.id,
+            tool: toolCall.name,
+            mode: "shadow",
+            authoriser: "classifier",
+            wouldFlag: review.kind === "answered" ? review.wouldFlag : null,
+            reason: review.kind === "answered" ? review.reason : review.miss.message,
+            category: review.kind === "answered" ? review.category : null,
+            answers: review.kind === "answered" ? review.answered.answers : null,
+            missReason: review.kind === "miss" ? review.miss.reason : null,
+            thresholds: {
+              allow: AUTHORITY_JUDGE_THRESHOLDS.authorisedMinProbability,
+              flag: AUTHORITY_JUDGE_THRESHOLDS.riskMaxProbability,
+            },
+          });
+        }
+        // Shadow never changes what ran, including under an observe Snapshot.
+        if (authority.enforcement === "observe") return undefined;
         // Pi's own per-call signal is passed on rather than dropped: a question
         // this parks on has to lose to a cancelled run, and Pi re-reads that
         // signal the instant this callback returns.
@@ -3389,6 +3447,7 @@ async function attachSession(
             operation: "message.submit" as const,
             delivery,
             message,
+            authorityUserText: text,
             resources,
           };
           pendingQueuedDeliveries.set(message, pending);
@@ -3426,6 +3485,7 @@ async function attachSession(
           operation: "message.submit" as const,
           delivery: "prompt" as const,
           message,
+          authorityUserText: text,
           resources,
         };
         const run = async (): Promise<void> => {

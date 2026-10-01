@@ -1113,6 +1113,31 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           models: piModelAccess.models,
           catalogReady: piModelAccess.catalogReady,
+          recordDecision: async (fact) => {
+            if (sessionEngine === null || fact.sessionId === null) {
+              throw new Error("Authority review has no durable Session ledger.");
+            }
+            // authority.judge's caller redacts the reasoning-blind state BEFORE
+            // decide, so neither cloud transport nor this full-state audit sees
+            // secrets. Renderer scrubbing drops the native audit copy entirely.
+            await sessionEngine.observe({
+              id: `audit:decision:${randomUUID()}`,
+              kind: "adapter.observed",
+              sessionId: fact.sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: {
+                  kind: "system",
+                  id: "authority-classifier",
+                  detail: { purpose: fact.purpose, authoriser: "classifier" },
+                },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              name: "authority.judge.audit",
+              native: JSON.parse(JSON.stringify(fact)),
+            });
+          },
           recordUsage: async (sessionId, usage, purpose) => {
             if (sessionEngine === null) return;
             await sessionEngine.observe({
@@ -1489,6 +1514,7 @@ app.whenReady().then(async () => {
           ...(desktopDecisions === null
             ? {}
             : {
+                decisions: desktopDecisions.port,
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),

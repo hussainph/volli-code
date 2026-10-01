@@ -651,7 +651,8 @@ function boundActivityKey(value: string): string {
     : value;
 }
 
-function isSensitiveKey(value: string): boolean {
+/** Payload-key redaction shared with the reasoning-blind authority judge. */
+export function isSensitiveKey(value: string): boolean {
   return SENSITIVE_KEY.test(value.replace(/[^a-z]/gi, ""));
 }
 
@@ -669,7 +670,8 @@ function boundSummaryText(value: string): string {
     : redacted;
 }
 
-function redactPayloadSecrets(value: string): string {
+/** Redact without truncating: policy checks must retain a command's complete tail. */
+export function redactPayloadSecrets(value: string): string {
   if (!SECRET_MARKER.test(value)) return value;
   return value
     .replace(PREFIXED_SECRET, "[redacted]")

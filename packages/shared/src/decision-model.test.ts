@@ -38,9 +38,10 @@ const LOCAL: DecisionModelSetting = {
 
 describe("purposes", () => {
   it("names every caller, and only those", () => {
-    expect(DECISION_PURPOSES).toEqual(["agent.classify"]);
+    expect(DECISION_PURPOSES).toEqual(["agent.classify", "authority.judge"]);
     expect(isDecisionPurpose("agent.classify")).toBe(true);
-    expect(isDecisionPurpose("authority.judge")).toBe(false);
+    expect(isDecisionPurpose("authority.judge")).toBe(true);
+    expect(isDecisionPurpose("model.select")).toBe(false);
     expect(isDecisionPurpose(7)).toBe(false);
   });
 
@@ -151,7 +152,7 @@ describe("stored settings", () => {
 describe("the cloud disclosure", () => {
   it("says what leaves the machine, per purpose", () => {
     expect(decisionCloudDisclosure("Jev · TypeSafe")).toBe(
-      `Jev · TypeSafe runs off this Mac. Using it sends ${DECISION_PURPOSE_POLICY["agent.classify"].sends}.`,
+      `Jev · TypeSafe runs off this Mac. Using it sends ${DECISION_PURPOSE_POLICY["agent.classify"].sends}; and ${DECISION_PURPOSE_POLICY["authority.judge"].sends}.`,
     );
     expect(decisionCloudDisclosure("Jev", ["agent.classify"])).toMatch(/page content/);
   });
@@ -178,6 +179,24 @@ describe("where a call goes", () => {
       },
     });
     expect(offersClassifyTool(LOCAL)).toBe(true);
+    expect(decisionTargetFor(LOCAL, "authority.judge")).toMatchObject({
+      ok: false,
+      miss: { reason: "unset" },
+    });
+    expect(DECISION_PURPOSE_POLICY["authority.judge"]).toMatchObject({
+      audit: true,
+      timeoutMs: 3000,
+    });
+    expect(decisionTargetFor(CLOUD, "authority.judge")).toMatchObject({
+      ok: false,
+      miss: { reason: "not-opted-in" },
+    });
+    expect(
+      decisionTargetFor(
+        { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["authority.judge"] } },
+        "authority.judge",
+      ),
+    ).toMatchObject({ ok: true, target: { where: "cloud" } });
   });
 
   it("goes to the cloud only for a purpose the opt-in names", () => {

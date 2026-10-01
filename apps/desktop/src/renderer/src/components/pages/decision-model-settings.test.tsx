@@ -2,10 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { toast } from "sonner";
 import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/shared";
 
-import type { DecisionModelSettingsView } from "../../../../ipc/contract";
+import type { DecisionModelResult, DecisionModelSettingsView } from "../../../../ipc/contract";
 import type { Project } from "@volli/shared";
+
+import { authorityOptInExtensionKey, cloudSetting } from "./decision-model-model";
+import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 
 import {
   CloudOptInDialog,
@@ -15,6 +19,15 @@ import {
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
+}));
+
+const receipts = vi.hoisted(() => new Map<string, string>());
+vi.mock("@renderer/lib/app-state-storage", () => ({
+  appStateStorage: {
+    getItem: vi.fn((key: string) => receipts.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => receipts.set(key, value)),
+  },
+  flushPendingAppStateKey: vi.fn(async () => true),
 }));
 
 const ZEN: DecisionModelCatalogEntry = {
@@ -31,6 +44,8 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 beforeEach(() => {
+  receipts.clear();
+  vi.clearAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -56,10 +71,18 @@ function stubApi(global: DecisionModelSetting, project?: DecisionModelSetting) {
     ...(project === undefined ? {} : { project }),
     catalog: [ZEN],
   };
-  const set = vi.fn(async (_scope: unknown, setting: DecisionModelSetting | null) => {
-    view = { ...view, global: setting ?? view.global };
-    return { ok: true as const, settings: view };
-  });
+  const set = vi.fn(
+    async (
+      scope: { scope: string },
+      setting: DecisionModelSetting | null,
+    ): Promise<DecisionModelResult> => {
+      view =
+        scope.scope === "global"
+          ? { ...view, global: setting ?? view.global }
+          : { ...view, project: setting };
+      return { ok: true as const, settings: view };
+    },
+  );
   const test = vi.fn(async () => ({
     ok: true as const,
     test: { ok: true as const, elapsedMs: 42.4, probability: 0.97 },
@@ -139,10 +162,8 @@ describe("Settings → Models → Decision model", () => {
     expect(onSignIn).toHaveBeenCalledWith("opencode");
   });
 
-  // This build has one purpose, so an opt-in that covers it is indistinguishable
-  // from "every purpose". An opt-in that covers none of this build's purposes
-  // (the shape a purpose added later leaves a stored one in) tells the two
-  // apart: the line must say what was agreed to, not what the build could send.
+  // A deliberately narrow opt-in proves the disclosure uses only what the
+  // person agreed to, not every purpose this build supports.
   const NARROW_OPT_IN = { acceptedAt: 1, purposes: [] } as never;
 
   it("names only the purposes the person opted into on the app-wide page", async () => {
@@ -197,6 +218,147 @@ describe("Settings → Models → Decision model", () => {
   });
 });
 
+const LEGACY_CLOUD: DecisionModelSetting = {
+  kind: "cloud",
+  providerId: ZEN.providerId,
+  modelId: ZEN.modelId,
+  optIn: { acceptedAt: 1, purposes: ["agent.classify"] },
+};
+
+async function unmount(): Promise<void> {
+  await act(async () => root?.unmount());
+  container?.remove();
+  root = null;
+  container = null;
+}
+
+function extensionDialog(): Element | null {
+  return document.querySelector('[role="alertdialog"]');
+}
+
+describe("extending an existing cloud opt-in", () => {
+  it("discloses user messages and the bare call, and saves expanded global authority only on Allow", async () => {
+    const { set } = stubApi(LEGACY_CLOUD);
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()?.textContent).toContain("Allow tool-call review");
+    expect(extensionDialog()?.textContent).toMatch(
+      /user messages and the bare tool call \(name and arguments\) off this Mac/,
+    );
+    expect(extensionDialog()?.textContent).toMatch(
+      /does not send assistant prose, reasoning, tool outputs or tool descriptions/,
+    );
+    expect(set).not.toHaveBeenCalled();
+    expect(
+      document.querySelector('[data-testid="decision-model-sends"]')?.textContent,
+    ).not.toContain("user messages");
+    await act(async () => button("Allow tool-call review").click());
+    expect(set).toHaveBeenCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        kind: "cloud",
+        providerId: ZEN.providerId,
+        modelId: ZEN.modelId,
+        optIn: { acceptedAt: expect.any(Number), purposes: ["agent.classify", "authority.judge"] },
+      }),
+    );
+    expect(extensionDialog()).toBeNull();
+    expect(appStateStorage.setItem).not.toHaveBeenCalled();
+    await unmount();
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("persists a decline without changing the opt-in, and does not nag on remount", async () => {
+    const { set } = stubApi(LEGACY_CLOUD);
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    await act(async () => button("Not now").click());
+    const key = authorityOptInExtensionKey(LEGACY_CLOUD, null)!;
+    expect(appStateStorage.setItem).toHaveBeenCalledWith(key, "declined");
+    expect(flushPendingAppStateKey).toHaveBeenCalledWith(key);
+    expect(set).not.toHaveBeenCalled();
+    expect(extensionDialog()).toBeNull();
+    await unmount();
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("honours a durable decline seeded at app startup", async () => {
+    receipts.set(authorityOptInExtensionKey(LEGACY_CLOUD, null)!, "declined");
+    stubApi(LEGACY_CLOUD);
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("extends a project's own opt-in without changing the global model", async () => {
+    const { set } = stubApi({ kind: "none" }, LEGACY_CLOUD);
+    await render(
+      <ProjectDecisionModelRow
+        project={{ id: "project-1" } as Project}
+        onSaved={() => undefined}
+      />,
+    );
+    await act(async () => button("Allow tool-call review").click());
+    expect(set).toHaveBeenCalledWith(
+      { scope: "project", projectId: "project-1" },
+      expect.objectContaining({
+        optIn: { acceptedAt: expect.any(Number), purposes: ["agent.classify", "authority.judge"] },
+      }),
+    );
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("keeps declines scope-specific and does not create an override for an inherited agreement", async () => {
+    receipts.set(authorityOptInExtensionKey(LEGACY_CLOUD, null)!, "declined");
+    const project = { id: "project-1" } as Project;
+    const { set } = stubApi(LEGACY_CLOUD, LEGACY_CLOUD);
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(extensionDialog()).not.toBeNull();
+    await act(async () => button("Not now").click());
+    expect(appStateStorage.setItem).toHaveBeenCalledWith(
+      authorityOptInExtensionKey(LEGACY_CLOUD, project.id),
+      "declined",
+    );
+    expect(set).not.toHaveBeenCalled();
+    await unmount();
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+    await unmount();
+    stubApi(LEGACY_CLOUD);
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("asks nothing for an already expanded cloud agreement", async () => {
+    stubApi(cloudSetting(ZEN, 42));
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(extensionDialog()).toBeNull();
+  });
+
+  it("surfaces a refused extension save while retaining the retry", async () => {
+    const { set } = stubApi(LEGACY_CLOUD);
+    set.mockResolvedValueOnce({ ok: false, error: "disk full" });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    await act(async () => button("Allow tool-call review").click());
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't enable tool-call review: disk full",
+      expect.objectContaining({ closeButton: true }),
+    );
+    expect(extensionDialog()).not.toBeNull();
+    expect(appStateStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("keeps the extension available to retry when saving fails", async () => {
+    const { set } = stubApi(LEGACY_CLOUD);
+    set.mockRejectedValueOnce(new Error("disk full"));
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    await act(async () => button("Allow tool-call review").click());
+    expect(extensionDialog()).not.toBeNull();
+    expect(appStateStorage.setItem).not.toHaveBeenCalled();
+    await act(async () => button("Allow tool-call review").click());
+    expect(extensionDialog()).toBeNull();
+  });
+});
+
 describe("the cloud opt-in", () => {
   it("says what leaves the Mac, and only Allow writes", async () => {
     const onAllow = vi.fn();
@@ -204,6 +366,7 @@ describe("the cloud opt-in", () => {
     await render(<CloudOptInDialog entry={ZEN} onAllow={onAllow} onCancel={onCancel} />);
     expect(document.body.textContent).toContain("Send decisions to Jev 1.13 Free · OpenCode Zen?");
     expect(document.body.textContent).toMatch(/Session text, tool results and page content/);
+    expect(document.body.textContent).toMatch(/user's messages and the bare tool call/);
     await act(async () => button("Cancel").click());
     expect(onCancel).toHaveBeenCalled();
     expect(onAllow).not.toHaveBeenCalled();

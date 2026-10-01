@@ -107,6 +107,41 @@ export function cloudSetting(
   };
 }
 
+/**
+ * A once-only extension prompt, tied to the scope and the existing agreement.
+ * Declining changes no authority: this key is only a durable UI receipt.
+ * An inherited global agreement is handled in app-wide Settings, never by
+ * silently creating a project override.
+ */
+export function authorityOptInExtensionKey(
+  setting: DecisionModelSetting | null,
+  projectId: string | null,
+): string | null {
+  if (setting?.kind !== "cloud" || setting.optIn.purposes.includes("authority.judge")) return null;
+  return `volli:decision-opt-in-extension:authority.judge:${JSON.stringify([
+    projectId,
+    setting.providerId,
+    setting.modelId,
+    setting.optIn.acceptedAt,
+  ])}`;
+}
+
+/** Extend only the disclosed purpose, preserving every existing permission. */
+export function extendAuthorityCloudOptIn(
+  setting: Extract<DecisionModelSetting, { kind: "cloud" }>,
+  now: number,
+): DecisionModelSetting {
+  return {
+    ...setting,
+    optIn: {
+      acceptedAt: now,
+      purposes: DECISION_PURPOSES.filter(
+        (purpose) => purpose === "authority.judge" || setting.optIn.purposes.includes(purpose),
+      ),
+    },
+  };
+}
+
 /** A local setting from what the fields hold, with the defaults filling blanks. */
 export function localSetting(baseUrl: string, modelId: string): DecisionModelSetting {
   return {
