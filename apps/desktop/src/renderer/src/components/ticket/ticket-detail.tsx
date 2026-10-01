@@ -238,6 +238,7 @@ export function TicketDetail({
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
+  const recordResolvedTicketTab = useWorkspaceStore((state) => state.recordResolvedTicketTab);
   const moveTicketTab = useWorkspaceStore((state) => state.moveTicketTab);
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // this workspace is unsplit, which is what keeps the unsplit path untouched.
@@ -305,6 +306,10 @@ export function TicketDetail({
       useWorkspaceStore.getState().claimTicketTabInPane(projectId, ticket.id, tabId, paneId, front),
     [projectId, ticket.id],
   );
+  const activateClaimedDraft = React.useCallback(
+    (tabId: string) => useWorkspaceStore.getState().setTicketActiveTab(projectId, ticket.id, tabId),
+    [projectId, ticket.id],
+  );
   // Everything this workspace needs to know about its Chat Drafts, and the
   // rule about them, in one place shared with Home (VC-358).
   const {
@@ -318,6 +323,7 @@ export function TicketDetail({
   } = useProvisionalChatTabs(ticket.id, openChatIds, {
     readSplitView,
     claimTab: claimProvisionalTab,
+    activateTab: activateClaimedDraft,
   });
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
@@ -1087,7 +1093,7 @@ export function TicketDetail({
       chat.openChatTab(ticket.id, relaunch.sessionId);
       return;
     }
-    setTicketActiveTab(projectId, ticket.id, BODY_TAB_ID);
+    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID);
   }, [
     activeTabId,
     activeTabIsRenderable,
@@ -1095,7 +1101,7 @@ export function TicketDetail({
     creating,
     durableChatIds,
     projectId,
-    setTicketActiveTab,
+    recordResolvedTicketTab,
     ticket.id,
   ]);
 

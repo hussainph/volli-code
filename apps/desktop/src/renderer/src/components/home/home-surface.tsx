@@ -213,9 +213,16 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     },
     [selectedId],
   );
+  const activateClaimedDraft = React.useCallback(
+    (tabId: string) => {
+      if (selectedId !== null) useWorkspaceStore.getState().setHomeActiveTab(selectedId, tabId);
+    },
+    [selectedId],
+  );
   const provisionalTabs = useProvisionalChatTabs(selectedId, openChatIds, {
     readSplitView,
     claimTab: claimProvisionalTab,
+    activateTab: activateClaimedDraft,
   });
   const {
     activeOverride: provisionalActive,

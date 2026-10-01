@@ -5,6 +5,7 @@ import {
   paneForTab,
   resolveSplitView,
   singlePaneSplitView,
+  splitViewPanes,
   SPLIT_VIEW_ROOT_PANE_ID,
   type BlobLinkView,
   type SplitViewState,
@@ -121,7 +122,10 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
       if (ticket) store.getState().moveTicketTabToPane("project-1", ownerId, tabId, paneId);
       else store.getState().moveHomeTabToPane("project-1", tabId, paneId);
     },
-    activateTab: vi.fn(),
+    activateTab: vi.fn((tabId: string) => {
+      if (ticket) store.getState().setTicketActiveTab("project-1", ownerId, tabId);
+      else store.getState().setHomeActiveTab("project-1", tabId);
+    }),
     openPayload: vi.fn(),
     reorderPane: vi.fn(),
     reorderSurface: vi.fn(),
@@ -146,12 +150,23 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     permanentTabId,
     ...(useChatSessionsStore.getState().openTabs[ownerId] ?? []).map((id) => `chat:${id}`),
     ...Object.keys(useBrowserTabsStore.getState().byId).map(browserTabId),
+    ...(ticket
+      ? (store.getState().byProject["project-1"]?.ticketTabs[ownerId]?.files ?? [])
+      : (store.getState().byProject["project-1"]?.projectFiles.tabs ?? [])
+    ).map((file) => `file:${file.relPath}`),
   ];
   function Harness() {
     store((state) => state.byProject);
     const chats = useChatSessionsStore((state) => state.openTabs[ownerId] ?? NO_CHATS);
     useBrowserTabsStore((state) => state.byId);
-    provisional = useProvisionalChatTabs(ownerId, chats, { readSplitView, claimTab });
+    provisional = useProvisionalChatTabs(ownerId, chats, {
+      readSplitView,
+      claimTab,
+      activateTab: (tabId) => {
+        if (ticket) store.getState().setTicketActiveTab("project-1", ownerId, tabId);
+        else store.getState().setHomeActiveTab("project-1", tabId);
+      },
+    });
     guarded = provisional.guardLayoutWrites(writes, focusPane);
     const recorded = recordedActive();
     const resolution = resolveHomeTabs({
@@ -282,6 +297,25 @@ it("Home's stale-tab receipt never persists an unfocused empty Draft or selects 
   expect(s.readSplitView()?.focusedPaneId).toBe("n3");
 });
 
+it("Ticket's stale-tab receipt preserves a background Draft and focused empty pane", () => {
+  const s = surface(true);
+  act(() => s.guarded().moveTabToPane(DRAFT_TAB, SPLIT_VIEW_ROOT_PANE_ID));
+  act(() => s.focusPane("n1"));
+  act(() => s.store.getState().recordResolvedTicketTab("project-1", s.ownerId, "missing-terminal"));
+  const split = s.readSplitView();
+  act(() => s.store.getState().recordResolvedTicketTab("project-1", s.ownerId, "doc"));
+  expect(s.recordedActive()).toBe("doc");
+  expect(s.readSplitView()).toBe(split);
+  expect(s.readSplitView()?.focusedPaneId).toBe("n1");
+  expect(s.view().panes.find((pane) => pane.id === SPLIT_VIEW_ROOT_PANE_ID)?.activeTabId).toBe(
+    DRAFT_TAB,
+  );
+  expect(
+    useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)?.get("draft-1")?.front,
+  ).toBe(true);
+  expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+});
+
 for (const ticket of [false, true]) {
   describe(`provisional pane layout — ${ticket ? "Ticket" : "Home"}`, () => {
     it("closes the empty source after moving and splitting a Draft elsewhere, without teleporting it", () => {
@@ -382,6 +416,89 @@ for (const ticket of [false, true]) {
       expect(s.readSplitView()?.focusedPaneId).toBe("n3");
       expect(s.recordedActive()).toBe("browser:browser-1");
       expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+    });
+
+    it("reselects a typed-then-cleared Draft with a durable pane claim", async () => {
+      const s = surface(ticket);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "x"));
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", ""));
+      await act(async () => {
+        await s.createBrowser();
+      });
+      expect(s.provisional().emptyTabIds.has(DRAFT_TAB)).toBe(false);
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.provisional().takeActive("draft-1"));
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+      expect(s.readSplitView()?.focusedPaneId).toBe("n1");
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "again"));
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+    });
+
+    it("a durable tab moved into a background Draft pane comes to front without relocating the Draft", () => {
+      const s = surface(ticket, { oldChat: true });
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.provisional().releaseActive());
+      act(() => s.guarded().moveTabToPane("chat:old", "n1"));
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("chat:old");
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.tabIds).toContain(DRAFT_TAB);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "background"));
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("chat:old");
+      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
+    });
+
+    for (const sameUnderlying of [false, true]) {
+      it(`direct file preview dismisses the Draft ${sameUnderlying ? "even when the saved file is already active" : "when opening a new file"}`, () => {
+        const s = surface(ticket);
+        const preview = () => {
+          if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
+          else s.store.getState().previewHomeFile("project-1", "readme.md");
+        };
+        if (sameUnderlying) {
+          act(preview);
+          act(() => s.provisional().takeActive("draft-1"));
+          expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+        }
+        act(preview);
+        expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("file:readme.md");
+        expect(s.provisional().activeOverride).toBeNull();
+        act(() => useChatDraftsStore.getState().setDraft("draft-1", "later"));
+        expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
+        expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("file:readme.md");
+      });
+    }
+
+    it("direct workspace open dismisses a Draft covering the same already-active browser", async () => {
+      const s = surface(ticket);
+      await act(async () => {
+        await s.createBrowser();
+      });
+      act(() => s.provisional().takeActive("draft-1"));
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+      act(() => {
+        if (ticket)
+          s.store
+            .getState()
+            .openTicketWorkspace("project-1", s.ownerId, { tabId: "browser:browser-1" });
+        else s.store.getState().openHome("project-1", "browser:browser-1");
+      });
+      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(
+        "browser:browser-1",
+      );
+      expect(s.provisional().activeOverride).toBeNull();
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+    });
+
+    it("unmounted selection deactivates foreground before a late import saves the claim", () => {
+      const s = surface(ticket);
+      s.unmount();
+      if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
+      else s.store.getState().previewHomeFile("project-1", "readme.md");
+      useChatDraftsStore.getState().setDraft("draft-1", "finished import");
+      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
+      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", false);
+      expect(splitViewPanes(s.readSplitView()!).find((pane) => pane.id === "n1")?.activeTabId).toBe(
+        "file:readme.md",
+      );
     });
 
     it("saves attachment completion after the surface unmounts, before revisiting or relaunch", async () => {

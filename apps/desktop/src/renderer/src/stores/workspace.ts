@@ -46,6 +46,7 @@ import {
   markFileEdited,
   moveFile,
   moveTabToPane,
+  paneForTab,
   pinFile,
   previewFile,
   primaryPaneId,
@@ -76,6 +77,7 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
+import { publishWorkspaceTabSelection } from "@renderer/lib/workspace-tab-selection";
 import {
   HOME_BOARD_TAB_ID,
   closeHomeTabHistory,
@@ -718,9 +720,15 @@ interface WorkspaceState {
    * also closed the open ticket, closing a chat would discard the ticket
    * remembered behind it. {@link WorkspaceState.openHomeBoard} is where
    * "the Board tab means the plain board" lives.
+   *
+   * It is a tab SELECTION, though, so it announces one (VC-483) even when the
+   * tab is already the one recorded — see `publishHomeSelection`.
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
-  /** Renderer fallback receipt, not a tab selection: never moves pane focus. */
+  /**
+   * Renderer fallback receipt, not a tab selection: never moves pane focus and
+   * never announces a selection.
+   */
   recordResolvedHomeTab(projectId: string, tabId: string): void;
   /** Preview a Main-checkout file and bring its Home tab to the front atomically. */
   previewHomeFile(projectId: string, relPath: string): void;
@@ -882,6 +890,8 @@ interface WorkspaceState {
   /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a
    * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
+  /** Automatic stale-tab receipt: neither selects a pane nor announces intent. */
+  recordResolvedTicketTab(projectId: string, ticketId: string, tabId: string): void;
   /**
    * {@link WorkspaceState.moveHomeTab} at ticket scope (VC-189) — same overlay,
    * same pin-what-you-arranged rule, one scope down. The Ticket Body tab is
@@ -1355,6 +1365,35 @@ function homeHistoryAfterVisit(current: WorkspaceUiState, nextTabId: string): re
   return visitHomeTab(visitHomeTab(current.homeTabHistory, current.homeActiveTab), nextTabId);
 }
 
+/**
+ * Announce an explicit Home tab selection (VC-483), read against the split the
+ * write just left behind.
+ *
+ * Selection is intent rather than a change of `homeActiveTab`: the same durable
+ * tab may already be saved in front and still be covered by an empty Draft, so
+ * an activation door announces even when its write changed nothing. Callers run
+ * this AFTER `set()` returns, never inside an updater — a subscriber may commit a
+ * Draft's placement, which writes this store again. Receipts, focus moves,
+ * reorders and placement-only claims are not selections and never announce.
+ */
+function publishHomeSelection(state: WorkspaceState, projectId: string, tabId: string): void {
+  publishWorkspaceTabSelection(projectId, tabId, state.byProject[projectId]?.homeSplitView ?? null);
+}
+
+/** {@link publishHomeSelection} for a ticket workspace, whose owner is the ticket. */
+function publishTicketSelection(
+  state: WorkspaceState,
+  projectId: string,
+  ticketId: string,
+  tabId: string,
+): void {
+  publishWorkspaceTabSelection(
+    ticketId,
+    tabId,
+    state.byProject[projectId]?.ticketTabs[ticketId]?.splitView ?? null,
+  );
+}
+
 /** The project's record merged with `changes` — spread into `set()`. */
 function patchWorkspace(
   state: WorkspaceState,
@@ -1520,6 +1559,9 @@ export function createWorkspaceStore(
               ...homeSplitWrite(split),
             });
           });
+          // Even when nothing above changed: the saved front tab can still be
+          // covered by an empty Draft, and selecting it is what uncovers it.
+          publishHomeSelection(get(), projectId, tabId);
         },
 
         recordResolvedHomeTab(projectId, tabId) {
@@ -1562,6 +1604,7 @@ export function createWorkspaceStore(
               ),
             });
           });
+          publishHomeSelection(get(), projectId, fileTabId(relPath));
         },
 
         pinHomeFile(projectId, relPath) {
@@ -1577,12 +1620,17 @@ export function createWorkspaceStore(
               ...homeSplitWrite(activatedHomeSplit(current, tabId)),
             });
           });
+          publishHomeSelection(get(), projectId, fileTabId(relPath));
         },
 
         activateHomeFile(projectId, relPath) {
+          // A path that is not open is refused, and a refused activation
+          // selected nothing — so it has nothing to announce either.
+          let selected = false;
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
+            selected = true;
             const projectFiles = activateFile(current.projectFiles, relPath);
             const tabId = fileTabId(relPath);
             return patchWorkspace(state, projectId, {
@@ -1593,6 +1641,7 @@ export function createWorkspaceStore(
               ...homeSplitWrite(activatedHomeSplit(current, tabId)),
             });
           });
+          if (selected) publishHomeSelection(get(), projectId, fileTabId(relPath));
         },
 
         closeHomeFile(projectId, relPath, openSessionTabIds) {
@@ -1758,6 +1807,9 @@ export function createWorkspaceStore(
                   },
             );
           });
+          // Bringing Home forward without naming a tab is navigation, not a
+          // selection: whatever was in front — a Draft included — stays there.
+          if (tabId !== undefined) publishHomeSelection(get(), projectId, tabId);
         },
 
         openHomeBoard(projectId) {
@@ -1773,6 +1825,7 @@ export function createWorkspaceStore(
               ...homeSplitWrite(activatedHomeSplit(current, HOME_BOARD_TAB_ID)),
             });
           });
+          publishHomeSelection(get(), projectId, HOME_BOARD_TAB_ID);
         },
 
         openTicket(projectId, ticketId) {
@@ -1794,6 +1847,9 @@ export function createWorkspaceStore(
           // board — breadcrumb click, Escape, restart-then-close — shows it
           // selected rather than landing on a blank board.
           useBoardStore.getState().selectTicket(projectId, ticketId);
+          // The detail view is drawn in the Board tab, so opening it selects
+          // that tab — and a Draft in front of the Board's pane must give way.
+          publishHomeSelection(get(), projectId, HOME_BOARD_TAB_ID);
         },
 
         openTicketWorkspace(projectId, ticketId, opts) {
@@ -1828,6 +1884,12 @@ export function createWorkspaceStore(
             });
           });
           useBoardStore.getState().selectTicket(projectId, ticketId);
+          // Two surfaces, two owners: Home selected its Board tab, and the
+          // ticket selected a tab of its own only when the caller named one.
+          publishHomeSelection(get(), projectId, HOME_BOARD_TAB_ID);
+          if (opts?.tabId !== undefined) {
+            publishTicketSelection(get(), projectId, ticketId, opts.tabId);
+          }
         },
 
         openTicketSession(projectId, ticketId, tabId, paneId) {
@@ -1855,6 +1917,8 @@ export function createWorkspaceStore(
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
+          // Including a file already pinned and in front, which writes nothing.
+          publishTicketSelection(get(), projectId, ticketId, fileTabId(relPath));
         },
 
         previewTicketFile(projectId, ticketId, relPath) {
@@ -1869,18 +1933,24 @@ export function createWorkspaceStore(
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
+          publishTicketSelection(get(), projectId, ticketId, fileTabId(relPath));
         },
 
         pinTicketFile(projectId, ticketId, relPath) {
+          // `pinFile` brings a tab forward only when it OPENS it; pinning a tab
+          // that is already open does not steal focus, so it selects nothing.
+          let opened = false;
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+            opened = !existing.files.some((tab) => tab.relPath === relPath);
             const next = applyTicketFileTransition(existing, (files) => pinFile(files, relPath));
             if (next === null) return state;
             return patchWorkspace(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
+          if (opened) publishTicketSelection(get(), projectId, ticketId, fileTabId(relPath));
         },
 
         markTicketFileEdited(projectId, ticketId, relPath) {
@@ -1934,6 +2004,7 @@ export function createWorkspaceStore(
               },
             });
           });
+          publishTicketSelection(get(), projectId, ticketId, diffTabId(relPath));
         },
 
         closeTicketFile(projectId, ticketId, relPath) {
@@ -2042,6 +2113,22 @@ export function createWorkspaceStore(
               },
             });
           });
+          // See setHomeActiveTab: a no-op write is still a selection.
+          publishTicketSelection(get(), projectId, ticketId, tabId);
+        },
+
+        recordResolvedTicketTab(projectId, ticketId, tabId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+            if (existing.active === tabId) return state;
+            return patchWorkspace(state, projectId, {
+              ticketTabs: {
+                ...current.ticketTabs,
+                [ticketId]: { ...existing, active: tabId },
+              },
+            });
+          });
         },
 
         moveTicketTab(projectId, ticketId, movedId, order) {
@@ -2069,6 +2156,7 @@ export function createWorkspaceStore(
         },
 
         splitHomePane(projectId, paneId, edge, opts) {
+          let didSplit = false;
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             // Materialize the surface's one pane before splitting it, claiming
@@ -2090,14 +2178,21 @@ export function createWorkspaceStore(
             // Identity means the split did not happen, so nothing was
             // materialized either: the surface is still unsplit.
             if (next === split) return state;
+            didSplit = true;
             return patchWorkspace(state, projectId, {
               ...homeSplitWrite(next),
               ...homeActiveAfterFocus(current, next),
             });
           });
+          // A tab dragged onto an edge is a durable move into the new pane; a
+          // pane opened empty (`⌘\`) selected nothing.
+          if (didSplit && opts?.tabId !== undefined) {
+            publishHomeSelection(get(), projectId, opts.tabId);
+          }
         },
 
         splitTicketPane(projectId, ticketId, paneId, edge, opts) {
+          let didSplit = false;
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
@@ -2109,6 +2204,7 @@ export function createWorkspaceStore(
               );
             const next = splitPane(split, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
             if (next === split) return state;
+            didSplit = true;
             return patchWorkspace(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
@@ -2120,6 +2216,9 @@ export function createWorkspaceStore(
               },
             });
           });
+          if (didSplit && opts?.tabId !== undefined) {
+            publishTicketSelection(get(), projectId, ticketId, opts.tabId);
+          }
         },
 
         claimHomeTabInPane(projectId, tabId, paneId, activate) {
@@ -2147,17 +2246,32 @@ export function createWorkspaceStore(
         },
 
         moveHomeTabToPane(projectId, tabId, paneId) {
+          // Announced only once the tab has landed in `paneId`: an unsplit
+          // surface or a pane that is gone refuses the move. A tab that was
+          // already in front there landed too (the model answers by identity),
+          // and the drop still has to uncover it from a Draft. Read on the
+          // pane tree before any collapse, which can write the split as null.
+          let landed = false;
           set((state) =>
-            applyHomeSplit(state, projectId, (split) => moveTabToPane(split, tabId, paneId)),
+            applyHomeSplit(state, projectId, (split) => {
+              const next = moveTabToPane(split, tabId, paneId);
+              landed = paneForTab(next, tabId) === paneId;
+              return next;
+            }),
           );
+          if (landed) publishHomeSelection(get(), projectId, tabId);
         },
 
         moveTicketTabToPane(projectId, ticketId, tabId, paneId) {
+          let landed = false;
           set((state) =>
-            applyTicketSplit(state, projectId, ticketId, (split) =>
-              moveTabToPane(split, tabId, paneId),
-            ),
+            applyTicketSplit(state, projectId, ticketId, (split) => {
+              const next = moveTabToPane(split, tabId, paneId);
+              landed = paneForTab(next, tabId) === paneId;
+              return next;
+            }),
           );
+          if (landed) publishTicketSelection(get(), projectId, ticketId, tabId);
         },
 
         focusHomePane(projectId, paneId) {

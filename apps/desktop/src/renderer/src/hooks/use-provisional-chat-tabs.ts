@@ -48,6 +48,7 @@ import {
 
 import {
   placementPaneId,
+  deactivateProvisionalPane,
   registerProvisionalPaneHost,
   type ProvisionalPaneLayoutHost,
 } from "@renderer/lib/provisional-pane-commit";
@@ -77,20 +78,6 @@ function overlayPlacements(
   };
   const root = rewrite(state.root);
   return root === state.root ? state : { ...state, root };
-}
-
-function deactivateEffectivePane(
-  ownerId: string,
-  paneId: string,
-  split: SplitViewState | null,
-): void {
-  const layout = useProvisionalPaneLayoutStore.getState();
-  const aliases = new Set(
-    [...(layout.byOwner.get(ownerId) ?? [])]
-      .filter(([, placement]) => placementPaneId(split, placement.paneId) === paneId)
-      .map(([, placement]) => placement.paneId),
-  );
-  layout.deactivatePanes(ownerId, aliases);
 }
 
 export interface ProvisionalChatTabs {
@@ -143,7 +130,14 @@ export interface ProvisionalChatTabs {
 export function useProvisionalChatTabs(
   ownerId: string | null,
   openChatIds: readonly string[],
-  { readSplitView, claimTab }: ProvisionalPaneLayoutHost,
+  {
+    readSplitView,
+    claimTab,
+    activateTab,
+  }: ProvisionalPaneLayoutHost & {
+    /** A Draft with an existing durable claim is a normal tab selection. */
+    activateTab(tabId: string): void;
+  },
 ): ProvisionalChatTabs {
   const overrideId = useChatSessionsStore((state) =>
     ownerId === null ? null : (state.provisionalActive[ownerId] ?? null),
@@ -182,7 +176,7 @@ export function useProvisionalChatTabs(
   // location once; later context changes are not a placement or lifetime act.
   React.useEffect(() => {
     if (ownerId !== null && visibleOverride !== null && !placements.has(visibleOverride)) {
-      deactivateEffectivePane(ownerId, initialPaneId, readSplitView());
+      deactivateProvisionalPane(ownerId, initialPaneId, readSplitView());
       useProvisionalPaneLayoutStore.getState().place(ownerId, visibleOverride, initialPaneId);
     }
   }, [ownerId, visibleOverride, placements, initialPaneId, readSplitView]);
@@ -203,14 +197,19 @@ export function useProvisionalChatTabs(
   const overlaySplitView = (state: SplitViewState): SplitViewState =>
     overlayPlacements(state, renderPlacements);
   const emptyTabIds = React.useMemo(
-    () => new Set(emptyChatIds.map((sessionId) => chatTabId(sessionId))),
-    [emptyChatIds],
+    () =>
+      new Set(
+        emptyChatIds
+          .map((sessionId) => chatTabId(sessionId))
+          .filter((tabId) => split === null || paneForTab(split, tabId) === null),
+      ),
+    [emptyChatIds, split],
   );
   const releaseActive = React.useCallback(() => {
     if (ownerId === null) return;
     const latest = readSplitView();
     const paneId = latest?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID;
-    deactivateEffectivePane(ownerId, paneId, latest);
+    deactivateProvisionalPane(ownerId, paneId, latest);
     useChatSessionsStore.getState().setProvisionalActive(ownerId, null);
   }, [ownerId, readSplitView]);
   const takeActive = React.useCallback(
@@ -218,17 +217,26 @@ export function useProvisionalChatTabs(
       if (ownerId === null) return;
       const layout = useProvisionalPaneLayoutStore.getState();
       const latest = readSplitView();
+      const tabId = chatTabId(sessionId);
+      const claimedPane = latest === null ? null : paneForTab(latest, tabId);
+      if (claimedPane !== null) {
+        deactivateProvisionalPane(ownerId, claimedPane, latest);
+        layout.remove(ownerId, sessionId);
+        useChatSessionsStore.getState().setProvisionalActive(ownerId, null);
+        activateTab(tabId);
+        return;
+      }
       const previous = layout.byOwner.get(ownerId)?.get(sessionId);
       const paneId =
         destination ??
         (previous === undefined
           ? (latest?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID)
           : placementPaneId(latest, previous.paneId));
-      deactivateEffectivePane(ownerId, paneId, latest);
+      deactivateProvisionalPane(ownerId, paneId, latest);
       useProvisionalPaneLayoutStore.getState().place(ownerId, sessionId, paneId);
       useChatSessionsStore.getState().setProvisionalActive(ownerId, sessionId);
     },
-    [ownerId, readSplitView],
+    [ownerId, readSplitView, activateTab],
   );
 
   const guardLayoutWrites = React.useCallback(
