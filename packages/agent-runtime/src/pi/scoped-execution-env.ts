@@ -1,9 +1,10 @@
-import { execFile, spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { isDeepStrictEqual } from "node:util";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import {
   BACKGROUND_CONTEXT,
@@ -38,6 +39,7 @@ import {
   type SpawnLedgerPort,
 } from "@volli/shared";
 import { resolveCapabilityPolicy } from "../authority/capability";
+import { throughLinks } from "../authority/gate";
 import { resolvePathForPolicy } from "../authority/vendor/paths";
 import { refuseDaemonizingExecute } from "../shell/refusal";
 import {
@@ -46,6 +48,7 @@ import {
   scopedEnvironment,
   type PiSessionEnvIdentity,
 } from "./execution-env";
+import { gitVariables, NO_HOST_GIT, readHostGitSettings, type HostGitSettings } from "./host-git";
 
 const KILL_GRACE_MS = 250;
 /** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
@@ -85,12 +88,6 @@ export interface ExecutionEnvOwner {
   projectId: string | null;
 }
 
-/** The commit identity a contained `git` is handed in place of the denied `~/.gitconfig`. */
-export interface GitIdentity {
-  name: string;
-  email: string;
-}
-
 export interface ScopedExecutionEnvOptions {
   /**
    * The capability policy the walls are compiled from (VC-45) — the same
@@ -122,14 +119,14 @@ export interface ScopedExecutionEnvOptions {
   /** As `piExecutionEnv`'s: runs once when the attachment cleans this environment up. */
   onCleanup?: () => void | Promise<void>;
   /**
-   * The commit identity handed to `git`. `~/.gitconfig` is on the secrets
-   * denylist and git refuses to run at all when its global config exists and
-   * cannot be read, so a contained `git` is pointed at no global config and
-   * told who is committing instead. Absent, it is read from git on the host —
-   * outside the walls, which is the point — when the environment is created;
-   * `null` hands over none.
+   * What the host's git configuration contributes to a contained git — the
+   * identity, the global excludes and attributes, `safe.directory`, signing —
+   * see `host-git.ts`. The excludes and attributes files must be among the
+   * policy's read grants for git to read them; the runtime puts them there.
+   * Absent, they are read from git on the host — outside the walls, which is
+   * the point — when the environment is created; `null` hands over none.
    */
-  gitIdentity?: GitIdentity | null;
+  git?: HostGitSettings | null;
   /**
    * Where each spawned command is recorded, and who it is recorded as.
    *
@@ -155,46 +152,6 @@ export interface ScopedExecutionEnvOptions {
 }
 
 const processPreflights = new WeakMap<object, Promise<void>>();
-
-/** Read the host's commit identity for `root`, outside any sandbox; null when either half is unset. */
-async function hostGitIdentity(root: string): Promise<GitIdentity | null> {
-  const run = promisify(execFile);
-  try {
-    const [name, email] = await Promise.all(
-      ["user.name", "user.email"].map(async (key) =>
-        (await run("git", ["config", "--get", key], { cwd: root, timeout: 5_000 })).stdout.trim(),
-      ),
-    );
-    return name && email ? { name: name!, email: email! } : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * What a contained `git` needs in place of the global config it can no longer
- * read: no global file at all (git fails outright on an unreadable one), the
- * user's commit identity, and no per-user excludes or attributes files, which
- * live under the denied `~/.config` and would otherwise warn on every command.
- */
-function gitVariables(identity: GitIdentity | null): Record<string, string> {
-  return {
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "core.excludesFile",
-    GIT_CONFIG_VALUE_0: "/dev/null",
-    GIT_CONFIG_KEY_1: "core.attributesFile",
-    GIT_CONFIG_VALUE_1: "/dev/null",
-    ...(identity === null
-      ? {}
-      : {
-          GIT_AUTHOR_NAME: identity.name,
-          GIT_AUTHOR_EMAIL: identity.email,
-          GIT_COMMITTER_NAME: identity.name,
-          GIT_COMMITTER_EMAIL: identity.email,
-        }),
-  };
-}
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -254,6 +211,40 @@ function isInside(root: string, path: string): boolean {
 
 /** A guarded file operation is one of two accesses, judged by the policy's two verdicts. */
 type FileAccess = "read" | "write";
+
+/** Whether an existing path is a regular file with more than one name. */
+async function isMultiplyLinked(path: string): Promise<boolean> {
+  try {
+    const entry = await lstat(path);
+    return entry.isFile() && entry.nlink > 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create a directory chain one component at a time, never following a link:
+ * `mkdir` creates exactly the component named, and an existing component that
+ * is not a real directory stops the chain.
+ */
+async function mkdirEach(directory: string): Promise<void> {
+  const missing: string[] = [];
+  let current = directory;
+  for (;;) {
+    try {
+      const entry = await lstat(current);
+      if (!entry.isDirectory()) {
+        throw Object.assign(new Error(`${current} is not a directory.`), { code: "ENOTDIR" });
+      }
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      missing.unshift(current);
+      current = dirname(current);
+    }
+  }
+  for (const component of missing) await mkdir(component);
+}
 
 function countNewlines(text: string): number {
   let count = 0;
@@ -445,7 +436,7 @@ function isSafeTempFragment(value: string): boolean {
 
 /**
  * The boundary one command runs behind, compiled from the attachment's
- * capability policy (VC-45): no network; reads machine-wide minus the secrets
+ * capability policy (VC-45): no network; reads machine-wide minus the
  * denylist, with the Session's own grants carved back; writes in the writable
  * roots, minus the metadata carved out of every root and any secret that lies
  * inside one.
@@ -482,7 +473,7 @@ function perCommandSandboxConfig(
       allowMachLookup: [],
     },
     filesystem: {
-      denyRead: [...policy.readDeny],
+      denyRead: [...policy.credentialDeny, ...policy.privateDeny],
       allowRead: [...policy.readAllow],
       allowWrite: [...roots],
       denyWrite: [
@@ -494,7 +485,16 @@ function perCommandSandboxConfig(
         "/tmp/claude",
         "/private/tmp/claude",
         ...roots.flatMap((root) => sandboxWriteCarveOuts(root, policy.sandboxCarveOuts)),
-        ...policy.readDeny.filter((deny) => roots.some((root) => containsPath(root, deny))),
+        ...policy.protectedPaths,
+        // A credential or the host's data wherever it meets a root, in either
+        // direction; a private entry only strictly inside one, so a root equal
+        // to it — a workspace that IS `~/.pi` — keeps its own tree.
+        ...[...policy.credentialDeny, ...policy.hostDataDeny].filter((deny) =>
+          roots.some((root) => containsPath(root, deny) || containsPath(deny, root)),
+        ),
+        ...policy.privateDeny.filter((deny) =>
+          roots.some((root) => containsPath(root, deny) && deny !== root),
+        ),
       ],
     },
     allowAppleEvents: false,
@@ -619,7 +619,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   private constructor(
     root: string,
     policy: CapabilityPolicy,
-    gitIdentity: GitIdentity | null,
+    git: HostGitSettings,
     options: ScopedExecutionEnvOptions,
   ) {
     this.cwd = root;
@@ -639,7 +639,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     // orders it, so the budget channel cannot shadow who is running.
     this.#commandVariables = {
       ...options.environment,
-      ...gitVariables(gitIdentity),
+      ...gitVariables(git),
       ...(options.scratchDirectory === undefined ? {} : { TMPDIR: options.scratchDirectory }),
       ...identityVariables(options.identity),
     };
@@ -657,11 +657,11 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         ...(options.homeDir === undefined ? {} : { home: options.homeDir }),
         sandboxCarveOuts: true,
       });
-    const gitIdentity =
-      options.gitIdentity === undefined
-        ? await hostGitIdentity(canonicalRoot)
-        : options.gitIdentity;
-    return new ScopedExecutionEnv(canonicalRoot, policy, gitIdentity, options);
+    const git =
+      options.git === undefined
+        ? await readHostGitSettings(canonicalRoot)
+        : (options.git ?? NO_HOST_GIT);
+    return new ScopedExecutionEnv(canonicalRoot, policy, git, options);
   }
 
   /**
@@ -685,16 +685,19 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   /**
    * One file operation, judged against the capability policy before it runs.
    *
-   * Both the path as named and the path it resolves to must pass, so a symlink
-   * reaches nothing its target could not and a link named into a denied tree is
-   * refused by name. The refusal carries the policy's own sentence, which is
-   * what the model reads.
+   * Three spellings of the path must all pass: as named, as the filesystem
+   * resolves it (one real component at a time, case and Unicode folded the way
+   * APFS stores the name), and — for a multiply-linked regular file — as the
+   * denied name the resolver indexed for the same inode, since Seatbelt cannot
+   * see a hard link. A write to a multiply-linked file is refused outright: it
+   * would change every other name the file has, which may be one no root
+   * covers. The refusal carries the policy's own sentence, which the model reads.
    */
   async #guard(
     path: string,
     access: FileAccess,
     context: Context,
-  ): Promise<Result<string, FileError>> {
+  ): Promise<Result<{ target: string; resolved: string }, FileError>> {
     if (context.abortSignal?.aborted) {
       return err(new FileError("aborted", "Operation aborted.", path));
     }
@@ -709,7 +712,9 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         ),
       );
     }
-    for (const candidate of new Set([target, resolved])) {
+    const candidates = new Set([target, resolved]);
+    if (access === "read") candidates.add(throughLinks(this.policy, resolved));
+    for (const candidate of candidates) {
       const verdict =
         access === "read"
           ? capabilityRead(this.policy, candidate)
@@ -718,7 +723,87 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         return err(new FileError("permission_denied", verdict.reason, target));
       }
     }
-    return { ok: true, value: target };
+    if (access === "write" && (await isMultiplyLinked(resolved))) {
+      return err(
+        new FileError(
+          "permission_denied",
+          `${target} has more than one name on disk, so writing it would change a file this Session may not; copy it to a new file instead.`,
+          target,
+        ),
+      );
+    }
+    return { ok: true, value: { target, resolved } };
+  }
+
+  /**
+   * Create a write's missing parent directories one component at a time, then
+   * open the file itself without following a link, and only write once the
+   * open handle is a single-named regular file (VC-45 review, B1).
+   *
+   * Pi's own environment would `mkdir -p` the parent and open the path, both
+   * following every link on the way — so a dangling link planted by the shell
+   * (`x -> s/../LaunchAgents/x.plist`) took a judged write somewhere no root
+   * covers. Here the directory chain is re-resolved after it exists and must
+   * resolve where the guard judged, and the final component is opened
+   * `O_NOFOLLOW`.
+   *
+   * The window that remains is a parent directory swapped for a link between
+   * that re-resolution and the open. Closing it needs a descriptor-relative
+   * open (`openat` beneath the root, or `O_RESOLVE_BENEATH`), which Node does
+   * not expose; it is the plan's slice 8. The file tools run in this process,
+   * outside the Seatbelt profile the shell runs under, so nothing behind this
+   * check catches a write that wins that race: winning it needs a command
+   * running concurrently with the write, swapping a directory in the
+   * microseconds between two syscalls.
+   */
+  async #writeContained(
+    path: string,
+    content: string | Uint8Array,
+    append: boolean,
+    context: Context,
+  ): Promise<Result<void, FileError>> {
+    const guarded = await this.#guard(path, "write", context);
+    if (!guarded.ok) return guarded;
+    const { target, resolved } = guarded.value;
+    const denied = (message: string): Result<void, FileError> =>
+      err(new FileError("permission_denied", message, target));
+    try {
+      await mkdirEach(dirname(resolved));
+      // The chain exists now; resolve it again, so a link that appeared in it
+      // since the guard looked is judged rather than followed.
+      if (resolvePathForPolicy(resolved) !== resolved) {
+        return denied(`${target} changed while it was being written; refusing to follow it.`);
+      }
+      if (context.abortSignal?.aborted) {
+        return err(new FileError("aborted", "Operation aborted.", target));
+      }
+      const handle = await open(
+        resolved,
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_NOFOLLOW |
+          (append ? fsConstants.O_APPEND : 0),
+        0o666,
+      );
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.nlink > 1) {
+          return denied(`${target} is not a single-named regular file; refusing to write it.`);
+        }
+        if (!append) await handle.truncate(0);
+        await handle.writeFile(content);
+      } finally {
+        await handle.close();
+      }
+      return { ok: true, value: undefined };
+    } catch (error) {
+      const cause = asError(error);
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (code === "ELOOP") {
+        return denied(`${target} is a symbolic link; a contained write never follows one.`);
+      }
+      return err(new FileError("unknown", cause.message, target, cause));
+    }
   }
 
   async #commandCwd(path: string | undefined): Promise<Result<string, ExecutionError>> {
@@ -741,36 +826,36 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   }
 
   async absolutePath(path: string, context: Context = BACKGROUND_CONTEXT) {
-    return this.#guard(path, "read", context);
+    const guarded = await this.#guard(path, "read", context);
+    return guarded.ok ? ({ ok: true, value: guarded.value.target } as const) : guarded;
   }
 
   async exists(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.exists(guarded.value, context) : guarded;
+    return guarded.ok ? this.#delegate.exists(guarded.value.target, context) : guarded;
   }
 
   async readBinaryFile(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.readBinaryFile(guarded.value, context) : guarded;
+    return guarded.ok ? this.#delegate.readBinaryFile(guarded.value.target, context) : guarded;
   }
 
   async fileInfo(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.fileInfo(guarded.value, context) : guarded;
+    return guarded.ok ? this.#delegate.fileInfo(guarded.value.target, context) : guarded;
   }
 
   async readTextFile(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, "read", context);
-    return guarded.ok ? this.#delegate.readTextFile(guarded.value, context) : guarded;
+    return guarded.ok ? this.#delegate.readTextFile(guarded.value.target, context) : guarded;
   }
 
   async writeFile(
     path: string,
     content: string | Uint8Array,
     context: Context = BACKGROUND_CONTEXT,
-  ) {
-    const guarded = await this.#guard(path, "write", context);
-    return guarded.ok ? this.#delegate.writeFile(guarded.value, content, context) : guarded;
+  ): Promise<Result<void, FileError>> {
+    return this.#writeContained(path, content, false, context);
   }
 
   #unsupported(path = this.cwd): Result<never, FileError> {
@@ -803,13 +888,11 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     path: string,
     content: string | Uint8Array,
     context: Context = BACKGROUND_CONTEXT,
-  ) {
-    const guarded = await this.#guard(path, "write", context);
-    if (!guarded.ok) return guarded;
-    // 0.84's Node environment took a third argument and ignored it, so this
-    // forwarded through a cast. 0.85's honours the context it is given, so the
-    // cast is gone and the cancellation is real.
-    return this.#delegate.appendFile(guarded.value, content, context);
+  ): Promise<Result<void, FileError>> {
+    if (context.abortSignal?.aborted) {
+      return err(new FileError("aborted", "Operation aborted.", path));
+    }
+    return this.#writeContained(path, content, true, context);
   }
   async renameFile(_sourcePath: string, _destinationPath: string, _context?: Context) {
     return this.#unsupported();

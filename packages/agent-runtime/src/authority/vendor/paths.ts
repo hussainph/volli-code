@@ -16,9 +16,9 @@
  * See `./README.md` for the upstream revision and the divergences.
  */
 
-import { readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 /** The invoking user's home directory, read once, as upstream reads it. */
 export const HOME = homedir();
@@ -103,46 +103,91 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   return { kind: "path", path: isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded) };
 }
 
+/** How many symlinks one resolution follows before it calls the path unresolvable, as `MAXSYMLINKS`. */
+const MAX_LINKS = 32;
+
 /**
- * The absolute, symlink-free path an operand denotes, or undefined when no such
- * path can exist.
+ * The absolute, symlink-free path an operand denotes, spelled the way the
+ * filesystem stores it, or undefined when no such path can exist.
  *
  * Undefined is a refusal, not an absence: a symlink cycle, an over-long
  * component, or an unreadable ancestor all mean the resolver cannot say what
  * file this is, and a caller that cannot say must not allow.
+ *
+ * Resolved one REAL component at a time, the way the kernel walks a path, and
+ * that is the VC-45 fix. Upstream resolved a symlink's target lexically against
+ * the link's own directory, so `x -> s/../LaunchAgents/x.plist` with `s ->
+ * ~/Library/Caches` read as `<dir>/LaunchAgents/x.plist` — the `..` cancelled
+ * `s` — while the kernel resolves `s` first and lands in `~/Library`. Here a
+ * link's target is spliced back into the queue of components still to walk,
+ * so `s` is followed before `..` is applied to where it led.
+ *
+ * A component that does not exist yet ends the filesystem walk; what follows
+ * is appended lexically, because nothing that does not exist can be a link.
+ *
+ * The existing prefix is then spelled through `realpath.native`, which returns
+ * the name as stored: case, Unicode case (`.sſh` is `.ssh` on APFS) and
+ * normalization form all collapse to one spelling, so a policy comparing
+ * components compares what the kernel compares.
  */
 export function resolvePathForPolicy(path: string): string | undefined {
-  return resolveThroughLinks(resolve(path), new Set());
-}
-
-/**
- * Walk toward the root until something resolves, then rebuild what was missing.
- *
- * Termination does not rest on a root check: `readlinkSync("/")` reports
- * `EINVAL`, which is not one of the two codes that keep the walk going, so the
- * loop always stops at the filesystem root at the latest.
- */
-function resolveThroughLinks(path: string, visited: Set<string>): string | undefined {
-  let current = path;
-  const missing: string[] = [];
-  for (;;) {
-    try {
-      return resolve(realpathSync(current), ...missing);
-    } catch {
-      // Not canonicalizable as it stands; the next two branches say why.
+  const queue = resolve(path).split("/").filter(Boolean);
+  let resolved = "/";
+  let existing = true;
+  let links = 0;
+  while (queue.length > 0) {
+    const component = queue.shift()!;
+    if (component === ".") continue;
+    if (component === "..") {
+      resolved = dirname(resolved);
+      continue;
     }
+    const candidate = join(resolved, component);
+    if (!existing) {
+      resolved = candidate;
+      continue;
+    }
+    let entry;
+    try {
+      entry = lstatSync(candidate);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      existing = false;
+      resolved = candidate;
+      continue;
+    }
+    if (!entry.isSymbolicLink()) {
+      resolved = candidate;
+      continue;
+    }
+    links += 1;
+    if (links > MAX_LINKS) return undefined;
     let target: string;
     try {
-      target = readlinkSync(current);
+      target = readlinkSync(candidate);
+    } catch {
+      /* v8 ignore next -- lstat reported a link an instant ago; readlink fails only if it vanished in between, and an unreadable link is an unresolvable path. */
+      return undefined;
+    }
+    if (isAbsolute(target)) resolved = "/";
+    queue.unshift(...target.split("/").filter(Boolean));
+  }
+  return spelledAsStored(resolved);
+}
+
+/** The longest existing prefix through `realpath.native`, with the rest appended. */
+function spelledAsStored(path: string): string | undefined {
+  const missing: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      return resolve(realpathSync.native(current), ...missing);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
       missing.unshift(basename(current));
       current = dirname(current);
-      continue;
     }
-    if (visited.has(current)) return undefined;
-    visited.add(current);
-    return resolveThroughLinks(resolve(dirname(current), target, ...missing), visited);
   }
 }

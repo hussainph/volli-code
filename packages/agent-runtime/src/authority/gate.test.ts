@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -82,7 +89,7 @@ describe("authorityVerdict", () => {
     }
   });
 
-  it("refuses the secrets denylist even for a caller that resolved no policy", () => {
+  it("refuses the denylist even for a caller that resolved no policy", () => {
     const { raw } = workspace();
     const verdict = authorityVerdict({
       tool: "read",
@@ -90,7 +97,7 @@ describe("authorityVerdict", () => {
       authority: snapshot(),
       workspacePath: raw,
     });
-    expect(verdict).toMatchObject({ outcome: "deny", cause: "path.secrets" });
+    expect(verdict).toMatchObject({ outcome: "deny", cause: "path.credentials" });
     // The same path as a shell operand: one answer, whichever tool asks.
     expect(
       authorityVerdict({
@@ -99,7 +106,7 @@ describe("authorityVerdict", () => {
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toMatchObject({ outcome: "deny", cause: "path.secrets" });
+    ).toMatchObject({ outcome: "deny", cause: "path.credentials" });
   });
 
   it("lets the Session read its own saved tool output, and no other Session's (VC-469, VC-45)", () => {
@@ -132,27 +139,64 @@ describe("authorityVerdict", () => {
       });
 
     expect(verdict("read", join(own, "saved.txt"))).toEqual({ outcome: "allow" });
-    expect(verdict("read", join(sibling, "saved.txt"))).toMatchObject({ cause: "path.secrets" });
-    expect(verdict("read", join(own, "link.txt"))).toMatchObject({ cause: "path.secrets" });
-    expect(verdict("read", join(pointed, "saved.txt"))).toMatchObject({ cause: "path.secrets" });
-    // Never a write, even inside its own.
-    expect(verdict("write", join(own, "saved.txt"))).toMatchObject({ cause: "path.secrets" });
+    expect(verdict("read", join(sibling, "saved.txt"))).toMatchObject({ cause: "path.private" });
+    expect(verdict("read", join(own, "link.txt"))).toMatchObject({ cause: "path.private" });
+    expect(verdict("read", join(pointed, "saved.txt"))).toMatchObject({ cause: "path.private" });
+    // Never a write, even inside its own: a change to the host's data is no
+    // private read, and no approval reaches it.
+    expect(verdict("write", join(own, "saved.txt"))).toMatchObject({ cause: "path.host-data" });
+  });
+
+  it("never lets an approval change Volli's own data, while a read of it stays approvable (VC-480)", () => {
+    const { raw, real } = workspace();
+    const userData = join(real, "..", "userData");
+    mkdirSync(userData);
+    writeFileSync(join(userData, "volli.db"), "db");
+    for (const declared of [[], [userData]]) {
+      // A project that declared userData itself writable has declared nothing.
+      const capability = resolveCapabilityPolicy({
+        workspacePath: raw,
+        writableRoots: declared,
+        privateRoots: [userData],
+        sandboxCarveOuts: false,
+      });
+      const judged = (tool: string, args: Record<string, unknown>) =>
+        authorityVerdict({ tool, args, authority: snapshot(), workspacePath: raw, capability });
+      const db = join(userData, "volli.db");
+      for (const [tool, args] of [
+        ["write", { path: db, content: "x" }],
+        ["edit", { path: join(userData, "approvals.json"), edits: [] }],
+        ["bash", { command: `sqlite3 ${db} "delete from approvals"` }],
+        ["bash", { command: `printf x >> ${db}-wal` }],
+        ["bash", { command: `cp evil.db ${db}` }],
+      ] as const) {
+        expect(judged(tool, args), `${tool} ${JSON.stringify(args)}`).toMatchObject({
+          outcome: "deny",
+          cause: "path.host-data",
+        });
+      }
+      expect(judged("read", { path: db })).toMatchObject({ cause: "path.private" });
+      expect(judged("bash", { command: `cat ${db}` })).toMatchObject({ cause: "path.private" });
+    }
+    expect(isOverridableAuthorityRule("path.host-data")).toBe(false);
+    expect(isOverridableAuthorityRule("path.private")).toBe(true);
   });
 
   /**
    * The escalation smoke's trip, re-aimed (VC-45). It used to commit symlinks
    * aimed at ordinary files outside the tree, which `path.outside-workspace`
-   * refused as reads; slice 1 makes those reads ordinary. Aimed into the
-   * host's own private data instead, every one is still refused — by
-   * `path.secrets`, which no answer overrules, so no model decision and no
-   * person's "yes" can reset the streak the smoke counts on.
+   * refused as reads; slice 1 makes those reads ordinary. Aimed at the host's
+   * own credential file instead, every one is still refused — by
+   * `path.credentials`, which no answer overrules, so no model decision and
+   * no person's "yes" can reset the streak the smoke counts on.
    */
-  it("refuses a symlink in the tree that points into the host's private data, beyond any override", () => {
+  it("refuses a symlink in the tree that points at the host's credential file, beyond any override", () => {
     const { raw, real } = workspace();
     const userData = join(real, "..", "userData");
     mkdirSync(userData);
-    writeFileSync(join(userData, "probe-1.txt"), "probe");
-    symlinkSync(join(userData, "probe-1.txt"), join(real, "probe-1.txt"));
+    const credentials = join(userData, "mcp-credentials.json");
+    writeFileSync(credentials, "probe");
+    symlinkSync(credentials, join(real, "probe-1.txt"));
     const verdict = authorityVerdict({
       tool: "read",
       args: { path: "probe-1.txt" },
@@ -161,11 +205,33 @@ describe("authorityVerdict", () => {
       capability: resolveCapabilityPolicy({
         workspacePath: raw,
         privateRoots: [userData],
+        credentialPaths: [credentials],
         sandboxCarveOuts: false,
       }),
     });
-    expect(verdict).toMatchObject({ outcome: "deny", cause: "path.secrets" });
-    expect(isOverridableAuthorityRule("path.secrets")).toBe(false);
+    expect(verdict).toMatchObject({ outcome: "deny", cause: "path.credentials" });
+    expect(isOverridableAuthorityRule("path.credentials")).toBe(false);
+  });
+
+  it("names a hard link by the credential it is another name for (VC-45 review, B1)", () => {
+    const { raw, real } = workspace();
+    const home = join(real, "..", "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    writeFileSync(join(home, ".ssh", "id_ed25519"), "key");
+    linkSync(join(home, ".ssh", "id_ed25519"), join(real, "innocent.txt"));
+    const capability = resolveCapabilityPolicy({
+      workspacePath: raw,
+      home,
+      sandboxCarveOuts: false,
+    });
+    for (const [tool, args] of [
+      ["read", { path: "innocent.txt" }],
+      ["bash", { command: "cat innocent.txt" }],
+    ] as const) {
+      expect(
+        authorityVerdict({ tool, args, authority: snapshot(), workspacePath: raw, capability }),
+      ).toMatchObject({ outcome: "deny", cause: "path.credentials" });
+    }
   });
 
   it("marks an overridable refusal the Session's own walls repeat, so nobody is asked a moot question", () => {
@@ -193,6 +259,32 @@ describe("authorityVerdict", () => {
         contained: true,
       }),
     ).toMatchObject({ cause: "path.outside-workspace", walled: true });
+    // A private read is overridable, and the walls refuse it too: walled. A
+    // recursive read ABOVE it is not — the kernel refuses only the private
+    // entries, so the rest of the read would go ahead on a "yes".
+    const host = join(raw, "..", "host");
+    mkdirSync(join(host, "userData"), { recursive: true });
+    writeFileSync(join(host, "userData", "volli.db"), "");
+    const withHost = resolveCapabilityPolicy({
+      workspacePath: raw,
+      privateRoots: [join(host, "userData")],
+      sandboxCarveOuts: true,
+    });
+    const contained = (command: string) =>
+      authorityVerdict({
+        tool: "bash",
+        args: { command },
+        authority: snapshot(),
+        workspacePath: raw,
+        capability: withHost,
+        contained: true,
+      });
+    expect(contained(`cat ${join(host, "userData", "volli.db")}`)).toMatchObject({
+      cause: "path.private",
+      walled: true,
+    });
+    expect(contained(`grep -r token ${host}`)).toMatchObject({ cause: "path.private" });
+    expect(contained(`grep -r token ${host}`)).not.toHaveProperty("walled");
     // A refusal the walls do NOT repeat stays a question: git writes .git/info
     // freely, and only the rule pack objects to a file tool doing it.
     expect(
@@ -332,9 +424,9 @@ describe("authorityVerdict", () => {
       expect(verdict.outcome).toBe("deny");
       // A shell profile is a secret since VC-45 — it is where tokens are
       // exported — so the denylist answers before the writable roots do.
-      expect(verdict).toMatchObject({ cause: "path.secrets" });
+      expect(verdict).toMatchObject({ cause: "path.private" });
       if (verdict.outcome === "deny") {
-        expect(verdict.reason).toContain("holds credentials");
+        expect(verdict.reason).toContain("needs the user's approval");
       }
     }
   });

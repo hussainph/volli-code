@@ -107,6 +107,12 @@ import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import {
+  hostGitReadables,
+  NO_HOST_GIT,
+  readHostGitSettings,
+  type HostGitSettings,
+} from "./host-git";
+import {
   inspectPiModelAccess,
   type InspectPiModelAccessInput,
   type PiModelAccessSource,
@@ -269,7 +275,7 @@ export interface PiRuntimeHostOptions {
    */
   executionEnvFactory?: ExecutionEnvFactory;
   /**
-   * The host's own private state, on the secrets denylist of every Session
+   * The host's own private state, on the denylist of every Session
    * this runtime attaches (VC-45): main passes its `userData`, which holds the
    * database, `mcp-credentials.json`, backups, and every Session's sidecar and
    * saved output. The runtime adds {@link sessionDataDir} itself, so one
@@ -277,6 +283,13 @@ export interface PiRuntimeHostOptions {
    * names nothing.
    */
   hostPrivateRoots?: readonly string[];
+  /**
+   * The host's own credential files, in the credential tier of every Session's
+   * denylist (VC-45): main passes `mcp-credentials.json`. Inside
+   * {@link hostPrivateRoots} already, and named again so no grant and no
+   * person's "yes" to a private read reaches them.
+   */
+  hostCredentialPaths?: readonly string[];
   /**
    * Paths inside {@link hostPrivateRoots} the host exposes to its Sessions on
    * purpose, read-only: the directory the `volli` shim lives in, so a Scoped
@@ -361,6 +374,8 @@ export interface PiRuntimeHostOptions {
 export interface ScopedContainment {
   policy: CapabilityPolicy;
   scratchDirectory: string;
+  /** The host's git settings a contained git is handed; their files are among the policy's grants. */
+  git: HostGitSettings;
 }
 
 /**
@@ -417,6 +432,7 @@ interface PiRuntimeHost {
   now: () => number;
   executionEnvFactory: ExecutionEnvFactory;
   hostPrivateRoots: readonly string[];
+  hostCredentialPaths: readonly string[];
   hostExposedPaths: readonly string[];
   retryBackoffMs: (attempt: number) => number;
   connectivity: ConnectivityPort;
@@ -473,6 +489,9 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     // Wrapped rather than passed by reference: `piExecutionEnv`'s second
     // parameter is its options bag, and handing it the identity positionally
     // would silently misread it.
+    // The default Scoped factory knows no host: it names no unix socket and no
+    // Session identity, so the bundled `volli` CLI is unavailable inside it.
+    // The desktop injects its own factory, which supplies both.
     executionEnvFactory:
       options.executionEnvFactory ??
       ((workspacePath, _identity, containment) =>
@@ -481,8 +500,10 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           : ScopedExecutionEnv.create(workspacePath, {
               policy: containment.policy,
               scratchDirectory: containment.scratchDirectory,
+              git: containment.git,
             })),
     hostPrivateRoots: options.hostPrivateRoots ?? [],
+    hostCredentialPaths: options.hostCredentialPaths ?? [],
     hostExposedPaths: options.hostExposedPaths ?? [],
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     connectivity: options.connectivity ?? ALWAYS_ONLINE,
@@ -2152,11 +2173,15 @@ async function attachSession(
       workspacePath: spec.workspacePath,
     });
     // The capability axis (VC-45), resolved once for this attachment: the
-    // secrets denylist — the host's own data and every Session's saved output
-    // among it, with this Session's own carved back — and the writable roots.
+    // denylist's two tiers — the host's credential files in the credential
+    // tier; its own data and every Session's saved output in the private one,
+    // with this Session's own carved back — and the writable roots.
     // The gate below judges calls against exactly this object, and a Scoped
     // Session's walls are compiled from it, so the two give one answer.
     const scoped = spec.capability?.containment === "scoped";
+    // A contained git is handed the user's excludes, attributes, identity and
+    // signing settings (VC-45 review, S3); their files must be readable inside.
+    const git = scoped ? await readHostGitSettings(spec.workspacePath) : NO_HOST_GIT;
     if (scoped) {
       scratchDirectory = await realpath(await mkdtemp(join(tmpdir(), "volli-scoped-")));
     }
@@ -2165,7 +2190,12 @@ async function attachSession(
       writableRoots: spec.capability?.writableRoots ?? [],
       runtimeRoots: scratchDirectory === undefined ? [] : [scratchDirectory],
       privateRoots: [...host.hostPrivateRoots, host.sessionDataDir],
-      grants: [...toolOutput.readableDirectories, ...host.hostExposedPaths],
+      credentialPaths: host.hostCredentialPaths,
+      grants: [
+        ...toolOutput.readableDirectories,
+        ...host.hostExposedPaths,
+        ...hostGitReadables(git),
+      ],
       sandboxCarveOuts: scoped,
     });
     // No preflight before the tools are built: an attachment that hands Pi its
@@ -2174,7 +2204,7 @@ async function attachSession(
     toolEnv = await host.executionEnvFactory(
       spec.workspacePath,
       spec.identity,
-      scratchDirectory === undefined ? undefined : { policy: capability, scratchDirectory },
+      scratchDirectory === undefined ? undefined : { policy: capability, scratchDirectory, git },
     );
     const ownedToolEnv = toolEnv;
 

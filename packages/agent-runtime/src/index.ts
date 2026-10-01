@@ -22,11 +22,8 @@ export {
   type PiRuntimeHostOptions,
   type ScopedContainment,
 } from "./pi/runtime";
-export {
-  ScopedExecutionEnv,
-  type GitIdentity,
-  type ScopedExecutionEnvOptions,
-} from "./pi/scoped-execution-env";
+export { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./pi/scoped-execution-env";
+export { readHostGitSettings, type GitIdentity, type HostGitSettings } from "./pi/host-git";
 export {
   DEFAULT_MCP_SERVER_LIMITS,
   McpServerBudget,
@@ -50,6 +47,7 @@ export {
   type PromptCachePlacement,
 } from "./prompt-baseline";
 export {
+  identityVariables,
   piExecutionEnv,
   sessionCommandEnvironment,
   type PiExecutionEnvOptions,

@@ -20,11 +20,14 @@
  * from (VC-45). A decision kept per tool would be a second policy.
  */
 
+import { lstatSync } from "node:fs";
 import {
   capabilityWrite,
   errorMessage,
   evaluate,
   isOverridableAuthorityRule,
+  linkedAlias,
+  operandDenial,
   type AuthorityDenialCause,
   type AuthoritySnapshot,
   type CapabilityPolicy,
@@ -52,16 +55,60 @@ export type AuthorityVerdict =
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
 
 /**
- * Whether a Scoped Session's walls would refuse what this call writes.
+ * Whether a Scoped Session's walls would refuse what this call reads or writes.
  *
  * Asked only after an overridable rule has refused, and only of a contained
  * Session — without walls nothing stands behind the gate, so consent is never
- * moot. Writes only, because only writes reach an overridable rule: a read is
- * refused by `path.secrets` alone, and nobody may overrule that.
+ * moot. Reads count the file tools' and every literal operand's; a recursive
+ * reader handed a directory ABOVE a denied entry is not walled, because the
+ * kernel refuses only the denied files and the rest of the read goes ahead —
+ * so a person's "yes" would still do something.
  */
 function wallsRefuse(call: PolicyToolCall, capability: CapabilityPolicy): boolean {
-  const writes = [...call.writes, ...(call.command?.segments ?? []).flatMap((s) => s.writes)];
-  return writes.some((path) => capabilityWrite(capability, path).outcome === "deny");
+  const segments = call.command?.segments ?? [];
+  const writes = [...call.writes, ...segments.flatMap((segment) => segment.writes)];
+  const reads = [...call.reads, ...segments.flatMap((segment) => segment.paths)];
+  return (
+    writes.some((path) => capabilityWrite(capability, path).outcome === "deny") ||
+    reads.some((path) => operandDenial(capability, path, false) !== undefined)
+  );
+}
+
+/**
+ * A multiply-linked regular file named by the denied path it shares an inode
+ * with, when the resolver indexed one: a second name for a credential is the
+ * credential, and Seatbelt — matching names — cannot see that.
+ */
+export function throughLinks(capability: CapabilityPolicy, path: string): string {
+  let entry;
+  try {
+    entry = lstatSync(path);
+  } catch {
+    return path;
+  }
+  if (!entry.isFile() || entry.nlink < 2) return path;
+  return linkedAlias(capability, path, `${entry.dev}:${entry.ino}`);
+}
+
+/** The call with every path it names translated through {@link throughLinks}. */
+function withLinksNamed(call: PolicyToolCall, capability: CapabilityPolicy): PolicyToolCall {
+  const name = (path: string) => throughLinks(capability, path);
+  return {
+    ...call,
+    reads: call.reads.map(name),
+    writes: call.writes.map(name),
+    command:
+      call.command === null
+        ? null
+        : {
+            ...call.command,
+            segments: call.command.segments.map((segment) => ({
+              ...segment,
+              paths: segment.paths.map(name),
+              writes: segment.writes.map(name),
+            })),
+          },
+  };
 }
 
 /** What the Session's authority makes of one call, before it runs. */
@@ -105,6 +152,7 @@ export function authorityVerdict(input: {
       grants: input.readableRoots ?? [],
       sandboxCarveOuts: false,
     });
+  call = withLinksNamed(call, capability);
   const decision = evaluate(call, input.authority, { workspacePath, capability });
   if (decision.outcome === "allow") return ALLOW;
   const walled =

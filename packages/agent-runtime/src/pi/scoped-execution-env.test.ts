@@ -5,10 +5,13 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   realpathSync,
   symlinkSync,
   writeFileSync,
@@ -21,7 +24,6 @@ import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import {
   applyShellOutputUpdate,
   BACKGROUND_CONTEXT,
-  FileError,
   withAbortSignal,
   type Context,
   type ShellExecOptions,
@@ -29,13 +31,13 @@ import {
   type ShellOutputUpdate,
   type ShellOutputView,
 } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   SANDBOX_PROTECTED_DIRECTORIES,
   SANDBOX_PROTECTED_FILES,
   sandboxWriteCarveOuts,
 } from "@volli/shared";
+import { NO_HOST_GIT } from "./host-git";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 
 type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
@@ -182,7 +184,7 @@ describe("ScopedExecutionEnv", () => {
   it("reads machine-wide, through a symlink too, and writes only inside its roots (VC-45)", async () => {
     const { worktree, outside } = roots();
     symlinkSync(outside, join(worktree, "escape-link"));
-    const env = await ScopedExecutionEnv.create(worktree, { gitIdentity: null });
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
 
     expect(await env.readTextFile(outside)).toEqual({ ok: true, value: "outside\n" });
     expect(await env.readTextFile("escape-link")).toEqual({ ok: true, value: "outside\n" });
@@ -213,14 +215,98 @@ describe("ScopedExecutionEnv", () => {
     });
   });
 
-  it("refuses the secrets denylist and the metadata carve-outs at the file tools (VC-45)", async () => {
+  it("never follows a dangling link whose target climbs out through another link (VC-45 review, B1)", async () => {
+    const { worktree } = roots();
+    const outside = mkdtempSync(join(tmpdir(), "volli-scoped-escape-"));
+    mkdirSync(join(outside, "Caches"));
+    // The shell's two-step plant: `s` leads out, and `x` dangles through `s/..`.
+    symlinkSync(join(outside, "Caches"), join(worktree, "s"));
+    symlinkSync("s/../LaunchAgents/x.plist", join(worktree, "x"));
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
+
+    expect(await env.writeFile("x", "pwned")).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(await env.appendFile("x", "pwned")).toMatchObject({ ok: false });
+    expect(existsSync(join(outside, "LaunchAgents"))).toBe(false);
+    await env.cleanup();
+  });
+
+  it("writes a link where it resolves, refuses a multiply-linked file, and judges a parent swapped for a link", async () => {
+    const { worktree, outside } = roots();
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
+    // An ordinary new file in a new directory chain still lands.
+    expect(await env.writeFile("a/b/c.txt", "ok")).toEqual({ ok: true, value: undefined });
+    expect(readFileSync(join(worktree, "a", "b", "c.txt"), "utf8")).toBe("ok");
+    // A link inside the tree to a file inside the tree is judged, and written,
+    // where it resolves; the open itself never follows a link (O_NOFOLLOW).
+    symlinkSync(join(worktree, "inside.txt"), join(worktree, "alias.txt"));
+    expect(await env.writeFile("alias.txt", "x")).toEqual({ ok: true, value: undefined });
+    expect(readFileSync(join(worktree, "inside.txt"), "utf8")).toBe("x");
+    // A hard link to a file outside every root: writing it would change that file.
+    linkSync(outside, join(worktree, "hard.txt"));
+    expect(await env.writeFile("hard.txt", "x")).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("more than one name") },
+    });
+    expect(readFileSync(outside, "utf8")).toBe("outside\n");
+    // A directory swapped for a link to outside before the write: resolution
+    // sees the link, so the write is judged where it would land and refused.
+    // (The window between that resolution and the open is slice 8's.)
+    mkdirSync(join(worktree, "d"));
+    rmSync(join(worktree, "d"), { recursive: true });
+    symlinkSync(dirname(outside), join(worktree, "d"));
+    expect(await env.writeFile("d/planted.txt", "x")).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(existsSync(join(dirname(outside), "planted.txt"))).toBe(false);
+    await env.cleanup();
+  });
+
+  it("refuses rewriting a Ticket worktree's .git file (VC-45 review, B3)", async () => {
+    const { worktree } = roots();
+    writeFileSync(join(worktree, ".git"), "gitdir: /repo/.git/worktrees/wt\n");
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
+    expect(await env.writeFile(".git", "gitdir: /tmp/fake\n")).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(readFileSync(join(worktree, ".git"), "utf8")).toBe("gitdir: /repo/.git/worktrees/wt\n");
+    await env.cleanup();
+  });
+
+  it("reads a denied file under none of the spellings the kernel resolves (VC-45 review, B1)", async () => {
+    const { worktree } = roots();
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "volli-scoped-home-")));
+    mkdirSync(join(home, ".ssh"));
+    writeFileSync(join(home, ".ssh", "id_rsa"), "fake-key");
+    linkSync(join(home, ".ssh", "id_rsa"), join(worktree, "innocent.txt"));
+    const env = await ScopedExecutionEnv.create(worktree, { homeDir: home, git: null });
+    for (const path of [
+      join(home, ".SSH", "id_rsa"),
+      join(home, ".sſh", "id_rsa"),
+      join(home, ".ssh", "id_rsa").normalize("NFD"),
+      `/System/Volumes/Data${join(home, ".ssh", "id_rsa")}`,
+      "innocent.txt",
+    ]) {
+      expect(await env.readTextFile(path), path).toMatchObject({
+        ok: false,
+        error: { code: "permission_denied" },
+      });
+    }
+    await env.cleanup();
+  });
+
+  it("refuses the denylist and the metadata carve-outs at the file tools (VC-45)", async () => {
     const { worktree } = roots();
     const home = mkdtempSync(join(tmpdir(), "volli-scoped-home-"));
     mkdirSync(join(home, ".ssh"));
     writeFileSync(join(home, ".ssh", "id_ed25519"), "key");
     writeFileSync(join(home, ".netrc"), "machine x password y");
     mkdirSync(join(worktree, ".git", "hooks"), { recursive: true });
-    const env = await ScopedExecutionEnv.create(worktree, { homeDir: home, gitIdentity: null });
+    const env = await ScopedExecutionEnv.create(worktree, { homeDir: home, git: null });
 
     for (const result of [
       await env.readTextFile(join(home, ".ssh", "id_ed25519")),
@@ -415,7 +501,13 @@ describe("ScopedExecutionEnv", () => {
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
       homeDir,
-      gitIdentity: { name: "Volli Session", email: "session@volli.test" },
+      git: {
+        ...NO_HOST_GIT,
+        identity: { name: "Volli Session", email: "session@volli.test" },
+        excludesFile: "/Users/me/.config/git/ignore",
+        safeDirectories: ["/shared/repo"],
+        signCommits: true,
+      },
       identity: { sessionId: "s-1", ticketDisplayId: "VC-1", sessionToken: "tok" },
       environment: { VITEST_MAX_WORKERS: "1" },
       pathPrefixes: ["/vol/bin"],
@@ -452,7 +544,7 @@ describe("ScopedExecutionEnv", () => {
         },
         filesystem: {
           // One policy, compiled: the same object the file guard judges with.
-          denyRead: [...env.policy.readDeny],
+          denyRead: [...env.policy.credentialDeny, ...env.policy.privateDeny],
           allowRead: [...env.policy.readAllow],
           allowWrite: [env.cwd],
           denyWrite: [
@@ -468,13 +560,10 @@ describe("ScopedExecutionEnv", () => {
       env.cwd,
     ]);
     const canonicalHome = join(realpathSync(tmpdir()), "volli-home");
-    expect(env.policy.readDeny).toEqual(
-      expect.arrayContaining([
-        join(canonicalHome, ".ssh"),
-        join(canonicalHome, ".pi"),
-        "/Library/Keychains",
-      ]),
+    expect(env.policy.credentialDeny).toEqual(
+      expect.arrayContaining([join(canonicalHome, ".ssh"), "/Library/Keychains"]),
     );
+    expect(env.policy.privateDeny).toEqual(expect.arrayContaining([join(canonicalHome, ".pi")]));
     expect(spawns).toHaveLength(1);
     expect(spawns[0]).toMatchObject({
       command: "/usr/bin/true",
@@ -494,11 +583,15 @@ describe("ScopedExecutionEnv", () => {
       VOLLI_SESSION_TOKEN: "tok",
       VOLLI_TICKET: "VC-1",
       GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_COUNT: "4",
       GIT_CONFIG_KEY_0: "core.excludesFile",
-      GIT_CONFIG_VALUE_0: "/dev/null",
+      GIT_CONFIG_VALUE_0: "/Users/me/.config/git/ignore",
       GIT_CONFIG_KEY_1: "core.attributesFile",
       GIT_CONFIG_VALUE_1: "/dev/null",
+      GIT_CONFIG_KEY_2: "safe.directory",
+      GIT_CONFIG_VALUE_2: "/shared/repo",
+      GIT_CONFIG_KEY_3: "commit.gpgsign",
+      GIT_CONFIG_VALUE_3: "true",
       GIT_AUTHOR_NAME: "Volli Session",
       GIT_AUTHOR_EMAIL: "session@volli.test",
       GIT_COMMITTER_NAME: "Volli Session",
@@ -529,7 +622,7 @@ describe("ScopedExecutionEnv", () => {
     const running = child();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
-      gitIdentity: null,
+      git: null,
       spawn: (() => running) as never,
     });
     const execution = env.exec("git commit -m x");
@@ -540,10 +633,14 @@ describe("ScopedExecutionEnv", () => {
     const [, , composed] = srt.calls.wraps[0] as [string, string, SandboxRuntimeConfig];
     expect(composed.filesystem.denyWrite).toEqual(
       expect.arrayContaining([
-        `${env.cwd}/**/.git/hooks`,
-        `${env.cwd}/**/.git/config`,
+        // Literal, so SRT's move-blocking also refuses `mv .git .g` (B2).
+        `${env.cwd}/.git/hooks`,
+        `${env.cwd}/.git/config`,
+        `${env.cwd}/.git/config.lock`,
         // A submodule's hooks execute too, and live where the literals cannot reach.
-        `${env.cwd}/**/.git/modules/**/hooks`,
+        `${env.cwd}/.git/modules/**/hooks`,
+        // A nested repository's `.git`, or a submodule's `.git` file, whole.
+        `${env.cwd}/*/**/.git`,
         `${env.cwd}/**/.gitmodules`,
         `${env.cwd}/.volli`,
       ]),
@@ -555,17 +652,29 @@ describe("ScopedExecutionEnv", () => {
   it("compiles a Ticket worktree's common git directory as a root, and a secret inside a root as a deny", async () => {
     const { worktree } = roots();
     const policy = {
-      readDeny: ["/Users/me/.ssh", `${worktree}/.env-secrets`],
+      credentialDeny: ["/Users/me/.ssh", `${worktree}/.env-secrets`],
+      privateDeny: [
+        `${worktree}`,
+        `${worktree}/private-notes`,
+        "/Users/me/.zshrc",
+        "/Users/me/userData",
+        "/repo/.git/objects/host",
+      ],
+      // The host's data meets the roots in neither direction here, and in one
+      // direction there; only the meeting one is compiled.
+      hostDataDeny: ["/Users/me/userData", "/repo/.git/objects/host"],
       readAllow: [],
-      writableRoots: [worktree, "/repo/.git"],
+      writableRoots: [worktree, "/repo/.git/objects"],
+      protectedPaths: [`${worktree}/.git`],
       sandboxCarveOuts: true,
+      linkedFiles: {},
     };
     const srt = sandbox();
     const running = child();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
       policy,
-      gitIdentity: null,
+      git: null,
       spawn: (() => running) as never,
     });
     const execution = env.exec("git commit -m x");
@@ -574,12 +683,24 @@ describe("ScopedExecutionEnv", () => {
     await execution;
 
     const [, , composed] = srt.calls.wraps[0] as [string, string, SandboxRuntimeConfig];
-    expect(composed.filesystem.allowWrite).toEqual([worktree, "/repo/.git"]);
+    expect(composed.filesystem.allowWrite).toEqual([worktree, "/repo/.git/objects"]);
     expect(composed.filesystem.denyWrite).toEqual(
-      expect.arrayContaining(["/repo/.git/hooks", "/repo/.git/config", `${worktree}/.env-secrets`]),
+      expect.arrayContaining([
+        "/repo/.git/hooks",
+        "/repo/.git/config",
+        "/repo/.git/objects/info/alternates",
+        `${worktree}/.env-secrets`,
+        `${worktree}/private-notes`,
+        `${worktree}/.git`,
+        "/repo/.git/objects/host",
+      ]),
     );
     // A secret outside every root needs no write deny: nothing is writable there.
     expect(composed.filesystem.denyWrite).not.toContain("/Users/me/.ssh");
+    expect(composed.filesystem.denyWrite).not.toContain("/Users/me/userData");
+    expect(composed.filesystem.denyWrite).not.toContain("/Users/me/.zshrc");
+    // A private entry EQUAL to a root is the root's own tree: not denied.
+    expect(composed.filesystem.denyWrite).not.toContain(worktree);
   });
 
   it("holds the file tools to Seatbelt's own carve-outs, which SRT applies whatever it is told", async () => {
@@ -599,13 +720,13 @@ describe("ScopedExecutionEnv", () => {
     const srt = sandbox();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
-      gitIdentity: null,
+      git: null,
       unixSockets: ["/data/volli.sock"],
     });
     await expect(env.prepareProcessExecution()).resolves.toEqual({ ok: true, value: undefined });
     expect(srt.getConfig()?.network.allowUnixSockets).toEqual(["/data/volli.sock"]);
 
-    const other = await ScopedExecutionEnv.create(worktree, { sandbox: srt, gitIdentity: null });
+    const other = await ScopedExecutionEnv.create(worktree, { sandbox: srt, git: null });
     await expect(other.prepareProcessExecution()).resolves.toMatchObject({
       ok: false,
       error: { code: "shell_unavailable", message: expect.stringContaining("incompatible") },
@@ -613,7 +734,7 @@ describe("ScopedExecutionEnv", () => {
     // The same set still shares the boundary that is in place.
     const same = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
-      gitIdentity: null,
+      git: null,
       unixSockets: ["/data/volli.sock"],
     });
     await expect(same.prepareProcessExecution()).resolves.toEqual({ ok: true, value: undefined });
@@ -624,7 +745,7 @@ describe("ScopedExecutionEnv", () => {
     const srt = sandbox();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: srt,
-      gitIdentity: null,
+      git: null,
       scratchDirectory: "/scratch/x",
     });
     const launch = await env.containLaunch("pnpm dev", env.cwd);
@@ -633,19 +754,22 @@ describe("ScopedExecutionEnv", () => {
     expect(launch.env).not.toHaveProperty("GITHUB_TOKEN");
     const [command, shell, profile, signal, cwd] = srt.calls.wraps[0] as unknown[];
     expect([command, shell, signal, cwd]).toEqual(["pnpm dev", "/bin/bash", undefined, env.cwd]);
-    expect((profile as SandboxRuntimeConfig).filesystem.denyRead).toEqual([...env.policy.readDeny]);
+    expect((profile as SandboxRuntimeConfig).filesystem.denyRead).toEqual([
+      ...env.policy.credentialDeny,
+      ...env.policy.privateDeny,
+    ]);
 
     await expect(env.containLaunch("pnpm dev", "/")).rejects.toThrow(
       "outside the Session workspace",
     );
     const empty = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox({ wrapWithSandboxArgv: async () => ({ argv: [], env: {} }) }),
-      gitIdentity: null,
+      git: null,
     });
     await expect(empty.containLaunch("pnpm dev", worktree)).rejects.toThrow("no command argv");
     const unavailable = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox({ isSupportedPlatform: () => false }),
-      gitIdentity: null,
+      git: null,
     });
     await expect(unavailable.containLaunch("pnpm dev", worktree)).rejects.toThrow(
       "unavailable on this platform",
@@ -1240,12 +1364,19 @@ describe("ScopedExecutionEnv", () => {
     });
 
     const unwritable = child();
-    const append = vi
-      .spyOn(NodeExecutionEnv.prototype, "appendFile")
-      .mockResolvedValue({ ok: false, error: new FileError("permission_denied", "read-only") });
+    // The spool is created read-only, so the contained writer's open fails.
     const unwritableEnv = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox(),
+      git: null,
       spawn: (() => unwritable) as never,
+      fileOperations: {
+        mkdtemp,
+        rm,
+        writeFile: async (path: string, content: string) => {
+          await writeFile(path, content);
+          chmodSync(path, 0o444);
+        },
+      },
     });
     const cannotWrite = unwritableEnv.exec("output", {
       capture: { limits: { maxBytes: 4, maxLines: 100 }, spill: true },
@@ -1256,27 +1387,24 @@ describe("ScopedExecutionEnv", () => {
 
     await expect(cannotWrite).resolves.toMatchObject({
       ok: false,
-      error: { code: "unknown", message: expect.stringContaining("read-only") },
+      error: { code: "unknown", message: expect.stringContaining("permission denied") },
     });
-    append.mockRestore();
     await unwritableEnv.cleanup();
   });
 
-  it("forwards append-file cancellation to the underlying environment", async () => {
+  it("appends through the contained writer, and not at all once cancelled", async () => {
     const { worktree } = roots();
-    const append = vi.spyOn(NodeExecutionEnv.prototype, "appendFile");
-    const env = await ScopedExecutionEnv.create(worktree);
+    const env = await ScopedExecutionEnv.create(worktree, { git: null });
     const controller = new AbortController();
-    const context = under(controller.signal);
+    controller.abort();
 
-    await env.appendFile("inside.txt", "x", context);
-
-    // 0.84's Node environment took a third argument and ignored it, so this was
-    // forwarded through a cast on the promise that it would one day mean
-    // something. In 0.85 it does: `appendFile` reads `context.abortSignal`.
-    expect(append).toHaveBeenCalledWith(join(env.cwd, "inside.txt"), "x", context);
+    expect(await env.appendFile("inside.txt", "x", under(controller.signal))).toMatchObject({
+      ok: false,
+      error: { code: "aborted" },
+    });
+    expect(await env.appendFile("inside.txt", "x")).toEqual({ ok: true, value: undefined });
+    expect(readFileSync(join(worktree, "inside.txt"), "utf8")).toBe("inside\nx");
     await env.cleanup();
-    append.mockRestore();
   });
 
   it("cleans owned output spools after a late abort, write failure, or cleanup fault", async () => {

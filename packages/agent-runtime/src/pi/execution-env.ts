@@ -127,7 +127,7 @@ function carriedOver(source: NodeJS.ProcessEnv, names: readonly string[]): Recor
  * The `PATH` used to be filtered to system roots, on the argument that behind
  * Seatbelt the binaries a command can reach were one clause of a boundary.
  * VC-45 retired that argument with the reads it rested on: reads are
- * machine-wide minus the secrets denylist, so a toolchain under `~/.nvm` is
+ * machine-wide minus the denylist, so a toolchain under `~/.nvm` is
  * readable and executable by absolute path whatever `PATH` says, and filtering
  * it only cost a Session the toolchain its repository is built with. What
  * contains a Scoped Session is the profile, not the variables.

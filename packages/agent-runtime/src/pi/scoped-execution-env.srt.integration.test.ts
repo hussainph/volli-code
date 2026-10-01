@@ -7,7 +7,7 @@
  */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { resolveCapabilityPolicy } from "../authority/capability";
+import { NO_HOST_GIT } from "./host-git";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 
 const enabled = process.env.VOLLI_SRT_INTEGRATION === "1";
@@ -96,6 +97,8 @@ function expectDenied(result: ShellCaptureResult, secret: string): void {
 
 describe.skipIf(!enabled)(
   "ScopedExecutionEnv SRT host integration (VOLLI_SRT_INTEGRATION=1)",
+  // Every command starts a sandboxed process; a matrix of them outlasts the default.
+  { timeout: 120_000 },
   () => {
     let parent = "";
     let scratchMarkers: string[] = [];
@@ -120,7 +123,7 @@ describe.skipIf(!enabled)(
 
       parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
       const worktree = join(parent, "worktree");
-      // Host-private, as Volli's `userData` is: on the secrets denylist.
+      // Host-private, as Volli's `userData` is: on the denylist.
       const privateRoot = join(parent, "private");
       const outside = join(privateRoot, "outside-secret.txt");
       const hook = join(worktree, "ambient-hook.sh");
@@ -268,18 +271,48 @@ describe.skipIf(!enabled)(
         for (const destination of [
           ".git/hooks/pre-commit",
           ".git/config",
+          ".git/config.lock",
           ".git/modules/sub/hooks/pre-commit",
           ".git/modules/sub/config",
           ".gitmodules",
           ".volli/state.json",
+          // A nested repository's `.git`, which git would run hooks from too (N3).
+          "vendor/lib/.git/hooks/pre-commit",
+          // Case variants of every entry (VC-45 review, S2). APFS is
+          // case-insensitive, so each names the protected path — and Seatbelt
+          // folds case on such a volume, a new name included: `.VOLLI` and
+          // `.GITMODULES` do not exist yet, and are refused anyway.
+          ".GIT/HOOKS/pre-push",
+          ".Git/config",
+          ".VOLLI/state.json",
+          ".GITMODULES",
         ]) {
-          const copied = await ran(env, `cp evil.sh ${destination}`);
+          const copied = await ran(
+            env,
+            `/bin/mkdir -p ${JSON.stringify(join(destination, ".."))} 2>/dev/null; cp evil.sh ${JSON.stringify(destination)}`,
+          );
           expect(copied.exitCode === 0, destination).toBe(false);
           // `.git/config` already exists, so the proof is that it was not
           // overwritten; the hooks must not have been created at all.
           const landed = join(checkout, destination);
           const contents = existsSync(landed) ? await readFile(landed, "utf8") : "";
           expect(contents, destination).not.toContain("pwned");
+        }
+        expect(existsSync(join(checkout, ".volli"))).toBe(false);
+        expect(existsSync(join(checkout, "vendor", "lib", ".git"))).toBe(false);
+
+        // Moving the protected directories aside, writing the hook, and moving
+        // them back (VC-45 review, B2): the literals' move-blocking refuses
+        // the rename of every ancestor, `.git` itself included.
+        for (const [from, to] of [
+          [".git", ".g"],
+          [".git/hooks", ".git/h"],
+          [".git/config", ".git/c"],
+        ]) {
+          const moved = await ran(env, `mv ${from} ${to}`);
+          expect(moved.exitCode === 0, from).toBe(false);
+          expect(existsSync(join(checkout, from)), from).toBe(true);
+          expect(existsSync(join(checkout, to)), to).toBe(false);
         }
 
         // The denial is four patterns, not the repository: committing writes the
@@ -384,6 +417,7 @@ describe.skipIf(!enabled)(
       const scratchDir = join(parent, "scratch");
       for (const directory of [
         join(home, ".ssh"),
+        join(home, ".config", "café"),
         own,
         other,
         join(worktree, ".git", "hooks"),
@@ -395,6 +429,7 @@ describe.skipIf(!enabled)(
       }
       const files = {
         key: [join(home, ".ssh", "id_ed25519"), canary("key")],
+        accented: [join(home, ".config", "café", "token"), canary("accented")],
         rc: [join(home, ".zshrc"), canary("rc")],
         db: [join(userData, "volli.db"), canary("db")],
         credentials: [join(userData, "mcp-credentials.json"), canary("credentials")],
@@ -404,6 +439,9 @@ describe.skipIf(!enabled)(
         workspaceFile: [join(worktree, "README.md"), canary("workspace")],
       } as const;
       for (const [path, content] of Object.values(files)) await writeFile(path, content);
+      // A hard link planted before the Session, from inside the workspace to
+      // the key: the same file under a name no denylist entry matches.
+      linkSync(files.key[0], join(worktree, "innocent.txt"));
 
       const policy = resolveCapabilityPolicy({
         workspacePath: worktree,
@@ -416,7 +454,7 @@ describe.skipIf(!enabled)(
       });
       const env = await ScopedExecutionEnv.create(
         worktree,
-        scoped({ policy, homeDir: home, scratchDirectory: scratchDir, gitIdentity: null }),
+        scoped({ policy, homeDir: home, scratchDirectory: scratchDir, git: null }),
       );
       try {
         const reads: [keyof typeof files, "allow" | "deny"][] = [
@@ -442,6 +480,31 @@ describe.skipIf(!enabled)(
           });
           if (expected === "deny") expect(shell.output, name).not.toContain(content);
           else expect(shell.output, name).toBe(content);
+        }
+
+        // Other spellings of denied files (VC-45 review, B1): case, Unicode
+        // case (`ſ` folds to `s`), the decomposed form, and the Data volume's
+        // firmlinked path. Each names the same file on APFS; each is refused
+        // by both layers. The hard link is the one row the layers do NOT
+        // agree on: Seatbelt matches names, so a link planted before the
+        // Session reads through the kernel — a known limit, documented — and
+        // only the file tools, which index the denied files' inodes, refuse it.
+        const spellings: [string, string, string, "allow" | "deny"][] = [
+          ["upper case", join(home, ".SSH", "ID_ED25519"), files.key[1], "deny"],
+          ["long s", join(home, ".sſh", "id_ed25519"), files.key[1], "deny"],
+          ["decomposed", files.accented[0].normalize("NFD"), files.accented[1], "deny"],
+          ["firmlink", `/System/Volumes/Data${files.key[0]}`, files.key[1], "deny"],
+          ["hard link", join(worktree, "innocent.txt"), files.key[1], "allow"],
+        ];
+        for (const [name, path, content, shellExpected] of spellings) {
+          const shell = await ran(env, `/bin/cat ${JSON.stringify(path)}`);
+          const tool = await env.readTextFile(path);
+          expect({
+            name,
+            shell: shell.exitCode === 0 ? "allow" : "deny",
+            tool: tool.ok ? "allow" : "deny",
+          }).toEqual({ name, shell: shellExpected, tool: "deny" });
+          if (shellExpected === "deny") expect(shell.output, name).not.toContain(content);
         }
 
         const writes: [string, "allow" | "deny"][] = [
@@ -493,7 +556,7 @@ describe.skipIf(!enabled)(
       parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
       const main = join(parent, "main");
       await mkdir(main);
-      await git(main, "init", "--quiet");
+      await git(main, "init", "--quiet", "--initial-branch=main");
       await git(
         main,
         "-c",
@@ -513,7 +576,7 @@ describe.skipIf(!enabled)(
         worktree,
         scoped({
           policy: resolveCapabilityPolicy({ workspacePath: worktree, sandboxCarveOuts: true }),
-          gitIdentity: { name: "Volli Session", email: "session@volli.test" },
+          git: { ...NO_HOST_GIT, identity: { name: "Volli Session", email: "session@volli.test" } },
         }),
       );
       try {
@@ -521,15 +584,95 @@ describe.skipIf(!enabled)(
         await expect(
           ran(env, "git add a.txt && git commit --quiet -m contained && git log -1 --format=%an"),
         ).resolves.toMatchObject({ output: "Volli Session\n", exitCode: 0 });
-        const hook = await ran(
-          env,
-          `printf pwned > ${JSON.stringify(join(main, ".git", "hooks", "post-checkout"))}`,
+        const common = join(main, ".git");
+        // Only this worktree's slices of the common directory are writable
+        // (VC-45 review, S1 and B3): never the files that redirect git, never
+        // state the Main checkout or another worktree shares.
+        for (const target of [
+          join(common, "hooks", "post-checkout"),
+          join(common, "config"),
+          join(common, "HEAD"),
+          join(common, "index"),
+          join(common, "packed-refs"),
+          join(common, "refs", "heads", "main"),
+          join(common, "objects", "info", "alternates"),
+          join(common, "worktrees", "wt", "commondir"),
+          join(common, "worktrees", "wt", "gitdir"),
+          join(worktree, ".git"),
+          join(main, "x.txt"),
+        ]) {
+          const before = existsSync(target) ? readFileSync(target, "utf8") : null;
+          const write = await ran(env, `printf pwned > ${JSON.stringify(target)}`);
+          expect(write.exitCode === 0, target).toBe(false);
+          expect(existsSync(target) ? readFileSync(target, "utf8") : null, target).toBe(before);
+        }
+        // What a Ticket's own work needs still works: amend, and a rebase of
+        // the branch onto a base that moved on the host.
+        await git(
+          main,
+          "-c",
+          "user.name=h",
+          "-c",
+          "user.email=h@h",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "-m",
+          "base",
         );
-        expect(hook.exitCode).not.toBe(0);
-        expect(existsSync(join(main, ".git", "hooks", "post-checkout"))).toBe(false);
-        // The main checkout's own files are not a root.
-        const tree = await ran(env, `printf x > ${JSON.stringify(join(main, "x.txt"))}`);
-        expect(tree.exitCode).not.toBe(0);
+        await expect(
+          ran(
+            env,
+            "git commit --quiet --amend --no-edit && git rebase --quiet main && git log --format=%s -2",
+          ),
+        ).resolves.toMatchObject({ output: "contained\nbase\n", exitCode: 0 });
+        // What legitimately breaks: a stash writes `refs/stash`, shared by
+        // every worktree of the repository.
+        await writeFile(join(worktree, "a.txt"), "changed");
+        expect((await ran(env, "git stash --quiet")).exitCode).not.toBe(0);
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    /**
+     * Volli's own data is never writable (VC-480): an approval that reached it
+     * could let a Session edit its own approvals or policy. Even a project
+     * that declared `userData` itself a writable root gets no write there, at
+     * the kernel or at the file tools.
+     */
+    it("refuses every write into the host's data, even under a root declared over it", async () => {
+      expect(process.platform).toBe("darwin");
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const userData = join(parent, "userData");
+      await mkdir(worktree);
+      await mkdir(join(userData, "pi-sessions"), { recursive: true });
+      const db = join(userData, "volli.db");
+      await writeFile(db, "db");
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [userData, join(userData, "pi-sessions")],
+            privateRoots: [userData],
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+        }),
+      );
+      try {
+        for (const target of [db, `${db}-wal`, join(userData, "pi-sessions", "x.jsonl")]) {
+          const before = existsSync(target) ? readFileSync(target, "utf8") : null;
+          const shell = await ran(env, `printf written > ${JSON.stringify(target)}`);
+          expect(shell.exitCode === 0, target).toBe(false);
+          expect(await env.writeFile(target, "written"), target).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(existsSync(target) ? readFileSync(target, "utf8") : null, target).toBe(before);
+        }
       } finally {
         await env.cleanup(BACKGROUND_CONTEXT);
       }
@@ -560,7 +703,7 @@ describe.skipIf(!enabled)(
             privateRoots: [tmpdir()],
             sandboxCarveOuts: true,
           }),
-          gitIdentity: null,
+          git: null,
         }),
       );
       try {

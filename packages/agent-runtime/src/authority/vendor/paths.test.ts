@@ -132,6 +132,34 @@ describe("resolvePathForPolicy", () => {
     expect(resolvePathForPolicy(join(raw, "x".repeat(400)))).toBeUndefined();
   });
 
+  it("follows a link before applying the .. after it, as the kernel does (VC-45 review, B1)", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "out", "Caches"), { recursive: true });
+    mkdirSync(join(raw, "ws"));
+    symlinkSync(join(raw, "out", "Caches"), join(raw, "ws", "s"));
+    symlinkSync("s/../LaunchAgents/x.plist", join(raw, "ws", "x"));
+    // Lexically `ws/s/../LaunchAgents` is `ws/LaunchAgents`; through `s` it is `out/LaunchAgents`.
+    expect(resolvePathForPolicy(join(raw, "ws", "x"))).toBe(join(real, "out/LaunchAgents/x.plist"));
+    // A relative target with `.` components is walked from the link's directory.
+    symlinkSync("./s/./new.txt", join(raw, "ws", "dotted"));
+    expect(resolvePathForPolicy(join(raw, "ws", "dotted"))).toBe(join(real, "out/Caches/new.txt"));
+  });
+
+  it("spells an existing prefix as the filesystem stores it", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, ".ssh"));
+    // APFS folds case and normalization; these name the same directory, and so does the policy.
+    for (const spelling of [".SSH", ".sſh", ".ssh".normalize("NFD")]) {
+      expect(resolvePathForPolicy(join(raw, spelling, "id_rsa"))).toBe(join(real, ".ssh/id_rsa"));
+    }
+  });
+
+  it("refuses a path too long to spell, even when most of it does not exist", () => {
+    const { raw } = workspace();
+    const deep = join(raw, "missing", ...Array.from({ length: 6 }, () => "x".repeat(200)));
+    expect(resolvePathForPolicy(deep)).toBeUndefined();
+  });
+
   it("resolves through an ancestor that turns out to be a file", () => {
     const { raw, real } = workspace();
     writeFileSync(join(raw, "not-a-dir"), "x");

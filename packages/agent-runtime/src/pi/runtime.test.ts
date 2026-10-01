@@ -2940,7 +2940,7 @@ describe("startSession", () => {
       state: "denied",
       turnId: expect.any(String),
       tool: "read",
-      cause: "path.secrets",
+      cause: "path.private",
     });
     // Not a paraphrase: the exact reason the model was refused with.
     expect(JSON.stringify(toolResultContext?.messages)).toContain(authority?.reason);
@@ -4097,7 +4097,7 @@ describe("startSession", () => {
 
     const serialized = JSON.stringify(toolResultContext?.messages);
     expect(serialized).toContain("sibling-value");
-    expect(serialized).toContain("holds credentials or another party's data");
+    expect(serialized).toContain("holds private data outside this Session's work");
     expect(serialized).not.toContain("outside-secret-value");
   });
 
@@ -4129,7 +4129,7 @@ describe("startSession", () => {
     await handle.close();
 
     const serialized = JSON.stringify(toolResultContext?.messages);
-    expect(serialized).toContain("holds credentials or another party's data");
+    expect(serialized).toContain("holds private data outside this Session's work");
     expect(serialized).not.toContain("outside-secret-value");
     expect(observations.filter((observation) => observation.kind === "message-settled")).toEqual([
       expect.objectContaining({
@@ -12389,6 +12389,7 @@ describe("Scoped Sessions (VC-45)", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir,
       hostPrivateRoots: [userData],
+      hostCredentialPaths: [credentials],
       executionEnvFactory: async (workspacePath, _identity, scoped) => {
         containment = scoped;
         scratchWhileRunning = scoped !== undefined && existsSync(scoped.scratchDirectory);
@@ -12397,7 +12398,7 @@ describe("Scoped Sessions (VC-45)", () => {
             ? {}
             : { policy: scoped.policy, scratchDirectory: scoped.scratchDirectory }),
           sandbox,
-          gitIdentity: null,
+          git: null,
         });
       },
       models: modelsWithStream(
@@ -12447,7 +12448,11 @@ describe("Scoped Sessions (VC-45)", () => {
     const serialized = JSON.stringify(toolResultContext?.messages);
     expect(serialized).not.toContain("mcp-token-value");
     expect(serialized).not.toContain("other-session-output");
-    expect(serialized.match(/holds credentials or another party's data/g)).toHaveLength(2);
+    // The credential file in the credential tier; the other Session's output in the private one.
+    expect(serialized).toContain(
+      `${credentials} is inside ${credentials}, which holds credentials`,
+    );
+    expect(serialized).toContain("holds private data outside this Session's work");
 
     // The shell: its Seatbelt profile was compiled from the SAME policy, and
     // that policy denies both files — one answer, whichever tool asks.
@@ -12460,10 +12465,10 @@ describe("Scoped Sessions (VC-45)", () => {
     expect(launches).toEqual([expect.objectContaining({ argv: ["/usr/bin/false"] })]);
     for (const wrap of wraps) {
       const [, , each] = wrap as [string, string, { filesystem: Record<string, string[]> }];
-      expect(each.filesystem.denyRead).toEqual([...policy.readDeny]);
+      expect(each.filesystem.denyRead).toEqual([...policy.credentialDeny, ...policy.privateDeny]);
     }
     const [, , profile] = wraps[0] as [string, string, { filesystem: Record<string, string[]> }];
-    expect(profile.filesystem.denyRead).toEqual([...policy.readDeny]);
+    expect(profile.filesystem.denyRead).toEqual([...policy.credentialDeny, ...policy.privateDeny]);
     expect(profile.filesystem.allowRead).toEqual([...policy.readAllow]);
     expect(profile.filesystem.denyRead).toEqual(expect.arrayContaining([userData, sessionDataDir]));
     // No grant reaches into another Session's output.
@@ -12523,7 +12528,7 @@ describe("Scoped Sessions (VC-45)", () => {
     // session data directory whether or not a host names anything.
     const serialized = JSON.stringify(toolResultContext?.messages);
     expect(serialized).not.toContain("other-session-output");
-    expect(serialized).toContain("holds credentials or another party's data");
+    expect(serialized).toContain("holds private data outside this Session's work");
     expect(contains).toHaveLength(1);
     expect(typeof contains[0]).toBe("function");
   });
