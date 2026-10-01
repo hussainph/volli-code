@@ -2,10 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { ModelSelection } from "./agent-runtime";
 import {
+  AUTO_TITLE_MAX_LENGTH,
   AUTO_TITLE_MAX_SUBJECT_CHARS,
   AUTO_TITLE_MAX_TICKET_CHARS,
   AUTO_TITLE_MAX_WORDS,
   AUTO_TITLE_SYSTEM_PROMPT,
+  AUTO_TITLE_TOLERATED_WORDS,
   autoTitlePrompt,
   cheapestReasoningLevel,
   resolveAutoTitleModel,
@@ -54,10 +56,17 @@ describe("resolveAutoTitleModel", () => {
 describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
   const prompt = AUTO_TITLE_SYSTEM_PROMPT.toLowerCase();
 
-  it("states the ceiling the sanitizer actually enforces", () => {
-    // Drift here is the expensive kind: the prompt would promise one budget
-    // while the sanitizer cut at another, and every title would look truncated.
-    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`${AUTO_TITLE_MAX_WORDS} words is the hard ceiling`);
+  it("states a ceiling the sanitizer never cuts below", () => {
+    // Drift here is the expensive kind when it runs the other way: a prompt
+    // promising one budget while the sanitizer cut at a smaller one would
+    // truncate every title the model wrote inside what it was told. The
+    // sanitizer's tolerance is therefore the LARGER number — the prompt's
+    // target is what the model aims at, and the tolerance is the overshoot a
+    // real answer may keep (VC-490: a model told "six" answers seven, and
+    // cutting that word off is what stored names ending in "and").
+    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`Aim for ${AUTO_TITLE_MAX_WORDS} words`);
+    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(`Never go past ${AUTO_TITLE_TOLERATED_WORDS} words`);
+    expect(AUTO_TITLE_TOLERATED_WORDS).toBeGreaterThanOrEqual(AUTO_TITLE_MAX_WORDS);
   });
 
   it("aims below the ceiling rather than at it", () => {
@@ -85,12 +94,13 @@ describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
     expect(AUTO_TITLE_SYSTEM_PROMPT).not.toContain("Title:");
   });
 
-  it("keeps every example inside the ceiling it preaches", () => {
+  it("keeps every example inside the numbers it preaches", () => {
     const titles = AUTO_TITLE_SYSTEM_PROMPT.split("\n")
       .filter((line) => line.includes(" -> "))
       .map((line) => line.split(" -> ")[1]);
     expect(titles).toHaveLength(6);
     for (const title of titles) {
+      expect(title.split(" ").length).toBeLessThanOrEqual(AUTO_TITLE_MAX_WORDS);
       expect(sanitizeAutoTitle(title)).toBe(title);
     }
   });
@@ -279,9 +289,9 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Auth: login and signup")).toBe("Auth: login and signup");
   });
 
-  it("keeps a colon that lands past the word ceiling, which cannot be a lead-in", () => {
+  it("keeps a colon that lands past the target, which cannot be a lead-in", () => {
     expect(sanitizeAutoTitle("one two three four five six seven: title")).toBe(
-      "one two three four five six",
+      "one two three four five six seven: title",
     );
   });
 
@@ -328,18 +338,74 @@ describe("sanitizeAutoTitle", () => {
     expect(sanitizeAutoTitle("Title Case conventions")).toBe("Title Case conventions");
   });
 
-  it(`cuts answers longer than ${AUTO_TITLE_MAX_WORDS} words down to that many`, () => {
-    expect(sanitizeAutoTitle("The quick brown fox jumps over the lazy dog")).toBe(
-      "The quick brown fox jumps over",
+  it("keeps the model's whole phrase when it runs past the target", () => {
+    // The regression this policy exists for (VC-490): the prompt asks for six
+    // words, models answer seven, and the old six-word slice stored the first
+    // six — names that stopped at "and" or "for" instead of at a subject.
+    // These are the real answers that were cut in the wild.
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and clarity")).toBe(
+      "Polish MCP page for simplicity and clarity",
+    );
+    expect(sanitizeAutoTitle("Assess cloud sandbox design options for Volli")).toBe(
+      "Assess cloud sandbox design options for Volli",
+    );
+    expect(sanitizeAutoTitle("Test authority protection on a temp database")).toBe(
+      "Test authority protection on a temp database",
     );
   });
 
-  it("caps length at the session-title budget on a word boundary", () => {
+  it("keeps a complete answer that runs past the old character budget", () => {
+    // 49 characters, and the old 48-character cut stored it as "Review
+    // classifier decision service…" — an ellipsis the model never wrote.
+    expect(sanitizeAutoTitle("Review classifier decision service implementation")).toBe(
+      "Review classifier decision service implementation",
+    );
+  });
+
+  it("keeps an answer at the tolerated ceiling whole", () => {
+    expect(sanitizeAutoTitle("Review model selection across all configured provider tiers")).toBe(
+      "Review model selection across all configured provider tiers",
+    );
+  });
+
+  it("trims an answer past the tolerated ceiling to whole words, not mid-phrase", () => {
+    expect(sanitizeAutoTitle("The quick brown fox jumps over the lazy dog")).toBe(
+      "The quick brown fox jumps over the lazy",
+    );
+  });
+
+  it("drops a connector a trim left hanging off the end", () => {
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and clarity and speed")).toBe(
+      "Polish MCP page for simplicity and clarity",
+    );
+  });
+
+  it("drops a particle only when the trim is what left it hanging", () => {
+    // "Turn notifications off" is a whole title, so an answer inside the
+    // ceilings keeps the model's own last word. The same word at the end of a
+    // trimmed answer is the cut's artifact and goes.
+    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
     expect(
-      sanitizeAutoTitle(
-        "Internationalization infrastructure investigation compatibility documentation rationalization",
-      ),
-    ).toBe("Internationalization infrastructure…");
+      sanitizeAutoTitle("Review Pi context scaling measurements in production in detail"),
+    ).toBe("Review Pi context scaling measurements in production");
+  });
+
+  it("never leaves a title ending on a connector the model wrote", () => {
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and")).toBe(
+      "Polish MCP page for simplicity",
+    );
+  });
+
+  it("gives up whole words rather than growing an ellipsis", () => {
+    // 93 characters at six words: the word ceiling cannot bound this, so the
+    // length budget drops whole words. A model title is a phrase the model
+    // chose, and "…" on it would read as a cut the model did not make.
+    const title = sanitizeAutoTitle(
+      "Internationalization infrastructure investigation compatibility documentation rationalization",
+    );
+    expect(title).toBe("Internationalization infrastructure investigation compatibility");
+    expect(title?.length).toBeLessThanOrEqual(AUTO_TITLE_MAX_LENGTH);
+    expect(title).not.toContain("…");
   });
 
   it("returns null when nothing survives", () => {

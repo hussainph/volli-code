@@ -1,10 +1,14 @@
-/** The longest generated Session title before it is cut at a word boundary. */
+/** The longest heuristic Session title before it is cut at a word boundary. */
 export const SESSION_TITLE_MAX_LENGTH = 48;
 
 /**
  * Cuts `text` to the Session-title length budget on a word boundary, with an
- * ellipsis. The shared budget discipline for every generated title, heuristic
- * and model-sourced alike.
+ * ellipsis.
+ *
+ * This is the HEURISTIC's discipline: a title taken from a message is a prefix
+ * of something longer, so an ellipsis says so honestly. A model title is a
+ * phrase the model chose rather than a prefix, and is bounded by whole words
+ * instead (`auto-title.ts`, `AUTO_TITLE_MAX_LENGTH`).
  */
 export function truncateSessionTitle(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
