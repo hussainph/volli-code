@@ -1,8 +1,9 @@
 /**
- * Manual host-boundary gate. It deliberately uses the real process-global SRT
- * manager, so it must be run alone on a macOS host rather than in CI.
+ * Host-boundary gate. It deliberately uses the real process-global SRT manager,
+ * so it must run alone, in a process of its own, on a macOS host. CI runs it
+ * that way in the macOS boot-tier job (VC-45); the Linux test lanes skip it.
  *
- *   VOLLI_SRT_INTEGRATION=1 vp test run packages/agent-runtime/src/pi/scoped-execution-env.srt.integration.test.ts
+ *   VOLLI_SRT_INTEGRATION=1 vp test run src/pi/scoped-execution-env.srt.integration.test.ts
  */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";

@@ -534,6 +534,18 @@ jobs:
           vp run --filter @volli/desktop check:lgpl-source
           vp run --filter @volli/desktop check:library-validation
 
+      # The capability axis at the kernel (VC-45): a Scoped Session's shell
+      # under real Seatbelt and its file tools under the guard must give one
+      # answer for one path — secrets, other Sessions' saved output and `.volli`
+      # refused by both. Only a Mac can run it, and it needs a process of its
+      # own because SRT's configuration is process-global. Seconds on a runner
+      # that has already paid for the install.
+      - name: Check Scoped Session walls under Seatbelt
+        working-directory: packages/agent-runtime
+        env:
+          VOLLI_SRT_INTEGRATION: "1"
+        run: vp test run src/pi/scoped-execution-env.srt.integration.test.ts
+
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4
 
