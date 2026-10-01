@@ -23,7 +23,12 @@ if (pidFileIndex >= 0) {
 const server = new McpServer({ name: "volli-stdio-fixture", version: "1.0.0" });
 server.registerTool(
   "fixture_echo",
-  { description: "Echo from a real stdio fixture" },
+  {
+    description: "Echo from a real stdio fixture",
+    // What Settings sorts by (display only): it must survive the real client.
+    title: "Fixture echo",
+    annotations: { readOnlyHint: true },
+  },
   async () => ({
     content: [{ type: "text", text: "stdio fixture response" }],
     structuredContent: { transport: "stdio" },

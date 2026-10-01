@@ -3,6 +3,7 @@ import {
   MCP_TOOL_COUNT_MAX,
   MCP_TOOL_NAME_MAX_CHARS,
   sanitizeMcpToolDefinition,
+  sanitizeMcpToolHints,
   type McpCatalogTool,
   type McpJsonObject,
   type McpServerDraft,
@@ -16,6 +17,10 @@ export interface McpProtocolTool {
   inputSchema: unknown;
   /** The schema of the tool's `structuredContent`, when the server publishes one (VC-469). */
   outputSchema?: unknown;
+  /** A human-readable name, shown in Settings only (`sanitizeMcpToolHints`). */
+  title?: unknown;
+  /** The server's behaviour annotations, shown in Settings only (`sanitizeMcpToolHints`). */
+  annotations?: unknown;
 }
 
 /** Client-library-free seam used by discovery and live attachment hosts. */
@@ -114,25 +119,29 @@ export async function discoverMcpServer(
           `[mcp] ${input.server.name}: left off the output schema of ${bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS)} (${sanitized.outputSchemaRejected})`,
         );
       }
-      if (!sanitized.ok) {
-        return {
-          name: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),
-          description: bounded(tool.description ?? "", MCP_DESCRIPTION_MAX_CHARS),
-          enabled: false,
-          definition: null,
-          error: sanitized.reason,
-        };
-      }
-      return {
-        name: sanitized.definition.toolName,
-        description: sanitized.definition.description,
-        enabled: enabled.has(sanitized.definition.toolName),
-        definition: {
-          ...sanitized.definition,
-          inputSchema: sanitized.definition.inputSchema as McpJsonObject,
-        },
-        error: null,
-      };
+      // Display-only: a server's labels sort a catalog in Settings and are
+      // never part of the definition a Session freezes (see McpToolHints).
+      const hints = sanitizeMcpToolHints(tool);
+      const entry: McpCatalogTool = sanitized.ok
+        ? {
+            name: sanitized.definition.toolName,
+            description: sanitized.definition.description,
+            enabled: enabled.has(sanitized.definition.toolName),
+            definition: {
+              ...sanitized.definition,
+              inputSchema: sanitized.definition.inputSchema as McpJsonObject,
+            },
+            error: null,
+          }
+        : {
+            name: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),
+            description: bounded(tool.description ?? "", MCP_DESCRIPTION_MAX_CHARS),
+            enabled: false,
+            definition: null,
+            error: sanitized.reason,
+          };
+      if (hints !== undefined) entry.hints = hints;
+      return entry;
     });
   } catch (error) {
     if (input.signal.aborted) throw input.signal.reason;

@@ -11,6 +11,7 @@ import {
   MCP_SERVER_NAME_MAX_CHARS,
   MCP_TOOL_COUNT_MAX,
   MCP_TOOL_NAME_MAX_CHARS,
+  MCP_TOOL_TITLE_MAX_CHARS,
   UNKNOWN_MCP_PROVENANCE,
   isMcpToolId,
   mcpEndpointSecretRefusal,
@@ -23,6 +24,7 @@ import {
   sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   sanitizeMcpToolDefinition,
+  sanitizeMcpToolHints,
   validateMcpToolDefinitions,
   withParallelReadEligibility,
   type McpToolCandidate,
@@ -656,6 +658,54 @@ describe("parallel-read eligibility (VC-454)", () => {
     expect(narrowParallelReadEligibility([kept], new Set())).toEqual([
       definition("server-1", "read_file", "Reads."),
     ]);
+  });
+});
+
+describe("sanitizeMcpToolHints (display-only labels)", () => {
+  it("keeps nothing from a value that is not a tool object", () => {
+    expect(sanitizeMcpToolHints(null)).toBeUndefined();
+    expect(sanitizeMcpToolHints("tool")).toBeUndefined();
+    expect(sanitizeMcpToolHints([{ title: "List" }])).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "list" })).toBeUndefined();
+  });
+
+  it("reads the top-level title first, then the annotation title, and drops one that repeats the name", () => {
+    expect(
+      sanitizeMcpToolHints({
+        name: "list_issues",
+        title: "List issues",
+        annotations: { title: "Ignored" },
+      }),
+    ).toEqual({ title: "List issues" });
+    expect(
+      sanitizeMcpToolHints({ name: "list_issues", annotations: { title: "List issues" } }),
+    ).toEqual({ title: "List issues" });
+    expect(sanitizeMcpToolHints({ name: "list_issues", title: "list_issues" })).toBeUndefined();
+  });
+
+  it("keeps a title as one plain line within its bound, or not at all", () => {
+    expect(
+      sanitizeMcpToolHints({ name: "a", title: "  Create\n\tan\u202eissue\u0000 " })?.title,
+    ).toBe("Create an issue");
+    expect(sanitizeMcpToolHints({ name: "a", title: " \n " })).toBeUndefined();
+    expect(
+      sanitizeMcpToolHints({ name: "a", title: "x".repeat(MCP_TOOL_TITLE_MAX_CHARS + 1) }),
+    ).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", title: 7 })).toBeUndefined();
+  });
+
+  it("keeps the read-only and destructive annotations only as booleans, false included", () => {
+    expect(
+      sanitizeMcpToolHints({
+        name: "a",
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      }),
+    ).toEqual({ readOnly: true, destructive: false });
+    expect(
+      sanitizeMcpToolHints({ name: "a", annotations: { readOnlyHint: "yes", destructiveHint: 1 } }),
+    ).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", annotations: null })).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", annotations: [true] })).toBeUndefined();
   });
 });
 

@@ -46,6 +46,8 @@ describe("real MCP transport fixtures", () => {
       expect.objectContaining({
         name: "fixture_echo",
         description: "Echo from a real stdio fixture",
+        title: "Fixture echo",
+        annotations: expect.objectContaining({ readOnlyHint: true }),
       }),
       expect.objectContaining({ name: "fixture_env" }),
       expect.objectContaining({ name: "fixture_too_large" }),

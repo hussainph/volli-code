@@ -155,7 +155,7 @@ export function connectionProblemIn(error: unknown): McpConnectionProblem | null
  * Where values come from for one resolution.
  *
  * `pending` holds secrets a person typed into an editor that has not been
- * saved yet — so *Test and discover* can use a key before it is stored — and
+ * saved yet — so *Connect* in the server dialog can use a key before it is stored — and
  * wins over the store for the slots it names.
  */
 export interface McpCredentialSources {

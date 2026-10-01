@@ -49,7 +49,7 @@ export type McpMutationResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Secret values a person typed into an editor that has not been saved yet,
- * by slot. They reach a connection for *Test and discover* and are written to
+ * by slot. They reach a connection for *Connect* in the server dialog and are written to
  * the credential store only when the save that carries them succeeds.
  */
 export type McpPendingSecrets = Readonly<Record<string, string>>;

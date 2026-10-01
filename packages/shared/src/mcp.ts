@@ -227,6 +227,79 @@ export interface McpCatalogTool {
   enabled: boolean;
   definition: McpToolDefinition | null;
   error: string | null;
+  /**
+   * What the server says about this tool, for Settings to show and sort by.
+   * Absent on every catalog read before it existed, and on a tool whose server
+   * said nothing. See {@link McpToolHints}.
+   */
+  hints?: McpToolHints;
+}
+
+/** The longest tool title Settings shows, as the server's `title` or `annotations.title`. */
+export const MCP_TOOL_TITLE_MAX_CHARS = 128;
+
+/**
+ * A server's own description of one tool: its human-readable title and the
+ * MCP behaviour annotations (`readOnlyHint`, `destructiveHint`).
+ *
+ * DISPLAY ONLY, and third-party data like a description. Settings groups a
+ * catalog into read-only tools and the rest by it, so a person can turn on
+ * every read in one move and judge the writes one at a time. Nothing that
+ * decides what runs reads it: it never reaches a frozen definition, the model,
+ * the parallel-read allowlist ({@link McpToolDefinition.parallelRead}) or any
+ * approval. A server that labels a delete "read-only" misleads a person's
+ * choice and gains nothing else, which is why Settings says the labels are the
+ * server's own.
+ *
+ * Each field is present only when the server said it; `false` is a statement,
+ * not a default.
+ */
+export interface McpToolHints {
+  title?: string;
+  readOnly?: boolean;
+  destructive?: boolean;
+}
+
+/**
+ * The hints worth keeping from one `tools/list` entry, or `undefined` when it
+ * carries none.
+ *
+ * Reads the tool's top-level `title` first (2025-06-18), then
+ * `annotations.title`. A title is kept only as a single trimmed line within
+ * {@link MCP_TOOL_TITLE_MAX_CHARS}, and not when it merely repeats the name;
+ * an annotation is kept only when it is a boolean. Anything else is dropped
+ * rather than refused: the tool works without its hints.
+ */
+export function sanitizeMcpToolHints(tool: unknown): McpToolHints | undefined {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return undefined;
+  const record = tool as Record<string, unknown>;
+  const annotations =
+    record["annotations"] !== null &&
+    typeof record["annotations"] === "object" &&
+    !Array.isArray(record["annotations"])
+      ? (record["annotations"] as Record<string, unknown>)
+      : {};
+  const hints: McpToolHints = {};
+  const title = hintTitle(record["title"]) ?? hintTitle(annotations["title"]);
+  if (title !== undefined && title !== record["name"]) hints.title = title;
+  if (typeof annotations["readOnlyHint"] === "boolean")
+    hints.readOnly = annotations["readOnlyHint"];
+  if (typeof annotations["destructiveHint"] === "boolean") {
+    hints.destructive = annotations["destructiveHint"];
+  }
+  return Object.keys(hints).length === 0 ? undefined : hints;
+}
+
+// eslint-disable-next-line no-control-regex -- matching control characters is the point.
+const HINT_TITLE_UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+function hintTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // One line, no control or bidi-override characters: a title is drawn in a
+  // row beside the tool's name, and a newline or an RLO could disguise which
+  // name it belongs to.
+  const title = value.replace(HINT_TITLE_UNSAFE, " ").replace(/\s+/g, " ").trim();
+  return title.length === 0 || title.length > MCP_TOOL_TITLE_MAX_CHARS ? undefined : title;
 }
 
 export interface McpServerRecord extends McpServerDraft {

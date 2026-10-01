@@ -34,16 +34,38 @@ just installed a server will otherwise try to call its tools in the same turn.
 
 ## Configuring a server by hand
 
-**Settings → Configure → MCP Servers.** Press *Add server* to open the editor,
-fill in the transport, press *Test and discover* to connect and read its tool
-list, tick the tools you want, and save. Nothing is stored until discovery
-succeeds, and discovered tools default to off — every tool is an explicit
-choice. *Cancel* closes the editor; *Edit* on a server row reopens it populated.
+**Settings → Configure → MCP Servers.** Each server is one row: where it lives,
+how many of its tools are on, how fresh that list is, where it came from, and
+whether it works. When it does not, the row says why and offers the one fix
+(*Sign in*, *Add credential*, *Retry*). A switch turns the server off without
+forgetting it, and a menu holds the rest: tools, connection, refresh, sign out
+and remove (which asks first, because it deletes stored credentials).
 
-A configured server's tools sit behind *Show tools* on its summary card, which
-is where they are enabled and disabled. A real catalog is thirty-plus tools with
-a paragraph of description each, so the page shows the counts, the freshness,
-the origin and anything wrong, and opens the rest on request.
+Everything about one server opens as one dialog, with one *Save*:
+
+- **Adding a server.** Choose *Remote (HTTP)* or *Local (stdio)*, give the URL
+  (or the executable and its arguments), and press *Connect* (or Enter). The name
+  is suggested from the host or package. A server that wants a sign-in or a
+  credential says so beside the *Connect* button with the fix. Nothing is stored
+  until discovery succeeds, and **discovered tools start off**: every tool is an
+  explicit choice, and *Add server* saves only what you ticked.
+- **Choosing tools.** Clicking a row opens its tools: a filter (name, title or
+  description), *All · On · Off*, **Select all**, and — when the server labels
+  its tools read-only — a **Read-only** group and a **Can make changes** group,
+  each with its own checkbox, so every read can be turned on in one click and
+  each write judged on its own. A checkbox for a group or for the whole list is
+  checked, clear or mixed, and with a filter typed it acts on the listed tools
+  only. A row shows the server's title for the tool beside its exact name, one
+  line of description, and, opened, the whole description and the arguments it
+  takes. A tool marked *Destructive* is one the server says can delete or
+  overwrite. The labels are the server's own (`annotations.readOnlyHint`,
+  `destructiveHint`, `title`): Volli shows them and sorts by them, and never
+  trusts them for anything else. A tool whose definition Volli cannot offer is
+  listed last with the reason and cannot be ticked. Saving a change to tools
+  alone writes it without connecting.
+- **Editing the connection.** *Edit* in the dialog opens the fields. A changed
+  connection is read again as it is saved (*Connect and save*); a tool still
+  offered keeps its choice, and one that is gone is dropped.
 
 ## The agent-facing verbs
 
@@ -301,7 +323,7 @@ endpoint (and says why), and Volli refuses to sign in to one.
 A remote server without an `Authorization` header of its own can sign in with
 OAuth. When such a server refuses a connection, its row in Settings shows
 **Needs sign-in** with a *Sign in* control (a server that has never asked for one
-shows none; *Sign in* in the editor appears when *Test and discover* is refused
+shows none; *Sign in* in the server dialog appears when *Connect* is refused
 for one). *Sign in* opens the server's
 authorization page in your browser and waits (up to five minutes, or until you
 press *Cancel sign-in*) for the browser to come back to a temporary server on
@@ -337,7 +359,7 @@ One sign-in runs per server at a time: Settings and an agent's question join the
 same one, an agent that stops waiting leaves it running for the person, and the
 person's *Cancel sign-in* stops it for everyone.
 
-**Pre-registered clients.** Under *OAuth client* in the editor: a client ID, an
+**Pre-registered clients.** Under *OAuth client* in the connection fields: a client ID, an
 optional client secret (a stored secret or a `${NAME}` reference), and either a
 callback port — the redirect is then `http://127.0.0.1:<port>/callback` — or a
 whole loopback callback URL (`http://localhost:…`, `127.0.0.1` or `[::1]`) for a
@@ -356,7 +378,7 @@ is signed in to.
 
 ### Headers and environment values
 
-In the editor, a remote server takes **Headers** and a local server takes
+In the connection fields, a remote server takes **Headers** and a local server takes
 **Environment** entries. Each value is one of two kinds, and neither is stored
 as plain text in configuration:
 
@@ -759,4 +781,6 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
 | Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
+| Server dialog, tool picker | `mcp-server-dialog.tsx`, `mcp-tool-picker.tsx`, `mcp-tools-model.ts` (same folder) |
+| Tool hints (display-only labels) | `sanitizeMcpToolHints` in `packages/shared/src/mcp.ts` |
 | Credential editor | `apps/desktop/src/renderer/src/components/settings/configure/mcp-credentials-editor.tsx` |

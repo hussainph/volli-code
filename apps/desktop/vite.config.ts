@@ -441,6 +441,11 @@ export default defineConfig(({ mode }) => ({
         // of a wide window would never show.
         "src/components/ticket/diff-fit.ts",
         "src/components/ticket/label-picker-model.ts",
+        // What MCP's tool picker selects in bulk and what a server row says
+        // about its health (VC-470): a select-all that reached a hidden or an
+        // unavailable tool, or a row that called a broken server Ready, is a
+        // tool offered to every new Session that nobody chose.
+        "src/components/settings/configure/mcp-tools-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
