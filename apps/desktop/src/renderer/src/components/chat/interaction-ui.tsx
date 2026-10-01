@@ -704,7 +704,7 @@ function ApprovalCard({
                 <li
                   key={key}
                   className={cn(
-                    "flex min-w-0 items-baseline gap-2 rounded px-1",
+                    "flex min-w-0 items-baseline gap-2 rounded-sm px-1",
                     index === detail.held
                       ? "bg-primary/10 text-foreground"
                       : "text-muted-foreground",
