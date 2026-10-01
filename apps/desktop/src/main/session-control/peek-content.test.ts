@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionTranscriptArtifact } from "@volli/session-engine";
-import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, peekSummaryOf } from "@volli/shared";
 import type {
   SessionEvent,
   SessionInteraction,
@@ -10,7 +10,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { readSessionPeekContent } from "./peek-content";
+import { PEEK_EXCERPT_CHARS, readSessionPeekContent } from "./peek-content";
 
 const PROVENANCE = {
   source: { kind: "adapter", id: "pi", detail: null },
@@ -229,16 +229,142 @@ describe("readSessionPeekContent", () => {
     expect(content?.question?.id).toBe("asked-first");
   });
 
+  it("passes longer bounded excerpts to one optional hover refinement", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const text = "Detailed progress. ".repeat(150);
+    const spoken = await artifacts.write(
+      artifactOf({ id: "m1", role: "assistant", parts: [{ type: "text", text }] }),
+    );
+    const summarize = vi.fn(async () => "The requested fix is ready for review.");
+    const content = await readSessionPeekContent(
+      {
+        listEvents: async () => [transcriptEvent(1, spoken)],
+        readArtifact: (reference) => artifacts.read(reference),
+        getSession: async () => projection(),
+        summarize,
+      },
+      { sessionId: "session-1", refine: true },
+    );
+    expect(content?.entries[0]?.text).toBe(`${text.trim().slice(0, PEEK_EXCERPT_CHARS)}…`);
+    expect(summarize).toHaveBeenCalledExactlyOnceWith("session-1", content?.entries);
+    expect(content?.summary).toBe("The requested fix is ready for review.");
+  });
+
+  it("keeps prose available to refinement through a tools-only tail without expanding the card's entries", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const messages: UIMessage[] = [
+      { id: "request", role: "user", parts: [{ type: "text", text: "Fix the peek" }] },
+      { id: "progress", role: "assistant", parts: [{ type: "text", text: "Testing the fix" }] },
+      ...Array.from({ length: 6 }, (_, index): UIMessage => ({
+        id: `tools-${index}`,
+        role: "assistant",
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolName: "bash",
+            toolCallId: `tool-${index}`,
+            state: "input-streaming",
+          },
+        ],
+      })),
+    ];
+    const references = await Promise.all(
+      messages.map((message) => artifacts.write(artifactOf(message))),
+    );
+    const summarize = vi.fn(async (_id: string, entries: readonly { text: string }[]) =>
+      entries
+        .filter((entry) => entry.text !== "")
+        .map((entry) => entry.text)
+        .join(". "),
+    );
+    const content = await readSessionPeekContent(
+      {
+        listEvents: async () =>
+          references.map((reference, index) => transcriptEvent(index + 1, reference)),
+        readArtifact: (reference) => artifacts.read(reference),
+        getSession: async () => projection(),
+        summarize,
+      },
+      { sessionId: "session-1", refine: true },
+    );
+    expect(content?.summary).toBe("Fix the peek. Testing the fix");
+    expect(content?.entries).toHaveLength(6);
+    expect(content?.entries.every((entry) => entry.text === "")).toBe(true);
+    expect(summarize).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries null refinement without losing the durable fallback", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const requested = await artifacts.write(
+      artifactOf({ id: "request", role: "user", parts: [{ type: "text", text: "Fix the peek" }] }),
+    );
+    const progress = await artifacts.write(
+      artifactOf({
+        id: "progress",
+        role: "assistant",
+        parts: [{ type: "text", text: "Testing the fix" }],
+      }),
+    );
+    const content = await readSessionPeekContent(
+      {
+        listEvents: async () => [transcriptEvent(1, requested), transcriptEvent(2, progress)],
+        readArtifact: (reference) => artifacts.read(reference),
+        getSession: async () => projection(),
+        summarize: async () => null,
+      },
+      { sessionId: "session-1", refine: true },
+    );
+    expect(content?.summary).toBeNull();
+    expect(content?.entries).toEqual([
+      { at: 10, role: "user", text: "Fix the peek", tools: [] },
+      { at: 20, role: "assistant", text: "Testing the fix", tools: [] },
+    ]);
+    expect(peekSummaryOf(content!.entries)).toBe("Testing the fix");
+  });
+
+  it.each([undefined, false])(
+    "local reads return readable content without waiting for utility work (%s)",
+    async (refine) => {
+      const artifacts = createInMemoryTranscriptArtifactStore();
+      const spoken = await artifacts.write(
+        artifactOf({
+          id: "m1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Local progress" }],
+        }),
+      );
+      const pending = Promise.withResolvers<string | null>();
+      const summarize = vi.fn(() => pending.promise);
+      const ports = {
+        listEvents: async () => [transcriptEvent(1, spoken)],
+        readArtifact: (reference: TranscriptReference) => artifacts.read(reference),
+        getSession: async () =>
+          projection({ interactions: { active: [question()], resolved: [] } }),
+        summarize,
+      };
+      const content = await readSessionPeekContent(ports, { sessionId: "session-1", refine });
+      expect(content?.entries[0]?.text).toBe("Local progress");
+      expect(content?.question?.id).toBe("interaction-1");
+      expect(summarize).not.toHaveBeenCalled();
+      const refined = readSessionPeekContent(ports, { sessionId: "session-1", refine: true });
+      pending.resolve("Combined summary");
+      expect((await refined)?.summary).toBe("Combined summary");
+      expect(summarize).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("answers null for a Session the ledger no longer has", async () => {
     const listEvents = vi.fn(async () => []);
+    const summarize = vi.fn(async () => "No work");
 
     const content = await readSessionPeekContent(
-      { listEvents, getSession: async () => null },
+      { listEvents, getSession: async () => null, summarize },
       { sessionId: "gone" },
     );
 
     expect(content).toBeNull();
-    // And it costs no transcript read at all.
+    // And it costs no transcript read or model refinement at all.
     expect(listEvents).not.toHaveBeenCalled();
+    expect(summarize).not.toHaveBeenCalled();
   });
 });

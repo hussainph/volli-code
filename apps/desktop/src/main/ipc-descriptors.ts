@@ -987,9 +987,13 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input)) return false;
-      // A peek's depth is the app's (`SESSION_PEEK_ENTRIES`), so the id is the
-      // whole ask and there is nothing else here to check.
-      return typeof input["sessionId"] === "string" && input["sessionId"].length > 0;
+      // Depth stays host-owned. Refinement is a separate, explicit demand;
+      // ordinary reads (including pinned-card refreshes) buy no model work.
+      return (
+        typeof input["sessionId"] === "string" &&
+        input["sessionId"].length > 0 &&
+        (input["refine"] === undefined || typeof input["refine"] === "boolean")
+      );
     },
     invalidError: "Invalid session peek",
   },

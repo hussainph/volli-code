@@ -424,6 +424,8 @@ export default defineConfig(({ mode }) => ({
         "src/components/session-peek/peek-machine.ts",
         "src/components/session-peek/peek-geometry.ts",
         "src/components/session-peek/peek-subject.ts",
+        // Local/refinement demand, coalescing and stale-reply safety (VC-473).
+        "src/components/session-peek/peek-content-cache.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
         // Which row the keyboard is on, and what each key does to the band

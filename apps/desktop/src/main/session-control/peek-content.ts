@@ -3,11 +3,13 @@
  *
  * ── WHY THIS IS A PULL AND NOT A SUBSCRIPTION ─────────────────────────────
  * A peek is a READ. Hovering a row must not adopt the Session, must not open a
- * stream, and must not cost anything that has to be torn down afterwards —
+ * stream, or start background summary work —
  * somebody sweeping the pointer down a sidebar would otherwise attach and
  * detach a dozen executors. So the card asks for one fold and draws it, and
  * only an explicit intent (pinning it to answer a question) adopts the Session
- * through the door that already exists.
+ * through the door that already exists. A separate explicit refinement read
+ * may ask the process-wide utility summarizer; no agent-loop event does. The
+ * renderer first shows the local fold, then keeps it visible while refining.
  *
  * ── WHY IT IS THE CLI's FOLD ──────────────────────────────────────────────
  * `readSessionTranscriptTail` is the same read `volli session peek` has shipped
@@ -50,38 +52,52 @@ export interface SessionPeekContentPorts {
    */
   readArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
+  /** Called only by an explicit refinement read, never a local read, CLI or agent loop. */
+  summarize?: (sessionId: string, entries: readonly SessionPeekEntry[]) => Promise<string | null>;
 }
+
+/** Enough prose to summarize meaningfully; the CLI keeps its own 120-character default. */
+export const PEEK_EXCERPT_CHARS = 2_000;
+/** Local reads only: tools must not immediately evict the prose a summary needs. */
+export const PEEK_SUMMARY_WINDOW_ENTRIES = 32;
 
 /**
  * One fold of a Session for one peek: its tail, its open question, and the
  * counts beside them. `null` means no such Session — a row the listing still
  * holds for a Session the ledger no longer has.
  *
- * It holds {@link SESSION_PEEK_ENTRIES}, which is far smaller than the CLI's
- * own default for the reason that constant records: this is a glance, and the
- * conversation is one press away. The depth is the app's, not the caller's —
- * no surface has ever wanted a different one.
+ * The card holds {@link SESSION_PEEK_ENTRIES}. When refining, a separately
+ * bounded local window looks further back for prose through tool-only messages.
+ * The summarizer still sends only a few spoken excerpts, never tool payloads.
+ * Both depths are the app's, not the caller's.
  */
 export async function readSessionPeekContent(
   ports: SessionPeekContentPorts,
-  input: { sessionId: string },
+  input: { sessionId: string; refine?: boolean },
 ): Promise<SessionPeekContent | null> {
   const projection = await ports.getSession({ sessionId: input.sessionId });
   if (projection === null) return null;
+  const summarize = input.refine === true ? ports.summarize : undefined;
   const tail = await readSessionTranscriptTail(
     {
       listEvents: ports.listEvents,
       ...(ports.readArtifact === undefined ? {} : { readArtifact: ports.readArtifact }),
     },
-    { sessionId: input.sessionId, limit: SESSION_PEEK_ENTRIES },
+    {
+      sessionId: input.sessionId,
+      limit: summarize === undefined ? SESSION_PEEK_ENTRIES : PEEK_SUMMARY_WINDOW_ENTRIES,
+      textLimit: PEEK_EXCERPT_CHARS,
+    },
   );
   // `interactions.active[0]` is the app's one answer to "which question is this
   // Session asking" — `sessionNotificationItem` picks the same one, so the card
   // and the alert that sent somebody to it are talking about the same question.
   const question = projection.interactions.active[0];
+  const summary = await summarize?.(input.sessionId, tail.entries);
   return {
     sessionId: input.sessionId,
-    entries: tail.entries.map((entry): SessionPeekEntry => ({
+    ...(summary === undefined ? {} : { summary }),
+    entries: tail.entries.slice(-SESSION_PEEK_ENTRIES).map((entry): SessionPeekEntry => ({
       at: entry.at,
       role: entry.role,
       text: entry.text,

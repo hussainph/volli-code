@@ -156,6 +156,68 @@ describe("readSessionTranscriptTail", () => {
     });
   });
 
+  it("allows longer bounded UI excerpts without truncating words within the requested limit", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const first = "word ".repeat(30).trim();
+    const second = "more ".repeat(10).trim();
+    const words = `${first} ${second}`;
+    const reference = await artifacts.write(
+      artifactOf({
+        id: "m1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: `  ${first}\n` },
+          { type: "text", text: `\t${second}  ` },
+        ],
+      }),
+    );
+    const ports = {
+      listEvents: async () => [transcriptEvent(1, reference)],
+      readArtifact: (requestedReference: TranscriptReference) => artifacts.read(requestedReference),
+    };
+
+    const tail = await readSessionTranscriptTail(ports, {
+      sessionId: "session-1",
+      limit: 1,
+      textLimit: words.length,
+    });
+
+    expect(words.length).toBeGreaterThan(TRANSCRIPT_TAIL_TEXT_LIMIT);
+    expect(tail.entries).toEqual([{ at: 10, role: "assistant", text: words, tools: [] }]);
+
+    const capped = await readSessionTranscriptTail(ports, {
+      sessionId: "session-1",
+      limit: 1,
+      textLimit: 160,
+    });
+    expect(capped.entries[0]?.text).toBe(`${words.slice(0, 160)}…`);
+  });
+
+  it.each([
+    { textLimit: 3.9, expectedLimit: 3 },
+    { textLimit: -3, expectedLimit: 0 },
+    { textLimit: 0, expectedLimit: 0 },
+    { textLimit: Number.NaN, expectedLimit: TRANSCRIPT_TAIL_TEXT_LIMIT },
+    { textLimit: Number.POSITIVE_INFINITY, expectedLimit: TRANSCRIPT_TAIL_TEXT_LIMIT },
+    { textLimit: Number.NEGATIVE_INFINITY, expectedLimit: TRANSCRIPT_TAIL_TEXT_LIMIT },
+  ])("normalizes textLimit $textLimit to $expectedLimit", async ({ textLimit, expectedLimit }) => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const words = "x".repeat(200);
+    const reference = await artifacts.write(
+      artifactOf({ id: "m1", role: "assistant", parts: [{ type: "text", text: words }] }),
+    );
+
+    const tail = await readSessionTranscriptTail(
+      {
+        listEvents: async () => [transcriptEvent(1, reference)],
+        readArtifact: (requestedReference) => artifacts.read(requestedReference),
+      },
+      { sessionId: "session-1", limit: 1, textLimit },
+    );
+
+    expect(tail.entries[0]?.text).toBe(`${words.slice(0, expectedLimit)}…`);
+  });
+
   it("counts turns and the depth of the newest one over the Session's whole life", async () => {
     const artifacts = createInMemoryTranscriptArtifactStore();
     const first = await artifacts.write(
@@ -282,5 +344,41 @@ describe("readSessionTranscriptTail", () => {
     expect(transcriptReferenceFor(transcriptEvent(1, reference))).toEqual(reference);
     expect(transcriptReferenceFor(submitEvent(2, reference))).toEqual(reference);
     expect(transcriptReferenceFor(turnStarted(3))).toBeNull();
+    expect(
+      transcriptReferenceFor({
+        ...submitEvent(4, reference),
+        payload: {
+          kind: "command.recorded",
+          command: {
+            id: "command-4",
+            sessionId: "session-1",
+            createdAt: 40,
+            route: null,
+            intent: {
+              kind: "interaction.resolve",
+              attachmentId: "attachment-1",
+              interactionId: "interaction-1",
+              resolution: { optionIds: ["once"], response: null },
+              reference,
+            },
+          },
+        },
+      }),
+    ).toEqual(reference);
+    expect(
+      transcriptReferenceFor({
+        ...submitEvent(5, reference),
+        payload: {
+          kind: "command.recorded",
+          command: {
+            id: "command-5",
+            sessionId: "session-1",
+            createdAt: 50,
+            route: null,
+            intent: { kind: "executor.stop", attachmentId: "attachment-1" },
+          },
+        },
+      }),
+    ).toBeNull();
   });
 });

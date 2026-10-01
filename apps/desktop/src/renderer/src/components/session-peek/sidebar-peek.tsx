@@ -16,13 +16,13 @@
  * here, once.
  *
  * ONE FAILURE CONVENTION FOR THE PULL. `readContent` REJECTS when the door
- * refuses, rather than answering `null`. `use-peek-content.ts` caches an
- * answer and does not cache a rejection, so a Session that genuinely has
- * nothing to show is remembered while a bridge that failed is retried the next
- * time the pointer rests on it — and the error text stays attached to the
- * failure instead of being dropped at the boundary.
+ * refuses, rather than answering `null`. A failed local fold is retried on
+ * the next glance; an empty fold is remembered. Utility refusal/failure keeps
+ * the readable local fold and may retry after the summary cooldown, never on
+ * a background timer.
  *
- * ACTING ADOPTS, READING DOES NOT. A peek costs one fold (plan §1.1); an
+ * ACTING ADOPTS, READING DOES NOT. A peek first pulls a local fold; only an
+ * explicit unpinned glance may ask for utility refinement. An
  * answer, a send or viewing the conversation is an explicit intent, and only
  * then is the Session adopted so the SHIPPED delivery path — `answerInteraction`
  * and the resident client's `submit` — does the work. Neither is re-implemented
@@ -74,8 +74,8 @@ export function createSidebarPeekPorts(surface: SidebarPeekSurface): SessionPeek
     surface.setRead(sessionId, false);
   };
   return {
-    async readContent(sessionId) {
-      const result = await window.api.sessions.peekContent({ sessionId });
+    async readContent(sessionId, refine = false) {
+      const result = await window.api.sessions.peekContent({ sessionId, refine });
       // A refusal is a FAILED card, never a card claiming the Session said
       // nothing — and never a read: a peek has no read side effect at all.
       if (!result.ok) throw new Error(result.error);

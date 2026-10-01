@@ -2,10 +2,10 @@
  * VC-30 — the peek a ticket FOLDER opens (D2).
  *
  * A folder is a ticket, so its peek is the ticket: what column it sits in, its
- * title, and its Sessions — each with ONE line on what it did. That line is the
+ * title, and its Sessions — each with a summary of what it did. That summary is the
  * whole reason to peek a folder rather than expand it: a folder of three
  * Sessions all titled `Chat` expands into three rows that still say nothing,
- * while three one-line summaries say which of them answered the reviewer.
+ * while three readable summaries say which of them answered the reviewer.
  *
  * Read-only by construction. Nothing behind a folder can be waiting on anyone (a
  * Session asking for a person is pinned to Active — VC-69), so there is no
@@ -34,7 +34,7 @@ export interface TicketPeekSession {
   readonly rowId: string;
   readonly title: string;
   readonly age: string;
-  /** `null` when the fold had nothing readable to show for this Session. */
+  /** Generated summary or durable-tail fallback; `null` when neither is readable. */
   readonly summary: string | null;
   /** The row's own `SessionGlyph`, so the list reads as the sidebar in miniature. */
   readonly glyph: React.ReactNode;
@@ -130,9 +130,9 @@ export function TicketPeekCard({
         fact `ui/list-row.tsx` records for `density="two-line"`.
       */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 py-1.5">
-        <ul className="flex flex-col" aria-label={`${id} sessions`}>
+        <ul className="flex shrink-0 flex-col" aria-label={`${id} sessions`}>
           {sessions.map((session) => (
-            <li key={session.rowId}>
+            <li key={session.rowId} className="shrink-0">
               <button
                 type="button"
                 data-peek-drill={session.rowId}
@@ -149,8 +149,11 @@ export function TicketPeekCard({
                       {session.age}
                     </span>
                   </span>
-                  <span className="line-clamp-2 text-muted-foreground [overflow-wrap:anywhere]">
-                    {/* Never invented prose: a Session with nothing readable says so. */}
+                  <span
+                    data-peek-summary=""
+                    className="whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+                  >
+                    {/* A Session with nothing readable says so. */}
                     {session.summary ?? "No summary yet"}
                   </span>
                 </span>
