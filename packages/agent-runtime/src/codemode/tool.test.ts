@@ -358,6 +358,47 @@ describe("scheduling", () => {
   });
 });
 
+describe("one prompt at a time", () => {
+  it("never lets a judgement's question overlap a verb's own budget question", async () => {
+    let asking = 0;
+    let peakAsking = 0;
+    const ask = async (ms: number) => {
+      asking += 1;
+      peakAsking = Math.max(peakAsking, asking);
+      await sleep(ms);
+      asking -= 1;
+    };
+    const verb: SurfaceTool = {
+      id: "session.start",
+      verb: true,
+      tool: {
+        ...textTool("session_start", async () => {
+          // The door asks a person to extend a spent delegation allowance,
+          // for longer than the program's whole running time.
+          await ask(1_200);
+          return "Started.";
+        }),
+      },
+    };
+    const gate: NonNullable<AgentLoopConfig["beforeToolCall"]> = async ({ toolCall }) => {
+      if (toolCall.name === "read") await ask(30);
+      return undefined;
+    };
+    const f = fixture({
+      tools: [verb, textTool("read", () => "read")],
+      gate,
+      limits: { timeoutMs: 1_000 },
+    });
+    const { text, details } = await run(
+      f,
+      "return await Promise.all([tools.session_start({}), tools.read({}), tools.session_start({}), tools.read({})]);",
+    );
+    expect(peakAsking).toBe(1);
+    expect(text).toContain('Returned: [{"text":"Started."},"read",{"text":"Started."},"read"]');
+    expect(details.pausedMs).toBeGreaterThanOrEqual(2_400);
+  }, 15_000);
+});
+
 describe("replay", () => {
   it("answers completed calls from the journal and never repeats their effect", async () => {
     const effects: string[] = [];

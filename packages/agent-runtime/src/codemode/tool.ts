@@ -146,6 +146,15 @@ export interface CodeModeDetails {
   output?: ToolOutputCut;
 }
 
+/**
+ * A program that reached for Node rather than for its tools. Measured on a
+ * small model's first program, so the answer says what to do instead.
+ */
+const NODE_API =
+  /\b(?:require|process|fs|__dirname|fetch|setTimeout|setInterval|Buffer|module) is not defined/u;
+const NODE_API_HINT =
+  "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`.";
+
 /** Records kept per run in the result; the rest are counted, not listed. */
 const MAX_RECORDED_CALLS = 50;
 const MAX_RECORDED_ARGUMENT_BYTES = 1_024;
@@ -346,22 +355,27 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   let issued = 0;
   let replayed = 0;
 
-  // The Session's own gate, serialised and with the clock stopped while it
-  // decides: judgement is where a call may wait on a person.
+  // The Session's own gate, with the clock stopped while it decides:
+  // judgement is where a call may wait on a person.
   const gate = host.gate();
   const judge: BeforeToolCall | undefined =
     gate === undefined
       ? undefined
-      : (context, callSignal) =>
-          judging.run(async () => {
-            if (callSignal?.aborted) return { block: true, reason: "The program was cancelled." };
-            clock.pause();
-            try {
-              return await gate(context, callSignal);
-            } finally {
-              clock.resume();
-            }
-          });
+      : async (context, callSignal) => {
+          if (callSignal?.aborted) return { block: true, reason: "The program was cancelled." };
+          clock.pause();
+          try {
+            return await gate(context, callSignal);
+          } finally {
+            clock.resume();
+          }
+        };
+  // A call that may overlap is judged under the lock and then runs beside
+  // others like it; nothing about running it can ask a person.
+  const lockedJudge: BeforeToolCall | undefined =
+    judge === undefined
+      ? undefined
+      : (context, callSignal) => judging.run(() => judge(context, callSignal));
 
   const nestedCall = async (
     tool: AgentTool,
@@ -403,24 +417,39 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     records.push(record);
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
+    // A verb's only wait is a person answering its budget question, so its
+    // run stops the clock the way judgement does.
+    const verb = input.kinds.get(tool.name) === "verb";
     const slotted: AgentTool = {
       ...tool,
       execute: (callId, params, executeSignal, onUpdate) =>
-        slots.run(shared, executeSignal, () =>
-          tool.execute(callId, params, executeSignal, onUpdate),
-        ),
+        slots.run(shared, executeSignal, async () => {
+          if (verb) clock.pause();
+          try {
+            return await tool.execute(callId, params, executeSignal, onUpdate);
+          } finally {
+            if (verb) clock.resume();
+          }
+        }),
     };
     await host.observe({ type: "tool_execution_start", toolCallId: id, toolName: tool.name, args });
-    const work = runToolCall(
-      { type: "toolCall", id, name: tool.name, arguments: (args ?? {}) as JsonObject },
-      {
-        tools: [slotted],
-        assistantMessage: syntheticMessage(),
-        context: { messages: [], tools: [slotted] } satisfies AgentContext,
-        ...(judge === undefined ? {} : { beforeToolCall: judge }),
-        signal,
-      },
-    );
+    const call = (beforeToolCall: BeforeToolCall | undefined) =>
+      runToolCall(
+        { type: "toolCall", id, name: tool.name, arguments: (args ?? {}) as JsonObject },
+        {
+          tools: [slotted],
+          assistantMessage: syntheticMessage(),
+          context: { messages: [], tools: [slotted] } satisfies AgentContext,
+          ...(beforeToolCall === undefined ? {} : { beforeToolCall }),
+          signal,
+        },
+      );
+    // One prompt at a time, structurally. A call that runs alone — every
+    // write, `bash`, verb and unmarked MCP tool, and the only kind whose own
+    // execution can ask a person (a verb's budget) — holds the judgement
+    // lock from its judgement to its end, so no other judgement, and so no
+    // other question, can start while it runs.
+    const work = shared ? call(lockedJudge) : judging.run(() => call(judge));
     inflight.add(work);
     let outcome;
     try {
@@ -618,6 +647,7 @@ async function assemble(input: {
         ? `Program error: ${result.error.stack ?? result.error.message}`
         : `Program stopped: ${result.error.message}`,
     );
+    if (NODE_API.test(result.error.message)) body.push(NODE_API_HINT);
   }
   let text = body.join("\n");
   const details: CodeModeDetails = {
@@ -652,7 +682,9 @@ async function assemble(input: {
   }
   const header = [
     `Program ${ok ? "completed" : "failed"} in ${seconds(input.activeMs)}`,
-    input.pausedMs >= 1_000 ? ` (and ${seconds(input.pausedMs)} waiting on approval)` : "",
+    input.pausedMs >= 1_000
+      ? ` (plus ${seconds(input.pausedMs)} paused on approvals and Volli verbs)`
+      : "",
     ` · ${callSummary(input.records, input.replayed)}.`,
     printed.images > 0
       ? ` ${printed.images} image${printed.images === 1 ? " was" : "s were"} left out: Code Mode returns no images.`
