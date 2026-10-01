@@ -700,7 +700,7 @@ export async function mcpPreviewTool(
   if (!result.ok) {
     if (result.blocked?.kind === "sign-in") {
       return refusal(
-        `${draft.server.name} needs a person to sign in before its tools can be read, so nothing was read and nothing was saved. mcp_install with confirm="apply" asks the person driving to sign in; only a person can.`,
+        `${draft.server.name} needs a person to sign in before its tools can be read, so nothing was read and nothing was saved. server_install with confirm="apply" asks the person driving to sign in; only a person can.`,
       );
     }
     return refusal(
@@ -810,7 +810,7 @@ export async function mcpInstallTool(
       target,
       saved.blocked,
       request,
-      "mcp_install",
+      "server_install",
       signal,
     );
     if (routed.provided) {
@@ -917,7 +917,7 @@ export async function mcpRefreshTool(
       result.server,
       result.blocked,
       request,
-      "mcp_refresh",
+      "server_refresh",
       signal,
     );
     if (routed.provided) {

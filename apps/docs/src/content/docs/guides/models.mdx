@@ -1,0 +1,84 @@
+---
+title: Model access and usage
+description: Connect providers, choose default models, and read Volli's usage numbers.
+sidebar:
+  label: Models and usage
+---
+
+Use **Settings → Models** to connect provider accounts, choose default models,
+control which models appear in pickers, and set automatic compaction. When
+Volli creates a Session, it records the model for that Session. Changing a
+default does not change the model already recorded for an existing Session.
+
+## Connect a provider
+
+1. In **Settings → Models → Available to connect**, find your provider.
+2. Select **Sign in** and follow the provider's prompts. Depending on the
+   provider, you may sign in with a browser, a device code, or an API key.
+3. In **Default models → Board chats**, choose an available model.
+4. Optional: Set a different **Ticket Sessions** model for ticket work.
+
+A provider appears under **Signed in** once its credentials are saved. If a
+request later fails to authenticate, repair the connection there and follow
+[Recover a Session](/guides/recover-session/).
+
+## Choose a default model
+
+New chats choose a model in this order: the composer's model choice, then the
+project's override, then the matching app-wide default. To set the project
+override, open **Configure → Sessions → Chat → Model** and choose a model and
+reasoning level. The override applies to new Board and Ticket chats in that
+project. An Automation's **Project default** uses the same override.
+
+**Default models** in **Settings → Models** has six app-wide rows. Each row
+stores a model and its reasoning level when you choose one. The table shows
+what applies when no project override or explicit model choice is set. When you
+pick a named tier, that tier's app-wide row applies instead of the project
+override.
+
+| Row | Used for | When unset |
+| --- | --- | --- |
+| **Board chats** | Board Sessions | Choose a model here; this is the root default. |
+| **Ticket Sessions** | Ticket Sessions | Uses **Board chats**. |
+| **Fast** | Quick, low-cost work | Uses **Ticket Sessions**. |
+| **Deep** | Complex reasoning, planning, and review | Uses **Ticket Sessions**. |
+| **Visual** | Work with images, screenshots, and pages | Uses **Ticket Sessions** only if that model accepts images. Otherwise, choose a Visual model. |
+| **Utility** | Chat names and summaries | Uses the chat’s own model. |
+
+Choose **Settings → Models**, then select a model in the row for the kind of
+work you want to configure. If you choose a model explicitly, select one of its
+available reasoning levels in the control beside it. The **Visual** row offers
+only models that accept image input.
+
+## Provider accounts and model pickers
+
+In **Signed in**, manage the providers you have connected. **Available to
+connect** lists other providers. A provider's models appear in default-model
+selectors when your account can use them. Use **Catalog** to hide or show
+individual models in pickers. Hiding a model does not remove the provider
+account.
+
+## Automatic compaction
+
+**Automatic compaction** is on by default. When a Session's conversation nears
+its context limit, Volli shortens it automatically. Turn the setting off if
+you don't want that. Turning it off does not disable `/compact` or recovery
+after a provider rejects a turn because the context is too large.
+
+## Usage readings
+
+Volli shows two kinds of usage:
+
+- **Session usage** totals the model operations recorded for a Session. Volli
+  marks the total **Provider-reported**, **Estimated** (priced from its own
+  catalog), or **Unverified**. When Volli can price only some of a Session's
+  operations, it marks the total as partial. A catalog estimate is an
+  estimate, not an invoice.
+- **Usage limits** shows the subscription usage windows that supported
+  providers report. Open the **Usage limits** control beside `⌘K` to check
+  them; they are not in **Settings → Models**.
+
+See [Settings and configuration](/guides/settings/#configure) for project
+configuration and the other Settings pages, and [Chats and
+worktrees](/guides/agents-and-worktrees/) for the Board and Ticket Session
+workflows.

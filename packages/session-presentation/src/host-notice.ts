@@ -16,9 +16,12 @@ import {
   SESSION_HOST_NOTICE_METADATA_KIND,
   SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
   SUBAGENT_NOTICE_STATES,
+  WATCH_NOTICE_FACTS,
   shortSessionId,
   type SubagentNoticeReason,
   type SubagentNoticeState,
+  type WatchNoticeEvent,
+  type WatchNoticeFact,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -40,13 +43,23 @@ export interface BrowserHoldNotice {
   action: "person-took" | "ask-to-leave";
 }
 
+/** Changes to watched Sessions and Tickets (VC-457). */
+export interface WatchNotice {
+  kind: "watch";
+  events: readonly WatchNoticeEvent[];
+}
+
 export interface UnknownHostNotice {
   kind: "unknown";
   text: string;
 }
 
 /** One host row in the portable Session Surface Model. */
-export type TranscriptHostNotice = SubagentNotice | BrowserHoldNotice | UnknownHostNotice;
+export type TranscriptHostNotice =
+  | SubagentNotice
+  | BrowserHoldNotice
+  | WatchNotice
+  | UnknownHostNotice;
 
 /**
  * Read one transcript message as a host notice.
@@ -76,8 +89,15 @@ export function readHostNotice(
   return readHistoricalSubagent(text) ?? unknownNotice(text);
 }
 
-function readSharedNotice(value: unknown): SubagentNotice | BrowserHoldNotice | null {
+function readSharedNotice(value: unknown): SubagentNotice | BrowserHoldNotice | WatchNotice | null {
   const notice = recordOf(value);
+  if (notice?.kind === "watch") {
+    if (!Array.isArray(notice.events)) return null;
+    const events = notice.events.map(watchEvent);
+    return events.length > 0 && events.every((event) => event !== null)
+      ? { kind: "watch", events: events as WatchNoticeEvent[] }
+      : null;
+  }
   if (notice?.kind === "subagent") {
     const childSessionId = nonEmptyString(notice.childSessionId);
     const title = typeof notice.title === "string" ? notice.title : null;
@@ -194,6 +214,22 @@ function messageText(parts: UIMessage["parts"]): string {
     .trim();
 }
 
+function watchEvent(value: unknown): WatchNoticeEvent | null {
+  const event = recordOf(value);
+  if (event === null) return null;
+  const subject = event.subject === "session" || event.subject === "ticket" ? event.subject : null;
+  const id = nonEmptyString(event.id);
+  const label = nonEmptyString(event.label);
+  const fact =
+    typeof event.fact === "string" && (WATCH_NOTICE_FACTS as readonly string[]).includes(event.fact)
+      ? (event.fact as WatchNoticeFact)
+      : null;
+  const detail = event.detail === null ? null : nonEmptyString(event.detail);
+  if (subject === null || id === null || label === null || fact === null) return null;
+  if (event.detail !== null && detail === null) return null;
+  return { subject, id, label, fact, detail };
+}
+
 function subagentState(value: unknown): SubagentNoticeState | null {
   return typeof value === "string" && (SUBAGENT_NOTICE_STATES as readonly string[]).includes(value)
     ? (value as SubagentNoticeState)
@@ -236,7 +272,7 @@ const STATE_WORD: Record<SubagentNoticeState, string> = {
 };
 
 const STATE_NOTE: Record<SubagentNoticeState, string> = {
-  completed: "Finished its task; its answer is in its own Session.",
+  completed: "",
   interrupted: "Its turn ended before it answered.",
   stopped: "It was stopped before it answered.",
   failed: "Its executor failed before it answered.",
@@ -258,6 +294,34 @@ export function subagentNoticeCopy(notice: SubagentNotice): SubagentNoticeCopy {
       notice.reason === "app-relaunched"
         ? "Volli relaunched while its turn was active, so the turn ended before it answered."
         : STATE_NOTE[notice.state],
+  };
+}
+
+const WATCH_FACT_WORD: Record<WatchNoticeFact, string> = {
+  "turn-completed": "finished its turn",
+  "turn-interrupted": "was interrupted",
+  "signaled-done": "signaled done",
+  "signaled-blocked": "signaled blocked",
+  stopped: "was stopped",
+  "ticket-moved": "moved",
+  "ticket-commented": "has a new comment",
+  "ticket-signaled": "was signaled",
+};
+
+export interface WatchNoticeCopy {
+  headline: string;
+  /** One line per change, in delivery order. */
+  lines: readonly string[];
+}
+
+export function watchNoticeCopy(notice: WatchNotice): WatchNoticeCopy {
+  const lines = notice.events.map((event) => {
+    const detail = event.detail === null ? "" : ` (${event.detail})`;
+    return `${event.label} ${WATCH_FACT_WORD[event.fact]}${detail}`;
+  });
+  return {
+    headline: lines.length === 1 ? lines[0]! : `${lines.length} watched changes`,
+    lines,
   };
 }
 

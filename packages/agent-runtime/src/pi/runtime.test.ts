@@ -26,16 +26,22 @@ import {
   createAssistantMessageEventStream,
   createModels,
   fauxProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   InMemoryCredentialStore,
   ModelsError,
+  normalizeContext,
   type AnthropicMessagesCompat,
   type AssistantMessage,
   type Context,
   type CredentialStore,
+  type JsonObject,
   type Message,
   type Model,
   type Models,
+  type SystemMessage,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
@@ -44,6 +50,8 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   mcpProviderToolName,
+  parseMcpToolKey,
+  withParallelReadEligibility,
   sessionToolIds,
   skillPromptResource,
   SKILL_POLICY_DEFAULT,
@@ -66,10 +74,24 @@ import { piContext } from "./pi-context";
 import { toAnthropicMessages } from "./provider-compaction";
 import { projectedContextTokens } from "./token-counting";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
-import { MAIN_BRANCH_TIP } from "./sidecar-storage";
+import { MAIN_BRANCH_TIP, SIDECAR_IDENTITY } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
 import { withoutReasoning } from "./reasoning";
-import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
+import { recoveryRefFor } from "./transcript";
+import { withoutSystemMessages } from "./transcript-context";
+import { estimatedContextTokens } from "./compaction";
+import {
+  CONTEXT_CARRY_MAX_CHARS,
+  createPiAgentRuntime,
+  type PiRuntimeHostOptions,
+} from "./runtime";
+import { McpServerBudget } from "../mcp/server-budget";
+import type { ConnectivityPort } from "./connectivity";
+import {
+  TRANSPORT_NOTICE_AFTER_ATTEMPTS,
+  TRANSPORT_RETRY_BUDGET_MS,
+  TRANSPORT_RETRY_LIMIT,
+} from "./transport-retry";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import type { UsageProbeFetch } from "./usage-limits/probe";
 
@@ -94,6 +116,13 @@ const FABLE_MODEL_ID = "claude-fable-5-1";
  */
 const UNFLAGGED_FABLE_ID = "claude-fable-5";
 const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
+/**
+ * A real 1×1 PNG. Every request passes the send-time image guard, which
+ * decodes what it sends, so an image a test expects the model to see must be
+ * one a decoder can read; undecodable bytes reach the model as a placeholder.
+ */
+const TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 // --- scripted model stream -------------------------------------------------
 //
@@ -101,9 +130,39 @@ const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 // the provider call is scripted. Each entry in the script answers one provider
 // request, in order.
 
+/**
+ * One provider request as a scripted step reads it.
+ *
+ * Pi 0.86 hands a stream function a normalized `TranscriptContext`: the system
+ * prompt and the tool declarations are no longer fields of the request but
+ * system messages inside it, the leading one carrying both and any later one
+ * a prompt addition or a tool delta. The three fields the old `Context` had
+ * are replayed off those messages here, and the conversation is read without
+ * them, so a test about the prompt, the tools or the turns keeps asking the
+ * question it always asked. `transcript` is the request exactly as the
+ * provider met it, for the tests about the system messages themselves.
+ */
+interface ScriptContext extends Context {
+  transcript: readonly Message[];
+}
+
+function scriptContext(context: TranscriptContext): ScriptContext {
+  return {
+    systemPrompt: getCurrentSystemPrompt(context.messages),
+    tools: getCurrentTools(context.messages),
+    messages: withoutSystemMessages(context.messages),
+    transcript: context.messages,
+  };
+}
+
+/** The system messages of a recorded request, in transcript order. */
+function systemMessagesOf(transcript: readonly Message[]): SystemMessage[] {
+  return transcript.filter((message): message is SystemMessage => message.role === "system");
+}
+
 type ScriptStep = (
   emit: EmitApi,
-  context: Context,
+  context: ScriptContext,
   signal: AbortSignal | undefined,
   model: Model<string>,
   reasoning: string | undefined,
@@ -118,7 +177,7 @@ interface EmitApi {
    */
   thinking(delta: string, signature?: string): void;
   text(delta: string): void;
-  toolCall(name: string, args: Record<string, unknown>): void;
+  toolCall(name: string, args: JsonObject): void;
   /**
    * A provider diagnostic on the reply, as pi-ai appends them.
    *
@@ -127,7 +186,7 @@ interface EmitApi {
    * dropped-block report, and it is appended after a SUCCESSFUL stream, just
    * before `done` (VC-254).
    */
-  diagnostic(type: string, details: Record<string, unknown>): void;
+  diagnostic(type: string, details: JsonObject): void;
   finish(): void;
   fail(message: string): void;
   cancel(): void;
@@ -279,7 +338,7 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
       }
       await step(
         emit,
-        context,
+        scriptContext(context),
         options?.signal,
         model as Model<string>,
         (options as { reasoning?: string } | undefined)?.reasoning,
@@ -402,6 +461,8 @@ interface ProviderCall {
    * wire — see {@link wireOf}.
    */
   context: readonly Message[];
+  /** The normalized transcript as the provider met it, system messages included. */
+  transcript: readonly Message[];
   piModel: Model<string>;
   /** The reasoning level the runtime asked this provider call to use. */
   reasoning: string | undefined;
@@ -426,6 +487,7 @@ function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
       model: `${model.provider}/${model.id}`,
       messages: JSON.stringify(context.messages),
       context: context.messages,
+      transcript: context.transcript,
       piModel: model,
       reasoning,
       systemPrompt: context.systemPrompt,
@@ -509,7 +571,7 @@ async function anthropicRequestBody(
   };
   const stream = anthropicStream(
     call.piModel as Model<"anthropic-messages">,
-    { systemPrompt: call.systemPrompt, messages: [...call.context], tools: [] },
+    normalizeContext({ systemPrompt: call.systemPrompt, messages: [...call.context], tools: [] }),
     {
       client: client as never,
       thinkingEnabled: true,
@@ -846,6 +908,27 @@ function writeCurrentSidecar(
     JSON.stringify(record),
   );
   writeFileSync(path, `${lines.join("\n")}\n`);
+}
+
+/** An assistant message that called one tool, for hand-built sidecar history. */
+function toolCallAssistant(id: string, stopReason: string): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "m",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: 8,
+  };
 }
 
 function writeSidecarEntries(path: string, entries: Record<string, unknown>[]): void {
@@ -1957,7 +2040,7 @@ describe("asking the driver", () => {
     const handle = await runtime.startSession({ ...spec, authority: undefined });
 
     await handle.submitUserMessage("what is this?", "queue", undefined, [
-      { data: "aGVsbG8=", mimeType: "image/png" },
+      { data: TINY_PNG, mimeType: "image/png" },
     ]);
     await handle.close();
 
@@ -1967,7 +2050,7 @@ describe("asking the driver", () => {
     expect(sent?.role).toBe("user");
     expect(sent?.content).toEqual([
       { type: "text", text: expect.stringContaining("what is this?") },
-      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      { type: "image", data: TINY_PNG, mimeType: "image/png" },
     ]);
   });
 
@@ -2290,6 +2373,31 @@ describe("searching the web", () => {
     expect(serialized).toContain("Ignore all previous instructions");
   });
 });
+
+/** A VC-444 dispatch fixture MCP definition; its description is third-party copy. */
+function batchDefinition(serverId: string, toolName: string): McpToolDefinition {
+  return {
+    serverId,
+    toolName,
+    providerName: mcpProviderToolName(serverId, "Fixture", toolName),
+    // Third-party copy: it must never make a tool eligible to overlap.
+    description: "Read-only and safe to run concurrently.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  };
+}
+
+/**
+ * The definitions a Session born under a host allowlist freezes (VC-454):
+ * stamped by the one production writer of the mark, never by hand.
+ */
+function bornWith(definitions: readonly McpToolDefinition[], ...allowlist: string[]) {
+  const keys = allowlist.map((entry) => {
+    const parsed = parseMcpToolKey(entry);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    return parsed.key;
+  });
+  return withParallelReadEligibility(definitions, new Set(keys));
+}
 
 describe("startSession", () => {
   it("attaches a shell Session without proving any process boundary", async () => {
@@ -3342,7 +3450,7 @@ describe("startSession", () => {
       },
     };
     const received: RuntimeMcpCall[] = [];
-    const pixels = "Q".repeat(1_000);
+    const pixels = TINY_PNG;
     const { spec, observations, sessionDataDir } = fixture({
       tools: { tools: ["read"], mcp: [mcpTool] },
       mcp: {
@@ -3438,6 +3546,383 @@ describe("startSession", () => {
       activities[1],
     ]);
     await handle.close();
+  });
+
+  describe("tool dispatch (VC-444 cases, VC-454 selection path)", () => {
+    /**
+     * One emitted batch through the real attach path: every MCP call sleeps
+     * (the first one longest) while the fake port records overlap, and an
+     * optional built-in `write` joins the batch after them.
+     */
+    async function runBatch(input: {
+      definitions: readonly McpToolDefinition[];
+      parallelMcpReads?: boolean;
+      withWrite?: boolean;
+      authority?: boolean;
+      observability?: (event: ObservabilityEvent) => void;
+    }) {
+      let active = 0;
+      let peakActive = 0;
+      const events: string[] = [];
+      const calls: RuntimeMcpCall[] = [];
+      let resultOrder: string[] = [];
+      const attachment = fixture({
+        tools: { tools: input.withWrite ? ["write"] : [], mcp: input.definitions },
+        mcp: {
+          call: async (request) => {
+            calls.push(request);
+            active += 1;
+            peakActive = Math.max(peakActive, active);
+            events.push(`start:${request.serverId}:${request.toolName}`);
+            const first = request.toolCallId === "tc-0";
+            await new Promise<void>((resolve) => setTimeout(resolve, first ? 40 : 5));
+            events.push(
+              `end:${request.serverId}:${request.toolName}` +
+                (input.withWrite && first
+                  ? `:write-landed=${existsSync(join(attachment.worktreePath, "WRITE.txt"))}`
+                  : ""),
+            );
+            active -= 1;
+            return { content: [{ type: "text", text: request.toolName }], isError: false };
+          },
+        },
+      });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        ...(input.parallelMcpReads === undefined
+          ? {}
+          : { parallelMcpReads: input.parallelMcpReads }),
+        ...(input.observability === undefined
+          ? {}
+          : {
+              observability: {
+                record: (event: ObservabilityEvent) => {
+                  input.observability?.(event);
+                  if (event.kind === "authority") events.push(`authority:${event.outcome}`);
+                },
+              },
+            }),
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              for (const tool of input.definitions) emit.toolCall(tool.providerName, {});
+              if (input.withWrite) {
+                emit.toolCall("write", {
+                  path: join(attachment.worktreePath, "WRITE.txt"),
+                  content: "written\n",
+                });
+              }
+              emit.finish();
+            },
+            (emit, context) => {
+              resultOrder = context.messages
+                .filter(
+                  (message): message is Extract<Message, { role: "toolResult" }> =>
+                    message.role === "toolResult",
+                )
+                .map((message) => message.toolCallId);
+              emit.text("complete");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(
+        input.authority === true ? attachment.spec : { ...attachment.spec, authority: undefined },
+      );
+      try {
+        await handle.submitUserMessage("Run the synthetic MCP batch.");
+      } finally {
+        await handle.close();
+      }
+      // The runtime observation each Pi result became, keyed by the same
+      // tool-call id the port received.
+      const activities = attachment.observations.flatMap((observation) =>
+        observation.kind === "activity" && observation.state === "completed"
+          ? [observation.activityId]
+          : [],
+      );
+      return { peakActive, events, resultOrder, calls, activities };
+    }
+
+    const twoReads = () => [
+      batchDefinition("fixture-1", "fixture/first"),
+      batchDefinition("fixture-1", "fixture/second"),
+    ];
+
+    it("keeps ordinary production Sessions sequential for an emitted MCP batch", async () => {
+      const run = await runBatch({ definitions: twoReads() });
+      expect(run.peakActive).toBe(1);
+      expect(run.events).toEqual([
+        "start:fixture-1:fixture/first",
+        "end:fixture-1:fixture/first",
+        "start:fixture-1:fixture/second",
+        "end:fixture-1:fixture/second",
+      ]);
+    });
+
+    it("keeps a Session born unmarked sequential even on a runtime that honours marks", async () => {
+      const run = await runBatch({ definitions: bornWith(twoReads()), parallelMcpReads: true });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("ignores a Session's frozen marks unless the runtime was built to honour them", async () => {
+      // The kill switch: the record says parallel, the host says no.
+      const marked = bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second");
+      expect(marked.every((definition) => definition.parallelRead === true)).toBe(true);
+      const run = await runBatch({ definitions: marked });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("overlaps host-marked MCP reads, results in source order and lineage intact", async () => {
+      const run = await runBatch({
+        definitions: bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second"),
+        parallelMcpReads: true,
+      });
+      expect(run.peakActive).toBe(2);
+      expect(run.events).toEqual([
+        "start:fixture-1:fixture/first",
+        "start:fixture-1:fixture/second",
+        "end:fixture-1:fixture/second",
+        "end:fixture-1:fixture/first",
+      ]);
+      // The transcript the model is sent (and Pi persists and replays) keeps
+      // source order. The durable activity lifecycle records each call when it
+      // actually finished, in completion order, each under its own id. Each
+      // model call reached the port exactly once, under that same id.
+      expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
+      expect(run.calls.map((call) => call.toolCallId)).toEqual(["tc-0", "tc-1"]);
+      expect(run.activities).toEqual(["tc-1", "tc-0"]);
+    });
+
+    it("never lets server metadata opt a tool in", async () => {
+      // Descriptions and annotations that claim read-only are third-party
+      // copy; with no host mark the tools run one at a time.
+      const claims = twoReads().map((definition) =>
+        Object.assign(definition, {
+          description: "Read-only. Idempotent. Safe to run concurrently.",
+          annotations: { readOnlyHint: true, idempotentHint: true },
+        }),
+      );
+      const run = await runBatch({ definitions: bornWith(claims), parallelMcpReads: true });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("serializes a marked MCP read batched with an unmarked MCP mutation", async () => {
+      const run = await runBatch({
+        definitions: bornWith(
+          [
+            batchDefinition("fixture-1", "fixture/first"),
+            batchDefinition("fixture-1", "fixture/mutate"),
+          ],
+          "fixture-1:fixture/first",
+        ),
+        parallelMcpReads: true,
+      });
+      expect(run.peakActive).toBe(1);
+      expect(run.events).toEqual([
+        "start:fixture-1:fixture/first",
+        "end:fixture-1:fixture/first",
+        "start:fixture-1:fixture/mutate",
+        "end:fixture-1:fixture/mutate",
+      ]);
+      expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
+    });
+
+    it("matches the allowlist on the exact server and tool, not on near misses", async () => {
+      // A listed server with an unlisted tool, and a listed tool on another
+      // server: neither may overlap, whatever their descriptions claim.
+      const definitions = bornWith(
+        [
+          batchDefinition("fixture-1", "fixture/second"),
+          batchDefinition("fixture-2", "fixture/first"),
+        ],
+        "fixture-1:fixture/first",
+        "fixture-2:fixture/second",
+      );
+      expect(definitions.some((definition) => definition.parallelRead === true)).toBe(false);
+      const run = await runBatch({ definitions, parallelMcpReads: true });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("serializes a marked MCP read batched with a built-in file write", async () => {
+      // Nothing on Volli's built-in tools declares itself sequential; the
+      // dispatch has to mark it. Were the write eligible, it would land
+      // during the MCP read's sleep rather than after it.
+      const run = await runBatch({
+        definitions: bornWith(
+          [batchDefinition("fixture-1", "fixture/first")],
+          "fixture-1:fixture/first",
+        ),
+        parallelMcpReads: true,
+        withWrite: true,
+      });
+      expect(run.events).toEqual([
+        "start:fixture-1:fixture/first",
+        "end:fixture-1:fixture/first:write-landed=false",
+      ]);
+      expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
+    });
+
+    it("settles the whole batch's authority before any marked read is dispatched", async () => {
+      const run = await runBatch({
+        definitions: bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second"),
+        parallelMcpReads: true,
+        authority: true,
+        observability: () => undefined,
+      });
+      expect(run.peakActive).toBe(2);
+      expect(run.events.slice(0, 4)).toEqual([
+        "authority:allowed",
+        "authority:allowed",
+        "start:fixture-1:fixture/first",
+        "start:fixture-1:fixture/second",
+      ]);
+    });
+
+    it("dispatches nothing while an approval in an opted-in Session's batch is pending", async () => {
+      // A real parked approval: a refused `git reset --hard` on the main
+      // checkout escalates to a person. Only built-ins can ever be refused,
+      // and a built-in in the batch makes the whole batch sequential, so the
+      // marked reads behind it must wait for the answer and then run in order.
+      const answer = Promise.withResolvers<"allow">();
+      const asked = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const definitions = bornWith(
+        twoReads(),
+        "fixture-1:fixture/first",
+        "fixture-1:fixture/second",
+      );
+      const attachment = fixture({
+        tools: { tools: ["execute"], mcp: definitions },
+        mcp: {
+          call: async (request) => {
+            calls.push(`mcp:${request.toolCallId}`);
+            return { content: [{ type: "text", text: "read" }], isError: false };
+          },
+        },
+      });
+      attachment.spec.authority = {
+        ...attachment.spec.authority,
+        location: "main-checkout",
+        fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+      };
+      attachment.spec.ask = async () => {
+        asked.resolve();
+        return answer.promise;
+      };
+      const exec = vi.fn(async () => {
+        calls.push("exec:tc-0");
+        return { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
+      });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        parallelMcpReads: true,
+        executionEnvFactory: async () =>
+          ({
+            cwd: attachment.worktreePath,
+            exec,
+            cleanup: async () => undefined,
+          }) as unknown as ExecutionEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "git reset --hard" });
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("done");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      const delivery = handle.submitUserMessage("Reset, then read.");
+
+      await asked.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toEqual([]);
+      answer.resolve("allow");
+      await delivery;
+      await handle.close();
+
+      expect(calls).toEqual(["exec:tc-0", "mcp:tc-1", "mcp:tc-2"]);
+    });
+
+    it("withdraws in-flight and queued calls across two servers when the turn is interrupted", async () => {
+      // Two servers, one slot each in the host bound: the four-call batch
+      // has two calls running and two queued when the person presses stop.
+      const budget = new McpServerBudget({
+        limitsFor: () => ({ maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 }),
+      });
+      const started: Array<{ call: RuntimeMcpCall; signal: AbortSignal }> = [];
+      const active = new Map<string, number>();
+      const bound = budget.bind({
+        call: (request, signal) =>
+          new Promise((_resolve, reject) => {
+            started.push({ call: request, signal });
+            active.set(request.serverId, (active.get(request.serverId) ?? 0) + 1);
+            signal.addEventListener(
+              "abort",
+              () => {
+                active.set(request.serverId, active.get(request.serverId)! - 1);
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      });
+      const definitions = bornWith(
+        [
+          batchDefinition("server-a", "read"),
+          batchDefinition("server-b", "read"),
+          batchDefinition("server-a", "list"),
+          batchDefinition("server-b", "list"),
+        ],
+        "server-a:read",
+        "server-b:read",
+        "server-a:list",
+        "server-b:list",
+      );
+      const attachment = fixture({ tools: { tools: [], mcp: definitions }, mcp: bound });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        parallelMcpReads: true,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("unreachable");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession({ ...attachment.spec, authority: undefined });
+      const delivery = handle.submitUserMessage("Read everything from both servers.");
+      await vi.waitFor(() => {
+        expect(started).toHaveLength(2);
+        expect(budget.load("server-a")).toMatchObject({ active: 1, queued: 1 });
+        expect(budget.load("server-b")).toMatchObject({ active: 1, queued: 1 });
+      });
+
+      await handle.interrupt();
+      await delivery;
+
+      expect(started.map((entry) => entry.call.toolCallId)).toEqual(["tc-0", "tc-1"]);
+      expect(started.every((entry) => entry.signal.aborted)).toBe(true);
+      expect([...active.values()]).toEqual([0, 0]);
+      for (const serverId of ["server-a", "server-b"]) {
+        expect(budget.load(serverId)).toMatchObject({ active: 0, queued: 0, admitted: 1 });
+      }
+      await handle.close();
+      bound.close();
+    });
   });
 
   it("reports an MCP isError result as a failed activity the model can read", async () => {
@@ -3804,6 +4289,665 @@ describe("startSession", () => {
     expect(JSON.stringify(recoveredContext?.messages)).toContain("remembered answer");
     expect(secondHandle.recovery).toEqual(recovery);
     await secondHandle.close();
+  });
+
+  it("carries a closed attachment's conversation into a fresh one, and keeps it across that one's own resume (VC-457)", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("the refresh lives in auth/refresh.ts");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const first = await firstRuntime.startSession(attachment.spec);
+    // Through a durable command, so the question lives in its acceptance
+    // marker rather than as a message entry — the carry reads both.
+    await first.submitUserMessage("find where the token is refreshed", "queue", "command-1");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const seen: Context[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("continuing");
+            emit.finish();
+          },
+          (emit, context) => {
+            seen.push(context);
+            emit.text("still continuing");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondSpec = {
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+    };
+    const second = await secondRuntime.startSession({
+      ...secondSpec,
+      carry: {
+        ...earlier,
+        attachmentId: "attachment-1",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    // A new sidecar of its own, and nothing the earlier one recorded is
+    // replayed as a fact of this attachment.
+    expect(second.recovery?.sessionId).not.toBe(earlier.sessionId);
+    expect((await second.reconcile(null)).observations).toEqual([]);
+    await second.submitUserMessage("cont");
+    const carriedWire = JSON.stringify(seen[0]?.messages);
+    expect(carriedWire).toContain("find where the token is refreshed");
+    expect(carriedWire).toContain("the refresh lives in auth/refresh.ts");
+    // The Brief rode the earlier first message and is not composed again.
+    expect(carriedWire.match(/BEGIN TICKET BRIEF/gu)).toHaveLength(1);
+    const resumeRef = second.recovery;
+    await second.close();
+
+    const resumed = await secondRuntime.startSession({ ...secondSpec, recovery: resumeRef });
+    await resumed.submitUserMessage("again");
+    const resumedWire = JSON.stringify(seen[1]?.messages);
+    expect(resumedWire).toContain("the refresh lives in auth/refresh.ts");
+    expect(resumedWire).toContain("continuing");
+    expect(resumedWire).toContain("cont");
+    await resumed.close();
+    expect(attachment.observations.some((o) => o.kind === "attention")).toBe(false);
+  });
+
+  it("writes no carry for an earlier attachment that said nothing (VC-457)", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const silent = await runtime.startSession(attachment.spec);
+    const earlier = silent.recovery!;
+    await silent.close();
+    const second = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const own = second.recovery!;
+    await second.close();
+    expect(
+      entryRecords(own.sessionFilePath).some((entry) => entry["customType"] === "volli.context.v1"),
+    ).toBe(false);
+    expect(attachment.observations.some((o) => o.kind === "attention")).toBe(false);
+  });
+
+  it("opens fresh, and says so, when the earlier conversation cannot be read (VC-457)", async () => {
+    const attachment = fixture();
+    const seen: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      carry: {
+        runtime: "pi",
+        sessionId: "gone",
+        sessionFilePath: join(attachment.sessionDataDir, "gone.jsonl"),
+        attachmentId: "attachment-0",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    await handle.submitUserMessage("hello");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("BEGIN TICKET BRIEF");
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: expect.stringContaining("could not carry the Session's earlier conversation"),
+      }),
+    );
+  });
+
+  it("refuses to carry a sidecar another attachment wrote (VC-457)", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("secret");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const first = await firstRuntime.startSession(attachment.spec);
+    await first.submitUserMessage("hello");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const seen: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      // Names a different writer than the one the sidecar's identity records.
+      carry: { ...earlier, attachmentId: "attachment-9", workspacePath: attachment.worktreePath },
+    });
+    await handle.submitUserMessage("hi");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("secret");
+    // The right writer, recorded at the wrong path, is refused too.
+    const misplaced = await runtime.startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-3" },
+      carry: {
+        ...earlier,
+        sessionFilePath: join(attachment.sessionDataDir, "elsewhere.jsonl"),
+        attachmentId: "attachment-1",
+        workspacePath: attachment.worktreePath,
+      },
+    });
+    await misplaced.close();
+    expect(
+      attachment.observations.filter(
+        (observation) =>
+          observation.kind === "attention" &&
+          observation.state === "raised" &&
+          observation.message.includes("is not where its record says"),
+      ),
+    ).toHaveLength(1);
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({ kind: "attention", reason: "runtime-failure" }),
+    );
+  });
+
+  it("carries only what a resume would replay, and expands a carried carry (VC-457)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("withheld answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("original question");
+    const earlier = first.recovery!;
+    await first.close();
+    const records = readJsonl(earlier.sessionFilePath);
+    const marker = records.find((record) => {
+      const data = record["data"] as { kind?: string } | undefined;
+      return data?.kind === "message-settled";
+    })!;
+    const data = marker["data"] as { message: Record<string, unknown> };
+    records.push(
+      // History disagrees about the reply: it is withheld from the carry.
+      { ...marker, id: "duplicate-marker" },
+      // A settled marker for an entry that is not there.
+      {
+        ...marker,
+        id: "ghost-marker",
+        data: { ...data, message: { ...data.message, entryId: "ghost" } },
+      },
+      // A carried marker that no longer validates carries nothing.
+      {
+        ...marker,
+        id: "junk-carry",
+        customType: "volli.context.v1",
+        data: { kind: "context-carried", fromAttachmentId: "x", entries: "junk" },
+      },
+      // An earlier carry, expanded in place; its compaction cuts what came before.
+      {
+        ...marker,
+        id: "nested-carry",
+        customType: "volli.context.v1",
+        data: {
+          kind: "context-carried",
+          fromAttachmentId: "attachment-0",
+          entries: [
+            {
+              type: "compaction",
+              id: "c-0",
+              parentId: null,
+              seq: 1,
+              timestamp: 1,
+              summary: "earlier summary",
+              retainedTail: [],
+              tokensBefore: 10,
+              fromHook: false,
+            },
+            7,
+            {
+              type: "message",
+              id: "m-0",
+              parentId: "c-0",
+              seq: 2,
+              timestamp: 2,
+              message: { role: "user", content: "nested memory", timestamp: 2 },
+            },
+          ],
+        },
+      },
+    );
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const seen: Context[] = [];
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("next");
+    await second.close();
+    const wire = JSON.stringify(seen[0]?.messages);
+    expect(wire).toContain("earlier summary");
+    expect(wire).toContain("nested memory");
+    expect(wire).not.toContain("withheld answer");
+    expect(wire).not.toContain("original question");
+  });
+
+  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457 review)", async () => {
+    const attachment = fixture();
+    const seen: Context[] = [];
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, carryUnreadable: "binding unreadable" });
+    await handle.submitUserMessage("hello");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("BEGIN TICKET BRIEF");
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        reason: "runtime-failure",
+        message: expect.stringContaining("binding unreadable"),
+      }),
+    );
+  });
+
+  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457 review)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("first answer");
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("second answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("first question");
+    await first.submitUserMessage("second question");
+    const earlier = first.recovery!;
+    await first.close();
+    // A provider-native checkpoint minted by ANOTHER model sits between the
+    // two turns: the carrying attachment's model cannot replay it.
+    const records = readJsonl(earlier.sessionFilePath);
+    const second = records.findIndex((record) => {
+      const message = record["message"] as { role?: string; content?: unknown } | undefined;
+      return (
+        message?.role === "user" && JSON.stringify(message.content).includes("second question")
+      );
+    });
+    expect(second).toBeGreaterThan(0);
+    records.splice(second, 0, {
+      kind: "entry",
+      type: "compaction",
+      id: "native-checkpoint",
+      timestamp: 5,
+      summary: "opaque",
+      retainedTail: [],
+      tokensBefore: 10,
+      fromHook: false,
+      details: {
+        providerCompaction: {
+          kind: "anthropic-messages",
+          model: "some-other-model",
+          compactedAt: 5,
+          block: { type: "compaction", content: "opaque checkpoint" },
+        },
+      },
+    });
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const seen: Context[] = [];
+    const carried = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await carried.submitUserMessage("third question");
+    await carried.close();
+    const wire = JSON.stringify(seen[0]?.messages);
+    // The checkpoint could not be replayed here, and what it replaced was
+    // carried: nothing is lost.
+    expect(wire).not.toContain("opaque checkpoint");
+    expect(wire).toContain("first answer");
+    expect(wire).toContain("second answer");
+  });
+
+  it("carries no tool result whose call was withheld (VC-457 review)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("kept answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("question");
+    const earlier = first.recovery!;
+    await first.close();
+    const records = readJsonl(earlier.sessionFilePath);
+    records.push(
+      // A portable summary whose retained tail holds a call whose result
+      // follows it: that pair is carried.
+      {
+        kind: "entry",
+        type: "compaction",
+        id: "portable-summary",
+        timestamp: 7,
+        summary: "summary of earlier work",
+        retainedTail: [toolCallAssistant("call-2", "toolUse")],
+        tokensBefore: 10,
+        fromHook: false,
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "kept-result",
+        timestamp: 8,
+        message: {
+          role: "toolResult",
+          toolCallId: "call-2",
+          toolName: "read",
+          content: [{ type: "text", text: "kept tool output" }],
+          isError: false,
+          timestamp: 8,
+        },
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "aborted-call",
+        timestamp: 9,
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "m",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "aborted",
+          timestamp: 9,
+        },
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "orphan-result",
+        timestamp: 10,
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: "orphaned tool output" }],
+          isError: false,
+          timestamp: 10,
+        },
+      },
+    );
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const own = second.recovery!;
+    await second.close();
+    const marker = entryRecords(own.sessionFilePath).find(
+      (entry) => entry["customType"] === "volli.context.v1",
+    )!;
+    const carried = JSON.stringify(marker["data"]);
+    expect(carried).toContain("summary of earlier work");
+    expect(carried).toContain("kept tool output");
+    expect(carried).not.toContain("orphaned tool output");
+    expect(carried).not.toContain("call-1");
+  });
+
+  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457 review)", async () => {
+    const attachment = fixture();
+    const huge = "h".repeat(CONTEXT_CARRY_MAX_CHARS + 10_000);
+    const runtimeWith = (steps: Parameters<typeof scriptedStream>[0]) =>
+      createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream(steps)),
+      });
+    const first = await runtimeWith([
+      (emit) => {
+        emit.text("answer to the huge question");
+        emit.finish();
+      },
+      (emit) => {
+        emit.text("small answer");
+        emit.finish();
+      },
+    ]).startSession(attachment.spec);
+    // The oversized entry is the QUESTION, so the cut lands mid-turn and must
+    // move on to the next user turn rather than carry an answer without it.
+    await first.submitUserMessage(`huge question ${huge}`);
+    await first.submitUserMessage("small question");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const second = await runtimeWith([]).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const secondRef = second.recovery!;
+    await second.close();
+    const marker = (path: string) =>
+      entryRecords(path).find((entry) => entry["customType"] === "volli.context.v1")!;
+    const bounded = JSON.stringify(marker(secondRef.sessionFilePath)["data"]);
+    expect(bounded.length).toBeLessThan(CONTEXT_CARRY_MAX_CHARS);
+    expect(bounded).not.toContain("hhhhhhhhhh");
+    expect(bounded).not.toContain("huge question");
+    expect(bounded).not.toContain("answer to the huge question");
+    expect(bounded).toContain("small question");
+    expect(bounded).toContain("were too large to carry into this attachment and were left out");
+
+    // Reattach again from the carried attachment: one level, never nested.
+    const third = await runtimeWith([]).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-3" },
+      carry: { ...secondRef, attachmentId: "attachment-2", workspacePath: attachment.worktreePath },
+    });
+    const thirdRef = third.recovery!;
+    await third.close();
+    const flattened = marker(thirdRef.sessionFilePath)["data"] as { entries: { type: string }[] };
+    expect(flattened.entries.map((entry) => entry.type)).not.toContain("custom");
+    expect(JSON.stringify(flattened)).toContain("small question");
+    expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
+  });
+
+  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457 review)", async () => {
+    const attachment = fixture();
+    // Written by a model with a million-token window: three ~50k-token turns.
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream(
+          [1, 2, 3].map((n) => (emit) => {
+            emit.text(`answer ${n}`);
+            emit.finish();
+          }),
+        ),
+        [{ id: MODEL_ID, reasoning: true, contextWindow: 1_000_000 }],
+      ),
+    }).startSession(attachment.spec);
+    for (const n of [1, 2, 3]) {
+      await first.submitUserMessage(`turn-${n} ${"lorem ".repeat(30_000)}`);
+    }
+    const earlier = first.recovery!;
+    await first.close();
+
+    // Resumed where the same model now has a 128k window.
+    const small = modelsWithStream(
+      scriptedStream([
+        (emit, context) => {
+          seen.push(context);
+          emit.text("ok");
+          emit.finish();
+        },
+      ]),
+      [{ id: MODEL_ID, reasoning: true, contextWindow: 128_000 }],
+    );
+    const seen: Context[] = [];
+    const observationsBefore = attachment.observations.length;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: small,
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("continue");
+    await second.close();
+
+    const request = seen[0]!;
+    const model = small.getModel(PROVIDER_ID, MODEL_ID)!;
+    // The first request fits the window with room to spare, without having to
+    // compact over an oversized history first.
+    expect(estimatedContextTokens(request.messages, model)).toBeLessThanOrEqual(64_000 + 1_000);
+    expect(compactions(attachment.observations.slice(observationsBefore))).toEqual([]);
+    const wire = JSON.stringify(request.messages);
+    expect(wire).toContain("turn-3");
+    expect(wire).toContain("answer 3");
+    expect(wire).not.toContain("turn-1");
+    expect(wire).toContain("were too large to carry into this attachment");
+  });
+
+  it("carries whole under the character bound when the attaching model states no window (VC-457)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("remembered");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("question");
+    const earlier = first.recovery!;
+    await first.close();
+    const seen: Context[] = [];
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+        [{ id: MODEL_ID, reasoning: true, contextWindow: 0 }],
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("next");
+    await second.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("remembered");
   });
 
   it("recovers accepted prompt and retry receipts independently of the observation cursor", async () => {
@@ -4235,6 +5379,14 @@ describe("startSession", () => {
       { ...activity, descriptor: { ...descriptor, endedAt: "later" } },
       { ...activity, error: 1 },
       { kind: "attention", state: "raised", reason: "auth", message: 1 },
+      // A reset is an instant or nothing; a reset that is neither is corruption.
+      {
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: "Usage limit reached",
+        resetsAt: "soon",
+      },
       {
         kind: "command-accepted",
         commandId: 1,
@@ -4485,9 +5637,26 @@ describe("startSession", () => {
         kind: "entry",
         lane: "main",
         type: "custom",
-        id: "attention-clear-marker",
+        id: "attention-quota-marker",
         parentId: "activity-marker",
         seq: 3,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data: {
+          kind: "attention",
+          state: "raised",
+          reason: "runtime-failure",
+          message: "Usage limit reached for 5 hour.",
+          resetsAt: 1_800_000_000_000,
+        },
+      },
+      {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: "attention-clear-marker",
+        parentId: "attention-quota-marker",
+        seq: 4,
         timestamp: Date.now(),
         customType: "volli.observation.v1",
         data: {
@@ -4503,7 +5672,7 @@ describe("startSession", () => {
         type: "custom",
         id: "compaction-failed-marker",
         parentId: "attention-clear-marker",
-        seq: 4,
+        seq: 5,
         timestamp: Date.now(),
         customType: "volli.observation.v1",
         data: {
@@ -4517,7 +5686,12 @@ describe("startSession", () => {
     writeSidecarEntries(recovery.sessionFilePath, entries);
 
     const reopened = await runtime.startSession({ ...attachment.spec, recovery });
-    expect((await reopened.reconcile(null)).observations).toHaveLength(3);
+    const recovered = (await reopened.reconcile(null)).observations;
+    expect(recovered).toHaveLength(4);
+    // A quota reset survives the relaunch with the marker that carried it.
+    expect(recovered).toContainEqual(
+      expect.objectContaining({ kind: "attention", resetsAt: 1_800_000_000_000 }),
+    );
     await reopened.close();
   });
 
@@ -5563,6 +6737,37 @@ describe("settling a submit on the turn opening (VC-324)", () => {
     await handle.close();
   });
 
+  it("carries a spent allowance's stated reset onto the Attention it raises", async () => {
+    const resetsAt = Date.now() + 3_600_000;
+    const stated = new Date(resetsAt).toISOString().replace(/\.\d+Z$/, "Z");
+    for (const usageLimits of [
+      undefined,
+      { holder: new UsageLimitsHolder(), fetch: unusedFetch },
+    ]) {
+      const { spec, observations, sessionDataDir } = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir,
+        retryBackoffMs: instantBackoff,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => emit.fail(`429: Usage limit reached. Your limit will reset at ${stated}`),
+          ]),
+        ),
+        ...(usageLimits === undefined ? {} : { usageLimits }),
+      });
+      const handle = await runtime.startSession(spec);
+      await handle.submitUserMessage("go");
+      expect(attentions(observations)).toEqual([
+        expect.objectContaining({
+          state: "raised",
+          reason: "runtime-failure",
+          resetsAt: Math.floor(resetsAt / 1000) * 1000,
+        }),
+      ]);
+      await handle.close();
+    }
+  });
+
   it("does not charge a detached run failure to the next command", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const detachedFailed = Promise.withResolvers<void>();
@@ -5708,7 +6913,7 @@ describe("auto-retrying a dropped transport", () => {
     await handle.close();
   });
 
-  it("gives up after ten attempts and says how many it spent", async () => {
+  it("gives up at the attempt backstop and says how many it spent", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const attempts: number[] = [];
     const runtime = createPiAgentRuntime({
@@ -5717,27 +6922,61 @@ describe("auto-retrying a dropped transport", () => {
         attempts.push(attempt);
         return 0;
       },
-      models: modelsWithStream(scriptedStream(drops(11))),
+      models: modelsWithStream(scriptedStream(drops(TRANSPORT_RETRY_LIMIT + 1))),
     });
     const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("go");
 
-    expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    // Eleven metered attempts for one turn that produced nothing. An owner
-    // asking why a quiet pass was expensive has to be able to see this.
+    // Asked once more than it spends: the schedule is read before the budget
+    // says no to the attempt after the last one.
+    expect(attempts).toEqual(Array.from({ length: TRANSPORT_RETRY_LIMIT + 1 }, (_, n) => n));
+    // Every metered attempt for one turn that produced nothing. An owner
+    // asking why a quiet pass was expensive has to be able to see this. The
+    // reconnecting notice appears at the third retry, and gives way to the
+    // dead end rather than standing beside it.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
-      ...Array.from({ length: 11 }, () => "usage"),
+      ...Array.from({ length: TRANSPORT_NOTICE_AFTER_ATTEMPTS }, () => "usage"),
+      "attention",
+      ...Array.from(
+        { length: TRANSPORT_RETRY_LIMIT + 1 - TRANSPORT_NOTICE_AFTER_ATTEMPTS },
+        () => "usage",
+      ),
+      "attention",
       "attention",
       "turn:interrupted",
     ]);
     expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport", message: DROPPED_SOCKET }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
       expect.objectContaining({
         state: "raised",
         reason: "runtime-failure",
-        message: `${DROPPED_SOCKET} (after 10 retries)`,
+        message: `${DROPPED_SOCKET} (after ${TRANSPORT_RETRY_LIMIT} retries)`,
+      }),
+    ]);
+    await handle.close();
+  });
+
+  it("gives up once the waiting would pass the online budget", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      // Two instant retries, then a wait longer than the whole budget.
+      retryBackoffMs: (attempt) => (attempt < 2 ? 0 : TRANSPORT_RETRY_BUDGET_MS + 1),
+      models: modelsWithStream(scriptedStream(drops(3))),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "runtime-failure",
+        message: `${DROPPED_SOCKET} (after 2 retries)`,
       }),
     ]);
     await handle.close();
@@ -5747,8 +6986,10 @@ describe("auto-retrying a dropped transport", () => {
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      retryBackoffMs: instantBackoff,
-      models: modelsWithStream(scriptedStream([...drops(12), settles("recovered")])),
+      // One free retry per turn, then a wait past the budget: a turn that
+      // inherited the first one's spend would give up on its first drop.
+      retryBackoffMs: (attempt) => (attempt < 1 ? 0 : TRANSPORT_RETRY_BUDGET_MS + 1),
+      models: modelsWithStream(scriptedStream([...drops(3), settles("recovered")])),
     });
     const handle = await runtime.startSession(spec);
     await handle.submitUserMessage("go");
@@ -5762,6 +7003,85 @@ describe("auto-retrying a dropped transport", () => {
       expect.objectContaining({ state: "raised", reason: "runtime-failure" }),
       expect.objectContaining({ state: "cleared", reason: "runtime-failure" }),
     ]);
+    await handle.close();
+  });
+
+  it("says it is reconnecting from the third retry, and stops saying so once the provider answers", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "usage",
+      "usage",
+      "attention",
+      // Cleared by the first streamed word, not by the end of the turn.
+      "attention",
+      "delta",
+      "usage",
+      "message-settled",
+      "turn:completed",
+    ]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport", message: DROPPED_SOCKET }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("raises the notice once for a provider that fails the same way again and again", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS + 2), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("clears the notice at the end of a turn that never streamed another word", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          ...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS),
+          // A reply with nothing in it: no delta ever clears the notice.
+          (emit) => emit.finish(),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
     await handle.close();
   });
 
@@ -5910,6 +7230,517 @@ describe("auto-retrying a dropped transport", () => {
       expect.objectContaining({ commandId: "command-follow-up" }),
     ]);
     await handle.close();
+  });
+});
+
+/** A host whose network a test switches off and on, and whose lid it opens. */
+function fakeConnectivity(initiallyOnline: boolean) {
+  let online = initiallyOnline;
+  let waitStarted = Promise.withResolvers<void>();
+  const waiters = new Set<() => void>();
+  const resumeListeners = new Set<() => void>();
+  const signals: AbortSignal[] = [];
+  const port: ConnectivityPort = {
+    isOnline: () => online,
+    waitUntilOnline: (signal) =>
+      new Promise<void>((resolve, reject) => {
+        signals.push(signal);
+        const onAbort = (): void => {
+          waiters.delete(done);
+          reject(new Error("wait abandoned"));
+        };
+        const done = (): void => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        waiters.add(done);
+        waitStarted.resolve();
+      }),
+    onResume: (listener) => {
+      resumeListeners.add(listener);
+      return () => {
+        resumeListeners.delete(listener);
+      };
+    },
+  };
+  return {
+    port,
+    signals,
+    /** Resolves once the runtime is waiting for the network. */
+    waiting: () => waitStarted.promise,
+    goOffline(): void {
+      online = false;
+    },
+    reconnect(): void {
+      online = true;
+      waitStarted = Promise.withResolvers<void>();
+      for (const done of Array.from(waiters)) {
+        waiters.delete(done);
+        done();
+      }
+    },
+    wake(): void {
+      for (const listener of Array.from(resumeListeners)) listener();
+    },
+    resumeListenerCount: (): number => resumeListeners.size,
+  };
+}
+
+/** How an expired OAuth token's refresh reads when the machine has no network. */
+const REFRESH_UNREACHED =
+  "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed";
+
+/** A provider request that hangs until its own signal is aborted. */
+function hangs(onStreaming: (signal: AbortSignal | undefined) => void): ScriptStep {
+  return async (emit, _context, signal) => {
+    onStreaming(signal);
+    await new Promise<void>((resolve) => {
+      signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    emit.cancel();
+  };
+}
+
+describe("waiting out a machine with no network", () => {
+  it("waits for the network without spending the budget, then resumes the same turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    const backoffs: number[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: (attempt) => {
+        backoffs.push(attempt);
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+    ]);
+    connectivity.reconnect();
+    await expect(delivery).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+
+    // No online attempt was charged for the time the lid was shut.
+    expect(backoffs).toEqual([]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "attention",
+      "attention",
+      "delta",
+      "usage",
+      "message-settled",
+      "turn:completed",
+    ]);
+    expect(attentions(observations)[1]).toMatchObject({ state: "cleared", reason: "transport" });
+    await handle.close();
+  });
+
+  it("waits for the network again when a backoff ends to find it gone", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        // The network drops while the backoff runs.
+        connectivity.goOffline();
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["back online"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("says it once when the network goes away twice in one turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    let backoffs = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        backoffs += 1;
+        connectivity.goOffline();
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(2), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    // Back, and the retry fails online — whose backoff then finds it gone again.
+    connectivity.reconnect();
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(backoffs).toBe(1);
+    expect(settledTexts(observations)).toEqual(["back online"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("abandons the network wait when the turn is stopped", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+
+    await handle.interrupt();
+    await delivery;
+
+    expect(calls).toBe(1);
+    expect(connectivity.signals[0]?.aborted).toBe(true);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "attention",
+      "attention",
+      "turn:interrupted",
+    ]);
+    expect(attentions(observations).at(-1)).toMatchObject({
+      state: "cleared",
+      reason: "transport",
+    });
+    await handle.close();
+  });
+
+  it("honours a Stop that lands while the reconnecting notice is being written", async () => {
+    // The notice is written before either wait begins, so a Stop there finds
+    // no wait to cancel; each wait re-reads it rather than sitting it out.
+    let stop: (() => void) | undefined;
+    const { spec, observations, sessionDataDir } = fixture({
+      observer: async (observation) => {
+        observations.push(observation);
+        if (observation.kind === "attention" && observation.state === "raised") stop?.();
+      },
+    });
+    const connectivity = fakeConnectivity(false);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const handle = await runtime.startSession(spec);
+    stop = () => void handle.interrupt();
+
+    await handle.submitUserMessage("go");
+
+    expect(connectivity.signals).toEqual([]);
+    expect(kinds(observations).at(-1)).toBe("turn:interrupted");
+    await handle.close();
+  });
+
+  it("does not sit out a backoff for a Stop that landed as the notice was written", async () => {
+    let stop: (() => void) | undefined;
+    const { spec, observations, sessionDataDir } = fixture({
+      observer: async (observation) => {
+        observations.push(observation);
+        if (observation.kind === "attention" && observation.state === "raised") stop?.();
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      // Instant until the notice is raised, then a wait no test would outlast.
+      retryBackoffMs: (attempt) =>
+        attempt + 1 >= TRANSPORT_NOTICE_AFTER_ATTEMPTS ? 10 * 60_000 : 0,
+      models: modelsWithStream(scriptedStream(drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS))),
+    });
+    const handle = await runtime.startSession(spec);
+    stop = () => void handle.interrupt();
+
+    await handle.submitUserMessage("go");
+
+    expect(kinds(observations).at(-1)).toBe("turn:interrupted");
+    await handle.close();
+  });
+
+  it("charges a network wait the host could not keep to the online budget", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const backoffs: number[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: {
+        isOnline: () => false,
+        waitUntilOnline: () => Promise.reject(new Error("the port broke its word")),
+        onResume: () => () => undefined,
+      },
+      retryBackoffMs: (attempt) => {
+        backoffs.push(attempt);
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("recovered anyway")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(backoffs).toEqual([0]);
+    expect(settledTexts(observations)).toEqual(["recovered anyway"]);
+    await handle.close();
+  });
+
+  it("waits out a credential refresh that could not leave the machine", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([(emit) => emit.fail(REFRESH_UNREACHED), settles("refreshed")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["refreshed"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("hands the same refresh failure to the person when the machine is online", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: fakeConnectivity(true).port,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(REFRESH_UNREACHED);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(calls).toBe(1);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "auth" }),
+    ]);
+    await handle.close();
+  });
+
+  it("hands it over too when the host cannot wait for the network", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: {
+        isOnline: () => false,
+        waitUntilOnline: () => Promise.reject(new Error("the port broke its word")),
+        onResume: () => () => undefined,
+      },
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail(REFRESH_UNREACHED)])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+      expect.objectContaining({ state: "raised", reason: "auth" }),
+    ]);
+    await handle.close();
+  });
+
+  it("retires a reconnecting notice a crashed process left behind", async () => {
+    const attachment = fixture();
+    const connectivity = fakeConnectivity(false);
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    const delivery = firstHandle.submitUserMessage("go");
+    await connectivity.waiting();
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    await delivery;
+    // The process died mid-wait: nothing after the notice was ever written —
+    // not its clearance, and not the end of the turn it was waiting in.
+    const entries = entryRecords(recovery.sessionFilePath);
+    const clearance = entries.findIndex((entry) => {
+      const data = entry["data"] as { kind?: string; state?: string; reason?: string } | undefined;
+      return data?.kind === "attention" && data.reason === "transport" && data.state === "cleared";
+    });
+    expect(clearance).toBeGreaterThan(0);
+    writeSidecarEntries(recovery.sessionFilePath, entries.slice(0, clearance));
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    const replay = await secondHandle.reconcile(null);
+
+    expect(attentions([...replay.observations])).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "raised", reason: "partial-turn" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await secondHandle.close();
+  });
+});
+
+describe("recovering a provider request that went silent", () => {
+  it("cuts a request that stops answering and resumes the same turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const providerSignals: (AbortSignal | undefined)[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      streamSupervision: { idleTimeoutMs: 30, wakeGraceMs: 10_000 },
+      models: modelsWithStream(
+        scriptedStream([hangs((signal) => providerSignals.push(signal)), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(handle.submitUserMessage("go")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    // Only the provider's request was cut; the turn carried on in place.
+    expect(providerSignals[0]?.aborted).toBe(true);
+    expect(kinds(observations).filter((kind) => kind === "turn:started")).toHaveLength(1);
+    expect(settledTexts(observations)).toEqual(["recovered"]);
+    expect(attentions(observations)).toEqual([]);
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
+    await handle.close();
+  });
+
+  it("cuts a request that says nothing after the machine wakes", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const streaming = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: instantBackoff,
+      streamSupervision: { idleTimeoutMs: 60_000, wakeGraceMs: 10 },
+      models: modelsWithStream(
+        scriptedStream([hangs(() => streaming.resolve()), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await streaming.promise;
+    // Let what the request said before the sleep drain first.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    connectivity.wake();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["recovered"]);
+    expect(attentions(observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("retries at once when the machine wakes in the middle of a backoff", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const backingOff = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        backingOff.resolve();
+        return 10 * 60_000;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("awake")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await backingOff.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    connectivity.wake();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["awake"]);
+    await handle.close();
+  });
+
+  it("stops listening for wakes when the attachment closes", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const handle = await runtime.startSession(spec);
+    expect(connectivity.resumeListenerCount()).toBe(1);
+
+    await handle.close();
+
+    expect(connectivity.resumeListenerCount()).toBe(0);
+    // A wake after close reaches nothing.
+    connectivity.wake();
   });
 });
 
@@ -6074,12 +7905,9 @@ describe("compacting a context that reached its reserve", () => {
     let occupied = 0;
     const stream: StreamFn = (model, context, options) => {
       ceiling = options?.maxTokens ?? 0;
-      occupied = projectedContextTokens(
-        context.messages,
-        model,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The normalized transcript prices its own prefix: the leading system
+      // message IS the prompt and the tools.
+      occupied = projectedContextTokens(context.messages, model);
       return script(model, context, options);
     };
     const runtime = createPiAgentRuntime({
@@ -6205,7 +8033,7 @@ describe("compacting a context that reached its reserve", () => {
     const handle = await runtime.startSession(attachment.spec);
 
     await handle.submitUserMessage("what is this?", "queue", "command-1", [
-      { data: "aGVsbG8=", mimeType: "image/png" },
+      { data: TINY_PNG, mimeType: "image/png" },
     ]);
     await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
       kind: "delivered",
@@ -6228,7 +8056,7 @@ describe("compacting a context that reached its reserve", () => {
     const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     await secondHandle.submitUserMessage("still here?");
     // The recovered context still holds the image message, blocks and all.
-    expect(calls[0]?.messages).toContain("aGVsbG8=");
+    expect(calls[0]?.messages).toContain(TINY_PNG);
     const replayed = await secondHandle.reconcile(null);
     expect(replayed.receipts).toEqual([
       expect.objectContaining({ commandId: "command-1" }),
@@ -7520,6 +9348,52 @@ describe("compacting because somebody asked", () => {
     await handle.close();
   });
 
+  it("exports how long a compaction's work took, from its progress to its outcome (VC-455)", async () => {
+    const attachment = fixture();
+    const events: ObservabilityEvent[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let clock = 1_000;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      now: () => clock,
+      observability: { record: (event) => void events.push(event) },
+      models: modelsWithStream(
+        conversation([], async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    const compacting = handle.compact();
+    await summarizing.promise;
+    clock = 3_500;
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
+    await handle.close();
+
+    expect(events.filter((event) => event.kind === "compaction")).toEqual([
+      {
+        kind: "compaction",
+        outcome: "compacted",
+        reason: "manual",
+        tokensBefore: expect.any(Number),
+        tokensAfter: expect.any(Number),
+        durationMs: 2_500,
+        runId: expect.any(String),
+      },
+    ]);
+    // Metadata only: neither the summary nor the conversation it replaced.
+    expect(JSON.stringify(events)).not.toContain("summarized");
+    expect(JSON.stringify(events)).not.toContain("remember the marker");
+  });
+
   it("hands the requester's own words to the summarizer", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
@@ -7836,8 +9710,10 @@ describe("compacting because somebody asked", () => {
     // refused message — the one thing this path promises never to do.
     const attachment = fixture();
     const calls: ProviderCall[] = [];
+    const events: ObservabilityEvent[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
+      observability: { record: (event) => void events.push(event) },
       models: modelsWithStream(
         scriptedStream([
           recording(calls, settlesHolding("first answer", 200_000)),
@@ -7865,6 +9741,11 @@ describe("compacting because somebody asked", () => {
       expect.objectContaining({ state: "failed", reason: "threshold" }),
       expect.objectContaining({ state: "failed", reason: "threshold" }),
     ]);
+    // It threw before any summary work began, so there is no span to report
+    // (VC-455): the failures are exported without a duration, not with zero.
+    const exported = events.filter((event) => event.kind === "compaction");
+    expect(exported).toHaveLength(2);
+    for (const event of exported) expect(event).not.toHaveProperty("durationMs");
     expect(attentions(attachment.observations)).toEqual([]);
     await handle.close();
   });
@@ -7944,6 +9825,56 @@ describe("the verb half of the Agent Tool Surface", () => {
       },
     ]);
     expect(JSON.stringify(answered?.messages)).toContain("Started Session ab12cd34 on VC-12.");
+  });
+
+  it("keeps each MCP management wire spelling through a model switch and recovery", async () => {
+    for (const [names, wireName] of [
+      [undefined, "mcp_list"],
+      ["server", "server_list"],
+    ] as const) {
+      const calls: ProviderCall[] = [];
+      const attachment = fixture({
+        tools: {
+          tools: ["read"],
+          verbs: ["mcp.list"],
+          ...(names === undefined ? {} : { mcpManagementNames: names }),
+        },
+        callVerb: async () => ({ text: "listed" }),
+        authority: undefined,
+      });
+      const catalog = [{ id: MODEL_ID, reasoning: true }, { id: CHAT_MODEL_ID }];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([recording(calls, settles("first")), recording(calls, settles("second"))]),
+          catalog,
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      await handle.submitUserMessage("list");
+      await handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      });
+      await handle.submitUserMessage("again");
+      const recovery = handle.recovery;
+      await handle.close();
+
+      const resumed = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream([recording(calls, settles("third"))]), catalog),
+      });
+      const reattached = await resumed.startSession({ ...attachment.spec, recovery });
+      await reattached.submitUserMessage("after reattach");
+      await reattached.close();
+      expect(calls.map((call) => call.toolNames)).toEqual([
+        ["read", wireName],
+        ["read", wireName],
+        ["read", wireName],
+      ]);
+      expect(calls[0]?.tools).toEqual(calls[2]?.tools);
+    }
   });
 
   it("offers a Session with no verbs nothing to call", async () => {
@@ -9436,17 +11367,6 @@ describe("a provider that drops reasoning instead of refusing it (VC-254)", () =
   });
 });
 
-describe("autoRetryDelayMs", () => {
-  it("doubles the wait up to a ceiling, jittered", () => {
-    expect(autoRetryDelayMs(0)).toBeGreaterThanOrEqual(500);
-    expect(autoRetryDelayMs(0)).toBeLessThan(600);
-    expect(autoRetryDelayMs(3)).toBeGreaterThanOrEqual(4000);
-    expect(autoRetryDelayMs(3)).toBeLessThan(4100);
-    expect(autoRetryDelayMs(9)).toBeGreaterThanOrEqual(8000);
-    expect(autoRetryDelayMs(9)).toBeLessThan(8100);
-  });
-});
-
 // --- completeUtility -------------------------------------------------------
 
 /**
@@ -9481,7 +11401,12 @@ function utilityModels(
     streamSimple: ((model, context, options) => {
       onCall?.({
         model: model as Model<string>,
-        context,
+        // The request as `completeSimple` was asked for it, replayed off the
+        // normalized transcript pi-ai 0.86 hands the provider.
+        context: {
+          systemPrompt: getCurrentSystemPrompt(context.messages),
+          messages: withoutSystemMessages(context.messages),
+        },
         options: options as { reasoning?: string } | undefined,
       });
       const stream = createAssistantMessageEventStream();
@@ -9934,5 +11859,433 @@ describe("usage limits", () => {
       windows: [],
       unavailable: { reason: "unsupported" },
     });
+  });
+});
+
+/**
+ * Pi 0.86 moved the system prompt and the tool declarations INTO the transcript:
+ * a provider request is a normalized `TranscriptContext` whose leading system
+ * message carries both, and `AgentState.systemPrompt` is a read-only replay of
+ * the system messages in the live array. Everything this runtime does to that
+ * array — seed it, rebuild it after a compaction or a model switch, retry from
+ * it, recover it from the sidecar — is now also responsible for the prompt, and
+ * the failure when it forgets is silent: Pi replays an empty prompt, declares
+ * every tool again in a bare system message, and carries on. These pin each
+ * path against the request the provider actually met (VC-421).
+ */
+/** The names a system message declares, in order; empty for one that adds nothing. */
+function declaredNames(message: SystemMessage): string[] {
+  return (message.toolsAdded ?? []).map((tool) => tool.name);
+}
+
+describe("transcript context (pi 0.87)", () => {
+  /** The one system message a well-formed Volli request carries, asserted as such. */
+  function onlySystemMessage(call: ProviderCall): SystemMessage {
+    const system = systemMessagesOf(call.transcript);
+    expect(system).toHaveLength(1);
+    return system[0]!;
+  }
+
+  it("leads the first request with one system message carrying the composed prompt and every session tool", async () => {
+    const attachment = fixture({ tools: { tools: ["read", "edit"] } });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("hello"))])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("first words");
+    await handle.close();
+
+    expect(calls).toHaveLength(1);
+    const [first] = calls;
+    // The head is the FIRST message, ahead of the Brief-carrying user message,
+    // and it is the only system message: no bare tool re-declaration follows
+    // it, because the executable tools and the declared ones agree.
+    expect(first!.transcript[0]?.role).toBe("system");
+    const head = onlySystemMessage(first!);
+    expect(typeof head.content === "string" ? head.content : "").toContain("# Operating");
+    expect(declaredNames(head)).toEqual(sessionToolIds(attachment.spec));
+    expect(head.timestamp).toBe(0);
+    // A declaration is what the model sees and nothing it cannot: no `execute`
+    // rides the transcript, and so none can reach a sidecar.
+    for (const tool of head.toolsAdded ?? []) {
+      expect(Object.keys(tool).toSorted()).toEqual(["description", "name", "parameters"]);
+    }
+    // The array is never empty now that the head lives in it, and the Brief is
+    // still composed onto the first thing a person says — the question is
+    // asked of the conversation, not of the array.
+    expect(first!.transcript[1]?.role).toBe("user");
+    expect(first!.messages).toContain("VC-12 — read the marker.");
+    expect(first!.messages).toContain("first words");
+  });
+
+  it("keeps one byte-identical head across a tool round and writes no system entry for it", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("the marker is volli-marker-42")),
+          recording(calls, settles("and again")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("read the marker");
+    await handle.submitUserMessage("say it again");
+    const sidecarPath = handle.recovery!.sessionFilePath;
+    await handle.close();
+
+    expect(calls).toHaveLength(3);
+    const heads = calls.map((call) => JSON.stringify(onlySystemMessage(call)));
+    expect(heads[1]).toBe(heads[0]);
+    expect(heads[2]).toBe(heads[0]);
+    // The tool result rode the second request behind the same head, and the
+    // third request grew append-only from the second: a prefix a provider can
+    // reuse, exactly as before the head became a message.
+    expect(calls[1]!.context.some((message) => message.role === "toolResult")).toBe(true);
+    expectAppendOnly(calls[0]!, calls[1]!);
+    expectAppendOnly(calls[1]!, calls[2]!);
+    // Nothing about the prompt or the tools was persisted: the head is this
+    // attachment's and is recomposed on attach, and Pi had no delta to declare.
+    const persistedRoles = entryRecords(sidecarPath)
+      .filter((record) => record["type"] === "message")
+      .map((record) => (record["message"] as { role: string }).role);
+    expect(persistedRoles).not.toContain("system");
+    expect(persistedRoles).toContain("toolResult");
+  });
+
+  it("puts the head back after a compaction and after a model switch", async () => {
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+          recording(calls, settles("fourth answer")),
+        ]),
+        [
+          { id: MODEL_ID, reasoning: true },
+          { id: CHAT_MODEL_ID, reasoning: true },
+        ],
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage("and on the other model");
+    await handle.close();
+
+    expect(calls).toHaveLength(5);
+    const [firstTurn, , summarization, afterCompaction, afterSwitch] = calls;
+    const head = onlySystemMessage(firstTurn!);
+    // The summarizer's request is Pi's own — its prompt, no tools — and is the
+    // one request of the five that does not lead with this Session's head.
+    expect(summarization!.systemPrompt).not.toBe(firstTurn!.systemPrompt);
+    expect(summarization!.tools).toBe("[]");
+    // The compacted context leads with the same head, then the summary. Not
+    // an empty prompt with the tools re-declared beneath it, which is what an
+    // array replaced without its head would have replayed as.
+    expect(JSON.stringify(onlySystemMessage(afterCompaction!))).toBe(JSON.stringify(head));
+    expect(afterCompaction!.transcript[0]?.role).toBe("system");
+    expect(afterCompaction!.context[0]?.role).toBe("user");
+    expect(afterCompaction!.messages).toContain("finish the marker work");
+    expect(afterCompaction!.messages).not.toContain("first answer");
+    // And so does the context rebuilt for the other model.
+    expect(afterSwitch!.model).toBe(`${PROVIDER_ID}/${CHAT_MODEL_ID}`);
+    expect(JSON.stringify(onlySystemMessage(afterSwitch!))).toBe(JSON.stringify(head));
+    expect(afterSwitch!.messages).toContain("and on the other model");
+  });
+
+  it("retries a failed turn behind the head, with nothing re-delivered", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => emit.fail("invalid x-api-key secret-token")),
+          recording(calls, settles("authenticated now")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("first");
+    await expect(handle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
+    await handle.close();
+
+    expect(calls).toHaveLength(2);
+    const [failed, retried] = calls;
+    expect(JSON.stringify(onlySystemMessage(retried!))).toBe(
+      JSON.stringify(onlySystemMessage(failed!)),
+    );
+    // The same one user message, once: the retry dropped the failed reply and
+    // continued from what it was answering.
+    expect(retried!.context.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(retried!.messages).toBe(failed!.messages);
+  });
+
+  it("delivers a queued message behind the head and ahead of no second one", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const streaming = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, async (emit) => {
+            emit.text("working");
+            streaming.resolve();
+            await release.promise;
+            emit.finish();
+          }),
+          recording(calls, settles("queued answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "command-first");
+    await streaming.promise;
+    await expect(
+      handle.submitUserMessage("queued while busy", "queue", "command-queued"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "queue" });
+    release.resolve();
+    await first;
+    await handle.close();
+
+    expect(calls).toHaveLength(2);
+    const [opening, queued] = calls;
+    expect(JSON.stringify(onlySystemMessage(queued!))).toBe(
+      JSON.stringify(onlySystemMessage(opening!)),
+    );
+    expect(queued!.context.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(queued!.messages).toContain("queued while busy");
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "command-first",
+      "command-queued",
+    ]);
+  });
+
+  it("replays a persisted tool-change system entry in place and reconciles it against the executable tools", async () => {
+    // What a sidecar holds when Pi's loop found the executable tools and the
+    // declared ones disagreeing: a system message with the delta, persisted
+    // through `message_end` like any other message. This runtime never
+    // changes its tools mid-attachment, so the entry is forged here — and
+    // forged as Pi would write it, with a declaration nothing here can run.
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("first answer")])),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    await firstHandle.submitUserMessage("start");
+    const recovery = firstHandle.recovery;
+    await firstHandle.close();
+
+    const sidecars = new JsonlSessionRepo({
+      fileSystem: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      sessionsRoot: attachment.sessionDataDir,
+    });
+    const found = (await sidecars.list({ cwd: attachment.worktreePath }, piContext())).find(
+      (candidate) => candidate.id === recovery!.sessionId,
+    );
+    const sidecar = await sidecars.open(found!, piContext());
+    const main = (await sidecar.branch("main", piContext()))!;
+    const phantom = {
+      name: "phantom_tool",
+      description: "A tool a later attachment does not have.",
+      parameters: { type: "object", properties: {} },
+    };
+    await main.appendMessage(
+      { role: "system", content: "", toolsAdded: [phantom], timestamp: 7 },
+      piContext(),
+    );
+    await sidecar.close(piContext());
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([recording(calls, settles("after")), recording(calls, settles("again"))]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("continue");
+    await secondHandle.submitUserMessage("once more");
+    const sidecarPath = secondHandle.recovery!.sessionFilePath;
+    await secondHandle.close();
+
+    expect(calls).toHaveLength(2);
+    const [recovered, later] = calls;
+    const system = systemMessagesOf(recovered!.transcript);
+    // Three system messages, in order: this attachment's composed head first
+    // — recomposed on attach, never read off the sidecar — then the persisted
+    // delta exactly where it was, then the one Pi declared before the new
+    // prompt because `phantom_tool` is declared and not executable.
+    expect(system).toHaveLength(3);
+    expect(system[0]!.timestamp).toBe(0);
+    expect(typeof system[0]!.content === "string" ? system[0]!.content : "").toContain(
+      "# Operating",
+    );
+    expect(declaredNames(system[0]!)).toEqual(sessionToolIds(attachment.spec));
+    expect(system[1]).toEqual({
+      role: "system",
+      content: "",
+      toolsAdded: [phantom],
+      timestamp: 7,
+    });
+    expect(system[2]!.toolsRemoved).toEqual([{ name: "phantom_tool" }]);
+    expect(system[2]!.toolsAdded).toBeUndefined();
+    // A delta Pi declares carries no prompt text and no sections. Native
+    // compaction leans on that: it strips every system message from the
+    // conversation it sends because the prompt rides the request's own field,
+    // and a Pi that started putting instructions on a delta would make that
+    // strip lossy. Pinned here, against the real loop, rather than assumed.
+    expect(system[2]!.content).toBe("");
+    expect(system[2]!.sections).toBeUndefined();
+    // The transcript keeps the conversation's order around them...
+    expect(recovered!.transcript.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "system",
+      "system",
+      "user",
+    ]);
+    // ...and replays to exactly the executable set, so the model is offered
+    // what this attachment can run and nothing it cannot.
+    expect(recovered!.toolNames).toEqual(sessionToolIds(attachment.spec));
+    expect(recovered!.systemPrompt).toContain("# Operating");
+    // The removal Pi declared was persisted, so the next attach reads a
+    // transcript that already agrees with itself; the next request of THIS
+    // attachment declares nothing further.
+    expect(systemMessagesOf(later!.transcript)).toHaveLength(3);
+    const persistedSystem = entryRecords(sidecarPath)
+      .filter((record) => record["type"] === "message")
+      .map((record) => record["message"] as { role: string; toolsRemoved?: unknown })
+      .filter((message) => message.role === "system");
+    expect(persistedSystem).toEqual([
+      expect.objectContaining({ toolsAdded: [phantom] }),
+      expect.objectContaining({ toolsRemoved: [{ name: "phantom_tool" }] }),
+    ]);
+  });
+
+  it("still composes the prompt when the sidecar's first replayable entry is a system message", async () => {
+    // The case the `Agent` alone gets wrong: handed an array that already
+    // starts with a system message, it seeds no head of its own. A sidecar
+    // whose first entry is a tool delta Pi declared ahead of the first prompt
+    // is exactly that array, and the composed prompt would be gone.
+    const attachment = fixture();
+    const sidecars = new JsonlSessionRepo({
+      fileSystem: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      sessionsRoot: attachment.sessionDataDir,
+    });
+    const sidecar = await sidecars.create({ cwd: attachment.worktreePath }, piContext());
+    await sidecar.setValue(
+      SIDECAR_IDENTITY,
+      {
+        volliSessionId: attachment.spec.identity.sessionId,
+        volliThreadId: attachment.spec.identity.rootThreadId,
+        volliAttachmentId: attachment.spec.identity.attachmentId,
+      },
+      piContext(),
+    );
+    const main = await sidecar.createBranch("main", null, piContext());
+    await main.appendMessage(
+      {
+        role: "system",
+        content: "",
+        toolsAdded: [{ name: "phantom_tool", description: "gone", parameters: { type: "object" } }],
+        timestamp: 7,
+      },
+      piContext(),
+    );
+    await main.appendMessage({ role: "user", content: "start", timestamp: 8 }, piContext());
+    const recovery = recoveryRefFor(sidecar.metadata.id, sidecar.metadata.path);
+    await sidecar.close(piContext());
+
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after"))])),
+    });
+    const handle = await runtime.startSession({ ...attachment.spec, recovery });
+    await handle.submitUserMessage("continue");
+    await handle.close();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.systemPrompt).toContain("# Operating");
+    expect(calls[0]!.toolNames).toEqual(sessionToolIds(attachment.spec));
+    expect(calls[0]!.transcript.map((message) => message.role)).toEqual([
+      "system",
+      "system",
+      "user",
+      "system",
+      "user",
+    ]);
+    // A recovered conversation is not an empty one: no second Brief.
+    expect(calls[0]!.messages.split("VC-12 — read the marker.").length - 1).toBe(0);
+  });
+
+  it("prices the head into the context budget, once", async () => {
+    // The output ceiling and the compaction preflight both read the projector,
+    // and both hand it the transcript with the head inside — the one spelling
+    // it accepts. What that transcript costs must be what Pi's own fold of the
+    // replayed prompt and tools around the bare conversation costs, and the
+    // head must not be counted twice.
+    const attachment = fixture();
+    let ceiling = 0;
+    let transcriptTokens = 0;
+    let conversationTokens = 0;
+    let refoldedTokens = 0;
+    const script = scriptedStream([settles("answer")]);
+    const stream: StreamFn = (model, context, options) => {
+      ceiling = options?.maxTokens ?? 0;
+      transcriptTokens = projectedContextTokens(context.messages, model);
+      const conversation = withoutSystemMessages(context.messages);
+      conversationTokens = projectedContextTokens(conversation, model);
+      refoldedTokens = projectedContextTokens(
+        normalizeContext({
+          systemPrompt: getCurrentSystemPrompt(context.messages),
+          tools: getCurrentTools(context.messages),
+          messages: conversation,
+        }).messages,
+        model,
+      );
+      return script(model, context, options);
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream, [{ id: MODEL_ID, contextWindow: 48_000 }]),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("dense input ".repeat(8_000));
+    await handle.close();
+
+    expect(transcriptTokens).toBe(refoldedTokens);
+    expect(transcriptTokens).toBeGreaterThan(conversationTokens);
+    // The ceiling is what the window has left after the whole transcript, prefix
+    // included, less the reply's headroom — so the head is inside the budget.
+    expect(ceiling).toBe(48_000 - transcriptTokens - 4_096);
   });
 });

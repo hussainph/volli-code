@@ -108,6 +108,7 @@ import {
   type RuntimeMcpCallResult,
   type RuntimeObservation,
   type RuntimeShellPort,
+  type RuntimeContextCarry,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -242,6 +243,8 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
+  mcpManagementNames?: "server";
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /**
@@ -363,6 +366,22 @@ function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
   return withoutPair;
 }
 
+/** The port without `find`, for a surface frozen before `browser_find` (VC-364). */
+function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
+  // Safe as a shallow copy for `withoutHoldPair`'s reasons.
+  const { find: _find, ...withoutSearch } = port;
+  return withoutSearch;
+}
+
+/** The port a frozen surface binds: exactly the optional tools it recorded. */
+function browserForSurface(
+  port: DesktopBrowserPort,
+  surface: { holdPair: boolean; find: boolean },
+): DesktopBrowserPort {
+  const held = surface.holdPair ? port : withoutHoldPair(port);
+  return surface.find ? held : withoutFind(held);
+}
+
 export interface PiAdapterOptions {
   /**
    * Directory that owns every attachment's Pi recovery sidecar. Main resolves
@@ -393,6 +412,13 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The machine's network and sleep, over Electron's `net` and `powerMonitor`
+   * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
+   * instead of spending its retry budget on it (VC-443). Absent, the runtime
+   * treats the host as always online.
+   */
+  connectivity?: PiRuntimeHostOptions["connectivity"];
   /**
    * The web ports this profile can honestly bind now, resolved once per
    * attachment. Membership comes from the Session's durable tool surface, not
@@ -534,6 +560,13 @@ export interface PiAdapterOptions {
    * is allowed to touch.
    */
   usageLimits?: PiRuntimeHostOptions["usageLimits"];
+  /**
+   * Whether host-authored parallel-read marks frozen into a Session's MCP
+   * definitions may take effect (VC-454). Developer-only: main turns it on
+   * only in an unpackaged build given `VOLLI_DEV_MCP_PARALLEL`. Absent, the
+   * runtime's default holds and every Session dispatches sequentially.
+   */
+  parallelMcpReads?: PiRuntimeHostOptions["parallelMcpReads"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -645,6 +678,56 @@ function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefin
   };
 }
 
+/**
+ * The earlier attachment a `context_replay` attach continues (VC-457), read
+ * with the same checks a resume applies to its own binding.
+ *
+ * Three answers, kept apart because they are different facts: nothing to
+ * carry (undefined — the attach opens fresh, silently, as a first attach
+ * does), a carry, or an earlier conversation whose binding cannot be read.
+ * The last still opens fresh — a carry is an improvement to a fresh attach,
+ * never a new way for one to fail — but the runtime raises an Attention for
+ * it, because a Session that silently forgot its conversation is the bug this
+ * exists to fix.
+ */
+function piContextCarry(
+  spec: NativeAttachmentSpec,
+): { carry: RuntimeContextCarry } | { carryUnreadable: string } | undefined {
+  if (spec.carryFrom === undefined) return undefined;
+  // Checked before continuity on purpose: the engine records an attach whose
+  // earlier binding it could not read as `fresh` — that is what it IS — and
+  // the reason still has to reach the runtime, or the Attention it raises is
+  // lost between the two layers.
+  if ("unreadable" in spec.carryFrom) return { carryUnreadable: spec.carryFrom.unreadable };
+  if (spec.continuity !== "context_replay") return undefined;
+  const { native, attachmentId, directory } = spec.carryFrom;
+  const detail = native.detail;
+  const record =
+    detail === null || Array.isArray(detail) || typeof detail !== "object"
+      ? null
+      : (detail as { readonly [key: string]: SessionNativeDetail });
+  if (
+    record === null ||
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    native.id !== record["sessionId"]
+  ) {
+    return {
+      carryUnreadable: "the earlier attachment's Pi binding is not one this build can read.",
+    };
+  }
+  return {
+    carry: {
+      runtime: "pi",
+      sessionId: record["sessionId"],
+      sessionFilePath: record["sessionFilePath"],
+      attachmentId,
+      workspacePath: directory ?? spec.directory,
+    },
+  };
+}
+
 function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   if (cursor === null || Array.isArray(cursor) || typeof cursor !== "object") return null;
   const entryId = (cursor as { readonly [key: string]: SessionNativeDetail })["entryId"];
@@ -685,7 +768,11 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
+    ...(options.parallelMcpReads === undefined
+      ? {}
+      : { parallelMcpReads: options.parallelMcpReads }),
   });
 
   return {
@@ -740,6 +827,7 @@ function piNativeAdapter(
         sink,
         context,
         recovery,
+        carry: recovery === undefined ? piContextCarry(spec) : undefined,
         now,
         web: options.resolveWebPorts?.() ?? {},
         browser: options.resolveBrowserPort?.({
@@ -844,6 +932,8 @@ interface PiBindingOptions {
   sink: ObservationSink;
   context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
+  /** The earlier attachment a fresh one continues, or why it cannot be (VC-457). */
+  carry: ReturnType<typeof piContextCarry>;
   now: () => number;
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
@@ -864,6 +954,7 @@ class PiBinding implements BindingHandle {
   readonly #sink: ObservationSink;
   readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
+  readonly #carry: ReturnType<typeof piContextCarry>;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
@@ -899,6 +990,7 @@ class PiBinding implements BindingHandle {
     this.#sink = options.sink;
     this.#context = options.context;
     this.#recovery = options.recovery;
+    this.#carry = options.carry;
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
@@ -978,6 +1070,8 @@ class PiBinding implements BindingHandle {
     // names six, and is handed a port without the pair so it binds six.
     const wantsBrowser = context.toolSurface.includes("browser_tabs");
     const wantsHoldPair = context.toolSurface.includes("browser_acquire");
+    // And the search (VC-364), appended after both, on the same terms.
+    const wantsFind = context.toolSurface.includes("browser_find");
     // One name stands for the three (VC-270), on the browser's reasoning.
     const wantsShell = context.toolSurface.includes("shell_start");
     const mcpTools = context.mcpTools ?? [];
@@ -1093,9 +1187,13 @@ class PiBinding implements BindingHandle {
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
         ...(verbs.length === 0 ? {} : { verbs }),
+        ...(context.mcpManagementNames === undefined
+          ? {}
+          : { mcpManagementNames: context.mcpManagementNames }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
+      ...this.#carry,
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),
@@ -1103,7 +1201,12 @@ class PiBinding implements BindingHandle {
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
       ...(wantsBrowser && this.#browser !== undefined
-        ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
+        ? {
+            browser: browserForSurface(this.#browser, {
+              holdPair: wantsHoldPair,
+              find: wantsFind,
+            }),
+          }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       // The attachment's own ask rides into every MCP call, so a server that

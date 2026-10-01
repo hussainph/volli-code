@@ -1,6 +1,6 @@
-# Contributing to Volli Code
+# Contributing to Volli
 
-Volli Code is a local-first macOS workspace for Tickets, Sessions, worktrees, and review. This guide covers the workflow used for changes to the app.
+Volli is a local-first macOS workspace for Tickets, Sessions, worktrees, and review. This guide covers the workflow used for changes to the app.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Open a pull request against `main`. Describe the user-facing change, link the re
 
 Maintainers review pull requests for product fit, implementation quality, and test coverage. Opening a pull request does not guarantee that it will be merged.
 
-Contributions accepted into Volli Code are licensed under the [Apache License 2.0](LICENSE).
+Contributions accepted into Volli are licensed under the [Apache License 2.0](LICENSE).
 
 ## Validation
 

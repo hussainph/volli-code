@@ -2,6 +2,8 @@ import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
+  nextInFlightTools,
+  turnQueueEvent,
 } from "@volli/shared";
 import type {
   CommandReceipt,
@@ -9,6 +11,7 @@ import type {
   CompactionWorkReason,
   ModelSelection,
   ModelTier,
+  ObservabilitySink,
   Session,
   SessionAttachment,
   SessionAttachmentContinuity,
@@ -19,8 +22,10 @@ import type {
   RuntimeMessageSettle,
   RuntimeObservation,
   SessionExecutionVenue,
+  SessionInFlightTool,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
+  ScheduledResumeOutcome,
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
@@ -120,6 +125,14 @@ export interface SessionRuntimePorts {
    * the only symptom would be that opening a long chat never got faster.
    */
   onProjectionCheckpointFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Where the metadata-only VC-119 side channel goes, for the one measurement
+   * only this layer can make: how long an accepted message queued before the
+   * turn it started opened (VC-455). A side channel, never a participant — a
+   * sink that throws costs the measurement and nothing else. Absent records
+   * nothing; whether anything is exported is the sink's own opt-in.
+   */
+  observability?: ObservabilitySink;
 }
 
 export type SessionClientCommand =
@@ -168,7 +181,15 @@ export type SessionClientCommand =
       interactionId: string;
       resolution: SessionInteractionResolution;
     }
-  | { kind: "adapter.release"; attachmentId: string };
+  | { kind: "adapter.release"; attachmentId: string }
+  /** A person choosing to resume a quota-stopped run at its reset. */
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  | { kind: "resume.cancel"; scheduleId: string }
+  /**
+   * The host recording what became of a schedule. Recorded under SYSTEM
+   * provenance: nobody chose the outcome, and the RPC edge never accepts it.
+   */
+  | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
 
 export type SessionRuntimeCommandRequest =
   | { commandId: string; command: Extract<SessionClientCommand, { kind: "session.create" }> }
@@ -197,6 +218,14 @@ type RetryCommandRequest = ExistingSessionCommandRequest & {
 type CompactCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "context.compact" }>;
 };
+type ScheduledResumeCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<
+    SessionClientCommand,
+    { kind: "resume.schedule" | "resume.cancel" | "resume.settle" }
+  >;
+};
+/** The system source a scheduled resume's settle is recorded under. */
+export const SCHEDULED_RESUME_SOURCE_ID = "scheduled-resume";
 type DeliveryResultKind =
   | "executor.start.requested"
   | "executor.stop.requested"
@@ -444,6 +473,12 @@ export interface OpenNativeBinding {
    * runtime progress.
    */
   lastProgressAt: number;
+  /**
+   * Tool calls this binding has seen start live and not yet finish — what the
+   * watchdog reads to tell a slow tool from a wedged turn. Process-local for
+   * the same reason as {@link lastProgressAt}: a `started` is never durable.
+   */
+  inFlightTools: readonly SessionInFlightTool[];
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
@@ -502,6 +537,8 @@ interface BindingRecord {
   cursor: SessionNativeDetail | null;
   /** Latest token/tool observation this live binding received, never a durable fact. */
   lastProgressAt: number;
+  /** Tool calls seen starting live and not yet finished; folded by `nextInFlightTools`. */
+  inFlightTools: readonly SessionInFlightTool[];
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -589,6 +626,8 @@ class BufferedObservationSink implements ObservationSink {
   constructor(
     private readonly translator: RuntimeObservationTranslator,
     private readonly record: TranslatedObservationSink,
+    /** Sees each live observation in delivery order, before it is translated. */
+    private readonly observe: (observation: RuntimeObservation) => void,
   ) {}
 
   emit(observation: RuntimeObservation): Promise<void> {
@@ -634,6 +673,7 @@ class BufferedObservationSink implements ObservationSink {
 
   #translate(observation: RuntimeObservation): Promise<void> {
     if (this.stopped) return Promise.resolve();
+    this.observe(observation);
     return this.translator.translate(observation, (fact) =>
       this.stopped ? Promise.resolve() : this.record(fact),
     );
@@ -681,8 +721,7 @@ export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
  *
  * A Session's events are held for as long as its entry lives, so this is the
  * bound on that memory: a measured entry is 17.4 KB for an ordinary Session
- * and 272.5 KB for a 450-event one
- * (`docs/research/perf/session-listing-vc388.md`).
+ * and 272.5 KB for a 450-event one (VC-388).
  *
  * It used to read "the desktop reads one or two Sessions at a time", which
  * stopped being true once a person could keep dozens of tabs open, and the
@@ -709,12 +748,37 @@ export const PROJECTION_CACHE_LIMIT = 8;
  */
 const OVERLAY_CACHE_LIMIT = 8;
 
+/**
+ * The message a Session's admission is currently held for.
+ *
+ * `receivedAt` is read when {@link DefaultSessionRuntime.command} first sees
+ * the message — before it waits behind the Session's previous message, before
+ * any attach — and `dispatched` turns true only once this very command is handed
+ * to the executor. A `turn.started` that releases the admission is this
+ * message's turn only when it arrives after that hand-off; the queue time is
+ * then measured on this runtime's one clock (VC-455). "Received", not
+ * "accepted": acceptance is a Receipt outcome, and this is only arrival.
+ *
+ * Known limit: the executor does not say which Command opened a turn. If an
+ * unrelated turn start (an `executor.retry`) releases one message early, the
+ * next message can be dispatched while the first one's own turn is still to
+ * open, and that turn is then measured as the second message's. That needs a
+ * turn start that names its Command, which the runtime port does not carry.
+ */
+interface MessageAdmission {
+  readonly commandId: string;
+  /** Null when no observability sink is attached: nothing to measure for. */
+  readonly receivedAt: number | null;
+  readonly release: () => void;
+  dispatched: boolean;
+}
+
 class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
   readonly #sessionAdmissionTails = new Map<string, Promise<void>>();
-  readonly #messageAdmissions = new Map<string, () => void>();
+  readonly #messageAdmissions = new Map<string, MessageAdmission>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   /** Insertion-ordered, so the first key is the least recently read Session. */
   readonly #histories = new Map<string, ProjectedHistory>();
@@ -727,11 +791,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   constructor(private readonly ports: SessionRuntimePorts) {}
 
   openNativeBindings(): readonly OpenNativeBinding[] {
-    return [...this.#bindings.values()].map(({ spec, lastProgressAt }) => ({
+    return [...this.#bindings.values()].map(({ spec, lastProgressAt, inFlightTools }) => ({
       sessionId: spec.sessionId,
       directory: spec.directory,
       attachmentId: spec.attachmentId,
       lastProgressAt,
+      inFlightTools,
     }));
   }
 
@@ -772,6 +837,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "adapter_unrecoverable",
         detail: input.detail,
         diagnostic: null,
+        // A delivery the binding refused spent no provider allowance.
+        resetsAt: null,
       },
     });
     await this.#publish([attention]);
@@ -812,13 +879,25 @@ class DefaultSessionRuntime implements SessionRuntime {
       "sessionId" in request && request.command.kind === "message.submit"
         ? Promise.withResolvers<void>()
         : null;
+    // The message's arrival, for the queue measurement: read here, before it
+    // waits behind anything, so that wait is inside the span.
+    const held: MessageAdmission | null =
+      admission === null
+        ? null
+        : {
+            commandId: request.commandId,
+            // Only a runtime with somewhere to send it reads the clock for it.
+            receivedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
+            release: admission.resolve,
+            dispatched: false,
+          };
     const run = () => {
-      if (admission !== null && "sessionId" in request) {
-        this.#messageAdmissions.set(request.sessionId, admission.resolve);
+      if (held !== null && "sessionId" in request) {
+        this.#messageAdmissions.set(request.sessionId, held);
       }
       return this.#command(request).finally(() => {
-        if (admission !== null && "sessionId" in request) {
-          this.#releaseMessageAdmission(request.sessionId, admission.resolve);
+        if (held !== null && "sessionId" in request) {
+          this.#releaseMessageAdmission(request.sessionId, held);
         }
       });
     };
@@ -846,10 +925,32 @@ class DefaultSessionRuntime implements SessionRuntime {
     return promise;
   }
 
-  #releaseMessageAdmission(sessionId: string, release: () => void): void {
-    if (this.#messageAdmissions.get(sessionId) !== release) return;
+  #releaseMessageAdmission(sessionId: string, admission: MessageAdmission): void {
+    if (this.#messageAdmissions.get(sessionId) !== admission) return;
     this.#messageAdmissions.delete(sessionId);
-    release();
+    admission.release();
+  }
+
+  /**
+   * Report how long the held message queued before its turn opened (VC-455).
+   *
+   * Only for a message this runtime has already handed to the executor: a turn
+   * that opened before that is some other turn, and attributing it here would
+   * turn a coincidence into a measurement. Both readings are this runtime's
+   * own clock. Never awaited, never thrown from.
+   */
+  #recordTurnQueue(sessionId: string): void {
+    const admission = this.#messageAdmissions.get(sessionId);
+    if (admission === undefined || !admission.dispatched || admission.receivedAt === null) return;
+    try {
+      const event = turnQueueEvent({
+        receivedAt: admission.receivedAt,
+        turnStartedAt: this.ports.clock.now(),
+      });
+      if (event !== null) this.ports.observability?.record(event);
+    } catch {
+      // A lost measurement, never a lost turn.
+    }
   }
 
   async #command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -906,7 +1007,38 @@ class DefaultSessionRuntime implements SessionRuntime {
         );
       case "adapter.release":
         return this.#release(request as ReleaseCommandRequest, projection, location, existed);
+      case "resume.schedule":
+      case "resume.cancel":
+      case "resume.settle":
+        return this.#scheduledResume(request as ScheduledResumeCommandRequest, location, existed);
     }
+  }
+
+  /**
+   * A scheduled resume's three commands: accepted or refused in the engine,
+   * with nothing to deliver. Through the runtime rather than straight to the
+   * engine so the frames reach subscribers — an open chat redraws its row the
+   * moment the schedule, the cancel or the settle lands.
+   */
+  async #scheduledResume(
+    request: ScheduledResumeCommandRequest,
+    location: SessionLocation,
+    existed: boolean,
+  ): Promise<SessionRuntimeCommandResult> {
+    const submitted = await this.ports.engine.submit({
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      intent: request.command,
+      provenance:
+        request.command.kind === "resume.settle"
+          ? {
+              source: { kind: "system", id: SCHEDULED_RESUME_SOURCE_ID, detail: null },
+              venue: location.venue,
+            }
+          : userProvenance(location.venue),
+    });
+    await this.#publishSubmit(submitted, existed);
+    return this.#result(request.sessionId, submitted.command, submitted.receipt);
   }
 
   async #selectModel(
@@ -1034,12 +1166,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
 
     const attachmentId = this.#id("attachment");
+    const carryFrom =
+      request.command.continuity === "context_replay"
+        ? priorAttachmentContext(projection, adapter.id)
+        : undefined;
+    // What this attachment actually is, as distinct from what was asked: a
+    // `context_replay` with no earlier conversation to carry is a fresh
+    // attachment, and the attachment record says so (the command keeps the
+    // request). Reattach doors ask for a replay without first reading history,
+    // so a Session's first attach through one lands here.
+    const continuity: SessionAttachmentContinuity =
+      request.command.continuity === "context_replay" &&
+      (carryFrom === undefined || "unreadable" in carryFrom)
+        ? "fresh"
+        : request.command.continuity;
     const spec: NativeAttachmentSpec = {
       sessionId: request.sessionId,
       attachmentId,
       directory: site.directory,
-      continuity: request.command.continuity,
+      continuity,
       native: null,
+      ...(carryFrom === undefined ? {} : { carryFrom }),
     };
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
@@ -1073,7 +1220,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         sessionId: request.sessionId,
         adapterId: adapter.id,
         venue: location.venue,
-        continuity: request.command.continuity,
+        continuity,
         // The directory that was PREPARED, never the one that was resolved. On a
         // worktree ticket with no stamp yet the two differ, and `resolve` names
         // the main checkout — writing that down would hand every later resume
@@ -1121,6 +1268,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         venue: location.venue,
         cursor: null,
         lastProgressAt: this.ports.clock.now(),
+        inFlightTools: [],
         reconcileInFlight: null,
         translator,
         sink,
@@ -1257,9 +1405,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         // belongs to the Session until a fresh attach succeeds, rather
         // than pretending a failed binding can receive recovery work.
         attachmentId: null,
-        kind: input.attentionKind,
         detail: input.detail,
         diagnostic: null,
+        // An attach that failed never reached a provider, so no allowance is
+        // spent and there is no reset to resume at.
+        ...(input.attentionKind === "adapter_unrecoverable"
+          ? { kind: input.attentionKind, resetsAt: null }
+          : { kind: input.attentionKind }),
       },
     });
     await this.#publish([failed, attention]);
@@ -1334,6 +1486,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     // documented to be.
     if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
 
+    // From here a turn that opens can be this message's (VC-455). Matched by
+    // command id, because an admission released early by some other turn's
+    // start may already belong to the next message.
+    const admission = this.#messageAdmissions.get(request.sessionId);
+    if (admission?.commandId === request.commandId) admission.dispatched = true;
     const receipt = await binding.handle.dispatch({
       kind: "message.submit",
       commandId: request.commandId,
@@ -1573,6 +1730,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             kind: "adapter_unrecoverable",
             detail,
             diagnostic: null,
+            // Recovery failing is this host's fault, not a spent allowance.
+            resetsAt: null,
           },
         });
         await this.#publish([attention]);
@@ -2034,6 +2193,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             kind: "adapter_unrecoverable",
             detail,
             diagnostic: null,
+            // Recovery failing is this host's fault, not a spent allowance.
+            resetsAt: null,
           },
         });
         await this.#publish([attention]);
@@ -2120,6 +2281,26 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   /**
+   * Fold one live observation into the tool calls its binding has in flight.
+   *
+   * Raw, before translation, because a tool's `started` never becomes a durable
+   * fact — it is only a transient overlay — and the watchdog needs to know it
+   * happened. Live only: the replay path never comes through a sink.
+   */
+  #recordInFlightTools(
+    spec: Pick<NativeAttachmentSpec, "sessionId" | "attachmentId">,
+    observation: RuntimeObservation,
+  ): void {
+    const binding = this.#bindings.get(spec.attachmentId);
+    // A sink's buffered startup observations drain only after its binding is
+    // recorded. The window this guards is shutdown: it clears the map first and
+    // discards each sink only once that executor's release settles, so an
+    // executor still speaking inside its own release lands here with no binding.
+    if (binding?.spec.sessionId !== spec.sessionId) return;
+    binding.inFlightTools = nextInFlightTools(binding.inFlightTools, observation);
+  }
+
+  /**
    * One attachment's observation pipeline, and the translator it runs on.
    *
    * Both are returned because the binding record borrows the translator for the
@@ -2136,8 +2317,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: spec.attachmentId,
       now: () => this.ports.clock.now(),
     });
-    const sink: BufferedObservationSink = new BufferedObservationSink(translator, (fact) =>
-      this.#recordFact(adapter, spec, venue, fact, sink, "live"),
+    const sink: BufferedObservationSink = new BufferedObservationSink(
+      translator,
+      (fact) => this.#recordFact(adapter, spec, venue, fact, sink, "live"),
+      (observation) => this.#recordInFlightTools(spec, observation),
     );
     return { translator, sink };
   }
@@ -2220,14 +2403,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       case "turn.started":
       case "turn.completed":
       case "turn.interrupted":
+        // Measured before the durable write, so the ledger's latency is not
+        // charged to the queue in front of this turn. Only a live start is a
+        // clock reading: a replayed one may be hours old.
+        if (observation.kind === "turn.started" && source === "live") {
+          this.#recordTurnQueue(spec.sessionId);
+        }
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
           turnId: observation.turnId,
         });
         if (observation.kind === "turn.started") {
-          const release = this.#messageAdmissions.get(spec.sessionId);
-          if (release !== undefined) this.#releaseMessageAdmission(spec.sessionId, release);
+          const admission = this.#messageAdmissions.get(spec.sessionId);
+          if (admission !== undefined) this.#releaseMessageAdmission(spec.sessionId, admission);
         }
         break;
       case "context.compacted":
@@ -2317,22 +2506,22 @@ class DefaultSessionRuntime implements SessionRuntime {
         break;
       // `rate_limited` and `quota_exhausted` are Attention kinds no executor can
       // reach, so this arm no longer carries the `retryAt`/`resetAt` shapes they
-      // need. Reaching them means widening the runtime's attention `reason`,
-      // which the recovery sidecar re-validates against every marker already on
-      // disk — a schema migration, and its own piece of work.
-      case "attention.raised":
+      // need. Reaching them means widening the runtime's attention `reason` —
+      // additive, as `transport` → `transport_retrying` was (VC-443) — and
+      // carrying a provider-stated time through this arm. A spent allowance
+      // with a stated reset rides `adapter_unrecoverable` instead, as its
+      // `resetsAt`: the run is still retryable, and now schedulable.
+      case "attention.raised": {
+        // The executor may not name another attachment; everything else about
+        // the Attention is the executor's own, reset included.
+        const { id, ...attention } = observation.attention;
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          attention: {
-            id: observation.attention.id,
-            attachmentId: spec.attachmentId,
-            kind: observation.attention.kind,
-            detail: observation.attention.detail,
-            diagnostic: observation.attention.diagnostic,
-          },
+          attention: { id, attachmentId: spec.attachmentId, ...attention },
         });
         break;
+      }
     }
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
@@ -2568,6 +2757,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       venue: attachment.venue,
       cursor: null,
       lastProgressAt: this.ports.clock.now(),
+      inFlightTools: [],
       reconcileInFlight: null,
       translator,
       sink,
@@ -3301,6 +3491,32 @@ function adapterProvenance(
 /** Names an adapter this runtime does not host — a historical attachment's own id. */
 function adapterIdentity(adapterId: string): AdapterIdentity {
   return { id: adapterId, adapterVersion: "unavailable" };
+}
+
+/**
+ * The newest closed attachment of this executor that bound a native identity,
+ * for a `context_replay` attach (VC-457). Undefined when there is none — a
+ * Session that never bound one (a first attach, or only failed ones) has no
+ * conversation to carry, and the attach opens exactly as a fresh one would.
+ * A binding this build cannot read is reported as such rather than skipped:
+ * a conversation that existed and could not be carried is a fact the Session
+ * must be told, where one that never existed is not.
+ */
+function priorAttachmentContext(
+  projection: SessionProjection,
+  adapterId: string,
+): NativeAttachmentSpec["carryFrom"] {
+  for (const attachment of projection.attachments.toReversed()) {
+    if (attachment.adapterId !== adapterId || attachment.status === "open") continue;
+    if (attachment.native === null) continue;
+    try {
+      const binding = unwrapNativeBinding(attachment.native);
+      return { attachmentId: attachment.id, directory: binding.directory, native: binding.native };
+    } catch (error) {
+      return { attachmentId: attachment.id, unreadable: errorMessage(error) };
+    }
+  }
+  return undefined;
 }
 
 function wrapNativeBinding(

@@ -58,6 +58,8 @@ import type {
   BootstrapResult,
   BrowserPictureInput,
   BrowserPictureResult,
+  BrowserTracesInput,
+  BrowserTracesResult,
   BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
@@ -90,6 +92,7 @@ import type {
   AutomationsResult,
   AutomationSetEnabledInput,
   AutomationSetEnabledResult,
+  AutomationHistoryScopeInput,
   AutomationSkipsResult,
   AutomationUpdateInput,
   PendingArmedRunCancelInput,
@@ -169,8 +172,11 @@ import type {
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
@@ -192,6 +198,10 @@ import type {
   RevealResult,
   SessionActivityNotice,
   SessionHarnessNotice,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
   SessionStopInput,
@@ -477,6 +487,8 @@ const api = {
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
       invoke("volli:browser-picture", input),
+    traces: (input: BrowserTracesInput): Promise<BrowserTracesResult> =>
+      invoke("volli:browser-traces", input),
     takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
       invoke("volli:browser-take-over", input),
     handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
@@ -548,6 +560,16 @@ const api = {
     setAuthorityPolicy: (
       input: ProjectAuthorityPolicyInput,
     ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
+    /**
+     * Points an existing project at the folder it moved to (VC-430) — the same
+     * row, so its id, tickets, settings and history come with it. Refused when
+     * the folder is missing, is a file, or is one another project tracks.
+     */
+    relink: (input: ProjectRelinkInput): Promise<ProjectRelinkResult> =>
+      invoke("volli:project-relink", input),
+    /** Whether a project's registered folder is still on disk (VC-430). */
+    checkFolder: (projectId: string): Promise<ProjectFolderResult> =>
+      invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -662,6 +684,27 @@ const api = {
      */
     stop: (input: SessionStopInput): Promise<SessionStopResult> =>
       invoke("volli:session-stop", input),
+    /**
+     * Marks a Session read or unread (VC-30) — `U`, the row's context menu,
+     * opening it, or answering it from a peek card.
+     *
+     * The row every window draws follows on `onActivity`: main persists the
+     * receipt and re-publishes that Session's listing row through the same
+     * broadcast the push channel uses, because this write moves no ledger fact
+     * for the activity watch to notice.
+     */
+    setRead: (input: SessionReadSetInput): Promise<SessionReadSetResult> =>
+      invoke("volli:session-read-set", input),
+    /**
+     * One fold of a Session for a peek card (VC-30): its transcript tail, the
+     * question it is asking, and the counts beside them.
+     *
+     * A pull, deliberately: a peek adopts nothing and subscribes to nothing, so
+     * sweeping the pointer down a sidebar costs reads and leaves nothing to
+     * tear down. Acting on what it shows is a separate, explicit intent.
+     */
+    peekContent: (input: SessionPeekContentInput): Promise<SessionPeekContentResult> =>
+      invoke("volli:session-peek-content", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
@@ -949,6 +992,15 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
+    /**
+     * ONE Automation's Runs in one project, newest first (VC-297) — the
+     * editor's own history, asked for rather than sieved out of the project's.
+     */
+    runsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-automation", input),
+    /** That Automation's Skipped occurrences, read beside its Runs (VC-297). */
+    skipsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-automation", input),
     /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
@@ -994,7 +1046,7 @@ const api = {
     },
   },
   /**
-   * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
+   * Bring-your-own harness trust. A
    * manifest on disk declares a command line Volli will execute and stays inert
    * until a human confirms it; these two calls are the question and the answer.
    */
@@ -1490,7 +1542,7 @@ const api = {
       override: ProjectThemeOverride | null,
     ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
     /**
-     * The canvas (docs/plans/arc-theming-migration.md): five writes, no reads.
+     * The canvas: five writes, no reads.
      * Everything these persist comes back through `data.bootstrap()` — the
      * global canvas and appearance as `app_state` rows, a project's as columns
      * on its row — so there is deliberately no `canvas.state()` twin.

@@ -1,5 +1,6 @@
 import { getCollection } from "astro:content";
 import type { APIRoute } from "astro";
+import { DOC_SECTIONS } from "../data/navigation";
 
 /*
  * /llms.txt — the whole docs tree as one list, in the order the sidebar shows
@@ -9,40 +10,9 @@ import type { APIRoute } from "astro";
  * agent when you want it to read the docs, and it's what cursor.com/docs links
  * from the foot of every page.
  *
- * The order below has to match the `sidebar` array in astro.config.mjs. A page
- * added there and not here is dropped from this listing, so the build fails
- * loudly rather than shipping a quietly incomplete index.
+ * The sidebar and this index share one navigation definition. The build
+ * rejects an unlisted page rather than publishing an incomplete index.
  */
-const SECTIONS = [
-  {
-    label: "Get started",
-    slugs: ["start/install", "start/quickstart", "start/concepts"],
-  },
-  {
-    label: "Releases",
-    slugs: ["releases/whats-new-0-2"],
-  },
-  {
-    label: "Using Volli",
-    slugs: [
-      "guides/board",
-      "guides/automations",
-      "guides/ticket-workspace",
-      "guides/agents-and-worktrees",
-      "guides/settings",
-      "guides/theming",
-    ],
-  },
-  {
-    label: "Reference",
-    slugs: [
-      "reference/cli",
-      "reference/agent-capability-changes",
-      "reference/keyboard-shortcuts",
-      "reference/troubleshooting",
-    ],
-  },
-];
 
 export const GET: APIRoute = async ({ site }) => {
   const docs = await getCollection("docs");
@@ -50,22 +20,25 @@ export const GET: APIRoute = async ({ site }) => {
   const origin = site?.origin ?? "https://docs.volli.app";
 
   // "index" is the docs home, which titles this file rather than appearing in it.
-  const listed = new Set(["index", ...SECTIONS.flatMap((s) => s.slugs)]);
+  const listed = new Set([
+    "index",
+    ...DOC_SECTIONS.flatMap((s) => s.items.map((item) => item.slug)),
+  ]);
   const missing = docs.map((entry) => entry.id).filter((id) => !listed.has(id));
   if (missing.length > 0) {
     throw new Error(
-      `llms.txt is missing ${missing.join(", ")}. Add each page to SECTIONS in src/pages/llms.txt.ts.`
+      `llms.txt is missing ${missing.join(", ")}. Add each page to src/data/navigation.ts.`,
     );
   }
 
-  const lines = ["# Volli Code"];
+  const lines = ["# Volli"];
 
   const home = byId.get("index");
   if (home?.data.description) lines.push("", `> ${home.data.description}`);
 
-  for (const section of SECTIONS) {
+  for (const section of DOC_SECTIONS) {
     lines.push("", `## ${section.label}`, "");
-    for (const slug of section.slugs) {
+    for (const { slug } of section.items) {
       const entry = byId.get(slug);
       if (!entry) throw new Error(`llms.txt references a missing page: ${slug}`);
       const summary = entry.data.description ? `: ${entry.data.description}` : "";

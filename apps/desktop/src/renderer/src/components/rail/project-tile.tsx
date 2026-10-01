@@ -1,10 +1,12 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
+import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
 import { RemoveProjectDialog } from "@renderer/components/rail/remove-project-dialog";
 import {
   ContextMenu,
@@ -29,6 +31,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   const select = useProjectsStore((state) => state.select);
   const isSelected = useProjectsStore((state) => state.selectedProjectId === project.id);
   const [removeOpen, setRemoveOpen] = React.useState(false);
+  const [relinkOpen, setRelinkOpen] = React.useState(false);
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: project.id,
   });
@@ -99,6 +102,9 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
             <ContextMenuItem icon={FolderOpenIcon} onSelect={() => void revealInFinder()}>
               Reveal in Finder
             </ContextMenuItem>
+            <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={() => setRelinkOpen(true)}>
+              Relink folder…
+            </ContextMenuItem>
             <ContextMenuItem
               icon={MinusCircleIcon}
               variant="destructive"
@@ -111,6 +117,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
       </div>
       {/* Sibling of the ContextMenu, not a child of its content: the dialog
           must survive the menu unmounting on item select. */}
+      <RelinkProjectDialog project={project} open={relinkOpen} onOpenChange={setRelinkOpen} />
       <RemoveProjectDialog project={project} open={removeOpen} onOpenChange={setRemoveOpen} />
     </>
   );

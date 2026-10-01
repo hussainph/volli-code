@@ -9,6 +9,7 @@
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
@@ -16,10 +17,12 @@ import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import {
   browserHoldNoticeCopy,
   subagentNoticeCopy,
+  watchNoticeCopy,
   type BrowserHoldNotice,
   type SubagentNotice,
   type TranscriptHostNotice,
   type UnknownHostNotice,
+  type WatchNotice,
 } from "@volli/session-presentation";
 
 import { Button } from "@renderer/components/ui/button";
@@ -56,12 +59,14 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
   const childSessionId = notice.childSessionId;
   const historicalNote =
     childSessionId === null
-      ? `${copy.note} Answer: volli session answer ${notice.sessionHandle}`
+      ? [copy.note, `Answer: volli session answer ${notice.sessionHandle}`]
+          .filter((part) => part.length > 0)
+          .join(" ")
       : copy.note;
   return (
     <div
       className="not-prose flex min-w-0 flex-col gap-1"
-      title={`${copy.headline} — ${copy.state}. ${historicalNote}`}
+      title={`${copy.headline} — ${copy.state}${historicalNote.length > 0 ? `. ${historicalNote}` : ""}`}
     >
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <SubagentNoticeGlyph state={notice.state} />
@@ -82,7 +87,9 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
           </Button>
         )}
       </div>
-      <p className="truncate text-ui text-muted-foreground/70">{historicalNote}</p>
+      {historicalNote.length > 0 ? (
+        <p className="truncate text-ui text-muted-foreground/70">{historicalNote}</p>
+      ) : null}
     </div>
   );
 });
@@ -102,6 +109,26 @@ export const BrowserHoldNoticeRow = React.memo(function BrowserHoldNoticeRow({
       <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
       <span className="min-w-0 truncate">{copy.note}</span>
+    </div>
+  );
+});
+
+export const WatchNoticeRow = React.memo(function WatchNoticeRow({
+  notice,
+}: {
+  notice: WatchNotice;
+}) {
+  const copy = watchNoticeCopy(notice);
+  return (
+    <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.lines.join("\n")}>
+      <div className="flex min-w-0 items-center gap-2 text-ui">
+        <EyeIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />
+        <span className="min-w-0 truncate font-medium">{copy.headline}</span>
+        <Separator aria-hidden className="min-w-4 flex-1" />
+      </div>
+      {copy.lines.length > 1 ? (
+        <p className="truncate text-ui text-muted-foreground/70">{copy.lines.join(" · ")}</p>
+      ) : null}
     </div>
   );
 });
@@ -141,6 +168,8 @@ export const HostNoticeRow = React.memo(function HostNoticeRow({
       );
     case "browser-hold":
       return <BrowserHoldNoticeRow notice={notice} />;
+    case "watch":
+      return <WatchNoticeRow notice={notice} />;
     case "unknown":
       return <UnknownHostNoticeRow notice={notice} />;
   }

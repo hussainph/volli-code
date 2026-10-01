@@ -16,6 +16,16 @@ export {
   type PiSignInSteps,
 } from "./pi/sign-in";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export {
+  DEFAULT_MCP_SERVER_LIMITS,
+  McpServerBudget,
+  validateMcpServerLimits,
+  type BoundMcpPort,
+  type McpServerBudgetOptions,
+  type McpServerLimits,
+  type McpServerLoad,
+} from "./mcp/server-budget";
+export { ALWAYS_ONLINE, type ConnectivityPort } from "./pi/connectivity";
 export { supersededModelId } from "./pi/model-catalog";
 export {
   promptBaseline,
@@ -63,6 +73,7 @@ export {
   type WebAddressResolver,
   type WebFetchAddress,
   type WebFetchLimits,
+  type WebFetchRefusalKind,
   type WebFetchRuleId,
 } from "./web/safe-fetch";
 export {

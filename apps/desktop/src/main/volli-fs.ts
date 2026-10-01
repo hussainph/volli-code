@@ -1,6 +1,6 @@
 /**
- * All Node fs work for the global-artifacts + `@file` rework
- * (docs/plans/global-artifacts.md): the whole-project file index (git
+ * All Node fs work for the global-artifacts + `@file` rework: the
+ * whole-project file index (git
  * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
  * worktree-aware read/write/reveal and external-app launch of any repo file,
  * the single project-scoped `.volli/artifacts/` create flow, the navigators'

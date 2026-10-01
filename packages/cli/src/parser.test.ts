@@ -1002,6 +1002,8 @@ describe("registry ↔ argv mechanics", () => {
       "mcp.disable",
       "mcp.tools",
       "mcp.remove",
+      // What replaced the awaits (VC-457), tool-only for the reason they were.
+      "watch",
     ]);
   });
 });

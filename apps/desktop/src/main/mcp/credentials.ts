@@ -224,7 +224,7 @@ export function resolveMcpOAuthClientSecret(
 /**
  * The secret slots a server's configuration names that hold no value now.
  *
- * Settings and `mcp_list` show this — as slot labels only — so a person can
+ * Settings and `server_list` show this — as slot labels only — so a person can
  * see which value to add before anything fails.
  */
 export function missingMcpSecretSlots(

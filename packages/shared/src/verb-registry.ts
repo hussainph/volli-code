@@ -282,6 +282,14 @@ export interface VerbEntry {
   readonly previewsByDefault?: boolean;
   /** How this verb appears on the Agent Tool Surface; required by a `tool` access mode. */
   readonly tool?: VerbToolProjection;
+  /**
+   * A tool verb no new Session is handed (VC-457). It stays declared — and
+   * keeps its place in declaration order — because a Session whose surface
+   * was frozen holding it must still reattach with that exact surface, and its
+   * handler still answers. It is in no Role bundle, and a grant naming it is
+   * refused. The string says what replaced it.
+   */
+  readonly retired?: string;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
   /**
@@ -330,12 +338,20 @@ const MODEL_TIER_VALUES = `valid: ${AGENT_MODEL_TIERS.join(", ")}`;
  * model choosing between `fast` and `deep` reads the words the person who
  * filled those rows read. The first sentence is the rule the door enforces:
  * a tier and an exact model are alternatives, never a pair.
+ *
+ * Both doors that offer a rung offer the SAME set (VC-431), so the subject is
+ * the only word that differs between them.
  */
-const MODEL_TIER_DESCRIPTION = [
-  "Run the Session on one of the user's configured model tiers instead of `model`; pass one or the other, never both.",
-  "The tier's stored reasoning level comes with it unless `reasoning` is given.",
-  ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
-].join(" ");
+function modelTierDescription(subject: string): string {
+  return [
+    `Run ${subject} on one of the user's configured model tiers instead of \`model\`; pass one or the other, never both.`,
+    "The tier's stored reasoning level comes with it unless `reasoning` is given.",
+    ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
+  ].join(" ");
+}
+
+const MODEL_TIER_DESCRIPTION = modelTierDescription("the Session");
+const DELEGATE_MODEL_TIER_DESCRIPTION = modelTierDescription("the subagent");
 
 /**
  * The confirmation field the two destructive MCP verbs share (VC-380).
@@ -363,7 +379,7 @@ const MCP_SERVER_ID_FIELD: VerbToolField = {
   name: "server",
   type: "string",
   required: true,
-  description: "The server's id, as mcp_list prints it.",
+  description: "The server's id, as server_list prints it.",
 };
 
 /**
@@ -706,9 +722,13 @@ export const VERB_REGISTRY = [
             "Update the Ticket's board status and order and append one status-change Ticket event.",
         },
       ],
-      humanVisible: ["The Ticket moves to the selected board column."],
+      humanVisible: [
+        "The Ticket moves to the selected board column.",
+        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
+        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
+      ],
       nonEffects: [
-        "The move does not start a Session, submit a kickoff turn, or create a worktree.",
+        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
       ],
     },
     positionalId: "required",
@@ -1346,22 +1366,28 @@ export const VERB_REGISTRY = [
       nonEffects: [
         "The Ticket does not move.",
         "The app does not steal focus or navigate until the person uses Open session.",
+        "The calling Session is not paused: it is told about the started Session through later notices, not by waiting.",
       ],
     },
     tool: {
       name: "session_start",
-      // Written for the model, and mostly about restraint: a tool that starts
-      // another agent is a tool that will be used to start another agent
-      // unless the description says when not to. The last line is the one a
+      // Written for the model. It leads with WHEN and what the caller gains
+      // (VC-459) — an owner, a worktree, a reviewable branch — and names its
+      // lighter neighbour, `session_delegate`, as the answer for work that
+      // must come back into this conversation, so the two are chosen between
+      // rather than confused. Restraint follows: a tool that starts another
+      // agent needs to say when not to. The last line is the one a
       // caller cannot learn from the schema — this door binds the caller's
       // identity itself, so there is no project or actor field to supply and
       // nothing to be gained by describing oneself.
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
-        "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "Use it for work that deserves its own owner — its own worktree, branch, review and merge — that outlives this conversation, or that the person should follow on the board. From a Board Session this is the default for substantial implementation: create the Ticket first with `volli ticket create` when none exists. For a bounded question or check whose answer you need back in this conversation, use session_delegate instead.",
+        "The new Session knows only its Ticket and your kickoff, so make the kickoff a complete brief: goal, scope, constraints, and what done means. Start independent Tickets together rather than one after another.",
+        "The new Session runs on its own.",
         "When the person names a saved Automation, preserve that workflow rather than copying or rewriting its Instructions into a kickoff. If this Session holds `automation_run`, use that tool instead so the saved definition and Run history stay connected. If it does not, explain the missing tool and ask for a Board Session or a manual Run; do not bypass the missing tool with an improvised kickoff.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
-        "Its receipt includes a Session cursor; pass that cursor to session_await so a fast completion between these calls is replayed rather than missed.",
+        "This Session watches the one it started: a notice from Volli arrives here when its first turn ends, when it signals done or blocked, or if it is stopped — keep working meanwhile, or end your turn and the notice opens a new one.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1799,42 +1825,39 @@ export const VERB_REGISTRY = [
     options: [],
   },
   {
-    // The watch/wake tool (VC-85), appended so no frozen surface shifts. The
-    // first tool-only entry: no cli access mode, because a CLI verb must never
-    // wait — a blocking socket request is the `gh pr checks --watch` wedge that
-    // killed two merge sessions, and the socket's own 10-second request timeout
-    // enforces the same rule mechanically. Blocking belongs where the runtime
-    // can suspend the turn and wake it, which is the Agent Tool Surface.
+    // The watch/wake tool (VC-85), RETIRED by VC-457. A parked tool call is a
+    // chat the person driving cannot use, so waiting became events: `watch`
+    // arms a subscription and returns, and the fact arrives later as a notice.
+    // The entry stays, in place, because declaration order is the frozen tool
+    // order and Sessions born holding `ticket_await` must reattach with that
+    // exact surface; for them the handler now arms the equivalent watch and
+    // returns at once. No Role bundle holds it, and no grant may name it.
     key: "ticket.await",
     accessModes: ["tool"],
     actor: "role",
     handler: { site: "main", id: "ticket.await" },
     listed: false,
+    retired: "watch",
     group: "Session",
-    summary: "Block until a watched ticket signals, is commented on, or moves.",
+    summary: "Retired: arm a watch on tickets and return at once (use watch).",
     effects: {
       durableWrites: [],
       humanVisible: [
-        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+        "A later matching ticket change appears in the calling Session as a notice from Volli.",
       ],
       nonEffects: [
         "No ticket changes: nothing is written, nothing moves, and no other Session is contacted.",
-        "Waiting costs no model turns; the Session is suspended until it wakes.",
+        "The calling Session is not paused; the call returns at once.",
       ],
     },
     tool: {
       name: "ticket_await",
-      // Written for the model, and mostly about when to stop doing something
-      // else: an orchestrator that cannot wait polls, and a poll is a full
-      // turn re-sending the whole conversation. The last two lines carry what
-      // the schema cannot: that the alternative patterns are the failure modes
-      // this tool exists to end, and that project policy — not the tool —
-      // decides what may be awaited.
+      // Read only by Sessions whose frozen surface predates VC-457, so it says
+      // what the call does NOW: nothing waits any more.
       description: [
-        "Wait until one of the named tickets receives a verdict signal, a new comment, or a board move, then wake with that event.",
-        "Use it after delegating work: it replaces polling in a loop and sleeping in bash, both of which waste turns or wedge the session.",
-        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
-        "What may be awaited is project policy; a refusal names what the policy allows.",
+        "Retired: this no longer waits. It arms a watch on the named tickets and returns at once; a verdict signal, new comment or board move made by anyone but this Session later arrives here as a notice from Volli, read mid-turn or opening a new turn.",
+        "Keep working after calling it, or end your turn; do not poll or sleep in bash for the change.",
+        "What may be watched is project policy; a refusal names what the policy allows.",
       ].join(" "),
       input: [
         {
@@ -1848,19 +1871,17 @@ export const VERB_REGISTRY = [
           type: "enum",
           values: TICKET_AWAIT_FOR,
           description:
-            "What wakes the wait: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
+            "What a later notice reports: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
         },
         {
           name: "timeoutSeconds",
           type: "number",
-          description:
-            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+          description: "Ignored: nothing waits any more.",
         },
         {
           name: "cursor",
           type: "string",
-          description:
-            "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
+          description: "Ignored: nothing waits any more.",
         },
       ],
     },
@@ -1935,7 +1956,7 @@ export const VERB_REGISTRY = [
       ],
       nonEffects: [
         "The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.",
-        "It does not wait for the Run to finish, and the Run does not report back into the calling Session.",
+        "It does not wait for the Run to finish; the calling Session watches the Run's Session and hears about it through later notices.",
         "No Automation is created, edited or armed \u2014 this verb runs a saved one and authors nothing.",
       ],
     },
@@ -1949,7 +1970,7 @@ export const VERB_REGISTRY = [
       description: [
         "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
         "This includes an Automation whose Trigger is a schedule: although the schedule itself and person-facing Run doors target the Project, this agent-only invocation is a ruled exception that aims its one Run at the named Ticket without changing the Trigger.",
-        "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
+        "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; each Run runs on its own, and this Session watches its Session: a notice from Volli arrives here when its first turn ends, when it signals done or blocked, or if it is stopped.",
         "Prefer this over composing an equivalent `session_start` kickoff by hand: the Automation is the person's authored, rerunnable version of that work.",
         "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
         "It does not move the Ticket, and it does not wait for the work to finish.",
@@ -2080,7 +2101,7 @@ export const VERB_REGISTRY = [
         "The steering message appears in the target Session's transcript, marked with the sending Session.",
       ],
       nonEffects: [
-        "It does not wait for the target's turn to finish and nothing reports back into the calling Session.",
+        "It does not wait for the target's turn to finish; the calling Session watches the target and is told when that turn ends, through a later notice.",
         "No Ticket moves, no Session stops, and no new Session starts.",
       ],
     },
@@ -2089,8 +2110,8 @@ export const VERB_REGISTRY = [
       description: [
         "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
         "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
-        "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn and includes a Session cursor for a lossless later session_await.",
-        "It does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn.",
+        "It does not wait for a reply. This Session watches the target: a notice from Volli arrives here when the turn your message opened or joined ends, when it signals done or blocked, or if it is stopped.",
         "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
       ].join(" "),
       input: [
@@ -2116,17 +2137,16 @@ export const VERB_REGISTRY = [
     // Session and go on working. The child is a real Session — its own Role,
     // transcript, model attachment and row in the session list — never a
     // hidden thread inside the parent. When its first turn completes a NOTICE
-    // — Volli's facts, none of the child's words — is steered into the parent,
-    // and the answer itself is read through `session answer`, so the child's
-    // prose reaches the parent as a tool result and never as its user. The
-    // parent is not parked on it.
+    // is steered into the parent carrying Volli's facts and the child's final
+    // message, quoted inside an untrusted-prose envelope as the child's own
+    // words (VC-457). The parent is not parked on it, and nothing times it out.
     //
     // Control tier, tool-only, for the reason `session.start` is: it opens
     // agent work and spends a model, so it must carry its caller in the
     // binding rather than in a request any same-uid process could forge. In
     // BOTH working bundles: an executor needs "go read this and report back"
     // as much as an orchestrator does, and what makes that safe is the child's
-    // bundle — no agent-control verb, no `ticket.await`, no `ask_user` — not
+    // bundle — no agent-control verb, no `watch`, no `ask_user` — not
     // the parent's Role. Depth is therefore structural: a child has no
     // `session.delegate` to call, so there is no grandchild to count.
     //
@@ -2147,7 +2167,7 @@ export const VERB_REGISTRY = [
     example: 'volli session delegate "Find where the auth token is refreshed"',
     notes: [
       "Runs as a named tool in the project and ticket Role bundles; the shell never executes it.",
-      "Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session naming it; `volli session answer <handle>` reads its final message.",
+      "Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session carrying its final message; `volli session answer <handle>` prints it again in full.",
       "The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.",
     ],
     effects: {
@@ -2162,11 +2182,11 @@ export const VERB_REGISTRY = [
           resource: "session-ledger",
           operation: "append",
           summary:
-            "When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state; its final message stays in the subagent's own ledger, read through `session answer`.",
+            "When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state and quoting its final message as the subagent's prose; a long message is cut, with `session answer` naming the rest.",
         },
       ],
       humanVisible: [
-        "The subagent appears in the session list as a child of this Session, with its own transcript.",
+        "The subagent appears in the parent Session's Activity Island, where the person can inspect its transcript or open it as a tab. It has no separate Session-list row.",
       ],
       nonEffects: [
         "No Ticket moves, and the person driving is not asked anything.",
@@ -2175,17 +2195,23 @@ export const VERB_REGISTRY = [
     },
     tool: {
       name: "session_delegate",
-      // Written for the model, and mostly about the three facts the schema
-      // cannot carry: that a notice arrives later as a message (so the model
-      // should go on working rather than wait or poll), that the answer is
-      // read through `volli session answer` (a tool result, not its user's
-      // words), and that the child shares the working tree (so two agents
+      // Written for the model. The first two sentences are WHEN (VC-459): the
+      // benefit — context isolation, parallelism, a cheaper tier — and then the
+      // cases that stay inline, because a description that only grants
+      // permission reads as a caveat list and gets used when someone asks.
+      // Everything after is protocol (VC-457), the facts the schema cannot
+      // carry: the answer arrives by itself as a notice (so the model goes on
+      // working rather than waiting or polling), nothing bounds the child's
+      // time, and the child shares the working tree (so two agents
       // editing one file is the model's own coordination problem to avoid).
       // The last line is the same one every control-tier tool ends on.
       description: [
-        "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once.",
-        "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
+        "A subagent works in its own context, not yours, and only its answer comes back here. Use it for bounded work when the raw output would crowd this conversation and you will not need it again — a broad codebase search, log or test triage, a diff review, web research — for independent checks to run in parallel, or for a second-opinion review; a cheaper `tier` often fits.",
+        "Stay inline instead for a specific file read, a known-symbol lookup, a small edit, or work that needs what you have already worked out.",
+        "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own, with no time limit, until it answers.",
+        "Its answer arrives by itself: when it finishes, a notice from Volli lands in this Session carrying its final message — read mid-turn if you are working, or opening a new turn if you have ended yours. Keep working meanwhile; do not poll or wait for it. A very long answer is cut, and `volli session answer <handle>` prints it in full. Several may run at once: launch independent tasks in the same turn rather than one after another.",
+        "The subagent starts with none of your context, so brief it as if it knows nothing: the goal, the paths and decisions it needs, its constraints, and what the answer should contain. It cannot ask a person, so an unclear requirement comes back as an open question, not a guess.",
+        "It shares this Session's working directory and holds every coding tool, so give each file one owner and keep it clear of edits you are making.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
       ].join(" "),
@@ -2206,7 +2232,8 @@ export const VERB_REGISTRY = [
         {
           name: "model",
           type: "object",
-          description: "Run the subagent on a specific model instead of the utility default.",
+          description:
+            "Run the subagent on a specific model instead of the one this Session runs on.",
           fields: [
             {
               name: "providerId",
@@ -2223,6 +2250,12 @@ export const VERB_REGISTRY = [
           ],
         },
         {
+          name: "tier",
+          type: "enum",
+          values: AGENT_MODEL_TIERS,
+          description: DELEGATE_MODEL_TIER_DESCRIPTION,
+        },
+        {
           name: "reasoning",
           type: "enum",
           values: REASONING_LEVELS,
@@ -2233,13 +2266,14 @@ export const VERB_REGISTRY = [
     options: [],
   },
   {
-    // The watch/wake tool over Sessions (VC-324 item 3), and the LAST entry in
-    // this file for the reason `session.stop` and `session.delegate` were
-    // appended rather than filed beside their siblings: registry declaration
-    // order IS the frozen tool order, so anything inserted earlier shifts every
-    // verb after it inside every already-frozen surface record, and a shifted
-    // tool array invalidates the Cache Prefix — including the system prompt,
-    // where the provider orders tools first.
+    // The watch/wake tool over Sessions (VC-324 item 3), RETIRED by VC-457 on
+    // `ticket.await`'s terms: kept in place for frozen surfaces, in no bundle,
+    // and answering by arming the equivalent watch and returning at once.
+    // It was appended rather than filed beside its siblings because registry
+    // declaration order IS the frozen tool order, so anything inserted earlier
+    // shifts every verb after it inside every already-frozen surface record,
+    // and a shifted tool array invalidates the Cache Prefix — including the
+    // system prompt, where the provider orders tools first.
     //
     // A separate tool rather than a `sessions` field on `ticket.await`, for the
     // same arithmetic seen from the other side: appending a tool shifts
@@ -2256,31 +2290,26 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.await" },
     listed: false,
+    retired: "watch",
     group: "Session",
-    summary: "Block until a watched Session finishes a turn, signals, or is stopped.",
+    summary: "Retired: arm a watch on Sessions and return at once (use watch).",
     effects: {
       durableWrites: [],
       humanVisible: [
-        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+        "A later turn end, verdict or stop of a watched Session appears in the calling Session as a notice from Volli.",
       ],
       nonEffects: [
         "No Session is contacted, steered or stopped: nothing is written and nothing moves.",
-        "Waiting costs no model turns; the Session is suspended until it wakes.",
+        "The calling Session is not paused; the call returns at once.",
       ],
     },
     tool: {
       name: "session_await",
-      // Written for the model, and mostly about when to stop doing something
-      // else: an orchestrator that cannot wait polls `session list`, and a poll
-      // is a full turn re-sending the whole conversation. The interruption line
-      // is load-bearing — the failure this tool was built for is a fleet that
-      // read `idle` in a listing while four of its members had been cut off.
+      // Read only by Sessions whose frozen surface predates VC-457.
       description: [
-        "Wait until one of the named Sessions finishes or is interrupted mid-turn, signals done or blocked, or is stopped, then wake with that one event.",
-        "Use it after delegating or steering work: it replaces polling `volli session list` in a loop and sleeping in bash, both of which waste turns or wedge the session.",
-        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
-        "Begin with the Session cursor returned by session_start, session_send or session_delegate; every wake and timeout returns the next cursor to chain so nothing committed in between is missed.",
-        "A Board Session may await any Session in its project; a Ticket Session may await itself and the subagents it delegated. What may be awaited is project policy; a refusal names what the policy allows.",
+        "Retired: this no longer waits. It arms a watch on the named Sessions and returns at once; when one's next turn ends, when it signals done or blocked, or if it is stopped, a notice from Volli arrives here — read mid-turn, or opening a new turn if you have ended yours.",
+        "Keep working after calling it, or end your turn; do not poll `volli session list` or sleep in bash.",
+        "A Board Session may watch any Session in its project; a Ticket Session only the subagents it delegated. What may be watched is project policy; a refusal names what the policy allows.",
       ].join(" "),
       input: [
         {
@@ -2294,19 +2323,17 @@ export const VERB_REGISTRY = [
           type: "enum",
           values: SESSION_AWAIT_FOR,
           description:
-            "What wakes the wait: a turn ending (completed or interrupted), a done/blocked signal, a stop, or any of the three. Defaults to any.",
+            "What a later notice reports: a turn ending (completed or interrupted), a done/blocked signal, a stop, or any of the three. Defaults to any.",
         },
         {
           name: "timeoutSeconds",
           type: "number",
-          description:
-            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+          description: "Ignored: nothing waits any more.",
         },
         {
           name: "cursor",
           type: "string",
-          description:
-            "Wake immediately on the first matching event after this opaque cursor. Start with the cursor returned by session_start, session_send or session_delegate, then copy each wake or timeout cursor unchanged; omit it only to start watching from now.",
+          description: "Ignored: nothing waits any more.",
         },
       ],
     },
@@ -2315,7 +2342,7 @@ export const VERB_REGISTRY = [
   // ── The MCP management family (VC-380) ───────────────────────────────────
   //
   // Appended after `session.await` for the reason that entry states about
-  // itself: registry declaration order IS the frozen tool order, so anything
+  // itself (`watch`, VC-457, is appended after this family for the same one): registry declaration order IS the frozen tool order, so anything
   // inserted earlier shifts every verb after it inside every already-frozen
   // surface record, and a shifted tool array throws away the Cache Prefix.
   //
@@ -2355,7 +2382,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_list",
+      name: "server_list",
       description: [
         "List the MCP servers configured for this project: each server's transport, whether it is on, which of its tools are selected, whether its catalog went stale, and the provenance recorded when it was installed.",
         "Read this before installing anything, so an install that already exists becomes a refresh instead of a duplicate.",
@@ -2395,7 +2422,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_preview",
+      name: "server_preview",
       description: [
         "Connect to one MCP server you already have the configuration for, read its tool list, and save nothing.",
         "Use it to see what a server offers before deciding what to install and which of its tools to turn on.",
@@ -2453,7 +2480,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_install",
+      name: "server_install",
       description: [
         "Add or update one MCP server for this project.",
         'Called plainly it PREVIEWS: it connects, reports the tools it found and the exact warning for this kind of server, and writes nothing. Call it again with confirm="apply" to perform it.',
@@ -2467,7 +2494,7 @@ export const VERB_REGISTRY = [
           name: "tools",
           type: "string",
           description:
-            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.",
+            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use server_tools. A name the server did not offer is refused rather than ignored.",
         },
         {
           name: "source",
@@ -2530,7 +2557,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_refresh",
+      name: "server_refresh",
       description: [
         "Reconnect to a server this project already has and re-read its tools, keeping the current selection.",
         "Use it after a server is upgraded, or to clear a stale marker left by an earlier failure.",
@@ -2564,7 +2591,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_enable",
+      name: "server_enable",
       description: [
         "Turn a configured MCP server on, so its selected tools are offered to Sessions created after this call.",
         "It connects to nothing, and it does not change any Session that already exists.",
@@ -2605,11 +2632,11 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_disable",
+      name: "server_disable",
       description: [
         "Turn a configured MCP server off, keeping its configuration.",
         "Sessions created after this call are not offered its tools; Sessions that already exist keep the tools they were born with and can still reattach.",
-        "Prefer this to mcp_remove whenever the intent is only to stop offering the tools.",
+        "Prefer this to server_remove whenever the intent is only to stop offering the tools.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD],
     },
@@ -2643,7 +2670,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_tools",
+      name: "server_tools",
       description: [
         "Set exactly which of a configured server's tools are on, replacing the current selection.",
         "Anything the server offers that you do not name is turned off. Sessions created after this call get the new selection; existing Sessions are unchanged.",
@@ -2705,15 +2732,88 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_remove",
+      name: "server_remove",
       description: [
         "Delete one MCP server's configuration from this project.",
         'Called plainly it PREVIEWS: it reports what would be deleted and what that breaks, and removes nothing. Call it again with confirm="apply" to perform it.',
         "This is more destructive than it looks. Any older Session that was born holding one of this server's tools will fail to reattach afterwards, because the transport its frozen tool needs is gone.",
         "Re-adding the server under the SAME id restores those Sessions; re-adding it under a different id does not.",
-        "If the intent is only to stop offering the tools to new Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+        "If the intent is only to stop offering the tools to new Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD, MCP_CONFIRM_FIELD],
+    },
+    options: [],
+  },
+  {
+    // What replaced `ticket.await` and `session.await` (VC-457): a
+    // subscription that RETURNS. The await tools parked the caller's turn
+    // until a watched fact arrived, and a parked turn is a chat the person
+    // driving cannot use. Here the call arms a watch and comes back; the fact
+    // arrives later as a notice from Volli, steered into a turn in progress or
+    // opening one on an idle Session — the delivery a subagent's answer has
+    // always had.
+    //
+    // One tool for both subjects, because the two awaits differed only in
+    // which ledger they read, and a caller watching a fleet names Sessions and
+    // Tickets in the same breath. Appended LAST, after the MCP family, because
+    // declaration order is the frozen tool order.
+    //
+    // Tool-only and control tier for the reason the awaits were: it reaches
+    // into the caller's own ledger later, so its caller must be the bound
+    // attachment, never a socket request. `session_start`, `automation_run`
+    // and `session_send` arm the common case themselves; this is for the rest
+    // — a Ticket someone else is working, a Session a person started, and
+    // ending a watch.
+    key: "watch",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "watch" },
+    listed: false,
+    group: "Session",
+    summary: "Get notices when watched Sessions or tickets change, without waiting.",
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Later, when a watched change lands, append one notice from Volli to this Session's ledger; changes that land together share one notice.",
+        },
+      ],
+      humanVisible: [
+        "Each notice appears in the calling Session's transcript as a Volli row naming what changed.",
+      ],
+      nonEffects: [
+        "The call returns at once; the calling Session is never paused on it.",
+        "Nothing about the watched Sessions or Tickets changes, and watches end when Volli relaunches.",
+      ],
+    },
+    tool: {
+      name: "watch",
+      description: [
+        "Watch Sessions or tickets in this project and return at once; later changes arrive in this Session as notices from Volli — read mid-turn if you are working, or opening a new turn if you have ended yours. Never poll or sleep to find out.",
+        "A watched Session reports its next turn ending (with what it said last), a done or blocked signal, and a stop. A watched ticket reports every move, comment and signal made by anyone but this Session until you unwatch it.",
+        'session_start, automation_run and session_send already watch the Session they open or steer; use this for other work, or with action "unwatch" to stop.',
+        "A Board Session may watch any Session or ticket in its project; a Ticket Session any ticket and only the subagents it delegated. What may be watched is project policy; a refusal names what it allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "sessions",
+          type: "string",
+          description: `Up to ${MAX_SESSION_AWAIT_TARGETS} short session ids, as \`volli session list\` prints them, separated by spaces or commas.`,
+        },
+        {
+          name: "tickets",
+          type: "string",
+          description: `Up to ${MAX_TICKET_AWAIT_TARGETS} ticket display ids, for example 'VC-12 VC-14'.`,
+        },
+        {
+          name: "action",
+          type: "enum",
+          values: ["watch", "unwatch"],
+          description: "watch (the default) arms the watches; unwatch ends them.",
+        },
+      ],
     },
     options: [],
   },
@@ -2950,6 +3050,23 @@ const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
 /** One verb's entry, or undefined for a key this build does not declare. */
 export function verbEntry(key: string): VerbEntry | undefined {
   return ENTRY_BY_KEY.get(key);
+}
+
+/**
+ * The provider spelling for a frozen Session, not the durable verb key.
+ * Historical surfaces have no naming marker and must keep their mcp_* names;
+ * new Sessions carry "server" and avoid Anthropic OAuth's single-underscore
+ * mcp_ extra-usage classifier. Real MCP tools use mcp__ and are unaffected.
+ */
+export function verbToolWireName(
+  key: VerbToolKey,
+  mcpManagementNames?: "server",
+): string | undefined {
+  const name = verbEntry(key)?.tool?.name;
+  if (name === undefined) return undefined;
+  return key.startsWith("mcp.") && mcpManagementNames === undefined
+    ? name.replace(/^server_/, "mcp_")
+    : name;
 }
 
 /** Every listed registry verb, including a tool-only or app-only door. */

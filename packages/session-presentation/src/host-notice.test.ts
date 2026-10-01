@@ -6,7 +6,9 @@ import {
   browserHoldNoticeCopy,
   readHostNotice,
   subagentNoticeCopy,
+  watchNoticeCopy,
   type SubagentNotice,
+  type WatchNotice,
 } from "./host-notice";
 
 const MODEL_NOTICE =
@@ -290,7 +292,7 @@ describe("host-notice copy", () => {
     expect(subagentNoticeCopy(projected)).toEqual({
       headline: "Find artifact conventions",
       state: "done",
-      note: "Finished its task; its answer is in its own Session.",
+      note: "",
     });
     expect(subagentNoticeCopy({ ...projected, state: "interrupted" }).note).toBe(
       "Its turn ended before it answered.",
@@ -333,5 +335,87 @@ describe("host-notice copy", () => {
       headline: "Documentation",
       note: "You asked the Session to leave; it will release the tab when it is safe.",
     });
+  });
+});
+
+describe("watch notices (VC-457)", () => {
+  const MOVED = {
+    subject: "ticket",
+    id: "ticket-1",
+    label: "VC-12",
+    fact: "ticket-moved",
+    detail: "Needs Review",
+  } as const;
+  const TURN = {
+    subject: "session",
+    id: "ses-12345678",
+    label: "ses-1234",
+    fact: "turn-completed",
+    detail: null,
+  } as const;
+
+  it("projects the facts a watch notice carries", () => {
+    expect(
+      readHostNotice(message(sessionHostNoticeMetadata({ kind: "watch", events: [MOVED, TURN] }))),
+    ).toEqual({ kind: "watch", events: [MOVED, TURN] });
+  });
+
+  it("reads a malformed or empty watch payload as an unknown host notice, never a person", () => {
+    const malformed = [
+      { kind: "watch" },
+      { kind: "watch", events: [] },
+      { kind: "watch", events: ["x"] },
+      { kind: "watch", events: [{ ...MOVED, subject: "board" }] },
+      { kind: "watch", events: [{ ...MOVED, id: "" }] },
+      { kind: "watch", events: [{ ...MOVED, label: 7 }] },
+      { kind: "watch", events: [{ ...MOVED, fact: "ticket-exploded" }] },
+      { kind: "watch", events: [{ ...MOVED, fact: 3 }] },
+      { kind: "watch", events: [{ ...MOVED, detail: "" }] },
+    ];
+    for (const notice of malformed) {
+      expect(
+        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" })),
+      ).toEqual({ kind: "unknown", text: "Volli text" });
+    }
+  });
+
+  it("words one change as its own headline and several as a count", () => {
+    const one: WatchNotice = { kind: "watch", events: [MOVED] };
+    expect(watchNoticeCopy(one)).toEqual({
+      headline: "VC-12 moved (Needs Review)",
+      lines: ["VC-12 moved (Needs Review)"],
+    });
+    const facts = [
+      "turn-completed",
+      "turn-interrupted",
+      "signaled-done",
+      "signaled-blocked",
+      "stopped",
+      "ticket-moved",
+      "ticket-commented",
+      "ticket-signaled",
+    ] as const;
+    const many: WatchNotice = {
+      kind: "watch",
+      events: facts.map((fact) => ({
+        subject: TURN.subject,
+        id: TURN.id,
+        label: TURN.label,
+        fact,
+        detail: TURN.detail,
+      })),
+    };
+    const copy = watchNoticeCopy(many);
+    expect(copy.headline).toBe("8 watched changes");
+    expect(copy.lines).toEqual([
+      "ses-1234 finished its turn",
+      "ses-1234 was interrupted",
+      "ses-1234 signaled done",
+      "ses-1234 signaled blocked",
+      "ses-1234 was stopped",
+      "ses-1234 moved",
+      "ses-1234 has a new comment",
+      "ses-1234 was signaled",
+    ]);
   });
 });

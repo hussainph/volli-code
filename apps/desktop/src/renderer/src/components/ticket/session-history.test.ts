@@ -17,17 +17,28 @@ import {
   canResumeSession,
   filterChatSessionHistory,
   filterSessionHistory,
+  groupChatSessionRows,
   groupSessionRows,
   latestResumableSession,
   mergeSessionRailRows,
   nextSessionRailAgeChangeAt,
   nextTicketSessionStatusChangeAt,
+  orderSessionRailRowsByAttention,
+  orderSessionRailRowsByHold,
+  sessionRailOrderMembers,
+  sessionRailRowActivityAt,
+  sessionRailRowDotState,
+  sessionRailRowId,
+  sessionRailRowSessionId,
   sessionRailRowStampAt,
+  SESSION_ROSTER_FILTER_THRESHOLD,
   ticketOutputStamps,
   ticketSessionProvenance,
+  ticketSessionUnreadIds,
   type SessionRailRow,
   type TicketSessionRow,
   type TicketSessionRowsInput,
+  type TicketSessionStatus,
 } from "./session-history";
 import { WORKING_WINDOW_MS, ticketScope, type SessionTab } from "../../stores/sessions";
 
@@ -87,6 +98,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
 }
@@ -403,12 +415,36 @@ describe("buildTicketChatSessionRows", () => {
         record: chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
         title: "Plan the migration",
         isOpen: true,
+        isLive: true,
       },
       {
         record: chatRecord({ sessionId: "closed", title: "Draft the RFC", live: false }),
         title: "Draft the RFC",
         isOpen: false,
+        // Closed, and still LIVE: an attachment is not a lifecycle (VC-406).
+        // This is the pair the roster splits on, and they disagree here on
+        // purpose.
+        isLive: true,
       },
+    ]);
+  });
+
+  it("reads liveness off the record, never off the attachment (VC-406)", () => {
+    const rows = buildTicketChatSessionRows([
+      // Blocked on a person with nothing attached — the row that made the old
+      // split visible, because it folded under "Earlier".
+      chatRecord({ sessionId: "waiting", activity: "waiting", live: false }),
+      // The last turn died and nobody decided that (VC-324): still a Session
+      // to go back to.
+      chatRecord({ sessionId: "interrupted", activity: "interrupted", live: false }),
+      // Somebody ended it (VC-86): the one deliberate end a chat has.
+      chatRecord({ sessionId: "stopped", activity: "stopped", live: true }),
+    ]);
+
+    expect(rows.map((chatRow) => [chatRow.record.sessionId, chatRow.isLive])).toEqual([
+      ["waiting", true],
+      ["interrupted", true],
+      ["stopped", false],
     ]);
   });
 
@@ -448,6 +484,40 @@ describe("buildTicketChatSessionRows", () => {
         chatRecord({ sessionId: "peer", parentSessionId: "parent" }),
       ]).map((chatRow) => chatRow.record.sessionId),
     ).toEqual(["peer"]);
+  });
+});
+
+describe("groupChatSessionRows", () => {
+  const live = buildTicketChatSessionRows([chatRecord({ sessionId: "live", activity: "idle" })])[0];
+  const finished = buildTicketChatSessionRows([
+    chatRecord({ sessionId: "finished", activity: "stopped" }),
+  ])[0];
+
+  it("folds a finished Session and keeps a live one on the page", () => {
+    expect(groupChatSessionRows([live, finished], new Set())).toEqual({
+      current: [live],
+      history: [finished],
+    });
+  });
+
+  // D6: unread is its own axis. A Session that left work behind and then went
+  // quiet used to drop into the collapsed record, which hid the very dot that
+  // says it is waiting to be read.
+  it("keeps an UNREAD finished Session in the live half (VC-30, D6)", () => {
+    expect(groupChatSessionRows([live, finished], new Set(["finished"]))).toEqual({
+      current: [live, finished],
+      history: [],
+    });
+  });
+
+  it("retires a Session only once it is both finished and read", () => {
+    const read = groupChatSessionRows([finished], new Set(["someone-else"]));
+
+    expect(read).toEqual({ current: [], history: [finished] });
+  });
+
+  it("is two empty halves for a ticket with no chat Sessions", () => {
+    expect(groupChatSessionRows([], new Set())).toEqual({ current: [], history: [] });
   });
 });
 
@@ -652,6 +722,237 @@ describe("sessionRailRowStampAt", () => {
   });
 });
 
+describe("sessionRailRowActivityAt", () => {
+  it("dates a live chat row from when the Session last said anything", () => {
+    const rows = buildTicketChatSessionRows([chatRecord({ lastActivityAt: 4242 })]);
+
+    expect(sessionRailRowActivityAt({ kind: "chat", row: rows[0]! }, {})).toBe(4242);
+  });
+
+  it("dates a live terminal row from the last line it printed", () => {
+    // A live pane has no ENDING to date itself from, which is what separates
+    // this reading from `sessionRailRowStampAt`.
+    const entry: SessionRailRow = {
+      kind: "terminal",
+      row: row({ record: record({ id: "pane", createdAt: 10, endedAt: null }) }),
+    };
+
+    expect(sessionRailRowActivityAt(entry, { pane: 555 })).toBe(555);
+  });
+
+  it("falls back to creation for a pane that has printed nothing", () => {
+    // The oldest instant that is certainly true of it — never a fabricated
+    // "now", which would make a silent pane look busy.
+    const entry: SessionRailRow = {
+      kind: "terminal",
+      row: row({ record: record({ id: "pane", createdAt: 10, endedAt: null }) }),
+    };
+
+    expect(sessionRailRowActivityAt(entry, {})).toBe(10);
+  });
+});
+
+describe("sessionRailRowDotState", () => {
+  it("spells a terminal's setup, and defers everything else to the shared map", () => {
+    // `setup` is the worktree's ensure script — named by this surface rather
+    // than reported by a PTY — so it is the one state spelled here.
+    expect(sessionRailRowDotState({ kind: "terminal", row: row({ status: "setup" }) })).toBe(
+      "setup",
+    );
+    expect(sessionRailRowDotState({ kind: "terminal", row: row({ status: "working" }) })).toBe(
+      "working",
+    );
+  });
+
+  it("reads a chat row's dot from its own activity", () => {
+    const rows = buildTicketChatSessionRows([chatRecord({ activity: "waiting" })]);
+
+    expect(sessionRailRowDotState({ kind: "chat", row: rows[0]! })).toBe("waiting");
+  });
+});
+
+describe("orderSessionRailRowsByAttention", () => {
+  const waiting: SessionRailRow = {
+    kind: "chat",
+    row: buildTicketChatSessionRows([
+      chatRecord({ sessionId: "waiting", activity: "waiting" }),
+    ])[0]!,
+  };
+  const idle: SessionRailRow = {
+    kind: "chat",
+    row: buildTicketChatSessionRows([chatRecord({ sessionId: "idle", activity: "idle" })])[0]!,
+  };
+  const working: SessionRailRow = {
+    kind: "terminal",
+    row: row({ record: record({ id: "working" }), status: "working" }),
+  };
+
+  it("leads with whatever is asking for a person", () => {
+    expect(
+      orderSessionRailRowsByAttention([idle, working, waiting]).map((entry) =>
+        entry.kind === "chat" ? entry.row.record.sessionId : entry.row.record.id,
+      ),
+    ).toEqual(["waiting", "working", "idle"]);
+  });
+
+  it("keeps the order it was given inside one rank", () => {
+    // `toSorted` is stable by specification, which is what makes "newest first
+    // within a rank" a property of this function rather than of the engine.
+    const second: SessionRailRow = {
+      kind: "chat",
+      row: buildTicketChatSessionRows([chatRecord({ sessionId: "idle-2", activity: "idle" })])[0]!,
+    };
+
+    expect(
+      orderSessionRailRowsByAttention([idle, second]).map((entry) =>
+        entry.kind === "chat" ? entry.row.record.sessionId : entry.row.record.id,
+      ),
+    ).toEqual(["idle", "idle-2"]);
+  });
+
+  it("does not mutate the list it was handed", () => {
+    const rows = [idle, waiting];
+    orderSessionRailRowsByAttention(rows);
+    expect(rows[0]).toBe(idle);
+  });
+});
+
+/* ------------------------------------------------ the rail's held order (VC-30) */
+
+/** One chat rail row, by Session id and activity. */
+function chatRail(sessionId: string, activity: ChatSessionRecord["activity"]): SessionRailRow {
+  return {
+    kind: "chat",
+    row: buildTicketChatSessionRows([chatRecord({ sessionId, activity })])[0]!,
+  };
+}
+
+/** One terminal rail row, by record id and displayed status. */
+function terminalRail(id: string, status: TicketSessionStatus = "idle"): SessionRailRow {
+  return { kind: "terminal", row: row({ record: record({ id }), status }) };
+}
+
+describe("sessionRailRowId", () => {
+  // The peek and the held order address a rail row by the SAME id the sidebar's
+  // listing mints, which is what lets one committed order serve both surfaces.
+  it("uses the sidebar's own row vocabulary for both kinds", () => {
+    expect(sessionRailRowId(chatRail("chat-1", "idle"))).toBe("chat:chat-1");
+    expect(sessionRailRowId(terminalRail("terminal-0"))).toBe("session:terminal-0");
+  });
+});
+
+describe("sessionRailRowSessionId", () => {
+  it("is the bare Session id, whichever kind the row is", () => {
+    expect(sessionRailRowSessionId(chatRail("chat-1", "idle"))).toBe("chat-1");
+    expect(sessionRailRowSessionId(terminalRail("terminal-0"))).toBe("terminal-0");
+  });
+});
+
+describe("sessionRailOrderMembers", () => {
+  it("names the rail's membership in the held order's vocabulary, in place order", () => {
+    expect(
+      sessionRailOrderMembers([
+        chatRail("asking", "waiting"),
+        terminalRail("running", "working"),
+        chatRail("quiet", "idle"),
+      ]),
+    ).toEqual([
+      { id: "chat:asking", phase: "waiting" },
+      { id: "session:running", phase: "working" },
+      { id: "chat:quiet", phase: "resting" },
+    ]);
+  });
+
+  it("phases a row through the reading both sidebars share (VC-30, D7)", () => {
+    // The rail used to spell its own phase rule, and it disagreed with the left
+    // band about a Session coming up — so one event lifted the rail row and
+    // left the band row where it was. `sessionOrderPhaseOf` is now the only
+    // reading; `setup` is work, and a died turn is over rather than lifting.
+    expect(
+      sessionRailOrderMembers([
+        terminalRail("booting", "setup"),
+        chatRail("cut-off", "interrupted"),
+      ]),
+    ).toEqual([
+      { id: "session:booting", phase: "working" },
+      { id: "chat:cut-off", phase: "resting" },
+    ]);
+  });
+});
+
+describe("orderSessionRailRowsByHold", () => {
+  const asking = chatRail("asking", "waiting");
+  const quiet = chatRail("quiet", "idle");
+  const running = terminalRail("running", "working");
+
+  it("draws the live rows in the order the rail's key committed to", () => {
+    expect(
+      orderSessionRailRowsByHold(
+        [quiet, running, asking],
+        ["chat:asking", "session:running", "chat:quiet"],
+      ).map(sessionRailRowId),
+    ).toEqual(["chat:asking", "session:running", "chat:quiet"]);
+  });
+
+  it("keeps a row the order has not heard of, at the end, in its own order", () => {
+    // A Session that appeared since the last commit is still on screen — the
+    // order is applied, never used as a filter (`applyHeldOrder`).
+    expect(
+      orderSessionRailRowsByHold([quiet, running, asking], ["chat:asking"]).map(sessionRailRowId),
+    ).toEqual(["chat:asking", "chat:quiet", "session:running"]);
+  });
+
+  it("ignores an id the rail is not drawing and does not mutate its input", () => {
+    // The hold is global and the order outlives a build, so it can still name a
+    // row this ticket has retired.
+    const rows = [quiet, asking];
+    expect(
+      orderSessionRailRowsByHold(rows, ["chat:gone", "chat:asking"]).map(sessionRailRowId),
+    ).toEqual(["chat:asking", "chat:quiet"]);
+    expect(rows[0]).toBe(quiet);
+  });
+});
+
+describe("ticketSessionUnreadIds", () => {
+  it("collects the unread Sessions by the id the rail's rows answer to", () => {
+    const unread = ticketSessionUnreadIds([
+      { ...terminalRow(record({ id: "s1" })), read: { unreadSince: 7 } },
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+        read: { unreadSince: 9 },
+      },
+    ]);
+
+    expect([...unread]).toEqual(["s1", "c1"]);
+  });
+
+  it("leaves out a row with no receipt and one that has been read", () => {
+    // Sparse is the resting case (`isSessionUnread`): a builder with no receipt
+    // reader marks nothing rather than guessing.
+    const unread = ticketSessionUnreadIds([
+      terminalRow(record({ id: "s1" })),
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+        read: { unreadSince: null },
+      },
+    ]);
+
+    expect(unread.size).toBe(0);
+  });
+});
+
+describe("SESSION_ROSTER_FILTER_THRESHOLD", () => {
+  it("is the reviewed four, for both scopes", () => {
+    expect(SESSION_ROSTER_FILTER_THRESHOLD).toBe(4);
+  });
+});
+
 describe("nextSessionRailAgeChangeAt", () => {
   const now = 1_000_000;
   // "just now" for another 15s; the minute bucket it sits in closes later.
@@ -671,5 +972,23 @@ describe("nextSessionRailAgeChangeAt", () => {
   it("takes the soonest instant any visible stamp reads differently, in either order", () => {
     expect(nextSessionRailAgeChangeAt([fresh, older], now)).toBe(now - 30_000 + 45_000);
     expect(nextSessionRailAgeChangeAt([older, fresh], now)).toBe(now - 30_000 + 45_000);
+  });
+
+  it("waits on the stamp the caller is actually printing", () => {
+    // A live row prints its ACTIVITY age, not an ending it does not have, so
+    // the timer has to be armed on that reading — two readings is how a column
+    // wakes on a boundary belonging to a stamp it is not showing (VC-406).
+    const live: SessionRailRow = {
+      kind: "terminal",
+      row: row({ record: record({ id: "live", createdAt: 1, endedAt: null }) }),
+    };
+
+    expect(
+      nextSessionRailAgeChangeAt([live], now, (entry) =>
+        sessionRailRowActivityAt(entry, { live: now - 30_000 }),
+      ),
+    ).toBe(now - 30_000 + 45_000);
+    // …and the default reading, on the same row, is the record's creation.
+    expect(nextSessionRailAgeChangeAt([live], now)).not.toBe(now - 30_000 + 45_000);
   });
 });

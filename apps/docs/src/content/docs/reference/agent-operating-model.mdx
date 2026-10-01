@@ -1,0 +1,71 @@
+---
+title: Agent operating model
+description: Session roles, frozen tools, and how ticket commands differ from Session signals.
+---
+
+Use this page when you write instructions for an agent that runs in Volli. A
+**Session** keeps the conversation and its local history. Its role sets where it
+works and which agent-control tools it can receive.
+
+## Session roles
+
+| Role | Working directory | Scope |
+| --- | --- | --- |
+| **Board Session** | Project's main checkout | Plan and coordinate project work |
+| **Ticket Session** | Ticket's worktree, or main checkout when isolation is off | Work on one ticket |
+| **Subagent Session** | Parent Session's working directory | Answer a bounded task for its parent |
+
+Subagents share their parent's files, so give each file one owner when you
+delegate edits. A Subagent Session keeps its own history and returns its answer
+to the parent. You can inspect children from the parent's Activity Island.
+
+## Drafts and starts
+
+Selecting **Chat** in the app opens a draft. The first message creates the
+Session and starts work. A saved Automation Run or an agent's `session_start`
+call already has an opening instruction, so it creates the Session immediately.
+
+Starting a Session and moving a ticket are separate actions. A deliberate move
+into a column can also trigger an Automation that is enabled and armed for that
+column.
+
+## Frozen tools
+
+Volli records a Session's tool list when it creates the Session. Changes to
+project tool settings apply to new Sessions. Reopening an existing Session
+keeps its recorded tools.
+
+A Board Session can receive project-management tools that a Ticket Session does
+not hold by default. Subagent Sessions cannot start or steer other Sessions and
+cannot ask you a question through `ask_user`.
+
+Run `volli help` inside the Session to see the tools it holds. Prompt
+instructions cannot grant a missing tool.
+
+## Commands and signals
+
+| Action | Effect |
+| --- | --- |
+| `volli ticket move` | Changes the ticket's board column; an armed Automation may run |
+| `volli ticket comment` | Adds an attributed comment to the ticket |
+| `volli ticket signal` | Records a verdict without moving the ticket |
+| `volli session done` | Records the Session's completion without moving the ticket |
+| `volli session blocked` | Raises attention on the Session without moving the ticket |
+
+If the Session keeps a todo list, `session done` and `session blocked` also
+leave its final list as a comment on its ticket.
+
+## Shell commands and named tools
+
+The `volli` CLI provides discovery and coordination commands. Agent-control
+operations, such as starting a Session or running a saved Automation, use named
+tools supplied to that Session. They have no shell equivalent. Archiving a
+ticket stays in the app.
+
+The local socket derives attribution from Session authentication. Setting
+`VOLLI_SESSION` to an ID does not make a shell that Session. This is not a
+sandbox against other processes running as your macOS user.
+
+See [command effects](/reference/command-effects/),
+[agent authority](/guides/authority/), and
+[agent capability changes](/reference/agent-capability-changes/) for details.

@@ -1,6 +1,6 @@
 # @volli/docs
 
-The user-facing documentation site for Volli Code, published at
+The user-facing documentation site for Volli, published at
 [docs.volli.app](https://docs.volli.app).
 
 Built with [Astro Starlight](https://starlight.astro.build). It deploys to its
@@ -10,7 +10,8 @@ own Cloudflare Pages project, separate from the marketing site in `apps/website`
 
 ```sh
 pnpm -C apps/docs dev      # local preview on :4321
-pnpm -C apps/docs build    # astro check + static build to dist/
+pnpm -C apps/docs build    # typecheck, build, docs integrity, and font notices
+pnpm -C apps/docs check:docs # check an existing dist/ build
 pnpm -C apps/docs deploy   # build, then wrangler pages deploy
 ```
 
@@ -18,14 +19,23 @@ pnpm -C apps/docs deploy   # build, then wrangler pages deploy
 
 ```
 src/content/docs/     pages, one .mdx per route
+src/data/navigation.ts shared sidebar and llms.txt navigation
+src/lib/generated-markdown.ts data-backed Markdown reference expansion
 src/styles/volli.css  the brand layer
-src/components/       Starlight component overrides
-astro.config.mjs      sidebar navigation lives here
+src/components/       Starlight components and overrides
+scripts/check-docs.mjs built-page integrity checks
+astro.config.mjs      Starlight configuration
 ```
 
-Adding a page means creating the `.mdx` file and adding it to the `sidebar`
-array in `astro.config.mjs`. A page that isn't in the sidebar still builds and is
-reachable by URL, it just won't appear in the navigation.
+Add a `.mdx` file and list its route in `src/data/navigation.ts`. Both the
+sidebar and `/llms.txt` use that definition. The build rejects an unlisted or
+missing page. Every page also has a Markdown mirror at `/<slug>.md`, used by
+**Copy page**.
+
+The build checks local links and anchors, retained fragments from split pages,
+heading hierarchy, Markdown mirrors, Copy page targets, and the agent index. Data-backed reference components must
+also be expanded in `src/lib/generated-markdown.ts`; a component tag without
+its content is not a usable copied page.
 
 ## Brand
 
@@ -33,7 +43,7 @@ reachable by URL, it just won't appear in the navigation.
 palette. The values come from two places, and both are upstream of this file:
 
 - Page, text, border, and brand-accent values match
-  `apps/website/src/styles/global.css`.
+  `apps/website/src/styles/site.css`.
 - The readable accent `#ff966c` is the default canvas's generated
   `--primary-text` token, solved onto a dark background at APCA Lc60. Fills use
   `#e8652a`; text uses `#ff966c`, because the fill color fails contrast as body
@@ -70,13 +80,24 @@ it runs there too, and CI builds both sites.
 
 ## Writing
 
-Documentation prose follows the `product-docs` skill: second person, active
-voice, no marketing language, and no em-dashes. Terminology comes from
-`CONTEXT.md` at the repo root, which is the glossary of record. Use its terms
-exactly rather than inventing synonyms.
+Use both `product-docs` and `.agents/skills/google-developer-docs`. Before
+drafting, record the page's reader, goal, dominant type (tutorial, how-to,
+explanation, or reference), prerequisites, and product fact sources. Review the
+outline against that contract before writing.
 
-Anything not verifiable from the code gets a `{/* TODO */}` comment instead of a
-guess.
+Use second person, active voice, exact UI labels in bold, and sentence-case
+headings. Procedures name the location before the action. Keep alternatives
+out of the main tutorial path. Run the product-docs voice checklist and the
+Google reference checklist on every substantive rewrite. Do not add generic
+warm-ups, marketing praise, synonym cycling, or repeated summaries.
+
+`CONTEXT.md` supplies terminology; implementation and tests establish current
+behavior. Record unverified facts as open questions in the audit rather than
+publishing guesses. Do not change screenshot alt text to disguise an outdated
+control. Prefer one canonical procedure with links from related pages.
+
+The comparison, page contracts, source links, and follow-ups for the 0.2 pass
+are in `docs/research/docs-0-2-audit.md` at the repository root.
 
 ## Deployment
 

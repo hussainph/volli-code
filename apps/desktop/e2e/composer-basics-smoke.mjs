@@ -39,6 +39,7 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
+import { execFileSync } from "node:child_process";
 import {
   assertProfileIsolated,
   columnHasCard,
@@ -109,6 +110,9 @@ async function main() {
 
     // Seed two real git-repo projects, then reload → import into SQLite.
     const alphaPath = await makeGitRepo(scratch, "alpha-");
+    // Reproduce a real branch name wider than the Options row, rather than
+    // only checking the default short branch that never exposed the overflow.
+    execFileSync("git", ["-C", alphaPath, "checkout", "-qb", "fix/worktree-identity-drift"]);
     const betaPath = await makeGitRepo(scratch, "beta-");
     await seedProjects(page, [
       { ...PROJECT_ALPHA, path: alphaPath },
@@ -177,11 +181,22 @@ async function main() {
         // destination chip binds the same `usesWorktree` field, and the base
         // chip is shown only while that destination is a worktree.
         await composer(page).getByRole("button", { name: "Ticket options" }).click();
+        await page
+          .getByRole("button", { name: "Base branch: fix/worktree-identity-drift" })
+          .waitFor();
         const baseChip = await page.getByRole("button", { name: "Base branch" }).count();
         const destinationChip = await page
           .getByRole("button", { name: "Working destination" })
           .count();
         const createMore = await page.getByRole("switch", { name: "Create more" }).count();
+        const branchFits = await page
+          .getByRole("button", { name: "Working destination: new worktree" })
+          .evaluate((button) => {
+            const options = button.closest('[data-slot="popover-content"]');
+            const bounds = options?.getBoundingClientRect();
+            const destination = button.getBoundingClientRect();
+            return Boolean(bounds && destination.right <= bounds.right - 8);
+          });
         await page.keyboard.press("Escape");
         const actionPicker = await composer(page)
           .getByRole("button", { name: "Choose what starts" })
@@ -208,6 +223,7 @@ async function main() {
           effortChip === 0 &&
           baseChip === 1 &&
           destinationChip === 1 &&
+          branchFits &&
           createMore === 1 &&
           // Plain Create is a visible peer of the primary again, not a menu row.
           createBtn === 1 &&
@@ -215,7 +231,7 @@ async function main() {
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} branchFits=${branchFits} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );

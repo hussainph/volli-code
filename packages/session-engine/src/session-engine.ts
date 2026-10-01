@@ -2,7 +2,9 @@ import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   observationPayload,
+  pendingScheduledResume,
   reportSessionUsage,
+  scheduledResumeRetryCommandId,
   sameCommandReceipt,
   sameSessionCommand,
   sameCommandReceiptOutcome,
@@ -579,6 +581,37 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return { command, commandEvent, receipt: receiptEvent.payload.receipt, receiptEvent };
         }
 
+        // A scheduled resume's whole state is its commands and their receipts
+        // (`pendingScheduledResume`), so acceptance writes no fact between the
+        // two: the completed receipt IS the schedule, the cancel or the settle.
+        if (
+          command.intent.kind === "resume.schedule" ||
+          command.intent.kind === "resume.cancel" ||
+          command.intent.kind === "resume.settle"
+        ) {
+          const receiptEvent = receiptRecordedEvent(
+            ports.ids.next("event"),
+            session.id,
+            commandEvent.sequence + 1,
+            command.createdAt,
+            request.provenance,
+            completedReceipt(
+              ports.ids.next("receipt"),
+              command.id,
+              commandEvent.sequence + 1,
+              ports.clock.now(),
+              command.intent.kind === "resume.schedule"
+                ? { kind: "resume.scheduled", sessionId: session.id }
+                : command.intent.kind === "resume.cancel"
+                  ? { kind: "resume.cancelled", sessionId: session.id }
+                  : { kind: "resume.settled", sessionId: session.id },
+            ),
+          );
+          transaction.appendReceipt(receiptEvent.payload.receipt);
+          transaction.appendEvent(receiptEvent);
+          return { command, commandEvent, receipt: receiptEvent.payload.receipt, receiptEvent };
+        }
+
         if (
           command.intent.kind !== "session.archive" &&
           command.intent.kind !== "session.retitle" &&
@@ -897,8 +930,7 @@ export const CHECKPOINT_REFRESH_EVENTS = 64;
  * so the worst case per chunk is this many folds of that tail — not a function
  * of how many Sessions the project has.
  *
- * Eight is measured, not guessed, and the measurement is in
- * `docs/research/perf/session-listing-vc388.md`. Two results shaped it. Total
+ * Eight is measured, not guessed (VC-388). Two results shaped it. Total
  * time is nearly FLAT across chunk sizes — a 60-Session roster costs about the
  * same whether it is folded in one transaction or sixty — so a fine chunk buys
  * its shorter block almost for free. But the yield primitive is not free: a
@@ -942,8 +974,8 @@ const defaultYieldToHost = (): Promise<void> =>
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
  * receipts — so this ceiling is about 1.4 MB in the shape a real roster has
- * and about 20 MB in a shape that would need 256 such Sessions to reach. See
- * `docs/research/perf/session-listing-vc388.md`.
+ * and about 20 MB in a shape that would need 256 such Sessions to reach
+ * (VC-388).
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 
@@ -1002,7 +1034,7 @@ interface ListingFold {
  * The copy costs one extra walk of a graph the fold has just built, paid once
  * per fold and never on the cache-hit path, which is where listings spend
  * their time. Priced by `listing-cache-cost.bench.test.ts` against the entry
- * weights in `docs/research/perf/session-listing-vc388.md`, per row:
+ * weights VC-388 measured, per row:
  *
  * |                  | ordinary (5.6 KB) | extreme (79.8 KB) |
  * |------------------|-------------------|-------------------|
@@ -1343,7 +1375,10 @@ function rejectionFor(
   command: SessionCommand,
   routeRejection: CommandRouteRejection | null,
 ): UnstampedCommandReceipt | null {
-  if (projection.status === "archived") {
+  // A settle is the one command an archived Session still takes: archiving is
+  // exactly one of the things a scheduled resume has to be skipped for, and
+  // that skip has to be recordable or the schedule stays pending forever.
+  if (projection.status === "archived" && command.intent.kind !== "resume.settle") {
     return {
       id: `rejected:${command.id}`,
       commandId: command.id,
@@ -1362,6 +1397,15 @@ function rejectionFor(
       detail: "The model cannot change while a turn is active",
     };
   }
+  const resumeRejection = scheduledResumeRejection(projection, command);
+  if (resumeRejection) {
+    return {
+      id: `rejected:${command.id}`,
+      commandId: command.id,
+      status: "rejected",
+      ...resumeRejection,
+    };
+  }
   if (!routeRejection) return null;
   return {
     id: `rejected:${command.id}`,
@@ -1370,6 +1414,92 @@ function rejectionFor(
     code: routeRejection.code,
     detail: routeRejection.detail,
   };
+}
+
+/**
+ * What a scheduled-resume command must be true of to be accepted.
+ *
+ * A schedule names an Attention that is live, is the failed-run kind, stated
+ * exactly the reset being scheduled, and belongs to an attachment that is still
+ * open — so a schedule can never name a time the failure did not state, nor a
+ * run there is no executor left to resume. A cancel or a settle names the
+ * schedule that is pending now; anything else is a stale click or a pass that
+ * lost a race, and refusing it is what keeps "settled once" true. A resumed
+ * settle must name the retry the schedule's frozen derivation gives.
+ *
+ * The retry a schedule fires is judged here too, inside the same transaction
+ * that records it: the host decided to fire from a projection it read a moment
+ * earlier, and a person who cancelled or took the Session back in that moment
+ * has the last word. A cancel is refused once the retry has fired — it could
+ * no longer stop anything, and the resumed turn is stopped like any other.
+ */
+function scheduledResumeRejection(
+  projection: SessionProjection,
+  command: SessionCommand,
+): { code: string; detail: string } | null {
+  const intent = command.intent;
+  if (intent.kind === "executor.retry") {
+    const schedule = projection.commands.find(
+      (candidate) =>
+        candidate.intent.kind === "resume.schedule" &&
+        scheduledResumeRetryCommandId(candidate.id) === command.id,
+    );
+    if (schedule === undefined) return null;
+    const pending = pendingScheduledResume(projection);
+    if (pending?.id !== schedule.id) {
+      return {
+        code: "resume_not_pending",
+        detail: `Scheduled resume ${schedule.id} is not pending`,
+      };
+    }
+    return pending.continued
+      ? {
+          code: "resume_continued",
+          detail: `Session ${projection.session.id} was continued before its resume`,
+        }
+      : null;
+  }
+  if (intent.kind === "resume.schedule") {
+    const attention = projection.attention.active.find(({ id }) => id === intent.attentionId);
+    const attachment = projection.attachments.find(({ id }) => id === intent.attachmentId);
+    const schedulable =
+      attention?.kind === "adapter_unrecoverable" &&
+      attention.resetsAt !== null &&
+      attention.resetsAt === intent.resumeAt &&
+      attention.attachmentId === intent.attachmentId &&
+      attachment?.status === "open";
+    return schedulable
+      ? null
+      : {
+          code: "resume_unavailable",
+          detail: `Attention ${intent.attentionId} offers no resume at ${intent.resumeAt}`,
+        };
+  }
+  if (intent.kind !== "resume.cancel" && intent.kind !== "resume.settle") return null;
+  const pending = pendingScheduledResume(projection);
+  if (pending?.id !== intent.scheduleId) {
+    return {
+      code: "resume_not_pending",
+      detail: `Scheduled resume ${intent.scheduleId} is not pending`,
+    };
+  }
+  if (intent.kind === "resume.cancel" && pending.fired) {
+    return {
+      code: "resume_fired",
+      detail: `Scheduled resume ${intent.scheduleId} has already resumed`,
+    };
+  }
+  if (
+    intent.kind === "resume.settle" &&
+    intent.outcome.kind === "resumed" &&
+    intent.outcome.retryCommandId !== scheduledResumeRetryCommandId(intent.scheduleId)
+  ) {
+    return {
+      code: "resume_outcome_invalid",
+      detail: `Retry ${intent.outcome.retryCommandId} is not scheduled resume ${intent.scheduleId}'s`,
+    };
+  }
+  return null;
 }
 
 interface CommandRouteRejection {
@@ -1487,6 +1617,11 @@ function resolveCommandRoute(
     case "session.retitle":
     case "session.signal":
     case "session.stop":
+    // A scheduled resume is Session state, settled in this engine; the retry it
+    // eventually fires is its own routed command.
+    case "resume.schedule":
+    case "resume.cancel":
+    case "resume.settle":
       return { route: null, rejection: null };
   }
 }
@@ -1622,7 +1757,10 @@ function assertReceiptCommandOwnership(
     command.intent.kind === "session.create" ||
     command.intent.kind === "session.archive" ||
     command.intent.kind === "session.retitle" ||
-    command.intent.kind === "session.signal"
+    command.intent.kind === "session.signal" ||
+    command.intent.kind === "resume.schedule" ||
+    command.intent.kind === "resume.cancel" ||
+    command.intent.kind === "resume.settle"
   ) {
     throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} cannot be externally observed`,
@@ -1734,6 +1872,9 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "context.compact": "context.compacted",
     "message.submit": "message.submitted",
     "interaction.resolve": "interaction.resolved",
+    "resume.schedule": "resume.scheduled",
+    "resume.cancel": "resume.cancelled",
+    "resume.settle": "resume.settled",
   };
   return resultKinds[intent];
 }

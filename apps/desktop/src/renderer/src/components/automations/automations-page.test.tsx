@@ -115,6 +115,8 @@ const doors = {
   list: vi.fn(),
   runsForProject: vi.fn(),
   skipsForProject: vi.fn(),
+  runsForAutomation: vi.fn(),
+  skipsForAutomation: vi.fn(),
   enablement: vi.fn(),
   setEnabled: vi.fn(),
   create: vi.fn(),
@@ -141,6 +143,18 @@ async function mount(seed: {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   doors.skipsForProject.mockResolvedValue({ ok: true, skips: seed.skips ?? [] });
+  // The SCOPED doors answer the way main does (`listProjectRunsForAutomation`,
+  // proven in `automations-repo.test.ts`): one record's rows, by id. The page
+  // cannot invent a row main did not send, so what these tests prove is that
+  // the page asks the right question and draws the answer it is given.
+  doors.runsForAutomation.mockImplementation(async (input: { automationId: string }) => ({
+    ok: true,
+    runs: (seed.runs ?? []).filter((row) => row.automationId === input.automationId),
+  }));
+  doors.skipsForAutomation.mockImplementation(async (input: { automationId: string }) => ({
+    ok: true,
+    skips: (seed.skips ?? []).filter((row) => row.automationId === input.automationId),
+  }));
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
   doors.armings.mockResolvedValue({ ok: true, armings: seed.armings ?? [] });
   doors.columnOrders.mockResolvedValue({ ok: true, orders: seed.orders ?? [] });
@@ -186,6 +200,39 @@ function button(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
   return found as HTMLElement;
+}
+
+/** The one Run history on screen: the selected editor's, or the project's. */
+function historySection(): HTMLElement {
+  const sections = document.querySelectorAll<HTMLElement>("[data-run-history]");
+  if (sections.length !== 1) throw new Error(`${sections.length} Run histories on screen`);
+  return sections.item(0);
+}
+
+/** The ids the history actually drew, in drawn order. */
+function historyRowIds(kind: "run" | "skip"): string[] {
+  return [...historySection().querySelectorAll(`[data-run-history-${kind}]`)].map(
+    (row) => row.getAttribute(`data-run-history-${kind}`) ?? "",
+  );
+}
+
+function historyRun(id: string): HTMLElement {
+  const found = historySection().querySelector<HTMLElement>(`[data-run-history-run="${id}"]`);
+  if (found === null) throw new Error(`no Run row for ${id}`);
+  return found;
+}
+
+function railRow(id: string): HTMLElement {
+  const found = document.querySelector<HTMLElement>(`[data-automation-rail-row="${id}"]`);
+  if (found === null) throw new Error(`no rail row for ${id}`);
+  return found;
+}
+
+/** The rail's way back to the whole project's work (VC-297). */
+function activityRow(): HTMLElement {
+  const found = document.querySelector<HTMLElement>("[data-automation-rail-activity]");
+  if (found === null) throw new Error("no Project activity row in the rail");
+  return found;
 }
 
 function paragraph(copy: string): HTMLParagraphElement {
@@ -255,6 +302,12 @@ beforeEach(() => {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
+    // The scoped slices too (VC-297). The store is a module singleton, so a
+    // record's history cached by one test would otherwise be read by the next
+    // — which is exactly how a cold-cache assertion passes for the wrong
+    // reason, or a scoping bug hides behind a neighbour's warm cache.
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     editor: null,
   });
@@ -459,6 +512,23 @@ describe("run history", () => {
     expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
   });
 
+  it("says how each Run started, so the row carries its trigger too (VC-297)", async () => {
+    // VC-297 asks for the originating record AND its trigger on every row. The
+    // record cannot supply the second one — a Trigger is editable and a record
+    // is deletable — so the row prints the Run's OWN attendance instead.
+    await mount({
+      runs: [
+        run({ id: "run-by-hand", attendance: "attended", createdAt: 200 }),
+        run({ id: "run-automatic", attendance: "unattended", createdAt: 100 }),
+      ],
+    });
+
+    expect(historyRun("run-by-hand").textContent).toContain("By hand");
+    expect(historyRun("run-automatic").textContent).toContain("Automatic");
+    // Never a schedule: an unattended Run may be the agent's, not a timer's.
+    expect(historyRun("run-automatic").textContent?.toLowerCase()).not.toContain("schedule");
+  });
+
   it("names an Unbound Run rather than leaving its row anonymous", async () => {
     await mount({ runs: [run({ automationId: null, automationName: null })] });
 
@@ -497,6 +567,277 @@ describe("run history", () => {
       projectId: "p1",
       ticketId: null,
     });
+  });
+});
+
+/**
+ * Whose history the editor shows (VC-297).
+ *
+ * Two Automations running in the same week interleave. An editor that drew the
+ * project's whole list would say the record on screen did work it never did —
+ * the rows name their origin, but provenance on a row is not scope on a list.
+ *
+ * The narrowing is MAIN's (`runsForAutomation` beside `runsForProject`, proven
+ * in `automations-repo.test.ts`). What these tests own is the page's half: that
+ * it asks for the record on screen, draws the answer, and asks again when the
+ * reader moves to another record.
+ */
+describe("history is scoped to the selected Automation", () => {
+  const REVIEW = automation();
+  const NIGHTLY = automation({ id: "automation-2", name: "Nightly sweep" });
+  // Interleaved on purpose: newest first across BOTH records is
+  // nightly-skip, nightly-run, review-skip, review-run.
+  const INTERLEAVED = {
+    automations: [REVIEW, NIGHTLY],
+    runs: [
+      run({
+        id: "run-nightly",
+        automationId: "automation-2",
+        automationName: "Nightly sweep",
+        sessionId: "s2",
+        createdAt: 400,
+      }),
+      run({ id: "run-review", automationId: "automation-1", createdAt: 100 }),
+    ],
+    skips: [
+      skip({ id: "skip-nightly", automationId: "automation-2", dueAt: 500 }),
+      skip({
+        id: "skip-review",
+        automationId: "automation-1",
+        automationName: "Review sweep",
+        dueAt: 200,
+      }),
+    ],
+  };
+
+  it("asks main for the selected record's own history, and draws that", async () => {
+    await mount(INTERLEAVED);
+
+    expect(doors.runsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-1",
+    });
+    expect(doors.skipsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-1",
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+    expect(historyRowIds("skip")).toEqual(["skip-review"]);
+    expect(historySection().textContent).not.toContain("Nightly sweep");
+  });
+
+  it("asks again, for the other record, when the reader moves to it", async () => {
+    // The other half of the same rule: neither record may masquerade as the
+    // other's history, so selecting the second one re-reads and swaps the list.
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    expect(doors.runsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-2",
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
+    expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
+  });
+
+  it("never reads the project's whole history to draw ONE record's", async () => {
+    // The architectural half of VC-297, and the one a client that is not this
+    // process would feel: an editor asks for the list it draws. A page that
+    // fetched every Run in the project and sieved it here would pass every
+    // test above and still make a phone download a project's whole history.
+    await mount(INTERLEAVED);
+
+    expect(doors.runsForAutomation).toHaveBeenCalled();
+    expect(doors.runsForProject).not.toHaveBeenCalled();
+    expect(doors.skipsForProject).not.toHaveBeenCalled();
+  });
+
+  it("keeps a scoped Run a door to its OWN Session", async () => {
+    // Narrowing the list must not re-aim the rows: each Run still opens the
+    // Session it actually created, and the neighbour's Run holds "s2".
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      historyRun("run-review").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledTimes(1);
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("does not claim a record has never run before its history is read", async () => {
+    // Each scope is its own read now, so a cold cache is the ordinary state
+    // every time the reader picks another record. Answering that with
+    // "Nothing has run this Automation yet" states a fact the next frame may
+    // contradict, so the list stays silent until the read lands.
+    await mount(INTERLEAVED);
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+
+    // Now hold the neighbour's read open and move to it.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    doors.runsForAutomation.mockImplementation(async (input: { automationId: string }) => {
+      await held;
+      return {
+        ok: true,
+        runs: INTERLEAVED.runs.filter((row) => row.automationId === input.automationId),
+      };
+    });
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    // The read is in flight: the neighbour's heading, and NO claim under it.
+    // Critically, not the previous record's rows either.
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual([]);
+    expect(historySection().textContent).not.toContain("Nothing has run");
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
+  });
+
+  it("says nothing has run THIS Automation while the project has other Runs", async () => {
+    await mount({
+      automations: [REVIEW],
+      runs: [
+        run({
+          id: "run-nightly",
+          automationId: "automation-2",
+          automationName: "Nightly sweep",
+        }),
+      ],
+    });
+
+    expect(historyRowIds("run")).toEqual([]);
+    expect(paragraph("Nothing has run this Automation yet.")).not.toBeNull();
+    expect(historySection().textContent).not.toContain("Nightly sweep");
+  });
+});
+
+/**
+ * Project activity (VC-297): the interleaved list, labelled, and reachable.
+ *
+ * The rail always leaves one record selected once the list lands, so without
+ * its own way in this view would only ever appear for a project that has no
+ * Automations at all — and a Run whose record was DELETED, which main keeps on
+ * purpose, would be kept where nobody could read it.
+ */
+describe("project activity", () => {
+  it("is reachable from the rail while records exist", async () => {
+    await mount({
+      automations: [automation(), automation({ id: "automation-2", name: "Nightly sweep" })],
+      runs: [
+        run({ id: "run-review", automationId: "automation-1", createdAt: 100 }),
+        run({
+          id: "run-nightly",
+          automationId: "automation-2",
+          automationName: "Nightly sweep",
+          createdAt: 400,
+        }),
+      ],
+      skips: [skip({ id: "skip-nightly", automationId: "automation-2", dueAt: 500 })],
+    });
+
+    // Before: the editor's own narrow list.
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+
+    await act(async () => {
+      activityRow().click();
+    });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+    expect(historySection().textContent).toContain("Project activity");
+    // Every record's work, interleaved, newest first.
+    expect(historyRowIds("run")).toEqual(["run-nightly", "run-review"]);
+    expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
+    expect(doors.runsForProject).toHaveBeenCalledWith({ projectId: "p1" });
+  });
+
+  it("gives the reader their record back when they leave it", async () => {
+    await mount({ automations: [automation()], runs: [run()] });
+
+    await act(async () => {
+      activityRow().click();
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+
+    await act(async () => {
+      railRow("automation-1").click();
+    });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+  });
+
+  it("keeps a DELETED record's Run and an Unbound Run readable there", async () => {
+    // Deleting an Automation deletes the record; the history of what it did is
+    // not the record. Both rows belong to no editor, so this view is the only
+    // place they can be read — and they still open their own Sessions.
+    await mount({
+      automations: [automation()],
+      runs: [
+        run({
+          id: "run-retired",
+          automationId: "gone",
+          automationName: "Retired sweep",
+          sessionId: "s2",
+          createdAt: 300,
+        }),
+        run({
+          id: "run-unbound",
+          automationId: null,
+          automationName: null,
+          sessionId: "s3",
+          createdAt: 200,
+        }),
+      ],
+    });
+
+    await act(async () => {
+      activityRow().click();
+    });
+
+    expect(historyRowIds("run")).toEqual(["run-retired", "run-unbound"]);
+    expect(historySection().textContent).toContain("Retired sweep");
+    expect(historySection().textContent).toContain("Run once");
+
+    await act(async () => {
+      historyRun("run-unbound").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledTimes(1);
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s3",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("labels the unfiltered list as the project's on the empty state too", async () => {
+    // A project with no records at all: the same wide list, the same label,
+    // and no editor for it to be mistaken for.
+    await mount({ runs: [run()], skips: [skip({ automationId: "automation-2" })] });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+    expect(historySection().textContent).toContain("Project activity");
+    expect(historyRowIds("run")).toEqual(["run-1"]);
+    expect(historyRowIds("skip")).toEqual(["skip-1"]);
   });
 });
 

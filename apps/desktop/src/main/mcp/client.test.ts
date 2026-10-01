@@ -1,4 +1,15 @@
-import { McpClient, type JsonRpcMessage, type McpRequestOptions } from "@earendil-works/pi-mcp";
+import {
+  McpAbortError,
+  McpAuthRequiredError,
+  McpClient,
+  McpConnectionClosedError,
+  McpError,
+  McpHttpError,
+  McpSessionExpiredError,
+  McpTimeoutError,
+  type JsonRpcMessage,
+  type McpRequestOptions,
+} from "@earendil-works/pi-mcp";
 import {
   createInMemoryTransportPair,
   type InMemoryTransport,
@@ -7,11 +18,14 @@ import { MCP_CALL_TIMEOUT_MS, MCP_CONNECTION_TIMEOUT_MS } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  isMcpTransportFailure,
   MCP_LIST_MAX_PAGES,
   mcpLaunchEnvironment,
   protocolClientForConnectedClient,
   type CloseableMcpClient,
 } from "./client";
+import { McpCredentialMissingError, McpSignInRequiredError } from "./credentials";
+import { McpTransportFailure } from "./discovery";
 
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -202,6 +216,68 @@ describe("MCP client limits", () => {
     await client.close();
     await client.close();
     expect(closeClient).toHaveBeenCalledOnce();
+  });
+});
+
+describe("MCP transport failure classification (VC-454, on pi-mcp)", () => {
+  it("counts only a lost, refused, ended or unanswered connection as a transport failure", () => {
+    expect(isMcpTransportFailure(new McpConnectionClosedError())).toBe(true);
+    // The whole call deadline passed with the caller still waiting.
+    expect(isMcpTransportFailure(new McpTimeoutError(30_000))).toBe(true);
+    expect(isMcpTransportFailure(new McpSessionExpiredError())).toBe(true);
+    expect(isMcpTransportFailure(new McpHttpError(400, "session ended"))).toBe(true);
+    expect(isMcpTransportFailure(new TypeError("fetch failed"))).toBe(true);
+
+    // The server answered, or the connection is still usable.
+    expect(isMcpTransportFailure(new McpError(-32602, "bad args"))).toBe(false);
+    expect(isMcpTransportFailure(new McpError(-32600, "Invalid MCP tools/call result"))).toBe(
+      false,
+    );
+    expect(isMcpTransportFailure(new McpAbortError())).toBe(false);
+    for (const status of [429, 500, 502, 503, 403]) {
+      expect(isMcpTransportFailure(new McpHttpError(status, "answered"))).toBe(false);
+    }
+    // Refusals a person answers (VC-470): the connection stays.
+    expect(
+      isMcpTransportFailure(new McpAuthRequiredError(new Response(null, { status: 401 }))),
+    ).toBe(false);
+    expect(isMcpTransportFailure(new McpSignInRequiredError("X", false))).toBe(false);
+    expect(isMcpTransportFailure(new McpCredentialMissingError("X", ["header A"]))).toBe(false);
+  });
+
+  it("wraps a transport failure and passes every other rejection through unchanged", async () => {
+    const answered = new McpError(-32602, "bad args");
+    const failures: unknown[] = [new McpConnectionClosedError(), answered];
+    const client = protocolClientForConnectedClient({
+      request: vi.fn() as unknown as CloseableMcpClient["request"],
+      callTool: async () => Promise.reject(failures.shift()),
+      close: async () => undefined,
+    });
+    const signal = new AbortController().signal;
+
+    const transport = await client
+      .callTool({ name: "one", arguments: {}, signal })
+      .catch((error: unknown) => error);
+    expect(transport).toBeInstanceOf(McpTransportFailure);
+    expect((transport as Error).cause).toBeInstanceOf(McpConnectionClosedError);
+    await expect(client.callTool({ name: "two", arguments: {}, signal })).rejects.toBe(answered);
+  });
+
+  it("never reports a caller's own abort as a transport failure", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("stopped"));
+    const rejection = new McpConnectionClosedError();
+    const client = protocolClientForConnectedClient({
+      request: vi.fn() as unknown as CloseableMcpClient["request"],
+      callTool: async () => Promise.reject(rejection),
+      close: async () => undefined,
+    });
+
+    const error = await client
+      .callTool({ name: "one", arguments: {}, signal: controller.signal })
+      .catch((caught: unknown) => caught);
+    expect(error).toBe(rejection);
+    expect(error).not.toBeInstanceOf(McpTransportFailure);
   });
 });
 

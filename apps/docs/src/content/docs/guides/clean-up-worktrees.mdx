@@ -1,0 +1,63 @@
+---
+title: Clean up worktrees
+description: Remove or keep a ticket's worktree, and learn when Volli reclaims one.
+sidebar:
+  label: Clean-up worktrees
+---
+
+A ticket's worktree is its local checkout directory. Removing it keeps the
+branch, commits, and ticket. When the ticket needs work again, Volli recreates
+the checkout on the same branch.
+
+## Remove a worktree manually
+
+1. Open the ticket's context menu on the board and select **Remove worktree…**.
+2. Select **Remove** in the confirmation. If the worktree is clean, Volli
+   removes the folder and keeps the branch.
+3. Review the reason if Volli finds uncommitted work or Git no longer tracks the
+   folder. Select **Delete Folder** only if you intend to discard its contents;
+   otherwise select **Cancel**.
+
+Volli blocks removal while work is in flight. The board also disables **Remove
+worktree…** while a live terminal is attached to the ticket. Volli always asks a
+second confirmation before deleting a folder it cannot verify as clean.
+
+## Retention and archive prompts
+
+Volli offers **Archive & clean** in the ticket's **Now** rail in two cases:
+
+- The ticket's pull request has merged, in any column.
+- The ticket has spent the configured retention period in **Done** with no open
+  pull request.
+
+Volli reads pull requests with the GitHub CLI (`gh`). If it cannot read a
+linked PR's state, check that `gh` is installed and signed in. Until it has read
+that state, Volli does not offer the action, so an open pull request keeps its
+worktree.
+
+Select **Archive & clean** to remove the worktree and archive the ticket. Volli
+never does this on its own. If the worktree isn't clean, Volli refuses and
+leaves the ticket on the board.
+
+When Volli offers the action, open **More repository actions** and choose
+**Keep worktree** to exempt the ticket from retention cleanup. **Dismiss** hides
+the archive prompt for this app launch; it does not protect the worktree from
+automatic reclamation.
+
+## Let retention reclaim the worktree
+
+After a ticket has stayed in **Done** for the configured retention period, Volli
+can remove a clean worktree automatically. Set the period in
+**Settings → Storage**, under **Retention**. Volli acts only when no pull request
+is open, no work is in flight, and the ticket is not kept.
+
+The ticket remains on the board with its branch, commits, and any pull-request
+link. Volli recreates the checkout on that branch when work needs it again. A
+merged pull request alone does not trigger automatic worktree removal. Volli
+sends a notification when it reclaims a worktree.
+
+When a ticket is **Done**, archived, or has a merged pull request, Volli can
+also trim git-ignored files from its worktree. The trim keeps the checkout and
+all tracked changes, and the ticket's **Activity** feed records it. See [Manage
+tickets](/guides/manage-tickets/) for archiving, restoring, and deleting
+tickets.

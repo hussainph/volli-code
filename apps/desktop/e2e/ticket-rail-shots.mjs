@@ -122,15 +122,23 @@ try {
     });
   }
 
-  // The repository card only exists on Now, so the page shot above carries it
-  // small. This one frames the element itself, where the branch pair's
-  // truncation and the action row's balance are actually legible.
+  // The worktree footer stands under every page, folded (VC-406). The page
+  // shots above carry the row small; this one unfolds the body and frames the
+  // element itself, where the branch's truncation, the glance and the action
+  // row's balance are actually legible.
   await attempt("repository", "screenshot rail-repository-summary.png", async () => {
     await aside.getByTestId("ticket-rail-tab-now").click();
-    const card = aside.getByTestId("ticket-repository-summary");
-    await waitUntil("repository card visible", async () => (await card.count()) === 1);
+    const footer = aside.getByTestId("ticket-repository-summary");
+    await waitUntil("worktree footer visible", async () => (await footer.count()) === 1);
+    const fold = aside.getByTestId("ticket-repository-fold");
+    if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+    await waitUntil(
+      "worktree body unfolded",
+      async () => (await fold.getAttribute("aria-expanded")) === "true",
+    );
+    await page.waitForTimeout(300);
     const path = join(SHOT_DIR, "rail-repository-summary.png");
-    await card.screenshot({ path });
+    await footer.screenshot({ path });
     const stat = await fs.stat(path);
     return { ok: stat.size > 1000, detail: path };
   });

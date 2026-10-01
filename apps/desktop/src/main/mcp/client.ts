@@ -31,10 +31,13 @@
  * It also SIGTERMs every live group when the host process exits.
  */
 import {
+  McpAbortError,
   McpAuthRequiredError,
   McpClient,
+  McpConnectionClosedError,
   McpError,
   McpHttpError,
+  McpTimeoutError,
   StdioTransport,
   StreamableHttpTransport,
   type AuthProvider,
@@ -61,7 +64,12 @@ import {
   resolveMcpCredentialEntries,
   type McpCredentialSources,
 } from "./credentials";
-import type { McpProtocolClient, McpProtocolTool, OpenMcpProtocolClient } from "./discovery";
+import {
+  McpTransportFailure,
+  type McpProtocolClient,
+  type McpProtocolTool,
+  type OpenMcpProtocolClient,
+} from "./discovery";
 
 /** The largest single stdio message a server may send. */
 export const MCP_STDIO_BUFFER_MAX_BYTES = 1 * 1_024 * 1_024;
@@ -158,6 +166,40 @@ function withDeadline(
   };
 }
 
+/**
+ * The HTTP statuses that end a Streamable HTTP protocol session: 404 for a
+ * session the server no longer knows, which the MCP transport says a client
+ * MUST answer by starting a new one, and 400 for a request the server could
+ * not tie to a session. Any other status — a 429 above all — is the server
+ * answering this request, and reconnecting would only add a handshake to a
+ * server that is already asking for less.
+ */
+const SESSION_ENDING_HTTP_STATUSES: ReadonlySet<number> = new Set([400, 404]);
+
+/**
+ * Whether a rejected call means the connection is unusable (VC-454, on pi-mcp
+ * since VC-470).
+ *
+ * Decided here because this is the one module that may name the client
+ * library's error types; the host above sees only {@link McpTransportFailure}.
+ * A JSON-RPC error is the server answering, so the connection is fine, and so
+ * is a result that failed validation. An HTTP status that ends the protocol
+ * session, a closed connection, a call deadline the server let pass, and
+ * anything that is not one of the library's errors at all (a socket, a spawn,
+ * a fetch that never reached the server) are the connection failing. A
+ * refusal for want of a sign-in or a credential is neither: it is answered by
+ * a person, and the connection stays. The caller's own abort never reaches
+ * this function.
+ */
+export function isMcpTransportFailure(error: unknown): boolean {
+  if (connectionProblemIn(error) !== null) return false;
+  if (error instanceof McpAuthRequiredError) return false;
+  if (error instanceof McpHttpError) return SESSION_ENDING_HTTP_STATUSES.has(error.status);
+  if (error instanceof McpError || error instanceof McpAbortError) return false;
+  if (error instanceof McpConnectionClosedError || error instanceof McpTimeoutError) return true;
+  return true;
+}
+
 /** A pi-mcp client narrowed behind the port the rest of Electron main consumes. */
 export function protocolClientForConnectedClient(client: CloseableMcpClient): McpProtocolClient {
   let closed = false;
@@ -190,8 +232,19 @@ export function protocolClientForConnectedClient(client: CloseableMcpClient): Mc
         deadline.release();
       }
     },
-    callTool: ({ name, arguments: arguments_, signal }) =>
-      client.callTool(name, { ...arguments_ }, { signal, timeoutMs: MCP_CALL_TIMEOUT_MS }),
+    async callTool({ name, arguments: arguments_, signal }) {
+      try {
+        return await client.callTool(
+          name,
+          { ...arguments_ },
+          { signal, timeoutMs: MCP_CALL_TIMEOUT_MS },
+        );
+      } catch (error) {
+        // The caller's own abort is never the transport failing.
+        if (signal.aborted || !isMcpTransportFailure(error)) throw error;
+        throw new McpTransportFailure({ cause: error });
+      }
+    },
     async close() {
       if (closed) return;
       closed = true;

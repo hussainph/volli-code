@@ -208,6 +208,7 @@ describe("ScopedExecutionEnv", () => {
     const unsupported = await Promise.all([
       env.joinPath(["a", "b"]),
       env.readTextLines("inside.txt"),
+      env.openTextLineReader("inside.txt"),
       env.renameFile("inside.txt", "other.txt"),
       env.listDir("."),
       env.canonicalPath("inside.txt"),

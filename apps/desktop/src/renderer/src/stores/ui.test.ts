@@ -462,12 +462,14 @@ describe("persistence", () => {
     store.getState().setSidebarPinned(false);
     store.getState().toggleRailCollapsed();
     store.getState().setRailMode("files");
-    store.getState().setHomeRailMode("sessions");
+    store.getState().setHomeRailMode("files");
     store.getState().setHomeEmptyVisual("board");
     store.getState().setDiffPresentation("side-by-side");
     store.getState().setWordWrap(false);
     store.getState().setCostVisible(false);
+    store.getState().toggleRailFold("worktree");
     store.getState().dismissEnvironmentFault("login-path-unreadable");
+    store.getState().toggleUsagePin("anthropic", "five_hour");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
@@ -480,13 +482,15 @@ describe("persistence", () => {
       sidebarPinned: false,
       railCollapsed: true,
       railMode: "files",
-      homeRailMode: "sessions",
+      homeRailMode: "files",
       homeEmptyVisual: "board",
       costVisible: false,
+      railFolds: { sessionsRecord: false, worktree: true, usage: false },
       diffPresentation: "side-by-side",
       wordWrap: false,
       defaultExternalAppId: null,
       dismissedEnvironmentFaults: ["login-path-unreadable"],
+      usagePin: { providerId: "anthropic", windowIds: ["five_hour"] },
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
     // The New-ticket composer's terminal harness left with the terminal kickoff
@@ -495,14 +499,48 @@ describe("persistence", () => {
     expect(persisted.state).not.toHaveProperty("lastHarnessId");
   });
 
+  it("rehydrates the rail's folds; only an explicit true opens one", async () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().toggleRailFold("sessionsRecord");
+    store.getState().setRailFold("usage", true);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().railFolds).toEqual({
+      sessionsRecord: true,
+      worktree: false,
+      usage: true,
+    });
+
+    // A fold already in the asked state writes nothing (VC-406): asserting
+    // "closed" on a closed fold must not cost a persist round trip.
+    const before = storage.getItem("volli:ui");
+    reloaded.getState().setRailFold("worktree", false);
+    expect(storage.getItem("volli:ui")).toBe(before);
+
+    // Corrupt or partial state lands every fold closed — the resting page.
+    const stale = createMemoryStorage();
+    stale.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { railFolds: { worktree: "yes", usage: 1 } }, version: 1 }),
+    );
+    const sanitized = createUiStore(stale);
+    await sanitized.persist.rehydrate();
+    expect(sanitized.getState().railFolds).toEqual({
+      sessionsRecord: false,
+      worktree: false,
+      usage: false,
+    });
+  });
+
   it("rehydrates Home's rail page and empty-chat visual; unknown values fall back", async () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
-    store.getState().setHomeRailMode("sessions");
+    store.getState().setHomeRailMode("search");
     store.getState().setHomeEmptyVisual("venue");
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
-    expect(reloaded.getState().homeRailMode).toBe("sessions");
+    expect(reloaded.getState().homeRailMode).toBe("search");
     expect(reloaded.getState().homeEmptyVisual).toBe("venue");
 
     // A page or a visual a past build wrote and this one no longer draws lands
@@ -519,6 +557,18 @@ describe("persistence", () => {
     await recovered.persist.rehydrate();
     expect(recovered.getState().homeRailMode).toBe("now");
     expect(recovered.getState().homeEmptyVisual).toBe("streak");
+
+    // A page this build RETIRED is not the same as one it never had (VC-406):
+    // whoever left the rail on Sessions was reading the roster, and the roster
+    // is on Now.
+    const retired = createMemoryStorage();
+    retired.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { homeRailMode: "sessions" }, version: 1 }),
+    );
+    const migrated = createUiStore(retired);
+    await migrated.persist.rehydrate();
+    expect(migrated.getState().homeRailMode).toBe("now");
   });
 
   it("rehydrates diffPresentation from storage; missing/unknown values default to inline", async () => {
@@ -967,5 +1017,45 @@ describe("environment fault dismissals", () => {
       }),
     );
     expect(createUiStore(corrupt).getState().dismissedEnvironmentFaults).toEqual([]);
+  });
+});
+
+describe("usagePin", () => {
+  it("starts unpinned, so the glyph reports the account nearest to running out", () => {
+    expect(createUiStore(createMemoryStorage()).getState().usagePin).toBeNull();
+  });
+
+  it("pins, adds a second window, and unpins through the one toggle", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().toggleUsagePin("anthropic", "five_hour");
+    store.getState().toggleUsagePin("anthropic", "seven_day");
+    expect(store.getState().usagePin).toEqual({
+      providerId: "anthropic",
+      windowIds: ["five_hour", "seven_day"],
+    });
+    store.getState().toggleUsagePin("anthropic", "five_hour");
+    store.getState().toggleUsagePin("anthropic", "seven_day");
+    expect(store.getState().usagePin).toBeNull();
+  });
+
+  it("survives a relaunch, and a corrupt pin is no pin", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().toggleUsagePin("github-copilot", "premium");
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().usagePin).toEqual({
+      providerId: "github-copilot",
+      windowIds: ["premium"],
+    });
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, usagePin: { providerId: "anthropic" } },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().usagePin).toBeNull();
   });
 });

@@ -396,7 +396,7 @@ export function mcpSecretSlots(
 }
 
 /**
- * Where a server stands on signing in, as Settings and `mcp_list` show it.
+ * Where a server stands on signing in, as Settings and `server_list` show it.
  *
  * - `not-applicable` — a local server, or a remote one carrying its own
  *   `Authorization` header: there is nothing to sign in to.

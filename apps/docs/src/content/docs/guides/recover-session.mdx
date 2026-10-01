@@ -1,0 +1,55 @@
+---
+title: Recover a Session
+description: Reconnect an interrupted chat, fix provider access, and choose the action that matches the Session's status.
+---
+
+Return to the existing Session when a chat disconnects or stops. Its recorded
+conversation is still there, so you do not need to create a replacement chat.
+
+## Return after a crash
+
+1. Open the ticket's **Now → Sessions** section, or find the Session with `⌘K`.
+2. Open the chat and read its status.
+3. If it shows **Session stopped**, select **Retry**. If the composer is usable,
+   send a message telling the agent where to continue.
+
+Volli reconnects a disconnected Session before it delivers your message. Volli
+does not automatically restart every interrupted agent when the app opens.
+Before continuing, check the worktree: commands may have changed files before
+the interruption.
+
+## Choose the action for the status
+
+| Status | What to do |
+| --- | --- |
+| **Sign-in required** | Open **Settings → Models**, fix the provider connection, then return and select **Retry** |
+| **Configuration invalid** | Fix the reported model configuration in **Settings**, then select **Retry** |
+| **Disconnected** | Select **Retry** to reconnect |
+| **Reconnecting** | Wait while Volli retries; the row offers no other retry action |
+| **Rate limited** | Wait until the provider's retry time, if shown, then select **Retry** |
+| **Session stopped** | Read the reason, then select **Retry** when it is resolved |
+| **Turn interrupted** | Send a new instruction when you are ready to continue |
+| **Waiting for an answer** or **Waiting for approval** | Respond on the question or approval card |
+| **Quota exhausted** | Resolve the provider allowance; retrying here does not refill it |
+| **Context limit reached** | Start a new chat with a focused handoff; Volli already tried summarizing the conversation |
+
+**Dismiss** hides a report. It does not fix the cause.
+
+## Resume after a quota reset
+
+If the provider gives a future reset time for a stopped run, the row can offer
+**Resume at…** beside **Retry**. Select it to schedule that one resume. Use
+**Cancel** to withdraw it, or **Retry** to continue sooner.
+
+Volli does not invent a reset time when the provider supplies none. A scheduled
+Session resume is separate from a saved [Automation schedule](/guides/automations/schedules/).
+
+## Check models and tools
+
+Repairing a provider connection does not silently switch you to another model.
+See [Models and usage](/guides/models/) for how to choose a model yourself.
+
+Reopening a Session keeps its recorded tools. If you have just added an MCP
+server, start a new Session to receive its tools. Removing a server required by
+an older Session can prevent that Session from reconnecting. See
+[MCP servers](/guides/mcp-servers/) before deleting server configuration.

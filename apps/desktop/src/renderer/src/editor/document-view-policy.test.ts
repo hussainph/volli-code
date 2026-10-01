@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -164,8 +165,16 @@ describe("documentViewRefusal — raw HTML", () => {
 
 /**
  * "Verify the projection against repo-typical markdown before enabling
- * broadly" (plan §4.6), done against the corpus the plan names: this repo's own
- * `docs/` plus its root-level markdown.
+ * broadly" (plan §4.6), done against two corpora:
+ *
+ *  - `__fixtures__/markdown-corpus/`, a committed fixture set that covers every
+ *    construct the projection has a rule for, in the variants people write
+ *    (`*` and `_`, Setext and ATX, backtick, tilde and long fences, nested
+ *    quotes and lists, tables, badges). It changes only on purpose, so its
+ *    floors below are what keep the sweep from quietly hollowing out.
+ *  - every Markdown file git tracks in this repository outside dot-directories
+ *    (`.agents/` holds vendored skills, not our prose) — real prose, whatever
+ *    size the repo's docs happen to be this month.
  *
  * The property under test is the honest form of "round-trips byte-identical".
  * Document Mode edits the file's own bytes — the Monaco model IS the markdown,
@@ -177,15 +186,19 @@ describe("documentViewRefusal — raw HTML", () => {
  */
 describe("the repository's own markdown", () => {
   const root = repoRoot();
-  const files = [
-    ...markdownUnder(join(root, "docs")),
-    ...readdirSync(root)
-      .filter((entry) => entry.endsWith(".md"))
-      .map((entry) => join(root, entry)),
-  ];
+  const fixtureDir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "__fixtures__",
+    "markdown-corpus",
+  );
+  const fixtures = markdownUnder(fixtureDir).toSorted();
+  const repository = trackedMarkdown(root).filter((file) => !file.startsWith(fixtureDir + sep));
+  const files = [...fixtures, ...repository];
 
   it("is a corpus worth calling one", () => {
-    expect(files.length).toBeGreaterThan(20);
+    expect(fixtures.length).toBeGreaterThanOrEqual(10);
+    expect(repository.length).toBeGreaterThanOrEqual(15);
+    expect(files.length).toBeGreaterThan(25);
   });
 
   it("opens in Document view except where a named construct refuses it", () => {
@@ -196,33 +209,36 @@ describe("the repository's own markdown", () => {
       }))
       .filter((entry) => entry.refusal !== null);
 
-    // The README opens with five centred HTML blocks; nothing else in the
-    // corpus is refused. If this list grows, the gate has started refusing
-    // ordinary repository prose and the rule needs re-reading — not the test.
+    // The two fixtures exist to be refused, and the README opens with five
+    // centred HTML blocks; nothing else in the corpus is refused. If this list
+    // grows, the gate has started refusing ordinary repository prose and the
+    // rule needs re-reading — not the test.
+    const fixturePath = fixtureDir.slice(root.length + 1);
     expect(refused.map((entry) => `${entry.file}: ${entry.refusal?.reason}`)).toEqual([
+      `${fixturePath}/frontmatter.md: frontmatter`,
+      `${fixturePath}/html-block.md: raw-html`,
       "README.md: raw-html",
     ]);
   });
 
   // The same corpus projection as the sweep below, and likewise slower when
   // coverage instrumentation shares the machine with the full renderer suite.
-  it("conceals 13k spans across the corpus, and that is what is sampled below", () => {
-    const spans = files
-      .map(read)
-      .filter((text) => documentViewRefusal(text) === null)
-      .reduce(
-        (total, text) =>
-          total + concealedSpans(projectMarkdown({ text, selection: [], focused: false })).length,
-        0,
-      );
-    expect(spans).toBeGreaterThan(10_000);
+  it("conceals 7k spans across the corpus, and that is what is sampled below", () => {
+    const fixtureSpans = concealedSpanCount(fixtures);
+    const repositorySpans = concealedSpanCount(repository);
+    // ~1,400 from the fixtures, which only change on purpose, and ~5,700 from
+    // the repository's own prose, which may drift; the floors sit under both.
+    expect(fixtureSpans).toBeGreaterThan(1_200);
+    expect(repositorySpans).toBeGreaterThan(3_000);
+    expect(fixtureSpans + repositorySpans).toBeGreaterThan(6_000);
   }, 30_000);
 
   it("hides nothing in an accepted file that the caret cannot bring back", () => {
     // SAMPLED, deliberately: the property is per-span and the corpus holds
-    // ~13,500 of them, which is 40 seconds of re-projection — too slow to sit
-    // in the suite. The exhaustive run was made once while writing this (all
-    // 13,505 spans in all 36 accepted files, green); what stays is an even
+    // ~7,100 of them, which is 35 seconds of re-projection — too slow to sit in
+    // the suite. The exhaustive run was made when the corpus was built (all
+    // 7,099 spans in all 30 accepted files, green, after it caught a fence
+    // inside a quote hiding its `>`); what stays is an even
     // spread through every file, which is what would catch a projection change
     // that started swallowing something.
     for (const file of files) {
@@ -266,8 +282,32 @@ function concealedSpans(ops: readonly ProjectionOp[]): { from: number; to: numbe
     .filter((span) => span.to > span.from);
 }
 
+/** How many spans the live preview conceals across the files Document view opens. */
+function concealedSpanCount(files: readonly string[]): number {
+  return files
+    .map(read)
+    .filter((text) => documentViewRefusal(text) === null)
+    .reduce(
+      (total, text) =>
+        total + concealedSpans(projectMarkdown({ text, selection: [], focused: false })).length,
+      0,
+    );
+}
+
 function read(file: string): string {
   return readFileSync(file, "utf8");
+}
+
+/** Every Markdown file git tracks, outside dot-directories, as absolute paths. */
+function trackedMarkdown(root: string): string[] {
+  return (
+    execFileSync("git", ["ls-files", "-z", "--", "*.md"], { cwd: root, encoding: "utf8" })
+      .split("\0")
+      .filter((rel) => rel !== "" && !rel.startsWith("."))
+      .map((rel) => join(root, rel))
+      // A tracked file deleted in the working tree is still listed until staged.
+      .filter((file) => existsSync(file))
+  );
 }
 
 function markdownUnder(directory: string): string[] {

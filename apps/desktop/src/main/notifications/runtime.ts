@@ -63,6 +63,27 @@ export interface NotificationRuntime {
    * nothing.
    */
   forgetRenderer(windowId: number): void;
+  /**
+   * The Sessions in front of a FOCUSED window right now (VC-30).
+   *
+   * The unread rule's other half. `ActiveTargetRegistry` is already the app's
+   * one answer to "is this in front of the person" — it pairs what each
+   * renderer reports with Electron's focus — and the read rule must ask the
+   * same question the alert suppression asks, or a turn could be loud and
+   * unread at the same time. So it is exposed here rather than re-derived from
+   * a second source.
+   */
+  focusedSessionIds(): ReadonlySet<string>;
+  /**
+   * Called whenever that set CHANGES: a window's target moved, a window took or
+   * lost focus, a window went away (VC-30 A1 — viewing clears unread).
+   *
+   * Bound late, like {@link NotificationRuntime.bindWindowOpener}, and for the
+   * same reason: this runtime is built right after the database handle is known,
+   * while the read receipt repo and the Session Engine that publishes a row are
+   * composed well after it. One listener, replaced if bound twice.
+   */
+  onFocusedSessionsChanged(listener: (sessionIds: ReadonlySet<string>) => void): void;
   /** The target of a click that arrived with no window open, taken once. */
   takePendingActivation(): NotificationTarget | null;
   /**
@@ -143,7 +164,18 @@ export function createNotificationRuntime(options: {
           // a failure that lands behind it, and two windows on the page agree.
           onChange: broadcastNotificationSettings,
         });
-  const registry = createActiveTargetRegistry({ windows: () => BrowserWindow.getAllWindows() });
+  let focusedSessionsListener: ((sessionIds: ReadonlySet<string>) => void) | null = null;
+  const registry = createActiveTargetRegistry({
+    windows: () => BrowserWindow.getAllWindows(),
+    onFocusedSessions: (sessionIds) => focusedSessionsListener?.(sessionIds),
+  });
+  // Focus belongs to `app`, not to the registry: a window that was already
+  // showing a finished chat changes nothing about what it SHOWS when the person
+  // comes back to it, and A1 is precisely about that case. Both edges are
+  // watched — taking focus is what makes a Session read, losing it is what lets
+  // the next turn be unread again.
+  app.on("browser-window-focus", () => registry.noteFocusChanged());
+  app.on("browser-window-blur", () => registry.noteFocusChanged());
   let openWindow: (() => void) | null = null;
   const activation = createNotificationActivation({
     windows: () =>
@@ -184,6 +216,10 @@ export function createNotificationRuntime(options: {
     forgetWindow: (windowId) => {
       registry.forget(windowId);
       activation.forgetWindow(windowId);
+    },
+    focusedSessionIds: () => registry.focusedSessionIds(),
+    onFocusedSessionsChanged: (listener) => {
+      focusedSessionsListener = listener;
     },
     markRendererReady: (windowId) => activation.markRendererReady(windowId),
     forgetRenderer: (windowId) => {

@@ -1,46 +1,90 @@
 ---
 /*
- * Starlight's footer, plus a link to /llms.txt.
+ * Starlight's footer, then the website's quiet end (BRAND.md §7.6): the mark
+ * and name, a row of links, and the licence line.
  *
- * cursor.com/docs closes every page with a link to the whole tree as plain
- * text, which is the address you hand an agent. Same reasoning here, and it's
- * the main thing this override adds.
- *
- * Beside it, /licenses.txt: this site self-hosts Mona Sans, and OFL-1.1 asks
- * that the copyright notice and license travel with the font software. The
- * route emits them (src/pages/licenses.txt.ts); this link is how a reader
- * finds them.
+ * Two of the links are why this override exists. /llms.txt is the whole tree
+ * as plain text — cursor.com/docs closes every page with one, and it's the
+ * address you hand an agent. /licenses.txt carries the OFL notices for the
+ * fonts this site self-hosts (Mona Sans, Geist Mono): OFL-1.1 asks that the
+ * copyright notice and license travel with the font software, and the route
+ * emits them (src/pages/licenses.txt.ts); this link is how a reader finds them.
  *
  * The edit link, timestamp, and pagination come from Starlight's own Footer,
- * rendered as-is. Rebuilding them here would mean importing three
- * `virtual:starlight/components/*` modules, whose types are internal to the
- * package.
+ * rendered as-is and restyled in volli.css. Rebuilding them here would mean
+ * importing three `virtual:starlight/components/*` modules, whose types are
+ * internal to the package.
  */
 import Default from "@astrojs/starlight/components/Footer.astro";
+import Mark from "./Mark.astro";
+
+const REPOSITORY_URL = "https://github.com/hussainph/volli-code";
 ---
 
 <Default><slot /></Default>
 
-<div class="volli-footer-links print:hidden">
-  <a href="/llms.txt">All docs as plain text</a>
-  <a href="/licenses.txt">Licenses</a>
+<div class="volli-footer print:hidden">
+  <a class="volli-footer-brand" href="https://volli.app/" aria-label="Volli home">
+    <Mark size={18} />
+    <span translate="no">Volli</span>
+  </a>
+  <nav aria-label="Footer">
+    <a href="https://volli.app/download/">Download</a>
+    <a href={`${REPOSITORY_URL}/releases`}>Releases</a>
+    <a href={REPOSITORY_URL}>GitHub</a>
+    <a href={`${REPOSITORY_URL}/issues`}>Feedback</a>
+    <a href="/llms.txt">All docs as plain text</a>
+    <a href="/licenses.txt">Licenses</a>
+  </nav>
+  <p class="volli-footer-note">Open source under Apache-2.0.</p>
 </div>
 
 <style>
-  .volli-footer-links {
+  .volli-footer {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
-    margin-top: 1.5rem;
+    margin-top: 4rem;
+    padding-top: 1.75rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem 2rem;
+    border-top: 1px solid var(--volli-hairline);
+    color: var(--volli-ink-3);
+    font-size: 13.5px;
   }
 
-  .volli-footer-links a {
-    font-size: var(--sl-text-xs);
+  .volli-footer a {
+    color: inherit;
     text-decoration: none;
-    color: var(--sl-color-gray-4);
+    transition: color 160ms ease;
   }
 
-  .volli-footer-links a:hover {
-    color: var(--sl-color-gray-1);
+  .volli-footer a:hover {
+    color: var(--volli-ink);
+  }
+
+  .volli-footer .volli-footer-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--volli-ink);
+    font-size: 15px;
+    font-weight: 640;
+    font-stretch: 104%;
+    letter-spacing: -0.02em;
+  }
+
+  .volli-footer nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    margin-inline-start: auto;
+  }
+
+  .volli-footer-note {
+    flex-basis: 100%;
+    margin: 0;
+    font-family: var(--volli-mono);
+    font-size: 12px;
   }
 </style>

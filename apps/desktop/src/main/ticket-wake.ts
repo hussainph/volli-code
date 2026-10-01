@@ -5,10 +5,10 @@
  * Both mutation doors converge on the command layer (`ticket-commands.ts`),
  * but until this module nothing in main could OBSERVE a committed ticket fact:
  * `broadcastDataChanged` reaches BrowserWindows only, and only from the socket
- * door. The await tool (`ticket.await`, slice D) needs an in-process wake, so
- * this is the canonical seam: every door that commits a ticket mutation calls
- * {@link emitTicketWake} AFTER its transaction commits, and anything in main
- * that cares subscribes.
+ * door. Watches (`watches.ts`, VC-457; the retired `ticket.await` before it)
+ * need an in-process wake, so this is the canonical seam: every door that
+ * commits a ticket mutation calls {@link emitTicketWake} AFTER its
+ * transaction commits, and anything in main that cares subscribes.
  *
  * ## Post-commit, never inside
  *

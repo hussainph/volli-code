@@ -323,7 +323,7 @@ async function buildProducts() {
   });
 }
 
-async function hostMetadata() {
+export async function hostMetadata() {
   const git = async (...args) => (await command("git", args)).trim();
   const sysctl = async (key) =>
     command("/usr/sbin/sysctl", ["-n", key])

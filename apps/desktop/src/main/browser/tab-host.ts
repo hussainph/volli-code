@@ -12,6 +12,7 @@ import {
   pickSessionColor,
   shortSessionId,
   type BrowserTabHolder,
+  type BrowserTrace,
   type RuntimeBrowserConsoleMessage,
 } from "@volli/shared";
 
@@ -25,6 +26,7 @@ import type {
 } from "../../ipc/contract";
 import { BrowserAgentCoordinator } from "./agent-coordinator";
 import type { BrowserPictureStore } from "./picture-store";
+import type { BrowserTraceStepInput, BrowserTraceStore } from "./trace-store";
 
 /**
  * One Session's claim on a tab (VC-239), keyed by attachment as well as
@@ -111,6 +113,11 @@ export interface BrowserTabHostDependencies {
   publishClosed: (tabId: string) => void;
   /** Where captured pixels wait for the card that shows them (VC-238). */
   pictures: BrowserPictureStore;
+  /**
+   * Where a Session's steps in its own tabs are recorded for replay (VC-453).
+   * Absent means nothing is recorded — most tests, and a build with no disk.
+   */
+  traces?: BrowserTraceStore;
   /** The clock the interaction window is measured against; production passes none. */
   now?: () => number;
   /**
@@ -1548,9 +1555,44 @@ export class BrowserTabHost {
     });
   }
 
-  /** The renderer's one read of a picture: a data URL, or null for an id this host never minted. */
+  /**
+   * The renderer's one read of a picture: a data URL, or null for an id this
+   * host never minted. A capture the live set has let go of still answers
+   * when a Browser Trace kept its frame (VC-453) — the card's picture and the
+   * replay's frame are one id, so a reopened chat shows both.
+   */
   pictureOf(pictureId: string): string | null {
-    return this.deps.pictures.dataUrl(pictureId);
+    return (
+      this.deps.pictures.dataUrl(pictureId) ?? this.deps.traces?.frameDataUrl(pictureId) ?? null
+    );
+  }
+
+  /**
+   * Records one settled call against a tab into the acting Session's trace for
+   * the tab (VC-453) — or nothing, when the tab is not a Session's. A tab the
+   * person created is never recorded, even while a Session holds it: their
+   * pages carry their sign-ins, and the live card is all the evidence those
+   * get. A tab that has already closed cannot be judged, so it is not
+   * recorded either.
+   *
+   * Background enrichment of a call that has already answered: a trace that
+   * cannot be written owes the tool call nothing, and no person is waiting on
+   * it, so a failure is logged and the call's own result stands.
+   */
+  recordTraceStep(step: BrowserTraceStepInput): void {
+    const traces = this.deps.traces;
+    const entry = this.tabs.get(step.tabId);
+    if (traces === undefined || entry === undefined || entry.state.createdBy !== "session") return;
+    try {
+      traces.record(step);
+    } catch (error) {
+      console.warn(`[volli] Browser Trace step for tab ${step.tabId} was not recorded:`, error);
+    }
+  }
+
+  /** A Session's kept Browser Traces, oldest first; empty when nothing was recorded. */
+  tracesOf(sessionId: string): BrowserTrace[] {
+    return this.deps.traces?.tracesOf(sessionId) ?? [];
   }
 
   /**
@@ -1606,6 +1648,55 @@ export class BrowserTabHost {
     const entry = this.tabs.get(tabId);
     if (entry === undefined) return;
     this.goOffScreen(entry);
+  }
+
+  /**
+   * Takes every plane off ONE window and parks it back on the stage, for an app
+   * page that has just been replaced or died (VC-424).
+   *
+   * Hide is otherwise the renderer's word: its plane controller emits it from
+   * React cleanup as a pane unmounts. A main-frame reload, an
+   * `ELECTRON_RENDERER_URL` re-navigation, or a crashed app renderer runs no
+   * cleanup at all — and a Browser Tab's `WebContentsView` is a sibling of the
+   * window's own `webContents`, not a child of it, so nothing in that reset
+   * detaches one. The view stays composited exactly where the dead page last
+   * placed it, over a fresh app UI that has never heard of the tab and cannot
+   * hide what it does not know it has.
+   *
+   * Deliberately the smallest act that ends that: the tabs stay open, their
+   * holds stay with the Sessions that took them, their engines keep running on
+   * the stage, and a pane in the new page shows the same tab again through the
+   * ordinary {@link show}. Closing them here would destroy live pages — and a
+   * page a person was reading — over a reload they may not even have asked for.
+   *
+   * Scoped to the window whose page reset, never host-wide: a second window's
+   * first navigation must not sweep planes off the window still showing them.
+   *
+   * Every plane comes off even when one cannot be parked. The view leaves the
+   * window before the stage is asked for, so the pixels over the app are gone
+   * either way, and the first {@link BrowserStageUnavailableError} is raised
+   * once the sweep is complete: surfacelessness is still a fault worth hearing
+   * about (VC-278), but never a reason to leave the remaining pages stranded on
+   * top of the new page. Returns the tabs taken off, in registry order.
+   */
+  parkPlanesOn(window: BrowserWindow): string[] {
+    const parked: string[] = [];
+    let failure: Error | null = null;
+    for (const entry of this.tabs.values()) {
+      if (entry.parent.kind !== "window" || entry.parent.window !== window) continue;
+      parked.push(entry.state.tabId);
+      try {
+        // The same pair every other off-screen path uses, so the cursor overlay
+        // hears the plane change (VC-239) and the page keeps a surface (VC-278).
+        this.goOffScreen(entry);
+      } catch (cause) {
+        // The first fault is the one reported; the sweep owes the rest of the
+        // planes their detach either way.
+        failure ??= cause instanceof Error ? cause : new Error(String(cause), { cause });
+      }
+    }
+    if (failure !== null) throw failure;
+    return parked;
   }
 
   /**

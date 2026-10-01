@@ -13,6 +13,7 @@ import {
   VERB_TOOLS,
   verbEntry,
   verbTier,
+  verbToolWireName,
 } from "./verb-registry";
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
@@ -178,6 +179,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // — tool-only, Role-gated, never on the socket, because a CLI verb must
   // never wait.
   "session.await": "control",
+  // What replaced both awaits (VC-457): tool-only and Role-gated for the
+  // reason they were — it reaches into its caller's own ledger later, so the
+  // caller must be the bound attachment, never a socket request.
+  watch: "control",
   // MCP management (VC-380). Control tier for the reason the whole family is
   // tool-only: an install starts a process as the user or opens a network
   // relationship on the project's behalf, which is exactly the misuse a
@@ -517,9 +522,10 @@ describe("the registry table", () => {
     // schema itself. `automation.run` used to sit beside it, but VC-329 moved
     // it to listed (with the session.start precedent): an agent that could not
     // discover it substituted a hand-written session_start kickoff for the
-    // person's saved Automation. `session.await` remains unlisted because its
-    // cursor contract is discovered through the tool schema that supplies it.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await"]);
+    // person's saved Automation. `session.await` stays unlisted beside it;
+    // both are retired (VC-457). `watch`, which replaced them, is discovered
+    // through its tool schema the same way.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await", "watch"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -614,6 +620,19 @@ describe("the registry table", () => {
     }
   });
 
+  it("describes armed arrival Runs and interruption as ticket-move effects", () => {
+    const effects = verbEntry("ticket.move")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Automatic triggers");
+    expect(effects?.humanVisible.join(" ")).toContain("interrupts");
+    expect(effects?.nonEffects.join(" ")).toContain("Without an enabled, armed Automation");
+  });
+
+  it("locates delegated Sessions in the parent's Activity Island", () => {
+    const effects = verbEntry("session.delegate")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Activity Island");
+    expect(effects?.humanVisible.join(" ")).toContain("no separate Session-list row");
+  });
+
   // VC-134, filed by VC-112 ("The agent's verb") under VC-92 §5's rules. The
   // whole ticket is this entry: one row in this table, in one Role bundle,
   // with no second implementation and no verb surface of its own.
@@ -690,6 +709,44 @@ describe("the registry table", () => {
     expect(tool?.input.map((field) => field.name)).toEqual([
       "ticket",
       "message",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
+  });
+
+  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
+  // gave — "it gives a working session an anchor to the user's preferences for
+  // models and effort". A delegation that names neither a tier nor a model is
+  // anchored to its parent's own, which is why `model` no longer speaks of a
+  // utility default: nothing on a chat path resolves that row.
+  it("lets session_delegate name the same model tiers, and never the Utility row", () => {
+    const tool = verbEntry("session.delegate")?.tool;
+    const tier = tool?.input.find((field) => field.name === "tier");
+    expect(tier).toBeDefined();
+    expect(tier?.required).toBeUndefined();
+    // Written out rather than compared against `AGENT_MODEL_TIERS`, which is
+    // the constant the schema is BUILT from: that comparison holds however the
+    // constant changes, so it could never fail on the one thing this test is
+    // named for. The literal is what refuses `utility` here.
+    expect(tier?.type === "enum" ? tier.values : []).toEqual([
+      "fast",
+      "deep",
+      "visual",
+      "ticket",
+      "global",
+    ]);
+    for (const name of AGENT_MODEL_TIERS) {
+      expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
+    }
+    expect(tier?.description).not.toMatch(/utility/i);
+    expect(tier?.description).toMatch(/instead of `model`/);
+    expect(tool?.input.find((field) => field.name === "model")?.description).not.toMatch(
+      /utility/i,
+    );
+    expect(tool?.input.map((field) => field.name)).toEqual([
+      "task",
       "title",
       "model",
       "tier",
@@ -846,10 +903,19 @@ describe("the MCP management verbs (VC-380)", () => {
     }
   });
 
+  it("freezes management wire names separately from the durable dot-keys", () => {
+    expect(verbToolWireName("mcp.list")).toBe("mcp_list");
+    expect(verbToolWireName("mcp.list", "server")).toBe("server_list");
+    expect(verbToolWireName("session.start")).toBe("session_start");
+    expect(verbToolWireName("mcp.unknown" as never)).toBeUndefined();
+  });
+
   it("projects a wire name a provider accepts, with no caller field in any schema", () => {
     for (const key of MCP_VERBS) {
       const tool = verbEntry(key)!.tool;
-      expect(tool?.name, key).toBe(key.replace(".", "_"));
+      // Management is a native Volli verb, not an MCP-discovered tool. The
+      // single-underscore mcp_ prefix routes Anthropic OAuth to extra usage.
+      expect(tool?.name, key).toBe(key.replace("mcp.", "server_"));
       expect(tool!.description.length, key).toBeGreaterThan(0);
       for (const field of tool!.input) {
         expect(field.name, `${key}.${field.name}`).not.toMatch(/^-/);
@@ -888,7 +954,7 @@ describe("the MCP management verbs (VC-380)", () => {
 
     const remove = verbEntry("mcp.remove")!.tool!.description;
     expect(remove).toMatch(/reattach/i);
-    expect(remove).toContain("mcp_disable");
+    expect(remove).toContain("server_disable");
   });
 
   it("spells args as the array the whole MCP ecosystem spells it as", () => {
@@ -932,9 +998,11 @@ describe("the MCP management verbs (VC-380)", () => {
 
   it("appends the family after every previously frozen tool position", () => {
     const keys = VERB_TOOLS.map((entry) => entry.key);
-    expect(keys.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // `watch` (VC-457) is appended after the family, for the same reason.
+    expect(keys.slice(-(MCP_VERBS.length + 1), -1)).toEqual([...MCP_VERBS]);
+    expect(keys.at(-1)).toBe("watch");
     // `session.await` was the last tool before this family; nothing may be
     // inserted ahead of it, because declaration order IS the frozen tool order.
-    expect(keys.at(-(MCP_VERBS.length + 1))).toBe("session.await");
+    expect(keys.at(-(MCP_VERBS.length + 2))).toBe("session.await");
   });
 });

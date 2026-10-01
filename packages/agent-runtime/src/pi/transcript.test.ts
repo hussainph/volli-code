@@ -9,7 +9,9 @@ import {
   classifyDiagnostic,
   errorText,
   isTransientTransportFailure,
+  isUnreachedAuthFailure,
   recoveryRefFor,
+  retryHintMs,
   sanitizeDiagnostic,
   sessionUsageFrom,
 } from "./transcript";
@@ -232,10 +234,123 @@ describe("isTransientTransportFailure", () => {
     expect(isTransientTransportFailure(failureFor(message))).toBe(true);
   });
 
+  /**
+   * Every sentence the owner's ledger recorded dead-ending a turn as
+   * `adapter_unrecoverable` after 2026-09-15, verbatim as the provider SDK
+   * handed it to pi-ai — envelope, status and all — so what is pinned is the
+   * path from raw text through the sanitizer and the classifier (VC-443).
+   */
+  it.each([
+    // The SDKs' own words for a socket that went away.
+    ["Request timed out.", "timeout"],
+    ["Connection error.", "connection"],
+    ["terminated", "body cut mid-read"],
+    ["getaddrinfo ENOTFOUND api.anthropic.com", "DNS with no network"],
+    ["getaddrinfo EAI_AGAIN chatgpt.com", "DNS with no network"],
+    ["other side closed", "undici"],
+    // A stream that ended without its closing event.
+    ["Stream ended without finish_reason", "OpenAI-compatible"],
+    ["Anthropic stream ended before message_stop", "Anthropic"],
+    ["Provider stream stalled.", "this runtime's idle cut"],
+    ["Provider stream stalled after sleep.", "this runtime's wake cut"],
+    // Overload and "send it again".
+    [
+      `${JSON.stringify({
+        type: "error",
+        error: { details: null, type: "overloaded_error", message: "Overloaded" },
+        request_id: "req_011CWz7qgV2Gkq3n3x9dP4bY",
+      })}`,
+      "Anthropic overloaded envelope",
+    ],
+    ["529 Overloaded", "Anthropic 529"],
+    ["Codex error: Our servers are currently overloaded. Please try again later.", "Codex"],
+    [
+      "Codex error: An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 4013a1f2-9c1e-4c1b-8d2a-7f2b1e3c4d5e in your message.",
+      "Codex, with a request id containing 401",
+    ],
+    // Gateways.
+    [
+      "502 <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n",
+      "Cloudflare HTML",
+    ],
+    [
+      '502 {"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502/","title":"Error 502: Bad gateway","status":502,"detail":"The origin returned an invalid response. Ray ID: 8f4013ab2c9d7e01"}',
+      "Cloudflare JSON, Ray ID containing 4013",
+    ],
+    ["500 status code (no body)", "bare 500"],
+    ["503 Service Unavailable", "503"],
+    ["504 Gateway Timeout", "504"],
+    // Throttling: slow down, and the next window answers.
+    [
+      `429 ${JSON.stringify({
+        type: "error",
+        error: {
+          type: "rate_limit_error",
+          message: "This request would exceed your account's rate limit. Please try again later.",
+        },
+      })}`,
+      "Anthropic rate limit envelope",
+    ],
+    ["429: Rate limit reached for requests", "OpenAI-compatible"],
+    ["429 This request would exceed your account's rate limit. Please try again later.", "bare"],
+    ["429 Too Many Requests", "status alone"],
+  ])("retries what the ledger dead-ended: %s (%s)", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(true);
+  });
+
+  /**
+   * The quota and credential sentences from the same ledger, which must stay
+   * the person's to answer: waiting minutes refills no allowance and repairs
+   * no token.
+   */
+  it.each([
+    ["Codex error: The usage limit has been reached", "Codex quota"],
+    [
+      "429: Usage limit reached for 5 hour. Your limit will reset at 2026-09-20 18:04:11",
+      "quota wearing a 429",
+    ],
+    ["400 You're out of extra usage. Add more at claude.ai/settings/usage", "extra usage"],
+    [
+      `429: ${JSON.stringify({ code: "1308", message: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-21 02:00:00" })}`,
+      "quota envelope",
+    ],
+    ["You exceeded your current quota, please check your plan and billing details.", "OpenAI"],
+    ["429 Insufficient credits. Add more at openrouter.ai/settings/credits", "spent credit"],
+    ["429 You are out of credits", "out of credits"],
+    ["402 Payment Required", "payment required"],
+    [
+      `401 ${JSON.stringify({
+        type: "error",
+        error: {
+          type: "authentication_error",
+          message: "OAuth token has been revoked. Please obtain a new token.",
+        },
+      })}`,
+      "revoked token",
+    ],
+    [
+      "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed",
+      "OAuth refresh that never left the machine",
+    ],
+    ["OpenAI Codex token refresh error: invalid_grant", "OAuth refresh refused"],
+    ["501 Not Implemented", "a status that is not a transient one"],
+    [
+      `400 Invalid JSON payload received. Unknown name "timeout" at 'tools[3]': Cannot find field.`,
+      "a request error quoting a transport word",
+    ],
+  ])("leaves a quota or a credential to the user: %s (%s)", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(false);
+  });
+
+  it("reads a gateway status ahead of whatever its page happens to say", () => {
+    // A 502 page that mentions signing in is still a gateway, not a refusal.
+    expect(failureFor("502 <html>Sign in to Cloudflare</html>").reason).toBe("model");
+    expect(failureFor("403 Forbidden").reason).toBe("auth");
+  });
+
   it.each([
     "malformed provider payload",
     "The model run failed.",
-    "429 Too Many Requests",
     "You exceeded your current quota",
     "maximum context length exceeded",
     "No API key found for anthropic",
@@ -256,6 +371,46 @@ describe("isTransientTransportFailure", () => {
     expect(isTransientTransportFailure({ reason: "aborted", message: "WebSocket closed" })).toBe(
       false,
     );
+  });
+});
+
+describe("isUnreachedAuthFailure", () => {
+  it("recognises a credential refresh that never reached its server", () => {
+    expect(
+      isUnreachedAuthFailure(
+        failureFor(
+          "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    // Reached, and refused.
+    "401 OAuth token has been revoked. Please obtain a new token.",
+    // Not an auth failure at all; the transient predicate owns these.
+    "fetch failed",
+  ])("leaves anything else alone: %s", (message) => {
+    expect(isUnreachedAuthFailure(failureFor(message))).toBe(false);
+  });
+});
+
+describe("retryHintMs", () => {
+  it.each([
+    ["Server requested 120s retry delay (max: 60s). Rate limited", 120_000],
+    ["Rate limit reached. Please try again in 20s.", 20_000],
+    ["Please try again in 1.5 seconds", 1_500],
+    ["retry after 250ms", 250],
+    ["retry after 250 milliseconds", 250],
+    ["Please try again in 2 minutes", 120_000],
+    ["try again after 1 min", 60_000],
+    ["try again in 3 secs", 3_000],
+  ])("reads the wait out of %s", (message, expected) => {
+    expect(retryHintMs(message)).toBe(expected);
+  });
+
+  it("finds nothing in a sentence that states no wait", () => {
+    expect(retryHintMs("429 This request would exceed your account's rate limit.")).toBe(undefined);
   });
 });
 

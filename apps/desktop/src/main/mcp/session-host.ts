@@ -9,11 +9,16 @@ import {
   type RuntimeMcpCall,
   type RuntimeMcpCallResult,
   type RuntimeMcpContent,
+  type RuntimeMcpPort,
 } from "@volli/shared";
 
 import { classifyMcpConnectionError, openMcpProtocolClient } from "./client";
 import { mcpConnectionBlock } from "./credentials";
-import type { McpProtocolClient, OpenMcpProtocolClient } from "./discovery";
+import {
+  McpTransportFailure,
+  type McpProtocolClient,
+  type OpenMcpProtocolClient,
+} from "./discovery";
 import type { McpSignInOutcome } from "./oauth";
 
 const SAFE_UNAVAILABLE = "MCP server is unavailable for this Session";
@@ -21,7 +26,7 @@ const SAFE_UNAVAILABLE = "MCP server is unavailable for this Session";
 /**
  * The attachment's parked-question machinery, lent to one call (VC-470).
  *
- * The same port `mcp_install` confirms through: a question the person driving
+ * The same port `server_install` confirms through: a question the person driving
  * answers, recorded in the Session's interaction ledger. Absent when the call
  * arrived with nobody to ask.
  */
@@ -30,7 +35,7 @@ export type McpHostAsk = (
   signal: AbortSignal,
 ) => Promise<RuntimeAskChoice>;
 
-/** What the host hands the runtime: the call, plus the ask it may raise. */
+/** A call port that may put a blocked call to the person driving. */
 export interface McpHostPort {
   call(
     request: RuntimeMcpCall,
@@ -39,25 +44,40 @@ export interface McpHostPort {
   ): Promise<RuntimeMcpCallResult>;
 }
 
+/**
+ * A call that cannot run until a person gives something only they can: a
+ * sign-in, or a credential (VC-470).
+ *
+ * Thrown by {@link McpSessionHost.rawPort} rather than turned into a result
+ * there, so that the wait for the person happens OUTSIDE whatever bounds the
+ * raw call — the per-server budget (VC-454) must not hold a slot for the
+ * minutes a person spends in a browser. {@link McpSessionHost.routed} catches
+ * it, asks, and retries.
+ */
+export class McpCallBlocked extends Error {
+  readonly block: McpConnectionBlock;
+
+  constructor(block: McpConnectionBlock) {
+    super("MCP call is waiting on a person");
+    this.name = "McpCallBlocked";
+    this.block = block;
+  }
+}
+
 export interface McpSessionHostOptions {
   workspacePath: string;
   servers: readonly McpServerDraft[];
   open?: OpenMcpProtocolClient;
   /**
    * Moves when a server's stored secrets change. A client opened before the
-   * move is retired before the next call, so a value a person just stored
-   * reaches a running Session without reattaching it.
+   * move is retired (drained, then closed) and the next call opens a fresh
+   * one, so a value a person just stored reaches a running Session without
+   * reattaching it.
    */
   credentialsRevision?: (serverId: string) => number;
   /** Run a person's sign-in for one server, once they have allowed it. */
   signIn?: (server: McpServerDraft, signal: AbortSignal) => Promise<McpSignInOutcome>;
 }
-
-/** A call outcome the host can route: done, blocked on a person, or failed. */
-type Attempt =
-  | { kind: "result"; result: RuntimeMcpCallResult }
-  | { kind: "blocked"; block: McpConnectionBlock }
-  | { kind: "failed" };
 
 function errorResult(text: string): RuntimeMcpCallResult {
   return { content: [{ type: "text", text }], isError: true };
@@ -134,6 +154,22 @@ function combineSignals(
   };
 }
 
+/**
+ * `pending`, unless `signal` aborts first.
+ *
+ * The caller stops waiting; the work behind `pending` does not stop. That is
+ * the point: a shared connection one caller gave up on is still the
+ * connection every other caller is waiting for.
+ */
+function untilAborted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 function safeSummary(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0
     ? Array.from(value.slice(0, 1_024), (character) =>
@@ -200,23 +236,55 @@ function convertResult(
 }
 
 /**
+ * One protocol client a host opened for one server, and the calls on it.
+ *
+ * Identity matters more than the server id it is filed under: a call that
+ * fails retires the connection IT used, and only if that connection is still
+ * the one the host would hand out — never whichever one happens to be cached
+ * by the time its failure is noticed.
+ */
+interface ClientEntry {
+  readonly opening: Promise<McpProtocolClient>;
+  /** The credentials revision it was opened under (VC-470). */
+  readonly revision: number;
+  /** Calls holding this client, from acquisition until they settle. */
+  inFlight: number;
+  /** No longer handed to new calls; closed once `inFlight` reaches zero. */
+  retired: boolean;
+  closing: Promise<void> | undefined;
+}
+
+/**
  * Attachment-scoped MCP connection owner. Clients are opened lazily, reused by
  * server id, and all retired when the attachment closes.
  *
- * VC-470 adds one duty: a call blocked on something only a person can give —
- * a sign-in, a credential — is routed to that person through the ask the
- * attachment lends, and retried once if they provide it. The model receives
- * an outcome (the call's real result, or that the person declined, or that
- * the credential is still missing), never the credential.
+ * One client per server is shared by every call this attachment makes to it,
+ * so no single call may decide its fate (VC-454). A connection is opened under
+ * the attachment's lifetime, not under the signal of whichever call asked
+ * first; a caller that gives up stops waiting and the open carries on for the
+ * rest. A client is retired only when a call on it fails with
+ * {@link McpTransportFailure} — never for a call's own abort, a server's error
+ * answer, a timeout or an oversized result — and a retired client is closed
+ * only after the last call still running on it settles, so a sibling that
+ * could still succeed is not cut off by someone else's failure.
  */
 export class McpSessionHost {
+  /** The call, routed: a call blocked on a person asks them and is retried once. */
   readonly port: McpHostPort;
+  /**
+   * The call alone, for a caller that bounds it (the per-server budget): it
+   * throws {@link McpCallBlocked} instead of waiting on a person. Pair it with
+   * {@link routed} outside the bound.
+   */
+  readonly rawPort: RuntimeMcpPort;
   readonly #workspacePath: string;
   readonly #servers: ReadonlyMap<string, McpServerDraft>;
   readonly #open: OpenMcpProtocolClient;
   readonly #revision: (serverId: string) => number;
   readonly #signIn: McpSessionHostOptions["signIn"];
-  readonly #clients = new Map<string, { opening: Promise<McpProtocolClient>; revision: number }>();
+  readonly #clients = new Map<string, ClientEntry>();
+  /** Retired clients still draining or closing; owned here so `close()` can reach them. */
+  readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
   #closed = false;
 
@@ -226,101 +294,146 @@ export class McpSessionHost {
     this.#open = options.open ?? openMcpProtocolClient;
     this.#revision = options.credentialsRevision ?? (() => 0);
     this.#signIn = options.signIn;
-    this.port = { call: (request, signal, ask) => this.#call(request, signal, ask) };
+    this.rawPort = { call: (request, signal) => this.#call(request, signal) };
+    this.port = this.routed(this.rawPort.call);
     LIVE_HOSTS.add(this);
   }
 
-  async #client(server: McpServerDraft, signal: AbortSignal): Promise<McpProtocolClient> {
+  #entry(server: McpServerDraft): ClientEntry {
     const revision = this.#revision(server.id);
     const existing = this.#clients.get(server.id);
-    if (existing !== undefined && existing.revision === revision) return existing.opening;
+    if (existing !== undefined && existing.revision === revision) return existing;
+    // Opened with credentials a person has since replaced: drained and closed
+    // like any retired client, never cut off under a sibling still using it.
     if (existing !== undefined) {
-      // Opened with credentials a person has since replaced: retire it.
-      this.#clients.delete(server.id);
-      void existing.opening.then((client) => client.close()).catch(() => undefined);
+      this.#retire(server.id, existing);
+      if (existing.inFlight === 0) {
+        void this.#closeEntry(existing).then(() => this.#retired.delete(existing));
+      }
     }
-    const combined = combineSignals(this.#lifetime.signal, signal);
-    const opening = this.#open(server, this.#workspacePath, combined.signal).finally(
-      combined.release,
-    );
-    const entry = { opening, revision };
+    const entry: ClientEntry = {
+      opening: this.#open(server, this.#workspacePath, this.#lifetime.signal),
+      revision,
+      inFlight: 0,
+      retired: false,
+      closing: undefined,
+    };
     this.#clients.set(server.id, entry);
-    try {
-      return await opening;
-    } catch (error) {
+    // A connection that never opened has nothing to close; it is simply no
+    // longer the one handed out. Registered before any caller awaits it.
+    entry.opening.catch(() => {
       if (this.#clients.get(server.id) === entry) this.#clients.delete(server.id);
-      throw error;
-    }
+    });
+    return entry;
   }
 
-  async #call(
-    request: RuntimeMcpCall,
-    signal: AbortSignal,
-    ask: McpHostAsk | undefined,
-  ): Promise<RuntimeMcpCallResult> {
+  #retire(serverId: string, entry: ClientEntry): void {
+    if (this.#clients.get(serverId) === entry) this.#clients.delete(serverId);
+    if (entry.retired) return;
+    entry.retired = true;
+    this.#retired.add(entry);
+  }
+
+  #closeEntry(entry: ClientEntry): Promise<void> {
+    entry.closing ??= entry.opening.then(
+      (client) => client.close().catch(() => undefined),
+      () => undefined,
+    );
+    return entry.closing;
+  }
+
+  async #call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult> {
     if (this.#closed) throw new Error("MCP attachment is closed");
     const server = this.#servers.get(request.serverId);
     if (server === undefined || !server.enabled) throw new Error(SAFE_UNAVAILABLE);
     signal.throwIfAborted();
     const combined = combineSignals(this.#lifetime.signal, signal);
+    const entry = this.#entry(server);
+    entry.inFlight += 1;
     try {
-      const first = await this.#attempt(server, request, combined.signal);
-      if (first.kind === "result") return first.result;
-      if (first.kind === "failed") return this.#failed(server);
-      const routed = await this.#route(server, first.block, request, combined.signal, ask);
-      if (routed !== "retry") return routed;
-      const second = await this.#attempt(server, request, combined.signal);
-      if (second.kind === "result") return second.result;
-      if (second.kind === "failed") return this.#failed(server);
-      return errorResult(
-        second.block.kind === "sign-in"
-          ? `${safeSummary(server.name, "The server")} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 Configure \u2192 MCP Servers.`
-          : `${safeSummary(server.name, "The server")} is still missing ${second.block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers.`,
-      );
-    } finally {
-      combined.release();
-    }
-  }
-
-  /** One try at the call. Throws only for an abort or an oversized result. */
-  async #attempt(
-    server: McpServerDraft,
-    request: RuntimeMcpCall,
-    signal: AbortSignal,
-  ): Promise<Attempt> {
-    let client: McpProtocolClient | null = null;
-    try {
-      client = await this.#client(server, signal);
+      const client = await untilAborted(entry.opening, combined.signal);
       const result = await client.callTool({
         name: request.toolName,
         arguments: request.arguments,
-        signal,
+        signal: combined.signal,
       });
-      return { kind: "result", result: convertResult(result) };
+      return convertResult(result);
     } catch (error) {
+      // This call was withdrawn, or the attachment closed under it. Either way
+      // the connection did nothing wrong and stays for every other caller.
+      if (combined.signal.aborted) throw combined.signal.reason;
       if (error instanceof Error && error.message === "MCP result exceeded the safe size limit") {
         throw error;
       }
-      if (this.#clients.get(server.id) !== undefined) this.#clients.delete(server.id);
-      await client?.close().catch(() => undefined);
-      if (signal.aborted) throw signal.reason;
+      if (error instanceof McpTransportFailure) this.#retire(server.id, entry);
+      // Refused for want of a sign-in or a credential (VC-470). The connection
+      // is fine — tokens and headers are read per request — so it is kept;
+      // the person is asked outside any bound on this call.
       const block = mcpConnectionBlock(classifyMcpConnectionError(error, server));
-      return block === undefined ? { kind: "failed" } : { kind: "blocked", block };
+      if (block !== undefined) throw new McpCallBlocked(block);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `MCP server ${safeSummary(server.name, "configured")} call failed.`,
+          },
+        ],
+        isError: true,
+      };
+    } finally {
+      combined.release();
+      entry.inFlight -= 1;
+      // Not awaited: this call's answer does not wait on a goodbye to a
+      // connection it no longer uses, which for HTTP is a request of its own.
+      // The entry stays in `#retired` until the close lands, so `close()`
+      // still waits for it.
+      if (entry.retired && entry.inFlight === 0) {
+        void this.#closeEntry(entry).then(() => this.#retired.delete(entry));
+      }
     }
   }
 
-  #failed(server: McpServerDraft): RuntimeMcpCallResult {
-    return errorResult(`MCP server ${safeSummary(server.name, "configured")} call failed.`);
+  /**
+   * `call`, with a blocked call put to the person driving (VC-470).
+   *
+   * Returns the retried call's own result when the person provided what was
+   * missing; otherwise a result saying what happened — declined, still
+   * missing, nobody to ask. Nothing here carries a value: the question names
+   * the server, the tool and the slot.
+   */
+  routed(call: RuntimeMcpPort["call"]): McpHostPort {
+    return {
+      call: async (request, signal, ask) => {
+        let blocked: McpConnectionBlock;
+        try {
+          return await call(request, signal);
+        } catch (error) {
+          if (!(error instanceof McpCallBlocked)) throw error;
+          blocked = error.block;
+        }
+        const server = this.#servers.get(request.serverId);
+        // Unreachable: a blocked call named a server this host bound.
+        if (server === undefined) throw new Error(SAFE_UNAVAILABLE);
+        const routed = await this.#route(server, blocked, request, signal, ask);
+        if (routed !== "retry") return routed;
+        try {
+          return await call(request, signal);
+        } catch (error) {
+          if (!(error instanceof McpCallBlocked)) throw error;
+          const name = safeSummary(server.name, "The server");
+          return errorResult(
+            error.block.kind === "sign-in"
+              ? `${name} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 Configure \u2192 MCP Servers.`
+              : `${name} is still missing ${error.block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers.`,
+          );
+        }
+      },
+    };
   }
 
   /**
    * Put a blocked call in front of the person driving, and say what happened.
-   *
-   * Returns `"retry"` only when the person provided what was missing; every
-   * other path is the call's final result. Nothing here carries a value: the
-   * question names the server, the tool and the slot, and the answer the model
-   * reads is one of signed in (the retried call's own result), declined, or
-   * still missing.
+   * Returns `"retry"` only when the person provided what was missing.
    */
   async #route(
     server: McpServerDraft,
@@ -378,9 +491,7 @@ export class McpSessionHost {
     if (signIn !== undefined) {
       const outcome = await signIn(server, signal);
       if (signal.aborted) throw signal.reason;
-      if (!outcome.ok) {
-        return errorResult(`${outcome.message} ${request.toolName} was not called.`);
-      }
+      if (!outcome.ok) return errorResult(`${outcome.message} ${request.toolName} was not called.`);
     }
     return "retry";
   }
@@ -390,8 +501,9 @@ export class McpSessionHost {
     this.#closed = true;
     LIVE_HOSTS.delete(this);
     this.#lifetime.abort(new Error("MCP attachment closed"));
-    const clients = [...this.#clients.values()];
+    const entries = [...this.#clients.values(), ...this.#retired];
     this.#clients.clear();
-    await Promise.allSettled(clients.map(async (client) => (await client.opening).close()));
+    this.#retired.clear();
+    await Promise.allSettled(entries.map((entry) => this.#closeEntry(entry)));
   }
 }

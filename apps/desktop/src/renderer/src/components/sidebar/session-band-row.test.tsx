@@ -1,23 +1,30 @@
+// @vitest-environment jsdom
 /**
- * What an Active row's second line SAYS — the one thing about these rows that
- * is a product decision rather than a layout one.
+ * What the two band rows SAY, now that the peek is the thing that explains a
+ * Session (VC-30).
  *
- * The line's first slot holds where the Session lives (its ticket's column),
- * not what launched it. That was a swap, not an addition: the source label the
- * status displaced is still built for every row and still has to be reachable,
- * so every case here pins both halves — what the line reads, and that the
- * harness survived in the row's hover `title`.
+ * Three of these are product decisions rather than layout, and each replaced a
+ * line the band used to print:
  *
- * `renderToStaticMarkup` for the same reason the rail's row tests use it: the
- * suite runs on `environment: "node"` (root `vite.config.ts`) with no DOM. The
- * provider mirrors the real tree — `SidebarProvider` wraps the whole app, and
- * `SidebarMenuButton` reads its context unconditionally.
+ *   • The Active row's second line is WHERE and WHEN — `VC-7 · 2m ago` — and
+ *     never a state word. The mark beside it carries the state, and the line
+ *     this replaced said it twice ("Doing · Working").
+ *   • Unread is its own axis: a semibold title and a blue dot, never the mark's
+ *     badge, which is busy saying what the Session is doing.
+ *   • A peekable row has NO native `title`. The card says the untruncated
+ *     title, the harness and the provenance, and a browser tooltip would open
+ *     on top of it at almost the same instant.
+ *
+ * `renderToStaticMarkup` for most of it — a row is a pure function of its props
+ * — with a real jsdom root for the one promise that is a gesture: the
+ * right-click menu, which Radix only mounts once something opens it.
  */
-import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
+import { createRoot, type Root } from "react-dom/client";
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
-import { FIRST_CLASS_HARNESS_IDS, harnessLabel, PERSON_STARTED } from "@volli/shared";
-import type { FirstClassHarnessId, HarnessId, Ticket } from "@volli/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { FIRST_CLASS_HARNESS_IDS, PERSON_STARTED } from "@volli/shared";
+import type { HarnessId, Ticket } from "@volli/shared";
 
 import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
 import {
@@ -66,160 +73,404 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
   };
 }
 
-function render(subject: ActiveSessionRow): string {
+function previousRow(overrides: Partial<PreviousSessionRow> = {}): PreviousSessionRow {
+  return {
+    id: "session:s1",
+    ticket,
+    title: "Review fixes",
+    kind: "chat",
+    harnessId: null,
+    endedOrQuietAt: 0,
+    activity: "idle",
+    provenance: PERSON_STARTED,
+    target: null,
+    cleaned: false,
+    ...overrides,
+  };
+}
+
+function render(
+  subject: ActiveSessionRow,
+  props: Partial<React.ComponentProps<typeof ActiveBandRow>> = {},
+): string {
   return renderToStaticMarkup(
     <SidebarProvider>
       <ActiveBandRow
         row={subject}
         projectId="proj-1"
         ticketPrefix="VC"
-        now={120_000}
+        now={180_000}
         selected={false}
         onSelect={() => {}}
+        {...props}
+      />
+    </SidebarProvider>,
+  );
+}
+
+function renderPrevious(
+  subject: PreviousSessionRow = previousRow(),
+  props: Partial<React.ComponentProps<typeof PreviousBandRow>> = {},
+): string {
+  return renderToStaticMarkup(
+    <SidebarProvider>
+      <PreviousBandRow
+        row={subject}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={60_000}
+        selected={false}
+        onSelect={() => {}}
+        {...props}
       />
     </SidebarProvider>,
   );
 }
 
 /**
- * The meta line's state half — the slot after the ticket id. It is the one span
- * whose class list is exactly `truncate`; the row's own title span carries
- * `session-row-dim truncate …`, so an exact-attribute match tells them apart
- * without a DOM to query.
+ * The row's second line. The row typesets it itself rather than handing
+ * `ListRow` a string, because the line carries the promotion hook decision #74
+ * measures (`session-row-meta`) — see the ink-tier block at the bottom.
  */
-function stateLine(markup: string): string {
-  return /<span class="truncate">([^<]*)<\/span>/.exec(markup)?.[1] ?? "";
+function subtitle(markup: string): string {
+  return /<span class="session-row-meta[^"]*">([^<]*)<\/span>/.exec(markup)?.[1] ?? "";
 }
 
 /**
- * The row button's hover `title` — where the source label lives now.
+ * Whether the row promotes its dimmed second line in the given state.
  *
- * Deliberately NOT anchored on `<button`: `sidebarMenuButtonVariants` bakes in
- * Tailwind arbitrary variants like `[&>span:last-child]:truncate`, so a `>` sits
- * inside the class attribute and no `<button[^>]*` prefix can reach past it. The
- * row draws exactly one `title`, so the first match is the right one.
+ * The variants are Tailwind's descendant form, and `renderToStaticMarkup`
+ * escapes their `&` into `&amp;` — so the hover one is recognised by its
+ * `:hover_` and the selected one by the `;` the escape ends with.
  */
-function hoverTitle(markup: string): string {
-  return /title="([^"]*)"/.exec(markup)?.[1] ?? "";
-}
+const promotes = (markup: string, on: "hover" | "selected"): boolean =>
+  markup.includes(
+    on === "hover"
+      ? ":hover_.session-row-meta]:text-foreground"
+      : ";_.session-row-meta]:text-foreground",
+  );
+
+/** Every accessible name the row's marks announce. */
+const markNames = (markup: string): string[] =>
+  Array.from(markup.matchAll(/aria-label="([^"]*)"/g), (match) => match[1]!);
+
+/** Every drawing in the row, in order: the mark's logo first, its badge after. */
+const glyphPaths = (markup: string): string[] =>
+  Array.from(markup.matchAll(/<path d="([^"]*)"/g), (match) => match[1]!);
 
 /**
- * The text the mark itself PRINTS, as distinct from the name it announces.
+ * The LOGO the row leads with, as a value two renders can be compared by.
  *
- * Anchored on the mark's own accessible name and read past its bolt, rather
- * than on `<span class="truncate">` — the row's state line wears exactly
- * that class too, and matching it would have read the state as the mark.
+ * The first drawing only: the badge behind it says the state, which differs
+ * between a working Active row and the same Session resting in Previous.
  */
-const markText = (markup: string): string | null =>
-  /aria-label="Started by the Automation [^"]*"><svg[^]*?<\/svg>(?:<span class="truncate">([^<]*)<\/span>)?<\/span>/.exec(
-    markup,
-  )?.[1] ?? null;
+const logo = (markup: string): string => glyphPaths(markup)[0] ?? "";
 
-describe("ActiveBandRow", () => {
-  it("names the ticket's column in the slot the harness name used to hold", () => {
+/** How many times a word appears in the markup at all. */
+const occurrences = (markup: string, word: string): number => markup.split(word).length - 1;
+
+/** Opens the row's context menu the way a person does. */
+async function rightClick(): Promise<void> {
+  const trigger = document.querySelector('[data-slot="context-menu-trigger"]');
+  await act(async () => {
+    trigger?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+    );
+  });
+}
+
+/** The open context menu's item labels. */
+function menuItems(): string[] {
+  return [...document.querySelectorAll('[data-slot="context-menu-item"]')].map(
+    (item) => item.textContent ?? "",
+  );
+}
+
+describe("the Active row's second line", () => {
+  it("says where the Session lives and when it last spoke, and no state word", () => {
     const markup = render(row());
 
-    expect(stateLine(markup)).toBe("Doing · Working");
-    // Displaced, not dropped.
-    expect(hoverTitle(markup)).toContain("Claude Code");
+    expect(subtitle(markup)).toBe("VC-7 · 2m ago");
+    // The words the line used to carry are gone: the ticket's column, the
+    // harness, the degradation notice. What is left of the state is the MARK's
+    // accessible name, and exactly once.
+    expect(markup).not.toContain("Doing");
+    expect(markup).not.toContain("Not reporting");
+    expect(occurrences(markup, "Working")).toBe(1);
+    expect(markNames(markup)).toContain("Claude Code · Working");
+    expect(subtitle(render(row({ activitySource: "silent" })))).toBe("VC-7 · 2m ago");
   });
 
-  it("shows the age of the row's newest activity", () => {
-    expect(render(row())).toContain("last 1m");
-  });
-
-  it("says where a ticketed chat Session lives and keeps its source plain", () => {
-    const markup = render(
-      row({
-        id: "chat:c1",
-        source: "Chat",
-        harnessId: null,
-        ticket: { ...ticket, status: "needs_review" },
-      }),
+  it("says so rather than leaving a hole for a Session with no ticket", () => {
+    expect(subtitle(render(row({ ticket: null, lastActivityAt: 180_000 - 22 * 60_000 })))).toBe(
+      "No ticket · 22m ago",
     );
-
-    expect(stateLine(markup)).toBe("Needs Review · Working");
-    expect(hoverTitle(markup)).toContain("Chat");
-    expect(markup).not.toContain("Live");
   });
 
-  it("keeps the source on a ticketless row, which has no column to name", () => {
+  it("says only where it lives when nothing can date it", () => {
+    expect(subtitle(render(row({ lastActivityAt: null })))).toBe("VC-7");
+  });
+
+  it("drops the errand copy a waiting row used to print", () => {
     const markup = render(
-      row({ ticket: null, source: "Shell", harnessId: null, activity: "idle" }),
-    );
-
-    expect(stateLine(markup)).toBe("Shell · Idle");
-  });
-
-  it("still reports a silent harness, against the column rather than the source", () => {
-    const markup = render(row({ activitySource: "silent" }));
-
-    expect(stateLine(markup)).toBe("Doing · Not reporting");
-  });
-
-  // VC-131's three marks, at the surface VC-112 calls out by name. Everything
-  // asserted here is about a RESTING band: what it draws, and what it refuses
-  // to draw for the two parties that get no ink.
-  describe("who started the Session", () => {
-    const RUN = { kind: "automation", automationName: "Nightly sweep" } as const;
-
-    it("carries a bolt and the Automation's name for a Run's Session", () => {
-      const markup = render(row({ title: "Fix the flaky worktree test", provenance: RUN }));
-
-      expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
-      expect(markText(markup)).toBe("Nightly sweep");
-      expect(hoverTitle(markup)).toContain("Automation · Nightly sweep");
-    });
-
-    // A Run titles its Session after its Automation, so the word is usually
-    // already the largest text on the row and the mark declines to repeat it.
-    it("draws the bolt alone when the title already is the name", () => {
-      const markup = render(row({ title: "Nightly sweep", provenance: RUN }));
-
-      // Still announced in full — the fact never depends on a sighted
-      // comparison with the title beside it.
-      expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
-      expect(markText(markup)).toBeNull();
-    });
-
-    it("names the parent in the tooltip for a Session another Session started, and mints no glyph", () => {
-      const markup = render(
-        row({
-          provenance: {
-            kind: "session",
-            parentSessionId: "session-parent",
-            parentTitle: "Orchestrator",
-          },
-        }),
-      );
-
-      expect(hoverTitle(markup)).toContain("Started by Orchestrator");
-      // No bolt, and no mark of any kind: a link answers "which agent" where a
-      // glyph answers neither question (VC-112).
-      expect(markup).not.toContain("Started by the Automation");
-      expect(markup).not.toContain("text-primary");
-    });
-
-    it("gives a person's Session no mark at all — the resting rail stays quiet", () => {
-      const marked = render(row({ provenance: RUN }));
-      const resting = render(row());
-
-      expect(resting).not.toContain("Started by the Automation");
-      expect(hoverTitle(resting)).toBe("Session 1\nClaude Code");
-      // The resting row is strictly SHORTER: the feature adds no node, no
-      // class and no character to a band nobody automated.
-      expect(resting.length).toBeLessThan(marked.length);
-    });
-  });
-
-  it("leaves an errand row saying the errand, which never held a source", () => {
-    const blocked = render(row({ attention: { signal: "blocked", reason: "Needs a decision" } }));
-    expect(stateLine(blocked)).toBe("Blocked · Needs a decision");
-
-    const waiting = render(
       row({ activity: "waiting", attention: { signal: "waiting", reason: null } }),
     );
-    expect(stateLine(waiting)).toBe("Waiting for you");
+
+    expect(subtitle(markup)).toBe("VC-7 · 2m ago");
+    expect(markup).not.toContain("Answer a question");
+    expect(markup).not.toContain("Blocked");
+    // The errand is the MARK's now, said once, in the words the band already
+    // used for it.
+    expect(occurrences(markup, "Waiting for you")).toBe(1);
+    expect(markNames(markup)).toContain("Claude Code · Waiting for you");
+  });
+});
+
+describe("the Active row's marks", () => {
+  it("leads with the vendor's logo and the state as one accessible name", () => {
+    expect(markNames(render(row()))).toContain("Claude Code · Working");
+    expect(markNames(render(row({ activity: "idle" })))).toContain("Claude Code · Idle");
+    expect(markNames(render(row({ activity: "interrupted" })))).toContain(
+      "Claude Code · Interrupted",
+    );
+  });
+
+  it("names the band's own vendor when the caller hands one over", () => {
+    // A chat's logo comes from the model it runs, which only the band holds.
+    const markup = render(row({ id: "chat:c1", harnessId: null, source: "Chat" }), {
+      vendor: { providerId: "anthropic", providerLabel: "anthropic" },
+    });
+
+    expect(markNames(markup)).toContain("anthropic · Working");
+  });
+
+  it("keeps the working title's sweep, and the provenance mark beside it", () => {
+    expect(render(row())).toContain("session-title-sweep");
+    expect(render(row({ activity: "idle" }))).not.toContain("session-title-sweep");
+
+    const marked = render(
+      row({
+        title: "Fix the flaky worktree test",
+        provenance: { kind: "automation", automationName: "Nightly sweep" },
+      }),
+    );
+    expect(marked).toContain('aria-label="Started by the Automation Nightly sweep"');
+    expect(render(row())).not.toContain("Started by the Automation");
+  });
+});
+
+describe("unread, on its own axis (VC-108)", () => {
+  it("draws a blue dot and a semibold title, and says the word out of band", () => {
+    const markup = render(row(), { unread: true });
+
+    expect(markup).toContain("data-unread-dot");
+    expect(markup).toContain("bg-info");
+    expect(markup).toContain("Unread");
+    expect(markup).toContain("font-semibold");
+  });
+
+  it("draws nothing at all when the Session has been read", () => {
+    const markup = render(row());
+
+    expect(markup).not.toContain("data-unread-dot");
+    expect(markup).not.toContain("Unread");
+    expect(markup).not.toContain("font-semibold");
+  });
+});
+
+describe("a peekable row", () => {
+  it("addresses itself to the peek and drops its native tooltip", () => {
+    const markup = render(row());
+
+    expect(markup).toContain('data-peek-row="session:s1"');
+    expect(markup).toContain('data-peek-surface="nav"');
+    expect(markup).not.toContain("title=");
+  });
+
+  it("leaves a Chat Draft out of it — a Draft stands for no Session", () => {
+    // A provisional Draft's row id carries no `chat:`/`session:` prefix.
+    const markup = render(
+      row({ id: "draft-1", target: { kind: "chat", tabId: "t", sessionId: "d" } }),
+    );
+
+    expect(markup).not.toContain("data-peek-row");
+    expect(markup).not.toContain("data-peek-surface");
+  });
+
+  it("holds the Previous row and the folder to the same rule", () => {
+    const previous = renderPrevious();
+    expect(previous).toContain('data-peek-row="session:s1"');
+    expect(previous).not.toContain("title=");
+
+    const folder = renderToStaticMarkup(
+      <SidebarProvider>
+        <TicketGroupRow
+          ticket={ticket}
+          ticketPrefix="VC"
+          count={2}
+          newestAt={0}
+          now={60_000}
+          open={false}
+          selected={false}
+          onToggle={() => {}}
+        />
+      </SidebarProvider>,
+    );
+    // The folder's peek hangs off its BUTTON: its `<li>` also holds the nested
+    // list, and a pointer over a child must resolve to the child.
+    expect(folder).toContain('data-peek-row="folder:ticket-7"');
+    expect(folder).toContain('data-peek-surface="nav"');
+    expect(folder).not.toContain("title=");
+  });
+});
+
+describe("the Previous row", () => {
+  it("keeps its one line: identity, title, and the age alone on the right", () => {
+    const markup = renderPrevious(previousRow({ endedOrQuietAt: 0 }));
+
+    expect(markup).toContain("VC-7");
+    expect(markup).toContain("Review fixes");
+    // 0 is the model's "nothing durable can date this" sentinel.
+    expect(markup).not.toContain("1970");
+
+    expect(
+      renderPrevious(previousRow({ endedOrQuietAt: 0 }), { showIdentity: false }),
+    ).not.toContain("VC-7");
+    expect(renderPrevious(previousRow({ endedOrQuietAt: 1 }))).toContain("1m");
+  });
+
+  it("passes its real state to the mark, so an interrupted chat stays interrupted", () => {
+    // VC-324: the record's activity is durable, so the relaunch did not end it.
+    expect(markNames(renderPrevious(previousRow({ activity: "interrupted" })))).toContain(
+      "Chat · Interrupted",
+    );
+    expect(markNames(renderPrevious())).toContain("Chat · Idle");
+    // One mark, not a mark and a dot: the badge carries the state now.
+    expect(renderPrevious(previousRow({ activity: "interrupted" }))).not.toContain(
+      'data-slot="status-dot"',
+    );
+  });
+
+  it("weights an unread title, and marks the row for the band around it", () => {
+    const unread = renderPrevious(previousRow(), { unread: true });
+
+    expect(unread).toContain("data-unread");
+    expect(unread).toContain("font-semibold");
+    // Unread is the exception in this band — a read row carries neither mark.
+    expect(renderPrevious()).not.toContain("data-unread");
+    expect(renderPrevious()).not.toContain("font-semibold");
+  });
+
+  it("ghosts a cleaned row and says so out of band", () => {
+    expect(renderPrevious(previousRow({ cleaned: true }))).toContain("Cleaned up");
+    expect(renderPrevious()).not.toContain("Cleaned up");
+  });
+});
+
+/**
+ * THE SIDEBAR'S INK TIERS, which the `ListRow` adoption is not allowed to drop.
+ *
+ * This band stands on the translucent canvas, so its tiers are scoped rules in
+ * `globals.css` keyed off two classes: `session-row-dim` + `text-ui` puts the
+ * title on the canvas HEAD rung, and `session-row-meta` is the hook decision
+ * #74's vibrancy rule promotes on hover and on selection — the row's fill is a
+ * veil, so the dimmed line measures under the contrast floor un-promoted.
+ */
+describe("the Active row's ink tiers", () => {
+  it("keeps the title on the canvas head rung, in both of its costumes", () => {
+    // Resting: the tier rule is `.session-row-dim.text-ui`, so both have to be
+    // on the line itself.
+    const resting = render(row({ activity: "idle" }));
+    expect(resting).toMatch(/class="session-row-dim [^"]*text-ui/);
+    // Working: the sweep reads `--sidebar-foreground` through its own
+    // `color-mix`, so it lands on that rung only if the rule reaches it too.
+    expect(render(row())).toMatch(/class="session-row-dim session-title-sweep [^"]*text-ui/);
+  });
+
+  it("gives the second line its own hook, at the dim tier and not the title's", () => {
+    const markup = render(row());
+
+    expect(markup).toMatch(/class="session-row-meta [^"]*text-muted-foreground/);
+    // Never the title's class: both lines are `text-ui` now, so sharing it
+    // would promote the meta line to the head rung and erase the pair.
+    expect(markup).not.toMatch(/class="session-row-meta[^"]*session-row-dim/);
+    expect(markup).not.toMatch(/class="session-row-dim[^"]*session-row-meta/);
+  });
+
+  it("promotes the second line on hover, and with the row's own ink when selected", () => {
+    const resting = render(row());
+    const chosen = render(row(), { selected: true });
+
+    expect(promotes(resting, "hover")).toBe(true);
+    expect(promotes(resting, "selected")).toBe(false);
+    expect(promotes(chosen, "selected")).toBe(true);
+    // The row's own ink promotes WITH it, so the pair reads at one tier rather
+    // than as a bright title over a line still under the floor.
+    expect(chosen).toMatch(/class="[^"]*\btext-foreground\b/);
+  });
+
+  it("publishes selection on the target a pointer presses", () => {
+    // The `SidebarMenuButton` this row replaced said `data-active` out loud, and
+    // the vibrancy rule is only checkable against a row that still does.
+    expect(render(row(), { selected: true })).toContain('data-active="true"');
+    expect(render(row())).toContain('data-active="false"');
+  });
+});
+
+/**
+ * VC-402 × A3: a companion leads with its HARNESS'S VENDOR, so a Claude Code
+ * pane and a Claude chat read as the same maker. Only a harness nobody
+ * publishes a mark for keeps the band's Phosphor mnemonic.
+ */
+describe("a companion's mark", () => {
+  it("draws a different mark for every first-class harness, in both bands", () => {
+    const byDrawing = new Map<string, HarnessId[]>();
+    for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
+      const active = logo(render(row({ harnessId })));
+      expect(active).not.toBe("");
+      // A Session keeps its mark as it ages from one band into the other.
+      expect(logo(renderPrevious(previousRow({ kind: "terminal", harnessId })))).toBe(active);
+      byDrawing.set(active, [...(byDrawing.get(active) ?? []), harnessId]);
+    }
+
+    expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
+      ...FIRST_CLASS_HARNESS_IDS,
+    ]);
+  });
+
+  it("names a companion running no CLI by what the listing resolved, not by its kind", () => {
+    // The mark's accessible name is the only place this row states its source
+    // now that a peekable row has no native `title` (D1), and `Shell` — a
+    // durable record naming no harness — is a different answer from `Terminal`,
+    // a pane nothing has been resolved about yet (`sessionSourceLabel`).
+    expect(markNames(render(row({ harnessId: null, source: "Shell" })))).toContain(
+      "Shell · Working",
+    );
+    expect(markNames(render(row({ harnessId: null, source: "Terminal" })))).toContain(
+      "Terminal · Working",
+    );
+    // Never invented: a row that resolved a harness keeps naming it, and the
+    // band's own richer answer still wins where it passes one.
+    expect(markNames(render(row()))).toContain("Claude Code · Working");
+  });
+
+  it("keeps the generic terminal for a harness this build does not know", () => {
+    const custom = "my-custom-harness" as HarnessId;
+    const bare = renderPrevious(previousRow({ kind: "terminal", harnessId: null }));
+
+    expect(
+      markNames(renderPrevious(previousRow({ kind: "terminal", harnessId: custom }))),
+    ).toContain("my-custom-harness · Idle");
+    expect(logo(renderPrevious(previousRow({ kind: "terminal", harnessId: custom })))).toBe(
+      logo(bare),
+    );
+  });
+
+  it("stands a chat and a bare shell apart with the glyphs they already had", () => {
+    const chat = logo(renderPrevious());
+    const shell = logo(renderPrevious(previousRow({ kind: "terminal" })));
+
+    expect(chat).not.toBe(shell);
   });
 });
 
@@ -252,7 +503,7 @@ describe("TicketGroupRow", () => {
     );
   }
 
-  it("names the ticket, how many sessions are behind it, and the newest one's age", () => {
+  it("keeps its face: the ticket, how many sessions, and the newest one's age", () => {
     const markup = renderGroup(5, false);
 
     expect(markup).toContain("VC-7");
@@ -261,57 +512,32 @@ describe("TicketGroupRow", () => {
     expect(markup).toContain("1h");
   });
 
-  it("draws the count even at one, so a stack is never invisible", () => {
-    // Every ticket gets one of these rows, so the count is the only mark that
-    // separates a ticket hiding six sessions from one hiding a single session.
+  it("draws the count even at one, and spells its unit out of band", () => {
     expect(renderGroup(1, false)).toContain(">1<");
-  });
-
-  it("spells the count's unit out of band, so it cannot run into the age", () => {
-    // Two unlabelled numbers side by side read as one token: 3 sessions at 43m
-    // is announced "343m". The unit is what separates them for a screen reader,
-    // and it is not worth the width on screen.
     expect(renderGroup(3, false)).toContain("sessions");
     expect(renderGroup(1, false)).toContain("session<");
     expect(renderGroup(1, false)).not.toContain("sessions");
   });
 
   it("says nothing rather than the epoch when no stamp can date the newest session", () => {
-    // 0 is the listing model's "nothing durable can date this" sentinel, and
-    // the child rows already refuse to draw an age from it.
     const undated = renderGroup(2, false, { newestAt: 0 });
 
     expect(undated).not.toContain("1970");
-    expect(undated).not.toContain("Jan");
-    // The rest of the row is unaffected.
     expect(undated).toContain("VC-7");
-    expect(undated).toContain(">2<");
   });
 
   it("takes the active treatment when the session in front of you is one of its own", () => {
-    // The band reveals the group as well as marking it, but a reader who
-    // collapses it by hand is left with this mark alone pointing at where they
-    // are — so it has to survive the collapsed state.
     expect(renderGroup(4, false, { selected: true })).toContain('data-active="true"');
-    expect(renderGroup(4, true, { selected: true })).toContain('data-active="true"');
     expect(renderGroup(4, false)).toContain('data-active="false"');
   });
 
   it("carries no status dot in either state — attention never reaches this band", () => {
-    // A Session needing a human is pinned to Active for as long as it is
-    // asking, so nothing behind a collapsed ticket here can be waiting.
     expect(renderGroup(3, false)).not.toContain('data-slot="status-dot"');
     expect(renderGroup(3, true)).not.toContain('data-slot="status-dot"');
   });
 
-  it("names the list it discloses, not just that it is open", () => {
-    // `aria-expanded` alone announces a state with no subject. The id is
-    // derived from the ticket so the row and the band can agree on it without
-    // a channel between them.
+  it("names the list it discloses and turns only the caret", () => {
     expect(renderGroup(2, true)).toContain(`aria-controls="${sessionGroupPanelId(ticket.id)}"`);
-  });
-
-  it("announces its disclosure state and turns only the caret", () => {
     expect(renderGroup(2, false)).toContain('aria-expanded="false"');
 
     const open = renderGroup(2, true);
@@ -320,245 +546,172 @@ describe("TicketGroupRow", () => {
   });
 });
 
-describe("PreviousBandRow identity", () => {
-  const previous: PreviousSessionRow = {
-    id: "session:s1",
-    ticket,
-    title: "Review fixes",
-    kind: "chat",
-    harnessId: null,
-    endedOrQuietAt: 0,
-    activity: "idle",
-    provenance: PERSON_STARTED,
-    target: null,
-    cleaned: false,
-  };
-
-  function renderPrevious(
-    showIdentity?: boolean,
-    overrides: Partial<PreviousSessionRow> = {},
-  ): string {
-    return renderToStaticMarkup(
-      <SidebarProvider>
-        <PreviousBandRow
-          row={{ ...previous, ...overrides }}
-          projectId="proj-1"
-          ticketPrefix="VC"
-          now={60_000}
-          selected={false}
-          onSelect={() => {}}
-          showIdentity={showIdentity}
-        />
-      </SidebarProvider>,
-    );
-  }
-
-  it("draws its ticket id when standing on its own", () => {
-    expect(renderPrevious()).toContain("VC-7");
-  });
-
-  it("carries the same mark, from the same slot, once a Run's Session ages into it", () => {
-    const markup = renderToStaticMarkup(
-      <SidebarProvider>
-        <PreviousBandRow
-          row={{
-            ...previous,
-            title: "Fix the flaky worktree test",
-            provenance: { kind: "automation", automationName: "Nightly sweep" },
-          }}
-          projectId="proj-1"
-          ticketPrefix="VC"
-          now={60_000}
-          selected={false}
-          onSelect={() => {}}
-        />
-      </SidebarProvider>,
-    );
-
-    expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
-    expect(markup).toContain("Automation · Nightly sweep");
-  });
-
-  it("stays entirely unmarked for the Sessions a person opened", () => {
-    expect(renderPrevious()).not.toContain("Started by the Automation");
-    // No `title` at all on a row with nothing to add, rather than an empty one.
-    expect(renderPrevious()).toContain('title="Review fixes"');
-  });
-
-  it("drops the id under a ticket entry, which already said it", () => {
-    const markup = renderPrevious(false);
-
-    expect(markup).not.toContain("VC-7");
-    // Only the identity goes: the row keeps its title and its kind glyph.
-    expect(markup).toContain("Review fixes");
-    expect(markup).toContain('aria-label="Chat"');
-  });
-
-  // VC-324: `interrupted` is durable, so it survives the quiet window into
-  // Previous — and it must survive the RELAUNCH too, which is the same row
-  // built purely from the record. One line is all this band gives a row, so
-  // the mark is the destructive dot plus the words out of band.
-  it("draws the interrupted dot for a historical interrupted Session (VC-324)", () => {
-    const interrupted = renderPrevious(undefined, {
-      id: "session:dead",
-      title: "Died mid-run",
-      activity: "interrupted",
-    });
-    const idle = renderPrevious(undefined, { activity: "idle" });
-
-    // The destructive state the Active band gives the same fact.
-    expect(interrupted).toContain('data-state="interrupted"');
-    expect(idle).not.toContain('data-state="interrupted"');
-  });
-
-  it("says Interrupted out of band, as this row's one-line size demands", () => {
-    const interrupted = renderPrevious(undefined, { activity: "interrupted" });
-    const idle = renderPrevious(undefined, { activity: "idle" });
-
-    expect(interrupted).toContain('class="sr-only">Interrupted</span>');
-    expect(idle).not.toContain("Interrupted");
-  });
-});
-
 /**
- * VC-402: WHICH CLI a companion is running, as a mark rather than as words.
- *
- * The acceptance is exactly what these assert — two companion rows on different
- * harnesses are told apart with their titles hidden — so the tests read the
- * glyph's own SVG path rather than only its accessible name: a mapping that
- * handed two harnesses the same drawing would still announce two names.
+ * The read menu (D6). A gesture, so a real root: Radix mounts the content only
+ * once something opens it.
  */
-// `Array.from` rather than a spread of `.matchAll().map()`: the iterator
-// helper's `map` hands back another ITERATOR, which has no length and compares
-// equal to every other one.
-const glyphPaths = (markup: string): string[] =>
-  Array.from(markup.matchAll(/<path d="([^"]*)"/g), (match) => match[1]!);
+describe("the row's read menu", () => {
+  let root: Root | null = null;
+  let container: HTMLElement | null = null;
 
-describe("companion harness glyph", () => {
-  function renderPrevious(overrides: Partial<PreviousSessionRow>): string {
-    return renderToStaticMarkup(
-      <SidebarProvider>
-        <PreviousBandRow
-          row={{
-            id: "session:s1",
-            ticket,
-            title: "Session 1",
-            kind: "terminal",
-            harnessId: null,
-            endedOrQuietAt: 0,
-            activity: null,
-            provenance: PERSON_STARTED,
-            target: null,
-            cleaned: false,
-            ...overrides,
-          }}
-          projectId="proj-1"
-          ticketPrefix="VC"
-          now={60_000}
-          selected={false}
-          onSelect={() => {}}
-        />
-      </SidebarProvider>,
-    );
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  });
+
+  afterEach(async () => {
+    if (root !== null) {
+      await act(async () => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+    vi.unstubAllGlobals();
+  });
+
+  async function mount(node: React.ReactElement): Promise<void> {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<SidebarProvider>{node}</SidebarProvider>);
+    });
   }
 
-  /** The row's one glyph, as a value two renders can be compared by. */
-  const activeMark = (harnessId: HarnessId | null): string =>
-    glyphPaths(render(row({ harnessId }))).join("|");
-  const previousMark = (overrides: Partial<PreviousSessionRow>): string =>
-    glyphPaths(renderPrevious(overrides)).join("|");
-
-  // Driven off the shared vocabulary rather than a list retyped here, and over
-  // ALL of it rather than one pair. `HARNESS_GLYPHS` being a
-  // `Record<FirstClassHarnessId, …>` proves only that every harness has a KEY:
-  // two of them pointing at one drawing type-checks perfectly, and it is
-  // precisely the failure the acceptance forbids. A fifth harness added
-  // upstream lands here as a failure rather than as a silently shared mark.
-  it("draws a different glyph for every first-class harness, in both bands", () => {
-    const byDrawing = new Map<string, FirstClassHarnessId[]>();
-    for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
-      const active = activeMark(harnessId);
-      expect(active).not.toBe("");
-      // A Session keeps its mark as it ages out of one band and into the other.
-      expect(previousMark({ harnessId })).toBe(active);
-      expect(render(row({ harnessId }))).toContain(`aria-label="${harnessLabel(harnessId)}"`);
-      byDrawing.set(active, [...(byDrawing.get(active) ?? []), harnessId]);
-    }
-
-    // One harness per drawing, in order: any collision collapses two ids into
-    // a single entry, and the mismatch names the pair that shared a mark.
-    expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
-      ...FIRST_CLASS_HARNESS_IDS,
-    ]);
-  });
-
-  // Distinct from the harnesses is not enough: the band already draws two
-  // generic marks, and both of them mean something a harness does not. A
-  // first-class harness wearing the terminal window would be indistinguishable
-  // from a bare shell and from a BYO harness, which legitimately wear it.
-  it("keeps every harness mark distinct from the band's generic ones", () => {
-    const terminal = previousMark({ harnessId: null });
-    const chat = previousMark({ kind: "chat", harnessId: null });
-    expect(terminal).not.toBe(chat);
-
-    for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
-      expect(previousMark({ harnessId })).not.toBe(terminal);
-      expect(previousMark({ harnessId })).not.toBe(chat);
-    }
-  });
-
-  // Outline at the band's small-glyph tier, pinned against the drawing itself:
-  // `bold` is a DIFFERENT path from `regular`, and `fill` is a different one
-  // again — the mark a row's one exception wears, which no companion row is.
-  it("draws the mark bold rather than filling it", () => {
-    const markup = render(row({ harnessId: "claude-code" }));
-
-    expect(glyphPaths(markup)).toEqual(
-      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="bold" />)),
+  it("offers the direction the row is not in, and marks it", async () => {
+    const onToggleRead = vi.fn();
+    await mount(
+      <ActiveBandRow
+        row={row({
+          id: "chat:c1",
+          harnessId: null,
+          target: { kind: "chat", tabId: "t", sessionId: "c1" },
+        })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={180_000}
+        selected={false}
+        onSelect={() => {}}
+        onToggleRead={onToggleRead}
+      />,
     );
-    expect(glyphPaths(markup)).not.toEqual(
-      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="fill" />)),
+    await rightClick();
+
+    expect(menuItems()).toEqual(["Mark as unread"]);
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-slot="context-menu-item"]')?.click();
+    });
+    expect(onToggleRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the other direction on an unread row", async () => {
+    await mount(
+      <ActiveBandRow
+        row={row({
+          id: "chat:c1",
+          harnessId: null,
+          target: { kind: "chat", tabId: "t", sessionId: "c1" },
+        })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={180_000}
+        selected={false}
+        unread
+        onToggleRead={() => {}}
+        onSelect={() => {}}
+      />,
     );
-    expect(/aria-label="Claude Code"[^>]*/.exec(markup)?.[0]).toContain('class="size-3"');
+    await rightClick();
+
+    expect(menuItems()).toEqual(["Mark as read"]);
   });
 
-  // A bring-your-own harness gets the generic terminal, not a second invented
-  // mark that would only mean "not one of the four".
-  it("keeps the generic terminal for a harness this build does not know", () => {
-    const custom = "my-custom-harness" as HarnessId;
+  it("brings a Previous Session back by marking it unread", async () => {
+    const onToggleRead = vi.fn();
+    await mount(
+      <PreviousBandRow
+        row={previousRow({ id: "chat:c1" })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={60_000}
+        selected={false}
+        onSelect={() => {}}
+        onToggleRead={onToggleRead}
+      />,
+    );
+    await rightClick();
 
-    expect(renderPrevious({ harnessId: custom })).toContain('aria-label="my-custom-harness"');
-    expect(previousMark({ harnessId: custom })).toBe(previousMark({ harnessId: null }));
-
-    // The Active band takes the same fallback, and still DRAWS: it marks a row
-    // wherever there is a harness, and a slug this build cannot name is still
-    // one — which is what keeps it apart from the shell that draws nothing.
-    expect(render(row({ harnessId: custom }))).toContain('aria-label="my-custom-harness"');
-    expect(activeMark(custom)).toBe(previousMark({ harnessId: null }));
-    expect(activeMark(custom)).not.toBe(activeMark(null));
+    expect(menuItems()).toEqual(["Mark as unread"]);
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-slot="context-menu-item"]')?.click();
+    });
+    expect(onToggleRead).toHaveBeenCalledTimes(1);
   });
 
-  // The words the mark stands for, in the one place this one-line row can
-  // afford them. The Active row has carried them in its `title` all along.
-  it("decodes the mark in the row's hover title", () => {
-    expect(renderPrevious({ harnessId: "codex" })).toContain('title="Session 1\nCodex"');
-    expect(renderPrevious({ harnessId: null })).toContain('title="Session 1"');
+  it("offers the read direction on a Previous row that IS unread", async () => {
+    // The row used to hard-code `unread={false}`, so its menu could only ever
+    // offer "Mark as unread" — including for a Session that already was one,
+    // where the act did nothing a reader could see.
+    await mount(
+      <PreviousBandRow
+        row={previousRow({ id: "chat:c1" })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={60_000}
+        selected={false}
+        unread
+        onSelect={() => {}}
+        onToggleRead={() => {}}
+      />,
+    );
+    await rightClick();
+
+    expect(menuItems()).toEqual(["Mark as read"]);
   });
 
-  // No change to structured rows: a chat keeps its own glyph in Previous and
-  // gains nothing at all in Active.
-  it("leaves structured rows exactly as they were", () => {
-    const chatPrevious = renderPrevious({ kind: "chat", harnessId: null });
-    expect(chatPrevious).toContain('aria-label="Chat"');
-    expect(glyphPaths(chatPrevious)).toHaveLength(1);
+  it("gives a companion no menu at all — it has no turns to be unread", async () => {
+    // Amendment A4 Q2: no manual unread on terminal rows.
+    await mount(
+      <PreviousBandRow
+        row={previousRow({ kind: "terminal", harnessId: "codex" })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={60_000}
+        selected={false}
+        onSelect={() => {}}
+        onToggleRead={null}
+      />,
+    );
 
-    const chatActive = render(row({ id: "chat:c1", source: "Chat", harnessId: null }));
-    expect(glyphPaths(chatActive)).toHaveLength(0);
+    expect(document.querySelector('[data-slot="context-menu-trigger"]')).toBeNull();
+    // And the row is still a row: activation, drag and its mark are untouched.
+    expect(document.querySelector('[data-peek-row="session:s1"]')).not.toBeNull();
   });
 
-  // A shell names no CLI, so the Active row says nothing rather than claiming
-  // the default harness.
-  it("stays silent on an Active row with no harness to name", () => {
-    expect(render(row({ source: "Shell", harnessId: null }))).not.toContain('aria-label="Claude');
+  it("keeps the row draggable and activatable under the menu", async () => {
+    const onSelect = vi.fn();
+    await mount(
+      <ActiveBandRow
+        row={row({
+          id: "chat:c1",
+          harnessId: null,
+          target: { kind: "chat", tabId: "tab-1", sessionId: "c1" },
+        })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={180_000}
+        selected={false}
+        onSelect={onSelect}
+        onToggleRead={() => {}}
+      />,
+    );
+
+    const button = document.querySelector<HTMLElement>('[data-peek-row="chat:c1"] button');
+    expect(button?.getAttribute("draggable")).toBe("true");
+    await act(async () => {
+      button?.click();
+    });
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });

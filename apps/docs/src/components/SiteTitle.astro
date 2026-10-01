@@ -1,0 +1,64 @@
+---
+/*
+ * The header lockup: the website's mark and name, then "Docs".
+ *
+ * It is two links, the way the website's header is one: the mark and "Volli"
+ * go home to volli.app, exactly as they do on every volli.app page, and "Docs"
+ * goes to the top of these docs. Starlight's own SiteTitle renders a PNG logo
+ * and the config title ("Volli Docs"); BRAND.md §4 draws the mark instead and
+ * names the product "Volli".
+ */
+import Mark from "./Mark.astro";
+
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<span class="volli-lockup">
+  <a class="volli-lockup-home" href="https://volli.app/" aria-label="Volli home">
+    <Mark size={22} />
+    <span translate="no">Volli</span>
+  </a>
+  <a class="volli-lockup-docs" href={siteTitleHref}>Docs</a>
+</span>
+
+<style>
+  .volli-lockup {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .volli-lockup a {
+    text-decoration: none;
+  }
+
+  .volli-lockup-home {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--volli-ink);
+    font-size: 18px;
+    font-weight: 640;
+    font-stretch: 104%;
+    letter-spacing: -0.02em;
+  }
+
+  /* A hairline between the two, so "Docs" reads as a place, not a tagline. */
+  .volli-lockup-docs {
+    display: inline-flex;
+    align-items: center;
+    padding-inline-start: 0.75rem;
+    border-inline-start: 1px solid var(--volli-hairline-strong);
+    color: var(--volli-ink-2);
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.2;
+    transition: color 160ms ease;
+  }
+
+  .volli-lockup-docs:hover {
+    color: var(--volli-ink);
+  }
+</style>

@@ -54,6 +54,7 @@ class Adapter implements NativeHarnessAdapter {
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   sink: ObservationSink | null = null;
+  onRelease: (() => void) | null = null;
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
 
   async attach(spec: Parameters<NativeHarnessAdapter["attach"]>[0], sink: ObservationSink) {
@@ -81,6 +82,7 @@ class Adapter implements NativeHarnessAdapter {
       },
       release: async () => {
         this.releases += 1;
+        this.onRelease?.();
       },
     } satisfies BindingHandle;
   }
@@ -122,6 +124,27 @@ function composition(
       ids: runtimeIds(input.runtimeIdPrefix),
       ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
     }),
+  };
+}
+
+/** One `gh pr checks --watch` bash call, declared with a 30-minute timeout. */
+function bashCall(state: "started" | "completed"): RuntimeObservation {
+  return {
+    kind: "activity",
+    state,
+    turnId: "turn-1",
+    activityId: "call-1",
+    descriptor: {
+      kind: "run-command",
+      nativeToolName: "bash",
+      subject: { label: "gh pr checks --watch", path: null, lineRange: null },
+      outcome: null,
+      startedAt: 10,
+      endedAt: state === "completed" ? 20 : null,
+    },
+    input: { command: "gh pr checks --watch", timeout: 1_800 },
+    output: null,
+    occurredAt: 450,
   };
 }
 
@@ -367,6 +390,46 @@ describe("SessionRuntime durable boundary invariants", () => {
       sessionId: created.sessionId,
       command: { kind: "adapter.release", attachmentId },
     });
+    expect(runtime.openNativeBindings()).toEqual([]);
+  });
+
+  it("lists the tool calls a live binding has in flight, for the watchdog", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([]);
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 400 });
+    // A `started` is only ever a transient overlay, never a durable fact, so
+    // the binding is the one place its being in flight is known.
+    await adapter.emit(bashCall("started"));
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([
+      { activityId: "call-1", toolName: "bash", declaredTimeoutMs: 1_800_000 },
+    ]);
+
+    await adapter.emit(bashCall("completed"));
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([]);
+  });
+
+  it("ignores an observation that arrives while shutdown is releasing its binding", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    const late: Promise<void>[] = [];
+    // The executor still speaking inside its own shutdown release: the binding
+    // has already left the runtime's map, and its sink is not yet discarded.
+    adapter.onRelease = () => {
+      late.push(
+        adapter
+          .emit({ kind: "turn", state: "interrupted", turnId: "turn-1", occurredAt: 500 })
+          .catch(() => undefined),
+      );
+    };
+
+    await runtime.close();
+    await Promise.all(late);
+
+    expect(late).toHaveLength(1);
     expect(runtime.openNativeBindings()).toEqual([]);
   });
 

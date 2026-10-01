@@ -158,7 +158,7 @@ export function PrefShell({
                     aria-current={category.key === current?.key ? "page" : undefined}
                     onClick={() => onSelect(category.key)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                       category.key === current?.key
                         ? "bg-accent text-foreground"
                         : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",

@@ -131,6 +131,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "The canonical ordered Session history; payload working directories are stripped.",
   },
   {
+    table: "session_read_receipts",
+    decision: "include",
+    reason:
+      "Which Sessions the person has not yet seen (VC-30): their own record, with no path or live handle in it, so a restore brings the unread dots back rather than silently marking everything read.",
+  },
+  {
     table: "session_event_sequence",
     decision: "include",
     reason:
@@ -363,6 +369,8 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "session_commands",
   "session_provenances",
   "session_events",
+  // After `sessions`, which it references and cascades with.
+  "session_read_receipts",
   "session_event_sequence",
   "session_command_receipts",
   "ticket_comments",

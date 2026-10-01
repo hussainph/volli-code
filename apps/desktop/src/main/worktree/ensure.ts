@@ -5,7 +5,8 @@
  * `+` racing) join one in-flight run rather than duplicating `git worktree add`.
  *
  * Order (git first, DB write last — DB writes never straddle long-running git):
- *   resolve identity → reconcile → resolve base → git worktree add → copy step
+ *   resolve identity → reconcile (which may adopt a same-ticket branch already
+ *   checked out at the ticket's path) → resolve base → git worktree add → copy step
  *   (freshly-created worktrees ONLY — the Main-checkout walk is a creation
  *   cost, never a per-boot one) → materialize attachments (CONCEPT decision
  *   #19, issue #77 PR 2) → persist identity (emits `worktree_changed`) →
@@ -49,10 +50,17 @@ import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } fro
  * it already present. `created` is the setup-command gate — the setup command
  * must run exactly once, for a freshly-materialized worktree only, so a session
  * booting into an existing worktree never re-runs it (worktree-support §6).
+ *
+ * `restamped` says whether THIS run changed the identity the ticket records —
+ * true on a first creation, and on a reuse that adopted a same-ticket branch
+ * already checked out at the ticket's path. It is the broadcast gate, kept
+ * apart from `created` because adoption changes the rail's Branch without
+ * making a worktree, and must never fire the setup command.
  */
 export interface EnsureOutcome {
   identity: WorktreeIdentity;
   created: boolean;
+  restamped: boolean;
 }
 
 /** Concurrent `ensure(ticketId)` calls join the same promise; the entry clears on settle. */
@@ -140,13 +148,20 @@ async function runEnsure(
     projectPath: project.path,
     worktreePath: identity.path,
     branch: identity.branch,
+    displayId,
   });
   if (!reconciled.ok) return fail(deps, ticketId, "create", reconciled.error, reconciled.error);
+  // The branch the worktree stands on. Usually `identity.branch`; when the
+  // ticket's own path is already on another branch of this same ticket (an
+  // agent cut a narrower one, or a retitle drifted the name), reconcile adopts
+  // that checkout, and the identity write below records it as the ticket's
+  // branch through the ordinary `worktree_changed` event.
+  const branch = reconciled.value.branch;
 
   // Resolve base for stamping + (for a new branch) branching. Reusing an
   // existing ticket branch never resets it, so base is only structurally
   // required when we create the branch.
-  const reuseBranch = await refExists(git, project.path, `refs/heads/${identity.branch}`);
+  const reuseBranch = await refExists(git, project.path, `refs/heads/${branch}`);
   const base = await resolveBaseBranch(git, {
     projectPath: project.path,
     ticketBaseBranch: ticket.base_branch,
@@ -161,8 +176,8 @@ async function runEnsure(
   const created = reconciled.value.kind === "create";
   if (reconciled.value.kind === "create") {
     const addArgs = reuseBranch
-      ? [identity.path, identity.branch]
-      : ["-b", identity.branch, identity.path, base!.startPoint];
+      ? [identity.path, branch]
+      : ["-b", branch, identity.path, base!.startPoint];
     try {
       // The repository's turn wraps the MUTATION, not the decision (VC-389).
       // `reconcile` read the listing outside it, so `prune` can be one tick
@@ -214,13 +229,17 @@ async function runEnsure(
 
   // Persist identity (synchronous, after all git work) — emits `worktree_changed`.
   const baseBranch = base?.name ?? ticket.base_branch ?? null;
+  const restamped =
+    ticket.worktree_path !== identity.path ||
+    ticket.branch !== branch ||
+    ticket.base_branch !== baseBranch;
   try {
     updateTicketFieldsCommand(
       deps.db,
       {
         ticketId,
         worktreePath: identity.path,
-        branch: identity.branch,
+        branch,
         baseBranch,
       },
       { now: Date.now(), actor: SYSTEM_ACTOR },
@@ -233,10 +252,10 @@ async function runEnsure(
   setPhase(ticketId, "ready", deps.onPhase);
   const result: WorktreeIdentity = {
     worktreePath: identity.path,
-    branch: identity.branch,
+    branch,
     baseBranch,
   };
-  return ok({ identity: result, created });
+  return ok({ identity: result, created, restamped });
 }
 
 /**

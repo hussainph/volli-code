@@ -7,10 +7,31 @@
  * were prototyped in relied on to draw them against a scrubbable clock.
  *
  * The two rows are deliberately unequal on every axis at once. Active is two
- * lines, a status dot and full ink; Previous is one line, smaller type, muted,
- * no dot. Previous is where you go looking for something you already remember;
- * Active is where you look without being asked, and only one of them can win
- * that competition.
+ * lines and full ink; Previous is one line, smaller type, muted. Previous is
+ * where you go looking for something you already remember; Active is where you
+ * look without being asked, and only one of them can win that competition.
+ *
+ * WHAT VC-30 CHANGED, AND WHY (the approved lab, `lab/session-peek/`):
+ *
+ *   1. THE LEADING SLOT IS THE MARK on every row — {@link SessionGlyph}: the
+ *      vendor's logo with the state as a badge. It replaces the Active row's
+ *      status dot, the Previous row's kind glyph and the Active row's companion
+ *      glyph, so one Session reads the same in both bands and in the peek card.
+ *   2. THE ACTIVE ROW IS THE SHIPPED TWO-LINE `ListRow`, whose second line says
+ *      WHERE and WHEN — `VLT-14 · 2m ago` — and never a state word: the mark
+ *      already carries the state, and a line repeating it is noise at a glance.
+ *      `stateLine`, `placeLine`, `attentionLine` and `WAITING_COPY` went with it.
+ *   3. UNREAD IS ITS OWN AXIS (VC-108): a blue dot in the trailing slot and a
+ *      semibold title, never the badge — a result can be unread while a new
+ *      turn runs. Right-click marks a chat row read or unread.
+ *   4. NO NATIVE `title` ON A PEEKABLE ROW (D1). What the attribute carried —
+ *      the untruncated title, the harness, the provenance line — the peek card
+ *      says, and a browser tooltip would open on top of it.
+ *
+ * Rows are addressed by `data-peek-row` / `data-peek-surface`
+ * (`components/session-peek/use-session-peek.tsx`): a Session's `<li>`, a
+ * folder's disclosure BUTTON — the folder's own `<li>` also holds its children,
+ * and a pointer over a child must resolve to the child.
  *
  * **Both are memoised, and `onSelect` takes its row.** These bands are the one
  * list in the app whose length nobody controls — Previous holds every Session a
@@ -24,9 +45,10 @@ import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CursorIcon } from "@phosphor-icons/react/dist/csr/Cursor";
+import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
+import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { HexagonIcon } from "@phosphor-icons/react/dist/csr/Hexagon";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -34,9 +56,6 @@ import {
   displayTicketId,
   harnessLabel,
   isFirstClassHarnessId,
-  sessionProvenanceHoverLine,
-  TICKET_STATUS_LABELS,
-  type ChatWaitingReason,
   type FirstClassHarnessId,
   type HarnessId,
   type Ticket,
@@ -45,37 +64,26 @@ import {
 import type {
   ActiveSessionRow,
   PreviousSessionRow,
-  SessionAttention,
-  SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
+import { canPeekRow, folderRowId } from "@renderer/components/session-peek/peek-subject";
+import { sessionGlyphName, UnreadDot } from "@renderer/components/session-peek/sidebar-peek";
+import { SessionGlyph, harnessVendorId } from "@renderer/components/sessions/session-glyph";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { type LoadingBarWidth } from "@renderer/components/ui/list-row";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
+import { ListRow, type LoadingBarWidth } from "@renderer/components/ui/list-row";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { Skeleton } from "@renderer/components/ui/skeleton";
-import {
-  SESSION_ACTIVITY_LABEL,
-  sessionActivityDotState,
-} from "@renderer/components/ui/session-activity-status";
-import { StatusDot } from "@renderer/components/ui/status-dot";
-import { compactAge } from "@renderer/lib/relative-time";
+import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
+import type { StatusDotState } from "@renderer/components/ui/status-dot";
+import { compactAge, relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
-
-// `SESSION_ACTIVITY_LABEL` in `ui/session-activity-status.ts` is this map —
-// the fourth copy of it is the drift the review called, so the words live with
-// the mapping they annotate.
-
-/**
- * What a waiting chat is waiting FOR, as the one thing the reader can do about
- * it. A verb, because the row's whole job in this state is to hand over an
- * errand — "Waiting" on its own only tells them to go and find out.
- */
-const WAITING_COPY: Record<ChatWaitingReason, string> = {
-  question: "Answer a question",
-  permission: "Approve a tool call",
-  auth: "Sign in needed",
-};
 
 /**
  * Identity, in the one slot both bands give it: the ticket, or a globe for a
@@ -164,64 +172,122 @@ const HARNESS_GLYPHS: Record<FirstClassHarnessId, PhosphorIcon> = {
   opencode: CodeIcon,
 };
 
-function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
+export function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
   return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalWindowIcon;
 }
 
 /**
- * The glyph in the slot, at the band's small-glyph tier.
+ * Which logo a row's mark draws, and what it announces (A3).
  *
- * `bold` OVERRIDES the retired icon-weight-audit's `regular` verdict for every
- * glyph in this band, under CLAUDE.md's fifth clause: at 12px regular draws
- * lighter than the row's own title, and a mark that leads the identity cannot
- * be the faintest thing in the row it opens. Emphatically not `fill` — at this
- * size ChatCircle's is a solid disc covering 54% of its box, and a harness mark
- * is not the row's one exception among its neighbours; every companion row has
- * one.
- *
- * The label is out of band because the mark is not a control: a reader who
- * needs the words has them in the row's hover `title`, and a visible one would
- * put back the text this slot was cleared of.
+ * A CHAT is its model's provider; a TERMINAL companion is its harness's
+ * VENDOR, so a Claude Code pane and a Claude chat lead with the same logo —
+ * they are the same maker, and the row's shape already says which surface it
+ * is. Only a harness whose vendor publishes no mark falls back to the
+ * {@link HARNESS_GLYPHS} mnemonic this band drew before.
  */
-function BandGlyph({ glyph: Glyph, label }: { glyph: PhosphorIcon; label: string }) {
+export interface SessionRowVendor {
+  providerId: string | null;
+  providerLabel: string;
+  /** The glyph standing in where there is no logo — a mnemonic, or the kind's own. */
+  fallback?: PhosphorIcon;
+}
+
+/**
+ * The vendor a row's mark is drawn from when the band does not name one.
+ *
+ * A terminal companion is its harness's vendor, or that harness's shipped
+ * mnemonic where nobody publishes one; a chat has no logo to draw without the
+ * model its band holds, so it keeps the kind's own glyph and says `Chat`. The
+ * default exists so a row is never mark-less: the band's own
+ * {@link ActiveSessions} passes the richer answer.
+ *
+ * A COMPANION RUNNING NO CLI IS NAMED BY WHAT THE LISTING RESOLVED, not by the
+ * kind. The mark's accessible name is the only place this row still states its
+ * source — the native `title` that used to carry it is gone (D1) — and
+ * `Terminal` would throw away the distinction `sessionSourceLabel` already
+ * made: `Shell` is a durable record that names no harness, `Terminal` is a pane
+ * whose record has not landed and about which nothing has been resolved at all.
+ * The row knows which; the mark should say the same word the listing did.
+ */
+export function sessionRowVendor(row: {
+  kind: "chat" | "terminal";
+  harnessId: HarnessId | null;
+  /**
+   * What the listing resolved this row to be running
+   * ({@link ActiveSessionRow.source}) — `Shell` for a bare shell. Absent on a
+   * Previous row, which carries no source, and unused for a chat.
+   */
+  source?: string;
+}): SessionRowVendor {
+  if (row.kind === "chat") return { providerId: null, providerLabel: "Chat" };
+  if (row.harnessId === null) return { providerId: null, providerLabel: row.source ?? "Terminal" };
+  const providerId = harnessVendorId(row.harnessId);
+  return {
+    providerId,
+    providerLabel: harnessLabel(row.harnessId),
+    ...(providerId === null ? { fallback: harnessGlyphOf(row.harnessId) } : {}),
+  };
+}
+
+/** One row's mark, in the size its band gives it. */
+function RowMark({
+  vendor,
+  state,
+  kind,
+  size,
+}: {
+  vendor: SessionRowVendor;
+  state: StatusDotState | null;
+  kind: "chat" | "terminal";
+  size: "row" | "card";
+}) {
   return (
-    <span className="flex shrink-0 items-center">
-      <Glyph weight="bold" aria-label={label} className="size-3" />
-    </span>
+    <SessionGlyph
+      providerId={vendor.providerId}
+      providerLabel={vendor.providerLabel}
+      state={state}
+      kind={kind}
+      fallback={vendor.fallback}
+      // The name is `session-peek/sidebar-peek.tsx`'s, so a Session is
+      // announced the same on this band and on the ticket rail.
+      name={sessionGlyphName(vendor.providerLabel, state)}
+      size={size}
+      surface="sidebar"
+    />
   );
 }
 
 /**
- * Which execution surface a Previous row speaks for — the axis its filter sorts
- * on. It LEADS the identity it qualifies rather than trailing the title, which
- * is what clears the row's right edge for the age alone.
+ * Right-click on a Session row: read it without opening it, or keep it for
+ * later (D6).
  *
- * A companion spends this one slot on its harness rather than on a second way
- * of saying "terminal": the row's kind is already legible from what the glyph
- * is NOT (a chat's circle), and which CLI it is, is the fact the band could not
- * state anywhere. A companion with no harness to name — a bare shell, a pane
- * whose record has not landed — keeps the generic terminal window.
+ * `null` draws the row with no menu at all, which is the whole answer for a
+ * Chat Draft (no Session to mark) and for a terminal companion (amendment A4's
+ * Q2: a companion has no turns, so nothing about it is unread).
  */
-function KindGlyph({ kind, harnessId }: { kind: SessionRowKind; harnessId: HarnessId | null }) {
-  if (kind === "chat") return <BandGlyph glyph={ChatCircleIcon} label="Chat" />;
-  if (harnessId === null) return <BandGlyph glyph={TerminalWindowIcon} label="Terminal" />;
-  return <BandGlyph glyph={harnessGlyphOf(harnessId)} label={harnessLabel(harnessId)} />;
-}
-
-/**
- * The Active row's companion mark — the same glyph the Previous band draws,
- * and nothing at all on every other row.
- *
- * ASYMMETRY IS THE POINT, and it is why this is not the {@link KindGlyph} the
- * quiet band uses. Active is not a filtered list sorted by surface, so a mark
- * on every row would be a column that mostly repeats what the row's own shape
- * already says. A structured Session keeps exactly the marks it had — its
- * provenance and nothing beside it (VC-402) — and a shell names no CLI, so the
- * glyph appears precisely where there is a harness to tell apart.
- */
-function CompanionGlyph({ harnessId }: { harnessId: HarnessId | null }) {
-  if (harnessId === null) return null;
-  return <BandGlyph glyph={harnessGlyphOf(harnessId)} label={harnessLabel(harnessId)} />;
+function ReadMenu({
+  unread,
+  onToggle,
+  children,
+}: {
+  unread: boolean;
+  onToggle: (() => void) | null;
+  children: React.ReactElement;
+}) {
+  if (onToggle === null) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
+          onSelect={onToggle}
+        >
+          {unread ? "Mark as read" : "Mark as unread"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 /**
@@ -259,77 +325,51 @@ function sessionRowDragPayload(
 }
 
 /**
- * Why a human is needed. `blocked` is the agent's own voluntary `volli session`
- * signal and carries its words; `waiting` is the involuntary channel, which
- * knows only that someone is needed — so a chat's `waitingOn` is what turns
- * that into an errand.
+ * The Active row's second line: WHERE the Session lives, then WHEN it last did
+ * anything (D5).
+ *
+ * Never a state word. The mark beside it already says what the Session is
+ * doing, and the line this replaced spent its width saying it twice — "Doing ·
+ * Working", "Answer a question" — which at a glance is noise over the one fact
+ * a band of twenty rows is actually scanned for: which ticket each row is on.
+ * A ticketless Session says so rather than leaving a hole.
  */
-function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason | null): string {
-  if (attention.signal === "blocked") {
-    return attention.reason === null ? "Blocked" : `Blocked · ${attention.reason}`;
-  }
-  return waitingOn === null ? "Waiting for you" : WAITING_COPY[waitingOn];
+export function activeSubtitle(row: ActiveSessionRow, ticketPrefix: string, now: number): string {
+  const where =
+    row.ticket === null ? "No ticket" : displayTicketId(ticketPrefix, row.ticket.ticketNumber);
+  return row.lastActivityAt === null
+    ? where
+    : `${where} · ${relativeTime(row.lastActivityAt, now)}`;
 }
 
 /**
- * The meta line's first slot: WHERE the Session lives, not what launched it.
+ * Two lines: what it is, then where it lives and when it last spoke.
  *
- * This slot used to hold the source label — the harness name or `Chat`. Neither
- * is what a reader scans this band for. A band holding twenty Sessions is
- * parsed by which ticket column each one sits in. The ticket's status is the
- * fact that makes the list sortable by eye, so it takes the slot; the harness
- * moves to the row's `title`, where a question asked about ONE row belongs.
+ * The mark carries the three states worth telling apart at a glance — a human
+ * is needed, an agent is running, nothing is happening — and a working row's
+ * title still SWEEPS rather than growing a colour, so a band of running work
+ * reads as one list. Unread outranks by WEIGHT alone (semibold), with the blue
+ * dot at the row's end: two marks on two axes, neither borrowing the other's.
  *
- * A ticketless row — a Board Session, or one whose ticket has left
- * the board — has no column to name and keeps its source. A chat still says
- * only `Chat`; whether its attachment is open remains a functional listing
- * fact rather than a displayed state.
- */
-function placeLine(row: ActiveSessionRow): string {
-  return row.ticket === null ? row.source : TICKET_STATUS_LABELS[row.ticket.status];
-}
-
-/**
- * The row's hover `title`, with its provenance appended when there is any
- * (VC-131).
+ * THE SIDEBAR'S INK DISCIPLINE RIDES ON TWO CLASSES, and adopting the shipped
+ * {@link ListRow} is not allowed to drop either of them. This band stands on
+ * the translucent canvas rather than on the opaque card, so its tiers are
+ * scoped rules in `globals.css` rather than root tokens:
  *
- * This is the ENTIRE mark for a Session another Session started, and it costs
- * the resting band nothing: the `title` attribute is already on both rows, so a
- * parent's name reaches the reader through a node that was going to exist
- * anyway. A Run's row appends its line too even though its bolt is visible,
- * because the visible half truncates in a rail this narrow and a tooltip is
- * where the untruncated fact belongs.
+ *   • `session-row-dim` on the TITLE (with `text-ui`) is what puts the first
+ *     line on the canvas HEAD rung — `[data-slot="sidebar"]
+ *     .session-row-dim.text-ui` remaps the two foreground tokens onto
+ *     `--canvas-ink`. Without it a session title paints at the FURNITURE rung,
+ *     level with the nav destinations it is supposed to outrank.
+ *   • `session-row-meta` on the SECOND LINE is decision #74's vibrancy pairing:
+ *     the row's fill is a veil, so at the canvas band's ceiling the dimmed line
+ *     measures under the contrast floor un-promoted and comfortably over it
+ *     promoted — hence `hover` and selection pull it up to the row's own ink.
  *
- * Shared by both bands so the two cannot drift into saying it differently.
- */
-function rowTitleAttribute(
-  row: Pick<ActiveSessionRow, "provenance">,
-  lines: readonly string[],
-): string {
-  const provenance = sessionProvenanceHoverLine(row.provenance);
-  return (provenance === null ? lines : [...lines, provenance]).join("\n");
-}
-
-/** The Active row's second line: why a human is needed, else where it lives and what is running. */
-function stateLine(row: ActiveSessionRow): string {
-  if (row.attention !== null) return attentionLine(row.attention, row.waitingOn);
-  // A session whose hooks never arrived states that, in place of an activity it
-  // would only be guessing at. Every other row keeps its activity word: a Known
-  // harness never promised to report, so inference there is not news.
-  if (row.activitySource === "silent") return `${placeLine(row)} · Not reporting`;
-  return `${placeLine(row)} · ${SESSION_ACTIVITY_LABEL[row.activity]}`;
-}
-
-/**
- * Two lines: what it is, then who it belongs to and what it is doing.
- *
- * The dot carries the three states worth telling apart at a glance — a human is
- * needed, an agent is running, nothing is happening — and a working row's title
- * SWEEPS rather than growing a fourth colour, so a band of running work still
- * reads as one list. Every dimmed thing in the row promotes together on
- * hover/selected (decision #74's vibrancy rule): the row's fill is a veil, so
- * at the canvas band's ceiling this text measures under the contrast floor
- * un-promoted and comfortably over it promoted.
+ * The meta line gets its OWN hook rather than sharing the title's: the tier
+ * rule above tells the two lines apart by `text-ui` against `text-label`, and
+ * the approved second line is `text-ui` (D5), so a shared class would silently
+ * promote it to the head rung and erase the dim/promote pair it exists for.
  */
 export const ActiveBandRow = React.memo(function ActiveBandRow({
   row,
@@ -337,7 +377,10 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   ticketPrefix,
   now,
   selected,
+  unread = false,
+  vendor,
   onSelect,
+  onToggleRead,
 }: {
   row: ActiveSessionRow;
   /** Whose project this band belongs to — half of a drag payload's scope. */
@@ -346,84 +389,124 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   /** The clock the last-activity age is read against. */
   now: number;
   selected: boolean;
+  /** Whether this Session has work nobody has looked at (VC-108). */
+  unread?: boolean;
+  /**
+   * Whose logo leads the row. Built by the band, which is the surface holding
+   * the chat records a model selection lives on; absent falls back to what the
+   * row itself can say ({@link sessionRowVendor}).
+   */
+  vendor?: SessionRowVendor;
   onSelect(row: ActiveSessionRow): void;
+  /**
+   * Marks the row read or unread. `null` on a row with no Session to mark — a
+   * Chat Draft — and on a terminal companion, which has no turns (A4 Q2).
+   */
+  onToggleRead?: ((row: ActiveSessionRow) => void) | null;
 }) {
   const needsYou = row.attention !== null;
   const working = !needsYou && row.activity === "working";
+  const kind = row.target?.kind === "chat" ? "chat" : "terminal";
+  const mark = vendor ?? sessionRowVendor({ kind, harnessId: row.harnessId, source: row.source });
+  // A Draft stands for no Session, so it has no peek and nothing to read.
+  const peekable = canPeekRow(row.id);
+  const title = unread ? "font-semibold text-sidebar-foreground" : "font-medium";
 
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        size="lg"
-        isActive={selected}
-        onClick={() => onSelect(row)}
-        // Draggable onto a pane (VC-202): the same door, opened somewhere
-        // specific. A row with no live target does not drag.
-        {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
-        // The source label's new home, now that the ticket's status holds the
-        // meta line's first slot. Native `title` rather than the button's
-        // `tooltip` prop: that one is Radix and `hidden` unless the sidebar is
-        // COLLAPSED (`ui/sidebar.tsx`), so it would never fire on the expanded
-        // band this row lives in. The full title rides along because the
-        // visible one truncates.
-        title={rowTitleAttribute(row, [row.title, row.source])}
-        // Two lines at the tighter padding: long titles stay readable and the
-        // band stops out-massing the board it sits beside.
-        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
+    <SidebarMenuItem
+      data-peek-row={peekable ? row.id : undefined}
+      data-peek-surface={peekable ? "nav" : undefined}
+      data-unread={unread ? "" : undefined}
+    >
+      <ReadMenu
+        unread={unread}
+        onToggle={
+          onToggleRead === null || onToggleRead === undefined || !peekable
+            ? null
+            : () => onToggleRead(row)
+        }
       >
-        {/* The third copy of the status→tone map was written out right here,
-            which is how this band could paint a Session amber while the ticket
-            strip painted the same one with the accent. The row states the STATE
-            and `ui/status-dot.tsx` owns what colour that is. */}
-        {/* THE TWO HALF-STEPS HERE ARE DELIBERATE, and they are the recorded
-            exception to the 0/4/8/16/24 spacing collapse. `mt-1.5` is optical
-            alignment — it drops the dot onto the title's cap height, which is a
-            measurement of the type, not a rung of the rhythm. `gap-0.5` is what
-            binds the title to its meta line: at 4px the pair spaces the same as
-            the gap BETWEEN rows and the two lines stop reading as one entity,
-            which is the whole shape of this band. Screenshot-verified against
-            the collapse; anything that moves them has to look at the band. */}
-        <StatusDot
-          // The mapping is `ui/session-activity-status.ts`'s, not this row's:
-          // attention outranks, `interrupted` survives, the rest rest.
-          state={sessionActivityDotState(row.activity, { attention: needsYou })}
-          className="mt-1.5"
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {working ? (
-            <span className="session-row-dim session-title-sweep text-ui">
-              {row.title}
-              <span className="session-title-peak" aria-hidden>
+        <ListRow
+          density="two-line"
+          selected={selected}
+          onActivate={() => onSelect(row)}
+          // Selection, on the element a pointer and a test both land on: the
+          // `SidebarMenuButton` this row replaced published `data-active`, and
+          // the vibrancy rule below is only checkable against a row that says
+          // out loud which state it is in. It rides the rest props, so it lands
+          // on `ListRow`'s activation target rather than on its shell.
+          data-active={selected ? "true" : "false"}
+          // DECISION #74's VIBRANCY RULE, restored after the `ListRow` adoption
+          // dropped it. The dimmed second line promotes to the row's ink on
+          // hover and on selection, and the row's own ink promotes with it, so
+          // the pair reads as one line of copy at one tier rather than as a
+          // bright title over a line that stayed under the floor. Descendant
+          // variants rather than a rule in `globals.css`: the promotion belongs
+          // to THIS row's hover/selected states, and the selector it needs is
+          // two classes deep, which is what keeps it over the dim tier's own.
+          className={cn(
+            "hover:text-foreground [&:hover_.session-row-meta]:text-foreground",
+            selected && "text-foreground [&_.session-row-meta]:text-foreground",
+          )}
+          // Draggable onto a pane (VC-202): the same door, opened somewhere
+          // specific. A row with no live target does not drag. The props land
+          // on the activation target, which is what a pointer presses.
+          {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
+          // NO `title` (D1): the peek says the untruncated title, the harness
+          // and the provenance line, and a browser tooltip would open over it.
+          leading={
+            <RowMark
+              vendor={mark}
+              state={sessionActivityDotState(row.activity, { attention: needsYou })}
+              kind={kind}
+              size="card"
+            />
+          }
+          // `session-row-dim` on BOTH costumes of the first line (see the note
+          // above the component): the sweep reads `--sidebar-foreground` through
+          // its own `color-mix`, so it lands on the canvas head rung only if the
+          // tier rule reaches it too.
+          primary={
+            working ? (
+              <span
+                className={cn("session-row-dim session-title-sweep min-w-0 flex-1 text-ui", title)}
+              >
+                {row.title}
+                <span className="session-title-peak" aria-hidden>
+                  {row.title}
+                </span>
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "session-row-dim min-w-0 truncate text-ui text-sidebar-foreground",
+                  title,
+                )}
+              >
                 {row.title}
               </span>
-            </span>
-          ) : (
-            <span className="session-row-dim truncate text-ui text-sidebar-foreground transition-colors">
-              {row.title}
-            </span>
-          )}
-          <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
-            {/* Leading the identity, the same place the Previous band puts
-                its kind glyph, so a Session keeps its mark where it was as it
-                ages out of one band and into the other. */}
-            <CompanionGlyph harnessId={row.harnessId} />
-            <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
-            {/* Right of the identity and left of the state: the mark qualifies
-                WHOSE Session this is, which sits with the id rather than with
-                what the agent is doing this second. It draws nothing at all on
-                a row no Automation started, so the meta line of a resting band
-                is byte-for-byte the line it was before this feature. */}
+            )
+          }
+          // The provenance mark qualifies WHOSE Session this is, so it rides
+          // the title's own line — and draws nothing at all on a row no
+          // Automation started (VC-131).
+          primaryTrailing={
             <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
-            <span aria-hidden>·</span>
-            <span className="truncate">{stateLine(row)}</span>
-            {row.lastActivityAt !== null ? (
-              <span className="shrink-0 text-label tabular-nums">
-                last {compactAge(row.lastActivityAt, now)}
-              </span>
-            ) : null}
-          </span>
-        </span>
-      </SidebarMenuButton>
+          }
+          // The same line `ListRow` typesets for a string secondary, in the
+          // row's own span so it can carry the promotion hook — and at the
+          // SOLVED mute rather than at an alpha of it: a percentage of ink
+          // composites against whatever the gradient is doing behind that row,
+          // so one line reads at two contrasts down the band and neither of
+          // them is the measured one (`globals.css`, the section-heading note).
+          secondary={
+            <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
+              {activeSubtitle(row, ticketPrefix, now)}
+            </span>
+          }
+          trailing={unread ? <UnreadDot /> : undefined}
+        />
+      </ReadMenu>
     </SidebarMenuItem>
   );
 });
@@ -453,7 +536,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   ticketPrefix,
   now,
   selected,
+  unread = false,
+  vendor,
   onSelect,
+  onToggleRead,
   showIdentity = true,
 }: {
   row: PreviousSessionRow;
@@ -468,7 +554,24 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
    */
   now: number;
   selected: boolean;
+  /**
+   * Whether this Session has work nobody has looked at (VC-108).
+   *
+   * It used to be hard-coded `false` here, which made the row's own menu lie:
+   * an unread Session pulled back into this band offered "Mark as unread" for
+   * something already unread, and marking it did nothing a reader could see.
+   * Unread normally keeps a Session in Active — normally is not always, and a
+   * row that cannot say it is unread is a row whose menu cannot end it.
+   */
+  unread?: boolean;
+  /** Whose logo leads the row — see {@link ActiveBandRow}'s own prop. */
+  vendor?: SessionRowVendor;
   onSelect(row: PreviousSessionRow): void;
+  /**
+   * Marks the row unread, which brings its Session back to Active (VC-108).
+   * `null` on a terminal companion, which has no turns to be unread (A4 Q2).
+   */
+  onToggleRead?: ((row: PreviousSessionRow) => void) | null;
   /**
    * Whether the row draws its own ticket id. `false` under a
    * {@link TicketGroupRow}, where the id is the thing the reader just expanded
@@ -482,62 +585,70 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
    */
   showIdentity?: boolean;
 }) {
+  const peekable = canPeekRow(row.id);
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        size="sm"
-        isActive={selected}
-        onClick={() => onSelect(row)}
-        {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
-        // `px-2` is gone rather than kept: the button's own `p-2` is already
-        // 8px, so the override was a no-op that read like a deliberate
-        // difference from the Active row above it.
-        className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
-        // Two facts this one-line row cannot spell on screen, in the one place
-        // it can afford them:
-        //
-        // The provenance line is the same one the Active row gets, from the
-        // same function — a Session that dropped its mark on ageing out of
-        // Active would be a Run hiding in the quiet band.
-        //
-        // The harness is the words its new glyph stands for. The Active row has
-        // said its harness here since the meta line stopped naming one (see
-        // `placeLine`); this band never did, which left the mark with nothing
-        // anywhere to decode it.
-        title={rowTitleAttribute(
-          row,
-          row.harnessId === null ? [row.title] : [row.title, harnessLabel(row.harnessId)],
-        )}
+    <SidebarMenuItem
+      data-peek-row={peekable ? row.id : undefined}
+      data-peek-surface={peekable ? "nav" : undefined}
+      data-unread={unread ? "" : undefined}
+    >
+      <ReadMenu
+        unread={unread}
+        onToggle={
+          onToggleRead === null || onToggleRead === undefined || !peekable
+            ? null
+            : () => onToggleRead(row)
+        }
       >
-        {/* No `session-row-dim` here: this band is uniformly muted, with no
-            dim/promote pairing to join — and that class also names the Active
-            row's meta line for the smokes' contrast checks. */}
-        {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
-        {/* An interrupted chat stays interrupted in Previous — the record's
-            activity is durable, so the relaunch did not end it (VC-324). The
-            dot is the same destructive state the Active band draws; the words
-            ride out of band, as this row's size demands. */}
-        {row.activity === "interrupted" ? (
-          <>
-            <span className="sr-only">Interrupted</span>
-            <StatusDot state="interrupted" />
-          </>
-        ) : null}
-        <KindGlyph kind={row.kind} harnessId={row.harnessId} />
-        {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
-        {/* Same slot as the Active row's — after the identity, before the title
-            — so a Session keeps its mark in the same place as it ages out of
-            one band and into the other. */}
-        <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
-        <span className="min-w-0 flex-1 truncate">{row.title}</span>
-        {/* 0 is the model's "nothing durable can date this" sentinel — an age
-            drawn from it would read as the epoch, so the row says nothing. */}
-        {row.endedOrQuietAt > 0 ? (
-          <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
-            {compactAge(row.endedOrQuietAt, now)}
+        <SidebarMenuButton
+          size="sm"
+          isActive={selected}
+          onClick={() => onSelect(row)}
+          {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
+          // `px-2` is gone rather than kept: the button's own `p-2` is already
+          // 8px, so the override was a no-op that read like a deliberate
+          // difference from the Active row above it.
+          //
+          // NO `title` (D1). What it carried — the untruncated title, the
+          // harness's words, the provenance line — the peek's card says, and a
+          // native tooltip would open on top of that card.
+          className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+        >
+          {/* No `session-row-dim` here: this band is uniformly muted, with no
+              dim/promote pairing to join — and that class also names the Active
+              row's meta line for the smokes' contrast checks. */}
+          {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
+          {/* One mark everywhere (A3), and a Previous row passes its REAL state:
+              an interrupted chat stays interrupted here, because the record's
+              activity is durable and survived the relaunch (VC-324). The words
+              ride in the mark's own name, as this row's size demands. */}
+          <RowMark
+            vendor={vendor ?? sessionRowVendor(row)}
+            state={row.activity === "interrupted" ? "interrupted" : "idle"}
+            kind={row.kind}
+            size="row"
+          />
+          {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
+          {/* Same slot as the Active row's — beside the title — so a Session
+              keeps its mark in the same place as it ages out of one band and
+              into the other. */}
+          <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
+          {/* Unread outranks by WEIGHT alone, as it does on the Active row.
+              There is no trailing slot to put the dot in here: this row's right
+              edge is the age, and one trailing mark is the whole of its
+              geometry. */}
+          <span className={cn("min-w-0 flex-1 truncate", unread && "font-semibold")}>
+            {row.title}
           </span>
-        ) : null}
-      </SidebarMenuButton>
+          {/* 0 is the model's "nothing durable can date this" sentinel — an age
+              drawn from it would read as the epoch, so the row says nothing. */}
+          {row.endedOrQuietAt > 0 ? (
+            <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
+              {compactAge(row.endedOrQuietAt, now)}
+            </span>
+          ) : null}
+        </SidebarMenuButton>
+      </ReadMenu>
     </SidebarMenuItem>
   );
 });
@@ -628,8 +739,14 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
       isActive={selected}
       aria-expanded={open}
       aria-controls={sessionGroupPanelId(ticket.id)}
+      // The folder's peek hangs off the BUTTON, not off its `<li>`: that
+      // element also holds the nested list of its Sessions, and a pointer over
+      // a child must resolve to the child (D2, `use-session-peek.tsx`).
+      data-peek-row={folderRowId(ticket.id)}
+      data-peek-surface="nav"
       onClick={() => onToggle(ticket.id)}
-      title={`${displayTicketId(ticketPrefix, ticket.ticketNumber)} · ${ticket.title}`}
+      // No `title`, for the reason the rows above dropped theirs (D1): this row
+      // peeks its TICKET, and the card says the id and the title in full.
       className="h-6 gap-1.5 text-ui"
     >
       {/* `bold` for the same reason every other glyph in this band takes it:

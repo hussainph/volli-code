@@ -38,6 +38,7 @@ import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
+import { systemHead, withSystemHead } from "./transcript-context";
 
 /**
  * A model's usable window, or nothing when the catalog does not report one.
@@ -79,6 +80,13 @@ export interface ConversationReader {
   acceptedMessage: (entry: CustomEntry) => AgentMessage | undefined;
   /** Whether a persisted message entry may re-enter the live context. */
   replayable: (entry: MessageEntry) => boolean;
+  /**
+   * The conversation an earlier attachment's sidecar held, when this custom
+   * entry is the marker that carried it into this one (VC-457). Expanded in
+   * place, so compaction, the elision rule and recovery all read a carried
+   * conversation exactly as if this sidecar had written it.
+   */
+  carriedEntries?: (entry: CustomEntry) => readonly Entry[] | undefined;
 }
 
 /**
@@ -97,6 +105,8 @@ export interface ConversationReader {
 export function conversationPath(entries: readonly Entry[], reader: ConversationReader): Entry[] {
   return entries.flatMap<Entry>((entry) => {
     if (entry.type === "custom") {
+      const carried = reader.carriedEntries?.(entry);
+      if (carried !== undefined) return [...carried];
       const accepted = reader.acceptedMessage(entry);
       if (accepted === undefined) return [];
       return [
@@ -121,6 +131,28 @@ export function estimatedContextTokens(
   model: Model<Api>,
 ): number {
   return estimateContextTokens(messages, model);
+}
+
+/**
+ * The request a compaction prices: the durable conversation behind the
+ * attachment's head, the one array the live turn sends.
+ *
+ * The sidecar never holds the head — it is composed per attachment and put
+ * back by the runtime on every rebuild — so the path read off it is the
+ * conversation alone, tool-change system messages Pi persisted included. The
+ * head is composed here from the same prompt and tools the native request
+ * carries in fields of its own, and the estimator prices the result as it
+ * prices the live array: the prompt once, each declared tool once however
+ * many system messages declare it. There is no second spelling to hand the
+ * estimator, so `tokensBefore` cannot count the prompt or a declaration
+ * twice (VC-421 review, findings A and B). A caller with neither prompt nor
+ * tools prices the bare conversation, which is what Pi would send for it.
+ */
+function requestTranscript(input: CompactionInput, path: readonly Entry[]): AgentMessage[] {
+  const conversation = contextMessages(path);
+  const tools = input.tools ?? [];
+  if (!input.systemPrompt && tools.length === 0) return conversation;
+  return withSystemHead(systemHead(input.systemPrompt ?? "", tools), conversation);
 }
 
 /**
@@ -399,6 +431,12 @@ export interface CompactionInput {
    * opencode chats. Only sent when the compaction model is `opencode-go`.
    */
   sessionId?: string;
+  /**
+   * The attachment's prompt and executable tools: what a native compaction
+   * request carries in its own `instructions`/`system` and `tools` fields, and
+   * what {@link requestTranscript} composes into the head ahead of the durable
+   * conversation so `tokensBefore` prices the request the live turn sends.
+   */
   systemPrompt?: string;
   tools?: readonly Tool[];
   /** Extra focus for the summary. Only an explicit request carries any. */
@@ -496,12 +534,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   );
   let prepared = prepareModelCompaction(path, input.settings, input.model);
   if (prepared === undefined) return { kind: "skipped" };
-  const tokensBefore = projectedContextTokens(
-    contextMessages(path),
-    input.model,
-    input.systemPrompt,
-    input.tools,
-  );
+  const tokensBefore = projectedContextTokens(requestTranscript(input, path), input.model);
   prepared.tokensBefore = tokensBefore;
   const context = piContext(input.signal);
   // Compact the prefix, preserving Pi's safe call/result tail. The native
