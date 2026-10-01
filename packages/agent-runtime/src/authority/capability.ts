@@ -382,7 +382,7 @@ function linkedFilesIn(roots: readonly string[], limit: number): Record<string, 
 }
 
 /**
- * Literal workspace names sharing an inode with a critical host file.
+ * Literal names in every granted writable root sharing an inode with a critical host file.
  *
  * This walk is deliberately unbudgeted. A budget would make "Volli's own data
  * is never writable" depend on where an alias sorts in a large repository.
@@ -390,7 +390,7 @@ function linkedFilesIn(roots: readonly string[], limit: number): Record<string, 
  * only while looking for one of the handful of critical identities.
  */
 function criticalHostAliases(
-  workspace: string,
+  roots: readonly string[],
   criticalPaths: readonly string[],
 ): { aliases: string[]; linkedFiles: Record<string, string> } {
   const critical = new Map<string, string>();
@@ -418,7 +418,7 @@ function criticalHostAliases(
     if (!entry.isDirectory()) return;
     for (const child of entriesOf(path)) visit(join(path, child.name));
   };
-  visit(workspace);
+  for (const root of roots) visit(root);
   return { aliases: unique(aliases), linkedFiles: Object.fromEntries(critical) };
 }
 
@@ -497,7 +497,7 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
           denies.some((deny) => strictlyInside(outer, deny) && containsPath(deny, inner)),
       ),
   );
-  const criticalLinks = criticalHostAliases(workspace, input.criticalHostDataPaths ?? []);
+  const criticalLinks = criticalHostAliases(writableRoots, input.criticalHostDataPaths ?? []);
   return {
     credentialDeny,
     privateDeny,

@@ -703,6 +703,50 @@ describe.skipIf(!enabled)(
       }
     });
 
+    it("protects critical-data aliases in additional writable and runtime roots", async () => {
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const declared = join(parent, "declared");
+      const scratch = join(parent, "scratch");
+      const userData = join(parent, "userData");
+      for (const root of [worktree, declared, scratch, userData]) await mkdir(root);
+      const db = join(userData, "volli.db");
+      const secret = canary("additional-root-db");
+      await writeFile(db, secret);
+      const aliases = [join(declared, "cache.db"), join(scratch, "cache.db")];
+      for (const alias of aliases) linkSync(db, alias);
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [declared],
+            runtimeRoots: [scratch],
+            privateRoots: [userData],
+            criticalHostDataPaths: [db],
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+        }),
+      );
+      try {
+        for (const alias of aliases) {
+          expectDenied(await ran(env, `printf written > ${JSON.stringify(alias)}`), secret);
+          expect(await env.writeFile(alias, "written")).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(await readFile(db, "utf8")).toBe(secret);
+        }
+        // Declaring a root must still allow its ordinary files.
+        await expect(
+          ran(env, `printf ok > ${JSON.stringify(join(declared, "ordinary.txt"))}`),
+        ).resolves.toMatchObject({ exitCode: 0 });
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
     it("reaches the volli socket inside a denied directory", async () => {
       expect(process.platform).toBe("darwin");
       parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
