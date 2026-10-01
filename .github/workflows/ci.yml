@@ -548,7 +548,7 @@ jobs:
         working-directory: packages/agent-runtime
         env:
           VOLLI_SRT_INTEGRATION: "1"
-        run: vp test run src/pi/scoped-execution-env.srt.integration.test.ts
+        run: vp test run src/pi/scoped-execution-env.srt.integration.test.ts src/codemode/runtime-codemode.test.ts
 
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4

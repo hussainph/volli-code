@@ -7,6 +7,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
+  type AgentEvent,
   type AgentMessage,
   type AgentOptions,
   type Branch,
@@ -48,6 +49,7 @@ import {
   readPromptResourceBlocks,
   SESSION_USAGE_CAUSES,
   UtilityCompletionError,
+  CODE_MODE_TOOL_ID,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CapabilityPolicy,
@@ -136,7 +138,14 @@ import { providerImageGuard, withProviderSafeImages } from "./provider-images";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
-import { createSessionTools } from "./tools";
+import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { CodeModeJournal } from "../codemode/journal";
+import { scopedAsk } from "./call-scope";
+import {
+  createCodeModeTool,
+  type CodeModeSandboxAssets,
+  type NestedToolEvent,
+} from "../codemode/tool";
 import {
   savedOutputDirectoriesIn,
   ToolOutputLedger,
@@ -368,6 +377,16 @@ export interface PiRuntimeHostOptions {
    * only if its own MCP definitions carry the mark — see `tool-dispatch.ts`.
    */
   parallelMcpReads?: boolean;
+  /**
+   * Where Code Mode's sandbox finds its worker and its WebAssembly when this
+   * package runs bundled (VC-471). Absent, the sandbox resolves both from its
+   * own installed package, which is right for tests and for any host that
+   * runs this package from `node_modules`.
+   *
+   * This decides nothing about WHETHER a Session has Code Mode: that is the
+   * Session's frozen record, and every runtime can bind it.
+   */
+  codeModeSandbox?: CodeModeSandboxAssets;
 }
 
 /**
@@ -431,6 +450,7 @@ interface PiRuntimeHost {
   /** One bound across every attachment's saved tool output (VC-469). */
   toolOutputLedger: ToolOutputLedger;
   parallelMcpReads: boolean;
+  codeModeSandbox: CodeModeSandboxAssets | undefined;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -488,6 +508,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     sessionDataDir: options.sessionDataDir,
     toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
     parallelMcpReads: options.parallelMcpReads === true,
+    codeModeSandbox: options.codeModeSandbox,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -2240,6 +2261,27 @@ async function attachSession(
     // carry host-authored parallel-read marks — honoured only when this
     // runtime was built to — gets every other tool marked sequential. Names
     // and schemas, the provider-visible half, never change.
+    // Code Mode (VC-471), for a Session born with it: one more tool, built over
+    // the Session's own tools and reaching them through the gate below — the
+    // same function instance the Agent holds, assigned where the Agent is
+    // built and read only when a program runs. Nested tool events take the
+    // same activity path a direct call's do.
+    let sessionGate: NonNullable<AgentOptions["beforeToolCall"]> | undefined;
+    const codeModeJournal = new CodeModeJournal();
+    const buildCodeMode: CodeModeBuilder = (surface, surfaceTools) =>
+      createCodeModeTool({
+        surface,
+        tools: surfaceTools,
+        gate: () => sessionGate,
+        observe: (event) => observeToolActivity(event),
+        journal: codeModeJournal,
+        // The same switch the Agent's own batches obey (VC-454).
+        honourParallelReads: host.parallelMcpReads,
+        output: toolOutput,
+        sandbox: host.codeModeSandbox,
+        signal: spec.signal,
+        now: host.now,
+      });
     const { tools, toolExecution } = applyToolDispatch(
       createSessionTools(
         scoped && spec.shell !== undefined
@@ -2247,6 +2289,7 @@ async function attachSession(
           : spec,
         ownedToolEnv,
         toolOutput,
+        buildCodeMode,
       ),
       spec.tools.mcp ?? [],
       host.parallelMcpReads,
@@ -2464,10 +2507,15 @@ async function attachSession(
     const gateToolCalls = (
       authority: AuthoritySnapshot,
     ): NonNullable<AgentOptions["beforeToolCall"]> => {
+      const ask = spec.ask;
       const escalation = new AuthorityEscalation({
         fallback: authority.fallback,
         priorDenials: spec.priorAuthorityDenials,
-        ask: spec.ask,
+        // A program's nested call asks through the program's scope, so its
+        // escalations queue behind any other question it has open (VC-471).
+        ...(ask === undefined
+          ? {}
+          : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
         signal: spec.signal,
         now: host.now,
       });
@@ -2480,6 +2528,21 @@ async function attachSession(
           capability,
           contained: scoped,
         });
+        // The program a `codemode` call carries is not itself an act: every
+        // call it makes is judged on its own, through this same gate (VC-471).
+        // So an allowed `codemode` call does not count as "a call that ran"
+        // and does not reset the run of refusals the fallback counts — or a
+        // model could clear the counter between two refused calls by wrapping
+        // the second one in a program.
+        if (toolCall.name === CODE_MODE_TOOL_ID && verdict.outcome === "allow") {
+          recordObservability({
+            kind: "authority",
+            state: "allowed",
+            turnId,
+            toolCallId: toolCall.id,
+          });
+          return undefined;
+        }
         // Pi's own per-call signal is passed on rather than dropped: a question
         // this parks on has to lose to a cancelled run, and Pi re-reads that
         // signal the instant this callback returns.
@@ -2602,6 +2665,10 @@ async function attachSession(
       tools,
     );
 
+    // Built once and shared: the Agent judges every direct call with it, and
+    // Code Mode judges every nested call with the same instance, so the
+    // escalation counters and the denial thresholds are one Session's, not two.
+    sessionGate = spec.authority === undefined ? undefined : gateToolCalls(spec.authority);
     const agent = new Agent({
       initialState: {
         model,
@@ -2666,7 +2733,7 @@ async function attachSession(
       // The key is absent, not set to a callback that always allows: a Session
       // with no Snapshot runs Pi's own default path, and the gate, the fallback
       // thresholds and `ask` are then unreachable rather than quietly permissive.
-      ...(spec.authority === undefined ? {} : { beforeToolCall: gateToolCalls(spec.authority) }),
+      ...(sessionGate === undefined ? {} : { beforeToolCall: sessionGate }),
     });
     // Interrupting, closing and cancelling the attachment all arrive here, which
     // is why one flag answers for all three downstream.
@@ -3261,6 +3328,46 @@ async function attachSession(
       return outcome.kind === "compacted";
     };
 
+    /**
+     * One tool call's lifecycle, as durable activity: Pi's own events for a
+     * direct call, and Code Mode's for every call a program makes (VC-471),
+     * through the same mapping, the same ordered delivery and the same
+     * recovery marker — so a nested call is as visible in the activity stream,
+     * the ledger and a restart as a direct one, under its own id.
+     */
+    const observeToolActivity = async (
+      event:
+        | Extract<
+            AgentEvent,
+            { type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end" }
+          >
+        | NestedToolEvent,
+    ): Promise<void> => {
+      const observedAt = host.now();
+      const retained = activityByToolCallId.get(event.toolCallId);
+      const startedAt = retained?.startedAt ?? observedAt;
+      const activity = mapPiActivity(
+        event,
+        event.type === "tool_execution_end"
+          ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+          : event.type === "tool_execution_start"
+            ? { turnId, observedAt }
+            : { turnId, startedAt, observedAt },
+      );
+
+      if (event.type !== "tool_execution_end") {
+        activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
+        await commitObservation(activity);
+        return;
+      }
+
+      try {
+        await commitObservation(await persistObservation(activity));
+      } finally {
+        activityByToolCallId.delete(event.toolCallId);
+      }
+    };
+
     unsubscribe = agent.subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
         // A resumed attempt is the same turn continuing, so it neither starts one
@@ -3300,29 +3407,7 @@ async function attachSession(
         event.type === "tool_execution_update" ||
         event.type === "tool_execution_end"
       ) {
-        const observedAt = host.now();
-        const retained = activityByToolCallId.get(event.toolCallId);
-        const startedAt = retained?.startedAt ?? observedAt;
-        const activity = mapPiActivity(
-          event,
-          event.type === "tool_execution_end"
-            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
-            : event.type === "tool_execution_start"
-              ? { turnId, observedAt }
-              : { turnId, startedAt, observedAt },
-        );
-
-        if (event.type !== "tool_execution_end") {
-          activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
-          await commitObservation(activity);
-          return;
-        }
-
-        try {
-          await commitObservation(await persistObservation(activity));
-        } finally {
-          activityByToolCallId.delete(event.toolCallId);
-        }
+        await observeToolActivity(event);
         return;
       }
 

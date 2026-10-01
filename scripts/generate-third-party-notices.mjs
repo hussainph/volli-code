@@ -80,6 +80,7 @@ import {
   packagingFailures,
   renderNoticeDocument,
   repositoryUrl,
+  shippedAsFor,
   uncoveredPlatformPackages,
   unpackedPackages,
   wrapText,
@@ -383,7 +384,14 @@ function readPatchedDependencies() {
 
 function buildModel(artifact) {
   const builderConfig = parseYaml(readFileSync(artifact.builderConfigPath, "utf8"));
-  const keptNames = new Set(keptNodeModulePackages(builderConfig));
+  // Packages main both inlines and starts files of by path (VC-471), shared
+  // with verify-packed-requires so the two never disagree about which they are.
+  const pathReached = join(
+    dirname(artifact.builderConfigPath),
+    "scripts",
+    "path-reached-packages.json",
+  );
+  const alsoBundled = new Set(existsSync(pathReached) ? Object.keys(readJson(pathReached)) : []);
 
   const closure = collectPackageClosure({
     roots: artifact.roots,
@@ -397,9 +405,10 @@ function buildModel(artifact) {
     version: pkg.version,
     spdx: declaredLicense(pkg.manifest),
     repository: repositoryUrl(pkg.manifest),
-    // The whitelist is the set electron-builder keeps in the shipped
-    // node_modules tree; everything else reaches the .app inside a chunk.
-    shippedAs: isNameCovered(pkg.name, keptNames) ? "node_modules tree" : "bundled into a chunk",
+    // The whitelist (with its scope narrowings) is the set electron-builder
+    // keeps in the shipped node_modules tree, asarUnpack the part of it
+    // unpacked from the archive; everything else reaches the .app inside a chunk.
+    shippedAs: shippedAsFor(pkg.name, builderConfig, alsoBundled),
     files: licenseFilesIn(pkg.dir),
   }));
 
@@ -675,6 +684,34 @@ function selfTestClosure() {
     closure.notInstalled,
     ["gone"],
     "an uninstalled optional is recorded, not fatal",
+  );
+}
+
+function selfTestShippedAs() {
+  const config = {
+    files: ["!node_modules/!(@scope|plain|native)/**", "!node_modules/@scope/!(kept)/**"],
+    asarUnpack: ["**/node_modules/native/**", "**/node_modules/@scope/kept/**"],
+  };
+  assert.equal(shippedAsFor("bundled", config), "bundled into a chunk");
+  assert.equal(shippedAsFor("plain", config), "node_modules tree");
+  assert.equal(shippedAsFor("native", config), "node_modules tree, unpacked from the asar");
+  assert.equal(
+    shippedAsFor("@scope/dropped", config),
+    "bundled into a chunk",
+    "a narrowed-out scope member is bundled",
+  );
+  assert.equal(shippedAsFor("@other/x", config), "bundled into a chunk");
+  assert.equal(
+    shippedAsFor("@scope/kept", config, new Set(["@scope/kept"])),
+    "bundled into a chunk and node_modules tree, unpacked from the asar",
+  );
+  assert.equal(
+    shippedAsFor("@wide/x", {
+      files: ["!node_modules/!(@wide)/**"],
+      asarUnpack: ["**/node_modules/@wide/**"],
+    }),
+    "node_modules tree, unpacked from the asar",
+    "a whole unpacked scope covers its members",
   );
 }
 
@@ -1314,6 +1351,7 @@ function selfTestLiveDeclarations() {
 function selfTest() {
   selfTestClosure();
   selfTestDeclarations();
+  selfTestShippedAs();
   selfTestGrouping();
   selfTestPackagingRules();
   selfTestPackageNotices();

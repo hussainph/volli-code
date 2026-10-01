@@ -95,6 +95,7 @@ import {
   type CommandRefusalSeverity,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type CodeModeSurface,
   type McpToolDefinition,
   type ModelSelection,
   type ModelSelectionOutcome,
@@ -105,6 +106,7 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
   type RuntimeClassifyPort,
+  type RuntimeCallScope,
   type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
@@ -252,6 +254,8 @@ interface PiRuntimeContextFields {
   mcpManagementNames?: "server";
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
+  /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
+  codeMode?: CodeModeSurface;
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -573,6 +577,11 @@ export interface PiAdapterOptions {
    * runtime's default holds and every Session dispatches sequentially.
    */
   parallelMcpReads?: PiRuntimeHostOptions["parallelMcpReads"];
+  /**
+   * Where Code Mode's sandbox worker and WebAssembly are when main runs
+   * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
+   */
+  codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -791,6 +800,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.parallelMcpReads === undefined
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
+    ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
   });
 
   return {
@@ -1115,6 +1125,14 @@ class PiBinding implements BindingHandle {
         "This Session's frozen Agent Tool Surface includes MCP tools, but this launch wired no MCP host.",
       );
     }
+    // Code Mode's record is read back with the names it routes (VC-471); the
+    // shared builder then holds it to the surface exactly.
+    const wantsCodeMode = context.toolSurface.includes("codemode");
+    if (wantsCodeMode && context.codeMode === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface names codemode without its routes.",
+      );
+    }
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -1239,6 +1257,7 @@ class PiBinding implements BindingHandle {
           ? {}
           : { mcpManagementNames: context.mcpManagementNames }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
+        ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       ...this.#carry,
@@ -1266,9 +1285,14 @@ class PiBinding implements BindingHandle {
       ...(verbs.length === 0
         ? {}
         : {
-            callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
+            // A Code Mode program's call lends its scope (VC-471): the
+            // door's budget question then waits its turn among the
+            // program's questions, and stops the program's clock.
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
               callVerb!(sessionIdentity, request, signal, (ask, askSignal) =>
-                this.#ask(ask, askSignal),
+                scope === undefined
+                  ? this.#ask(ask, askSignal)
+                  : scope.question(() => this.#ask(ask, askSignal)),
               ),
           }),
     };

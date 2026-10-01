@@ -24,6 +24,8 @@ export {
 } from "./pi/runtime";
 export { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./pi/scoped-execution-env";
 export { readHostGitSettings, type GitIdentity, type HostGitSettings } from "./pi/host-git";
+export { codeModeSandboxAssetsFrom } from "./codemode/assets";
+export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";
 export {
   decisionTargetReady,
   inspectDecisionModels,

@@ -47,6 +47,7 @@ import { MODEL_TIERS } from "./model-access-policy";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { AUTHORITY_ENFORCEMENTS, JUDGMENT_MODES } from "./authority-config";
@@ -1323,6 +1324,7 @@ function decodeToolSurfaceInput(
   tools: readonly SessionToolId[];
   mcpManagementNames?: "server";
   mcpTools?: readonly McpToolDefinition[];
+  codeMode?: CodeModeSurface;
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
   const mcpManagementNames =
@@ -1338,11 +1340,22 @@ function decodeToolSurfaceInput(
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
+  // Code Mode's record and its name travel together (VC-471): a surface that
+  // names `codemode` with no routes, or routes with no `codemode`, is damaged
+  // rather than a smaller surface, and its routes must cover it exactly.
+  const codeMode =
+    input.codeMode === undefined
+      ? undefined
+      : parseCodeModeSurface(input.codeMode, tools, `${context}.codeMode`);
+  if (codeMode === undefined && tools.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context} names ${CODE_MODE_TOOL_ID} without its routes`);
+  }
   return {
     kind,
     tools,
     ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
     ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(codeMode === undefined ? {} : { codeMode }),
   };
 }
 

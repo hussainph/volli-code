@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { CodeModeBirth } from "@volli/shared";
 import type {
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -150,7 +151,7 @@ describe("Sessions", () => {
     let configured = true;
     const { sessions: door } = sessions({
       toolSurface: {
-        resolve: (_role, _grants, _within, _mcp, classify = false) => [
+        resolve: (_role, _grants, _within, _mcp, _codeMode, classify = false) => [
           "read",
           ...(classify ? (["classify"] as const) : []),
         ],
@@ -182,6 +183,66 @@ describe("Sessions", () => {
     });
     expect(asked).toEqual(["project-1", "project-1"]);
     expect(records).toEqual([["read", "classify"], ["read"]]);
+  });
+
+  it("asks Code Mode once per birth, with the Session's own model, and hands both steps that one answer (VC-471)", async () => {
+    const asked: unknown[] = [];
+    const resolved: unknown[] = [];
+    const recorded: unknown[] = [];
+    const decision: CodeModeBirth = {
+      mode: "both",
+      nudge: false,
+      offered: true,
+      largeServers: new Set(),
+    };
+    const { sessions: door } = sessions({
+      toolSurface: {
+        codeModeAt: (model, mcpTools) => {
+          asked.push([model, mcpTools]);
+          return decision;
+        },
+        resolve: (_role, _grants, _within, _mcpTools, codeMode) => {
+          resolved.push(codeMode);
+          return ["read", "codemode"];
+        },
+        recorded: async () => null,
+        record: async (_sessionId, _tools, _mcpTools, birth) => {
+          recorded.push(birth);
+        },
+      },
+    });
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    expect(asked).toEqual([[MODEL, []]]);
+    expect(resolved).toEqual([decision]);
+    expect(recorded).toEqual([{ codeMode: decision }]);
+    expect(resolved[0]).toBe(recorded[0] && (recorded[0] as { codeMode: unknown }).codeMode);
+  });
+
+  it("records no Code Mode decision where the host has none", async () => {
+    const recorded: unknown[] = [];
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: () => ["read"],
+        recorded: async () => null,
+        record: async (_sessionId, _tools, _mcpTools, birth) => {
+          recorded.push(birth);
+        },
+      },
+    });
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    expect(recorded).toEqual([{}]);
   });
 
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {

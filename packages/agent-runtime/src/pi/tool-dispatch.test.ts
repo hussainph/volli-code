@@ -130,4 +130,47 @@ describe("applyToolDispatch", () => {
       "end:tc-1-1",
     ]);
   });
+
+  it("never lets a codemode call overlap direct MCP reads in one batch (VC-471)", async () => {
+    // `codemode` is not a marked read, so a parallel Session marks it
+    // sequential — and Pi runs a batch holding one sequential call one call at
+    // a time, in source order. A program's own nested reads still overlap
+    // inside the run; the run never overlaps anything the model called directly.
+    const log: string[] = [];
+    const [read] = withParallelReadEligibility(
+      [definition("read")],
+      new Set([mcpToolKey(definition("read"))]),
+    );
+    const { tools, toolExecution } = applyToolDispatch(
+      [tool("codemode", log), tool(read!.providerName, log)],
+      [read!],
+      true,
+    );
+    expect(toolExecution).toBe("parallel");
+    expect(tools.map((entry) => entry.executionMode)).toEqual(["sequential", undefined]);
+    const { streamFn } = scriptedProvider([
+      {
+        toolCalls: [
+          { name: read!.providerName },
+          { name: "codemode" },
+          { name: read!.providerName },
+        ],
+      },
+      { text: "done" },
+    ]);
+    const agent = new Agent({
+      initialState: { systemPrompt: "", model: MODEL, tools, messages: [] },
+      streamFn,
+      toolExecution,
+    });
+    await agent.prompt("go");
+    expect(log).toEqual([
+      "start:tc-1-0",
+      "end:tc-1-0",
+      "start:tc-1-1",
+      "end:tc-1-1",
+      "start:tc-1-2",
+      "end:tc-1-2",
+    ]);
+  });
 });

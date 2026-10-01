@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 590 third-party packages: the production dependency closure
+It covers 593 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -50,7 +50,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (590 packages)
+2. PACKAGE INDEX (593 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
@@ -61,8 +61,8 @@ they are listed so the index accounts for every module in the bundle.
   @antfu/install-pkg@1.1.0  MIT  [bundled into a chunk]
   @anthropic-ai/sandbox-runtime@0.0.74  Apache-2.0  [bundled into a chunk]
   @anthropic-ai/sdk@0.124.0  MIT  [bundled into a chunk]
-  @asamuzakjp/css-color@6.0.7  MIT  [bundled into a chunk]
-  @asamuzakjp/dom-selector@8.3.2  MIT  [bundled into a chunk]
+  @asamuzakjp/css-color@6.0.7  MIT  [node_modules tree]
+  @asamuzakjp/dom-selector@8.3.2  MIT  [node_modules tree]
   @aws-sdk/client-bedrock-runtime@3.1127.0  Apache-2.0  [bundled into a chunk]
   @aws-sdk/core@3.978.1  Apache-2.0  [bundled into a chunk]
   @aws-sdk/credential-provider-env@3.972.72  Apache-2.0  [bundled into a chunk]
@@ -85,14 +85,14 @@ they are listed so the index accounts for every module in the bundle.
   @aws/lambda-invoke-store@0.3.0  Apache-2.0  [bundled into a chunk]
   @babel/runtime@7.29.7  MIT  [bundled into a chunk]
   @braintree/sanitize-url@7.1.2  MIT  [bundled into a chunk]
-  @bramus/specificity@2.4.2  MIT  [bundled into a chunk]
+  @bramus/specificity@2.4.2  MIT  [node_modules tree]
   @chevrotain/types@11.1.2  Apache-2.0  [bundled into a chunk]
-  @csstools/color-helpers@6.1.1  MIT-0  [bundled into a chunk]
-  @csstools/css-calc@3.3.0  MIT  [bundled into a chunk]
-  @csstools/css-color-parser@4.2.0  MIT  [bundled into a chunk]
-  @csstools/css-parser-algorithms@4.0.0  MIT  [bundled into a chunk]
-  @csstools/css-syntax-patches-for-csstree@1.1.8  MIT-0  [bundled into a chunk]
-  @csstools/css-tokenizer@4.0.0  MIT  [bundled into a chunk]
+  @csstools/color-helpers@6.1.1  MIT-0  [node_modules tree]
+  @csstools/css-calc@3.3.0  MIT  [node_modules tree]
+  @csstools/css-color-parser@4.2.0  MIT  [node_modules tree]
+  @csstools/css-parser-algorithms@4.0.0  MIT  [node_modules tree]
+  @csstools/css-syntax-patches-for-csstree@1.1.8  MIT-0  [node_modules tree]
+  @csstools/css-tokenizer@4.0.0  MIT  [node_modules tree]
   @dnd-kit/accessibility@3.1.1  MIT  [bundled into a chunk]
   @dnd-kit/core@6.3.1  MIT  [bundled into a chunk]
   @dnd-kit/modifiers@9.0.0  MIT  [bundled into a chunk]
@@ -101,8 +101,9 @@ they are listed so the index accounts for every module in the bundle.
   @earendil-works/chord@0.99.2  MIT  [bundled into a chunk]
   @earendil-works/pi-agent-core@0.99.2  MIT  [bundled into a chunk]
   @earendil-works/pi-ai@0.99.2  MIT  [bundled into a chunk]
+  @earendil-works/pi-codemode@0.99.2  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
   @earendil-works/pi-telemetry@0.99.2  MIT  [bundled into a chunk]
-  @exodus/bytes@1.15.1  MIT  [bundled into a chunk]
+  @exodus/bytes@1.15.1  MIT  [node_modules tree]
   @floating-ui/core@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/react-dom@2.1.9  MIT  [bundled into a chunk]
@@ -112,7 +113,7 @@ they are listed so the index accounts for every module in the bundle.
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
   @iconify/types@2.0.0  MIT  [bundled into a chunk]
   @iconify/utils@3.1.4  MIT  [bundled into a chunk]
-  @img/colour@1.1.0  MIT  [bundled into a chunk]
+  @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
   @img/sharp-darwin-arm64@0.35.4  Apache-2.0  [native binary, unpacked]
   @img/sharp-libvips-darwin-arm64@1.3.3  LGPL-3.0-or-later  [native binary, unpacked]
   @lezer/common@1.5.2  MIT  [bundled into a chunk]
@@ -248,7 +249,7 @@ they are listed so the index accounts for every module in the bundle.
   @streamdown/code@1.1.1  Apache-2.0  [bundled into a chunk]
   @streamdown/mermaid@1.0.2  Apache-2.0  [bundled into a chunk]
   @trpc/client@11.18.0  MIT  [bundled into a chunk]
-  @trpc/server@11.18.0  MIT  [bundled into a chunk]
+  @trpc/server@11.18.0  MIT  [node_modules tree]
   @types/d3@7.4.3  MIT  [bundled into a chunk]
   @types/d3-array@3.2.2  MIT  [bundled into a chunk]
   @types/d3-axis@3.0.6  MIT  [bundled into a chunk]
@@ -295,12 +296,13 @@ they are listed so the index accounts for every module in the bundle.
   @ungap/structured-clone@1.3.3  ISC  [bundled into a chunk]
   @upsetjs/venn.js@2.0.0  MIT  [bundled into a chunk]
   @vercel/oidc@3.2.0  Apache-2.0  [bundled into a chunk]
-  @vscode/ripgrep@1.18.0  MIT  [bundled into a chunk]
+  @vscode/ripgrep@1.18.0  MIT  [node_modules tree, unpacked from the asar]
   @vscode/ripgrep-darwin-arm64@1.18.0  MIT  [native binary, unpacked]
   @workflow/serde@4.1.0  Apache-2.0  [bundled into a chunk]
   @xterm/addon-fit@0.12.0-beta.301  MIT  [bundled into a chunk]
   @xterm/addon-unicode11@0.10.0-beta.301  MIT  [bundled into a chunk]
   @xterm/xterm@6.1.0-beta.304  MIT  [bundled into a chunk]
+  acorn@8.18.0  MIT  [bundled into a chunk]
   agent-base@7.1.4  MIT  [bundled into a chunk]
   agent-base@9.0.0  MIT  [bundled into a chunk]
   ai@7.0.84  Apache-2.0  [bundled into a chunk]
@@ -309,7 +311,7 @@ they are listed so the index accounts for every module in the bundle.
   aria-hidden@1.2.6  MIT  [bundled into a chunk]
   bail@2.0.2  MIT  [bundled into a chunk]
   base64-js@1.5.1  MIT  [bundled into a chunk]
-  better-sqlite3@13.0.3  MIT  [node_modules tree]
+  better-sqlite3@13.0.3  MIT  [node_modules tree, unpacked from the asar]
   bidi-js@1.0.3  MIT  [node_modules tree]
   bignumber.js@9.3.1  MIT  [bundled into a chunk]
   bowser@2.14.1  MIT  [bundled into a chunk]
@@ -527,7 +529,7 @@ they are listed so the index accounts for every module in the bundle.
   node-domexception@1.0.0  MIT  [bundled into a chunk]
   node-fetch@3.3.2  MIT  [bundled into a chunk]
   node-forge@1.4.0  (BSD-3-Clause OR GPL-2.0)  [bundled into a chunk]
-  node-pty@1.1.0  MIT  [node_modules tree]
+  node-pty@1.1.0  MIT  [node_modules tree, unpacked from the asar]
   oniguruma-parser@0.12.2  MIT  [bundled into a chunk]
   oniguruma-to-es@4.3.6  MIT  [bundled into a chunk]
   openai@7.19.0  Apache-2.0  [bundled into a chunk]
@@ -547,6 +549,7 @@ they are listed so the index accounts for every module in the bundle.
   protobufjs@7.6.5  BSD-3-Clause  [bundled into a chunk]
   proxy-agent-negotiate@1.1.0  MIT  [bundled into a chunk]
   punycode@2.3.1  MIT  [node_modules tree]
+  quickjs-wasi@3.6.2  MIT  [node_modules tree, unpacked from the asar]
   radix-ui@1.6.7  MIT  [bundled into a chunk]
   react@19.2.8  MIT  [bundled into a chunk]
   react-dom@19.2.8  MIT  [bundled into a chunk]
@@ -579,7 +582,7 @@ they are listed so the index accounts for every module in the bundle.
   scheduler@0.27.0  MIT  [bundled into a chunk]
   semver@7.7.4  ISC  [node_modules tree]
   semver@7.8.5  ISC  [node_modules tree]
-  sharp@0.35.4  Apache-2.0  [node_modules tree]
+  sharp@0.35.4  Apache-2.0  [node_modules tree, unpacked from the asar]
   shebang-command@2.0.0  MIT  [bundled into a chunk]
   shebang-regex@3.0.0  MIT  [bundled into a chunk]
   shiki@3.23.0  MIT  [bundled into a chunk]
@@ -647,7 +650,7 @@ they are listed so the index accounts for every module in the bundle.
   zwitch@2.0.4  MIT  [bundled into a chunk]
 
 =========================================================================================================
-3. PACKAGE LICENCES (230 distinct licence texts)
+3. PACKAGE LICENCES (232 distinct licence texts)
 =========================================================================================================
 
 Packages carrying byte-identical terms share one block; the package line names
@@ -4615,6 +4618,34 @@ File: LICENSE
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+=========================================================================================================
+Packages: acorn@8.18.0
+SPDX: MIT
+File: LICENSE
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (C) 2012-2022 by various contributors (see AUTHORS)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -10498,6 +10529,34 @@ support library is itself covered by the above license.
 
 
 =========================================================================================================
+Packages: quickjs-wasi@3.6.2
+SPDX: MIT
+File: LICENSE
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2026 Vercel, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+=========================================================================================================
 Packages: react@19.2.8, react-dom@19.2.8, scheduler@0.27.0
 SPDX: MIT
 File: LICENSE
@@ -12582,7 +12641,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-4. PACKAGES THAT PUBLISH NO LICENCE FILE (14)
+4. PACKAGES THAT PUBLISH NO LICENCE FILE (15)
 =========================================================================================================
 
 These packages declare a licence in their manifest but ship no licence file in the
@@ -12608,6 +12667,9 @@ no licence text is substituted for them here.
     declared: MIT
     source:   https://github.com/earendil-works/pi
   @earendil-works/pi-ai@0.99.2
+    declared: MIT
+    source:   https://github.com/earendil-works/pi
+  @earendil-works/pi-codemode@0.99.2
     declared: MIT
     source:   https://github.com/earendil-works/pi
   @earendil-works/pi-telemetry@0.99.2
@@ -13146,7 +13208,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-8. MODIFIED PACKAGES (3)
+8. MODIFIED PACKAGES (4)
 =========================================================================================================
 
 These packages are modified before they are bundled, by the pnpm patches recorded
@@ -13155,6 +13217,7 @@ in pnpm-workspace.yaml. The patch files are in the repository and state the chan
   @anthropic-ai/sandbox-runtime@0.0.74 — patches/@anthropic-ai__sandbox-runtime@0.0.74.patch
   @dnd-kit/core@6.3.1 — patches/@dnd-kit__core@6.3.1.patch
   @earendil-works/pi-agent-core@0.99.2 — patches/@earendil-works__pi-agent-core@0.99.2.patch
+  @earendil-works/pi-codemode@0.99.2 — patches/@earendil-works__pi-codemode@0.99.2.patch
 
 =========================================================================================================
 9. ADDITIONAL NOTICES (1)

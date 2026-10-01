@@ -160,6 +160,18 @@ export const NON_CODING_TOOL_IDS = [
    * Appended last for the Cache Prefix reason every name above was.
    */
   "classify",
+  /**
+   * Running a short JavaScript program that calls this Session's other tools
+   * and returns only what the model needs (VC-471).
+   *
+   * Like `todo_write`, no port decides it: the bundle's `codeMode` record
+   * does, and the record also carries the route of every other tool. The
+   * tool reaches the rule pack as a name no rule objects to, because it
+   * carries nothing a rule reads — every call the program makes is judged on
+   * its own, through the same gate a direct call passes. Appended last for
+   * the Cache Prefix reason every name above was.
+   */
+  "codemode",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
