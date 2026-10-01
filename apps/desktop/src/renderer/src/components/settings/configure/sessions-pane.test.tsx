@@ -74,14 +74,17 @@ function client(inspect: ModelAccessClient["inspect"]): ModelAccessClient {
   };
 }
 
-async function renderPane(inspect: ModelAccessClient["inspect"]): Promise<void> {
+async function renderPane(
+  inspect: ModelAccessClient["inspect"],
+  project: Project = PROJECT,
+): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
     root?.render(
       <ModelAccessProvider client={client(inspect)}>
-        <SessionsPane project={PROJECT} />
+        <SessionsPane project={project} />
       </ModelAccessProvider>,
     );
   });
@@ -94,6 +97,31 @@ function tryAgainButton(): HTMLButtonElement | undefined {
 }
 
 describe("SessionsPane's model catalog", () => {
+  it("draws the selected project model with its catalogue name and mark", async () => {
+    const selection = {
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      reasoningLevel: "high" as const,
+    };
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue({
+      ...CATALOG,
+      models: [
+        {
+          ...selection,
+          label: "Claude Opus 4.1",
+          state: "available",
+          reasoningLevels: ["high"],
+          acceptsImageInput: true,
+        },
+      ],
+    });
+    await renderPane(inspect, { ...PROJECT, sessionModel: selection });
+    const trigger = document.getElementById("project-session-model");
+    expect(trigger?.textContent).toContain("Claude Opus 4.1");
+    expect(trigger?.textContent).not.toContain("claude-opus-4-1");
+    expect(trigger?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+  });
+
   it("forces exactly one refresh when Try again is pressed", async () => {
     // The refresh bumps the shared revision, which re-runs this pane's effect;
     // a pane that reads that re-run as another retry would refresh forever.

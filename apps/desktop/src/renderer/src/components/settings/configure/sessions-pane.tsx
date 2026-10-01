@@ -18,7 +18,6 @@ import type { ModelAccessModel, ModelAccessProvider, ModelSelection, Project } f
 import {
   offerableModels,
   preferredReasoning,
-  providerLabelFor,
 } from "@renderer/components/pages/model-access-settings";
 import {
   CONTROL_W,
@@ -37,6 +36,7 @@ import {
   SelectValue,
 } from "@renderer/components/ui/select";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
+import { ModelName } from "@renderer/components/models/model-identity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -190,8 +190,11 @@ export function SessionsPane({ project }: { project: Project }) {
                 <SelectContent>
                   {availableModels.map((availableModel) => (
                     <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
-                      {availableModel.label} ·{" "}
-                      {providerLabelFor(providers, availableModel.providerId)}
+                      <ModelName
+                        model={availableModel}
+                        models={availableModels}
+                        providers={providers}
+                      />
                     </SelectItem>
                   ))}
                 </SelectContent>

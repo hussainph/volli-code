@@ -409,7 +409,15 @@ function CatalogSection({
         empty="No models. Sign in to a provider below."
         noResults="No models match."
         columns={[
-          { key: "name", header: "Model", cell: (model) => <Cell strong>{model.label}</Cell> },
+          {
+            key: "name",
+            header: "Model",
+            cell: (model) => (
+              <Cell strong>
+                <ModelName model={model} models={[]} providers={providers} />
+              </Cell>
+            ),
+          },
           {
             key: "provider",
             header: "Provider",
