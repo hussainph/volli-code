@@ -167,6 +167,7 @@ import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
+import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -2230,7 +2231,15 @@ app.whenReady().then(async () => {
   registerModelAccessIpcHandlers(
     piModelAccess === null
       ? null
-      : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+      : new ModelAccessSignInService({
+          // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
+          pi: piSignIn(piModelAccess.models, {
+            deviceId: () => {
+              if (!dbHandle.ok) throw new Error("The local database is unavailable.");
+              return installationId(dbHandle.db);
+            },
+          }),
+        }),
     // When the runtime is down because the database never opened, the sign-in
     // surface must answer with the recorded (already-classified) reason — a
     // Node-ABI failure names the incompatibility, not a generic "unavailable"
@@ -2671,6 +2680,8 @@ app.whenReady().then(async () => {
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
     mcpSettings: mcpSettings ?? undefined,
+    // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
+    piSessionsDirectory,
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its

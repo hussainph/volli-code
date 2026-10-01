@@ -56,6 +56,8 @@ interface Spec {
   checkAuth: (signal: AbortSignal | undefined) => Promise<AuthCheck | undefined>;
   getAvailable: (signal: AbortSignal | undefined) => Promise<readonly Model<Api>[]>;
   known?: readonly Model<Api>[];
+  /** Image or classifier models the provider also lists (Pi 0.99). */
+  other?: readonly unknown[];
 }
 
 function fakeModels(specs: readonly Spec[]): Models {
@@ -69,6 +71,7 @@ function fakeModels(specs: readonly Spec[]): Models {
     getProviders: () => specs.map((spec) => spec.provider),
     getProvider: (id: string) => byId.get(id)?.provider,
     getModels: (id?: string) => (id === undefined ? [] : (byId.get(id)?.known ?? [])),
+    getAllModels: (id: string) => [...(at(id).known ?? []), ...(at(id).other ?? [])],
     checkAuth: (id: string, options?: { signal?: AbortSignal }) =>
       at(id).checkAuth(options?.signal),
     getAvailable: (id: string, options?: { signal?: AbortSignal }) =>
@@ -125,6 +128,40 @@ function catalogs(
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+const ready = async () => ({ type: "api_key" as const });
+
+describe("inspectPiModelAccess provider list (Pi 0.99)", () => {
+  it("leaves out a provider that lists only image or classifier models, and keeps an empty one", async () => {
+    const snapshot = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("chat"),
+            checkAuth: ready,
+            getAvailable: async () => [model("chat", "c")],
+            known: [model("chat", "c")],
+          },
+          {
+            provider: provider("typesafe"),
+            checkAuth: async () => undefined,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+          {
+            provider: provider("dynamic"),
+            checkAuth: async () => undefined,
+            getAvailable: async () => [],
+          },
+        ]),
+        credentials: null,
+      },
+      () => 0,
+    );
+
+    expect(snapshot.providers.map((entry) => entry.id)).toEqual(["chat", "dynamic"]);
+  });
 });
 
 describe("inspectPiModelAccess concurrency", () => {

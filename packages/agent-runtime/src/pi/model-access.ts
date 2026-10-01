@@ -73,6 +73,19 @@ export interface UsageLimitsSource {
  */
 export const PROBE_TIMEOUT_MS = 5_000;
 
+/**
+ * Whether a provider belongs on this page, which picks chat models (VC-469).
+ *
+ * Pi 0.99 lists image and classifier models beside chat ones, and ships a
+ * provider (`typesafe`) that serves classifiers only. Listed here it asked a
+ * person to sign in to something with no model to pick. A provider with no
+ * models of any type stays: a dynamic provider lists nothing until its first
+ * refresh, and hiding it would hide the sign-in that fills it.
+ */
+function offersChat(models: Models, providerId: string): boolean {
+  return models.getModels(providerId).length > 0 || models.getAllModels(providerId).length === 0;
+}
+
 /** Maps Pi-owned auth and catalog state into Volli's secret-free Model Access vocabulary. */
 export async function inspectPiModelAccess(
   source: PiModelAccessSource,
@@ -82,6 +95,7 @@ export async function inspectPiModelAccess(
   const models = source.models;
   input.signal?.throwIfAborted();
   await (source.catalogReady ?? Promise.resolve());
+  const chatProviders = models.getProviders().filter((provider) => offersChat(models, provider.id));
   input.signal?.throwIfAborted();
   // One read of the whole file rather than one per provider: every credential
   // lives in the same document, and `list` yields ids and types only — the
@@ -112,7 +126,7 @@ export async function inspectPiModelAccess(
       refreshErrors = refreshed.errors;
     } else {
       const preflight = await Promise.all(
-        models.getProviders().map(async (provider) => ({
+        chatProviders.map(async (provider) => ({
           provider,
           probe: await probeProviderAuth(models, provider.id, input.signal, PROBE_TIMEOUT_MS),
         })),
@@ -175,7 +189,7 @@ export async function inspectPiModelAccess(
   // once and is bounded by its own timeout, so the inspection costs the slowest
   // single probe plus overhead rather than their sum — see {@link probeProvider}.
   const probed = await Promise.all(
-    models.getProviders().map(async (provider) => {
+    chatProviders.map(async (provider) => {
       // The usage read runs beside the provider probe, not inside it: it has
       // its own bound, so a slow usage endpoint cannot turn a provider that just
       // passed auth and availability into an `unavailable` row.

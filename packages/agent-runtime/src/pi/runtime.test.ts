@@ -3508,8 +3508,10 @@ describe("startSession", () => {
     expect(kinds(observations)).not.toContain("authority");
 
     // Every block reached the model: text as text, the image as an image, the
-    // unsupported block as its bounded text stand-in, and structured content as
-    // stable JSON — each behind the Volli-owned trust notice.
+    // unsupported block as its bounded text stand-in, and the structured data
+    // no text block carried as compact JSON — each behind the Volli-owned
+    // trust notice. Since Pi 0.99 the data also travels as the result's own
+    // `structuredContent` (VC-469).
     const toolResult = (afterTool?.messages ?? []).find(
       (message): message is Extract<Message, { role: "toolResult" }> =>
         message.role === "toolResult",
@@ -3519,10 +3521,7 @@ describe("startSession", () => {
       { type: "text", text: "issue #7 created" },
       { type: "image", data: pixels, mimeType: "image/png" },
       { type: "text", text: "[resource link: issue — https://fixture/7]" },
-      {
-        type: "text",
-        text: 'Structured content (untrusted data): {"number":7,"url":"https://fixture/7"}',
-      },
+      { type: "text", text: 'Structured content: {"number":7,"url":"https://fixture/7"}' },
     ]);
 
     const activities = observations.filter((observation) => observation.kind === "activity");
@@ -3537,6 +3536,9 @@ describe("startSession", () => {
     // The durable payload keeps the result readable and the bytes out of it.
     const durable = JSON.stringify(activities[1]?.output);
     expect(durable).toContain("issue #7 created");
+    expect(activities[1]?.output).toMatchObject({
+      structuredContent: { url: "https://fixture/7", number: 7 },
+    });
     expect(durable).toContain("[image]");
     expect(durable).not.toContain(pixels);
 

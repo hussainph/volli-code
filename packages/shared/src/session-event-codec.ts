@@ -1287,8 +1287,14 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
       toolName,
       description,
       inputSchema: row.inputSchema,
+      // Absent on every definition frozen before VC-469, which replays as it
+      // was written: without one.
+      ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
     });
     if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`${context}[${index}] ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(providerName)) {
       throw new Error(`${context}[${index}].providerName is invalid`);
     }

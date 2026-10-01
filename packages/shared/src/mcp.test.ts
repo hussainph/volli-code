@@ -223,6 +223,69 @@ describe("sanitizeMcpToolDefinition", () => {
   });
 });
 
+describe("sanitizeMcpToolDefinition output schemas (VC-469)", () => {
+  it("keeps a published output schema that passes the input-schema bounds, unchanged", () => {
+    const outputSchema = {
+      type: "object",
+      properties: { url: { type: "string" }, number: { type: "integer" } },
+      required: ["url", "number"],
+    } as const;
+
+    expect(sanitizeMcpToolDefinition(toolCandidate({ outputSchema }))).toEqual({
+      ok: true,
+      definition: {
+        serverId: "server-1",
+        toolName: "tool",
+        providerName: mcpProviderToolName("server-1", "Fixture", "tool"),
+        description: "Tool",
+        inputSchema: { type: "object" },
+        outputSchema,
+      },
+    });
+  });
+
+  it("declares nothing for a tool whose server published no output schema", () => {
+    const result = sanitizeMcpToolDefinition(toolCandidate());
+    expect(result).toEqual({
+      ok: true,
+      definition: expect.not.objectContaining({ outputSchema: expect.anything() }),
+    });
+    expect(result.ok && "outputSchemaRejected" in result).toBe(false);
+  });
+
+  it.each([
+    [null, "output schema must be a JSON Schema object"],
+    [{ type: "array" }, 'output schema root type must be "object"'],
+    [
+      { type: "object", properties: { value: { type: "not-a-type" } } },
+      "output schema must be valid JSON Schema",
+    ],
+    [
+      { type: "object", description: "x".repeat(MCP_SCHEMA_MAX_CHARS) },
+      "output schema is too large",
+    ],
+    [
+      { type: "object", examples: Array.from({ length: MCP_SCHEMA_MAX_NODES }, () => null) },
+      "output schema has too many values",
+    ],
+  ])("keeps the tool and drops an output schema it cannot accept %#", (outputSchema, reason) => {
+    const result = sanitizeMcpToolDefinition(toolCandidate({ outputSchema }));
+
+    expect(result).toEqual({
+      ok: true,
+      definition: expect.not.objectContaining({ outputSchema: expect.anything() }),
+      outputSchemaRejected: reason,
+    });
+  });
+
+  it("still refuses the tool for its input schema, whatever its output schema", () => {
+    const result = sanitizeMcpToolDefinition(
+      toolCandidate({ inputSchema: { type: "string" }, outputSchema: { type: "object" } }),
+    );
+    expect(result).toEqual({ ok: false, reason: 'input schema root type must be "object"' });
+  });
+});
+
 describe("sanitizeMcpServerDraft", () => {
   it("accepts only direct stdio argv or an unauthenticated Streamable HTTP endpoint", () => {
     expect(
@@ -343,6 +406,22 @@ describe("validateMcpToolDefinitions", () => {
     expect(validateMcpToolDefinitions([{ ...base, parallelRead: true }])).toEqual([
       { ...base, parallelRead: true },
     ]);
+  });
+
+  it("keeps a frozen output schema and refuses one damaged after it was written (VC-469)", () => {
+    const base: McpToolDefinition = {
+      serverId: "server-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("server-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const typed = { ...base, outputSchema: { type: "object", required: ["echo"] } } as const;
+
+    expect(validateMcpToolDefinitions([typed])).toEqual([typed]);
+    expect(() =>
+      validateMcpToolDefinitions([{ ...base, outputSchema: { type: "string" } }]),
+    ).toThrow('Invalid MCP tool echo: output schema root type must be "object"');
   });
 });
 

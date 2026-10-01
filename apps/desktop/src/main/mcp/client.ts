@@ -23,7 +23,10 @@ import {
   type OpenMcpProtocolClient,
 } from "./discovery";
 
-const MCP_STDIO_BUFFER_MAX_BYTES = 1 * 1_024 * 1_024;
+// One stdio message: `MCP_RESULT_MAX_BYTES` (8 MiB) of result plus room for
+// its JSON-RPC framing and escaping (VC-469). The runtime cuts what the model
+// reads and saves the rest; this only has to let a result that size arrive.
+const MCP_STDIO_BUFFER_MAX_BYTES = 9 * 1_024 * 1_024;
 const LAUNCH_ENVIRONMENT_KEYS = [
   "PATH",
   "HOME",

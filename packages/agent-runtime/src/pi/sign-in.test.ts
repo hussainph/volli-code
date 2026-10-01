@@ -57,6 +57,9 @@ function oauthAuth(
   };
 }
 
+/** A stable installation id, as main's `installationId` answers. */
+const installationDeviceId = () => "6f1c1a52-6a8e-4d55-9c3e-2f8f0f1d3b7a";
+
 interface FakeModels {
   models: Models;
   login: ReturnType<typeof vi.fn>;
@@ -388,11 +391,16 @@ describe("piSignIn", () => {
 
     // Pi's word for the method, Pi's signal, and Pi's callback bag — assembled
     // here so that nothing above this file ever names an `AuthInteraction`.
-    expect(login).toHaveBeenCalledExactlyOnceWith("example", "api_key", {
-      signal: attempt.signal,
-      prompt: expect.any(Function),
-      notify: expect.any(Function),
-    });
+    expect(login).toHaveBeenCalledExactlyOnceWith(
+      "example",
+      "api_key",
+      {
+        signal: attempt.signal,
+        prompt: expect.any(Function),
+        notify: expect.any(Function),
+      },
+      undefined,
+    );
     // Every question arrived translated, and each one carries an id minted by
     // the driver rather than derived from a prompt that has nothing unique in it.
     expect(driver.asked.map(({ prompt }) => prompt)).toEqual([
@@ -421,6 +429,24 @@ describe("piSignIn", () => {
         expiresInSeconds: null,
       },
     ]);
+  });
+
+  it("hands Pi the installation's device id, which Sign in with ChatGPT requires (Pi 0.99)", async () => {
+    const deviceId = installationDeviceId;
+    const { models, login } = fakeModels(providerWith({ oauth: oauthAuth() }), async () => ({
+      type: "oauth",
+      access: "a",
+      refresh: "r",
+      expires: 0,
+    }));
+    await piSignIn(models, { deviceId }).login(
+      "example",
+      "oauth",
+      new AbortController().signal,
+      transcript(async () => "").steps,
+    );
+
+    expect(login.mock.calls[0]?.[3]).toEqual({ getDeviceId: deviceId });
   });
 
   it("forwards the prompt's own signal, which is how a loopback callback retires its question", async () => {

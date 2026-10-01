@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -23,6 +23,7 @@ import {
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
+  SAVED_TOOL_OUTPUT_WARNING,
   WEB_FETCH_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
   type AskUserPort,
@@ -30,6 +31,7 @@ import {
   type WebSearchPort,
 } from "./tools";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
+import { ToolOutputStore } from "./tool-output";
 
 /** What the host was asked, and with which signal, so both can be read back. */
 interface RecordedAsk {
@@ -80,6 +82,42 @@ function resultText(result: AgentToolResult<undefined>): string {
 }
 
 describe("read tool", () => {
+  it("marks a read of saved tool output as untrusted, and no other read (VC-469)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-saved-"));
+    const workspace = join(root, "worktree");
+    await mkdir(workspace);
+    const env = new NodeExecutionEnv({ cwd: workspace });
+    try {
+      await writeFile(join(workspace, "own.txt"), "the Session's own file\n");
+      const output = new ToolOutputStore({
+        directory: join(root, "sidecar.tool-output"),
+        workspacePath: workspace,
+      });
+      const saved = await output.save({ callId: "tc-1", header: "HEADER", text: "server text\n" });
+      const path = (saved as { path: string }).path;
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env, output);
+
+      const savedRead = await read!.execute(
+        "call-1",
+        { path, offset: 3 },
+        new AbortController().signal,
+      );
+      expect(savedRead.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+      expect(JSON.stringify(savedRead.content[1])).toContain("server text");
+
+      const ownRead = await read!.execute(
+        "call-2",
+        { path: "own.txt" },
+        new AbortController().signal,
+      );
+      expect(resultText(ownRead as AgentToolResult<undefined>)).toContain("the Session's own file");
+      expect(JSON.stringify(ownRead.content)).not.toContain("Volli trust notice");
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("compresses a byte-heavy PNG before returning it to the model", async () => {
     const root = await mkdtemp(join(tmpdir(), "volli-read-image-"));
     const env = new NodeExecutionEnv({ cwd: root });

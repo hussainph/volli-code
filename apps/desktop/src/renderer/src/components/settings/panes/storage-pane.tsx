@@ -595,6 +595,14 @@ function PiSessionLogsSection() {
       : inventory === null
         ? "Not scanned"
         : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
+  // Long tool results saved across every Session (VC-469), against the bound
+  // past which the oldest are removed first. Measured by the same scan.
+  const savedOutput =
+    state.status === "loading"
+      ? "Scanning…"
+      : inventory === null
+        ? "Not scanned"
+        : `${formatFileSize(inventory.toolOutput.bytes)} of ${formatFileSize(inventory.toolOutput.limitBytes)}`;
 
   return (
     <>
@@ -610,28 +618,33 @@ function PiSessionLogsSection() {
           />
         }
         before={
-          <PrefRow
-            label="Orphaned logs"
-            hint={
-              <>
-                Only logs not referenced by any Volli session are candidates. Scanning never deletes
-                files.
-              </>
-            }
-          >
-            <span className="text-ui text-muted-foreground">{summary}</span>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={
-                inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+          <>
+            <PrefRow label="Saved tool output">
+              <span className="text-ui text-muted-foreground">{savedOutput}</span>
+            </PrefRow>
+            <PrefRow
+              label="Orphaned logs"
+              hint={
+                <>
+                  Only logs not referenced by any Volli session are candidates. Scanning never
+                  deletes files.
+                </>
               }
-              onClick={() => setConfirmOpen(true)}
             >
-              <TrashIcon />
-              Clean up…
-            </Button>
-          </PrefRow>
+              <span className="text-ui text-muted-foreground">{summary}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={
+                  inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+                }
+                onClick={() => setConfirmOpen(true)}
+              >
+                <TrashIcon />
+                Clean up…
+              </Button>
+            </PrefRow>
+          </>
         }
         state={state}
       >
