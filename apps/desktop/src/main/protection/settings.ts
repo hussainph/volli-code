@@ -10,8 +10,11 @@ import {
 import { getAppState, setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
 
-/** The raw backup's presence also marks completion, including an empty backup. */
+/** Legacy dogfood backup. Never replace it or treat it as rollout completion. */
 export const PROTECTION_POLICY_MIGRATION_KEY = "volli:protection-policy-migration:v1";
+
+/** This release's raw backup also marks rollout completion, even when empty. */
+export const PROTECTION_POLICY_ROLLOUT_KEY = "volli:protection-policy-rollout:v1";
 
 /**
  * One startup cleanup of dormant policy. The backup keeps the original
@@ -20,19 +23,20 @@ export const PROTECTION_POLICY_MIGRATION_KEY = "volli:protection-policy-migratio
  * explicit enforcement and the visible Session-peek departure. Everything else
  * inherits built-in defaults rather than pinning a copy of those defaults.
  *
- * The backup and all row updates commit together. An existing backup is never
- * replaced, so later policy edits cannot rerun cleanup.
+ * The rollout backup and all row updates commit together. The legacy dogfood
+ * backup stays untouched: policies may have been edited after it was written.
+ * Only the new rollout backup prevents a rerun on later startups.
  */
 export function migrateProtectionPolicies(db: Database.Database, now: number): void {
   db.transaction(() => {
-    if (getAppState(db, PROTECTION_POLICY_MIGRATION_KEY) !== undefined) return;
+    if (getAppState(db, PROTECTION_POLICY_ROLLOUT_KEY) !== undefined) return;
     const rows = prepared<[], { id: string; authority_policy: string }>(
       db,
       "SELECT id, authority_policy FROM projects WHERE authority_policy IS NOT NULL ORDER BY id",
     ).all();
     setAppState(
       db,
-      PROTECTION_POLICY_MIGRATION_KEY,
+      PROTECTION_POLICY_ROLLOUT_KEY,
       JSON.stringify({
         completedAt: now,
         policies: rows.map((row) => ({ projectId: row.id, authorityPolicy: row.authority_policy })),

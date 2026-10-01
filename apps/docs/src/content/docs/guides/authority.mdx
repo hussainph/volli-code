@@ -52,8 +52,10 @@ in app-owned storage before clearing hidden judgment, classifier, fallback,
 budget, other actor and unknown containment/writable-root departures to built-in
 defaults. It retains explicit Off/Observe and the visible Session transcript-read
 setting. Writable roots are **not** converted into approvals. Turning Protection
-off also clears hidden supported departures. The original backup is never
-replaced.
+off also clears hidden supported departures. This release uses a new cleanup
+marker and backup, so the cleanup also runs for earlier dogfood installs. Their
+original backup is kept unchanged, and the new backup records the policies just
+before this release clears them. Later startups do not rerun the cleanup.
 
 ## Know the boundary
 

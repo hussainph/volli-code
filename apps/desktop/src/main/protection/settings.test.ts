@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 
-import { getAllAppState, getAppState } from "../db/app-state-repo";
+import { getAllAppState, getAppState, setAppState } from "../db/app-state-repo";
 import { getProjectAuthorityPolicy, insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { migrateProtectionPolicies, PROTECTION_POLICY_MIGRATION_KEY } from "./settings";
+import {
+  migrateProtectionPolicies,
+  PROTECTION_POLICY_MIGRATION_KEY,
+  PROTECTION_POLICY_ROLLOUT_KEY,
+} from "./settings";
 
 let ctx: TestDb;
 
@@ -31,7 +35,7 @@ function row(id: string) {
 }
 
 function backup() {
-  const raw = getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY);
+  const raw = getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY);
   expect(raw).toBeDefined();
   return JSON.parse(raw!) as {
     completedAt: number;
@@ -73,6 +77,7 @@ describe("Protection policy cleanup", () => {
       JSON.stringify({ actors: { session: { peek: "project" } } }),
     );
     expect(backup().policies).toHaveLength(1);
+    expect(getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY)).toBeUndefined();
   });
 
   it.each(["off", "observe"] as const)(
@@ -161,10 +166,62 @@ describe("Protection policy cleanup", () => {
     expect(backup().policies).toHaveLength(1);
   });
 
-  it("is idempotent across repeated startup calls and later project edits", () => {
+  it.each([
+    '{ "completedAt": 1, "policies": [] }\n',
+    '{ "completedAt": 1, "policies": [{ "projectId": "dormant", "authorityPolicy": "{}" }] }\n',
+  ])(
+    "cleans hidden policies edited after the dogfood marker, preserving its exact backup (%s)",
+    (originalBackup) => {
+      setAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY, originalBackup, 1);
+      project("dormant", JSON.stringify(hidden));
+      project("later", JSON.stringify({ enforcement: "off", ...hidden }));
+      const before = row("dormant")!;
+      migrateProtectionPolicies(ctx.db, 10);
+      expect(row("dormant")).toEqual({
+        authority_policy: JSON.stringify({ actors: { session: { peek: "project" } } }),
+        row_version: before.row_version + 1,
+        updated_at: 10,
+      });
+      expect(row("later")?.authority_policy).toBe(
+        JSON.stringify({ enforcement: "off", actors: { session: { peek: "project" } } }),
+      );
+      expect(getProjectAuthorityPolicy(ctx.db, "dormant").budgets).toEqual(
+        DEFAULT_AUTHORITY_POLICY.budgets,
+      );
+      expect(getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY)).toBe(originalBackup);
+      expect(JSON.parse(getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY)!)).toEqual({
+        completedAt: 10,
+        policies: [
+          { projectId: "dormant", authorityPolicy: JSON.stringify(hidden) },
+          {
+            projectId: "later",
+            authorityPolicy: JSON.stringify({ enforcement: "off", ...hidden }),
+          },
+        ],
+      });
+    },
+  );
+
+  it("leaves On settings unchanged even with a pre-existing dogfood marker", () => {
+    const originalBackup = '{ "completedAt": 1, "policies": [] }\n';
+    setAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY, originalBackup, 1);
+    const raw = JSON.stringify({ enforcement: "enforce", ...hidden });
+    project("on", raw);
+    const before = row("on");
+    migrateProtectionPolicies(ctx.db, 10);
+    expect(row("on")).toEqual(before);
+    expect(getProjectAuthorityPolicy(ctx.db, "on").budgets.delegationExceeded).toBe("refuse");
+    expect(getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY)).toBe(originalBackup);
+    expect(JSON.parse(getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY)!)).toEqual({
+      completedAt: 10,
+      policies: [{ projectId: "on", authorityPolicy: raw }],
+    });
+  });
+
+  it("is idempotent across repeated rollout startup calls and later project edits", () => {
     project("dormant", JSON.stringify(hidden));
     migrateProtectionPolicies(ctx.db, 10);
-    const state = getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY);
+    const state = getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY);
     const cleaned = row("dormant");
     migrateProtectionPolicies(ctx.db, 11);
     expect(row("dormant")).toEqual(cleaned);
@@ -179,7 +236,7 @@ describe("Protection policy cleanup", () => {
     migrateProtectionPolicies(ctx.db, 14);
     expect(row("dormant")).toEqual(edited);
     expect(row("later")).toEqual(later);
-    expect(getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY)).toBe(state);
+    expect(getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY)).toBe(state);
   });
 
   it("durably marks completion even when there are no policies", () => {
@@ -193,7 +250,8 @@ describe("Protection policy cleanup", () => {
     expect(backup()).toEqual({ completedAt: 10, policies: [] });
   });
 
-  it("rolls back the backup and all row updates on failure", () => {
+  it("rolls back the rollout backup and all row updates on failure, leaving the dogfood backup intact", () => {
+    setAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY, '{ "completedAt": 1, "policies": [] }', 1);
     project("a", JSON.stringify(hidden));
     project("z", JSON.stringify(hidden));
     const state = getAllAppState(ctx.db);
@@ -205,20 +263,32 @@ describe("Protection policy cleanup", () => {
     expect(getAllAppState(ctx.db)).toEqual(state);
     expect(row("a")).toEqual(a);
     expect(row("z")).toEqual(z);
-    expect(getAppState(ctx.db, PROTECTION_POLICY_MIGRATION_KEY)).toBeUndefined();
+    expect(getAppState(ctx.db, PROTECTION_POLICY_ROLLOUT_KEY)).toBeUndefined();
     ctx.db.exec("DROP TRIGGER fail_policy_cleanup");
     migrateProtectionPolicies(ctx.db, 11);
     expect(backup().completedAt).toBe(11);
     expect(backup().policies).toHaveLength(2);
   });
 
-  it("does not clear policies when the backup cannot be stored", () => {
-    project("dormant", JSON.stringify(hidden));
-    const before = row("dormant");
-    ctx.db.exec(`CREATE TRIGGER fail_policy_backup BEFORE INSERT ON app_state
-      WHEN NEW.key = '${PROTECTION_POLICY_MIGRATION_KEY}' BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
-    expect(() => migrateProtectionPolicies(ctx.db, 10)).toThrow("disk full");
-    expect(getAllAppState(ctx.db)).toEqual({});
-    expect(row("dormant")).toEqual(before);
-  });
+  it.each([false, true])(
+    "does not clear policies when the rollout backup cannot be stored (dogfood=%s)",
+    (dogfood) => {
+      if (dogfood) {
+        setAppState(
+          ctx.db,
+          PROTECTION_POLICY_MIGRATION_KEY,
+          '{ "completedAt": 1, "policies": [] }',
+          1,
+        );
+      }
+      project("dormant", JSON.stringify(hidden));
+      const before = row("dormant");
+      const state = getAllAppState(ctx.db);
+      ctx.db.exec(`CREATE TRIGGER fail_policy_backup BEFORE INSERT ON app_state
+      WHEN NEW.key = '${PROTECTION_POLICY_ROLLOUT_KEY}' BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+      expect(() => migrateProtectionPolicies(ctx.db, 10)).toThrow("disk full");
+      expect(getAllAppState(ctx.db)).toEqual(state);
+      expect(row("dormant")).toEqual(before);
+    },
+  );
 });
