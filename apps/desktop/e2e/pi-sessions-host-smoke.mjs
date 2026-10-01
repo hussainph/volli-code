@@ -22,8 +22,16 @@
  *       concluded is hidden from Previous by default and reappears — openable
  *       — once the filter is toggled. `isCleanupExempt`
  *       (`active-session-listing.ts`) protects any Session whose attachment
- *       is still `open`, whatever the task at hand — so a chat has to be
- *       built whose Pi attach never opens in the first place.
+ *       is still `open`, whatever the task at hand — so this needs a real
+ *       failed attach, not merely an unopened Draft.
+ *
+ * A new ticket chat is now a provisional Draft until its first Send. Promotion
+ * creates the durable Session before it starts the resident client, whose
+ * asynchronous attach then calls `SessionLocationResolver#prepare` first
+ * (`session-runtime.ts`, ~line 677). A prepare error fails the whole attach
+ * with `location_unavailable`; it does not undo the already-created Session
+ * or its tab. Thus this scenario is still reachable after VC-358, but only by
+ * sending once to promote the Draft before checking cleanup.
  *
  * The retired smoke got its "never attaches" chat from a deliberately-broken
  * `opencode` binary override; that lever doesn't translate to Pi (credentials
@@ -31,20 +39,17 @@
  * `auth.json` was tried and empirically still attached: Pi's `startSession`
  * does not check provider credentials before binding). The lever that DOES
  * work is local and adapter-agnostic: every native attach — Pi included —
- * runs `SessionLocationResolver#prepare` first (`session-runtime.ts`, ~line
- * 677) and fails the WHOLE attach with `location_unavailable` if it throws,
- * before the adapter is ever asked anything. For a worktree ticket, `prepare`
- * runs the `ensure` pipeline's `git worktree add` inside the PROJECT's own
- * directory (`location.ts`, `worktree/ensure.ts`) — so deleting that
- * directory from disk, after part (a)'s real turn is safely durable and
- * needs it no further, makes the ensure pipeline fail on a missing `cwd`
- * deterministically, with no Pi credentials or network involved at all. The
- * already-recorded default model (`requireDefaultModel`) is unaffected: it is
- * read back from `app_state` with no live re-validation, so `session.create`
- * still succeeds and the tab still lands (`bootChatSession`'s doc comment:
- * "Landing is gated on the CREATE and never on the attach") — only the
- * attach itself fails, which is exactly the `attachment.status !== "open"`
- * state `isCleanupExempt` needs to see.
+ * runs `SessionLocationResolver#prepare` before the adapter is ever asked
+ * anything. For a worktree ticket, `prepare` runs the `ensure` pipeline's
+ * `git worktree add` inside the PROJECT's own directory (`location.ts`,
+ * `worktree/ensure.ts`). Deleting that directory from disk, after part (a)'s
+ * real turn is durably settled and needs it no further, makes `ensure` fail
+ * deterministically on its missing `cwd`, with no Pi credentials or network
+ * involved. The already-recorded default model (`requireDefaultModel`) remains
+ * available, so promotion's `session.create` succeeds first; the missing
+ * directory then produces a durable `attachment.failed` and leaves the first
+ * message held for Retry. That closed attachment is exactly the state the
+ * cleanup filter needs to see.
  *
  * Run:
  *   pnpm run build
@@ -87,10 +92,10 @@ const MODEL_PIN = {
 // Short on purpose so the one billed setup turn remains bounded. The Session
 // is addressed by its durable identity after this point, not by auto-title.
 const ORPHAN_PROMPT = "Say hi before this ticket is deleted.";
-// The concluded-business chat never sends a message (its attach fails before
-// the composer could deliver one, which is the whole point — see the module
-// doc comment), so it keeps the tab strip's neutral fallback label.
+// Check 6 sends only to promote the Draft. Its worktree attach fails before Pi
+// receives the held message, so the Session keeps the tab strip's neutral label.
 const DEFAULT_CHAT_TITLE = "Chat";
+const CONCLUDE_PROMPT = "Keep this message queued while the ticket worktree is unavailable.";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-sessions-host-smoke-");
 const fakeHome = join(scratch, "home");
@@ -368,7 +373,7 @@ async function main() {
     let concludeDisplayId = null;
     await attempt(
       6,
-      "a ticket chat whose worktree can't be prepared (project directory gone) still lands its tab, unattached",
+      "a ticket Draft promotes on first Send before its missing-project attach fails, keeping the durable Session and tab",
       async () => {
         const seeded = await seedTicket(page, projectId, PROJECT.prefix, "Concluded chat ticket");
         concludeDisplayId = seeded.displayId;
@@ -379,29 +384,63 @@ async function main() {
           async () =>
             (await page.getByRole("tab", { name: concludeDisplayId, exact: true }).count()) === 1,
         );
-        await openNewChatTab(page, TICKET_TAB_STRIP);
-        // No message is ever sent — the point is that the tab lands even
-        // though the attach behind it is about to fail (`bootChatSession`:
-        // landing is gated on the create, never the attach).
-        const live = await waitUntil(
-          "the chat's attachment to record as closed (attach failure, not just slow)",
+        const chatTabLabel = await openNewChatTab(page, TICKET_TAB_STRIP);
+        await sleep(600);
+        const beforeSend = await page.evaluate(
+          (ticketId) => window.api.sessions.listForTicket({ ticketId }),
+          concludeTicketId,
+        );
+        if (!beforeSend.ok) throw new Error(beforeSend.error);
+        const noSessionBeforeSend = beforeSend.sessions.length === 0;
+
+        await waitComposerReady(page);
+        await submitPrompt(page, CONCLUDE_PROMPT);
+        const failed = await waitUntil(
+          "promotion to persist the worktree attach failure before any attachment opens",
           async () => {
-            const recs = await page.evaluate(
-              (pid) => window.api.sessions.list({ projectId: pid }),
-              projectId,
+            const listed = await page.evaluate(
+              (ticketId) => window.api.sessions.listForTicket({ ticketId }),
+              concludeTicketId,
             );
-            if (!recs.ok) return false;
-            const mine = recs.sessions.find(
-              (s) => s.kind === "chat" && s.record.title === DEFAULT_CHAT_TITLE,
+            if (!listed.ok) throw new Error(listed.error);
+            const chat = listed.sessions.find((session) => session.kind === "chat");
+            if (chat === undefined) return false;
+            const snapshot = await page.evaluate(
+              async (sessionId) =>
+                window.api.sessionRpc.request({
+                  procedure: "session.snapshot",
+                  input: { sessionId },
+                }),
+              chat.record.sessionId,
             );
-            return mine !== undefined && mine.record.live === false;
+            if (!snapshot.ok) throw new Error(JSON.stringify(snapshot));
+            const events = (snapshot.data.frames ?? []).map((frame) => frame.event.payload);
+            const failure = events.find((event) => event.kind === "attachment.failed");
+            const opened = events.some((event) => event.kind === "attachment.opened");
+            return failure?.failure?.code === "location_unavailable" &&
+              !opened &&
+              chat.record.live === false
+              ? { chat, failure }
+              : false;
           },
           { timeout: 30000 },
         )
-          .then(() => true)
-          .catch(() => false);
-        if (!live) await captureFailureEvidence(page, "doomed-chat-still-live");
-        return { ok: live };
+          .then((result) => result)
+          .catch(() => null);
+        const tab = page.getByRole("tab", { name: chatTabLabel, exact: true });
+        const tabLanded =
+          (await tab.count()) === 1 && (await tab.getAttribute("aria-selected")) === "true";
+        const failedUnattached = failed !== null;
+        if (!noSessionBeforeSend || !failedUnattached || !tabLanded) {
+          await captureFailureEvidence(page, "promoted-chat-attach-failed");
+        }
+        return {
+          ok: noSessionBeforeSend && failedUnattached && tabLanded,
+          detail:
+            `sessionsBeforeSend=${beforeSend.sessions.length} ` +
+            `attachFailure=${failed?.failure?.failure?.code ?? "missing"} ` +
+            `live=${failed?.chat.record.live ?? "missing"} tabLanded=${tabLanded}`,
+        };
       },
     );
 
@@ -439,7 +478,7 @@ async function main() {
 
     await attempt(
       8,
-      "toggling Cleaned up reveals the concluded chat, and clicking it opens its (empty) conversation, selected",
+      "toggling Cleaned up reveals the concluded chat, and clicking it reopens its retained tab, selected",
       async () => {
         await page.getByRole("button", { name: "Filter", exact: true }).click();
         await page.getByRole("menuitemcheckbox", { name: "Cleaned up", exact: true }).click();
