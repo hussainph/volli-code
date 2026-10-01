@@ -358,6 +358,40 @@ describe("protection mode (VC-480)", () => {
     expect(verdict.stages).toEqual(["true", "echo x", "launchctl list"]);
   });
 
+  it("keeps main's readable tool-output exception in Protection without granting writes", () => {
+    const { raw, real } = workspace();
+    const saved = join(real, "..", "s.tool-output");
+    mkdirSync(saved);
+    const file = join(saved, "output.txt");
+    writeFileSync(file, "output");
+    for (const protection of [false, true]) {
+      expect(
+        authorityVerdict({
+          tool: "read",
+          args: { path: file },
+          authority: snapshot(),
+          workspacePath: raw,
+          readableRoots: [saved],
+          protection,
+        }),
+      ).toEqual({ outcome: "allow" });
+    }
+    const write = authorityVerdict({
+      tool: "write",
+      args: { path: file, content: "x" },
+      authority: snapshot(),
+      workspacePath: raw,
+      readableRoots: [saved],
+      protection: true,
+    });
+    expect(write).toMatchObject({
+      outcome: "deny",
+      violations: [
+        { rule: "path.outside-workspace", scopes: [{ operation: "write", target: file }] },
+      ],
+    });
+  });
+
   it("leaves a single command's stages off", () => {
     const { raw } = workspace();
     const verdict = authorityVerdict({

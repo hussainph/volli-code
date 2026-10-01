@@ -4,13 +4,10 @@
  *
  * ONE SWITCH, and it is a reading of the policy rather than a setting of its
  * own. Protection is on exactly when the resolved policy enforces. Turning it
- * on states `enforcement: "enforce"`; turning it off removes BOTH `enforcement`
- * and `containment` from the stored departures, so nothing the old Authority
- * pane left behind can keep governing a project whose page says it is off. The
- * write is `authority-pane.tsx`'s merge-and-prune, copied rather than shared so
- * the experiment can be deleted without touching the pane it replaces: every
- * field this page draws no control for survives the write untouched, and an
- * emptied document is stored as `null`.
+ * on states `enforcement: "enforce"`. Off clears hidden departures to defaults,
+ * retaining only the transcript control this page exposes. Main's command/file
+ * gate is the only protection here; Scoped containment is deferred to VC-45.
+ * The experimental flag still selects this page, so flag-off policy is untouched.
  *
  * APPROVED ACTIONS is the ledger main keeps of a person's "Allow for this
  * Session" and "Always allow" answers. Rows are written only in main, from a
@@ -75,7 +72,7 @@ import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 const ON_TEXT =
-  "Agents work inside their workspace and ask before going further. Credentials stay out of reach.";
+  "File and command checks ask before allowing a refused action. This is not a sandbox: scripts can bypass these checks.";
 const OFF_TEXT =
   "Agents run as you. They can read, change and run anything you can, without asking.";
 const FLIPPED_TEXT = "Sessions already running keep their setting until they next start.";
@@ -156,9 +153,17 @@ export function ProtectionPane({ project }: { project: Project }) {
     const ok = await patch(
       next
         ? { enforcement: "enforce" }
-        : // Off removes containment too: a wall left standing under a page
-          // that says "Agents run as you" would be governing invisibly.
-          { enforcement: undefined, containment: undefined },
+        : {
+            enforcement: undefined,
+            judgmentMode: undefined,
+            classifierModel: undefined,
+            fallback: undefined,
+            budgets: undefined,
+            actors:
+              override?.actors?.session?.peek === undefined
+                ? undefined
+                : { session: { peek: override.actors.session.peek } },
+          },
     );
     if (ok) setFlipped(true);
   }
@@ -191,9 +196,7 @@ export function ProtectionPane({ project }: { project: Project }) {
             <OverrideControl
               label="Protection"
               inheritedValue="Off"
-              overridden={
-                override?.enforcement !== undefined || override?.containment !== undefined
-              }
+              overridden={override?.enforcement !== undefined}
               disabled={saving}
               onRevert={() => void setProtection(false)}
             >

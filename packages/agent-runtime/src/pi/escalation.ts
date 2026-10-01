@@ -244,8 +244,7 @@ export class AuthorityEscalation {
    * Decide one call in protection mode (VC-480): no counters, no thresholds.
    *
    * The funnel, in order:
-   *  1. A refusal no person may clear — or one the Session's own walls repeat,
-   *     or one whose violations were not enumerated — is explained and never
+   *  1. A refusal no person may clear — or one whose violations were not enumerated — is explained and never
    *     asked about. It is checked across EVERY violation first, so a "yes" to
    *     one rule can never carry a never-allowed one through with it.
    *  2. Each approvable violation is looked up in the remembered approvals,
@@ -291,16 +290,6 @@ export class AuthorityEscalation {
         outcome: "deny",
         reason: hardRefusalMessage(cause, hard?.reason ?? verdict.reason),
         cause,
-        record: true,
-        interrupt: false,
-      };
-    }
-    if (verdict.walled === true) {
-      decided("rule:hard", verdict.cause, "Blocked by this Session's sandbox");
-      return {
-        outcome: "deny",
-        reason: verdict.reason,
-        cause: verdict.cause,
         record: true,
         interrupt: false,
       };

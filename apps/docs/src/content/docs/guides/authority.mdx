@@ -50,5 +50,23 @@ authority of the account running Volli, and the built-in rules do not isolate
 commands from every possible side effect. Do not treat Authority as
 operating-system containment.
 
+## Protection experiment
+
+With **Settings → General → Protection (experimental)** enabled,
+**Configure → Protection** replaces this project's Authority controls with an
+Off-by-default switch and an **Approved actions** list. An approvable refusal
+asks immediately: allow once, allow for this Session, always allow in this
+project, deny, or deny and steer. Remembered approvals can be revoked in the list.
+An unattended Session waits for your answer; hard refusals offer no approval.
+
+Protection uses the same file and command checks described above, **not a
+sandbox or a credential isolation boundary**. Scoped containment and writable
+roots are deferred. Scripts can bypass command-text checks.
+
+The first activation backs up stored policy and clears hidden departures for
+projects that are not enforcing, retaining their Off/Observe choice and the
+visible Session transcript setting. Enforcing projects retain their policy.
+With the experiment disabled, existing Authority behavior is unchanged.
+
 See [Settings and configuration](/guides/settings/) for the difference between
 app-wide Settings and project Configure options.

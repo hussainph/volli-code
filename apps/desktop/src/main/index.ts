@@ -185,7 +185,7 @@ import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { createProtection } from "./protection/host";
 import { registerProtectionIpcHandlers } from "./protection/ipc";
-import { protectionExperimentEnabled } from "./protection/settings";
+import { migrateProtectionPolicies, protectionExperimentEnabled } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -894,7 +894,14 @@ app.whenReady().then(async () => {
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    dbHandle = { ok: true, db: openVolliDb(dbPath) };
+    const db = openVolliDb(dbPath);
+    try {
+      migrateProtectionPolicies(db, Date.now());
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
     // is classified here, once: a native-ABI failure names the Node

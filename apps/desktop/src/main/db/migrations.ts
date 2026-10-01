@@ -2281,25 +2281,6 @@ CREATE INDEX IF NOT EXISTS session_read_receipts_unread
 `;
 
 /**
- * Migration 053: a project's own decision model (VC-478).
- *
- * One nullable JSON column beside `session_model`, on 024's terms: `NULL` is
- * "inherit the app-wide decision model", and a stored `{ "kind": "none" }` is
- * a project that turned decision models off for itself — a choice, not an
- * absence. The document is variable-shaped (none, a local server, a cloud
- * model with its opt-in), so `json_valid` guards it and the reader re-checks
- * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
- * inherit; see `readDecisionModelColumn`).
- *
- * No credential is or can be stored here: a cloud setting names a provider and
- * a model, and the key stays in Pi's own `auth.json`.
- */
-const MIGRATION_053_PROJECT_DECISION_MODEL = `
-ALTER TABLE projects ADD COLUMN decision_model TEXT
-  CHECK (decision_model IS NULL OR json_valid(decision_model));
-`;
-
-/**
  * Migration 054: `authority_approvals` — the remembered approvals of VC-480.
  *
  * One row per "allow for this Session" or "always allow in this project", with

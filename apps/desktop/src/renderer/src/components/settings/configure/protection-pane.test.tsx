@@ -6,7 +6,7 @@
  * Mounted for real rather than rendered to static markup, because what is
  * worth pinning here is what a click WRITES: the switch is a reading of the
  * stored policy, and the two directions write different departures — on
- * states `enforcement`, off prunes `enforcement` and `containment` both. The
+ * states `enforcement`, off clears hidden policy departures. The
  * list is the same: a revoke is a call, a removed row and a toast whose Undo is
  * another call. The bridge is a stub per test, as `authority-pane.test.tsx`
  * stubs nothing because it writes nothing.
@@ -178,7 +178,7 @@ describe("the switch", () => {
     expect(protectionSwitch()?.getAttribute("aria-checked")).toBe("true");
     expect(html).toContain("Protection is on");
     expect(html).toContain(
-      "Agents work inside their workspace and ask before going further. Credentials stay out of reach.",
+      "File and command checks ask before allowing a refused action. This is not a sandbox: scripts can bypass these checks.",
     );
     expect(html).toContain("Reset Protection to the app-wide value, Off");
   });
@@ -186,40 +186,43 @@ describe("the switch", () => {
   it("turns on by stating enforce, merged into what the project already says", async () => {
     const bridge = stubBridge();
     await renderPane({
-      writableRoots: ["/Users/me/scratch"],
       actors: { session: { peek: "project" } },
     });
 
     await click(protectionSwitch());
 
     expect(lastWrittenOverride(bridge)).toEqual({
-      writableRoots: ["/Users/me/scratch"],
       actors: { session: { peek: "project" } },
       enforcement: "enforce",
     });
   });
 
-  it("turns off by pruning enforcement and containment, leaving the rest", async () => {
+  it("turns off by clearing hidden restrictions, retaining only visible transcript policy", async () => {
     const bridge = stubBridge();
-    await renderPane({ enforcement: "enforce", containment: "scoped", judgmentMode: "auto" });
+    await renderPane({
+      enforcement: "enforce",
+      judgmentMode: "auto",
+      budgets: { delegationExceeded: "refuse" },
+      actors: { session: { peek: "project", coordinationVerbs: [] } },
+    });
 
     await click(protectionSwitch());
 
-    expect(lastWrittenOverride(bridge)).toEqual({ judgmentMode: "auto" });
+    expect(lastWrittenOverride(bridge)).toEqual({ actors: { session: { peek: "project" } } });
   });
 
   it("stores an emptied document as null", async () => {
     const bridge = stubBridge();
-    await renderPane({ enforcement: "enforce", containment: "scoped" });
+    await renderPane({ enforcement: "enforce" });
 
     await click(protectionSwitch());
 
     expect(lastWrittenOverride(bridge)).toBeNull();
   });
 
-  it("offers the reset for a wall left behind under a page that says off", async () => {
+  it("offers the reset for an explicit observe override under a page that says off", async () => {
     const bridge = stubBridge();
-    const html = (await renderPane({ enforcement: "observe", containment: "scoped" })).innerHTML;
+    const html = (await renderPane({ enforcement: "observe" })).innerHTML;
 
     expect(html).toContain("Protection is off");
     await click(buttonLabelled("Reset Protection to the app-wide value, Off"));

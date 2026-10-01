@@ -111,7 +111,6 @@ import {
   type PolicyViolation,
 } from "./approvals";
 
-
 /**
  * Case folding, and the one class of comparison that must not fold.
  *
@@ -265,17 +264,17 @@ function isDeviceSink(path: string): boolean {
 function containedPaths(
   call: PolicyToolCall,
   context: PolicyContext,
-): { path: string; roots: readonly string[] }[] {
+): { path: string; roots: readonly string[]; operation: "read" | "write" }[] {
   const writeRoots = [context.workspacePath];
   const readRoots = [context.workspacePath, ...(context.readableRoots ?? [])];
   return [
-    ...call.reads.map((path) => ({ path, roots: readRoots })),
+    ...call.reads.map((path) => ({ path, roots: readRoots, operation: "read" as const })),
     ...[
       ...call.writes,
       ...segmentsOf(call).flatMap((segment) =>
         segment.writes.filter((path) => !isDeviceSink(path)),
       ),
-    ].map((path) => ({ path, roots: writeRoots })),
+    ].map((path) => ({ path, roots: writeRoots, operation: "write" as const })),
   ];
 }
 
@@ -551,25 +550,25 @@ function isForced(args: readonly string[]): boolean {
 }
 
 function gitInternalsHazard(call: PolicyToolCall, context: PolicyContext): string | null {
-    const gitDir = gitDirOf(context);
-    for (const segment of segmentsOf(call)) {
-      for (const path of segment.paths) {
-        if (isGitExecutablePath(gitDir, path)) {
-          return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
-        }
-      }
-      if (baseName(segment.program) !== "git") continue;
-      const inlineConfig = gitInlineConfigHazard(segment.args);
-      if (inlineConfig !== null) {
-        return `git ${inlineConfig} makes git run something this policy never inspected; drop it and run the command directly.`;
-      }
-      const invocation = gitInvocation(segment.args);
-      if (invocation === null) continue;
-      if (invocation.subcommand === "config" && gitConfigWrites(invocation.rest)) {
-        return `This git config would write repository configuration and change what later commands do; only the read forms (--get, --list) are available.`;
+  const gitDir = gitDirOf(context);
+  for (const segment of segmentsOf(call)) {
+    for (const path of segment.paths) {
+      if (isGitExecutablePath(gitDir, path)) {
+        return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
       }
     }
-    return null;
+    if (baseName(segment.program) !== "git") continue;
+    const inlineConfig = gitInlineConfigHazard(segment.args);
+    if (inlineConfig !== null) {
+      return `git ${inlineConfig} makes git run something this policy never inspected; drop it and run the command directly.`;
+    }
+    const invocation = gitInvocation(segment.args);
+    if (invocation === null) continue;
+    if (invocation.subcommand === "config" && gitConfigWrites(invocation.rest)) {
+      return `This git config would write repository configuration and change what later commands do; only the read forms (--get, --list) are available.`;
+    }
+  }
+  return null;
 }
 
 /** A rule's verdict: the sentence the model should read, or null to pass the call on. */
@@ -764,15 +763,19 @@ const RULE_SCOPES: Partial<
   "path.outside-workspace": (call, _snapshot, context) =>
     containedPaths(call, context)
       .filter(({ path, roots }) => !roots.some((root) => containsPath(root, path)))
-      .map(({ path }) => call.reads.includes(path) ? readScope(path) : writeScope(path)),
+      .map(({ path, operation }) => (operation === "read" ? readScope(path) : writeScope(path))),
 
   "path.git-internals": (call, _snapshot, context) =>
     gitInternalsHazard(call, context) !== null
       ? null
-      : writtenPaths(call).filter((path) => guardsPath(gitDirOf(context), path)).map(exactWriteScope),
+      : writtenPaths(call)
+          .filter((path) => guardsPath(gitDirOf(context), path))
+          .map(exactWriteScope),
 
   "path.volli-internals": (call, _snapshot, context) =>
-    writtenPaths(call).filter((path) => guardsPath(volliDirOf(context), path)).map(exactWriteScope),
+    writtenPaths(call)
+      .filter((path) => guardsPath(volliDirOf(context), path))
+      .map(exactWriteScope),
 
   "command.git-escapes-workspace": (call, _snapshot, context) => {
     const scopes: ApprovalScope[] = [];

@@ -1671,7 +1671,8 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
 
 function decodeApprovalMetadata(value: unknown, context: string): ApprovalDetail {
   const row = asRecord(value, context);
-  const stages = readStringList(row.stages, `${context}.stages`);
+  if (!Array.isArray(row.stages)) throw new Error(`${context}.stages must be an array`);
+  const stages = row.stages.map((stage, index) => readString(stage, `${context}.stages[${index}]`));
   const held = readNullableInteger(row.held, `${context}.held`);
   if (held !== null && (held < 0 || held >= stages.length)) {
     throw new Error(`${context}.held must index a command stage`);

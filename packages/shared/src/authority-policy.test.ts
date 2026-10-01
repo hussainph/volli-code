@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  isOverridableAuthorityRule,
   type AuthorityRuleId,
   type AuthoritySnapshot,
   type PolicyCommandSegment,
@@ -11,7 +12,6 @@ import {
 } from "./authority";
 import { evaluate, violations } from "./authority-policy";
 import { approvalCovers, type ApprovalScope } from "./approvals";
-import type { CapabilityPolicy } from "./capability-policy";
 
 const WORKSPACE = "/Users/dev/code/volli";
 
@@ -967,7 +967,6 @@ describe("violations", () => {
   function all(toolCall: PolicyToolCall, overrides: Partial<AuthoritySnapshot> = {}) {
     return violations(toolCall, snapshot(overrides), {
       workspacePath: WORKSPACE,
-      capability: CAPABILITY,
     });
   }
 
@@ -986,20 +985,32 @@ describe("violations", () => {
     ]);
   });
 
-  it("names a private read exactly, and an operand of a program that may change it not at all", () => {
+  it("names an outside file-tool read exactly, without adding a capability denylist", () => {
     const read = all(call({ tool: "read", reads: ["/Users/dev/.zshrc"] }));
-    expect(read[0].rule).toBe("path.private");
+    expect(read[0].rule).toBe("path.outside-workspace");
     expect(read[0].scopes?.map((scope) => [scope.operation, scope.key])).toEqual([
       ["read", "/Users/dev/.zshrc"],
     ]);
-    const cat = all(exec(segment("cat", ["/Users/dev/.zshrc"], { paths: ["/Users/dev/.zshrc"] })));
-    expect(cat[0].scopes?.[0].operation).toBe("read");
-    const copy = all(
-      exec(segment("cp", ["/Users/dev/.zshrc", "x"], { paths: ["/Users/dev/.zshrc"] })),
-    );
-    expect(copy.find((violation) => violation.rule === "path.private")?.scopes).toBeNull();
-    const write = all(call({ tool: "write", writes: ["/Users/dev/.zshrc"] }));
-    expect(write.find((violation) => violation.rule === "path.private")?.scopes).toBeNull();
+    expect(all(exec(segment("cat", ["/etc/hosts"], { paths: ["/etc/hosts"] })))).toEqual([]);
+  });
+
+  it("keeps read and write objections separate even for the same outside path", () => {
+    const path = `${OTHER}/a.md`;
+    expect(
+      all(call({ reads: [path], writes: [path] }))[0].scopes?.map((scope) => scope.operation),
+    ).toEqual(["read", "write"]);
+    expect(
+      violations(call({ reads: [path] }), snapshot(), {
+        workspacePath: WORKSPACE,
+        readableRoots: [OTHER],
+      }),
+    ).toEqual([]);
+    expect(
+      violations(call({ writes: [path] }), snapshot(), {
+        workspacePath: WORKSPACE,
+        readableRoots: [OTHER],
+      })[0].scopes?.[0].operation,
+    ).toBe("write");
   });
 
   it("keeps plumbing and Volli's own files exact, and git config writes once-only", () => {

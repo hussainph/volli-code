@@ -1425,7 +1425,10 @@ describe("Pi native adapter attach", () => {
       resolveMcpPort: () => ({
         call: async (_request, signal, hostAsk) => {
           const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
-          return { content: [{ type: "text", text: choice }], isError: false };
+          return {
+            content: [{ type: "text", text: typeof choice === "string" ? choice : choice.message }],
+            isError: false,
+          };
         },
         dispose: async () => undefined,
       }),
@@ -3602,7 +3605,7 @@ describe("Protection mode (VC-480)", () => {
     expect(opened.interaction).toMatchObject({
       id: ASK_INTERACTION_ID,
       kind: "permission",
-      title: "Allow writing outside this workspace?",
+      title: "Allow file access outside this workspace?",
     });
     expect(opened.interaction.options.map((option) => option.id)).toEqual([
       "once",

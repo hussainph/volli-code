@@ -241,7 +241,7 @@ describe("the protection IPC surface", () => {
     }).remember({
       scope: "project",
       scopes: [readScope("/Users/me/.npmrc")],
-      rule: "path.private",
+      rule: "path.outside-workspace",
       asked: "cat ~/.npmrc",
       reason: "private",
       interactionId: "ask:c",

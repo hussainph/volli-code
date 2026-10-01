@@ -254,7 +254,9 @@ describe("AuthorityEscalation in protection mode", () => {
       };
       const verdict =
         authoriser === "rule:hard"
-          ? denial([{ rule: "path.credentials", reason: "reads ~/.ssh", scopes: null }])
+          ? denial([
+              { rule: "command.platform-weakening", reason: "csrutil disable", scopes: null },
+            ])
           : denial([OUTSIDE]);
       await expect(
         resolve(
@@ -313,21 +315,25 @@ describe("AuthorityEscalation in protection mode", () => {
     const ask = vi.fn(async () => "allow" as RuntimeAskChoice);
     const port = approvals();
     const hard: PolicyViolation = {
-      rule: "path.credentials",
-      reason: "reads ~/.ssh",
+      rule: "command.platform-weakening",
+      reason: "csrutil disable",
       scopes: null,
     };
     const outcome = await resolve(machine(port, ask), denial([OUTSIDE, hard]));
     expect(ask).not.toHaveBeenCalled();
-    expect(outcome).toMatchObject({ outcome: "deny", cause: "path.credentials", record: true });
+    expect(outcome).toMatchObject({
+      outcome: "deny",
+      cause: "command.platform-weakening",
+      record: true,
+    });
     expect(outcome.outcome === "deny" && outcome.reason).toContain(
-      "Never allowed: reading credentials",
+      "Never allowed: turning off macOS protections",
     );
-    expect(outcome.outcome === "deny" && outcome.reason).toContain("reads ~/.ssh");
+    expect(outcome.outcome === "deny" && outcome.reason).toContain("csrutil disable");
     expect(port.decisions).toEqual([
       expect.objectContaining({
         authoriser: "rule:hard",
-        summary: "Never allowed: reading credentials",
+        summary: "Never allowed: turning off macOS protections",
       }),
     ]);
   });
@@ -348,15 +354,6 @@ describe("AuthorityEscalation in protection mode", () => {
     });
     expect(ask).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ outcome: "deny", cause: "call.unreadable" });
-  });
-
-  it("does not ask about a refusal the Session's own walls repeat", async () => {
-    const ask = vi.fn(async () => "allow" as RuntimeAskChoice);
-    const port = approvals();
-    const outcome = await resolve(machine(port, ask), denial([OUTSIDE], { walled: true }));
-    expect(ask).not.toHaveBeenCalled();
-    expect(outcome).toMatchObject({ outcome: "deny", reason: "outside the workspace" });
-    expect(port.decisions[0].authoriser).toBe("rule:hard");
   });
 
   it("refuses when there is nobody to ask, rather than allowing silently", async () => {

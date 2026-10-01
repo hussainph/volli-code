@@ -142,7 +142,6 @@ describe("copy", () => {
   it("has a title and a reason for every approvable rule and a fallback", () => {
     for (const cause of [
       "path.outside-workspace",
-      "path.private",
       "path.git-internals",
       "path.volli-internals",
       "command.git-escapes-workspace",

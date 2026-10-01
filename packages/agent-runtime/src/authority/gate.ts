@@ -29,7 +29,13 @@ import { normalizeToolCall, resolveReadableRoot, resolveWorkspaceRoot } from "./
 /** Allow, or a refusal named well enough to count and to record. */
 export type AuthorityVerdict =
   | { outcome: "allow" }
-  | { outcome: "deny"; cause: AuthorityDenialCause; reason: string; violations?: readonly PolicyViolation[]; stages?: readonly string[] };
+  | {
+      outcome: "deny";
+      cause: AuthorityDenialCause;
+      reason: string;
+      violations?: readonly PolicyViolation[];
+      stages?: readonly string[];
+    };
 
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
 
@@ -45,6 +51,7 @@ export function authorityVerdict(input: {
    * exist yet, or that is not a real directory, grants nothing.
    */
   readableRoots?: readonly string[];
+  /** Enumerate objections for approval cards; absent preserves the main gate. */
   protection?: boolean;
 }): AuthorityVerdict {
   let workspacePath: string;
@@ -67,11 +74,22 @@ export function authorityVerdict(input: {
     ...(readableRoots.length === 0 ? {} : { readableRoots }),
   });
   if (decision.outcome === "allow") return ALLOW;
-  return { outcome: "deny", cause: decision.rule, reason: decision.reason,
-    ...(input.protection === true ? {
-      violations: allViolations(call, input.authority, { workspacePath, readableRoots }),
-      ...((call.command?.segments.length ?? 0) > 1 ? { stages: call.command!.segments.map((segment) => [segment.program, ...segment.args].join(" ")) } : {}),
-    } : {}),
+  return {
+    outcome: "deny",
+    cause: decision.rule,
+    reason: decision.reason,
+    ...(input.protection === true
+      ? {
+          violations: allViolations(call, input.authority, { workspacePath, readableRoots }),
+          ...((call.command?.segments.length ?? 0) > 1
+            ? {
+                stages: call.command!.segments.map((segment) =>
+                  [segment.program, ...segment.args].join(" "),
+                ),
+              }
+            : {}),
+        }
+      : {}),
   };
 }
 

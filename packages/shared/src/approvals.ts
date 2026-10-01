@@ -21,7 +21,7 @@
  */
 
 import type { AuthorityDenialCause } from "./authority";
-import { containsPath } from "./capability-policy";
+import { containsPath } from "./authority-policy";
 
 /** What a scope does to its target. The operation is part of the match: a read row never covers a write. */
 export type ApprovalOperation =
@@ -271,14 +271,8 @@ export function approvalCopy(cause: AuthorityDenialCause): ApprovalCopy {
   switch (cause) {
     case "path.outside-workspace":
       return {
-        title: "Allow writing outside this workspace?",
+        title: "Allow file access outside this workspace?",
         because: "this file is outside the Session's workspace, and protection is on.",
-      };
-    case "path.private":
-      return {
-        title: "Allow reading a private file?",
-        because:
-          "dotfiles and app settings in your home folder are private unless you approve them.",
       };
     case "path.git-internals":
       return {
@@ -321,16 +315,6 @@ export interface HardRefusalCopy {
  */
 export function hardRefusalCopy(cause: AuthorityDenialCause): HardRefusalCopy {
   switch (cause) {
-    case "path.credentials":
-      return {
-        heading: "Never allowed: reading credentials",
-        line: "Protection keeps SSH keys, cloud and API tokens, and keychains out of every agent's reach.",
-      };
-    case "path.host-data":
-      return {
-        heading: "Never allowed: changing Volli's own data",
-        line: "Volli's database, policy and approvals are changed by you, in Volli, never by an agent.",
-      };
     case "command.persistence":
       return {
         heading: "Never allowed: programs that outlive the Session",
