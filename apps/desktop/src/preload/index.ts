@@ -954,8 +954,10 @@ const api = {
    */
   protection: {
     approvals: (projectId: string) => invoke("volli:protection-approvals", projectId),
-    revoke: (approvalId: string) => invoke("volli:protection-revoke", approvalId),
-    restore: (approvalId: string) => invoke("volli:protection-restore", approvalId),
+    revoke: (approvalId: string, commandId: string) =>
+      invoke("volli:protection-revoke", approvalId, commandId),
+    restore: (approvalId: string, commandId: string) =>
+      invoke("volli:protection-restore", approvalId, commandId),
   },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>

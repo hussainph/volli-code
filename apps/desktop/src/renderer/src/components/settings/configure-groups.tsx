@@ -138,7 +138,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           label: "Protection",
           icon: ShieldCheckIcon,
           keywords: PROTECTION_KEYWORDS,
-          content: <ProtectionPane project={project} />,
+          content: <ProtectionPane key={project.id} project={project} />,
         },
       ],
     },

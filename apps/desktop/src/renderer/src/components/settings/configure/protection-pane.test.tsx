@@ -66,7 +66,9 @@ function approval(id: string, over: Partial<AuthorityApproval> = {}): AuthorityA
   };
 }
 
-type ApprovalsAnswer = { ok: true; approvals: AuthorityApproval[] } | { ok: false; error: string };
+type ApprovalsAnswer =
+  | { ok: true; approvals: AuthorityApproval[]; passedRequestCount?: number }
+  | { ok: false; error: string };
 
 interface Bridge {
   setAuthorityPolicy: ReturnType<typeof vi.fn>;
@@ -76,7 +78,9 @@ interface Bridge {
 }
 
 function stubBridge(listed: AuthorityApproval[] | ApprovalsAnswer = []): Bridge {
-  const answer: ApprovalsAnswer = Array.isArray(listed) ? { ok: true, approvals: listed } : listed;
+  const answer: ApprovalsAnswer = Array.isArray(listed)
+    ? { ok: true, approvals: listed, passedRequestCount: 0 }
+    : listed;
   const byId = (id: string) =>
     (Array.isArray(listed) ? listed : []).find((row) => row.id === id) ?? approval(id);
   const bridge: Bridge = {
@@ -257,6 +261,66 @@ describe("the switch", () => {
   });
 });
 
+describe("project retargeting", () => {
+  it("resets the ledger filter and expansion for the next project", async () => {
+    const bridge = stubBridge([approval("old", { scope: "session", sessionId: "s1" })]);
+    const pane = await renderPane();
+    await click(buttonLabelled("Sessions 1"));
+    await click(rows()[0]?.querySelector("button[aria-expanded]"));
+    expect(pane.textContent).toContain("Stopped by");
+    bridge.approvals.mockResolvedValue({
+      ok: true,
+      approvals: [approval("new", { projectId: "p2" })],
+      passedRequestCount: 1,
+    });
+    await act(async () => root?.render(<ProtectionPane project={{ ...project(), id: "p2" }} />));
+    expect(rows().map((row) => row.dataset.approvalId)).toEqual(["new"]);
+    expect(pane.textContent).not.toContain("Stopped by");
+    expect(buttonLabelled("All 1")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it.each(["success", "failure"])(
+    "drops a pending old-project %s without marking the new project",
+    async (outcome) => {
+      const bridge = stubBridge();
+      let settle!: (result: unknown) => void;
+      bridge.setAuthorityPolicy.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      );
+      const pane = await renderPane();
+      await click(protectionSwitch());
+      expect((protectionSwitch() as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => root?.render(<ProtectionPane project={{ ...project(), id: "p2" }} />));
+      expect((protectionSwitch() as HTMLButtonElement).disabled).toBe(false);
+      await act(async () =>
+        settle(
+          outcome === "success"
+            ? { ok: true, project: project({ enforcement: "enforce" }) }
+            : { ok: false, error: "old-project-error" },
+        ),
+      );
+      expect(pane.textContent).not.toContain("Sessions already running");
+      expect(toastMock.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears the flipped cue, ledger read errors, filter and Advanced on retarget", async () => {
+    const bridge = stubBridge({ ok: false, error: "old project" });
+    const pane = await renderPane();
+    await click(protectionSwitch());
+    await click(buttonLabelled("Advanced"));
+    expect(pane.textContent).toContain("Sessions already running");
+    bridge.approvals.mockResolvedValue({ ok: true, approvals: [] });
+    await act(async () => root?.render(<ProtectionPane project={{ ...project(), id: "p2" }} />));
+    expect(pane.textContent).not.toContain("Sessions already running");
+    expect(pane.textContent).not.toContain("old project");
+    expect(pane.textContent).not.toContain("Transcripts a Session can read");
+  });
+});
+
 describe("Approved actions", () => {
   it("lists each row with its sentence, origin, reach and use", async () => {
     stubBridge([
@@ -285,13 +349,35 @@ describe("Approved actions", () => {
     expect(npmrc?.textContent).toContain("inherited by a subagent");
   });
 
-  it("sums what the ledger has passed without asking", async () => {
-    stubBridge([approval("a", { useCount: 4 }), approval("b", { useCount: 1 })]);
+  it("counts distinct requests, not the sum of approval rows used by one call", async () => {
+    stubBridge({
+      ok: true,
+      approvals: [approval("a", { useCount: 4 }), approval("b", { useCount: 4 })],
+      passedRequestCount: 4,
+    });
     await renderPane();
 
     expect(
       document.querySelector('[data-testid="protection-approvals-summary"]')?.textContent,
-    ).toBe("2 approved · passed 5 requests without asking");
+    ).toBe("2 approved · passed 4 requests without asking");
+  });
+
+  it("never labels another ordinary Session's project use as inheritance", async () => {
+    stubBridge([approval("a", { lastUsedBySessionId: "other-session" })]);
+    await renderPane();
+    expect(rows()[0]?.textContent).not.toContain("inherited by a subagent");
+  });
+
+  it("does not label an unrelated subagent's project approval use as inheritance", async () => {
+    stubBridge([approval("a", { lastUsedBySessionId: "unrelated-child" })]);
+    await renderPane();
+    expect(rows()[0]?.textContent).not.toContain("inherited by a subagent");
+  });
+
+  it("does not label its own Session's use as inherited", async () => {
+    stubBridge([approval("own", { scope: "session", sessionId: "s1", lastUsedBySessionId: "s1" })]);
+    await renderPane();
+    expect(rows()[0]?.textContent).not.toContain("inherited by a subagent");
   });
 
   it("reads the list for this project", async () => {
@@ -377,7 +463,7 @@ describe("Approved actions", () => {
 
     await click(buttonLabelled("Revoke Write to /Users/me/code/docs"));
 
-    expect(bridge.revoke).toHaveBeenCalledWith("docs");
+    expect(bridge.revoke).toHaveBeenCalledWith("docs", expect.any(String));
     expect(rows().map((row) => row.dataset.approvalId)).toEqual(["npmrc"]);
     expect(toastMock).toHaveBeenCalledWith(
       'Revoked "Write to /Users/me/code/docs". Agents will ask again next time.',
@@ -387,7 +473,11 @@ describe("Approved actions", () => {
     const undo = toastMock.mock.calls.at(-1)?.[1] as { action: { onClick: () => void } };
     await act(async () => undo.action.onClick());
 
-    expect(bridge.restore).toHaveBeenCalledWith("docs");
+    expect(bridge.restore).toHaveBeenCalledWith("docs", expect.any(String));
+    const firstRestoreCommand = bridge.restore.mock.calls[0]?.[1];
+    expect(firstRestoreCommand).not.toBe(bridge.revoke.mock.calls[0]?.[1]);
+    await act(async () => undo.action.onClick());
+    expect(bridge.restore.mock.calls[1]?.[1]).toBe(firstRestoreCommand);
     expect(rows().map((row) => row.dataset.approvalId)).toEqual(["docs", "npmrc"]);
   });
 

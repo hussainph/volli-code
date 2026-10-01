@@ -81,7 +81,7 @@ function schema(table: string): unknown[] {
 }
 
 function expectConverged(): void {
-  expect(db.pragma("user_version", { simple: true })).toBe(54);
+  expect(db.pragma("user_version", { simple: true })).toBe(55);
   expect((db.pragma("table_info(projects)") as { name: string }[]).map((c) => c.name)).toContain(
     "decision_model",
   );

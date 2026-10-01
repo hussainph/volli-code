@@ -699,11 +699,8 @@ function ApprovalCard({
         <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-balance text-foreground">{interaction.title}</p>
-          {detail.stages.length > 1 && detail.held !== null ? (
-            <ol
-              className="mt-1 flex flex-col gap-0.5 font-mono text-ui"
-              aria-label="Command stages"
-            >
+          {detail.stages.length > 1 ? (
+            <ol className="mt-1 flex flex-col gap-1 font-mono text-ui" aria-label="Command stages">
               {keyedStages(detail.stages).map(({ stage, key }, index) => (
                 <li
                   key={key}
@@ -715,7 +712,7 @@ function ApprovalCard({
                   <span aria-hidden className="shrink-0 tabular-nums">
                     {index + 1}
                   </span>
-                  <span className="min-w-0 truncate">{stage}</span>
+                  <span className="min-w-0 whitespace-pre-wrap break-words">{stage}</span>
                   {stageHeld(index) ? (
                     <span className="ml-auto shrink-0 font-sans text-primary">held</span>
                   ) : null}

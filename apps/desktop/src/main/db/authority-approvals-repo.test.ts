@@ -196,6 +196,20 @@ describe("authority approvals", () => {
     expect(listApprovals(f.db, otherProject.id)).toEqual([other]);
   });
 
+  it("never authorizes a matching scope in project B from project A", () => {
+    const f = fixture();
+    const target = writeScope("/Users/me/code/docs/guides/a.md");
+    add(f, "project", target);
+    const b = testProject();
+    insertProject(f.db, b);
+    expect(
+      findCoveringApproval(f.db, { projectId: b.id, sessionIds: ["parent"] }, target),
+    ).toBeNull();
+    expect(
+      findCoveringApproval(f.db, { projectId: f.projectId, sessionIds: ["parent"] }, target),
+    ).not.toBeNull();
+  });
+
   it("revokes all identical legacy rows without leaving hidden coverage", () => {
     const f = fixture();
     const approval = writeScope("/Users/me/code/docs/guides/a.md");
@@ -248,7 +262,7 @@ describe("authority approvals", () => {
     expect(
       listApprovals(f.db, f.projectId).find((entry) => entry.id === project.id)
         ?.lastUsedBySessionId,
-    ).toBe("child");
+    ).toBeNull();
   });
 
   it("dies with its Session", () => {

@@ -3439,7 +3439,16 @@ async function attachSession(
 
       try {
         await commitObservation(await persistObservation(activity));
-        if (!event.isError) spec.approvals?.completed?.(event.toolCallId);
+        if (!event.isError) {
+          try {
+            // The action already succeeded. A lost use count is bookkeeping,
+            // not a failed tool: throwing into Pi here drops the real result
+            // and invites a repeat of an action that has already happened.
+            await spec.approvals?.completed?.(event.toolCallId);
+          } catch (error) {
+            console.error("Approval completion bookkeeping failed", event.toolCallId, error);
+          }
+        }
       } finally {
         activityByToolCallId.delete(event.toolCallId);
       }

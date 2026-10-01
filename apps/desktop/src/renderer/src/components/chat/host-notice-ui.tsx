@@ -170,6 +170,12 @@ export const HostNoticeRow = React.memo(function HostNoticeRow({
       return <BrowserHoldNoticeRow notice={notice} />;
     case "watch":
       return <WatchNoticeRow notice={notice} />;
+    case "approval-used":
+      return (
+        <div className="not-prose text-ui text-muted-foreground" title={notice.asked}>
+          Allowed by your earlier approval: {notice.summary}
+        </div>
+      );
     case "unknown":
       return <UnknownHostNoticeRow notice={notice} />;
   }

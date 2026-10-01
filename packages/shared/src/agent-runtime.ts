@@ -1,3 +1,4 @@
+import type { ApprovalUsedObservation } from "./approval-observation";
 /**
  * Product-owned Session and model policy consumed by the Agent Runtime, and the
  * Agent Runtime contracts themselves.
@@ -548,8 +549,8 @@ const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
  * Attention: it has a consequence either way.
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
-  if (request.approval !== undefined) return approvalOffer(request.approval);
   if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
+  if (request.approval !== undefined) return approvalOffer(request.approval);
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
     kind: "permission",
@@ -571,7 +572,11 @@ export function askChoice(
   optionIds: readonly string[],
   response: string | null = null,
 ): RuntimeAskChoice {
-  if (request.approval !== undefined) return approvalChoice(request.approval, optionIds, response);
+  if (request.approval !== undefined) {
+    const choice = decodeApprovalConsent(askOffer(request).options, optionIds, response);
+    /* v8 ignore next -- askOffer never declares ledger; it is only a host-authored historical receipt. */
+    return choice === "ledger" ? "refuse" : choice;
+  }
   // Refusal is read first, so an answer carrying both a grant and a refusal
   // resolves toward the state the call was already in. A multi-select that
   // accumulated `once` and `reject` together is incoherent, and resolving an
@@ -636,27 +641,38 @@ function approvalOffer(approval: RuntimeApprovalAsk): RuntimeAskOffer {
 }
 
 /**
- * Read an approval card's answer. Fails to a refusal like {@link askChoice};
- * `session` and `project` mean nothing for a refusal that offered nothing to
- * remember, and a steer with no words is a plain denial.
+ * The shared consent decoder for execution and scrollback. Consent is exactly
+ * one declared choice, never an inferred meaning of an undeclared/stale id.
+ * Denial wins over consent; declared steering carries the person's words.
+ * `ledger` is a host-authored historical answer, never a runtime grant.
  */
-function approvalChoice(
-  approval: RuntimeApprovalAsk,
+export function decodeApprovalConsent(
+  options: readonly { id: string }[],
   optionIds: readonly string[],
-  response: string | null,
-): RuntimeAskChoice {
+  response: string | null = null,
+): RuntimeAskChoice | "ledger" {
+  const offered = new Set(options.map((option) => option.id.toLowerCase()));
   const chosen = optionIds.map((id) => id.toLowerCase());
-  if (chosen.includes(APPROVAL_OPTION_IDS.steer)) {
+  if (offered.has(APPROVAL_OPTION_IDS.steer) && chosen.includes(APPROVAL_OPTION_IDS.steer)) {
     const message = (response ?? "").trim();
     return message === "" ? "refuse" : { kind: "steer", message };
   }
   if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
-  const remembers = approval.scopes.length > 0;
-  if (projectRememberable(approval.scopes) && chosen.includes(APPROVAL_OPTION_IDS.project)) {
-    return "allow-project";
+  if (chosen.length !== 1 || !offered.has(chosen[0]!)) return "refuse";
+  switch (chosen[0]) {
+    case APPROVAL_OPTION_IDS.once:
+      return "allow";
+    case APPROVAL_OPTION_IDS.session:
+      return "allow-session";
+    case APPROVAL_OPTION_IDS.project:
+      return "allow-project";
+    case "ledger":
+      return "ledger";
+    case SESSION_ESCALATION_STOP_ID:
+      return "stop";
+    default:
+      return "refuse";
   }
-  if (remembers && chosen.includes(APPROVAL_OPTION_IDS.session)) return "allow-session";
-  return chosen.includes(APPROVAL_OPTION_IDS.once) ? "allow" : "refuse";
 }
 
 /** One answer the model thought worth offering. */
@@ -1815,6 +1831,7 @@ export interface AuthorityReviewObservation {
 }
 
 export type RuntimeObservation =
+  | ApprovalUsedObservation
   | AuthorityReviewObservation
   | AttachmentObservation
   | TurnObservation

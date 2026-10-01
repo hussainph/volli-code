@@ -1807,17 +1807,23 @@ export interface VolliProtectionIpcContract {
   /** A project's live remembered approvals, newest first. */
   "volli:protection-approvals": {
     args: [projectId: string];
-    result: Result<{ approvals: AuthorityApproval[] }>;
+    result: Result<{ approvals: AuthorityApproval[]; passedRequestCount: number }>;
   };
   /** Soft-deletes one row; the next matching call asks again. */
   "volli:protection-revoke": {
-    args: [approvalId: string];
-    result: Result<{ approval: AuthorityApproval }>;
+    args: [approvalId: string, commandId: string];
+    result: Result<{
+      approval: AuthorityApproval;
+      receipt: import("@volli/shared").ApprovalCommandReceipt;
+    }>;
   };
   /** Undo of a revoke: the same row, id and provenance. */
   "volli:protection-restore": {
-    args: [approvalId: string];
-    result: Result<{ approval: AuthorityApproval }>;
+    args: [approvalId: string, commandId: string];
+    result: Result<{
+      approval: AuthorityApproval;
+      receipt: import("@volli/shared").ApprovalCommandReceipt;
+    }>;
   };
 }
 

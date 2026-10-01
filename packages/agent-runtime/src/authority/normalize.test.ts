@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { normalizeToolCall, resolveWorkspaceRoot } from "./normalize";
+import { describeCommandStages, normalizeToolCall, resolveWorkspaceRoot } from "./normalize";
 
 /** A real workspace whose root is a symlink on macOS, which is the case that matters. */
 function workspace(): { raw: string; real: string } {
@@ -368,6 +368,75 @@ describe("normalizeToolCall, for execution", () => {
     const { raw } = workspace();
     expect(bash("FOO=1", raw).segments).toEqual([
       { program: "", args: [], paths: [], writes: [], env: ["FOO=1"] },
+    ]);
+  });
+});
+
+describe("git path normalization", () => {
+  it("resolves repeated -C sequentially and tree flags against the final directory", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "nested", "repo"), { recursive: true });
+    expect(
+      bash("git -C nested --git-dir=.git -C repo --work-tree . status", raw).segments[0].args,
+    ).toEqual([
+      "-C",
+      join(real, "nested"),
+      `--git-dir=${join(real, "nested/repo/.git")}`,
+      "-C",
+      join(real, "nested/repo"),
+      "--work-tree",
+      join(real, "nested/repo"),
+      "status",
+    ]);
+  });
+
+  it.each(["--git-dir=$ELSEWHERE", "--work-tree=~someone", "--exec-path=$ELSEWHERE"])(
+    "refuses unresolvable equals-form %s",
+    (flag) => {
+      expect(() => bash(`git ${flag} status`, workspace().raw)).toThrow(
+        /another user's home directory|only the shell can read/,
+      );
+    },
+  );
+});
+
+describe("git normalization boundaries and stage display", () => {
+  it("keeps global valued options separate from paths and subcommand flags", () => {
+    const { raw, real } = workspace();
+    const args = bash(
+      `git --no-pager -c core.pager=cat --namespace ns --config-env key=ENV -C . status`,
+      raw,
+    ).segments[0].args;
+    expect(args).toEqual([
+      "--no-pager",
+      "-c",
+      "core.pager=cat",
+      "--namespace",
+      "ns",
+      "--config-env",
+      "key=ENV",
+      "-C",
+      real,
+      "status",
+    ]);
+    expect(bash('git commit -m "$MSG"', raw).segments[0].args).toEqual(["commit", "-m", "$MSG"]);
+    expect(bash("git", raw).segments[0].args).toEqual([]);
+    expect(bash("git --exec-path", raw).segments[0].args).toEqual(["--exec-path"]);
+  });
+
+  it.each(["git --git-dir", "git --git-dir=-", "git --work-tree=", "git --exec-path=&1"])(
+    "refuses a missing path in %s",
+    (command) => {
+      expect(() => bash(command, workspace().raw)).toThrow(/names no path/);
+    },
+  );
+
+  it("shows nested script stages with their original quoting and redirects", () => {
+    const command = `FOO='two words' sh -c 'printf "hello world" > out.txt && cat out.txt' 2>error.log`;
+    expect(describeCommandStages(command)).toEqual([
+      command,
+      'printf "hello world" > out.txt',
+      "cat out.txt",
     ]);
   });
 });

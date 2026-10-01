@@ -83,8 +83,19 @@ export interface WatchHostNotice {
   events: readonly WatchNoticeEvent[];
 }
 
+export interface ApprovalUsedHostNotice {
+  kind: "approval-used";
+  approvalId: string;
+  summary: string;
+  asked: string;
+}
+
 /** Every host-authored transcript notice understood by this product version. */
-export type SessionHostNotice = SubagentSessionHostNotice | BrowserHoldHostNotice | WatchHostNotice;
+export type SessionHostNotice =
+  | SubagentSessionHostNotice
+  | BrowserHoldHostNotice
+  | WatchHostNotice
+  | ApprovalUsedHostNotice;
 
 /** The durable marker shared by notice writers and Session clients. */
 export const SESSION_HOST_NOTICE_METADATA_KIND = "session-host-notice" as const;

@@ -789,7 +789,7 @@ function exactWriteScope(path: string): ApprovalScope {
 function uniqueScopes(scopes: readonly ApprovalScope[]): ApprovalScope[] {
   const seen = new Set<string>();
   return scopes.filter((scope) => {
-    const id = `${scope.operation}\0${scope.key}\0${scope.target}`;
+    const id = `${scope.operation}\0${scope.key}\0${scope.target}\0${scope.stage ?? ""}`;
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
@@ -867,18 +867,19 @@ export function violations(
   const wrapped = call.command !== null && wrapsCommands(call.command);
   const found: PolicyViolation[] = [];
   const stages = call.command?.segments ?? [];
-  // The stage of a compound command that made an objection: the first segment
-  // that names the path, or runs git for a git objection.
-  const stamp = (scope: ApprovalScope): ApprovalScope => {
+  // Path scopes belong to the operation that caused the objection, never an
+  // earlier mention/read. Keep every writer so repeated writes all highlight.
+  const stamp = (scope: ApprovalScope): ApprovalScope[] => {
     if (stages.length < 2) {
       const { stage: _single, ...whole } = scope;
-      return whole;
+      return [whole];
     }
-    if (scope.stage !== undefined) return scope;
-    const index = stages.findIndex(
-      (segment) => segment.paths.includes(scope.target) || segment.writes.includes(scope.target),
+    if (scope.stage !== undefined) return [scope];
+    if (scope.operation !== "write") return [scope];
+    const writers = stages.flatMap((segment, stage) =>
+      segment.writes.includes(scope.target) ? [{ ...scope, stage }] : [],
     );
-    return index === -1 ? scope : { ...scope, stage: index };
+    return writers.length === 0 ? [scope] : writers;
   };
   for (const rule of AUTHORITY_RULE_IDS) {
     const reason = RULE_CHECKS[rule](call, snapshot, context);
@@ -893,7 +894,7 @@ export function violations(
     found.push({
       rule,
       reason,
-      scopes: scopes === null || scopes.length === 0 ? null : uniqueScopes(scopes.map(stamp)),
+      scopes: scopes === null || scopes.length === 0 ? null : uniqueScopes(scopes.flatMap(stamp)),
     });
   }
   return found;

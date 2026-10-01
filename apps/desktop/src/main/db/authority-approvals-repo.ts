@@ -74,7 +74,7 @@ function toApproval(row: ApprovalRow): AuthorityApproval {
     provenance: parseProvenance(row.provenance, row.session_id),
     useCount: row.use_count,
     lastUsedAt: row.last_used_at,
-    lastUsedBySessionId: row.last_used_session_id,
+    lastUsedBySessionId: row.scope === "session" ? row.last_used_session_id : null,
   };
 }
 
@@ -209,7 +209,7 @@ export function recordApprovalUse(
     db,
     `UPDATE authority_approvals
         SET use_count = use_count + 1, last_used_at = ?,
-            last_used_session_id = CASE WHEN session_id IS ? THEN NULL ELSE ? END
+            last_used_session_id = CASE WHEN scope = 'session' AND session_id IS NOT ? THEN ? ELSE NULL END
       WHERE id = ?`,
   ).run(now, bySessionId, bySessionId, id);
 }
@@ -280,4 +280,57 @@ export function listDecisions(db: Database.Database, sessionId: string): StoredD
       approvalId: row.approval_id,
       createdAt: row.created_at,
     }));
+}
+
+/** One completed call may consume several grants; the request total counts it just once. */
+export function recordApprovalCompletion(
+  db: Database.Database,
+  input: {
+    projectId: string;
+    sessionId: string;
+    toolCallId: string;
+    approvalIds: readonly string[];
+    inheritedFrom: readonly string[];
+    now: number;
+  },
+): void {
+  db.transaction(() => {
+    const inserted = prepared(
+      db,
+      `INSERT OR IGNORE INTO authority_approval_completions
+      (project_id, session_id, tool_call_id, approval_ids, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      input.projectId,
+      input.sessionId,
+      input.toolCallId,
+      JSON.stringify(input.approvalIds),
+      input.now,
+    );
+    if (inserted.changes === 0) return;
+    for (const id of input.approvalIds) {
+      recordApprovalUse(db, id, input.sessionId, input.now);
+      // A different caller alone is not proof of inheritance. Only a verified ancestor grant is.
+      prepared(
+        db,
+        `UPDATE authority_approvals SET last_used_session_id = NULL
+        WHERE id = ? AND (scope != 'session' OR session_id NOT IN (SELECT value FROM json_each(?)))`,
+      ).run(id, JSON.stringify(input.inheritedFrom));
+    }
+  })();
+}
+
+export function countApprovedRequests(db: Database.Database, projectId: string): number {
+  return prepared<[string], { count: number }>(
+    db,
+    "SELECT COUNT(*) AS count FROM authority_approval_completions WHERE project_id = ?",
+  ).get(projectId)!.count;
+}
+
+/** Mutation commands may read a revoked row for replay/undo, but the gate never does. */
+export function getApproval(db: Database.Database, id: string): AuthorityApproval | null {
+  const row = prepared<[string], ApprovalRow>(
+    db,
+    "SELECT * FROM authority_approvals WHERE id = ?",
+  ).get(id);
+  return row === undefined ? null : toApproval(row);
 }

@@ -65,6 +65,7 @@ import {
 import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -97,6 +98,13 @@ const USED_W = "w-40 shrink-0";
 const REVOKE_W = "w-16 shrink-0";
 
 export function ProtectionPane({ project }: { project: Project }) {
+  // The visit belongs to a project, including all pending work and disclosures.
+  return <ProjectProtectionPane key={project.id} project={project} />;
+}
+
+function ProjectProtectionPane({ project }: { project: Project }) {
+  const saver = useLatestAsync();
+  React.useEffect(() => () => saver.invalidate(), [saver]);
   const adoptProject = useProjectsStore((store) => store.adoptProject);
   const [saving, setSaving] = React.useState(false);
   // The one-time cue: a flip reaches the next attachment, never one running.
@@ -121,16 +129,27 @@ export function ProtectionPane({ project }: { project: Project }) {
       else if (key !== "classifierModel" && isEmptyObject(value)) delete next[key];
     }
     setSaving(true);
-    const saved = await writeThrough("save this project's protection", () =>
-      window.api.projects.setAuthorityPolicy({
+    const token = saver.claim();
+    try {
+      const saved = await window.api.projects.setAuthorityPolicy({
         id: project.id,
         override: Object.keys(next).length === 0 ? null : next,
-      }),
-    );
-    setSaving(false);
-    if (saved === null) return false;
-    adoptProject(saved.project);
-    return true;
+      });
+      if (!saver.isCurrent(token)) return false;
+      if (!saved.ok) {
+        toastError(`Couldn't save this project's protection: ${saved.error}`);
+        return false;
+      }
+      adoptProject(saved.project);
+      return true;
+    } catch (error) {
+      if (saver.isCurrent(token)) {
+        toastError(`Couldn't save this project's protection: ${errorMessage(error)}`);
+      }
+      return false;
+    } finally {
+      if (saver.isCurrent(token)) setSaving(false);
+    }
   }
 
   /** One actor's departures, merged into the actor map rather than over it. */
@@ -169,7 +188,7 @@ export function ProtectionPane({ project }: { project: Project }) {
   return (
     <>
       <section data-testid="protection-switch" className="rounded-lg bg-card px-4 py-4">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-4">
           {on ? (
             <ShieldCheckIcon
               aria-hidden
@@ -227,6 +246,7 @@ export function ProtectionPane({ project }: { project: Project }) {
 interface ApprovalList {
   projectId: string;
   rows: readonly AuthorityApproval[];
+  passedRequestCount: number;
 }
 
 function ApprovedActions({ projectId }: { projectId: string }) {
@@ -249,7 +269,15 @@ function ApprovedActions({ projectId }: { projectId: string }) {
       const result = await window.api.protection.approvals(projectId);
       if (!fetcher.isCurrent(token)) return;
       if (!result.ok) fail(result.error);
-      else setState({ status: "ready", data: { projectId, rows: result.approvals } });
+      else
+        setState({
+          status: "ready",
+          data: {
+            projectId,
+            rows: result.approvals,
+            passedRequestCount: result.passedRequestCount,
+          },
+        });
     } catch (error) {
       if (fetcher.isCurrent(token)) fail(errorMessage(error));
     }
@@ -269,9 +297,9 @@ function ApprovedActions({ projectId }: { projectId: string }) {
     });
   }
 
-  async function restore(row: AuthorityApproval): Promise<void> {
+  async function restore(row: AuthorityApproval, commandId: string): Promise<void> {
     const restored = await writeThrough("restore that approval", () =>
-      window.api.protection.restore(row.id),
+      window.api.protection.restore(row.id, commandId),
     );
     if (restored === null) return;
     const approval = restored.approval;
@@ -288,7 +316,7 @@ function ApprovedActions({ projectId }: { projectId: string }) {
   async function revoke(row: AuthorityApproval): Promise<void> {
     markRevoking(row.id, true);
     const revoked = await writeThrough("revoke that approval", () =>
-      window.api.protection.revoke(row.id),
+      window.api.protection.revoke(row.id, crypto.randomUUID()),
     );
     markRevoking(row.id, false);
     if (revoked === null) return;
@@ -303,8 +331,10 @@ function ApprovedActions({ projectId }: { projectId: string }) {
           }
         : current,
     );
+    // Every press of this Undo retries the same intent, not a new mutation.
+    const undoCommandId = crypto.randomUUID();
     toast(`Revoked "${row.summary}". Agents will ask again next time.`, {
-      action: { label: "Undo", onClick: () => void restore(row) },
+      action: { label: "Undo", onClick: () => void restore(row, undoCommandId) },
     });
   }
 
@@ -314,7 +344,7 @@ function ApprovedActions({ projectId }: { projectId: string }) {
     project: rows.filter((row) => row.scope === "project").length,
     session: rows.filter((row) => row.scope === "session").length,
   };
-  const uses = rows.reduce((sum, row) => sum + row.useCount, 0);
+  const uses = state.status === "ready" ? state.data.passedRequestCount : 0;
   const shown = filter === "all" ? rows : rows.filter((row) => row.scope === filter);
 
   return (
@@ -434,7 +464,9 @@ function ApprovalRow({
             </span>
             <span className={cn(USED_W, "flex flex-col text-ui text-muted-foreground")}>
               <span className="truncate">{used}</span>
-              {row.lastUsedBySessionId === null ? null : (
+              {row.scope !== "session" ||
+              row.lastUsedBySessionId === null ||
+              row.lastUsedBySessionId === row.sessionId ? null : (
                 <span className="truncate text-muted-foreground/70">inherited by a subagent</span>
               )}
             </span>
@@ -473,8 +505,8 @@ function Provenance({ id, row }: { id: string; row: AuthorityApproval }) {
   const where = `${sessionTitle ?? "a Session"}${ticketDisplayId === null ? "" : ` (${ticketDisplayId})`}`;
 
   return (
-    <dl id={id} className="flex flex-col gap-2 px-3 pt-1 pb-3 text-ui">
-      <div className="flex gap-3">
+    <dl id={id} className="flex flex-col gap-2 px-4 pt-1 pb-4 text-ui">
+      <div className="flex gap-4">
         <dt className="w-20 shrink-0 text-muted-foreground">Asked</dt>
         <dd className="min-w-0 flex-1">
           <pre className="max-h-24 overflow-auto font-mono text-ui whitespace-pre-wrap break-all">
@@ -482,11 +514,11 @@ function Provenance({ id, row }: { id: string; row: AuthorityApproval }) {
           </pre>
         </dd>
       </div>
-      <div className="flex gap-3">
+      <div className="flex gap-4">
         <dt className="w-20 shrink-0 text-muted-foreground">Stopped by</dt>
         <dd className="min-w-0 flex-1">{reason}</dd>
       </div>
-      <div className="flex gap-3">
+      <div className="flex gap-4">
         <dt className="w-20 shrink-0 text-muted-foreground">Approved</dt>
         <dd className="min-w-0 flex-1">
           By you, {date} at {time}, on the card in {where}
@@ -514,7 +546,7 @@ function Advanced({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <section className="rounded-lg bg-card px-4 py-3">
+      <section className="rounded-lg bg-card px-4 py-4">
         <h2 className="text-sm font-semibold">
           <CollapsibleTrigger asChild>
             <button
@@ -533,7 +565,7 @@ function Advanced({
           </CollapsibleTrigger>
         </h2>
         <CollapsibleContent>
-          <div className="mt-3 border-t border-border/50 pt-4">
+          <div className="mt-4 border-t border-border/50 pt-4">
             <PrefRow
               label={label}
               htmlFor="protection-peek-session"

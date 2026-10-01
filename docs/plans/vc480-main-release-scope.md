@@ -21,7 +21,13 @@ Existing attachments retain their recorded policy. New snapshots pin Protection 
 
 ## Schema lineage
 
-Main's migration 053 remains the project decision-model column. Migration 054 creates approval/decision tables and repairs the decision-model column for older dogfood databases already stamped 53 with the approval schema. Both stamped-53 lineages and partial approval schemas converge without rewinding versions or replacing history. Decision-model exports retain raw stored JSON.
+Main's migration 053 remains the project decision-model column. Migration 054 creates approval/decision tables and repairs the decision-model column for older dogfood databases already stamped 53 with the approval schema. Both stamped-53 lineages and partial approval schemas converge without rewinding versions or replacing history. Decision-model exports retain raw stored JSON. Approval mutation history and distinct successful-call accounting are additive tables; the host's portable approval Command boundary atomically records intent, immutable receipts/events and the list projection. Saved-approval uses are non-interactive transcript facts, never temporary permission cards.
+
+## Final review evidence
+
+Both owner reviews are covered by the [findings and regression map](vc480-review/results.md). The real Pi/adapter/SQLite integration scripts only the provider: normalization, gate, filesystem operations, durable interactions and unattended attention are production paths.
+
+At the default 1400 × 900 window size, the shipping Protection pane fits with Advanced collapsed: [Off](vc480-review/protection-off-1400x900.png) and [On with three rows](vc480-review/protection-on-1400x900.png). Browser UI-lab fixture data is not an owner's real-task sign-off. The off pane is 337px tall and the populated on pane 484px, with equal client/scroll heights and bottom edges at 440px/587px. Long ledgers intentionally have their own bounded scroll region.
 
 ## How to test (owner)
 
@@ -38,9 +44,10 @@ The dev startup log should say `source=VOLLI_DB_PATH` and `/tmp/vc480-test/volli
 1. Select a fresh disposable project; Configure → Protection should show **Protection is off** without a General-page opt-in. Turn it on.
 2. Start a **new** Session. Ask it to use the `write` tool to create a harmless file outside its workspace in a scratch folder, for example `/tmp/vc480-test/actions/docs/a.txt`. Expect an inline card naming the file and why it stopped.
 3. Choose **Allow once**. Ask for another file in that folder: a new card should appear, and no row should have been remembered.
-4. Choose **Always allow in this project** on that card. See the narrow write row and its provenance in **Approved actions**. Repeat the same write: no card, and the passed-request count increases after it completes. (Also try **Allow for this Session** on a separate scratch target.)
-5. **Revoke** the relevant row, then repeat: the card returns. Choose **Deny and steer** with an in-workspace alternative; the receipt should say denied.
+4. Choose **Always allow in this project** on that card. See the narrow write row and its provenance in **Approved actions**. Repeat the same write: no card, a quiet “Allowed by your earlier approval” transcript line, and the passed-request count increases once after it completes (even when a call uses two grants). Reload/relaunch: the receipt remains, without a phantom waiting card. Also try **Allow for this Session** on a separate scratch target; an unrelated Session should ask again.
+5. **Revoke** the relevant row, then repeat: the card returns. Try the toast's **Undo**, then revoke again. Choose **Deny and steer** with an in-workspace alternative; the receipt should say denied and the refused operation must not execute.
 6. Turn Protection off and start another **new** Session. The same outside write should run as before, without an enforcing gate/card/Protection ledger audit (main's VC-28 shadow review remains unchanged). Restarting a previously protected attachment deliberately retains its pinned state.
-7. Optional: run an unattended Automation with an outside-write request. It should pause, notify, and open the same card. A request to disable TLS checking should instead show a hard refusal, with no approval action; do not approve or execute destructive examples.
+7. At the default 1400 × 900 size, check Configure → Protection with Advanced collapsed, both off/empty and on/populated. The switch, list and Advanced must fit without page scrolling. Switch projects during a pending save: the next project's controls and status must not inherit the previous save.
+8. Optional: run an unattended Automation with an outside-write request. It should pause, notify, and open the same card. A request to disable TLS checking should instead show a hard refusal, with no approval action; do not approve or execute destructive examples.
 
 Owner hands-on sign-off remains required. CI is not that sign-off. Do not merge until asked.

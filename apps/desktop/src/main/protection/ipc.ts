@@ -15,7 +15,9 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import { listApprovals, restoreApproval, revokeApproval } from "../db/authority-approvals-repo";
+import { listApprovals, countApprovedRequests } from "../db/authority-approvals-repo";
+
+import { commandApproval } from "./commands";
 
 export function registerProtectionIpcHandlers(
   db: Database.Database | null,
@@ -30,18 +32,31 @@ export function registerProtectionIpcHandlers(
     "volli:protection-approvals": (projectId) => ({
       ok: true,
       approvals: listApprovals(db, projectId),
+      passedRequestCount: countApprovedRequests(db, projectId),
     }),
-    "volli:protection-revoke": (approvalId) => {
-      const approval = revokeApproval(db, approvalId, now());
-      return approval === null
-        ? { ok: false, error: "That approval is already gone." }
-        : { ok: true, approval };
+    "volli:protection-revoke": (approvalId, commandId) => {
+      const receipt = commandApproval(db, { kind: "approval.revoke", approvalId, commandId }, now);
+      return receipt.status === "accepted"
+        ? { ok: true, approval: receipt.approval, receipt }
+        : {
+            ok: false,
+            error:
+              receipt.code === "APPROVAL_COMMAND_CONFLICT"
+                ? "That command ID belongs to a different action."
+                : "That approval is gone.",
+          };
     },
-    "volli:protection-restore": (approvalId) => {
-      const approval = restoreApproval(db, approvalId);
-      return approval === null
-        ? { ok: false, error: "That approval can't be restored." }
-        : { ok: true, approval };
+    "volli:protection-restore": (approvalId, commandId) => {
+      const receipt = commandApproval(db, { kind: "approval.restore", approvalId, commandId }, now);
+      return receipt.status === "accepted"
+        ? { ok: true, approval: receipt.approval, receipt }
+        : {
+            ok: false,
+            error:
+              receipt.code === "APPROVAL_COMMAND_CONFLICT"
+                ? "That command ID belongs to a different action."
+                : "That approval can't be restored.",
+          };
     },
   };
   registerGuardedIpcHandlers(PROTECTION_IPC, handlers);

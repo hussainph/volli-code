@@ -2120,12 +2120,20 @@ export const PROTECTION_IPC: {
   },
   "volli:protection-revoke": {
     guard: (args): args is IpcArgs<"volli:protection-revoke"> =>
-      args.length === 1 && typeof args[0] === "string" && args[0] !== "",
+      args.length === 2 &&
+      typeof args[0] === "string" &&
+      args[0] !== "" &&
+      typeof args[1] === "string" &&
+      args[1] !== "",
     invalidError: "Invalid request",
   },
   "volli:protection-restore": {
     guard: (args): args is IpcArgs<"volli:protection-restore"> =>
-      args.length === 1 && typeof args[0] === "string" && args[0] !== "",
+      args.length === 2 &&
+      typeof args[0] === "string" &&
+      args[0] !== "" &&
+      typeof args[1] === "string" &&
+      args[1] !== "",
     invalidError: "Invalid request",
   },
 };

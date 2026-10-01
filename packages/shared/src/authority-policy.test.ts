@@ -1338,3 +1338,38 @@ describe("hard denies first", () => {
     expect(decideHardFirst(harmless)).toEqual({ outcome: "allow" });
   });
 });
+
+describe("operation-specific objection stages", () => {
+  it.each([
+    "/Users/dev/code/other/docs/out.txt",
+    `${WORKSPACE}/.volli/state.json`,
+    `${WORKSPACE}/.git/HEAD`,
+  ])("holds every write to %s, not a mention or read", (target) => {
+    const found = violations(
+      exec(
+        segment("cat", [target], { paths: [target] }),
+        segment("echo", ["a"], { writes: [target] }),
+        segment("echo", ["b"], { writes: [target] }),
+      ),
+      snapshot(),
+      { workspacePath: WORKSPACE },
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].scopes?.map((scope) => [scope.operation, scope.target, scope.stage])).toEqual([
+      ["write", target, 1],
+      ["write", target, 2],
+    ]);
+  });
+});
+
+it("does not assign a read/file-tool objection to a command mentioning the same target", () => {
+  const target = "/Users/dev/code/other/docs/out.txt";
+  const toolCall = exec(segment("echo", [target], { paths: [target] }), segment("true"));
+  const found = violations({ ...toolCall, reads: [target], writes: [target] }, snapshot(), {
+    workspacePath: WORKSPACE,
+  });
+  expect(found[0].scopes?.map((scope) => [scope.operation, scope.stage])).toEqual([
+    ["read", undefined],
+    ["write", undefined],
+  ]);
+});

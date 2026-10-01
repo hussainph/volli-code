@@ -207,3 +207,62 @@ describe("approval metadata and actions", () => {
     ["other", null],
   ] as const)("fixes %s to digit %s", (id, digit) => expect(approvalActionDigit(id)).toBe(digit));
 });
+
+describe("distinctive approval copy", () => {
+  it.each([
+    ["path.outside-workspace", "outside this workspace", "outside the Session's workspace"],
+    ["path.git-internals", "git setup", "git hooks and git config"],
+    ["path.volli-internals", "Volli's files", ".volli holds Volli's own state"],
+    ["command.git-escapes-workspace", "another repository", "repository outside"],
+    [
+      "command.git-discards-work",
+      "discarding uncommitted",
+      "uncommitted work in your Main checkout",
+    ],
+  ] as const)("names the actual objection for %s", (cause, title, because) => {
+    expect(approvalCopy(cause).title).toContain(title);
+    expect(approvalCopy(cause).because).toContain(because);
+  });
+});
+
+describe("interpreter inline-code variants", () => {
+  it.each([
+    ["python3.12", "-c", "print(1)"],
+    ["python", "-cprint(1)"],
+    ["node", "--eval", "console.log(1)"],
+    ["node22", "--eval=console.log(1)"],
+    ["node", "--print", "1"],
+    ["node", "--print=1"],
+    ["node", "-p1"],
+    ["perl", "-we", "print 1"],
+    ["perl5.40", "-weprint 1"],
+    ["ruby3.3", "-eputs 1"],
+    ["osascript", "-e", "x"],
+    ["deno2.1", "eval", "x"],
+  ] as [string, ...string[]][])("treats %s inline code as an opaque command", (...invocation) => {
+    expect(wrapsCommands(cmd(invocation.join(" "), invocation))).toBe(true);
+  });
+  it.each([
+    ["python3.12", "--version"],
+    ["node22", "--check", "script.js"],
+    ["node", "-v"],
+    ["ruby3.3", "-w", "script.rb"],
+    ["deno2", "run", "script.ts"],
+    ["perl5.40", "script.pl"],
+  ] as [string, ...string[]][])("keeps %s non-inline commands ordinary", (...invocation) => {
+    expect(wrapsCommands(cmd(invocation.join(" "), invocation))).toBe(false);
+  });
+});
+
+describe("distinctive hard refusal copy", () => {
+  it.each([
+    ["command.persistence", "programs that outlive", "cron jobs"],
+    ["command.platform-weakening", "macOS protections", "Gatekeeper"],
+    ["command.tls-weakening", "certificate checks", "TLS verification"],
+    ["command.destructive-removal", "system or home folder", "recursive delete"],
+    ["call.unreadable", "couldn't read this call", "couldn't tell what this would touch"],
+  ] as const)("explains %s specifically, not with the generic fallback", (cause, heading, line) => {
+    expect(hardRefusalCopy(cause).heading).toContain(heading);
+    expect(hardRefusalCopy(cause).line).toContain(line);
+  });
+});

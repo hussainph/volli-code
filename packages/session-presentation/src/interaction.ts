@@ -20,6 +20,7 @@
  */
 import {
   askInteractionId,
+  decodeApprovalConsent,
   isApprovalInteraction,
   readInteractionAnswers,
   readInteractionPrompts,
@@ -1086,38 +1087,38 @@ function describeApprovalResolution(
   resolution: SessionInteractionResolution,
 ): InteractionReceipt {
   const detail = interaction.approval;
-  const chosen = new Set(resolution.optionIds.map((id) => id.toLowerCase()));
-  const said = (resolution.response ?? "").trim().replaceAll(/\s+/gu, " ");
+  const choice = decodeApprovalConsent(
+    interaction.options,
+    resolution.optionIds,
+    resolution.response,
+  );
   const subject = interaction.title.replace(/^Allow /u, "").replace(/\?$/u, "");
-  // Match the runtime's approvalChoice: steer first, then every refusal id,
-  // before any grant. Contradictory answers must never print consent.
-  if (chosen.has("steer")) {
+  if (typeof choice === "object") {
+    const said = choice.message.replaceAll(/\s+/gu, " ");
     return {
       verdict: "rejected",
       lead: "You denied",
       subject,
-      trailer: said === "" ? null : `\u201c${said}\u201d`,
+      trailer: `\u201c${said}\u201d`,
     };
   }
-  if (SESSION_REFUSAL_OPTION_IDS.some((id) => chosen.has(id))) {
-    return { verdict: "rejected", lead: "You denied", subject, trailer: null };
-  }
-  if (chosen.has("ledger")) {
+  if (choice === "ledger") {
     return {
       verdict: "standing",
       lead: "Allowed by your earlier approval:",
       subject:
-        interaction.options.find((option) => option.id === "ledger")?.description ?? detail.asked,
+        interaction.options.find((option) => option.id.toLowerCase() === "ledger")?.description ??
+        detail.asked,
       trailer: null,
     };
   }
-  if (chosen.has("project")) {
+  if (choice === "allow-project") {
     return { verdict: "standing", lead: "You allowed", subject, trailer: "always in this project" };
   }
-  if (chosen.has("session")) {
+  if (choice === "allow-session") {
     return { verdict: "standing", lead: "You allowed", subject, trailer: "for this Session" };
   }
-  if (chosen.has("once")) {
+  if (choice === "allow") {
     return { verdict: "allowed", lead: "You allowed", subject, trailer: "once" };
   }
   return { verdict: "rejected", lead: "You denied", subject, trailer: null };

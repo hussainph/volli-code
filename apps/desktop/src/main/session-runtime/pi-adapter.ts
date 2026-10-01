@@ -1776,54 +1776,21 @@ class PiBinding implements BindingHandle {
     return parked.settle.promise;
   }
 
-  /**
-   * The one quiet line a ledger hit leaves in the Session (VC-480): "Allowed by
-   * your earlier approval: …". It is an interaction opened and answered in the
-   * same breath, so it draws as the receipt line every answered card leaves and
-   * needs no new transcript element; it is never a question and asks nobody.
-   * Cosmetic by construction: a failure to write it is swallowed, because the
-   * decision it reports is already recorded and the call is already allowed.
-   */
+  /** A ledger receipt is a single nonblocking historical fact, never a parked ask. */
   async #showLedgerHit(decision: ApprovalDecision): Promise<void> {
-    // One call can use several grants. Each audited row needs its own receipt
-    // identity or the second row collides with the first resolved interaction.
-    const id = `ledger-hit:${decision.toolCallId}:${decision.approvalId}`;
-    const option = {
-      id: "ledger",
-      label: "Allowed by your earlier approval",
-      description: decision.summary,
-    };
+    if (decision.approvalId === null) return;
     try {
       await this.#observe({
-        kind: "interaction",
-        state: "opened",
+        kind: "approval-used",
         occurredAt: this.#now(),
-        interaction: {
-          id,
-          kind: "permission",
-          title: `Allowed by your earlier approval: ${decision.summary}`,
-          detail: decision.asked,
-          approval: {
-            asked: decision.asked,
-            because: "your approved action covers this call.",
-            reason: decision.rule,
-            stages: [],
-            held: null,
-          },
-          options: [option],
-          multiple: false,
-          native: this.#native,
-        },
+        toolCallId: decision.toolCallId,
+        approvalId: decision.approvalId,
+        summary: decision.summary,
+        asked: decision.asked,
       });
-      await this.#observe({
-        kind: "interaction",
-        state: "resolved",
-        occurredAt: this.#now(),
-        interactionId: id,
-        resolution: { optionIds: [option.id], response: null },
-      });
-    } catch {
-      // See above: a missing receipt line costs a sentence, never a decision.
+    } catch (error) {
+      // The fail-closed audit already committed; missing cosmetic history cannot undo it.
+      console.warn("[volli] approval receipt:", error);
     }
   }
 

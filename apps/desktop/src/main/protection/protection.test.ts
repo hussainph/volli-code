@@ -17,7 +17,7 @@ vi.mock("electron", () => ({
 
 import { listApprovals, listDecisions } from "../db/authority-approvals-repo";
 import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { PROTECTION_CHANNELS, PROTECTION_IPC } from "../ipc-descriptors";
 import { createProtection } from "./host";
 import { registerProtectionIpcHandlers } from "./ipc";
@@ -111,6 +111,55 @@ describe("the protection host", () => {
         interactionId: "ask:call-1",
       },
     });
+  });
+
+  it("lists one passed request when a completed call uses two grants, even after host recreation", async () => {
+    const { protection } = host("parent");
+    const targets = [
+      writeScope("/Users/me/code/docs/guides/a.md"),
+      writeScope("/Users/me/code/docs/reference/b.md"),
+    ];
+    protection.remember({ ...grant("project"), scopes: targets });
+    for (const target of targets) {
+      const hit = protection.covers(target)!;
+      protection.decided({
+        toolCallId: "compound-1",
+        tool: "execute",
+        authoriser: "policy:ledger",
+        rule: "path.outside-workspace",
+        summary: hit.summary,
+        asked: "write both folders",
+        approvalId: hit.approvalId,
+      });
+    }
+    protection.completed?.("compound-1");
+    registerProtectionIpcHandlers(ctx.db);
+    expect(await invoke("volli:protection-approvals", projectId)).toMatchObject({
+      ok: true,
+      passedRequestCount: 1,
+      approvals: [
+        expect.objectContaining({ useCount: 1 }),
+        expect.objectContaining({ useCount: 1 }),
+      ],
+    });
+    const replacement = host("parent").protection;
+    for (const target of targets) {
+      const hit = replacement.covers(target)!;
+      replacement.decided({
+        toolCallId: "compound-1",
+        tool: "execute",
+        authoriser: "policy:ledger",
+        rule: "path.outside-workspace",
+        summary: hit.summary,
+        asked: "write both folders",
+        approvalId: hit.approvalId,
+      });
+    }
+    replacement.completed?.("compound-1");
+    expect(await invoke("volli:protection-approvals", projectId)).toMatchObject({
+      passedRequestCount: 1,
+    });
+    expect(listApprovals(ctx.db, projectId).map((row) => row.useCount)).toEqual([1, 1]);
   });
 
   it("rolls back every scope when a multi-scope grant cannot be saved", () => {
@@ -224,7 +273,7 @@ describe("the protection host", () => {
 });
 
 describe("the protection IPC surface", () => {
-  it("lists, revokes and restores approvals, and says so when one is already gone", async () => {
+  it("lists, revokes and restores approvals through durable commands", async () => {
     createProtection({
       db: ctx.db,
       now: () => 1,
@@ -247,19 +296,95 @@ describe("the protection IPC surface", () => {
     };
     expect(listed.approvals).toHaveLength(1);
     const id = listed.approvals[0].id;
-    expect(await invoke("volli:protection-revoke", id)).toMatchObject({ ok: true });
-    expect(await invoke("volli:protection-revoke", id)).toEqual({
-      ok: false,
-      error: "That approval is already gone.",
-    });
+    expect(await invoke("volli:protection-revoke", id, "revoke-1")).toMatchObject({ ok: true });
+    expect(await invoke("volli:protection-revoke", id, "revoke-1")).toMatchObject({ ok: true });
     expect(
       ((await invoke("volli:protection-approvals", projectId)) as { approvals: unknown[] })
         .approvals,
     ).toEqual([]);
-    expect(await invoke("volli:protection-restore", id)).toMatchObject({ ok: true });
-    expect(await invoke("volli:protection-restore", id)).toEqual({
+    expect(await invoke("volli:protection-restore", id, "restore-1")).toMatchObject({ ok: true });
+    expect(await invoke("volli:protection-restore", id, "restore-1")).toMatchObject({ ok: true });
+  });
+
+  it("replays the same revoke/restore Command IDs after SQLite reopening", async () => {
+    const protection = createProtection({
+      db: ctx.db,
+      now: () => 1,
+      projectId,
+      sessionId: "parent",
+      inheritedFrom: [],
+      sessionTitle: null,
+      ticketDisplayId: null,
+    });
+    protection.remember(grant("project"));
+    const [row] = listApprovals(ctx.db, projectId);
+    registerProtectionIpcHandlers(ctx.db, undefined, () => 9);
+    const [first, concurrent] = await Promise.all([
+      invoke("volli:protection-revoke", row.id, "revoke-command"),
+      invoke("volli:protection-revoke", row.id, "revoke-command"),
+    ]);
+    expect(first).toMatchObject({
+      ok: true,
+      receipt: { commandId: "revoke-command", status: "accepted" },
+    });
+    expect(concurrent).toEqual(first);
+    ctx.db.close();
+    ctx.db = openRawDb(ctx.dbPath);
+    ctx.db.pragma("foreign_keys = ON");
+    registerProtectionIpcHandlers(ctx.db, undefined, () => 99);
+    expect(await invoke("volli:protection-revoke", row.id, "revoke-command")).toEqual(first);
+    const restored = await invoke("volli:protection-restore", row.id, "restore-command");
+    expect(restored).toMatchObject({ ok: true, receipt: { status: "accepted" } });
+    expect(await invoke("volli:protection-restore", row.id, "restore-command")).toEqual(restored);
+    expect(ctx.db.prepare("SELECT * FROM authority_approval_events").all()).toHaveLength(2);
+    expect(listApprovals(ctx.db, projectId)).toHaveLength(1);
+  });
+
+  it("records rejected commands, refuses ID reuse, and rolls back events/receipts if projection fails", async () => {
+    registerProtectionIpcHandlers(ctx.db, undefined, () => 9);
+    expect(await invoke("volli:protection-revoke", "missing", "missing-revoke")).toEqual({
+      ok: false,
+      error: "That approval is gone.",
+    });
+    expect(await invoke("volli:protection-restore", "missing", "missing-restore")).toEqual({
       ok: false,
       error: "That approval can't be restored.",
+    });
+    const protection = createProtection({
+      db: ctx.db,
+      now: () => 1,
+      projectId,
+      sessionId: "parent",
+      inheritedFrom: [],
+      sessionTitle: null,
+      ticketDisplayId: null,
+    });
+    protection.remember(grant("project"));
+    const [row] = listApprovals(ctx.db, projectId);
+    expect(await invoke("volli:protection-revoke", row.id, "missing-revoke")).toEqual({
+      ok: false,
+      error: "That command ID belongs to a different action.",
+    });
+    expect(await invoke("volli:protection-restore", row.id, "missing-restore")).toEqual({
+      ok: false,
+      error: "That command ID belongs to a different action.",
+    });
+    ctx.db.exec(`CREATE TRIGGER fail_revoke BEFORE UPDATE OF revoked_at ON authority_approvals
+      BEGIN SELECT RAISE(ABORT, 'projection failed'); END`);
+    await expect(invoke("volli:protection-revoke", row.id, "rollback-revoke")).resolves.toEqual({
+      ok: false,
+      error: "projection failed",
+    });
+    expect(
+      ctx.db
+        .prepare("SELECT * FROM authority_approval_commands WHERE command_id = 'rollback-revoke'")
+        .get(),
+    ).toBeUndefined();
+    expect(ctx.db.prepare("SELECT * FROM authority_approval_events").all()).toEqual([]);
+    expect(listApprovals(ctx.db, projectId)).toHaveLength(1);
+    ctx.db.exec("DROP TRIGGER fail_revoke");
+    expect(await invoke("volli:protection-revoke", row.id, "rollback-revoke")).toMatchObject({
+      ok: true,
     });
   });
 

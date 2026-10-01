@@ -19,7 +19,7 @@ import {
   findCoveringApproval,
   insertApproval,
   insertDecision,
-  recordApprovalUse,
+  recordApprovalCompletion,
 } from "../db/authority-approvals-repo";
 import type { PiProtection } from "../session-runtime/pi-adapter";
 
@@ -63,11 +63,21 @@ export function createProtection(input: ProtectionHostInput): PiProtection {
     },
     completed(toolCallId) {
       const ids = pendingUses.get(toolCallId);
-      pendingUses.delete(toolCallId);
       if (ids === undefined) return;
-      db.transaction(() => {
-        for (const id of ids) recordApprovalUse(db, id, sessionId, now());
-      })();
+      try {
+        recordApprovalCompletion(db, {
+          projectId,
+          sessionId,
+          toolCallId,
+          approvalIds: [...ids],
+          inheritedFrom: input.inheritedFrom,
+          now: now(),
+        });
+        pendingUses.delete(toolCallId);
+      } catch (error) {
+        // Keep the pending accounting for an idempotent retry. Work already succeeded.
+        onError(error);
+      }
     },
     remember(grant) {
       // A multi-scope answer is remembered in full or not at all.

@@ -1,6 +1,9 @@
 import {
   askOffer,
+  askChoice,
+  commandScope,
   writeScope,
+  type RuntimeAskRequest,
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
@@ -1896,6 +1899,26 @@ describe("describeInteractionResolution for an approval card (VC-480)", () => {
     },
   );
 
+  it.each(["session", "project", "ledger", "steer"])(
+    "never records undeclared %s consent or steering",
+    (id) => {
+      expect(
+        describeInteractionResolution(
+          { ...card, options: [{ id: "once", label: "Allow once", description: null }] },
+          { optionIds: [id], response: "use /tmp" },
+        ),
+      ).toMatchObject({ verdict: "rejected", trailer: null });
+    },
+  );
+
+  it.each([
+    ["once", "unknown"],
+    ["once", "session"],
+    ["project", "session"],
+  ])("records malformed consent as refused %j", (...ids) => {
+    expect(receipt(ids)).toMatchObject({ verdict: "rejected" });
+  });
+
   it("says what was remembered, and for how long", () => {
     expect(receipt(["once"])).toEqual({
       verdict: "allowed",
@@ -1911,6 +1934,36 @@ describe("describeInteractionResolution for an approval card (VC-480)", () => {
       verdict: "standing",
       trailer: "always in this project",
     });
+  });
+
+  it.each([
+    [],
+    ["once"],
+    ["session"],
+    ["project"],
+    ["ledger"],
+    ["ONCE"],
+    ["once", "project"],
+    ["once", "stale"],
+    ["once", "reject"],
+    ["steer"],
+  ])("agrees with execution for a command whose project grant was never offered: %j", (...ids) => {
+    const request: RuntimeAskRequest = {
+      cause: "call.unreadable",
+      tool: "execute",
+      toolCallId: "c",
+      turnId: null,
+      reason: "Opaque command",
+      trip: "approval",
+      overridable: true,
+      approval: { asked: "bash -c x", scopes: [commandScope("bash -c x")] },
+    };
+    const interaction = { ...card, options: askOffer(request).options };
+    const choice = askChoice(request, ids, null);
+    const shown = describeInteractionResolution(interaction, { optionIds: ids, response: null });
+    expect(shown.verdict === "allowed" || shown.verdict === "standing").toBe(
+      choice === "allow" || choice === "allow-session" || choice === "allow-project",
+    );
   });
 
   it("records a denial, with the person's words when they steered", () => {

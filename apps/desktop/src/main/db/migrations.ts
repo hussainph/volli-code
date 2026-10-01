@@ -2329,6 +2329,29 @@ CREATE INDEX IF NOT EXISTS authority_decisions_session
   ON authority_decisions(session_id, created_at);
 `;
 
+/** Successful calls and user mutation history are separate from per-grant counters. */
+const MIGRATION_055_APPROVAL_HISTORY = `
+CREATE TABLE authority_approval_completions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  approval_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, tool_call_id)
+);
+CREATE TABLE authority_approval_commands (
+  command_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  receipt TEXT NOT NULL
+);
+CREATE TABLE authority_approval_events (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL UNIQUE REFERENCES authority_approval_commands(command_id),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2611,6 +2634,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "authority_approvals — remembered approvals, app-owned (VC-480)",
     sql: MIGRATION_054_AUTHORITY_APPROVALS,
     apply: applyMigration054AuthorityApprovals,
+  },
+  {
+    version: 55,
+    name: "approval completion and command history (VC-480)",
+    sql: MIGRATION_055_APPROVAL_HISTORY,
   },
 ];
 

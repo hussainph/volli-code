@@ -7,7 +7,7 @@
  * of the body that rode along.
  */
 import { sessionHostNoticeMetadata, type RendererSessionInteraction } from "@volli/shared";
-import { projectTranscriptRows } from "@volli/session-presentation";
+import { approvalAnswerFailures, projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
@@ -45,7 +45,10 @@ describe("the desktop transcript-row mapping", () => {
         stages: [],
         held: null,
       },
-      options: [{ id: "session", label: "Allow for this Session", description: null }],
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "session", label: "Allow for this Session", description: null },
+      ],
     };
     const html = renderToStaticMarkup(
       <ChatTurn
@@ -53,7 +56,24 @@ describe("the desktop transcript-row mapping", () => {
         context={{
           ...context,
           interactions: new Map([[interaction.id, interaction]]),
-          approvalFailures: new Map([["answer", "once"]]),
+          approvalFailures: approvalAnswerFailures([
+            {
+              event: {
+                payload: {
+                  kind: "command.receipt.recorded",
+                  receipt: {
+                    id: "receipt",
+                    commandId: "answer",
+                    sequence: 1,
+                    recordedAt: 1,
+                    status: "rejected",
+                    code: "PI_APPROVAL_NOT_REMEMBERED",
+                    detail: "disk full",
+                  },
+                },
+              },
+            },
+          ]),
         }}
         messages={[
           {
@@ -76,7 +96,7 @@ describe("the desktop transcript-row mapping", () => {
 
   it.each(["PI_INTERACTION_NOT_RECORDED", "PI_INTERACTION_RESOLVING"])(
     "does not claim a remembered approval for a rejected %s answer",
-    () => {
+    (code) => {
       const interaction: RendererSessionInteraction = {
         id: "ask:c",
         attachmentId: "a",
@@ -100,7 +120,24 @@ describe("the desktop transcript-row mapping", () => {
           context={{
             ...context,
             interactions: new Map([[interaction.id, interaction]]),
-            approvalFailures: new Map([["answer", "not-delivered"]]),
+            approvalFailures: approvalAnswerFailures([
+              {
+                event: {
+                  payload: {
+                    kind: "command.receipt.recorded",
+                    receipt: {
+                      id: "receipt",
+                      commandId: "answer",
+                      sequence: 1,
+                      recordedAt: 1,
+                      status: "rejected",
+                      code,
+                      detail: "delivery failed",
+                    },
+                  },
+                },
+              },
+            ]),
           }}
           messages={[
             {

@@ -25,7 +25,12 @@ import {
   type AuthoritySnapshot,
   type PolicyToolCall,
 } from "@volli/shared";
-import { normalizeToolCall, resolveReadableRoot, resolveWorkspaceRoot } from "./normalize";
+import {
+  describeCommandStages,
+  normalizeToolCall,
+  resolveReadableRoot,
+  resolveWorkspaceRoot,
+} from "./normalize";
 
 /** Allow, or a refusal named well enough to count and to record. */
 export type AuthorityVerdict =
@@ -112,9 +117,7 @@ export function authorityVerdict(input: {
           violations: allViolations(call, input.authority, { workspacePath, readableRoots }),
           ...((call.command?.segments.length ?? 0) > 1
             ? {
-                stages: call.command!.segments.map((segment) =>
-                  [segment.program, ...segment.args].join(" "),
-                ),
+                stages: describeCommandStages(call.command!.raw),
               }
             : {}),
         }

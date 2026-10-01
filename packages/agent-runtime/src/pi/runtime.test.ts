@@ -49,6 +49,14 @@ import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-respo
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  approvalCovers,
+  askChoice,
+  describeApproval,
+  DENIED_BY_PERSON,
+  steerMessage,
+  type ApprovalDecision,
+  type ApprovalKey,
+  type RuntimeApprovals,
   mcpProviderToolName,
   parseMcpToolKey,
   withParallelReadEligibility,
@@ -91,6 +99,7 @@ import {
   type PiRuntimeHostOptions,
 } from "./runtime";
 import { McpServerBudget } from "../mcp/server-budget";
+import { authorityVerdict } from "../authority/gate";
 import type { ConnectivityPort } from "./connectivity";
 import {
   TRANSPORT_NOTICE_AFTER_ATTEMPTS,
@@ -443,6 +452,14 @@ function drops(count: number): ScriptStep[] {
 function settles(text: string): ScriptStep {
   return (emit) => {
     emit.text(text);
+    emit.finish();
+  };
+}
+
+/** A provider reply that asks the real Pi write tool to act. */
+function writesFile(path: string, content: string): ScriptStep {
+  return (emit) => {
+    emit.toolCall("write", { path, content });
     emit.finish();
   };
 }
@@ -843,6 +860,69 @@ function withResolvedAuth(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+}
+
+/**
+ * Host-side in-memory ledger for real Pi-hook tests, not a substitute for the
+ * desktop SQLite adapter tests. Rows are minted only from scopes the real gate
+ * put on the card, decoded through the same answer decoder as the desktop.
+ */
+function approvalLedger() {
+  const rows: (ApprovalKey & {
+    id: string;
+    projectId: string;
+    sessionId: string | null;
+  })[] = [];
+  const decisions: ApprovalDecision[] = [];
+  const completed = vi.fn();
+  let nextId = 0;
+  return {
+    rows,
+    decisions,
+    completed,
+    revoke: () => void rows.splice(0),
+    bind(identity: RuntimeSessionIdentity): RuntimeApprovals {
+      return {
+        covers(scope) {
+          const row = rows.find(
+            (candidate) =>
+              candidate.projectId === identity.projectId &&
+              (candidate.sessionId === null || candidate.sessionId === identity.sessionId) &&
+              approvalCovers(candidate, scope),
+          );
+          return row === undefined
+            ? null
+            : {
+                approvalId: row.id,
+                summary: describeApproval(row),
+              };
+        },
+        decided: (decision) => void decisions.push(decision),
+        completed,
+      };
+    },
+    answer(
+      identity: RuntimeSessionIdentity,
+      request: RuntimeAskRequest,
+      optionIds: readonly string[],
+      response: string | null = null,
+    ): RuntimeAskChoice {
+      const choice = askChoice(request, optionIds, response);
+      if (choice === "allow-session" || choice === "allow-project") {
+        for (const scope of request.approval?.scopes ?? []) {
+          if (scope.key === null) continue;
+          rows.push({
+            id: `approval-${++nextId}`,
+            projectId: identity.projectId,
+            sessionId: choice === "allow-session" ? identity.sessionId : null,
+            operation: scope.operation,
+            key: scope.key,
+          });
+        }
+      }
+      return choice;
+    },
+  };
 }
 
 /** One runtime over this fixture's data dir, with the models a test supplies. */
@@ -3656,6 +3736,69 @@ describe("startSession", () => {
     expect(readFileSync(outsidePath, "utf8")).toBe("written-outside\n");
   });
 
+  it("default-off executes otherwise-refused files and commands exactly like the legacy ungated path", async () => {
+    const outcomes: { file: string; command: string; errors: boolean[] }[] = [];
+    for (const mode of ["protected", "default-off", "legacy-ungated"] as const) {
+      const attachment = fixture({ tools: { tools: ["write", "execute"] } });
+      const filePath = join(attachment.worktreePath, "..", "OUTSIDE.txt");
+      const commandPath = join(attachment.worktreePath, "..", "COMMAND.txt");
+      const ledger = approvalLedger();
+      const ask = vi.fn(async (request: RuntimeAskRequest) =>
+        ledger.answer(attachment.spec.identity, request, ["reject"]),
+      );
+      const calls: ProviderCall[] = [];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("write", { path: filePath, content: "written-outside" });
+              emit.finish();
+            },
+            recording(calls, (emit) => {
+              emit.toolCall("bash", { command: `printf command-outside > '${commandPath}'` });
+              emit.finish();
+            }),
+            recording(calls, settles("Finished.")),
+          ]),
+        ),
+      });
+      // Off in the product omits policy/ledger entirely. The old ungated
+      // contract also accepts explicit undefined; both must actually execute,
+      // not just declare the same tool array or describe the same prompt.
+      const { authority: _authority, ...defaultOff } = attachment.spec;
+      const spec =
+        mode === "protected"
+          ? { ...attachment.spec, approvals: ledger.bind(attachment.spec.identity), ask }
+          : mode === "default-off"
+            ? defaultOff
+            : { ...attachment.spec, authority: undefined, approvals: undefined };
+      const handle = await runtime.startSession(spec);
+      await handle.submitUserMessage("Write the file and run the command next to this workspace.");
+      await handle.close();
+      if (mode === "protected") {
+        expect(existsSync(filePath)).toBe(false);
+        expect(existsSync(commandPath)).toBe(false);
+        expect(ask).toHaveBeenCalledTimes(2);
+        expect(ledger.completed).not.toHaveBeenCalled();
+      } else {
+        outcomes.push({
+          file: readFileSync(filePath, "utf8"),
+          command: readFileSync(commandPath, "utf8"),
+          errors: calls
+            .at(-1)!
+            .context.flatMap((message) => (message.role === "toolResult" ? [message.isError] : [])),
+        });
+        expect(ask).not.toHaveBeenCalled();
+        expect(kinds(attachment.observations)).not.toContain("authority");
+      }
+    }
+    expect(outcomes).toEqual([
+      { file: "written-outside", command: "command-outside", errors: [false, false] },
+      { file: "written-outside", command: "command-outside", errors: [false, false] },
+    ]);
+  });
+
   it("attaches against a workspace directory that does not exist", async () => {
     // `ScopedExecutionEnv.create` used to `realpath` its root, so a missing
     // worktree failed the attach as a side effect of containment. Pi's own
@@ -3934,14 +4077,12 @@ describe("startSession", () => {
   it.each(["ask", "auto"] as const)(
     "uses only cards and the ledger in Protection with retained %s judgment, never a classifier",
     async (judgmentMode) => {
-      const hits = new Set<string>();
-      const decisions: string[] = [];
-      const completed = vi.fn();
-      const ask = vi.fn(async () => {
-        hits.add("git discard");
-        return "allow-session" as const;
-      });
+      const ledger = approvalLedger();
+      const ask = vi.fn(async (request: RuntimeAskRequest) =>
+        ledger.answer(attachment.spec.identity, request, ["session"]),
+      );
       const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+      const completed = ledger.completed;
       attachment.spec.authority = {
         ...attachment.spec.authority,
         judgmentMode,
@@ -3949,12 +4090,7 @@ describe("startSession", () => {
       };
       const classify = vi.fn();
       attachment.spec.decisions = { decide: classify };
-      attachment.spec.approvals = {
-        covers: (scope) =>
-          hits.has("git discard") ? { approvalId: "row-1", summary: scope.summary } : null,
-        decided: (decision) => void decisions.push(decision.authoriser),
-        completed,
-      };
+      attachment.spec.approvals = ledger.bind(attachment.spec.identity);
       exec.mockImplementation(async () => {
         // A ledger lookup or a pre-execution audit is not a passed request.
         expect(completed).toHaveBeenCalledTimes(exec.mock.calls.length - 1);
@@ -4004,13 +4140,320 @@ describe("startSession", () => {
         approval: { asked: "git reset --hard" },
       });
       expect(exec).toHaveBeenCalledTimes(2);
-      expect(decisions).toEqual(["user:session", "policy:ledger"]);
+      expect(ledger.decisions.map((decision) => decision.authoriser)).toEqual([
+        "user:session",
+        "policy:ledger",
+      ]);
+      expect(ledger.rows).toEqual([
+        expect.objectContaining({
+          projectId: "project-1",
+          sessionId: "session-1",
+          operation: "git",
+          key: ask.mock.calls[0][0].approval?.scopes[0]?.key,
+        }),
+      ]);
       expect(completed).toHaveBeenCalledTimes(2);
       expect(classify).not.toHaveBeenCalled();
       expect(kinds(attachment.observations)).not.toContain("authority-review");
       expect(kinds(attachment.observations)).not.toContain("authority");
     },
   );
+
+  it.each(["session", "project"] as const)(
+    "Protection remembers true %s keys, isolates scope, and applies live revocation",
+    async (remember) => {
+      const attachment = fixture({ tools: { tools: ["write"] } });
+      const folder = join(attachment.worktreePath, "..", "docs");
+      const firstPath = join(folder, "a.txt");
+      const repeatPath = join(folder, "b.txt");
+      const unrelatedPath = join(attachment.worktreePath, "..", "docs-evil", "x.txt");
+      const ledger = approvalLedger();
+      const asks: RuntimeAskRequest[] = [];
+      attachment.spec.approvals = ledger.bind(attachment.spec.identity);
+      attachment.spec.ask = async (request) => {
+        asks.push(request);
+        return ledger.answer(attachment.spec.identity, request, [
+          asks.length === 1 ? remember : "reject",
+        ]);
+      };
+      const calls: ProviderCall[] = [];
+      const firstRuntime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            writesFile(firstPath, "first"),
+            recording(calls, settles("Approved and written.")),
+            writesFile(repeatPath, "repeat"),
+            recording(calls, settles("Remembered and written.")),
+            writesFile(unrelatedPath, "must not land"),
+            recording(calls, settles("Different folder denied.")),
+            writesFile(firstPath, "revoked must not land"),
+            recording(calls, settles("Revoked; I will not write.")),
+          ]),
+        ),
+      });
+      const first = await firstRuntime.startSession(attachment.spec);
+      await first.submitUserMessage("Write a.");
+      await first.submitUserMessage("Write b in the same approved folder.");
+      await first.submitUserMessage("Try another folder.");
+      expect(readFileSync(firstPath, "utf8")).toBe("first");
+      expect(readFileSync(repeatPath, "utf8")).toBe("repeat");
+      expect(existsSync(unrelatedPath)).toBe(false);
+      expect(asks).toHaveLength(2);
+      expect(ledger.rows).toHaveLength(1);
+      expect(ledger.rows[0]).toMatchObject({
+        operation: "write",
+        key: asks[0].approval?.scopes[0]?.key,
+        sessionId: remember === "session" ? attachment.spec.identity.sessionId : null,
+      });
+      expect(calls[0]?.context.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: false,
+      });
+      expect(calls[1]?.context.findLast((message) => message.role === "toolResult")).toMatchObject({
+        isError: false,
+      });
+
+      async function attempt(identity: RuntimeSessionIdentity, content: string) {
+        const asked = vi.fn(async (request: RuntimeAskRequest) =>
+          ledger.answer(identity, request, ["reject"]),
+        );
+        const runtime = createPiAgentRuntime({
+          sessionDataDir: attachment.sessionDataDir,
+          models: modelsWithStream(
+            scriptedStream([writesFile(firstPath, content), settles("Continued safely.")]),
+          ),
+        });
+        const handle = await runtime.startSession({
+          ...attachment.spec,
+          identity,
+          approvals: ledger.bind(identity),
+          ask: asked,
+        });
+        await handle.submitUserMessage("Write in that folder.");
+        await handle.close();
+        return asked;
+      }
+      const otherSessionAsk = await attempt(
+        {
+          ...attachment.spec.identity,
+          sessionId: "other-session",
+          attachmentId: "other-attachment",
+        },
+        "other-session",
+      );
+      expect(otherSessionAsk).toHaveBeenCalledTimes(remember === "session" ? 1 : 0);
+      const expectedContent = remember === "project" ? "other-session" : "first";
+      expect(readFileSync(firstPath, "utf8")).toBe(expectedContent);
+      const otherProjectAsk = await attempt(
+        {
+          ...attachment.spec.identity,
+          projectId: "other-project",
+          attachmentId: "other-project-attachment",
+        },
+        "other-project must not land",
+      );
+      expect(otherProjectAsk).toHaveBeenCalledOnce();
+      expect(readFileSync(firstPath, "utf8")).toBe(expectedContent);
+      ledger.revoke();
+      await first.submitUserMessage("Try the revoked folder.");
+      await first.close();
+      expect(asks).toHaveLength(3);
+      expect(readFileSync(firstPath, "utf8")).toBe(expectedContent);
+      expect(ledger.completed).toHaveBeenCalledTimes(remember === "session" ? 2 : 3);
+      expect(ledger.decisions.map((decision) => decision.authoriser)).toEqual([
+        remember === "session" ? "user:session" : "user:project",
+        "policy:ledger",
+        "user:deny",
+        remember === "session" ? "user:deny" : "policy:ledger",
+        "user:deny",
+        "user:deny",
+      ]);
+    },
+  );
+
+  it.each([
+    { option: "reject", response: null, reason: DENIED_BY_PERSON },
+    {
+      option: "steer",
+      response: "Inspect the marker instead.",
+      reason: steerMessage("Inspect the marker instead."),
+    },
+  ])(
+    "Protection $option refuses execution, tells the model, and continues safely",
+    async ({ option, response, reason }) => {
+      const ledger = approvalLedger();
+      const ask = vi.fn(async (request: RuntimeAskRequest) =>
+        ledger.answer(attachment.spec.identity, request, [option], response),
+      );
+      const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+      attachment.spec.approvals = ledger.bind(attachment.spec.identity);
+      const calls: ProviderCall[] = [];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        executionEnvFactory: async () => containedEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "git reset --hard" });
+              emit.finish();
+            },
+            recording(calls, settles("I will inspect instead, without resetting.")),
+            recording(calls, settles("Safe follow-up.")),
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      await handle.submitUserMessage("Reset.");
+      await handle.submitUserMessage("Continue safely.");
+      await handle.close();
+      expect(exec).not.toHaveBeenCalled();
+      expect(ledger.completed).not.toHaveBeenCalled();
+      expect(ledger.rows).toEqual([]);
+      expect(ledger.decisions.map((decision) => decision.authoriser)).toEqual(["user:deny"]);
+      expect(calls[0]?.context.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: reason }],
+      });
+      expect(settledTexts(attachment.observations)).toEqual([
+        "I will inspect instead, without resetting.",
+        "Safe follow-up.",
+      ]);
+      expect(kinds(attachment.observations)).not.toContain("turn:interrupted");
+      expect(attentions(attachment.observations)).toEqual([]);
+    },
+  );
+
+  it.each(["user", "ledger"] as const)(
+    "Protection fails closed on a %s pre-execution decision audit write failure",
+    async (source) => {
+      const ledger = approvalLedger();
+      const ask = vi.fn(async (request: RuntimeAskRequest) =>
+        ledger.answer(attachment.spec.identity, request, ["once"]),
+      );
+      const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+      if (source === "ledger") {
+        const verdict = authorityVerdict({
+          tool: "bash",
+          args: { command: "git reset --hard" },
+          authority: attachment.spec.authority,
+          workspacePath: attachment.worktreePath,
+          protection: true,
+        });
+        expect(verdict.outcome).toBe("deny");
+        const scopes = verdict.outcome === "deny" ? verdict.violations?.[0]?.scopes : [];
+        for (const scope of scopes ?? []) {
+          expect(scope.key).not.toBeNull();
+          ledger.rows.push({
+            id: "existing-row",
+            projectId: attachment.spec.identity.projectId,
+            sessionId: attachment.spec.identity.sessionId,
+            operation: scope.operation,
+            key: scope.key!,
+          });
+        }
+      }
+      const decided = vi.fn(() => {
+        throw new Error("decision audit write failed");
+      });
+      attachment.spec.approvals = { ...ledger.bind(attachment.spec.identity), decided };
+      const calls: ProviderCall[] = [];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        executionEnvFactory: async () => containedEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "git reset --hard" });
+              emit.finish();
+            },
+            recording(calls, settles("The action did not run. I will not retry it.")),
+            recording(calls, settles("Safe follow-up.")),
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      await handle.submitUserMessage("Reset.");
+      await handle.submitUserMessage("Continue safely.");
+      await handle.close();
+      expect(exec).not.toHaveBeenCalled();
+      expect(ledger.completed).not.toHaveBeenCalled();
+      expect(decided).toHaveBeenCalledOnce();
+      expect(ask).toHaveBeenCalledTimes(source === "user" ? 1 : 0);
+      expect(calls[0]?.context.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+      });
+      expect(calls[0]?.messages).toContain("decision audit write failed");
+      expect(settledTexts(attachment.observations)).toEqual([
+        "The action did not run. I will not retry it.",
+        "Safe follow-up.",
+      ]);
+    },
+  );
+
+  it("logs completion bookkeeping failures without losing the successful tool result or executing again", async () => {
+    const { attachment, exec, containedEnv } = escalatingAttachment(async () => "allow");
+    exec.mockResolvedValue({
+      ok: true,
+      value: {
+        exitCode: 0,
+        truncation: {
+          truncated: false,
+          truncatedBy: null,
+          totalLines: 0,
+          outputLines: 0,
+          outputBytes: 0,
+          lastLinePartial: false,
+        },
+      },
+    });
+    const completed = vi.fn(() => {
+      throw new Error("approval use count write failed");
+    });
+    attachment.spec.approvals = {
+      covers: () => null,
+      decided: vi.fn(),
+      completed,
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          recording(calls, settles("The reset succeeded; I will not repeat it.")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    try {
+      await expect(handle.submitUserMessage("Reset once.")).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+      });
+      expect(exec).toHaveBeenCalledOnce();
+      expect(completed).toHaveBeenCalledOnce();
+      const result = calls[0]?.context.find((message) => message.role === "toolResult");
+      expect(result).toMatchObject({ role: "toolResult", isError: false });
+      expect(calls[0]?.messages).not.toContain("approval use count write failed");
+      expect(settledTexts(attachment.observations)).toEqual([
+        "The reset succeeded; I will not repeat it.",
+      ]);
+      expect(attentions(attachment.observations)).toEqual([]);
+      expect(logged).toHaveBeenCalledWith(
+        "Approval completion bookkeeping failed",
+        "tc-0",
+        expect.any(Error),
+      );
+    } finally {
+      await handle.close();
+      logged.mockRestore();
+    }
+  });
 
   it("does not count a ledger decision whose tool execution fails", async () => {
     const { attachment, exec, containedEnv } = escalatingAttachment(vi.fn());

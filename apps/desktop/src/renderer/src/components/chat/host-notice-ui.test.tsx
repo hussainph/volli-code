@@ -142,6 +142,21 @@ describe("other host-notice rows", () => {
   });
 });
 
+it("renders a ledger-hit historical receipt as a quiet line, without approval actions", () => {
+  const html = renderToStaticMarkup(
+    <HostNoticeRow
+      notice={{
+        kind: "approval-used",
+        approvalId: "row",
+        summary: "Write to docs",
+        asked: "write docs/a.md",
+      }}
+    />,
+  );
+  expect(html).toContain("Allowed by your earlier approval: Write to docs");
+  expect(html).not.toContain("button");
+});
+
 describe("a watch notice row (VC-457)", () => {
   const moved = {
     subject: "ticket",

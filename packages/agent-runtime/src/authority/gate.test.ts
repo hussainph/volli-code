@@ -1,7 +1,18 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  approvalCovers,
+  projectRememberable,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   type AuthoritySnapshot,
@@ -419,7 +430,7 @@ describe("protection mode (VC-480)", () => {
       "path.outside-workspace",
       "command.persistence",
     ]);
-    expect(verdict.stages).toEqual(["true", "echo x", "launchctl list"]);
+    expect(verdict.stages).toEqual(["true", "echo x > /tmp/volli-protect/out", "launchctl list"]);
   });
 
   it("keeps main's readable tool-output exception in Protection without granting writes", () => {
@@ -479,5 +490,117 @@ describe("describeCall", () => {
     expect(describeCall("read", { filePath: "/a/d" })).toBe("read  /a/d");
     expect(describeCall("read", {})).toBe("read");
     expect(describeCall("read", null)).toBe("read");
+  });
+});
+
+describe("review security regressions", () => {
+  it.each(["--git-dir=", "--git-dir ", "--work-tree=", "--work-tree ", "-C "])(
+    "binds %s grants to the real target, not a retargetable symlink",
+    (flag) => {
+      const { raw, real } = workspace();
+      const first = join(real, "..", "first-repo");
+      const second = join(real, "..", "second-repo");
+      const link = join(real, "..", "repo-link");
+      mkdirSync(first);
+      mkdirSync(second);
+      for (const repo of [real, first, second]) execFileSync("git", ["init", "-q", repo]);
+      const target = (repo: string) => (flag.startsWith("--git-dir") ? join(repo, ".git") : repo);
+      symlinkSync(target(first), link);
+      const command = `git ${flag}${link} status`;
+      const currentScope = () => {
+        const verdict = authorityVerdict({
+          tool: "bash",
+          args: { command },
+          authority: snapshot(),
+          workspacePath: raw,
+          protection: true,
+        });
+        if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+        const scope = verdict.violations?.find((v) => v.rule === "command.git-escapes-workspace")
+          ?.scopes?.[0];
+        if (!scope || scope.key === null) throw new Error("expected a rememberable git scope");
+        return scope;
+      };
+      try {
+        const approved = currentScope();
+        expect(
+          approvalCovers({ operation: approved.operation, key: approved.key! }, currentScope()),
+        ).toBe(true);
+        unlinkSync(link);
+        symlinkSync(target(second), link);
+        expect(
+          approvalCovers({ operation: approved.operation, key: approved.key! }, currentScope()),
+        ).toBe(false);
+        expect(currentScope().key).toContain(second);
+      } finally {
+        rmSync(join(real, ".."), { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("shows original stage text and holds both writers, not the earlier reader", () => {
+    const { raw } = workspace();
+    const target = "/tmp/volli-card-data/out.txt";
+    const stages = [
+      `cat "${target}"`,
+      `MARKER='two words' printf 'hello world' > "${target}"`,
+      `printf 'again' >> "${target}"`,
+    ];
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args: { command: stages.join(" && ") },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.stages).toEqual(stages);
+    expect(verdict.violations?.[0].scopes?.map((scope) => scope.stage)).toEqual([1, 2]);
+  });
+
+  it.each([
+    "python3.12 -c 'print(1)'",
+    "python -c'print(1)'",
+    "node --eval 'console.log(1)'",
+    "node22 --eval='console.log(1)'",
+    "perl -we 'print 1'",
+    "perl5.40 -we'print 1'",
+    "ruby3.3 -e'puts 1'",
+  ])("remembers %s only as the exact command, never a project/path grant", (program) => {
+    const { raw } = workspace();
+    const command = `${program} > /tmp/volli-interpreter/out.txt`;
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args: { command },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    const scopes = verdict.violations?.[0].scopes;
+    if (!scopes) throw new Error("expected rememberable command scopes");
+    expect(scopes).toEqual([
+      { operation: "command", key: command, target: command, summary: `Run exactly: ${command}` },
+    ]);
+    expect(projectRememberable(scopes)).toBe(false);
+    const row = { operation: "command" as const, key: command };
+    expect(approvalCovers(row, scopes[0])).toBe(true);
+    const changedCommand = command
+      .replace("(1)", "(2)")
+      .replace("print 1", "print 2")
+      .replace("puts 1", "puts 2");
+    const changedVerdict = authorityVerdict({
+      tool: "bash",
+      args: { command: changedCommand },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (changedVerdict.outcome !== "deny")
+      throw new Error("expected changed code to need approval");
+    const changedScope = changedVerdict.violations?.[0].scopes?.[0];
+    if (!changedScope) throw new Error("expected changed command scope");
+    expect(changedScope.operation).toBe("command");
+    expect(approvalCovers(row, changedScope)).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askChoice,
   askOffer,
+  decodeApprovalConsent,
   browserFindPort,
   browserHoldPort,
   REASONING_LEVELS,
@@ -519,6 +520,29 @@ describe("UtilityCompletionError", () => {
   });
 });
 
+describe("decodeApprovalConsent", () => {
+  it("only grants a single declared choice, matching case without trusting unknown ids", () => {
+    expect(decodeApprovalConsent([{ id: "ONCE" }], ["once"])).toBe("allow");
+    expect(decodeApprovalConsent([{ id: "project" }], ["PROJECT"])).toBe("allow-project");
+    expect(decodeApprovalConsent([{ id: "session" }], ["SESSION"])).toBe("allow-session");
+    expect(decodeApprovalConsent([{ id: "ledger" }], ["LEDGER"])).toBe("ledger");
+    expect(decodeApprovalConsent([{ id: "stop" }], ["stop"])).toBe("stop");
+    expect(decodeApprovalConsent([{ id: "unknown" }], ["unknown"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], ["project"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], ["once", "once"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], [])).toBe("refuse");
+  });
+
+  it("never steers with words unless steering was declared", () => {
+    expect(decodeApprovalConsent([{ id: "once" }], ["steer"], "use /tmp")).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "steer" }], ["steer"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "steer" }], ["steer"], "  use /tmp ")).toEqual({
+      kind: "steer",
+      message: "use /tmp",
+    });
+  });
+});
+
 describe("the approval card's offer and answer", () => {
   const pathAsk = askRequest({
     trip: "approval",
@@ -536,6 +560,14 @@ describe("the approval card's offer and answer", () => {
     approval: { asked: "bash -c x", scopes: [commandScope("bash -c x")] },
   });
   const onceOnly = askRequest({ trip: "approval", approval: { asked: "x", scopes: [] } });
+
+  it("does not offer approval even if a hard refusal carried approval detail", () => {
+    const hard = { ...pathAsk, overridable: false };
+    expect(askOffer(hard).options).toBe(SESSION_ESCALATION_OPTIONS);
+    expect(askChoice(hard, ["once"])).toBe("refuse");
+    expect(askChoice(hard, ["project"])).toBe("refuse");
+    expect(askChoice(hard, ["stop"])).toBe("stop");
+  });
 
   it("offers all five choices, each naming what it will remember", () => {
     const offer = askOffer(pathAsk);
@@ -569,6 +601,14 @@ describe("the approval card's offer and answer", () => {
     ]);
     expect(askChoice(onceOnly, ["session"])).toBe("refuse");
     expect(askChoice(onceOnly, ["project"])).toBe("refuse");
+  });
+
+  it.each([
+    ["once", "unknown"],
+    ["once", "session"],
+    ["project", "session"],
+  ])("refuses incoherent consent %j instead of silently widening it", (...ids) => {
+    expect(askChoice(pathAsk, ids)).toBe("refuse");
   });
 
   it("reads each answer, failing to a refusal", () => {

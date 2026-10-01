@@ -3918,7 +3918,7 @@ describe("Protection mode (VC-480)", () => {
     expect(await outcome).toMatchObject({ answered: { optionIds: ["steer"] } });
   });
 
-  it("leaves one quiet line after a ledger hit, opened and answered in the same breath", async () => {
+  it("leaves one nonblocking historical fact per ledger row", async () => {
     const fake = fakeProtection(true);
     const { runtime, sink } = await protectedAttach(fake.protection);
     runtime.spec.approvals?.decided({
@@ -3934,16 +3934,10 @@ describe("Protection mode (VC-480)", () => {
     expect(fake.decisions).toHaveLength(1);
     expect(sink.observations).toEqual([
       expect.objectContaining({
-        state: "opened",
-        interaction: expect.objectContaining({
-          id: "ledger-hit:call-9:row-1",
-          title: "Allowed by your earlier approval: Write to /Users/me/code/docs/guides",
-        }),
-      }),
-      expect.objectContaining({
-        state: "resolved",
-        interactionId: "ledger-hit:call-9:row-1",
-        resolution: { optionIds: ["ledger"], response: null },
+        kind: "approval-used",
+        toolCallId: "call-9",
+        approvalId: "row-1",
+        summary: "Write to /Users/me/code/docs/guides",
       }),
     ]);
     runtime.spec.approvals?.decided({
@@ -3956,8 +3950,7 @@ describe("Protection mode (VC-480)", () => {
       approvalId: "row-2",
     });
     await flush();
-    expect(sink.observations[2]).toMatchObject({ interaction: { id: "ledger-hit:call-9:row-2" } });
-    expect(sink.observations[3]).toMatchObject({ interactionId: "ledger-hit:call-9:row-2" });
+    expect(sink.observations[1]).toMatchObject({ kind: "approval-used", approvalId: "row-2" });
     runtime.spec.approvals?.decided({
       toolCallId: "call-10",
       tool: "write",
@@ -3968,7 +3961,29 @@ describe("Protection mode (VC-480)", () => {
       approvalId: null,
     });
     await flush();
-    expect(sink.observations).toHaveLength(4);
+    expect(sink.observations).toHaveLength(2);
+  });
+
+  it("cannot manufacture a wait when only the resolution write would fail", async () => {
+    const fake = fakeProtection(true);
+    const { runtime, sink } = await protectedAttach(fake.protection);
+    sink.beforeEmit = async (observation) => {
+      if (observation.kind === "interaction" && observation.state === "resolved")
+        throw new Error("second write failed");
+    };
+    runtime.spec.approvals?.decided({
+      toolCallId: "partial-receipt",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "r",
+      summary: "Write to docs",
+      asked: "write docs",
+      approvalId: "row-1",
+    });
+    await flush();
+    expect(fake.decisions).toHaveLength(1);
+    expect(sink.observations.filter((o) => o.kind === "interaction")).toEqual([]);
+    expect(sink.observations).toHaveLength(1);
   });
 
   it("does not let a failed receipt line change the decision it reports", async () => {

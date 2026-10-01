@@ -422,6 +422,12 @@ export const ToolRow = React.memo(function ToolRow({
   className?: string;
 }) {
   const row = describeActivity(part);
+  // A failed/refused call owes its explanation even with the detail closed.
+  // This is the runtime's error, not a reinterpretation of successful output.
+  const deniedReason =
+    row.status === "failed" || row.status === "denied"
+      ? (row.errorText ?? activityDescriptor(part).outcome?.summary ?? null)
+      : null;
   // A browse row that touched a tab opens onto the tab card (VC-238): the live
   // tab, its owner, its picture, and the controls that show or close it.
   const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
@@ -452,6 +458,14 @@ export const ToolRow = React.memo(function ToolRow({
           </span>
         ) : null}
       </div>
+      {deniedReason ? (
+        <p
+          data-slot="refusal-explanation"
+          className="py-1 text-ui text-foreground whitespace-pre-wrap break-words"
+        >
+          {deniedReason}
+        </p>
+      ) : null}
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}

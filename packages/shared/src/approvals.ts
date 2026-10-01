@@ -199,15 +199,32 @@ const WRAPPING_PROGRAMS = new Set([
   "dlx",
 ]);
 
-const INTERPRETERS = new Set(["python", "python3", "node", "perl", "ruby", "osascript", "deno"]);
+// Versioned executables have the same inline-code boundary as their bare name.
+const INTERPRETER = /^(python|node|perl|ruby|osascript|deno)(?:\d+(?:\.\d+)*)?$/;
+
+function interpreterRunsCode(program: string, args: readonly string[]): boolean {
+  const family = INTERPRETER.exec(program)?.[1];
+  if (family === undefined) return false;
+  if (family === "deno" && args.includes("eval")) return true;
+  return args.some((arg) => {
+    if (arg === "--eval" || arg.startsWith("--eval=")) return true;
+    if (family === "node" && (arg === "--print" || arg.startsWith("--print="))) return true;
+    if (!arg.startsWith("-") || arg.startsWith("--")) return false;
+    // Includes attached code (-cCODE/-eCODE) and clusters such as perl -we.
+    return (
+      arg.slice(1).includes(family === "python" ? "c" : "e") ||
+      (family === "node" && arg.slice(1).includes("p"))
+    );
+  });
+}
 
 /** Package managers whose `exec`/`dlx`/`x` subcommand runs a downloaded program. */
 const PACKAGE_RUNNERS = new Set(["pnpm", "yarn", "npm", "bun"]);
 
 /**
  * Whether a command hides other commands from the lexer: `sh -c`, `eval`,
- * `xargs`, `$(…)`, `find -exec`, an interpreter's `-c`/`-e`. Such a call can
- * only be allowed once — a row for it would cover whatever the string expands to.
+ * `xargs`, `$(…)`, `find -exec`, an interpreter's `-c`/`-e`. Such a call is
+ * remembered only as the exact command, never as an operand/path or project grant.
  */
 export function wrapsCommands(command: {
   raw: string;
@@ -223,7 +240,7 @@ export function wrapsCommands(command: {
     if (PACKAGE_RUNNERS.has(program)) {
       return segment.args.some((arg) => ["exec", "dlx", "x"].includes(arg));
     }
-    return INTERPRETERS.has(program) && segment.args.some((arg) => arg === "-c" || arg === "-e");
+    return interpreterRunsCode(program, segment.args);
   });
 }
 
@@ -258,7 +275,7 @@ export interface AuthorityApproval {
   provenance: ApprovalProvenance;
   useCount: number;
   lastUsedAt: number | null;
-  /** The Session that last used it, when that was not the one that approved it. */
+  /** Verified subagent use of an inherited Session grant; null for ordinary/project use. */
   lastUsedBySessionId: string | null;
 }
 

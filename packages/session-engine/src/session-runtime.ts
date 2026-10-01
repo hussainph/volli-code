@@ -1821,9 +1821,15 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const interaction = projection.interactions.active.find(
-      ({ id }) => id === request.command.interactionId,
-    );
+    // A repeat must replay its durable outcome even after the card has settled.
+    // Still submit the full intent below: a reused ID with changed consent is a conflict.
+    const interaction =
+      projection.interactions.active.find(({ id }) => id === request.command.interactionId) ??
+      (existed
+        ? projection.interactions.resolved.find(
+            ({ interaction: settled }) => settled.id === request.command.interactionId,
+          )?.interaction
+        : undefined);
     if (!interaction) {
       throw new SessionRuntimeNotFoundError(
         `Interaction ${request.command.interactionId} is not open`,
