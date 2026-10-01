@@ -162,8 +162,12 @@ export async function inspectPiModelAccess(
           .filter(({ provider, probe }) => stored.has(provider.id) || probe.auth !== undefined)
           .map(({ provider }) => provider.id),
       );
-      const publicIds = source.catalogs.providerIds.filter((providerId) =>
-        connected.has(providerId),
+      // A decision-only provider has no chat catalog to refresh: its public
+      // feed publishes no chat model, which the feed reader refuses as an
+      // empty list, and the refusal would put a Retry beside a provider that
+      // is working fine (VC-478). Its classifiers come from Pi's catalog.
+      const publicIds = source.catalogs.providerIds.filter(
+        (providerId) => connected.has(providerId) && !servesOnlyDecisions(models, providerId),
       );
       // Public list discovery is deliberately separate from Pi's refresh: Pi
       // skips the network phase for providers whose credential is unresolved,

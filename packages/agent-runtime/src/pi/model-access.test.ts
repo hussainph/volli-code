@@ -435,6 +435,37 @@ describe("inspectPiModelAccess public/native refresh phases", () => {
     expect(providersById(result.providers).connected?.state).toBe("available");
   });
 
+  it("never refreshes a decision-only provider's chat catalog, which has nothing in it (VC-478)", async () => {
+    const refresh = vi.fn<RefreshableCatalogs["refresh"]>(async () => ({
+      aborted: false,
+      errors: new Map(),
+      rejectedByProvider: new Map(),
+      refreshedProviderIds: [],
+    }));
+    const result = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("typesafe"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+        ]),
+        credentials: null,
+        catalogs: catalogs(refresh, ["typesafe"]),
+      },
+      () => 0,
+      { refresh: true },
+    );
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ providers: [] }));
+    expect(result.providers[0]).toMatchObject({
+      id: "typesafe",
+      state: "available",
+      recovery: null,
+    });
+  });
+
   it("carries a preflight credential failure into the snapshot without re-asking", async () => {
     const secret = "sk-live-should-never-surface";
     let checkAuth = 0;
