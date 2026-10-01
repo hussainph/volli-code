@@ -57,7 +57,6 @@ function fakeDeps(overrides: Partial<SubmitDeps> = {}): SubmitDeps {
   return {
     addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket()),
     startChat: vi.fn<SubmitDeps["startChat"]>(async () => "s1"),
-    openTicketWorkspace: vi.fn<SubmitDeps["openTicketWorkspace"]>(),
     toastSuccess: vi.fn<SubmitDeps["toastSuccess"]>(),
     runAutomation: vi.fn<SubmitDeps["runAutomation"]>(async () => {}),
     ...overrides,
@@ -111,7 +110,7 @@ describe("runPlainCreate", () => {
 });
 
 describe("runKickoff", () => {
-  it("forces Doing and (foreground) navigates, then starts the chat on the chosen model", async () => {
+  it("forces Doing and starts the chat on the chosen model with creation feedback", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () =>
         madeTicket({ id: "tk", ticketNumber: 42, status: "doing" }),
@@ -119,7 +118,6 @@ describe("runKickoff", () => {
     });
 
     const result = await runKickoff(fields({ status: "backlog", body: "the body" }), deps, {
-      createMore: false,
       model: MODEL,
     });
 
@@ -131,7 +129,7 @@ describe("runKickoff", () => {
       "A ticket",
       expect.objectContaining({ body: "the body" }),
     );
-    expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
+    expect(deps.toastSuccess).toHaveBeenCalledWith("VC-42 created");
     // The ticket's own prose is NOT re-sent: the agent is handed the Ticket
     // Brief at attach, so the opening turn is only the instruction to begin.
     expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", {
@@ -148,7 +146,7 @@ describe("runKickoff", () => {
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
     });
 
-    await runKickoff(fields(), deps, { createMore: false, model: MODEL });
+    await runKickoff(fields(), deps, { model: MODEL });
 
     expect(deps.addTicket).toHaveBeenCalledWith(
       "p1",
@@ -164,7 +162,6 @@ describe("runKickoff", () => {
     });
 
     await runKickoff(fields({ baseBranch: "origin/main" }), deps, {
-      createMore: false,
       model: MODEL,
     });
 
@@ -181,7 +178,7 @@ describe("runKickoff", () => {
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
     });
 
-    await runKickoff(fields(), deps, { createMore: false });
+    await runKickoff(fields(), deps, {});
 
     // Not `model: undefined`: the start reads "absent" as "take the Ticket
     // default", and an explicit undefined key would be a second way to say it.
@@ -193,17 +190,6 @@ describe("runKickoff", () => {
     });
   });
 
-  it("starts in the background without navigating when Create-more is on", async () => {
-    const deps = fakeDeps({
-      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
-    });
-
-    await runKickoff(fields(), deps, { createMore: true, model: MODEL });
-
-    expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", expect.anything());
-    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
-  });
-
   it("offers the ticket task, not the generic kickoff, for model selection", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
@@ -211,7 +197,7 @@ describe("runKickoff", () => {
     await runKickoff(
       fields({ title: "Fix the database race", body: "Reproduce concurrent writes." }),
       deps,
-      { createMore: false },
+      {},
     );
     expect(deps.startChat).toHaveBeenCalledWith(
       "p1",
@@ -223,26 +209,25 @@ describe("runKickoff", () => {
     expect(vi.mocked(deps.startChat).mock.calls[0]![2]).not.toHaveProperty("model");
   });
 
-  it("still navigates (foreground) when the Session start fails, so the user can retry there", async () => {
+  it("reports the ticket as created even when the Session start fails", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
       startChat: vi.fn<SubmitDeps["startChat"]>(async () => null),
     });
 
-    const result = await runKickoff(fields(), deps, { createMore: false, model: MODEL });
+    const result = await runKickoff(fields(), deps, { model: MODEL });
 
     expect(result).toEqual({ created: true });
-    expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
+    expect(deps.toastSuccess).toHaveBeenCalledWith("VC-7 created");
   });
 
   it("does nothing further when the ticket create fails", async () => {
     const deps = fakeDeps({ addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => null) });
 
-    const result = await runKickoff(fields(), deps, { createMore: false, model: MODEL });
+    const result = await runKickoff(fields(), deps, { model: MODEL });
 
     expect(result).toEqual({ created: false });
     expect(deps.startChat).not.toHaveBeenCalled();
-    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
     expect(deps.toastSuccess).not.toHaveBeenCalled();
   });
 });
@@ -270,7 +255,6 @@ describe("runCreateWithAutomation (VC-329 item 4)", () => {
       ticketDisplayId: "VC-12",
     });
     expect(deps.startChat).not.toHaveBeenCalled();
-    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
   });
 
   it("links the composer's attachments before the Automation runs", async () => {
@@ -324,7 +308,7 @@ describe("composer attachments (VC-50)", () => {
       }),
     });
 
-    await runKickoff(fields(), deps, { createMore: true, model: MODEL });
+    await runKickoff(fields(), deps, { model: MODEL });
 
     // The kickoff brief names the attachments; a session booted first would
     // read a brief pointing at files that had not been linked yet.

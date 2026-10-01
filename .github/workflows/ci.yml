@@ -163,6 +163,11 @@ jobs:
       - name: Check
         run: vp check
 
+      # The live kickoff smoke needs credentials; its ledger/selection predicates
+      # and card-opening helper are deterministic and must still run on every PR.
+      - name: Test kickoff smoke helpers
+        run: node --test apps/desktop/e2e/lib/kickoff-support.test.mjs
+
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
       #
