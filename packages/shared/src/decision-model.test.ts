@@ -394,19 +394,19 @@ describe("answers", () => {
   });
 });
 
+function fieldNames(fields: readonly VerbToolField[], prefix: string): string[] {
+  return fields.flatMap((field) => [
+    `${prefix}.${field.name}`,
+    ...(field.type === "object" ? fieldNames(field.fields, `${prefix}.${field.name}`) : []),
+  ]);
+}
+
 describe("credentials are routed to the person", () => {
   // The ticket's rule (VC-470's, carried here): no agent verb or tool accepts,
   // sees or stores a key. The classify tool's own inputs are pinned in
   // `classify-tool.test.ts`; this pins the Verb Registry — every door an agent
   // can reach a product operation through — and the setting itself.
   const SECRETISH = /api.?key|token|secret|credential|password/i;
-
-  function fieldNames(fields: readonly VerbToolField[], prefix: string): string[] {
-    return fields.flatMap((field) => [
-      `${prefix}.${field.name}`,
-      ...(field.type === "object" ? fieldNames(field.fields, `${prefix}.${field.name}`) : []),
-    ]);
-  }
 
   it("offers no agent verb that configures a decision model or carries a key", () => {
     for (const verb of VERB_REGISTRY) {
