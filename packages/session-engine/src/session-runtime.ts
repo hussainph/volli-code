@@ -3,6 +3,7 @@ import {
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  sanitizeSessionInteraction,
   turnQueueEvent,
 } from "@volli/shared";
 import type {
@@ -1829,6 +1830,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         `Interaction ${request.command.interactionId} is not open`,
       );
     }
+    // Reject before writing either a transcript artifact or command intent.
+    // A generic answer may contain secret bytes in any resolution field.
+    if (interaction.credential !== undefined) {
+      throw new SessionRuntimeConflictError(
+        "Credential requests must use person-only credential controls",
+      );
+    }
     const resolutionArtifact = await this.ports.artifacts.write({
       version: 1,
       threadId: sessionRootThreadId(request.sessionId),
@@ -2476,7 +2484,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          interaction: { ...observation.interaction, attachmentId: spec.attachmentId },
+          interaction: sanitizeSessionInteraction({
+            ...observation.interaction,
+            attachmentId: spec.attachmentId,
+          }),
         });
         break;
       case "interaction.resolved":

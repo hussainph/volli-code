@@ -2050,6 +2050,131 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
+  it("publishes credential waiting from runtime observations with metadata only", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const credential = {
+      id: "credential-wait",
+      name: "DEPLOY_TOKEN",
+      sessionId,
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const observed = {
+      id: "credential-wait",
+      kind: "question" as const,
+      title: "Credential requested",
+      detail: null,
+      options: [],
+      multiple: false,
+      native: { id: null, detail: null },
+      value: "unexpected-value",
+      credential: { ...credential, value: "unexpected-value", futureProperty: "unexpected-extra" },
+    };
+    await adapter.emit({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: 300,
+      interaction: observed,
+    });
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(sessionPersonNeed(projection)).toBe("waiting");
+    expect(projection.interactions.active).toMatchObject([
+      {
+        kind: "question",
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    ]);
+    expect(frames.at(-1)?.event.payload).toMatchObject({
+      kind: "interaction.opened",
+      interaction: { credential },
+    });
+    expect(JSON.stringify(await engine.listEvents({ sessionId }))).not.toMatch(
+      /unexpected-value|unexpected-extra/,
+    );
+    expect(JSON.stringify(projection)).not.toMatch(/unexpected-value|unexpected-extra/);
+  });
+
+  it("refuses generic credential answers before persisting intent, facts, or artifacts", async () => {
+    const memory = createInMemoryTranscriptArtifactStore();
+    let writes = 0;
+    const { runtime, engine, adapter } = composition({
+      artifacts: {
+        read: (reference) => memory.read(reference),
+        write: async (artifact) => {
+          writes += 1;
+          return memory.write(artifact);
+        },
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await engine.observe({
+      id: "credential-opened",
+      sessionId,
+      attachmentId,
+      occurredAt: 300,
+      provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
+      kind: "interaction.opened",
+      interaction: {
+        id: "credential-1",
+        attachmentId,
+        kind: "question",
+        title: "Credential requested",
+        detail: null,
+        options: [],
+        multiple: false,
+        native: { id: null, detail: null },
+        credential: {
+          id: "credential-1",
+          name: "DEPLOY_TOKEN",
+          sessionId,
+          sessionLabel: "Deploy session",
+          projectId: "project-1",
+          projectLabel: "Website",
+          agentSays: null,
+        },
+      },
+    });
+    const before = await engine.listEvents({ sessionId });
+    const dispatchesBefore = adapter.dispatches;
+    await expect(
+      runtime.command({
+        commandId: "generic-credential-answer",
+        sessionId,
+        command: {
+          kind: "interaction.resolve",
+          interactionId: "credential-1",
+          resolution: {
+            optionIds: ["supplied-secret-option"],
+            response: "supplied-secret-response",
+            answers: [{ promptId: "prompt:0", optionIds: [], response: "supplied-secret-answer" }],
+          },
+        },
+      }),
+    ).rejects.toThrow("Credential requests must use person-only credential controls");
+    expect(await engine.listEvents({ sessionId })).toEqual(before);
+    expect(writes).toBe(0);
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(JSON.stringify(snapshot)).not.toContain("supplied-secret");
+    expect(snapshot.projection.interactions.active).toHaveLength(1);
+
+    // Withdrawal is still a metadata-only fact, not an answer.
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "credential-1",
+      reason: "abandoned",
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.interactions.active).toEqual([]);
+    expect(adapter.withdrawals).toEqual(["credential-1"]);
+    expect(writes).toBe(0);
+  });
+
   it("dispatches interrupts and resolves durable interactions against their owning attachment", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

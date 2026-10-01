@@ -128,6 +128,13 @@ import {
   type UIMessageLike,
   type WorkLocationKind,
 } from "@volli/shared";
+import type { SecretWaitPublisher } from "../secrets/service";
+
+type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
+  withdraw?(interactionId: string): Promise<void>;
+  cancelPending?(): Promise<void>;
+  dispose?(): Promise<void>;
+};
 import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
@@ -499,7 +506,10 @@ export interface PiAdapterOptions {
   resolveSecretPort?: (scope: {
     sessionId: string;
     projectId: string;
-  }) => NonNullable<SessionRuntimeSpec["secret"]>;
+    /** Output filtering is universal; requesting/injection stays frozen membership. */
+    allowInjection: boolean;
+    wait: SecretWaitPublisher;
+  }) => DesktopSecretPort;
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -870,9 +880,7 @@ function piNativeAdapter(
           sessionId: spec.sessionId,
           projectId: context.projectId,
         }),
-        secret: context.toolSurface.includes("request_secret")
-          ? options.resolveSecretPort?.({ sessionId: spec.sessionId, projectId: context.projectId })
-          : undefined,
+        resolveSecretPort: options.resolveSecretPort,
         mcp:
           (context.mcpTools?.length ?? 0) === 0
             ? undefined
@@ -973,7 +981,7 @@ interface PiBindingOptions {
   shell: DesktopShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
-  secret: SessionRuntimeSpec["secret"];
+  resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -993,7 +1001,7 @@ class PiBinding implements BindingHandle {
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
-  readonly #secret: SessionRuntimeSpec["secret"];
+  readonly #secret: DesktopSecretPort | undefined;
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1031,7 +1039,47 @@ class PiBinding implements BindingHandle {
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
-    this.#secret = options.secret;
+    this.#secret = options.resolveSecretPort?.({
+      sessionId: options.spec.sessionId,
+      projectId: options.context.projectId,
+      allowInjection: options.context.toolSurface.includes("request_secret"),
+      wait: {
+        opened: (metadata) =>
+          this.#observe({
+            kind: "interaction",
+            state: "opened",
+            occurredAt: this.#now(),
+            interaction: {
+              id: metadata.id,
+              kind: "question",
+              title: "Credential requested",
+              detail: null,
+              options: [],
+              multiple: false,
+              credential: metadata,
+              native: this.#native,
+            },
+          }),
+        settled: (metadata, outcome) =>
+          this.#observe(
+            outcome === "still missing"
+              ? {
+                  kind: "interaction",
+                  state: "cancelled",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  reason: "withdrawn",
+                }
+              : {
+                  kind: "interaction",
+                  state: "resolved",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  resolution: { optionIds: [outcome], response: null },
+                },
+          ),
+      },
+    });
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1266,7 +1314,10 @@ class PiBinding implements BindingHandle {
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       ...(wantsClassify && this.#classify !== undefined ? { classify: this.#classify } : {}),
-      ...(this.#secret === undefined ? {} : { secret: this.#secret }),
+      ...(this.#secret === undefined ? {} : { credentialRedaction: this.#secret }),
+      ...(context.toolSurface.includes("request_secret") && this.#secret !== undefined
+        ? { secret: this.#secret }
+        : {}),
       // The attachment's ask rides into MCP calls (VC-470). Code Mode lends
       // its question scope (VC-471), serializing asks and pausing its clock.
       ...(mcpTools.length === 0
@@ -1484,6 +1535,7 @@ class PiBinding implements BindingHandle {
    * record one withdrawal twice.
    */
   async withdrawInteraction(interactionId: string): Promise<void> {
+    await this.#secret?.withdraw?.(interactionId);
     await this.#withdraw(interactionId, false);
   }
 
@@ -1512,8 +1564,9 @@ class PiBinding implements BindingHandle {
     for (const asked of [this.#asked, this.#askedUser]) {
       for (const interactionId of asked.keys()) await this.#withdraw(interactionId, true);
     }
-    this.#released = true;
+    await this.#secret?.cancelPending?.();
     this.#abort.abort();
+    this.#released = true;
     this.#browser?.dispose?.();
     // Before the handle closes: the execution environment's cleanup revokes
     // the attachment's token, and a shell still being SIGTERMed should not
@@ -1521,6 +1574,7 @@ class PiBinding implements BindingHandle {
     this.#shell?.dispose();
     await this.#mcp?.dispose();
     await this.#handle?.close();
+    await this.#secret?.dispose?.();
   }
 
   async #submit(

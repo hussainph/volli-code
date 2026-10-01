@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { VERB_REGISTRY } from "@volli/shared";
 import { SecretService } from "./service";
 import { SecretStore } from "./store";
+import { retiresSessionSecrets } from "./lifetime";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -56,11 +57,76 @@ describe("person-only secret request service", () => {
       for (const log of logs) log.mockRestore();
     }
   });
+  it("checking availability never marks any credential used; injection does", async () => {
+    const { service, store, port } = setup();
+    store.put({ name: input.name, value: sentinel, scope: "session", sessionId: "s" });
+    store.put({
+      name: "OTHER_TOKEN",
+      value: "dummy-other-token",
+      scope: "session",
+      sessionId: "s",
+    });
+    expect(await port.request(input, new AbortController().signal)).toBe("signed in");
+    expect(store.list().map((item) => item.lastUsedAt)).toEqual([null, null]);
+    expect(service.environment("s")[input.name]).toBe(sentinel);
+    expect(store.list().every((item) => item.lastUsedAt !== null)).toBe(true);
+  });
+  it("a done signal preserves live injection, and only executor close retires it", async () => {
+    const { service, port } = setup();
+    const first = port.request(input, new AbortController().signal);
+    const pending = service.list();
+    if (!pending.ok) throw new Error("missing list");
+    service.submit(pending.requests[0]!.id, sentinel, "session");
+    expect(await first).toBe("signed in");
+    if (retiresSessionSecrets({ kind: "session.signaled", signal: "done", reason: null })) {
+      await service.endSession("s");
+    }
+    expect(service.environment("s")[input.name]).toBe(sentinel);
+    expect(await port.request(input, new AbortController().signal)).toBe("signed in");
+    expect(service.environment("s")[input.name]).toBe(sentinel);
+    expect(
+      retiresSessionSecrets({ kind: "attachment.closed", attachmentId: "a", outcome: "completed" }),
+    ).toBe(true);
+    await port.dispose();
+    expect(service.environment("s")).toEqual({});
+    expect(await port.request(input, new AbortController().signal)).toBe("still missing");
+  });
+  it("publishes metadata-only waits and settles facts before resuming the request", async () => {
+    const { service } = setup();
+    const opened = vi.fn(async () => {});
+    const commit = Promise.withResolvers<void>();
+    const settled = vi.fn(() => commit.promise);
+    const port = service.port(
+      { sessionId: "s", sessionLabel: "Session s", projectId: "p", projectLabel: "Project" },
+      { opened, settled },
+    );
+    const waiting = port.request(input, new AbortController().signal);
+    expect(opened).toHaveBeenCalledTimes(1);
+    const list = service.list();
+    if (!list.ok) throw new Error("missing list");
+    service.submit(list.requests[0]!.id, sentinel, "session");
+    const resumed = vi.fn();
+    void waiting.then(resumed);
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
+    expect(settled).toHaveBeenCalledWith(list.requests[0], "signed in");
+    expect(resumed).not.toHaveBeenCalled();
+    expect(JSON.stringify([opened.mock.calls, settled.mock.calls])).not.toContain(sentinel);
+    commit.resolve();
+    expect(await waiting).toBe("signed in");
+    await port.dispose();
+  });
   it("has no credential submission/answer/prefill verb", () => {
     expect(JSON.stringify(VERB_REGISTRY)).not.toContain("secret-submit");
     expect(JSON.stringify(VERB_REGISTRY)).not.toContain("secret-replace");
     const { port } = setup();
-    expect(Object.keys(port).toSorted()).toEqual(["hasValues", "redact", "request"]);
+    expect(Object.keys(port).toSorted()).toEqual([
+      "cancelPending",
+      "dispose",
+      "hasValues",
+      "redact",
+      "request",
+      "withdraw",
+    ]);
   });
   it("declines without storing, cancels without leaking a stale answer, and expires Session values", async () => {
     const { service, port } = setup();
@@ -81,7 +147,7 @@ describe("person-only secret request service", () => {
     if (!last.ok) throw new Error("missing list");
     service.submit(last.requests[0]!.id, sentinel, "session");
     await third;
-    service.endSession("s");
+    await service.endSession("s");
     expect(service.environment("s")).toEqual({});
     expect(port.redact(sentinel)).not.toContain(sentinel);
   });

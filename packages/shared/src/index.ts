@@ -88,6 +88,7 @@ export * from "./notification-catalog";
 export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
+export * from "./secrets";
 export * from "./session-watchdog";
 export * from "./quota-reset";
 export * from "./scheduled-resume";

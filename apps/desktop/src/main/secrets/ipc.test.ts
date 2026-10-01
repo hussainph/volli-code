@@ -85,6 +85,35 @@ describe("dedicated credential IPC", () => {
   ])("refuses malformed credential submissions: %j", (input) => {
     expect(setup().invoke("volli:secret-submit", input)).toMatchObject({ ok: false });
   });
+  it("reports settlement failures safely and keeps the Engine wait retryable", async () => {
+    const { service, invoke } = setup();
+    const settled = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error(value))
+      .mockResolvedValue(undefined);
+    const port = service.port(
+      { sessionId: "s", projectId: "p", sessionLabel: "Session", projectLabel: "Project" },
+      {
+        opened: async () => {},
+        settled,
+      },
+    );
+    const waiting = port.request(
+      { name: "API_TOKEN", toolCallId: "c" },
+      new AbortController().signal,
+    );
+    const before = service.list();
+    if (!before.ok) throw new Error("missing metadata");
+    const input = { requestId: before.requests[0]!.id, value, scope: "session" };
+    const failed = await invoke("volli:secret-submit", input);
+    expect(failed).toMatchObject({ ok: false });
+    expect(JSON.stringify(failed)).not.toContain(value);
+    expect(service.list()).toMatchObject({ requests: before.requests });
+    expect(await invoke("volli:secret-submit", input)).toEqual({ ok: true });
+    expect(await waiting).toBe("signed in");
+    expect(settled).toHaveBeenCalledTimes(2);
+    await port.dispose();
+  });
   it("accepts one person submission, metadata-only lists, replacement, revocation and decline", async () => {
     const { invoke, service, store, port } = setup();
     const waiting = port.request(
@@ -94,7 +123,11 @@ describe("dedicated credential IPC", () => {
     const list = service.list();
     if (!list.ok) throw new Error("missing metadata");
     expect(
-      invoke("volli:secret-submit", { requestId: list.requests[0]!.id, value, scope: "session" }),
+      await invoke("volli:secret-submit", {
+        requestId: list.requests[0]!.id,
+        value,
+        scope: "session",
+      }),
     ).toEqual({ ok: true });
     expect(await waiting).toBe("signed in");
     const metadata = store.list()[0]!;
@@ -111,7 +144,7 @@ describe("dedicated credential IPC", () => {
     );
     const pending = service.list();
     if (!pending.ok) throw new Error("missing metadata");
-    expect(invoke("volli:secret-decline", pending.requests[0]!.id)).toEqual({ ok: true });
+    expect(await invoke("volli:secret-decline", pending.requests[0]!.id)).toEqual({ ok: true });
     expect(await next).toBe("declined");
     expect(invoke("volli:secrets-list", 1)).toMatchObject({ ok: false });
   });

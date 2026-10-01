@@ -2075,7 +2075,8 @@ async function attachSession(
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
     toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
-    const ownedToolEnv = privateSecretExecution(toolEnv, spec.secret);
+    const credentialRedaction = spec.credentialRedaction ?? spec.secret;
+    const ownedToolEnv = privateSecretExecution(toolEnv, credentialRedaction);
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
@@ -2115,7 +2116,9 @@ async function attachSession(
       dataDirectory: host.sessionDataDir,
       ledger: host.toolOutputLedger,
       workspacePath: spec.workspacePath,
-      ...(spec.secret === undefined ? {} : { redact: (text: string) => spec.secret!.redact(text) }),
+      ...(credentialRedaction === undefined
+        ? {}
+        : { redact: (text: string) => credentialRedaction.redact(text) }),
     });
     // Code Mode (VC-471), for a Session born with it: one more tool, built over
     // the Session's own tools and reaching them through the gate below — the

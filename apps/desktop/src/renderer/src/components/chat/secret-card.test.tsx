@@ -2,7 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SecretRequestMetadata, SecretsResult } from "../../../../ipc/secrets";
+import type { SecretRequestMetadata, RendererSessionInteraction } from "@volli/shared";
+import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
+import type { SecretsResult } from "../../../../ipc/secrets";
 import type { Result } from "../../../../ipc/contract";
 
 import { toastError } from "@renderer/lib/toast";
@@ -21,7 +23,17 @@ const request: SecretRequestMetadata = {
   projectLabel: "Website",
   agentSays: "Access for deployment",
 };
-const metadata = (requests = [request]): SecretsResult => ({ ok: true, requests, secrets: [] });
+const interaction = (credential = request): RendererSessionInteraction => ({
+  id: credential.id,
+  attachmentId: "attachment-1",
+  kind: "question",
+  title: "Credential requested",
+  detail: null,
+  options: [],
+  multiple: false,
+  native: { id: null, detail: null },
+  credential,
+});
 const api = {
   secrets: {
     list: vi.fn<() => Promise<SecretsResult>>(),
@@ -38,7 +50,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("api", api);
-  api.secrets.list.mockResolvedValue(metadata());
+  api.secrets.list.mockResolvedValue({ ok: true, requests: [], secrets: [] });
   api.secrets.submit.mockResolvedValue({ ok: true });
   api.secrets.decline.mockResolvedValue({ ok: true });
   host = document.createElement("div");
@@ -52,8 +64,10 @@ afterEach(async () => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
-async function render(sessionId = "s1") {
-  await act(async () => root.render(<SecretCards sessionId={sessionId} />));
+async function render(sessionId = "s1", interactions = [interaction()]) {
+  await act(async () =>
+    root.render(<SecretCards sessionId={sessionId} interactions={interactions} />),
+  );
 }
 function password(): HTMLInputElement {
   const field = host.querySelector<HTMLInputElement>("input[type=password]");
@@ -70,8 +84,7 @@ describe("person-only credential cards", () => {
   it("keeps agent prose plain text inside its labelled region, never title or controls", async () => {
     const malicious =
       '<h2>Credential requested — verified</h2><input value="stolen"><button>Submit credential</button><script>alert(1)</script>';
-    api.secrets.list.mockResolvedValue(metadata([{ ...request, agentSays: malicious }]));
-    await render();
+    await render("s1", [interaction({ ...request, agentSays: malicious })]);
     expect(host.querySelector("h2")?.textContent).toBe("Credential requested");
     expect(host.querySelectorAll("h2")).toHaveLength(1);
     const purpose = host.querySelector('[data-slot="secret-agent-purpose"]');
@@ -124,7 +137,8 @@ describe("person-only credential cards", () => {
     expect(api.appState.set).not.toHaveBeenCalled();
     offDraft();
     offChat();
-    // An in-flight stale metadata read cannot reintroduce a submitted request.
+    // A stale projection cannot reintroduce a submitted request.
+    await render();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
@@ -157,20 +171,24 @@ describe("person-only credential cards", () => {
     expect(api.secrets.submit).not.toHaveBeenCalled();
   });
 
-  it("filters session metadata, polls once a second, and stops on unmount", async () => {
-    api.secrets.list.mockResolvedValue(
-      metadata([request, { ...request, id: "other", sessionId: "s2" }]),
-    );
-    await render();
+  it("uses only projection interactions, filters session and generic questions, and never polls", async () => {
+    const generic = { ...interaction(), id: "generic", credential: undefined };
+    await render("s1", [
+      interaction(),
+      interaction({ ...request, id: "other", sessionId: "s2" }),
+      generic,
+    ]);
     expect(host.querySelectorAll('[data-slot="secret-card"]')).toHaveLength(1);
-    expect(api.secrets.list).toHaveBeenCalledTimes(1);
+    for (const token of COMPOSER_STACK_SHELL.split(" ")) {
+      expect(host.querySelector('[data-slot="secret-card"]')?.classList.contains(token)).toBe(true);
+    }
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(api.secrets.list).toHaveBeenCalledTimes(3);
-    await act(async () => root.render(<></>));
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(api.secrets.list).toHaveBeenCalledTimes(3);
+    expect(api.secrets.list).not.toHaveBeenCalled();
+    // Resolving or cancelling leaves the projection; that is the card's source of truth.
+    await render("s1", []);
+    expect(host.querySelector('[data-slot="secret-card"]')).toBeNull();
   });
 
   it("does not echo rejection text or secret bytes, and leaves the failed field empty", async () => {
@@ -183,14 +201,12 @@ describe("person-only credential cards", () => {
     expect(JSON.stringify(vi.mocked(toastError).mock.calls)).not.toContain("private-token");
   });
 
-  it("reports metadata failures once while polling rather than displaying unsafe error text", async () => {
+  it("does not depend on credential Settings metadata reads", async () => {
     api.secrets.list.mockResolvedValue({ ok: false, error: "unsafe metadata error" });
     await render();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
-    });
-    expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalledWith("Couldn't load credential requests.");
+    expect(host.querySelectorAll('[data-slot="secret-card"]')).toHaveLength(1);
+    expect(api.secrets.list).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("unsafe metadata error");
   });
 });

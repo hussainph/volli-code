@@ -2,59 +2,36 @@
  * Values live only in the password DOM node until the dedicated IPC write.
  */
 import * as React from "react";
-import type { SecretRequestMetadata, SecretScope } from "../../../../ipc/secrets";
+import type { RendererSessionInteraction, SecretRequestMetadata, SecretScope } from "@volli/shared";
+import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
+import { cn } from "@renderer/lib/utils";
 
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 
-export function SecretCards({ sessionId }: { sessionId: string }) {
-  const [requests, setRequests] = React.useState<readonly SecretRequestMetadata[]>([]);
-  const settled = React.useRef(new Set<string>());
+export function SecretCards({
+  sessionId,
+  interactions,
+}: {
+  sessionId: string;
+  interactions: readonly RendererSessionInteraction[];
+}) {
+  const [settled, setSettled] = React.useState<ReadonlySet<string>>(() => new Set());
 
-  React.useEffect(() => {
-    const api = window.api?.secrets;
-    if (api === undefined) return;
-    const list = api.list;
-    let current = true;
-    let reading = false;
-    let failed = false;
-    async function poll(): Promise<void> {
-      if (reading) return;
-      reading = true;
-      try {
-        const result = await list();
-        if (!current) return;
-        if (!result.ok) throw new Error("Credential metadata unavailable");
-        setRequests(result.requests.filter((request) => request.sessionId === sessionId));
-        failed = false;
-      } catch {
-        if (current && !failed) toastError("Couldn't load credential requests.");
-        failed = true;
-      } finally {
-        reading = false;
-      }
-    }
-    void poll();
-    const timer = window.setInterval(() => void poll(), 1000);
-    return () => {
-      current = false;
-      window.clearInterval(timer);
-    };
-  }, [sessionId]);
-
-  return requests
-    .filter((request) => request.sessionId === sessionId && !settled.current.has(request.id))
-    .map((request) => (
-      <SecretCard
-        key={request.id}
-        request={request}
-        onSettled={() => {
-          settled.current.add(request.id);
-          setRequests((previous) => previous.filter((item) => item.id !== request.id));
-        }}
-      />
-    ));
+  // Waiting comes from the durable Session projection, not the Settings list.
+  // The local latch only hides successful writes until their fact reaches us.
+  return interactions.flatMap(({ id, credential }) =>
+    credential === undefined || credential.sessionId !== sessionId || settled.has(id)
+      ? []
+      : [
+          <SecretCard
+            key={id}
+            request={credential}
+            onSettled={() => setSettled((previous) => new Set([...previous, id]))}
+          />,
+        ],
+  );
 }
 
 function SecretCard({
@@ -107,7 +84,10 @@ function SecretCard({
     <section
       aria-labelledby={titleId}
       data-slot="secret-card"
-      className="pointer-events-auto mb-2 flex flex-col gap-2 rounded-xl border border-border bg-background p-4 text-ui text-foreground shadow-raised"
+      className={cn(
+        COMPOSER_STACK_SHELL,
+        "pointer-events-auto mb-2 flex flex-col gap-2 p-4 text-ui text-foreground",
+      )}
     >
       <h2 id={titleId} className="font-medium">
         Credential requested

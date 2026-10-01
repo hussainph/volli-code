@@ -197,6 +197,7 @@ import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { SecretStore } from "./secrets/store";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
+import { retiresSessionSecrets } from "./secrets/lifetime";
 import { registerSecretIpc } from "./secrets/ipc";
 import { refusingCredentialReads } from "@volli/agent-runtime";
 import { createConnectivityPort } from "./session-runtime/connectivity";
@@ -1194,13 +1195,7 @@ app.whenReady().then(async () => {
     new SecretStore(join(dirname(dbPath), "session-secrets.enc"), keychainSecretCodec(safeStorage)),
   );
   sessionWakeBus?.subscribe(({ event }) => {
-    if (
-      event.payload.kind === "session.stopped" ||
-      event.payload.kind === "session.archived" ||
-      (event.payload.kind === "session.signaled" && event.payload.signal === "done")
-    ) {
-      secrets.endSession(event.sessionId);
-    }
+    if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
   registerSecretIpc(secrets, (sender) => {
     const url = sender.getURL();
@@ -1613,15 +1608,19 @@ app.whenReady().then(async () => {
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),
-          resolveSecretPort: ({ sessionId, projectId }) =>
-            secrets.port({
-              sessionId,
-              sessionLabel: `Session ${shortSessionId(sessionId)}`,
-              projectId,
-              projectLabel: dbHandle.ok
-                ? (getProjectById(dbHandle.db, projectId)?.name ?? "Project")
-                : "Project",
-            }),
+          resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+            secrets.port(
+              {
+                sessionId,
+                sessionLabel: `Session ${shortSessionId(sessionId)}`,
+                projectId,
+                projectLabel: dbHandle.ok
+                  ? (getProjectById(dbHandle.db, projectId)?.name ?? "Project")
+                  : "Project",
+              },
+              wait,
+              allowInjection,
+            ),
           resolveMcpPort:
             mcpSettings === null
               ? undefined

@@ -13,12 +13,16 @@ The result is only **signed in**, **declined**, or **still missing**. Refer to
 change PATH, shell startup, loader settings, or Volli identity. Older frozen
 Sessions keep their existing tool arrays; start a new Session to request a
 secret. Subagents cannot request credentials and do not inherit root secrets.
+Every structured Session receives the launch's output redaction filter, including
+subagents and older Sessions without `request_secret`; filtering grants neither
+the tool nor environment injection.
 
 ## Storage and revocation
 
 The person chooses:
 
-- **Session** (default): memory only, until Session stop/done or app exit.
+- **Session** (default): memory only, until its executor attachment closes or app exit.
+  A done signal does not close a live attachment or break a later turn's injection.
 - **Project**: reused by new structured root Sessions in this project.
 - **Always**: reused by new structured root Sessions across projects.
 
@@ -27,7 +31,8 @@ values are injected at the next command or background-shell start, including
 commands in the requesting Session without reattachment.
 
 **Settings → Configure → Secrets** lists names, scope, and last use, with
-write-only replacement and revocation. Revocation stops *future spawns* from
+write-only replacement and revocation. Availability checks do not mark use; only
+subprocess injection updates last use. Revocation stops *future spawns* from
 receiving that scope's value. A running process already has its environment;
 stop its background shell to retire that copy. Historical values remain in the
 launch's redaction set after replacement/revocation so old output stays scrubbed.
@@ -54,7 +59,8 @@ the earlier prompt problem.
 
 Exact occurrences become `‹secret:NAME›` in tool results and updates, errors,
 read-back text, background-shell output (including the person's shell tail),
-and saved MCP/Code Mode output. Scrubbing precedes Pi activity, transcript and
+and saved MCP/Code Mode output. Matching numeric and boolean primitive
+representations are scrubbed too, including structured data and details. Scrubbing precedes Pi activity, transcript and
 sidecar persistence. Shell output spilling to a plaintext temp log is disabled
 while the launch holds credential values. Images are withheld once values exist:
 text substitution cannot scrub a credential rendered as pixels.
@@ -84,10 +90,11 @@ not on this base and is not claimed here.
 - Terminal companions (Claude Code/Codex). Launch-time injection is technically
   possible, but their own model/transcript/output paths cannot be scrubbed by
   this structured-runtime boundary, so secrets are not injected there.
-- Durable credential-request history, waiting-state notifications, and secret
-  re-entry after a cancelled/restarted request. Pending cards are metadata-only,
-  ephemeral, and cancellation removes them; secret values never become ledger
-  facts.
+- Secret re-entry after a cancelled/restarted request. Waiting and settlement
+  metadata now use the Engine's durable interactions and existing Attention and
+  presentation paths, like approval cards. The dedicated person-only write
+  channel is the only answer door; generic interaction answers are refused before
+  persistence. Secret values never become ledger facts.
 
 ## Verification
 

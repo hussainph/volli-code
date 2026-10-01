@@ -265,7 +265,10 @@ export function createSessionTools(
       ? null
       : {
           id: binding.tool,
-          tool: redactToolResults(createBoundTool(binding, spec, env, output), spec.secret),
+          tool: redactToolResults(
+            createBoundTool(binding, spec, env, output),
+            spec.credentialRedaction ?? spec.secret,
+          ),
           verb: "verb" in binding,
           ...("verb" in binding ? verbDetailsSchema(binding.verb) : {}),
           ...("definition" in binding ? { mcp: binding.definition } : {}),
@@ -287,7 +290,7 @@ export function createSessionTools(
       codeMode,
       built.filter((entry): entry is SurfaceTool => entry !== null),
     ),
-    spec.secret,
+    spec.credentialRedaction ?? spec.secret,
   );
   return bindings.flatMap((binding, index) => {
     if (binding.tool === "codemode") return [codemode];

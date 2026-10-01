@@ -8,6 +8,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { NonCodingToolId, SessionRuntimeSpec } from "@volli/shared";
 
 export type SecretPort = NonNullable<SessionRuntimeSpec["secret"]>;
+type RedactionPort = NonNullable<SessionRuntimeSpec["credentialRedaction"]>;
 export const REQUEST_SECRET_TOOL_NAME = "request_secret" satisfies NonCodingToolId;
 const ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const requestSecretSchema = Type.Object(
@@ -86,7 +87,7 @@ export function createRequestSecretTool(
 }
 
 /** Fail closed if the host cannot redact; never expose its failure's text. */
-function redact(text: string, port: SecretPort): string {
+function redact(text: string, port: RedactionPort): string {
   try {
     return port.redact(text);
   } catch {
@@ -101,8 +102,15 @@ function redact(text: string, port: SecretPort): string {
  * while this launch holds credential values: replacing bytes in base64 corrupts
  * images and text redaction cannot find a credential rendered as pixels.
  */
-function scrub(value: unknown, port: SecretPort): unknown {
+function scrub(value: unknown, port: RedactionPort): unknown {
   if (typeof value === "string") return redact(value, port);
+  if (typeof value === "number" || typeof value === "boolean") {
+    // A JSON primitive can carry the exact credential too. Keep its original
+    // type (and e.g. negative zero) only when the textual check is unchanged.
+    const text = String(value);
+    const safe = redact(text, port);
+    return safe === text ? value : safe;
+  }
   if (Array.isArray(value)) return value.map((entry) => scrub(entry, port));
   if (value !== null && typeof value === "object") {
     if ("type" in value && value.type === "image") {
@@ -129,7 +137,7 @@ function scrub(value: unknown, port: SecretPort): unknown {
  */
 export function privateSecretExecution(
   env: ExecutionEnv,
-  port: SecretPort | undefined,
+  port: RedactionPort | undefined,
 ): ExecutionEnv {
   if (port === undefined) return env;
   return new Proxy(env, {
@@ -162,7 +170,7 @@ export function privateSecretExecution(
 }
 
 /** Wrap every bound tool and Code Mode itself, not just execution tools. */
-export function redactToolResults(tool: AgentTool, port: SecretPort | undefined): AgentTool {
+export function redactToolResults(tool: AgentTool, port: RedactionPort | undefined): AgentTool {
   if (port === undefined) return tool;
   const safeResult = (result: AgentToolResult<unknown>): AgentToolResult<unknown> =>
     scrub(result, port) as AgentToolResult<unknown>;

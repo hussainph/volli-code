@@ -21,8 +21,9 @@
  * The payload graph's other roots live here too: `command.recorded` carries a
  * whole `SessionCommand` and `command.receipt.recorded` a `CommandReceipt`,
  * so intent, route, receipt and provenance decoding are this module's as well.
- * Encode stays a plain canonical `JSON.stringify` behind a strict JSON-safety
- * assertion — the codec never re-orders or rewrites what is already on disk.
+ * Encode stays canonical JSON behind a strict JSON-safety assertion. Ordinary
+ * records are not rewritten; credential-bearing interactions are allowlisted
+ * at every boundary so unknown fields cannot become stored credential values.
  *
  * The renderer-safe form is the same table's other column. Each entry's
  * `scrub` maps a durable payload onto what may cross the product edge to the
@@ -54,6 +55,7 @@ import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
 import type { PresentedScheduledResume } from "./scheduled-resume";
+import type { SecretRequestMetadata } from "./secrets";
 import {
   SCHEDULED_RESUME_SKIP_REASONS,
   SESSION_ATTACHMENT_CONTINUITIES,
@@ -714,7 +716,20 @@ export function scrubSessionAttention(attention: SessionAttention): RendererSess
 export function scrubSessionInteraction(
   interaction: SessionInteraction,
 ): RendererSessionInteraction {
-  return { ...interaction, native: scrubbedNativeReference() };
+  // Decode the presentation rather than spreading it: unknown fields, including
+  // an accidental credential value, are never renderer data.
+  return {
+    ...decodeInteraction(
+      { ...interaction, native: scrubbedNativeReference() },
+      "Session interaction",
+    ),
+    native: scrubbedNativeReference(),
+  };
+}
+
+/** Write-side allowlist, also used before runtime observations become facts. */
+export function sanitizeSessionInteraction(interaction: SessionInteraction): SessionInteraction {
+  return decodeInteraction(interaction, "Session interaction");
 }
 
 export function scrubSessionCommand(command: SessionCommand): RendererSessionCommand {
@@ -1153,15 +1168,26 @@ export function assertSession(value: Session, context: string): void {
 }
 
 /**
- * Canonical persisted form: a plain `JSON.stringify` behind a strict
- * JSON-safety assertion. No re-ordering — what is already on disk stays
- * byte-identical when re-encoded from the same value.
+ * Canonical persisted form behind a strict JSON-safety assertion. Ordinary
+ * records retain key order. Credential-bearing interactions (including those
+ * in checkpoints) are explicitly allowlisted, never serialized by a spread.
  */
 export function encodeSessionJson(value: unknown): string {
   assertJsonValue(value, "JSON value");
   // `JSON.stringify` returns `undefined` only for values `assertJsonValue`
   // already refused (undefined, functions, symbols), so the result is a string.
-  return JSON.stringify(value);
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (
+      item !== null &&
+      typeof item === "object" &&
+      "credential" in item &&
+      "kind" in item &&
+      (item.kind === "question" || item.kind === "permission")
+    ) {
+      return decodeInteraction(item, "Credential interaction");
+    }
+    return item;
+  });
 }
 
 /* ------------------------------------------------------------ entity decoders */
@@ -1656,6 +1682,9 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
     multiple: readBoolean(row.multiple, `${context}.multiple`),
     native: decodeNative(row.native, `${context}.native`),
   };
+  if (row.credential !== undefined) {
+    interaction.credential = decodeSecretRequestMetadata(row.credential, `${context}.credential`);
+  }
   // `prompts` is optional in both directions. A record written before an
   // interaction could carry per-question detail must decode back without the
   // key — not with an empty array, and not with one synthesised from the flat
@@ -1663,6 +1692,20 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
   // doing it here would persist a derived value on the next write.
   if (row.prompts === undefined) return interaction;
   return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
+}
+
+/** Deliberately enumerate every metadata field; never spread a credential object. */
+function decodeSecretRequestMetadata(value: unknown, context: string): SecretRequestMetadata {
+  const row = asRecord(value, context);
+  return {
+    id: readString(row.id, `${context}.id`),
+    name: readString(row.name, `${context}.name`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    sessionLabel: readString(row.sessionLabel, `${context}.sessionLabel`),
+    projectId: readString(row.projectId, `${context}.projectId`),
+    projectLabel: readString(row.projectLabel, `${context}.projectLabel`),
+    agentSays: readNullableString(row.agentSays, `${context}.agentSays`),
+  };
 }
 
 function decodeInteractionResolution(

@@ -13,6 +13,13 @@ function text(raw: unknown): string {
   return raw;
 }
 
+function failed() {
+  return {
+    ok: false,
+    error: "Could not update the secret. Retry or choose Session storage.",
+  };
+}
+
 /** Dedicated app-only door, with no generic Session resolution or CLI equivalent.
  * Never hand an exception from persistence back over IPC: OS/codec errors can
  * quote their input. In particular this envelope must never log args.
@@ -27,12 +34,10 @@ export function registerSecretIpc(
         return { ok: false, error: "Credentials can only be changed in Volli." };
       }
       try {
-        return run(...args);
+        const result = run(...args);
+        return result instanceof Promise ? result.catch(failed) : result;
       } catch {
-        return {
-          ok: false,
-          error: "Could not update the secret. Retry or choose Session storage.",
-        };
+        return failed();
       }
     });
   };
@@ -46,12 +51,12 @@ export function registerSecretIpc(
     const scope = input["scope"];
     if (scope !== "session" && scope !== "project" && scope !== "always")
       throw new Error("Invalid scope");
-    service.submit(text(input["requestId"]), text(input["value"]), scope);
-    return { ok: true };
+    return service
+      .submit(text(input["requestId"]), text(input["value"]), scope)
+      .then(() => ({ ok: true }));
   });
   handle("volli:secret-decline", (id) => {
-    service.decline(text(id));
-    return { ok: true };
+    return service.decline(text(id)).then(() => ({ ok: true }));
   });
   handle("volli:secret-revoke", (id) => {
     service.store.revoke(text(id));

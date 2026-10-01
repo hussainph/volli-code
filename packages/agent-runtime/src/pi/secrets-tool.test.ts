@@ -168,6 +168,81 @@ describe("request_secret", () => {
 });
 
 describe("tool result credential boundary", () => {
+  it.each([
+    { credential: "731942", primitive: 731942, redacted: "[redacted]" },
+    { credential: "194", primitive: 731942, redacted: "73[redacted]2" },
+    { credential: "true", primitive: true, redacted: "[redacted]" },
+    { credential: "false", primitive: false, redacted: "[redacted]" },
+    { credential: "rue", primitive: true, redacted: "t[redacted]" },
+  ])(
+    "scrubs credential $credential in numeric/boolean result data without changing safe primitives",
+    async ({ credential, primitive, redacted }) => {
+      const port = {
+        ...secretPort(),
+        redact: (text: string) => text.replaceAll(credential, "[redacted]"),
+      };
+      const safe = [17, -0, null];
+      const data = { credential: primitive, nested: [primitive, { value: primitive }], safe };
+      // MCP-shaped data can live anywhere in a result, not only its text blocks.
+      const result = {
+        content: [{ type: "text" as const, text: "MCP fixture" }],
+        structuredContent: data,
+        details: data,
+        result: data,
+      };
+      const updates: AgentToolResult<unknown>[] = [];
+      const tool = redactToolResults(
+        fixtureTool(async (_id, _params, _signal, update) => {
+          update?.(result);
+          return result;
+        }),
+        port,
+      );
+      const final = await tool.execute("mcp-call", {}, signal, (partial) => updates.push(partial));
+      const expected = { credential: redacted, nested: [redacted, { value: redacted }], safe };
+      expect(final).toEqual({
+        ...result,
+        structuredContent: expected,
+        details: expected,
+        result: expected,
+      });
+      expect(updates).toEqual([final]);
+      expect(result.structuredContent.credential).toBe(primitive);
+      expect(Object.is((final.details as typeof data).safe[1], -0)).toBe(true);
+      // Also cover a primitive at the root of the details/structured payload.
+      const rootResult = await redactToolResults(
+        fixtureTool(async () => ({
+          content: [],
+          details: primitive,
+          structuredContent: primitive,
+        })),
+        port,
+      ).execute("root-call", {}, signal);
+      expect(rootResult.details).toBe(redacted);
+      expect(rootResult.structuredContent).toBe(redacted);
+    },
+  );
+
+  it("preserves unmatched numbers and booleans and fails closed for primitive redaction errors", async () => {
+    const details = [17, 0, -0, 0.5, true, false, null];
+    const raw = fixtureTool(async () => ({ content: [], details }));
+    const final = await redactToolResults(raw, secretPort()).execute("safe", {}, signal);
+    expect(final.details).toEqual(details);
+    expect(Object.is((final.details as number[])[2], -0)).toBe(true);
+    const broken = {
+      ...secretPort(),
+      redact: (text: string) => {
+        if (text === "content" || text === "details") return text;
+        throw new Error(SECRET);
+      },
+    };
+    const withheld = await redactToolResults(raw, broken).execute("broken", {}, signal);
+    expect(withheld.details).toEqual([
+      ...Array(6).fill("[Text withheld: credential redaction failed.]"),
+      null,
+    ]);
+  });
+
   it("scrubs final and partial strings recursively, including details, structuredContent and keys", async () => {
     const result: AgentToolResult<unknown> = {
       content: [

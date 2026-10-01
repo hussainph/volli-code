@@ -20,16 +20,8 @@ export interface SecretCodec {
   decryptString(value: Buffer): string;
 }
 
-export type SecretScope = "session" | "project" | "always";
-
-export interface SecretMetadata {
-  id: string;
-  name: string;
-  scope: SecretScope;
-  sessionId?: string;
-  projectId?: string;
-  lastUsedAt: number | null;
-}
+import type { SecretMetadata, SecretScope } from "@volli/shared";
+export type { SecretMetadata, SecretScope } from "@volli/shared";
 
 export interface SecretInput {
   name: string;
@@ -215,8 +207,12 @@ export class SecretStore {
     }
   }
 
-  /** Nearest scope wins: session > project > always. Only injected values count as used. */
-  environment(sessionId: string, projectId: string): Record<string, string> {
+  /** Availability is metadata-only and never updates last use. */
+  available(name: string, sessionId: string, projectId: string): boolean {
+    return this.#select(sessionId, projectId).has(name);
+  }
+
+  #select(sessionId: string, projectId: string): Map<string, SecretRecord> {
     const persistent = this.#load();
     const selected = new Map<string, SecretRecord>();
     for (const scope of ["always", "project", "session"] as const) {
@@ -230,6 +226,13 @@ export class SecretStore {
           selected.set(item.name, item);
       }
     }
+    return selected;
+  }
+
+  /** Nearest scope wins: session > project > always. Only injected values count as used. */
+  environment(sessionId: string, projectId: string): Record<string, string> {
+    const selected = this.#select(sessionId, projectId);
+    const persistent = this.#load();
     const used = new Set([...selected.values()].map((item) => item.id));
     const at = Date.now();
     if (persistent.some((item) => used.has(item.id))) {

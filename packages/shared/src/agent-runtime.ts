@@ -1219,6 +1219,11 @@ export interface SessionRuntimeSpec {
    * best-effort exact text matching, not protection against encoded output or
    * a command deliberately sending a credential elsewhere.
    */
+  /** Universal output filter, independent of request_secret tool membership. */
+  credentialRedaction?: {
+    redact(text: string): string;
+    hasValues?(): boolean;
+  };
   secret?: {
     request(
       input: { name: string; purpose?: string; toolCallId: string },
@@ -1435,6 +1440,7 @@ export type SessionToolSpec = Pick<
   | "tools"
   | "askUser"
   | "secret"
+  | "credentialRedaction"
   | "webFetch"
   | "webSearch"
   | "browser"

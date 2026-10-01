@@ -1144,7 +1144,12 @@ export function ChatPlane({
           // The revealed question takes the slot, when it is still open: the
           // card stack draws one at a time, so "select that question" is this
           // ordering and nothing else.
-          preferRevealedInteraction(interactions, revealed?.interactionId ?? null),
+          preferRevealedInteraction(
+            // Credential questions have their own person-only controls; they
+            // must never reach the generic free-text answer stack.
+            interactions.filter((interaction) => interaction.credential === undefined),
+            revealed?.interactionId ?? null,
+          ),
           gatedToolCallIds(messages),
         )
       : null;
@@ -1650,7 +1655,7 @@ export function ChatPlane({
           {/* Overlay on the composer, never in its place. Ask-user cards
               stack above the input so a follow-up can still be typed while
               the card waits. */}
-          <SecretCards sessionId={sessionId} />
+          <SecretCards sessionId={sessionId} interactions={interactions} />
           <ComposerInteractionStack
             interaction={pending}
             resolving={pending ? resolving.has(pending.id) : false}
