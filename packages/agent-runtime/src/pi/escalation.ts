@@ -88,6 +88,8 @@ export interface AuthorityEscalationInput {
 /** One call offered for judgement, named well enough to put a question about it. */
 export interface AuthorityCall {
   verdict: AuthorityVerdict;
+  /** Optional labelled model explanation for the person only, never a tool result. */
+  personReason?: string;
   tool: string;
   /** The runtime's own id for this call, so a question can be shown against it. */
   toolCallId: string;
@@ -282,7 +284,10 @@ export class AuthorityEscalation {
         tool: call.tool,
         toolCallId: call.toolCallId,
         turnId: call.turnId,
-        reason: verdict.reason,
+        reason:
+          call.personReason === undefined
+            ? verdict.reason
+            : `${verdict.reason} ${call.personReason}`,
         trip,
         overridable,
       },

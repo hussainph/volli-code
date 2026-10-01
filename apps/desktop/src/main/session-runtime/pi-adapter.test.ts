@@ -3326,7 +3326,7 @@ describe("a departure written by the product reaches the next attachment's Snaps
       decide: async (call) =>
         call.fallback({ status: "unavailable", reason: "unset", message: "No model" }),
     };
-    const authorityReason = vi.fn(async (input: { fallback: string }) => input.fallback);
+    const authorityReason = vi.fn(async () => "Person-facing wording");
     const { binding, runtime } = await attached({
       ...fromDatabase("p1"),
       decisions,

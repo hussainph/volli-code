@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import {
   acceptsImageInputIn,
   applySkillModes,
+  authorityJudgeDenialReason,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -584,7 +585,7 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
 }
 
 async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
-  return input.fallback;
+  return authorityJudgeDenialReason(input.cause);
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */

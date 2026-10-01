@@ -35,6 +35,8 @@
  * proposed here and is still the wrong thing to do.
  */
 
+export * from "./authority-judge";
+
 import type { JudgmentMode } from "./authority-config";
 import type { McpToolId } from "./mcp";
 import type { VerbToolKey } from "./verb-registry";

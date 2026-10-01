@@ -22,7 +22,7 @@ omitted rather than treating host framing as user authority; omitted or malforme
 historical input makes automatic review ask instead of approving with partial
 constraints.
 
-Secret redaction uses the activity redactor, without truncating command tails.
+Secret redaction uses one shared redactor before classifier transport and audit persistence, without truncating command tails.
 Uninspectable or oversized requests miss; they never become apparent allowances.
 Routed model decisions await a classifier-attributed `authority.judge.audit`
 fact. Every final call verdict, including pre-routing misses (`unset`,
@@ -61,10 +61,14 @@ queued call is checked against state after earlier exclusive mutations finish.
 
 Settings → Decision model has one Block reason choice: Utility model (default)
 or Risk category. Only a configured utility model is used; unset, failed,
-aborted or slow wording falls back to the category. The wording call receives
-only the tool name and category, uses reasoning off, an 80-token output budget
+aborted or slow wording falls back to a trusted host denial cause (unauthorized,
+uncertain, or a risk category — never “safe”). The wording call receives
+only the tool name and trusted cause, uses reasoning off, an 80-token output budget
 and a 1.5-second deadline, and reports successful or failed metered usage even
-if the provider finishes late. It never changes permission.
+if the provider finishes late. It never changes permission. The agent's direct
+and Code Mode denial results contain only deterministic host text. Utility
+wording appears only in the person's transcript and Ask UI, labelled
+“Model-generated explanation”; it never enters agent context.
 
 ## Calibration and reason choice
 

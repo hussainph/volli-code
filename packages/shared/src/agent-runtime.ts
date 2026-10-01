@@ -19,6 +19,7 @@ import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
   AuthorityDenialCause,
+  AuthorityJudgeDenialCause,
   AuthoritySnapshot,
   CodingToolId,
   NonCodingToolId,
@@ -412,7 +413,7 @@ export interface RuntimeAskRequest {
   toolCallId: string;
   /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** The refusing rule's own words, as the model would otherwise have received them. */
+  /** Person-facing refusal explanation; may include labelled model prose, never an agent result. */
   reason: string;
   trip: RuntimeAskTrip;
   /**
@@ -1121,12 +1122,11 @@ export interface SessionRuntimeSpec {
   authority?: AuthoritySnapshot;
   /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
   decisions?: DecisionPort;
-  /** Optional wording pass on flags only; it never decides permission. */
+  /** Optional person-facing wording only. Never insert its output into agent context. */
   authorityReason?: (input: {
     sessionId: string;
     tool: string;
-    category: string;
-    fallback: string;
+    cause: AuthorityJudgeDenialCause;
     signal?: AbortSignal;
   }) => Promise<string>;
   brief: RuntimeBrief;

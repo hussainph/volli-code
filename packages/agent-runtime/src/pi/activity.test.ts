@@ -1,5 +1,9 @@
 import type { AgentEvent, EditToolDetails } from "@earendil-works/pi-agent-core";
-import { observedToolId } from "@volli/shared";
+import {
+  observedToolId,
+  isSensitiveKey as sharedIsSensitiveKey,
+  redactPayloadSecrets as sharedRedactPayloadSecrets,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
   MAX_ACTIVITY_PAYLOAD_STRING_LENGTH,
@@ -12,6 +16,7 @@ import {
   MAX_ACTIVITY_VALUE_TOTAL_LENGTH,
   MAX_ACTIVITY_IDENTIFIER_LENGTH,
   mapPiActivity,
+  isSensitiveKey,
   redactPayloadSecrets,
   type PiActivityContext,
 } from "./activity";
@@ -291,6 +296,45 @@ describe("mapPiActivity", () => {
     );
   });
 
+  it("keeps the existing redaction exports bound to the shared implementation", () => {
+    expect(redactPayloadSecrets).toBe(sharedRedactPayloadSecrets);
+    expect(isSensitiveKey).toBe(sharedIsSensitiveKey);
+  });
+
+  it("redacts credential text in object keys and complete environment assignments across activity surfaces", () => {
+    const command =
+      "AWS_SECRET_ACCESS_KEY='dummy aws; secret';GITHUB_TOKEN=dummy-gh-token|rm -rf /important";
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolName: "bash",
+        toolCallId: "call-env-redaction",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: command }],
+          details: { ghp_dummy_object_key: "ordinary" },
+        },
+      },
+      activityContext({
+        input: {
+          command,
+          env: { VENDOR_KEY: "dummy-env-key", AWS_ACCESS_KEY_ID: "dummy-access-id" },
+        },
+        observedAt: 550,
+      }),
+    );
+    const safeCommand =
+      "AWS_SECRET_ACCESS_KEY= [redacted];GITHUB_TOKEN= [redacted]|rm -rf /important";
+    expect(activity.input).toEqual({
+      command: safeCommand,
+      env: { VENDOR_KEY: "[redacted]", AWS_ACCESS_KEY_ID: "[redacted]" },
+    });
+    expect(activity.output).toMatchObject({ details: { "[redacted]": "[redacted]" } });
+    expect(activity.descriptor.subject.label).toBe(safeCommand);
+    expect(activity.descriptor.outcome?.summary).toBe(safeCommand);
+    expect(JSON.stringify(activity)).not.toContain("dummy");
+  });
+
   it("redacts sensitive keys recursively without reading their getter values and redacts authorization strings", () => {
     const nested: { api_token?: string } = {};
     Object.defineProperty(nested, "api_token", {
@@ -443,6 +487,11 @@ describe("mapPiActivity", () => {
     ["bearer credential", "retrying with Bearer eyJhbGciOi.J9.abc-def", "eyJhbGciOi"],
     ["authorization header", "Authorization: Bearer sourdough.crumb.value", "sourdough.crumb"],
     ["named assignment", "exported API_KEY=zzz-not-for-the-ledger today", "zzz-not-for"],
+    ["AWS access key", "using AKIA0123456789ABCDEF", "AKIA0123456789ABCDEF"],
+    ["AWS session access key", "using ASIA0123456789ABCDEF", "ASIA0123456789ABCDEF"],
+    ["fine-grained GitHub token", "using github_pat_dummy_token", "github_pat_dummy_token"],
+    ["JWT", "using eyJhbGciOiJub25lIn0.eyJmaXh0dXJlIjp0cnVlfQ.ZHVtbXk", "eyJhbGci"],
+    ["PEM", "-----BEGIN PRIVATE KEY-----\nZHVtbXk=\n-----END PRIVATE KEY-----", "ZHVtbXk="],
   ])("redacts a %s carried in ordinary tool output", (_label, text, secretFragment) => {
     const activity = mapPiActivity(
       {

@@ -117,6 +117,7 @@ describe("judgeAuthorityCall", () => {
       answered,
       wouldFlag: false,
       category: "safe",
+      denialCause: null,
       reason: "This call appears authorised and low risk.",
     });
     expect(AUTHORITY_JUDGE_THRESHOLDS).toEqual({
@@ -134,7 +135,12 @@ describe("judgeAuthorityCall", () => {
     async (category) => {
       const { decisions } = fixture(answer({ category }));
       const verdict = await judgeAuthorityCall({ ...BASE, decisions });
-      expect(verdict).toMatchObject({ kind: "answered", wouldFlag: true, category });
+      expect(verdict).toMatchObject({
+        kind: "answered",
+        wouldFlag: true,
+        category,
+        denialCause: category,
+      });
       if (verdict.kind !== "answered") throw new Error("expected answer");
       expect(verdict.reason).not.toContain("user's messages");
       expect(verdict.reason.length).toBeGreaterThan(20);
@@ -148,6 +154,7 @@ describe("judgeAuthorityCall", () => {
       kind: "answered",
       wouldFlag: true,
       category: "safe",
+      denialCause: "unauthorized",
       reason: "The user's messages do not clearly authorise this entire call and its side effects.",
     });
   });
@@ -158,6 +165,7 @@ describe("judgeAuthorityCall", () => {
       kind: "answered",
       wouldFlag: true,
       category: "safe",
+      denialCause: "uncertain",
       reason:
         "The scope or consequences of this call are not clear enough to proceed automatically.",
     });
@@ -259,7 +267,7 @@ describe("judgeAuthorityCall", () => {
   it("redacts secrets in property names and refuses redaction collisions", async () => {
     const { decisions, calls } = fixture();
     await judgeAuthorityCall({ ...BASE, args: { "sk-private-key": "value" }, decisions });
-    expect(calls[0]!.state).toMatchObject({ call: { args: { "[redacted]": "value" } } });
+    expect(calls[0]!.state).toMatchObject({ call: { args: { "[redacted]": "[redacted]" } } });
     const collision = await judgeAuthorityCall({
       ...BASE,
       args: { "sk-private-one": "one", "sk-private-two": "two" },

@@ -2526,6 +2526,7 @@ async function attachSession(
         let judgedVerdict: AuthorityVerdict =
           auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
         let askImmediately = false;
+        let personReason: string | undefined;
         // VC-480 hook: an explicit ledger allowance belongs here, after hard
         // denies and deterministic skips, before invoking the classifier.
         if (eligible) {
@@ -2541,27 +2542,30 @@ async function attachSession(
             args,
             signal,
           });
-          let reason = review.kind === "answered" ? review.reason : review.miss.message;
+          const reason = review.kind === "answered" ? review.reason : review.miss.message;
           if (auto) {
             if (review.kind === "miss") {
               judgedVerdict = {
                 outcome: "deny",
                 cause: "classifier.unavailable",
-                reason: `Automatic review is unavailable: ${reason} Ask the person before this call runs.`,
+                reason:
+                  "Automatic review is unavailable. Ask the person before this call runs; do not work around this block.",
               };
               askImmediately = true;
             } else if (review.wouldFlag) {
               if (spec.authorityReason !== undefined) {
                 try {
-                  reason = await spec.authorityReason({
+                  const wording = await spec.authorityReason({
                     sessionId: spec.identity.sessionId,
                     tool: toolCall.name,
-                    category: review.category,
-                    fallback: reason,
+                    cause: review.denialCause,
                     signal,
                   });
+                  // This channel is only for durable UI and the person's ask.
+                  // Neither direct tool results nor Code Mode see model prose.
+                  if (wording !== reason) personReason = `Model-generated explanation: ${wording}`;
                 } catch {
-                  // Wording is optional, permission is not. Keep the category.
+                  // Wording is optional, permission is not. Keep host text.
                 }
               }
               judgedVerdict = {
@@ -2581,7 +2585,7 @@ async function attachSession(
             mode: auto ? "auto" : "shadow",
             authoriser: "classifier",
             wouldFlag: review.kind === "answered" ? review.wouldFlag : null,
-            reason,
+            reason: personReason === undefined ? reason : `${reason} ${personReason}`,
             category: review.kind === "answered" ? review.category : null,
             answers: review.kind === "answered" ? review.answered.answers : null,
             missReason: review.kind === "miss" ? review.miss.reason : null,
@@ -2608,6 +2612,7 @@ async function attachSession(
         // signal the instant this callback returns.
         const disposition = await escalation.resolve({
           verdict: judgedVerdict,
+          ...(personReason === undefined ? {} : { personReason }),
           askImmediately,
           pauseIfUnattended: auto,
           tool: toolCall.name,
