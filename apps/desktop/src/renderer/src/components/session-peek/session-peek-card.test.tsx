@@ -21,6 +21,12 @@ import {
 
 import { SessionPeekCard, type SessionPeekCardProps } from "./session-peek-card";
 import type { SessionPeekRow } from "./use-session-peek";
+import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
+
+const held = vi.hoisted(() => ({ catalogue: null as ModelCatalogue | null }));
+vi.mock("@renderer/lib/use-model-catalogue", () => ({
+  useModelCatalogue: () => held.catalogue,
+}));
 
 const NOW = 1_700_000_600_000;
 
@@ -28,6 +34,7 @@ let container: HTMLElement;
 let root: Root | null = null;
 
 beforeEach(() => {
+  held.catalogue = null;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -243,6 +250,29 @@ describe("identity", () => {
     expect(line).toContain("Anthropic");
     expect(line).toContain("claude-opus-5");
     expect(line).toContain("Automation · Nightly triage");
+  });
+
+  it("resolves the peek's model name and mark without losing provenance", () => {
+    held.catalogue = {
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5",
+          label: "Claude Opus 5",
+          state: "available",
+          reasoningLevels: [],
+          acceptsImageInput: true,
+        },
+      ],
+      providers: [],
+    };
+    render({ row: row({ provenance: { kind: "automation", automationName: "Nightly triage" } }) });
+    const identity = container.querySelector("[data-peek-identity]");
+    expect(identity?.textContent).toContain(
+      "Claude Opus 5 · Anthropic · Automation · Nightly triage",
+    );
+    expect(identity?.textContent).not.toContain("claude-opus-5");
+    expect(identity?.querySelector("svg[aria-hidden] path")).not.toBeNull();
   });
 
   it("offers Close only while pinned", () => {

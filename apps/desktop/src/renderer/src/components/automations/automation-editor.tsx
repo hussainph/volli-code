@@ -56,6 +56,7 @@ import {
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
 import { ModelName } from "@renderer/components/models/model-identity";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -386,12 +387,7 @@ function RuntimeFields({
               name alone is ambiguous. */}
           {unavailableValue === null || pin === null ? null : (
             <SelectItem value={unavailableValue}>
-              <ModelName
-                model={{ providerId: pin.providerId, modelId: pin.modelId, label: pin.modelId }}
-                models={models}
-                providerLabel={pin.providerId}
-                alwaysProvider
-              />
+              <ResolvedModelName selection={pin} alwaysProvider />
             </SelectItem>
           )}
           {models.map((model) => (

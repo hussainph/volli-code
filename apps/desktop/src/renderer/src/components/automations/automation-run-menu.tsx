@@ -36,6 +36,7 @@ import {
 } from "@volli/shared";
 
 import { SWITCHED_OFF_NOTE } from "./automations-page-model";
+import { ModelName } from "@renderer/components/models/model-identity";
 import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
@@ -341,11 +342,13 @@ export function AutomationRunMenuItems({
                   icon={CpuIcon}
                   onSelect={() => onRun(rail.primary, selections[0] ?? null)}
                 >
-                  {model.label}
+                  <ModelName model={model} models={models} providerLabel={model.providerLabel} />
                 </ContextMenuItem>
               ) : (
                 <ContextMenuSub key={model.id}>
-                  <ContextMenuSubTrigger icon={CpuIcon}>{model.label}</ContextMenuSubTrigger>
+                  <ContextMenuSubTrigger icon={CpuIcon}>
+                    <ModelName model={model} models={models} providerLabel={model.providerLabel} />
+                  </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     {selections.map((selection) => (
                       <ContextMenuItem

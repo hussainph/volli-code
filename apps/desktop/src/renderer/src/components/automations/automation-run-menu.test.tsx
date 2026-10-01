@@ -22,6 +22,7 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { providerMark } from "@renderer/components/models/model-identity";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -72,7 +73,7 @@ const ARMING: ColumnArming = { projectId: "p1", status: "doing", automationId: "
 
 const doors = { list: vi.fn(), armings: vi.fn(), enablement: vi.fn(), columnOrders: vi.fn() };
 
-/** One available model with one level, so the override rows have something to name. */
+/** Distinct catalog names on both the direct and effort-submenu override rows. */
 const MODEL_ACCESS = {
   inspect: vi.fn(async () => ({
     providers: [{ id: "anthropic", label: "Anthropic" }],
@@ -80,9 +81,16 @@ const MODEL_ACCESS = {
       {
         providerId: "anthropic",
         modelId: "claude-opus",
-        label: "claude-opus",
+        label: "Claude Opus 4.1",
         state: "available",
         reasoningLevels: ["high"],
+      },
+      {
+        providerId: "anthropic",
+        modelId: "claude-sonnet",
+        label: "Claude Sonnet 4.5",
+        state: "available",
+        reasoningLevels: ["low", "medium", "high"],
       },
     ],
   })),
@@ -147,14 +155,30 @@ function menuItem(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
-async function openSubmenu(label: string): Promise<void> {
+function submenuTrigger(label: string): HTMLElement {
   const trigger = [...document.querySelectorAll('[data-slot="context-menu-sub-trigger"]')].find(
     (candidate) => candidate.textContent?.includes(label),
   );
   if (trigger === undefined) throw new Error(`no submenu named ${label}`);
+  return trigger as HTMLElement;
+}
+
+async function openSubmenu(label: string): Promise<void> {
   await act(async () => {
-    (trigger as HTMLElement).click();
+    submenuTrigger(label).click();
   });
+}
+
+function expectModelCaption(row: HTMLElement, label: string, modelId: string): void {
+  const caption = row.querySelector('[data-slot="model-name"]');
+  expect(caption?.textContent).toBe(label);
+  expect(row.textContent).not.toContain(modelId);
+  expect(row.textContent).not.toContain("anthropic");
+  // The caption's adjacent vendor mark, not the row's CPU icon or submenu caret.
+  const logo = caption?.previousElementSibling;
+  expect(logo?.tagName).toBe("svg");
+  expect(logo?.getAttribute("aria-hidden")).toBe("true");
+  expect(logo?.querySelector("path")?.getAttribute("d")).toBe(providerMark("anthropic")?.paths[0]);
 }
 
 beforeEach(() => {
@@ -210,18 +234,46 @@ describe("the board card's Automations submenu", () => {
     });
   });
 
-  it("carries a per-invocation override from its nested item", async () => {
+  it("shows a resolved name and logo on the direct model item, but launches its raw selection", async () => {
     await open();
     await openSubmenu("Run on model");
 
+    const item = menuItem("Claude Opus 4.1");
+    expectModelCaption(item, "Claude Opus 4.1", "claude-opus");
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+
     await act(async () => {
-      menuItem("claude-opus").click();
+      item.click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith(
       expect.objectContaining({
         target: { kind: "automation", automationId: "a1" },
         modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      }),
+    );
+  });
+
+  it("shows a resolved name and logo on the effort submenu, but launches the chosen raw selection", async () => {
+    await open();
+    await openSubmenu("Run on model");
+
+    expectModelCaption(submenuTrigger("Claude Sonnet 4.5"), "Claude Sonnet 4.5", "claude-sonnet");
+    await openSubmenu("Claude Sonnet 4.5");
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+
+    await act(async () => {
+      menuItem("medium").click();
+    });
+
+    expect(runAutomationOnTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "automation", automationId: "a1" },
+        modelOverride: {
+          providerId: "anthropic",
+          modelId: "claude-sonnet",
+          reasoningLevel: "medium",
+        },
       }),
     );
   });
