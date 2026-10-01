@@ -1,0 +1,295 @@
+/**
+ * Code Mode's frozen half (VC-471): which route each tool of a Session takes,
+ * and the limits every script run is held to.
+ *
+ * Code Mode is one more tool, `codemode`, whose argument is a short JavaScript
+ * program. The program calls the Session's own tools as `tools.<name>(args)`,
+ * and only what it returns or prints reaches the model. Everything about WHICH
+ * tools a program may call, and how far it may go, is decided here, at Session
+ * birth, by the host — never by the program, never by a file in the worktree,
+ * and never again after the Session exists.
+ *
+ * ## Routes
+ *
+ * A route says how the model reaches one tool of the frozen surface. The
+ * vocabulary is Pi's MCP `exposure`, renamed where Pi's word means something
+ * else in Volli:
+ *
+ * | route      | declared to the model | callable from a script | listed in the `codemode` description |
+ * | ---------- | --------------------- | ---------------------- | ------------------------------------ |
+ * | `direct`   | yes                   | no                     | no                                   |
+ * | `both`     | yes                   | yes                    | yes                                  |
+ * | `code`     | no                    | yes                    | yes                                  |
+ * | `deferred` | no                    | yes                    | no — found with `searchTools()`      |
+ * | `hidden`   | no                    | no                     | no                                   |
+ *
+ * Pi's `direct` is Volli's `both`: Pi's direct tools are also callable from
+ * codemode, and Volli needs a word for a tool that is NOT (`ask_user`, the
+ * todo list, background shells, screenshots). Pi's `codemode` exposure is
+ * Volli's `code`, and `codemode-deferred` is `deferred`.
+ *
+ * ## Why the routes are frozen
+ *
+ * The routes decide the provider tool array (declared tools plus `codemode`),
+ * and the Cache Prefix is computed over that array. A route that changed
+ * between attachments would change the array, which the frozen-surface rule
+ * forbids (VC-164). So the routes are part of the `tool-surface` record, a
+ * restart reads them back, and a change of policy reaches only Sessions born
+ * after it.
+ *
+ * ## Why the limits are frozen beside them
+ *
+ * Sandbox settings must come from app-owned state, never from a file the
+ * Session can edit. The record is written by the host at birth, through the
+ * Session Engine, and the runtime reads nothing else.
+ */
+
+import { CAPABILITY_TOOL_IDS, type SessionToolId } from "./authority";
+import { isMcpToolId, type McpToolDefinition } from "./mcp";
+
+/** The name the model calls, and the name the frozen surface records. */
+export const CODE_MODE_TOOL_ID = "codemode";
+
+export const TOOL_ROUTES = ["direct", "both", "code", "deferred", "hidden"] as const;
+export type ToolRoute = (typeof TOOL_ROUTES)[number];
+
+export function isToolRoute(value: unknown): value is ToolRoute {
+  return typeof value === "string" && (TOOL_ROUTES as readonly string[]).includes(value);
+}
+
+/** Whether a tool on this route is in the provider tool array. */
+export function isDeclaredRoute(route: ToolRoute): boolean {
+  return route === "direct" || route === "both";
+}
+
+/** Whether a script may call a tool on this route. */
+export function isCodeCallableRoute(route: ToolRoute): boolean {
+  return route === "both" || route === "code" || route === "deferred";
+}
+
+/** Whether a tool on this route is declared, as TypeScript, in the `codemode` description. */
+export function isListedRoute(route: ToolRoute): boolean {
+  return route === "both" || route === "code";
+}
+
+/**
+ * The hard limits one script run is held to. Every one is enforced by the
+ * host, outside the VM; none can be raised from inside a script.
+ */
+export interface CodeModeLimits {
+  /**
+   * Active time per run, in milliseconds. Time a nested call spends waiting for
+   * a person to answer an approval is not counted: a script that pauses on a
+   * person must not time out because the person was slow.
+   */
+  timeoutMs: number;
+  /** The QuickJS heap. Allocations past it fail inside the script. */
+  memoryLimitBytes: number;
+  /** What one run may hand the model, as UTF-8; the rest is cut and saved. */
+  maxOutputBytes: number;
+  /** Nested tool calls one run may make. The next one fails inside the script. */
+  maxNestedCalls: number;
+  /**
+   * Nested calls in flight at once. Only tools that may overlap ever do (see
+   * the runtime's scheduler); everything else runs one at a time regardless.
+   */
+  maxConcurrency: number;
+  /**
+   * Estimated tokens the TypeScript declarations in the `codemode` description
+   * may spend. Tools past it are named by namespace and count, and a script
+   * finds them with `searchTools()`.
+   */
+  declarationBudgetTokens: number;
+}
+
+/**
+ * Pi's own defaults where Pi has one (five minutes, a 3,000-token declaration
+ * budget), and Volli's MCP result bound for the output. The rest are chosen to
+ * fit the loop shape VC-245 measured: `bash` averaged 8.2 s a call, so 200
+ * calls in five minutes is already more than a loop will reach.
+ */
+export const DEFAULT_CODE_MODE_LIMITS: CodeModeLimits = Object.freeze({
+  timeoutMs: 300_000,
+  memoryLimitBytes: 64 * 1_024 * 1_024,
+  maxOutputBytes: 20 * 1_024,
+  maxNestedCalls: 200,
+  maxConcurrency: 4,
+  declarationBudgetTokens: 3_000,
+});
+
+/**
+ * The range each limit may take in a durable record. A record outside it is
+ * damaged rather than a policy: zero calls, zero bytes or an hour of runtime
+ * are not limits anybody chose.
+ */
+export const CODE_MODE_LIMIT_BOUNDS: Readonly<
+  Record<keyof CodeModeLimits, { min: number; max: number }>
+> = Object.freeze({
+  timeoutMs: { min: 1_000, max: 1_800_000 },
+  memoryLimitBytes: { min: 1_024 * 1_024, max: 1_024 * 1_024 * 1_024 },
+  maxOutputBytes: { min: 1_024, max: 1_024 * 1_024 },
+  maxNestedCalls: { min: 1, max: 10_000 },
+  maxConcurrency: { min: 1, max: 32 },
+  declarationBudgetTokens: { min: 0, max: 100_000 },
+});
+
+/** Code Mode as one Session was born with it. */
+export interface CodeModeSurface {
+  /**
+   * The route of every tool in the frozen surface except `codemode` itself,
+   * keyed by the durable tool id. Exactly those keys: a missing one or an
+   * extra one is a damaged record.
+   */
+  routes: Readonly<Record<string, ToolRoute>>;
+  limits: CodeModeLimits;
+}
+
+/**
+ * Tools a script never calls, whatever the host's MCP policy says.
+ *
+ * Each is a decision, and each is about what a script cannot do well rather
+ * than about danger:
+ *
+ * - `ask_user` puts a question in front of a person. A loop that asks is a
+ *   loop that interrupts someone N times; the model should ask, once, itself.
+ * - `todo_write` is read by the person watching and by the ticket, both of
+ *   which fold the list out of the model's own calls.
+ * - The background shells start processes that outlive the script that
+ *   started them, which a run's cancellation could not then reach.
+ * - `browser_screenshot` returns an image. Phase 1 lets no image into a
+ *   script or out of one (see the runtime's result shaping), so a screenshot
+ *   from code would be a call whose whole result is thrown away.
+ * - The hold pair is a turn-level promise to a person about a tab; a script
+ *   gets holds implicitly through its writes, as a direct call does.
+ */
+const DIRECT_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
+  "ask_user",
+  "todo_write",
+  "shell_start",
+  "shell_output",
+  "shell_kill",
+  "browser_screenshot",
+  "browser_acquire",
+  "browser_release",
+]);
+
+/**
+ * Verbs a script may call. Everything else in the registry stays direct.
+ *
+ * Starting and delegating Sessions and watching them are the multi-Session
+ * shape VC-245 measured; `mcp.list` is a read. The rest of the agent-control
+ * family (stop, send, Automation runs) and every MCP mutation stay where a
+ * person can see each one called on its own.
+ */
+const CODE_CALLABLE_VERBS: ReadonlySet<string> = new Set([
+  "session.start",
+  "session.delegate",
+  "watch",
+  "mcp.list",
+]);
+
+/**
+ * The default route for one tool, given the route the host chose for its MCP
+ * server when it is an MCP tool.
+ */
+export function defaultToolRoute(tool: SessionToolId, mcpRoute?: ToolRoute): ToolRoute {
+  if (isMcpToolId(tool)) return mcpRoute ?? "both";
+  if ((CAPABILITY_TOOL_IDS as readonly string[]).includes(tool)) {
+    return DIRECT_ONLY_CAPABILITIES.has(tool) ? "direct" : "both";
+  }
+  // What is left is the verb half of the vocabulary.
+  return CODE_CALLABLE_VERBS.has(tool) ? "both" : "direct";
+}
+
+/**
+ * The Code Mode record a new Session is born with: one route per tool of its
+ * resolved surface, and the limits.
+ *
+ * `mcpRoute` is the host's per-server (or per-tool) choice for MCP tools —
+ * `deferred` for a large server, say. It is consulted only for MCP tools, and
+ * only for the definition the surface actually froze.
+ */
+export function codeModeSurfaceFor(input: {
+  tools: readonly SessionToolId[];
+  mcpTools?: readonly McpToolDefinition[];
+  mcpRoute?: (definition: McpToolDefinition) => ToolRoute | undefined;
+  limits?: CodeModeLimits;
+}): CodeModeSurface {
+  const definitions = new Map(
+    (input.mcpTools ?? []).map((definition) => [definition.providerName as string, definition]),
+  );
+  const routes: Record<string, ToolRoute> = {};
+  for (const tool of input.tools) {
+    if (tool === CODE_MODE_TOOL_ID) continue;
+    const definition = definitions.get(tool);
+    routes[tool] = defaultToolRoute(
+      tool,
+      definition === undefined ? undefined : input.mcpRoute?.(definition),
+    );
+  }
+  return { routes, limits: { ...(input.limits ?? DEFAULT_CODE_MODE_LIMITS) } };
+}
+
+/**
+ * A Code Mode record read back against the surface it was frozen with.
+ *
+ * Strict in both directions, on the frozen-surface rule's reasoning: a record
+ * that names a tool the surface does not hold, or leaves one out, would bind a
+ * different provider tool array than the one the Session was born with.
+ */
+export function parseCodeModeSurface(
+  value: unknown,
+  tools: readonly string[],
+  context = "codeMode",
+): CodeModeSurface {
+  const row = record(value, context);
+  const routesRow = record(row.routes, `${context}.routes`);
+  const limitsRow = record(row.limits, `${context}.limits`);
+  if (!tools.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context} is present but the surface does not hold ${CODE_MODE_TOOL_ID}`);
+  }
+  const expected = tools.filter((tool) => tool !== CODE_MODE_TOOL_ID);
+  const keys = Object.keys(routesRow);
+  if (keys.length !== expected.length || expected.some((tool) => !(tool in routesRow))) {
+    throw new Error(`${context}.routes must name exactly the tools of the surface`);
+  }
+  const routes: Record<string, ToolRoute> = {};
+  for (const tool of expected) {
+    const route = routesRow[tool];
+    if (!isToolRoute(route)) throw new Error(`${context}.routes.${tool} is not a route`);
+    routes[tool] = route;
+  }
+  const limits = {} as CodeModeLimits;
+  for (const key of Object.keys(CODE_MODE_LIMIT_BOUNDS) as (keyof CodeModeLimits)[]) {
+    const limit = limitsRow[key];
+    const bound = CODE_MODE_LIMIT_BOUNDS[key];
+    if (
+      typeof limit !== "number" ||
+      !Number.isInteger(limit) ||
+      limit < bound.min ||
+      limit > bound.max
+    ) {
+      throw new Error(
+        `${context}.limits.${key} must be a whole number in [${bound.min}, ${bound.max}]`,
+      );
+    }
+    limits[key] = limit;
+  }
+  if (Object.keys(limitsRow).length !== Object.keys(CODE_MODE_LIMIT_BOUNDS).length) {
+    throw new Error(`${context}.limits names a limit this build does not know`);
+  }
+  return { routes, limits };
+}
+
+/** The route of one tool in a surface that holds Code Mode; `direct` for one it does not route. */
+export function routeOf(surface: CodeModeSurface | undefined, tool: string): ToolRoute {
+  if (surface === undefined) return "direct";
+  return surface.routes[tool] ?? "direct";
+}
+
+function record(value: unknown, context: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
