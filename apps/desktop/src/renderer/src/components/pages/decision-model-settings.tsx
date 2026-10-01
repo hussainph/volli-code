@@ -155,16 +155,21 @@ export function CloudOptInDialog({
   onCancel(): void;
   onAllow(entry: DecisionModelCatalogEntry): void;
 }) {
+  // The last model asked about, held while the dialog animates out: the
+  // caller clears `entry` the moment a button is pressed, and the closing
+  // frames must not read "Send decisions to ?".
+  const [shown, setShown] = React.useState(entry);
+  React.useEffect(() => {
+    if (entry !== null) setShown(entry);
+  }, [entry]);
+  const label = shown === null ? "" : cloudLabel(shown);
   return (
     <AlertDialog open={entry !== null} onOpenChange={(open) => (open ? undefined : onCancel())}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>
-            Send decisions to {entry === null ? "" : cloudLabel(entry)}?
-          </AlertDialogTitle>
+          <AlertDialogTitle>Send decisions to {label}?</AlertDialogTitle>
           <AlertDialogDescription>
-            {entry === null ? "" : decisionCloudDisclosure(cloudLabel(entry))} Choose None at any
-            time to stop.
+            {shown === null ? "" : decisionCloudDisclosure(label)} Choose None at any time to stop.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
