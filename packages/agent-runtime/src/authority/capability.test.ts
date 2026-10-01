@@ -16,7 +16,27 @@ import {
   HOME_CREDENTIAL_PATHS,
   HOME_PRIVATE_PATHS,
 } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+const indexFault: { stat?: string; directory?: string; code?: string } = {};
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const fail = (path: unknown, expected: string | undefined) => {
+    if (expected !== undefined && String(path) === expected)
+      throw Object.assign(new Error("index fault"), { code: indexFault.code });
+  };
+  return {
+    ...actual,
+    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
+      fail(args[0], indexFault.stat);
+      return actual.lstatSync(...args);
+    },
+    opendirSync: (...args: Parameters<typeof actual.opendirSync>) => {
+      fail(args[0], indexFault.directory);
+      return actual.opendirSync(...args);
+    },
+  };
+});
 import { gitCommonDirOf, resolveCapabilityPolicy, usersRootFor, worktreeGitOf } from "./capability";
 
 function scratch(): string {
@@ -266,15 +286,15 @@ describe("resolveCapabilityPolicy", () => {
       join(home, ".ssh", "id_ed25519"),
     );
     expect(Object.keys(policy.linkedFiles)).toHaveLength(1);
-    // The walk is bounded: out of budget, it indexes nothing more.
-    expect(
+    // A partial index would open the kernel boundary: refuse the attachment.
+    expect(() =>
       resolveCapabilityPolicy({
         workspacePath: base,
         home,
         sandboxCarveOuts: false,
         linkIndexBudget: 0,
-      }).linkedFiles,
-    ).toEqual({});
+      }),
+    ).toThrow(/hard-link index.*entry limit/u);
   });
 
   it("records workspace aliases of critical Volli data independently of the general link budget", () => {
@@ -304,11 +324,95 @@ describe("resolveCapabilityPolicy", () => {
       privateRoots: [userData],
       criticalHostDataPaths: [db, `${db}-wal`, `${db}-shm`, singleton, localCritical],
       sandboxCarveOuts: true,
-      linkIndexBudget: 0,
     });
     const linked = lstatSync(alias);
     expect(policy.hostDataAliases).toEqual([alias]);
     expect(policy.linkedFiles[`${linked.dev}:${linked.ino}`]).toBe(db);
+  });
+});
+
+describe("hard-link index limits and all granted roots", () => {
+  it("refuses an incomplete alias walk at its entry or time limit", () => {
+    const base = scratch();
+    const workspace = join(base, "workspace");
+    const home = join(base, "home");
+    mkdirSync(workspace);
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    const key = join(home, ".ssh", "id_ed25519");
+    writeFileSync(key, "key");
+    linkSync(key, join(workspace, "alias"));
+    const input = { workspacePath: workspace, home, sandboxCarveOuts: true };
+    expect(() => resolveCapabilityPolicy({ ...input, aliasIndexBudget: 0 })).toThrow(
+      /hard-link index.*entry limit/u,
+    );
+    expect(() => resolveCapabilityPolicy({ ...input, linkIndexTimeoutMs: 0 })).toThrow(
+      /hard-link index.*time limit/u,
+    );
+  });
+
+  it.each(["stat", "directory"] as const)(
+    "handles %s errors without silently skipping an unscannable writable root",
+    (operation) => {
+      const base = scratch();
+      const workspace = join(base, "workspace");
+      const home = join(base, "home");
+      const source = join(home, ".ssh");
+      mkdirSync(workspace);
+      mkdirSync(source, { recursive: true });
+      const db = join(base, "db");
+      writeFileSync(db, "db");
+      linkSync(db, join(workspace, "alias"));
+      const input = {
+        workspacePath: workspace,
+        home,
+        sandboxCarveOuts: true,
+        criticalHostDataPaths: [db],
+      };
+      try {
+        for (const code of ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EIO"]) {
+          indexFault.code = code;
+          indexFault[operation] = source;
+          if (
+            code === "EACCES" ||
+            code === "EPERM" ||
+            (operation === "stat" && (code === "ENOENT" || code === "ENOTDIR"))
+          ) {
+            expect(() => resolveCapabilityPolicy(input)).not.toThrow();
+          } else {
+            expect(() => resolveCapabilityPolicy(input)).toThrow("index fault");
+          }
+          indexFault[operation] = workspace;
+          if (operation === "stat" && (code === "ENOENT" || code === "ENOTDIR")) {
+            expect(() => resolveCapabilityPolicy(input)).not.toThrow();
+          } else {
+            expect(() => resolveCapabilityPolicy(input)).toThrow("index fault");
+          }
+        }
+      } finally {
+        delete indexFault.stat;
+        delete indexFault.directory;
+        delete indexFault.code;
+      }
+    },
+  );
+
+  it("denies credential aliases in the worktree's granted git slices too", () => {
+    const base = scratch();
+    const { main, worktree } = repository(base);
+    const home = join(base, "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    const key = join(home, ".ssh", "id_ed25519");
+    const alias = join(main, ".git", "objects", "credential-alias");
+    writeFileSync(key, "key");
+    linkSync(key, alias);
+    const policy = resolveCapabilityPolicy({
+      workspacePath: worktree,
+      home,
+      sandboxCarveOuts: true,
+    });
+    expect(policy.credentialDeny).toContain(alias);
+    expect(capabilityRead(policy, alias).outcome).toBe("deny");
+    expect(capabilityWrite(policy, alias).outcome).toBe("deny");
   });
 });
 

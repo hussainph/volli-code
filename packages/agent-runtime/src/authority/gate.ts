@@ -77,7 +77,8 @@ function wallsRefuse(call: PolicyToolCall, capability: CapabilityPolicy): boolea
 /**
  * A multiply-linked regular file named by the denied path it shares an inode
  * with, when the resolver indexed one: a second name for a credential is the
- * credential, and Seatbelt — matching names — cannot see that.
+ * credential. The resolver also protects its names in every granted root in
+ * Seatbelt; this check covers indexed identities under names elsewhere.
  */
 export function throughLinks(capability: CapabilityPolicy, path: string): string {
   let entry;

@@ -33,10 +33,11 @@
  * resolves — case variants, Unicode case and normalization forms, the
  * `/System/Volumes/Data` firmlink — because the runtime canonicalizes paths
  * through the filesystem before they reach here, and the comparisons below fold
- * what canonicalization cannot reach. Two seams remain and are named where they
- * live: a hard link to a credential that already exists is invisible to
- * Seatbelt (the file guard and gate catch the ones the resolver indexed), and
- * the file guard checks before it opens (slice 8). The gate's view of a SHELL
+ * what canonicalization cannot reach. Credential aliases in every writable root
+ * are indexed at attach and compiled into kernel read/write and movement
+ * denials; an incomplete scan refuses attachment. Non-credential private-tree
+ * aliases are not fully indexed, and parent-directory swaps in the file guard
+ * remain slice 8's seam. The gate's view of a SHELL
  * command is weaker still: it reads the operands a lexer can see, and a path
  * hidden in a variable, `$(…)` or a script never reaches it. Only a Scoped
  * Session has the kernel behind it.
@@ -305,7 +306,7 @@ export interface CapabilityPolicy {
    */
   readonly sandboxCarveOuts: boolean;
   /**
-   * Literal names inside the workspace that share an inode with one of the
+   * Literal names inside any granted writable root that share an inode with one of the
    * host's critical live files. Seatbelt matches paths rather than inodes, so
    * these names are explicit write denials in every command profile.
    */
@@ -313,8 +314,9 @@ export interface CapabilityPolicy {
   /**
    * Hard links into the denylist the resolver indexed, as `"<device>:<inode>"`
    * to the denied path that file also has. A second name for a credential is
-   * the credential; Seatbelt matches names and cannot see this, so the file
-   * guard and the gate translate a multiply-linked file through here.
+   * the credential. The resolver also adds its names in every writable root
+   * to credentialDeny for Seatbelt; the file guard and gate use this identity
+   * index for names elsewhere.
    */
   readonly linkedFiles: Readonly<Record<string, string>>;
 }

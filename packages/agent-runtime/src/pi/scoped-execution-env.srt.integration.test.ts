@@ -6,7 +6,7 @@
  *   VOLLI_SRT_INTEGRATION=1 vp test run src/pi/scoped-execution-env.srt.integration.test.ts
  */
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, X509Certificate } from "node:crypto";
 import { existsSync, linkSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -152,6 +152,7 @@ describe.skipIf(!enabled)(
             privateRoots: [privateRoot],
             sandboxCarveOuts: true,
           }),
+          scratchDirectory: worktree,
         }),
       );
       try {
@@ -196,6 +197,59 @@ describe.skipIf(!enabled)(
             `${JSON.stringify(process.execPath)} -e ${JSON.stringify("require('node:tls').createSecureContext(); process.stdout.write('tls-ok')")}`,
           ),
         ).resolves.toMatchObject({ output: "tls-ok", exitCode: 0 });
+        await expect(
+          ran(
+            env,
+            "/usr/bin/security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain > public-certs.pem",
+          ),
+        ).resolves.toMatchObject({ exitCode: 0 });
+        // Export the public root on the host: certificate enumeration can
+        // return no entries without keychain IPC, but verifying a supplied
+        // certificate must still work behind the credential wall.
+        const publicCertificates = (
+          await promisify(execFile)("/usr/bin/security", [
+            "find-certificate",
+            "-a",
+            "-p",
+            "/System/Library/Keychains/SystemRootCertificates.keychain",
+          ])
+        ).stdout;
+        const publicRoot = publicCertificates
+          .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu)
+          ?.find((pem) => {
+            const cert = new X509Certificate(pem);
+            return Date.parse(cert.validFrom) < Date.now() && Date.parse(cert.validTo) > Date.now();
+          });
+        expect(publicRoot).toBeDefined();
+        await writeFile(join(worktree, "public-root.pem"), publicRoot!);
+        const verified = await ran(
+          env,
+          "/usr/bin/security verify-cert -c public-root.pem -r public-root.pem -p basic -L -l -N",
+        );
+        // macOS can report a successful evaluation while returning 1 when
+        // its optional keychain IPC is refused. Do not open that IPC door.
+        expect(verified.output).toContain("Cert Verify Result: No error.");
+        expect([0, 1]).toContain(verified.exitCode);
+        // Trust enumeration may report no settings without keychain IPC; the
+        // certificate subcommand itself must remain available, not refused by
+        // Volli's shell layer. Keychain-dependent enumeration is not reopened.
+        const trust = await ran(env, "/usr/bin/security dump-trust-settings -s");
+        expect(trust.executionError).toBeUndefined();
+        expect([0, 1]).toContain(trust.exitCode);
+        expect(trust.output).not.toMatch(/operation not permitted|SecurityServer|securityd/iu);
+        await writeFile(
+          join(worktree, "package.json"),
+          JSON.stringify({
+            name: "contained-workflow",
+            private: true,
+            scripts: { test: "node -e \"process.stdout.write('pnpm-ok')\"" },
+          }),
+        );
+        // SRT's shell wrapper sets a Claude TMPDIR; point package-manager
+        // scratch at a granted root rather than opening that default path.
+        const pnpm = await ran(env, 'TMPDIR="$PWD" pnpm test');
+        expect(pnpm.exitCode, pnpm.output).toBe(0);
+        expect(pnpm.output).toContain("pnpm-ok");
         const gitHttps = await ran(env, "git ls-remote https://github.com/git/git.git HEAD");
         expect(gitHttps.exitCode).not.toBe(0);
         expect(gitHttps.output).not.toMatch(/SecurityServer|securityd|keychain/iu);
@@ -507,16 +561,14 @@ describe.skipIf(!enabled)(
         // Other spellings of denied files (VC-45 review, B1): case, Unicode
         // case (`ſ` folds to `s`), the decomposed form, and the Data volume's
         // firmlinked path. Each names the same file on APFS; each is refused
-        // by both layers. The hard link is the one row the layers do NOT
-        // agree on: Seatbelt matches names, so a link planted before the
-        // Session reads through the kernel — a known limit, documented — and
-        // only the file tools, which index the denied files' inodes, refuse it.
+        // by both layers. Credential hard links in every granted root are
+        // indexed at attach and compiled into kernel read/write denials too.
         const spellings: [string, string, string, "allow" | "deny"][] = [
           ["upper case", join(home, ".SSH", "ID_ED25519"), files.key[1], "deny"],
           ["long s", join(home, ".sſh", "id_ed25519"), files.key[1], "deny"],
           ["decomposed", files.accented[0].normalize("NFD"), files.accented[1], "deny"],
           ["firmlink", `/System/Volumes/Data${files.key[0]}`, files.key[1], "deny"],
-          ["hard link", join(worktree, "innocent.txt"), files.key[1], "allow"],
+          ["hard link", join(worktree, "innocent.txt"), files.key[1], "deny"],
         ];
         for (const [name, path, content, shellExpected] of spellings) {
           const shell = await ran(env, `/bin/cat ${JSON.stringify(path)}`);
@@ -742,6 +794,78 @@ describe.skipIf(!enabled)(
         await expect(
           ran(env, `printf ok > ${JSON.stringify(join(declared, "ordinary.txt"))}`),
         ).resolves.toMatchObject({ exitCode: 0 });
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    it("denies interpreter reads, writes, renames and relinks of credential aliases in every root", async () => {
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const declared = join(parent, "declared");
+      const scratch = join(parent, "scratch");
+      const home = join(parent, "home");
+      const key = join(home, ".ssh", "id_ed25519");
+      for (const root of [worktree, declared, scratch, join(home, ".ssh")])
+        await mkdir(root, { recursive: true });
+      const secret = canary("linked-credential");
+      await writeFile(key, secret);
+      const aliases = [];
+      for (const root of [worktree, declared, scratch]) {
+        const directory = join(root, "nested");
+        await mkdir(directory);
+        const alias = join(directory, "innocent.txt");
+        linkSync(key, alias);
+        aliases.push(alias);
+      }
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [declared],
+            runtimeRoots: [scratch],
+            home,
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+          homeDir: home,
+        }),
+      );
+      const node = (code: string) =>
+        ran(env, `${JSON.stringify(process.execPath)} -e ${JSON.stringify(code)}`);
+      try {
+        for (const alias of aliases) {
+          const path = JSON.stringify(alias);
+          const destination = JSON.stringify(`${alias}.moved`);
+          for (const code of [
+            `process.stdout.write(require('node:fs').readFileSync(${path}))`,
+            `require('node:fs').writeFileSync(${path}, 'written')`,
+            `require('node:fs').renameSync(${path}, ${destination})`,
+            `require('node:fs').linkSync(${path}, ${destination})`,
+            `require('node:fs').renameSync(${JSON.stringify(join(alias, ".."))}, ${JSON.stringify(join(alias, "..") + ".moved")})`,
+          ]) {
+            expectDenied(await node(code), secret);
+            expect(existsSync(alias)).toBe(true);
+            expect(existsSync(`${alias}.moved`)).toBe(false);
+            expect(await readFile(key, "utf8")).toBe(secret);
+          }
+          expect(await env.readTextFile(alias)).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(await env.writeFile(alias, "written")).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+        }
+        // Move and relink ordinary files remain normal workflows.
+        await writeFile(join(worktree, "ordinary.txt"), "ordinary");
+        await expect(
+          node(
+            "const fs = require('node:fs'); fs.renameSync('ordinary.txt', 'moved.txt'); fs.linkSync('moved.txt', 'linked.txt'); process.stdout.write(fs.readFileSync('linked.txt'))",
+          ),
+        ).resolves.toMatchObject({ exitCode: 0, output: "ordinary" });
       } finally {
         await env.cleanup(BACKGROUND_CONTEXT);
       }

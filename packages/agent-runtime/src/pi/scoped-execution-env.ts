@@ -492,8 +492,9 @@ function perCommandSandboxConfig(
         "/private/tmp/claude",
         ...roots.flatMap((root) => sandboxWriteCarveOuts(root, policy.sandboxCarveOuts)),
         ...policy.protectedPaths,
-        // Seatbelt matches path names, not inodes. These are workspace names
-        // discovered at attach that share an inode with a live Volli data file.
+        // Seatbelt matches path names, not inodes. These names in every granted
+        // root share an inode with live Volli data. Credential aliases are in
+        // credentialDeny below, so SRT also blocks read/write and movement.
         ...policy.hostDataAliases,
         // A credential or the host's data wherever it meets a root, in either
         // direction; a private entry only strictly inside one, so a root equal

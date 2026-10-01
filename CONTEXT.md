@@ -212,8 +212,14 @@ that redirect a worktree, nested `.git` directories), `.gitmodules` and
 `.volli/` — and its commands have no network until egress opens together with
 the classifier. Seatbelt and the guard agree on every spelling APFS folds
 together (case, Unicode case, normalization form, the Data-volume firmlink);
-they disagree on a hard link planted before the Session, which only the guard's
-inode index recognises. The authority gate judges paths against the same
+credential hard links in all granted roots (workspace, project, runtime scratch
+and worktree git slices) are indexed at attach and denied for kernel reads,
+writes, rename and relink too. Indexing is bounded: 65,536 source entries,
+250,000 writable-root entries, and a combined five-second deadline. Exceeding
+any bound refuses attachment, never returns a partial policy. Walks stream
+directory entries, deduplicate overlapping roots and never follow symlinks.
+Non-credential private-tree aliases remain incompletely indexed; file-tool
+parent-directory swap races remain slice 8's seam. The authority gate judges paths against the same
 policy, but its reading of a shell command's operands is best-effort: the
 kernel guarantee holds only in a Scoped Session. `off` is the default.
 _Avoid_: sandbox mode, full access (as a setting name)

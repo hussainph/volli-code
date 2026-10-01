@@ -17,9 +17,10 @@
  * what keep the ones that matter covered whether or not they existed yet.
  */
 
-import { lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, opendirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   containsPath,
   HOME_CREDENTIAL_PATHS,
@@ -76,8 +77,12 @@ export interface CapabilityResolution {
   usersRoot?: string;
   /** `$XDG_CONFIG_HOME`, when it points somewhere other than `~/.config`. Defaults to the process's. */
   xdgConfigHome?: string;
-  /** How many entries the hard-link index may visit. Defaults to `LINK_INDEX_BUDGET`. */
+  /** Source index entry limit; exceeded limits refuse attachment, never return a partial policy. */
   linkIndexBudget?: number;
+  /** Writable-root alias walk entry limit. Defaults to `ALIAS_INDEX_BUDGET`. */
+  aliasIndexBudget?: number;
+  /** Combined source/alias indexing deadline. Defaults to `LINK_INDEX_TIMEOUT_MS`. */
+  linkIndexTimeoutMs?: number;
 }
 
 /** Absolute, link-free and spelled as stored, or the lexical form when nothing resolves. */
@@ -334,8 +339,10 @@ function protectedPathsOf(workspace: string): string[] {
   return entry.isDirectory() ? [join(workspace, ".git", "worktrees")] : [join(workspace, ".git")];
 }
 
-/** How many filesystem entries the general hard-link index may visit at one attach. */
-const LINK_INDEX_BUDGET = 4_096;
+/** Finite attach cost; an incomplete index refuses attachment rather than opening a wall. */
+const LINK_INDEX_BUDGET = 65_536;
+const ALIAS_INDEX_BUDGET = 250_000;
+const LINK_INDEX_TIMEOUT_MS = 5_000;
 
 function fileIdentity(path: string): { identity: string; path: string } | undefined {
   try {
@@ -348,78 +355,107 @@ function fileIdentity(path: string): { identity: string; path: string } | undefi
 }
 
 /**
- * Every multiply-linked file inside the denied trees worth walking, as
- * `"<device>:<inode>"` to its denied path (VC-45 review, B1).
- *
- * A second name for a credential is the credential, and Seatbelt matches names:
- * a hard link planted before the Session started reads straight through the
- * kernel. The file guard and the gate translate a multiply-linked file through
- * this index instead. It walks the credential tier and the home's top-level
- * dotfiles, under a budget — a few hundred entries on a working machine. It
- * does not walk the private directories (`~/.config`, `~/.cache`, agent
- * transcripts: tens of thousands of entries, a second of attach time), so a
- * hard link to a private file reads without the approval it would need by
- * name: a known limit, documented with the kernel's own.
+ * Walk once, without following symlinks or materializing a huge directory
+ * listing. Overlapping roots are visited only once. Source permission errors
+ * can be skipped: the user (and hence the sandbox) cannot read those files.
+ * An unlistable granted root instead refuses attachment, as do exhausted entry
+ * and wall-clock bounds. No caller ever receives a partially scanned policy.
  */
-function linkedFilesIn(roots: readonly string[], limit: number): Record<string, string> {
-  const linked: Record<string, string> = {};
-  let budget = limit;
+function walkLinkedFiles(
+  roots: readonly string[],
+  limit: number,
+  deadline: number,
+  sources: boolean,
+  found: (identity: string, path: string) => void,
+): void {
+  let remaining = limit;
+  const checkTime = () => {
+    if (performance.now() >= deadline) {
+      throw new Error("Capability hard-link index time limit exceeded; refusing attachment.");
+    }
+  };
+  const check = () => {
+    checkTime();
+    if (remaining-- <= 0) {
+      throw new Error("Capability hard-link index entry limit exceeded; refusing attachment.");
+    }
+  };
   const visit = (path: string): void => {
-    if (budget <= 0) return;
-    budget -= 1;
+    check();
     let entry;
     try {
       entry = lstatSync(path);
-    } catch {
-      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        code === "ENOENT" ||
+        code === "ENOTDIR" ||
+        (sources && (code === "EACCES" || code === "EPERM"))
+      )
+        return;
+      throw error;
     }
-    if (entry.isFile() && entry.nlink > 1) linked[`${entry.dev}:${entry.ino}`] = path;
+    if (entry.isFile() && entry.nlink > 1) found(`${entry.dev}:${entry.ino}`, path);
     if (!entry.isDirectory()) return;
-    for (const child of entriesOf(path)) visit(join(path, child.name));
+    let directory;
+    try {
+      directory = opendirSync(path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (sources && (code === "EACCES" || code === "EPERM")) return;
+      throw error;
+    }
+    try {
+      for (let child = directory.readSync(); child !== null; child = directory.readSync()) {
+        visit(join(path, child.name));
+      }
+    } finally {
+      directory.closeSync();
+    }
   };
-  for (const root of roots) visit(root);
-  return linked;
+  const distinct = unique(roots);
+  for (const root of distinct.filter(
+    (inner) => !distinct.some((outer) => outer !== inner && containsPath(outer, inner)),
+  ))
+    visit(root);
+  checkTime();
 }
 
 /**
- * Literal names in every granted writable root sharing an inode with a critical host file.
- *
- * This walk is deliberately unbudgeted. A budget would make "Volli's own data
- * is never writable" depend on where an alias sorts in a large repository.
- * It runs once per attachment, does not follow symbolic links, and stats files
- * only while looking for one of the handful of critical identities.
+ * Multiply-linked credential files and home dotfiles, indexed by device/inode.
+ * Private directories are not walked: aliases to their non-credential files
+ * remain a documented private-tier limit. Credential indexing is complete or
+ * attachment is refused, never silently truncated at the budget.
  */
-function criticalHostAliases(
+function linkedFilesIn(
   roots: readonly string[],
-  criticalPaths: readonly string[],
-): { aliases: string[]; linkedFiles: Record<string, string> } {
-  const critical = new Map<string, string>();
-  for (const path of criticalPaths.map(canonical)) {
-    const file = fileIdentity(path);
-    if (file !== undefined) critical.set(file.identity, file.path);
-  }
-  if (critical.size === 0) return { aliases: [], linkedFiles: {} };
+  limit: number,
+  deadline: number,
+): Record<string, string> {
+  const linked: Record<string, string> = {};
+  walkLinkedFiles(roots, limit, deadline, true, (identity, path) => {
+    linked[identity] = path;
+  });
+  return linked;
+}
 
-  const aliases: string[] = [];
-  const visit = (path: string): void => {
-    let entry;
-    try {
-      entry = lstatSync(path);
-      /* v8 ignore start -- an entry removed between its directory listing and this stat is skipped; the race is not reproducible on demand. */
-    } catch {
-      return;
-      /* v8 ignore stop */
-    }
-    if (entry.isFile() && entry.nlink > 1) {
-      const source = critical.get(`${entry.dev}:${entry.ino}`);
-      if (source !== undefined && path !== source) aliases.push(path);
-      return;
-    }
-    if (!entry.isDirectory()) return;
-    for (const child of entriesOf(path)) visit(join(path, child.name));
-  };
-  for (const root of roots) visit(root);
-  return { aliases: unique(aliases), linkedFiles: Object.fromEntries(critical) };
+/** Every granted name for a protected inode, including runtime and worktree git roots. */
+function protectedAliases(
+  roots: readonly string[],
+  credentials: Readonly<Record<string, string>>,
+  critical: Readonly<Record<string, string>>,
+  limit: number,
+  deadline: number,
+): { credentials: string[]; critical: string[] } {
+  const aliases: { credentials: string[]; critical: string[] } = { credentials: [], critical: [] };
+  if (Object.keys(credentials).length === 0 && Object.keys(critical).length === 0) return aliases;
+  walkLinkedFiles(roots, limit, deadline, false, (identity, path) => {
+    if (credentials[identity] !== undefined && path !== credentials[identity])
+      aliases.credentials.push(path);
+    if (critical[identity] !== undefined && path !== critical[identity])
+      aliases.critical.push(path);
+  });
+  return aliases;
 }
 
 /** Whether `inner` lies strictly inside `outer`. */
@@ -473,6 +509,34 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
       ...hostDataDeny,
     ].flatMap(bothSpellings),
   );
+  const deadline = performance.now() + (input.linkIndexTimeoutMs ?? LINK_INDEX_TIMEOUT_MS);
+  const deniedLinks = linkedFilesIn(
+    [...credentialDeny, ...homeDotfiles(home)],
+    input.linkIndexBudget ?? LINK_INDEX_BUDGET,
+    deadline,
+  );
+  const credentialLinks = Object.fromEntries(
+    Object.entries(deniedLinks).filter(([, path]) =>
+      credentialDeny.some((deny) => containsPath(deny, path)),
+    ),
+  );
+  const criticalLinks = Object.fromEntries(
+    (input.criticalHostDataPaths ?? []).map(canonical).flatMap((path) => {
+      const file = fileIdentity(path);
+      return file === undefined ? [] : [[file.identity, file.path]];
+    }),
+  );
+  const aliases = protectedAliases(
+    writableRoots,
+    credentialLinks,
+    criticalLinks,
+    input.aliasIndexBudget ?? ALIAS_INDEX_BUDGET,
+    deadline,
+  );
+  // These names belong to the credential tier too, not merely a shell-specific
+  // deny: every layer judges the same paths. SRT's denyWrite also protects their
+  // unlink/create operations and every ancestor against rename/relink escapes.
+  credentialDeny.push(...aliases.credentials);
   const denies = [...credentialDeny, ...privateDeny];
   // A grant means something only inside (or at) a private entry, and never
   // inside a credential one: no grant reaches key material. And none may sit
@@ -497,7 +561,6 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
           denies.some((deny) => strictlyInside(outer, deny) && containsPath(deny, inner)),
       ),
   );
-  const criticalLinks = criticalHostAliases(writableRoots, input.criticalHostDataPaths ?? []);
   return {
     credentialDeny,
     privateDeny,
@@ -506,13 +569,7 @@ export function resolveCapabilityPolicy(input: CapabilityResolution): Capability
     writableRoots,
     protectedPaths: protectedPathsOf(workspace),
     sandboxCarveOuts: input.sandboxCarveOuts,
-    hostDataAliases: criticalLinks.aliases,
-    linkedFiles: {
-      ...linkedFilesIn(
-        [...credentialDeny, ...homeDotfiles(home)],
-        input.linkIndexBudget ?? LINK_INDEX_BUDGET,
-      ),
-      ...criticalLinks.linkedFiles,
-    },
+    hostDataAliases: unique(aliases.critical),
+    linkedFiles: { ...deniedLinks, ...criticalLinks },
   };
 }
