@@ -44,6 +44,21 @@ import { parse as parseYaml } from "yaml";
 const require = createRequire(import.meta.url);
 const DESKTOP_DIR = resolve(import.meta.dirname, "..");
 
+// electron-builder starts detection at apps/desktop, not at the workspace
+// root. vp exec supplies no pnpm user-agent, so missing desktop metadata
+// selects npm's collector over pnpm's isolated tree (VC-493). Keep the two
+// pins equal and fail the ordinary build before packaging can take that path.
+const desktopManifest = JSON.parse(readFileSync(join(DESKTOP_DIR, "package.json"), "utf8"));
+const rootManifest = JSON.parse(readFileSync(resolve(DESKTOP_DIR, "../../package.json"), "utf8"));
+if (
+  !rootManifest.packageManager?.startsWith("pnpm@") ||
+  desktopManifest.packageManager !== rootManifest.packageManager
+) {
+  throw new Error(
+    "verify-packed-requires: desktop packageManager must match the root pnpm pin so electron-builder uses the pnpm dependency collector.",
+  );
+}
+
 // `--dir <path>` overrides the directory scanned, defaulting to the real
 // build output. Exists so this script can be pointed at a scratch directory
 // containing a deliberately broken chunk — the only way to test "does this
