@@ -213,6 +213,30 @@ describe("authorityVerdict", () => {
     expect(isOverridableAuthorityRule("path.credentials")).toBe(false);
   });
 
+  it("follows a link in a shell operand before the .. after it, as the kernel will (VC-45 review, B1)", () => {
+    const { raw, real } = workspace();
+    const home = join(real, "..", "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    mkdirSync(join(home, "Library", "Caches"), { recursive: true });
+    writeFileSync(join(home, ".ssh", "id_ed25519"), "key");
+    symlinkSync(join(home, "Library", "Caches"), join(real, "s"));
+    const capability = resolveCapabilityPolicy({
+      workspacePath: raw,
+      home,
+      sandboxCarveOuts: false,
+    });
+    // Lexically `<ws>/../.ssh/id_ed25519`, nothing denied; through `s`, the key.
+    expect(
+      authorityVerdict({
+        tool: "bash",
+        args: { command: "cat s/../../.ssh/id_ed25519" },
+        authority: snapshot(),
+        workspacePath: raw,
+        capability,
+      }),
+    ).toMatchObject({ outcome: "deny", cause: "path.credentials" });
+  });
+
   it("names a hard link by the credential it is another name for (VC-45 review, B1)", () => {
     const { raw, real } = workspace();
     const home = join(real, "..", "home");

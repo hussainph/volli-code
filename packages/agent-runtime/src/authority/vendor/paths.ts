@@ -18,7 +18,7 @@
 
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 /** The invoking user's home directory, read once, as upstream reads it. */
 export const HOME = homedir();
@@ -86,7 +86,7 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   if (trimmed === "~" || trimmed === "$HOME" || trimmed === "${HOME}") {
     return { kind: "path", path: HOME };
   }
-  if (trimmed.startsWith("~/")) return { kind: "path", path: resolve(HOME, trimmed.slice(2)) };
+  if (trimmed.startsWith("~/")) return { kind: "path", path: `${HOME}/${trimmed.slice(2)}` };
   if (trimmed.startsWith("~")) {
     return {
       kind: "unresolvable",
@@ -100,7 +100,9 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
       reason: `"${trimmed}" expands through a variable only the shell can read; name the paths literally so they can be checked.`,
     };
   }
-  return { kind: "path", path: isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded) };
+  // Joined, never resolved: `s/..` is not `.` when `s` is a link, and only
+  // `resolvePathForPolicy` walks the components the way the kernel does.
+  return { kind: "path", path: isAbsolute(expanded) ? expanded : `${cwd}/${expanded}` };
 }
 
 /** How many symlinks one resolution follows before it calls the path unresolvable, as `MAXSYMLINKS`. */
@@ -122,8 +124,12 @@ const MAX_LINKS = 32;
  * link's target is spliced back into the queue of components still to walk,
  * so `s` is followed before `..` is applied to where it led.
  *
- * A component that does not exist yet ends the filesystem walk; what follows
- * is appended lexically, because nothing that does not exist can be a link.
+ * A component that does not exist yet suspends the filesystem walk; what
+ * follows is appended lexically, because nothing under a missing directory
+ * can be a link — until a `..` climbs back above it, where the walk resumes.
+ * Input is absolutized but never normalized first: `s/..` is not `.` when `s`
+ * is a link, and the callers hand over joined, unresolved paths for that
+ * reason.
  *
  * The existing prefix is then spelled through `realpath.native`, which returns
  * the name as stored: case, Unicode case (`.sſh` is `.ssh` on APFS) and
@@ -131,34 +137,38 @@ const MAX_LINKS = 32;
  * components compares what the kernel compares.
  */
 export function resolvePathForPolicy(path: string): string | undefined {
-  const queue = resolve(path).split("/").filter(Boolean);
-  let resolved = "/";
-  let existing = true;
+  // Absolutized but NOT normalized: a lexical `..` is exactly the bug the walk exists to avoid.
+  const queue = (isAbsolute(path) ? path : `${process.cwd()}/${path}`).split("/").filter(Boolean);
+  const resolved: string[] = [];
+  // How many leading components are known to exist; past it, nothing can be a link.
+  let existing: number | null = null;
   let links = 0;
   while (queue.length > 0) {
     const component = queue.shift()!;
     if (component === ".") continue;
     if (component === "..") {
-      resolved = dirname(resolved);
+      resolved.pop();
+      // Climbing back above the first missing component is back on real ground.
+      if (existing !== null && resolved.length <= existing) existing = null;
       continue;
     }
-    const candidate = join(resolved, component);
-    if (!existing) {
-      resolved = candidate;
+    if (existing !== null) {
+      resolved.push(component);
       continue;
     }
+    const candidate = `/${[...resolved, component].join("/")}`;
     let entry;
     try {
       entry = lstatSync(candidate);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
-      existing = false;
-      resolved = candidate;
+      existing = resolved.length;
+      resolved.push(component);
       continue;
     }
     if (!entry.isSymbolicLink()) {
-      resolved = candidate;
+      resolved.push(component);
       continue;
     }
     links += 1;
@@ -170,24 +180,18 @@ export function resolvePathForPolicy(path: string): string | undefined {
       /* v8 ignore next -- lstat reported a link an instant ago; readlink fails only if it vanished in between, and an unreadable link is an unresolvable path. */
       return undefined;
     }
-    if (isAbsolute(target)) resolved = "/";
+    if (isAbsolute(target)) resolved.length = 0;
     queue.unshift(...target.split("/").filter(Boolean));
   }
-  return spelledAsStored(resolved);
-}
-
-/** The longest existing prefix through `realpath.native`, with the rest appended. */
-function spelledAsStored(path: string): string | undefined {
-  const missing: string[] = [];
-  let current = path;
-  for (;;) {
-    try {
-      return resolve(realpathSync.native(current), ...missing);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
-      missing.unshift(basename(current));
-      current = dirname(current);
-    }
+  const real = existing ?? resolved.length;
+  try {
+    // The prefix the walk saw exist, spelled as stored; the rest as named.
+    return resolve(
+      realpathSync.native(`/${resolved.slice(0, real).join("/")}`),
+      ...resolved.slice(real),
+    );
+  } catch {
+    /* v8 ignore next -- every component of this prefix was lstat'ed above; it fails only if one vanished since. */
+    return undefined;
   }
 }

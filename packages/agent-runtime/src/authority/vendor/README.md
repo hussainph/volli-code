@@ -80,7 +80,11 @@ to path resolution.
   queue still to walk, so `..` applies to where the link led. The existing
   prefix is then spelled through `realpathSync.native`, which returns the
   name as stored: `.SSH`, `.sſh` and an NFD spelling all come back `.ssh`,
-  the comparison APFS itself makes.
+  the comparison APFS itself makes. For the same reason `resolveInputPath`'s
+  sibling `shellPathTokenToPath` JOINS an operand to its directory instead of
+  resolving it: `resolve` would collapse `s/..` before the walk could see
+  that `s` is a link, so `cat s/../../.ssh/id_rsa` would be judged where the
+  kernel never goes.
 - **Input and output redirects are separated.** Upstream collects `<` targets
   into the same `redirectTargets` list as `>`, which would report a read as a
   write. Here `>`/`>>`/`2>`/`>&file` become writes, `<` becomes a read, and a
