@@ -9,17 +9,19 @@ at `fa3f96cd`](https://github.com/hussainph/volli-code/blob/fa3f96cdacf9f83ce6f2
 pruned from `docs/` by VC-460), VC-454's bounded MCP reads, VC-469's Pi 0.99
 structured results, and `@earendil-works/pi-codemode` 0.99.2.
 
-> **Recommendation: change, then ship.** On the loop shape VC-245 found to be
-> 95% of the opportunity, Code Mode does what it promised, with no loss of
-> correctness: on Haiku 4.5, the `bash`/`read` loop-and-filter task needed
-> **64% fewer input tokens, 97% fewer tool-result tokens, 4 model calls instead
-> of 6, and cost 29% less**. But it is not free, and it is not uniformly used.
-> Its description adds **~2,500 input tokens to every request**, which made the
-> single-call control **60% more expensive**; models that already collapse a
-> loop into one shell pipeline (Sonnet 4.6 on the same task) gain little; and
-> code-only routing broke on a small model where a verb's result is prose.
-> Ship it as `both` routing, gated per model, after the four changes in
-> [Recommendation](#recommendation). Do not ship `only` routing.
+> **Recommendation: change before shipping; do not turn it on by default yet.**
+> The mechanism works and is safe: every VC-245 §3 rule is enforced on the host
+> side and tested, and no trial lost correctness where the model chose Code Mode
+> on its own (`both` routing, all four models). On the shape it was built for it pays off — Haiku 4.5's `bash`/`read`
+> loop-and-filter task took **64% fewer input tokens, 97% fewer tool-result
+> tokens, 4 model calls instead of 6, and 29% less cost**. But under the safe
+> routing (`both`: every tool still declared) **two of four models never wrote a
+> program at all** (GPT-5.5, GLM-5.3 Flash: 0 of 24 trials), and the description
+> costs **every request ~2,000–2,500 input tokens** (+62% to +86% on the
+> single-call control). Code-only routing makes every model use it but breaks
+> smaller ones (Haiku 4.5 16/20 correct against 20/20 direct; GLM-5.3 Flash's
+> Browser task 1/3) for reasons Volli can fix. Ship phase 2 only with the five
+> changes in [Recommendation](#recommendation), per model, off by default.
 
 ---
 
@@ -218,8 +220,8 @@ Session at 128 MCP tools):
 ### Simple calls, waits for a person, screenshots, side effects
 
 - **Simple calls stay direct.** The description says to call a tool directly for
-  one call, and every model did: 0 of 26 `both`-routed single-call trials used
-  `codemode`.
+  one call, and every model did: none of the 14 `both`-routed single-call trials
+  used `codemode`.
 - **Calls that wait for a person:** `ask_user` is direct-only. Approvals inside a
   program pause it, one prompt at a time (above).
 - **Screenshots:** direct-only, because of the image rule (§3).
@@ -241,16 +243,20 @@ Session at 128 MCP tools):
 ### Fallback for models and providers that do badly
 
 - **`both` is the fallback built in.** Every tool stays declared, so a model that
-  never writes a program loses nothing but the description's tokens.
-- **Per-model gating** (phase 2): offer Code Mode only to models measured to use
-  it well, from a host-owned list frozen at birth like the routes.
+  never writes a program loses nothing but the description's tokens — and no
+  `both`-routed trial of any of the four models failed.
+- **Per-model mode** (phase 2): off, `both` or `only` per model, from a host-owned
+  list frozen at birth like the routes. The benchmark is the first entry in it:
+  two of four models never chose Code Mode under `both`, and only the two larger
+  ones were safe under `only`.
 - **Teaching in the answers:** a program that reaches for Node (`require`,
   `process`, `fetch`, …) gets an error that says what to do instead, and the
   description carries one worked loop when `bash` and `read` are callable — both
   added after Haiku's first program was `require("fs")`.
-- **Not `only`.** Code-only routing failed in ways `both` cannot: a small model
-  concluded the Browser tools did not exist (1 of 5), and parsed a verb's prose (3
-  of 5). See the benchmark.
+- **Not `only` by default.** Code-only routing failed small models in ways `both`
+  cannot: Haiku concluded the Browser tools did not exist (1 of 5) and parsed a
+  verb's prose (3 of 5); GLM-5.3 Flash fixated on the one Browser tool left
+  declared (2 of 3). See the benchmark.
 - **The kill switch** is per new Session (above); phase 2's setting is per
   project and global.
 
@@ -276,7 +282,7 @@ and the codec suite, and `apps/desktop/src/main/codemode/dev-config.test.ts`.
 | Cancellation reaches nested calls | the turn's signal and the attachment's abort the run; the sandbox aborts each pending call's signal; queued calls leave the queue without running | real `sleep 30` killed on interrupt, the queued `write` never happens; unit cases for in-flight, queued and pre-cancelled calls |
 | Stable result order; explicit partial failure | `Promise.all`/`allSettled` order in the VM; per-call status in the result header and in `details.nestedCalls` | *overlaps reads … returns results in the order asked*; *makes a partial failure explicit* |
 | Approvals never several at once | one judgement lock, FIFO; non-read calls hold it through their run; the clock pauses | *pauses the program on an approval, one prompt at a time* (three approvals, peak one, the first longer than the whole budget); *never lets a judgement's question overlap a verb's own budget question* |
-| Within VC-454's per-server MCP bound | nested MCP calls go through the same `RuntimeMcpPort`, which main binds through the process-wide `McpServerBudget`; only host-marked reads overlap | by construction (same port); overlap only for `parallelRead`-marked definitions |
+| Within VC-454's per-server MCP bound | nested MCP calls go through the same `RuntimeMcpPort`, which main binds through the process-wide `McpServerBudget`; only host-marked reads overlap | *keeps a program's overlapping MCP reads inside the per-server bound*: six marked reads issued at once, concurrency limit six, a bound of two — the server sees two |
 | Visible in activity, logs and cost records | nested events go through the runtime's own `observeToolActivity` (same mapping, same ordered delivery, same recovery marker), under their own ids; the gate records observability per nested call; the result's `details.nestedCalls` is Pi's bounded `NestedToolCalls` | the real-path loop test asserts 14 activity rows and 8 gate decisions; *bounds the nested call record it keeps* |
 | Web, Browser and MCP content stays marked untrusted | taint per run: any call to those tools envelopes the whole output in markers whose id is minted after the program finished | *keeps web content marked untrusted in whatever the program returns* (a forged end marker in the page stays inside) |
 | Images designed before screenshots are code-callable | phase 1's design: no image enters a program (placeholders naming the type) and none leaves one (`image()` output dropped and counted); `browser_screenshot` is `direct` | *lets no image into a program or out of one* |
@@ -358,34 +364,100 @@ against a key the fixture computes; tokens are input + cache read + cache write;
 | single-call | codemode | 3/3 | 6,517 | 26 | 2 | 0 | 2.5 s | $0.0029 | 0/3 |
 | single-call | codemode-only | 3/3 | 5,495 | 22 | 2 | 1 | 2.9 s | $0.0035 | 3/3 |
 
-<!-- OTHER-PROVIDERS -->
+### gpt-5.5 via OpenAI Codex (3 trials per cell)
+
+| task | arm | correct | input tok | tool-result tok | model calls | nested calls | elapsed | cost | used codemode |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| loop-filter | direct | 3/3 | 4,029 | 178 | 3 | 0 | 9.9 s | $0.0267 | 0/3 |
+| loop-filter | codemode | 3/3 | 4,554 | 66 | 2 | 0 | 13.1 s | $0.0216 | 0/3 |
+| loop-filter | codemode-only | 3/3 | 4,072 | 84 | 2 | 17 | 5.8 s | $0.0208 | 3/3 |
+| browser-tabs | direct | 3/3 | 12,960 | 5,288 | 3 | 0 | 12.9 s | $0.0500 | 0/3 |
+| browser-tabs | codemode | 3/3 | 17,343 | 5,300 | 3 | 0 | 10.5 s | $0.0696 | 0/3 |
+| browser-tabs | codemode-only | 3/3 | **5,958** | **209** | 2 | 4 | 11.5 s | **$0.0226** | 3/3 |
+| session-fanout | direct | 3/3 | 6,060 | 251 | 3 | 0 | 16.4 s | $0.0217 | 0/3 |
+| session-fanout | codemode | 3/3 | 9,393 | 251 | 3 | 0 | 12.0 s | $0.0292 | 0/3 |
+| session-fanout | codemode-only | 3/3 | 8,374 | 430 | 3 | 5 | 12.3 s | $0.0301 | 3/3 |
+| single-call | direct | 3/3 | 2,332 | 26 | 2 | 0 | 5.3 s | $0.0126 | 0/3 |
+| single-call | codemode | 3/3 | 4,338 | 26 | 2 | 0 | 5.6 s | $0.0088 | 0/3 |
+| single-call | codemode-only | 3/3 | 3,798 | 25 | 2 | 1 | 4.5 s | $0.0135 | 3/3 |
+
+Cost is Pi's list-price estimate; the Codex subscription bills differently.
+
+### glm-5.3-flash via Z.ai (3 trials per cell)
+
+| task | arm | correct | input tok | tool-result tok | model calls | nested calls | elapsed | cost | used codemode |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| loop-filter | direct | 3/3 | 4,876 | 190 | 3 | 0 | 22.6 s | $0.0004 | 0/3 |
+| loop-filter | codemode | 3/3 | 8,202 | 168 | 3 | 0 | 30.4 s | $0.0008 | 0/3 |
+| loop-filter | codemode-only | 3/3 | 4,462 | 78 | 2 | 9 | 20.4 s | $0.0003 | 3/3 |
+| browser-tabs | direct | 3/3 | 10,828 | 5,290 | 2 | 0 | 18.5 s | $0.0010 | 0/3 |
+| browser-tabs | codemode | 3/3 | 14,176 | 5,300 | 2 | 0 | 14.4 s | $0.0019 | 0/3 |
+| browser-tabs | codemode-only | **1/3** | 20,664 | 1,910 | 6 | 0 | 37.4 s | $0.0012 | 1/3 |
+| session-fanout | direct | 3/3 | 7,167 | 251 | 3 | 0 | 21.2 s | $0.0006 | 0/3 |
+| session-fanout | codemode | 3/3 | 10,887 | 251 | 3 | 0 | 19.7 s | $0.0005 | 0/3 |
+| session-fanout | codemode-only | 3/3 | 5,816 | 431 | 2 | 5 | 13.2 s | $0.0004 | 3/3 |
+| single-call | direct | 3/3 | 2,907 | 11 | 2 | 0 | 11.3 s | $0.0001 | 0/3 |
+| single-call | codemode | 3/3 | 5,171 | 11 | 2 | 0 | 11.7 s | $0.0002 | 0/3 |
+| single-call | codemode-only | 3/3 | 4,218 | 25 | 2 | 1 | 12.0 s | $0.0003 | 3/3 |
+
+### Summary across models
+
+**Did the model choose Code Mode when every tool stayed declared (`both`)?**
+
+| model | loop-filter | browser-tabs | session-fanout | single-call |
+|---|---:|---:|---:|---:|
+| claude-haiku-4-5 | 5/5 | 0/5 | 0/5 | 0/5 |
+| claude-sonnet-4-6 | 3/3 | 3/3 | 0/3 | 0/3 |
+| gpt-5.5 | 0/3 | 0/3 | 0/3 | 0/3 |
+| glm-5.3-flash | 0/3 | 0/3 | 0/3 | 0/3 |
+
+**Correct answers, all four tasks:**
+
+| model | direct | `both` | `only` |
+|---|---:|---:|---:|
+| claude-haiku-4-5 | 20/20 | 20/20 | 16/20 |
+| claude-sonnet-4-6 | 12/12 | 12/12 | 12/12 |
+| gpt-5.5 | 12/12 | 12/12 | 12/12 |
+| glm-5.3-flash | 12/12 | 12/12 | 10/12 |
+
+**What the description costs, from the single-call control** (median input
+tokens, direct → `both` → `only`): Haiku 4,011 → 6,536 → 5,517; Sonnet 4,013 →
+6,517 → 5,495; GPT-5.5 2,332 → 4,338 → 3,798; GLM 2,907 → 5,171 → 4,218.
+
+**Spend:** about $2.80 in total, $2.50 of it in the saved trials
+(`node --experimental-strip-types packages/agent-runtime/bench/codemode/report.ts`
+prints the latest per model and task).
 
 ### What the numbers say
 
-1. **The loop shape wins, with no loss of correctness.** Where a model fans out —
-   Haiku read the manifests one by one — a program absorbs it: Haiku's
-   loop-filter input tokens fell 64% (`both`) and 77% (`only`), tool-result
-   tokens 97–98%, model calls 6 → 4 → 3, elapsed 15.1 → 11.4 → 8.0 s, cost
-   $0.030 → $0.021 → $0.014, 5/5 correct in every arm.
-2. **A model that already writes the pipeline gains little.** Sonnet 4.6 solved
-   loop-filter directly in two shell commands, 160 tokens of results; Code Mode
-   saved one model call and 7–13% of cost. `bash` *is* a programming
-   environment, and a strong model uses it as one.
-3. **Code Mode costs every request ~2,500 input tokens** (`both`), which is what
-   the single-call control measures: +63% input tokens and +60% cost on Haiku.
-   It is a cache read after the first request of a Session, but it is paid on
-   every request of every turn. `only` costs less (+38%) because it stops
-   declaring the routed tools.
-4. **Models do not reach for it unprompted on every shape.** With `both`, Haiku
-   used it on loop-filter 5/5 and on the Browser and fan-out tasks 0/5; Sonnet on
-   loop-filter and Browser 3/3 and fan-out 0/3. Where Sonnet did use it on the
-   Browser task, its programs returned the snapshots whole — no reduction.
-5. **`only` routing breaks small models in two specific ways.** Haiku concluded
-   the Browser tools did not exist (1/5) and, on the fan-out, parsed
-   `session.start`'s prose to find the new Session's handle (3/5 wrong). The
-   second is Volli's to fix: `session.start` returns no structured result.
-6. **No arm lost correctness where it used Code Mode by choice.** Every
-   `both`-routed failure-free; every failure was `only` routing.
+1. **The loop shape wins where a model fans out, with no loss of correctness.**
+   Haiku read the manifests one by one; a program absorbed it. Input tokens fell
+   64% (`both`) and 77% (`only`), tool-result tokens 97–98%, model calls 6 → 4 →
+   3, elapsed 15.1 → 11.4 → 8.0 s, cost $0.030 → $0.021 → $0.014, 5/5 correct in
+   every arm. Under `only`, GPT-5.5's Browser task fell from 12,960 to 5,958
+   input tokens and from 5,288 to 209 tool-result tokens, at 45% of the cost.
+2. **A model that already writes the pipeline gains little.** Sonnet 4.6,
+   GPT-5.5 and GLM-5.3 Flash solved loop-filter directly in two or three shell
+   commands with under 200 tokens of results. `bash` *is* a programming
+   environment, and a capable model uses it as one; Code Mode then saves a model
+   call and little else.
+3. **Under `both`, whether it is used depends on the model, not the task.** Haiku
+   used it for the loop and nothing else; Sonnet for the loop and the Browser;
+   GPT-5.5 and GLM never. Where Sonnet used it on the Browser task its programs
+   returned the snapshots whole, so nothing was saved.
+4. **It costs every request ~2,000–2,500 input tokens under `both`** — +62% to
+   +86% on the single-call control. After the first request of a Session that is
+   a cache read at ~0.1×, but it is paid on every request of every turn,
+   including the 84% of replies that issue one call. `only` costs ~25% less than
+   `both` because the routed tools are no longer declared directly.
+5. **`only` routing fails small models in three traceable ways**, none of them in
+   the sandbox: Haiku decided the Browser tools did not exist (1/5); Haiku parsed
+   `session.start`'s prose for the new Session's handle instead of a field (3/5 —
+   the real verb returns no structured result); GLM-5.3 Flash saw `browser_screenshot`
+   as the only declared Browser tool — it stays `direct` — and called it 64 times
+   against invented tab ids in one trial (2/3).
+6. **No `both`-routed trial failed, on any model.** Every wrong answer in this
+   benchmark came from code-only routing.
 
 ### Transcript audit, rerun
 
@@ -420,35 +492,47 @@ dominate the fan-outs — is unchanged at three times the sample.
 
 ## Recommendation
 
-**Change, then ship (phase 2), as `both` routing gated per model.** The loop
-shape is real in the audit (16% of replies, 56% of result volume, 95% `bash`/
-`read`) and Code Mode absorbs it where a model fans out, with no correctness cost.
-What stands between that and a default:
+**Change before shipping, then ship per model, off by default.** The audit says
+the opportunity is real (16% of replies, 56% of tool-result volume, 95% of it
+`bash`/`read` loops), and the prototype captures it safely when a model writes a
+program. What the numbers do not support is turning it on for everyone: under
+`both`, half the models never use it and every request pays for its description;
+under `only`, small models fail. Phase 2 should ship these changes, and its
+default should follow a measurement on real Sessions rather than these four
+tasks:
 
-1. **Pay for the description only where it is used.** ~2,500 tokens on every
-   request is the whole downside measured. Shrink it (the worked example and the
-   rules are ~1,000 tokens; `both` tools need a signature, not a sentence), and
-   measure again. Per-model gating (2) means a model that never writes programs
-   never pays.
-2. **Gate per model, from host-owned data frozen at birth.** Offer Code Mode to
-   models measured to use it well; start with the evidence above.
+1. **Pay for the description only where it earns it.** Shrink it — the worked
+   example and the rules are ~1,000 of its tokens, and a `both` tool needs a
+   signature, not a sentence — and measure again. With per-model enablement (2),
+   a model that never writes programs never pays.
+2. **Per-model mode, from host-owned data frozen at birth:** off, `both` or
+   `only`, like the routes. On this evidence: Haiku 4.5 `both`; Sonnet 4.6 and
+   GPT-5.5 `only` is safe (24/24) but only pays on Browser-shaped work; GLM-5.3
+   Flash off.
 3. **Typed results for code-callable verbs.** Give `session.start`,
-   `session.delegate` and `watch` an output schema in the Verb Registry and return
-   it as `structuredContent` (as MCP tools do since VC-469), so a program reads
-   `sessionId` instead of a sentence. Until then, keep verbs `both`, never `code`.
-4. **Package it.** Ship pi-codemode's worker and `quickjs.wasm` in the app
-   (`neverBundle` + `electron-builder.yml`, like jsdom), so a packaged build can
-   run a sandbox; phase 1 resolves them from the workspace in unpackaged builds.
+   `session.delegate` and `watch` an output schema in the Verb Registry and
+   return it as `structuredContent`, as MCP tools do since VC-469, so a program
+   reads `sessionId` instead of a sentence.
+4. **Route a capability as a whole.** A Browser surface split so that only
+   `browser_screenshot` is declared misled a small model badly. Routes should be
+   chosen per capability group (all Browser tools, all shell tools), never leaving
+   one stray member declared.
+5. **Package it.** Ship pi-codemode's worker and `quickjs.wasm` in the app
+   (`neverBundle` + `electron-builder.yml`, like jsdom); phase 1 resolves them
+   from the workspace in unpackaged builds only.
 
+**Then measure on real work before any default.** Extend `transcript-audit.ts`
+to count `codemode` calls, their nested calls and their result tokens, run the
+developer opt-in on real Sessions for a week, and set the default from that.
 Then phase 2 as the ticket defines it: the per-project and global setting, MCP
 per-server and per-tool routes in Settings → Configure → MCP Servers (with
-`deferred` for large servers), and `docs/`. Not recommended: `only` routing as a
+`deferred` for large servers), and `docs/`. Not recommended: `only` as a
 default, and `tool_search` before a measured need.
 
-**Also phase 2: `classify` (VC-478).** It had not merged when this ran, so it is
-not in the surface or the benchmark. When it lands it should be `both` by default
-— bulk classification in a loop is exactly the shape that won here — and its
-result is already structured.
+**`classify` (VC-478).** It had not merged when this ran, so it is not in the
+surface or the benchmark. When it lands it should be `both` — bulk
+classification in a loop is the shape that won here — and its result is already
+structured.
 
 ## Known gaps
 
