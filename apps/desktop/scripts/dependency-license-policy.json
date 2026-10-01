@@ -45,14 +45,13 @@
   "reviewed": {
     "@img/sharp-libvips-*": {
       "license": "LGPL-3.0-or-later",
-      "versions": ["1.3.1", "1.3.3"],
+      "versions": ["1.3.3"],
       "disposition": "shipped",
       "summary": [
         "Prebuilt libvips and its dependency stack, as one dylib. LGPLv3 applies to libvips itself and",
         "to seven bundled components (fribidi, glib, libexif, libheif, librsvg, pango, proxy-libintl);",
         "the rest of the table in the package README is permissive.",
-        "1.3.3 is what apps/desktop ships. 1.3.1 is build-time only: astro's own sharp@0.35.2 pulls it",
-        "into the store while building the website, and nothing in a distributed artifact loads it.",
+        "1.3.3 is what apps/desktop ships, and the only copy in the store.",
         "The package ships NO license text of its own — only the README's table of component licenses —",
         "so the full LGPLv3 and GPLv3 texts LGPLv3 section 4(b) requires must come from elsewhere."
       ],
@@ -282,7 +281,7 @@
 
     "dompurify": {
       "license": "(MPL-2.0 OR Apache-2.0)",
-      "versions": ["3.4.8", "3.4.14"],
+      "versions": ["3.4.15", "3.4.16"],
       "disposition": "shipped",
       "summary": [
         "Dual-licensed, so the choice is ours. Volli elects Apache-2.0, which is already the dominant",
