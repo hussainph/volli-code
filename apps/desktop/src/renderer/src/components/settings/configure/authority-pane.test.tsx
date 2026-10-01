@@ -93,6 +93,8 @@ describe("Configure → Authority", () => {
 
     for (const testId of [
       "authority-enforcement",
+      "authority-containment",
+      "authority-writable-roots",
       "authority-judgment",
       "authority-consecutive-denials",
       "authority-session-denials",
@@ -205,7 +207,9 @@ describe("Configure → Authority", () => {
       expect(html).toContain("Not active while calls are allowed.");
       expect(html).toContain(`value="${DEFAULT_AUTHORITY_POLICY.fallback.consecutiveDenials}"`);
       expect(html).toContain(`value="${DEFAULT_AUTHORITY_POLICY.fallback.sessionDenials}"`);
-      expect(html.match(/<input[^>]*disabled=""/g) ?? []).toHaveLength(2);
+      expect(
+        html.match(/<input[^>]*id="authority-(consecutive|session)"[^>]*disabled=""/g) ?? [],
+      ).toHaveLength(2);
     }
   });
 
@@ -287,6 +291,35 @@ describe("Configure → Authority", () => {
         `"${label}" is drawn in Configure → Authority and nothing in the rail finds it`,
       ).toBe(true);
     }
+  });
+
+  it("says what each containment posture costs, beside the control (VC-45)", () => {
+    expect(render(null)).toContain("Off \u2014 commands run as you, with the network.");
+    const scoped = render({ containment: "scoped" });
+    expect(scoped).toContain("commands have no network");
+    expect(scoped).toContain("Reset Containment to the app-wide value, Off");
+  });
+
+  it("makes containment and the writable roots inert under Off, where no walls are built", () => {
+    const html = render({ enforcement: "off", containment: "scoped" });
+    expect(html).toContain("Not active while rule enforcement is Off.");
+    expect(html.match(/<button[^>]*id="authority-containment"[^>]*>/)?.[0]).toContain(
+      'disabled=""',
+    );
+  });
+
+  it("reads declared writable roots back as one line, live only where something judges a write", () => {
+    const observing = render({ writableRoots: ["/Users/dev/scratch", "/opt/cache"] });
+    expect(observing).toContain('value="/Users/dev/scratch, /opt/cache"');
+    expect(observing).toContain("Not active unless rules are enforced or containment is Scoped.");
+    expect(observing.match(/<input[^>]*id="authority-writable-roots"[^>]*>/)?.[0]).toContain(
+      'disabled=""',
+    );
+    const scoped = render({ containment: "scoped", writableRoots: ["/Users/dev/scratch"] });
+    expect(scoped).toContain("Reset Writable roots to the app-wide value, None");
+    expect(scoped.match(/<input[^>]*id="authority-writable-roots"[^>]*>/)?.[0]).not.toContain(
+      'disabled=""',
+    );
   });
 
   it("names the unauthenticated caller as its own kind, not a borrowed one", () => {

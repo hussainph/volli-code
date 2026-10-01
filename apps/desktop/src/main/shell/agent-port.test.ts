@@ -101,6 +101,43 @@ describe("createAgentShellPort", () => {
     );
   });
 
+  it("spawns a Scoped Session's shell through the runtime's wrap, in the contained environment (VC-45)", async () => {
+    const { port: shell, ws } = port({
+      concurrencyEnv: async () => ({ VITEST_MAX_WORKERS: "1" }),
+    });
+    const asked: { command: string; cwd: string }[] = [];
+    const started = await shell.start({
+      command: "echo never-run-bare",
+      signal,
+      // A stand-in for the sandbox wrap: proves the host spawned what the hook
+      // returned, in the environment it returned, with the budget laid over it.
+      contain: async (command, cwd) => {
+        asked.push({ command, cwd });
+        return {
+          argv: ["/bin/sh", "-c", 'printf "%s|%s|%s" "$WRAPPED" "$VITEST_MAX_WORKERS" "$PWD"'],
+          env: { WRAPPED: "yes", PATH: "/usr/bin:/bin" },
+        };
+      },
+    });
+    expect(asked).toEqual([{ command: "echo never-run-bare", cwd: ws }]);
+    expect(started.output).toBe(`yes|1|${ws}`);
+    // The record keeps what the agent asked for, not the wrapper.
+    expect(started.shell.command).toBe("echo never-run-bare");
+  });
+
+  it("starts nothing when the walls cannot be put up", async () => {
+    const { port: shell } = port();
+    await expect(
+      shell.start({
+        command: "sleep 30",
+        signal,
+        contain: async () => {
+          throw new Error("sandbox unavailable");
+        },
+      }),
+    ).rejects.toThrow("sandbox unavailable");
+  });
+
   it("forwards title and tail, and answers a withdrawn call without touching the host", async () => {
     const { port: shell } = port();
     const started = await shell.start({

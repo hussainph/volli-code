@@ -220,7 +220,12 @@ import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
 } from "./session-rpc-ipc";
-import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
+import {
+  piExecutionEnv,
+  piOwnedModelAccess,
+  piSignIn,
+  ScopedExecutionEnv,
+} from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -1399,7 +1404,7 @@ app.whenReady().then(async () => {
           // recovery a spawned PTY gets from `agentSessionEnv`/
           // `ticketSessionEnv` prepending this same directory
           // (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath, identity) => {
+          executionEnvFactory: async (workspacePath, identity, containment) => {
             await loginPathBootstrap.apply();
             // The Session's own name rides beside the PATH recovery:
             // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
@@ -1409,7 +1414,7 @@ app.whenReady().then(async () => {
             // identity is resolved through the one per-attachment store the
             // shell port resolves through too (VC-270), so both doors export
             // the same token — see `attachment-identity.ts`.
-            return piExecutionEnv(workspacePath, {
+            const shared = {
               pathPrefixes: [runtimePaths.binDir],
               identity: attachmentIdentities.resolve(identity),
               // This Session's concurrency budget (VC-339), computed at attach
@@ -1420,8 +1425,25 @@ app.whenReady().then(async () => {
               // cleanup runs on every close path. Revoke there so a copied
               // token cannot outlive the structured attachment that held it.
               onCleanup: () => attachmentIdentities.release(identity.attachmentId),
+            };
+            if (containment === undefined) return piExecutionEnv(workspacePath, shared);
+            // A Scoped Session (VC-45): the same identity, prefixes and budget,
+            // behind walls compiled from the policy the runtime resolved — the
+            // one its authority gate judges with. The agent socket is the one
+            // door out, so the bundled `volli` CLI still works behind them.
+            return ScopedExecutionEnv.create(workspacePath, {
+              ...shared,
+              policy: containment.policy,
+              scratchDirectory: containment.scratchDirectory,
+              unixSockets: [runtimePaths.socketPath],
             });
           },
+          // The host's own data is on every Session's secrets denylist
+          // (VC-45): the database, `mcp-credentials.json`, backups, and every
+          // Session's sidecar and saved output. The CLI's bin dir is the one
+          // part a Session reads on purpose — the `volli` shim lives there.
+          hostPrivateRoots: [...new Set([app.getPath("userData"), dirname(dbPath)])],
+          hostExposedPaths: [runtimePaths.binDir],
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the
           // same attachment identity the execute tool gets.

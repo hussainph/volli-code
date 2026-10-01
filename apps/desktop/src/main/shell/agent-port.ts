@@ -21,7 +21,9 @@
  *   {@link sessionCommandEnvironment}'s record over the identity the host
  *   built ONCE for this attachment and hands to the `execute` tool as well —
  *   so the `VOLLI_SESSION_TOKEN` a background shell exports is the token the
- *   socket door accepts, not a second mint that would have retired it.
+ *   socket door accepts, not a second mint that would have retired it. In a
+ *   Scoped Session (VC-45) the runtime's `contain` hook supplies both the
+ *   sandboxed argv and the contained environment instead.
  *
  * Everything here throws {@link ShellRefusal} for judged outcomes and plain
  * errors for broken plumbing; the runtime's tools translate the former into
@@ -103,16 +105,27 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
       // Built at the spawn, as `exec` builds its own at every call, so a
       // PATH adopted after attach reaches the next shell the way it reaches
       // the next execute.
-      const env = sessionCommandEnvironment(process.env, {
-        identity: options.identity,
-        pathPrefixes: options.pathPrefixes,
-        environment: (await options.concurrencyEnv?.()) ?? {},
-      });
+      const concurrency = (await options.concurrencyEnv?.()) ?? {};
+      // A Scoped Session's shell runs behind the same walls as its `execute`
+      // tool (VC-45): the runtime hands the wrap over, and the host spawns
+      // what it returns. Its environment is the contained one, built from the
+      // same identity; only the budget is re-read at the start.
+      const launch =
+        input.contain === undefined ? undefined : await input.contain(input.command, cwd);
+      const env =
+        launch === undefined
+          ? sessionCommandEnvironment(process.env, {
+              identity: options.identity,
+              pathPrefixes: options.pathPrefixes,
+              environment: concurrency,
+            })
+          : { ...launch.env, ...concurrency };
       const started = await options.host.start(owner, {
         command: input.command,
         cwd,
         title: input.title ?? null,
         env,
+        ...(launch === undefined ? {} : { argv: launch.argv }),
       });
       return { ...started, shells: shells() };
     },

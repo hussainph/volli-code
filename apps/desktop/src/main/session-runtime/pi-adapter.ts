@@ -211,6 +211,8 @@ function piAuthoritySnapshot(
     mode: "auto",
     location,
     enforcement: policy.enforcement,
+    containment: policy.containment,
+    writableRoots: [...policy.writableRoots],
     judgmentMode: policy.judgmentMode,
     tools: [...toolSurface],
     rulePackId: BUILTIN_RULE_PACK_ID,
@@ -398,6 +400,10 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /** See `PiRuntimeHostOptions.hostPrivateRoots`: main's `userData`, on every Session's denylist. */
+  hostPrivateRoots?: PiRuntimeHostOptions["hostPrivateRoots"];
+  /** See `PiRuntimeHostOptions.hostExposedPaths`: the CLI's bin dir, readable inside the denylist. */
+  hostExposedPaths?: PiRuntimeHostOptions["hostExposedPaths"];
   /**
    * The machine's network and sleep, over Electron's `net` and `powerMonitor`
    * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
@@ -750,6 +756,12 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
+    ...(options.hostPrivateRoots === undefined
+      ? {}
+      : { hostPrivateRoots: options.hostPrivateRoots }),
+    ...(options.hostExposedPaths === undefined
+      ? {}
+      : { hostExposedPaths: options.hostExposedPaths }),
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
@@ -1144,6 +1156,18 @@ class PiBinding implements BindingHandle {
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
       ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      // The capability axis rides every Snapshot, `observe` included (VC-45):
+      // walls do not wait for the rule pack to bind, and a pinned Snapshot
+      // replayed after a relaunch keeps the walls it opened under. `off` has
+      // no Snapshot and so no walls — the explicit bypass of both axes.
+      ...(this.#authority === null
+        ? {}
+        : {
+            capability: {
+              containment: this.#authority.containment,
+              writableRoots: this.#authority.writableRoots,
+            },
+          }),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,

@@ -22,8 +22,11 @@
  *   compaction through Pi's own summarizer. Only the provider is a stand-in:
  *   `realPathProvider` from `@volli/agent-runtime/bench/turn-to-completion`.
  * - **Authority gate.** The attachment runs with `enforcement: "enforce"` and a
- *   one-refusal fallback, so a read outside the workspace is refused by the
- *   built-in rule pack, escalated, and parked on a Session interaction. The
+ *   one-refusal fallback, so a write outside the workspace is refused by the
+ *   built-in rule pack, escalated, and parked on a Session interaction. (A
+ *   read outside it used to be the refused call; since VC-45 reads are
+ *   machine-wide off the secrets denylist, so the outside read now runs and
+ *   the outside write is what a person is asked about.) The
  *   stand-in for the person is a live subscriber that answers `once` through
  *   `interaction.resolve` after a fixed think time.
  * - **Ledger.** A disposable profile directory holding a migrated `volli.db`
@@ -391,9 +394,15 @@ async function compose(
     replyText: PRIVATE_CONTENT_CANARY,
     toolCalls: [
       { name: "read", arguments: { path: insideFile } },
-      // Outside the workspace: refused by `path.outside-workspace`, which is
-      // overridable, so the one-refusal fallback asks.
+      // Outside the workspace and off the denylist: an ordinary read (VC-45).
       { name: "read", arguments: { path: outsideFile } },
+      // A write outside every writable root: refused by
+      // `path.outside-workspace`, which is overridable, so the one-refusal
+      // fallback asks.
+      {
+        name: "write",
+        arguments: { path: join(outside, "fixture-outside-write.txt"), content: "vc456" },
+      },
       { name: "bash", arguments: { command: "printf vc456" } },
     ],
     // Fired inside the stand-in's timer callbacks, which inherit the scope of

@@ -21,8 +21,10 @@
  * tightening of a built-in default would silently skip every project anyone had
  * ever opened this pane on.
  *
- * The scalar policy is here; the list-valued fields (`coordinationVerbs`,
- * `awaitable`) are NOT, and their absence is a decision. `awaitable` has no
+ * The scalar policy is here, and so is one list — `writableRoots` (VC-45),
+ * because a root a project cannot declare is the write half of slice 2 left
+ * unreachable, the very defect this pane was built to fix. The per-actor lists
+ * (`coordinationVerbs`, `awaitable`) are NOT, and their absence is a decision. `awaitable` has no
  * vocabulary until VC-85 ships something to wait on, and a picker offering await
  * kinds that do not exist would be a guess rendered as a control. Both are
  * PRESERVED across every write from this pane rather than dropped — see
@@ -61,13 +63,16 @@ import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import {
   AUTHORITY_ACTOR_KINDS,
   AUTHORITY_ENFORCEMENTS,
+  CONTAINMENT_MODES,
   DEFAULT_AUTHORITY_POLICY,
+  isWritableRoot,
   JUDGMENT_MODES,
   PEEK_DISCLOSURES,
   resolveAuthorityPolicy,
   type AuthorityActorKind,
   type AuthorityEnforcement,
   type AuthorityPolicyOverride,
+  type ContainmentMode,
   type JudgmentMode,
   type PeekDisclosure,
   type Project,
@@ -113,6 +118,27 @@ const ENFORCEMENT_OUTCOMES: Record<AuthorityEnforcement, string> = {
   observe: "Observe \u2014 save this attachment’s policy; allow calls.",
   enforce: "Enforce \u2014 block rule violations.",
 };
+
+const CONTAINMENT_LABELS: Record<ContainmentMode, string> = {
+  off: "Off",
+  scoped: "Scoped",
+};
+
+/**
+ * The two capability postures as OUTCOMES (VC-45). `scoped` names its cost —
+ * no network — because that is the price a person is paying for the walls
+ * until egress opens together with the classifier.
+ */
+const CONTAINMENT_OUTCOMES: Record<ContainmentMode, string> = {
+  off: "Off \u2014 commands run as you, with the network.",
+  scoped:
+    "Scoped \u2014 secrets stay unread, writes stay in the writable roots, and commands have no network.",
+};
+
+/** The list as one line: absolute paths, comma-separated. */
+function rootsText(roots: readonly string[]): string {
+  return roots.join(", ");
+}
 
 const JUDGMENT_LABELS: Record<JudgmentMode, string> = {
   ask: "Ask me",
@@ -236,6 +262,31 @@ export function AuthorityPane({ project }: { project: Project }) {
     };
   }
 
+  /**
+   * The writable-roots commit: a comma-separated list of absolute paths.
+   * Emptying the box reverts to the inherited list, which is empty.
+   */
+  async function commitWritableRoots(next: string): Promise<CommitResult> {
+    const roots = [
+      ...new Set(
+        next
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
+      ),
+    ];
+    const invalid = roots.filter((root) => !isWritableRoot(root));
+    if (invalid.length > 0) {
+      // `validateAuthorityPolicyOverride`'s rule, said before the round trip.
+      return {
+        ok: false,
+        error: `Not an absolute path other than /: ${invalid.join(", ")}`,
+      };
+    }
+    const ok = await patch({ writableRoots: roots.length === 0 ? undefined : roots });
+    return ok ? { ok: true, value: rootsText(roots) } : { ok: false, error: "That did not save." };
+  }
+
   // `auto` names a judge that does not exist until a classifier is configured,
   // and `classifierModel` has no surface yet. Offering it would let someone
   // select a decision-maker that cannot decide, so it is visible and disabled
@@ -246,6 +297,11 @@ export function AuthorityPane({ project }: { project: Project }) {
   // The one question every row below is qualified by: while calls are allowed,
   // no call is ever denied, so nothing can count toward a denial limit.
   const enforcing = effective.enforcement === "enforce";
+  // `off` builds no Snapshot, and walls ride the Snapshot: the explicit
+  // bypass is of both axes, so containment and roots go inert with it.
+  const pinned = effective.enforcement !== "off";
+  // Declared roots matter to whatever judges a write: the gate, or the walls.
+  const rootsActive = pinned && (enforcing || effective.containment === "scoped");
 
   return (
     <PrefSection
@@ -309,6 +365,92 @@ export function AuthorityPane({ project }: { project: Project }) {
               ))}
             </SelectContent>
           </Select>
+        </OverrideControl>
+      </PrefRow>
+
+      {/*
+       * The capability axis (VC-45), a dial apart from the rule pack's: walls
+       * versus judgement, the plan's two axes. Scoped names its cost in the
+       * row — no network — because egress opens only with the classifier.
+       */}
+      <PrefRow
+        label="Containment"
+        htmlFor="authority-containment"
+        testId="authority-containment"
+        align="start"
+        description={
+          pinned ? (
+            <span className="text-foreground">{CONTAINMENT_OUTCOMES[effective.containment]}</span>
+          ) : (
+            "Not active while rule enforcement is Off."
+          )
+        }
+        hint={
+          <>
+            <strong>Scoped</strong> runs a Session&rsquo;s commands in a macOS sandbox and holds its
+            file tools to the same policy: reads anywhere except credentials, keychains, shell
+            dotfiles, other users&rsquo; homes and Volli&rsquo;s own data; writes only in the
+            workspace and the writable roots below, never in git hooks, git config or{" "}
+            <code>.volli</code>. Commands have no network until network decisions arrive with the
+            classifier.
+          </>
+        }
+      >
+        <OverrideControl
+          label="Containment"
+          inheritedValue={CONTAINMENT_LABELS[defaults.containment]}
+          overridden={override?.containment !== undefined}
+          disabled={saving || !pinned}
+          onRevert={() => void patch({ containment: undefined })}
+        >
+          <Select
+            value={effective.containment}
+            disabled={saving || !pinned}
+            onValueChange={(next) => void patch({ containment: next as ContainmentMode })}
+          >
+            <SelectTrigger id="authority-containment" className={CONTROL_W.md}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CONTAINMENT_MODES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {CONTAINMENT_LABELS[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </OverrideControl>
+      </PrefRow>
+
+      <PrefRow
+        label="Writable roots"
+        htmlFor="authority-writable-roots"
+        testId="authority-writable-roots"
+        description={
+          rootsActive ? undefined : "Not active unless rules are enforced or containment is Scoped."
+        }
+        hint={
+          <>
+            Directories a Session may write besides its workspace, as absolute paths separated by
+            commas. A Ticket worktree may always write the git directory it commits into.
+          </>
+        }
+      >
+        <OverrideControl
+          label="Writable roots"
+          inheritedValue="None"
+          overridden={override?.writableRoots !== undefined}
+          disabled={saving || !rootsActive}
+          onRevert={() => void commitWritableRoots("")}
+        >
+          <CommitField
+            id="authority-writable-roots"
+            width="lg"
+            placeholder="None"
+            value={rootsText(effective.writableRoots)}
+            disabled={saving || !rootsActive}
+            onCommit={commitWritableRoots}
+          />
         </OverrideControl>
       </PrefRow>
 
