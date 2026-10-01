@@ -1496,6 +1496,10 @@ function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnap
       ["observe", "enforce"] as const,
       `${context}.enforcement`,
     ),
+    // Absence is legacy data, not permission to resolve current settings.
+    ...(row.protection === undefined
+      ? {}
+      : { protection: readBoolean(row.protection, `${context}.protection`) }),
     judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
     tools: readToolIds(row.tools, `${context}.tools`),
     rulePackId: readString(row.rulePackId, `${context}.rulePackId`),

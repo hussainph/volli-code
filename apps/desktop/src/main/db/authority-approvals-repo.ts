@@ -89,9 +89,23 @@ export interface NewApproval {
   now: number;
 }
 
-/** Writes one row. A scope with no key cannot be remembered and is refused. */
+/** Reuses an identical live grant, preserving its provenance and use history, or writes one row. */
 export function insertApproval(db: Database.Database, input: NewApproval): AuthorityApproval {
   if (input.approval.key === null) throw new Error("This approval cannot be remembered.");
+  const existing = prepared<[string, string, string | null, string, string], ApprovalRow>(
+    db,
+    `SELECT * FROM authority_approvals
+      WHERE project_id = ? AND scope = ? AND session_id IS ?
+        AND operation = ? AND key = ? AND revoked_at IS NULL
+      ORDER BY created_at, id LIMIT 1`,
+  ).get(
+    input.projectId,
+    input.scope,
+    input.scope === "session" ? input.sessionId : null,
+    input.approval.operation,
+    input.approval.key,
+  );
+  if (existing !== undefined) return toApproval(existing);
   const id = randomUUID();
   prepared(
     db,
@@ -126,20 +140,26 @@ export function listApprovals(db: Database.Database, projectId: string): Authori
     .map(toApproval);
 }
 
-/** Soft-deletes a row. The next matching call asks again. Returns the row, or null if none was live. */
+/** Soft-deletes a grant and any identical legacy duplicates. Returns the selected live row, or null. */
 export function revokeApproval(
   db: Database.Database,
   id: string,
   now: number,
 ): AuthorityApproval | null {
-  const result = prepared(
-    db,
-    "UPDATE authority_approvals SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
-  ).run(now, id);
-  if (result.changes === 0) return null;
-  return toApproval(
-    prepared<[string], ApprovalRow>(db, "SELECT * FROM authority_approvals WHERE id = ?").get(id)!,
-  );
+  return db.transaction(() => {
+    const row = prepared<[string], ApprovalRow>(
+      db,
+      "SELECT * FROM authority_approvals WHERE id = ? AND revoked_at IS NULL",
+    ).get(id);
+    if (row === undefined) return null;
+    prepared(
+      db,
+      `UPDATE authority_approvals SET revoked_at = ?
+        WHERE project_id = ? AND scope = ? AND session_id IS ?
+          AND operation = ? AND key = ? AND revoked_at IS NULL`,
+    ).run(now, row.project_id, row.scope, row.session_id, row.operation, row.key);
+    return toApproval(row);
+  })();
 }
 
 /** Undo of a revoke: the same row, the same id and provenance. */

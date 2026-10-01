@@ -1088,6 +1088,20 @@ function describeApprovalResolution(
   const detail = interaction.approval;
   const chosen = new Set(resolution.optionIds.map((id) => id.toLowerCase()));
   const said = (resolution.response ?? "").trim().replaceAll(/\s+/gu, " ");
+  const subject = interaction.title.replace(/^Allow /u, "").replace(/\?$/u, "");
+  // Match the runtime's approvalChoice: steer first, then every refusal id,
+  // before any grant. Contradictory answers must never print consent.
+  if (chosen.has("steer")) {
+    return {
+      verdict: "rejected",
+      lead: "You denied",
+      subject,
+      trailer: said === "" ? null : `\u201c${said}\u201d`,
+    };
+  }
+  if (SESSION_REFUSAL_OPTION_IDS.some((id) => chosen.has(id))) {
+    return { verdict: "rejected", lead: "You denied", subject, trailer: null };
+  }
   if (chosen.has("ledger")) {
     return {
       verdict: "standing",
@@ -1095,15 +1109,6 @@ function describeApprovalResolution(
       subject:
         interaction.options.find((option) => option.id === "ledger")?.description ?? detail.asked,
       trailer: null,
-    };
-  }
-  const subject = interaction.title.replace(/^Allow /u, "").replace(/\?$/u, "");
-  if (chosen.has("steer")) {
-    return {
-      verdict: "rejected",
-      lead: "You denied",
-      subject,
-      trailer: said === "" ? null : `\u201c${said}\u201d`,
     };
   }
   if (chosen.has("project")) {

@@ -3130,6 +3130,7 @@ describe("startSession", () => {
   it("asks on the first approvable refusal in protection mode, and a ledger hit never asks again", async () => {
     const hits = new Set<string>();
     const decisions: string[] = [];
+    const completed = vi.fn();
     const ask = vi.fn(async () => {
       hits.add("git discard");
       return "allow-session" as const;
@@ -3143,7 +3144,26 @@ describe("startSession", () => {
       covers: (scope) =>
         hits.has("git discard") ? { approvalId: "row-1", summary: scope.summary } : null,
       decided: (decision) => void decisions.push(decision.authoriser),
+      completed,
     };
+    exec.mockImplementation(async () => {
+      // A ledger lookup or a pre-execution audit is not a passed request.
+      expect(completed).toHaveBeenCalledTimes(exec.mock.calls.length - 1);
+      return {
+        ok: true,
+        value: {
+          exitCode: 0,
+          truncation: {
+            truncated: false,
+            truncatedBy: null,
+            totalLines: 0,
+            outputLines: 0,
+            outputBytes: 0,
+            lastLinePartial: false,
+          },
+        },
+      };
+    });
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       executionEnvFactory: async () => containedEnv,
@@ -3176,7 +3196,40 @@ describe("startSession", () => {
     });
     expect(exec).toHaveBeenCalledTimes(2);
     expect(decisions).toEqual(["user:session", "policy:ledger"]);
+    expect(completed).toHaveBeenCalledTimes(2);
     expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("does not count a ledger decision whose tool execution fails", async () => {
+    const { attachment, exec, containedEnv } = escalatingAttachment(vi.fn());
+    const completed = vi.fn();
+    attachment.spec.approvals = {
+      covers: (scope) => ({ approvalId: "row-1", summary: scope.summary }),
+      decided: vi.fn(),
+      completed,
+    };
+    exec.mockRejectedValue(new Error("command could not run"));
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Failed.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("Reset.");
+    await handle.close();
+    expect(exec).toHaveBeenCalledOnce();
+    expect(completed).not.toHaveBeenCalled();
   });
 
   it("refuses a never-allowed call in protection mode with the plain explanation and no question", async () => {

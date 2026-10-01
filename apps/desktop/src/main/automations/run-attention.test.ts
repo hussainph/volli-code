@@ -432,6 +432,48 @@ describe("an approval card in an unattended Run (VC-480)", () => {
     expect(h.notified[0]?.target).toMatchObject({ interactionId: "ask:call-1" });
   });
 
+  it("notifies an unattended error even while a ledger-hit receipt is open", () => {
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    const failed = state("error");
+    const withReceipt: SessionProjection = {
+      ...failed,
+      interactions: {
+        ...failed.interactions,
+        active: state("waiting", "Nightly sweep", SESSION_ID, [
+          { id: "ledger-hit:call-2", options: [] },
+        ]).interactions.active,
+      },
+    };
+    h.watch.observe(withReceipt);
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({
+      title: "An Automation stopped",
+      body: "Nightly sweep could not keep running.",
+      target: { interactionId: null, attentionId: "a1" },
+    });
+    // The cosmetic receipt closing is not another entry into the same error.
+    h.watch.observe(failed);
+    expect(h.notified).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+  });
+
+  it("still targets a real approval alongside a cosmetic ledger-hit receipt", () => {
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(
+      state("waiting", "Nightly sweep", SESSION_ID, [
+        { id: "ledger-hit:call-2", options: [] },
+        card,
+      ]),
+    );
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({
+      title: "An Automation needs your approval",
+      target: { interactionId: "ask:call-1", attentionId: null },
+    });
+  });
+
   it("does not read the quiet line a ledger hit leaves as a person being needed", () => {
     const h = harness({ attendance: "unattended" });
     h.watch.observeBirth(SESSION_ID);

@@ -289,6 +289,13 @@ export interface AuthoritySnapshot {
    */
   enforcement: "observe" | "enforce";
   /**
+   * Whether this attachment uses Protection's approvals and decision audit.
+   * Frozen with the gate, not inferred from current project or app settings on
+   * recovery. Older Snapshots omit it and keep their original gate without
+   * opting into approvals; only an explicit `true` activates Protection.
+   */
+  protection?: boolean;
+  /**
    * Who judges a call the deterministic rules cannot settle. Data here,
    * behaviour in VC-28.
    *

@@ -83,6 +83,10 @@ export interface ApprovalKey {
 export function approvalCovers(row: ApprovalKey, scope: ApprovalScope): boolean {
   if (scope.key === null || row.operation !== scope.operation) return false;
   if (scope.operation === "write" || scope.operation === "read") {
+    // A key equal to the target marks an exact-only scope (reads, shallow
+    // writes, git plumbing and Volli state). Broader folder approvals must not
+    // turn that deliberate boundary back into prefix coverage.
+    if (scope.key === scope.target) return row.key === scope.target;
     return containsPath(row.key, scope.target);
   }
   return row.key === scope.target;

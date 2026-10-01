@@ -3,6 +3,7 @@ import {
   writeScope,
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
+  SESSION_REFUSAL_OPTION_IDS,
   type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionPrompt,
@@ -1925,6 +1926,42 @@ describe("describeInteractionResolution for an approval card (VC-480)", () => {
     expect(receipt(["steer"])).toMatchObject({ trailer: null });
     expect(receipt([])).toMatchObject({ verdict: "rejected" });
   });
+
+  it.each(["once", "session", "project", "ledger"])(
+    "reads denial before a contradictory %s grant, as the runtime does",
+    (grant) => {
+      for (const denial of SESSION_REFUSAL_OPTION_IDS) {
+        for (const optionIds of [
+          [grant, denial],
+          [denial.toUpperCase(), grant],
+        ]) {
+          expect(receipt(optionIds, "ignored words")).toEqual({
+            verdict: "rejected",
+            lead: "You denied",
+            subject: "writing outside this workspace",
+            trailer: null,
+          });
+        }
+      }
+    },
+  );
+
+  it.each(["once", "session", "project", "ledger"])(
+    "reads steer before denial and a contradictory %s grant",
+    (grant) => {
+      expect(receipt([grant, "reject", "STEER"], "  use\n/tmp ")).toEqual({
+        verdict: "rejected",
+        lead: "You denied",
+        subject: "writing outside this workspace",
+        trailer: "\u201cuse /tmp\u201d",
+      });
+      expect(receipt(["steer", "reject", grant], "  ")).toMatchObject({
+        verdict: "rejected",
+        lead: "You denied",
+        trailer: null,
+      });
+    },
+  );
 
   it("reads a ledger hit as one quiet line naming the earlier approval", () => {
     const hit: RendererSessionInteraction = {

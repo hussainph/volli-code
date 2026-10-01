@@ -40,27 +40,44 @@ export function createProtection(input: ProtectionHostInput): PiProtection {
   const { db, now, projectId, sessionId } = input;
   const onError = input.onError ?? ((error: unknown) => console.warn("[volli] protection:", error));
   const sessionIds = [sessionId, ...input.inheritedFrom];
+  const pendingUses = new Map<string, Set<string>>();
   return {
     covers(scope: ApprovalScope) {
       const hit = findCoveringApproval(db, { projectId, sessionIds }, scope);
       if (hit === null) return null;
-      recordApprovalUse(db, hit.id, sessionId, now());
       return { approvalId: hit.id, summary: hit.summary };
     },
     decided(decision) {
       try {
         insertDecision(db, { projectId, sessionId, decision, now: now() });
+        if (decision.authoriser === "policy:ledger" && decision.approvalId !== null) {
+          const ids = pendingUses.get(decision.toolCallId) ?? new Set<string>();
+          ids.add(decision.approvalId);
+          pendingUses.set(decision.toolCallId, ids);
+        }
       } catch (error) {
         onError(error);
         // No execution may proceed without its pre-execution decision record.
         throw error;
       }
     },
+    completed(toolCallId) {
+      const ids = pendingUses.get(toolCallId);
+      pendingUses.delete(toolCallId);
+      if (ids === undefined) return;
+      db.transaction(() => {
+        for (const id of ids) recordApprovalUse(db, id, sessionId, now());
+      })();
+    },
     remember(grant) {
       // A multi-scope answer is remembered in full or not at all.
       db.transaction(() => {
+        const remembered = new Set<string>();
         for (const scope of grant.scopes) {
           if (scope.key === null) continue;
+          const identity = JSON.stringify([scope.operation, scope.key]);
+          if (remembered.has(identity)) continue;
+          remembered.add(identity);
           insertApproval(db, {
             projectId,
             scope: grant.scope,

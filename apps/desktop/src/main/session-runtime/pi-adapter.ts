@@ -215,12 +215,14 @@ function piAuthoritySnapshot(
   policy: AuthorityPolicy,
   location: WorkLocationKind,
   toolSurface: readonly SessionToolId[],
+  protectionEnabled: boolean,
 ): AuthoritySnapshot | null {
   if (policy.enforcement === "off") return null;
   return {
     mode: "auto",
     location,
     enforcement: policy.enforcement,
+    protection: policy.enforcement === "enforce" && protectionEnabled,
     judgmentMode: policy.judgmentMode,
     tools: [...toolSurface],
     rulePackId: BUILTIN_RULE_PACK_ID,
@@ -248,21 +250,24 @@ export interface PiProtectionGrant {
  * Protection mode for one attachment (VC-480): the remembered approvals it may
  * read and the one door that writes them.
  *
- * Present only when the experiment is switched on AND the project is
- * protected, resolved per attach by main. `covers` reads live on every call and
- * counts the use; `remember` runs in main, from the person's answer, BEFORE the
- * runtime is told — the runtime holds no way to write a row.
+ * Supplied by main independently of current policy so recovery can replay a
+ * protected attachment. The adapter activates it only from the pinned Snapshot.
+ * `covers` reads live on every call; `remember` runs in main, from the person's
+ * answer, BEFORE the runtime is told — the runtime holds no way to write a row.
  */
 export interface PiProtection {
   covers(scope: ApprovalScope): RuntimeApprovalHit | null;
   decided(decision: ApprovalDecision): void;
+  completed?(toolCallId: string): void;
   remember(grant: PiProtectionGrant): void;
 }
 
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
-  /** Protection mode, or absent (VC-480). */
+  /** Host capability, available even when current policy is off (VC-480). */
   protection?: PiProtection;
+  /** Fresh-attachment mode only; recovery uses the Snapshot, never this value. */
+  protectionEnabled?: boolean;
   projectId: string;
   /**
    * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
@@ -1084,6 +1089,7 @@ class PiBinding implements BindingHandle {
             options.context.authorityPolicy,
             options.context.location,
             options.context.toolSurface,
+            options.context.protectionEnabled ?? options.context.protection !== undefined,
           );
   }
 
@@ -1119,6 +1125,11 @@ class PiBinding implements BindingHandle {
 
   runtimeSpec(): SessionRuntimeSpec {
     const context = this.#context;
+    // Losing the ledger/audit host must not silently downgrade a protected
+    // attachment to an ordinary authority gate during recovery.
+    if (this.#authority?.protection === true && context.protection === undefined) {
+      throw new Error("Pi requires the Protection approval and audit host for this attachment.");
+    }
     const identity = {
       sessionId: this.#spec.sessionId,
       rootThreadId: context.rootThreadId,
@@ -1243,7 +1254,9 @@ class PiBinding implements BindingHandle {
       ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
       // Protection mode rides only a gate that binds. `covers` is the read
       // port and nothing else; the runtime cannot author a row (VC-480).
-      ...(this.#authority?.enforcement === "enforce" && this.#context.protection !== undefined
+      ...(this.#authority?.enforcement === "enforce" &&
+      this.#authority.protection === true &&
+      this.#context.protection !== undefined
         ? {
             approvals: {
               covers: (scope) => this.#context.protection!.covers(scope),
@@ -1251,6 +1264,12 @@ class PiBinding implements BindingHandle {
                 this.#context.protection!.decided(decision);
                 if (decision.authoriser === "policy:ledger") void this.#showLedgerHit(decision);
               },
+              ...(this.#context.protection.completed === undefined
+                ? {}
+                : {
+                    completed: (toolCallId: string) =>
+                      this.#context.protection!.completed!(toolCallId),
+                  }),
             },
           }
         : {}),

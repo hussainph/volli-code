@@ -49,6 +49,20 @@ describe("approvalCovers", () => {
     expect(approvalCovers(row, writeScope("/Users/me/code/docs/guides-evil/b.md"))).toBe(false);
   });
 
+  it("never widens an exact-only file scope with a folder grant", () => {
+    const exact = { ...scope, key: scope.target };
+    expect(approvalCovers({ operation: "write", key: "/Users/me/code/docs/guides" }, exact)).toBe(
+      false,
+    );
+    expect(approvalCovers({ operation: "write", key: exact.target }, exact)).toBe(true);
+    expect(
+      approvalCovers(
+        { operation: "read", key: "/Users/me/code/docs/guides" },
+        readScope(scope.target),
+      ),
+    ).toBe(false);
+  });
+
   it("never lets one operation cover another", () => {
     expect(approvalCovers({ operation: "read", key: "/Users/me/code/docs/guides" }, scope)).toBe(
       false,

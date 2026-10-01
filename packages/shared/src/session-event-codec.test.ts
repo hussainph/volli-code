@@ -1271,6 +1271,24 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
   });
 
+  it.each([true, false])("round-trips pinned Protection mode (%s)", (protection) => {
+    const authority = { ...recordedAuthority, protection };
+    const decoded = openedAttachment({ ...attachment, authority });
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("leaves legacy Snapshots without a Protection mode instead of opting them in", () => {
+    const decoded = openedAttachment({ ...attachment, authority: recordedAuthority });
+    if (decoded.kind !== "attachment.opened") throw new Error("not opened");
+    expect(decoded.attachment.authority).not.toHaveProperty("protection");
+  });
+
+  it("rejects a corrupt pinned Protection mode", () => {
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, protection: "true" } }),
+    ).toThrow("payload.attachment.authority.protection must be a boolean");
+  });
+
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
     // Every attachment in history predates VC-44 and carries no `authority` key.
     // Refusing to decode without one would make those Sessions unopenable rather

@@ -3593,6 +3593,96 @@ describe("Protection mode (VC-480)", () => {
     expect(observing.runtime.spec.approvals).toBeUndefined();
   });
 
+  it.each([
+    { enforcement: "enforce", protectionEnabled: false },
+    { enforcement: "off", protectionEnabled: true },
+    { enforcement: "observe", protectionEnabled: true },
+  ] as const)(
+    "does not opt a recovered attachment into Protection ($enforcement, $protectionEnabled)",
+    async ({ enforcement, protectionEnabled }) => {
+      const fake = fakeProtection();
+      const opened = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          authorityPolicy: resolveAuthorityPolicy({ enforcement }),
+          protectionEnabled,
+          protection: fake.protection,
+        }),
+      });
+      const recovered = await attached(
+        {
+          resolveRuntimeContext: async () => ({
+            ...context,
+            authorityPolicy: resolveAuthorityPolicy({ enforcement: "enforce" }),
+            protectionEnabled: true,
+            protection: fake.protection,
+          }),
+        },
+        attachmentSpec({
+          continuity: "native_resume",
+          native: opened.binding.native,
+          pinnedAuthority: opened.binding.authority,
+        }),
+      );
+      expect(recovered.binding.authority).toEqual(opened.binding.authority);
+      expect(recovered.runtime.spec.approvals).toBeUndefined();
+      expect(fake.decisions).toEqual([]);
+    },
+  );
+
+  it("does not infer Protection for a legacy enforced Snapshot from today's settings", async () => {
+    const fake = fakeProtection();
+    const opened = await protectedAttach(undefined);
+    const pinned = { ...opened.binding.authority! };
+    delete pinned.protection;
+    const recovered = await attached(
+      {
+        resolveRuntimeContext: async () => ({
+          ...context,
+          authorityPolicy: resolveAuthorityPolicy({ enforcement: "enforce" }),
+          protectionEnabled: true,
+          protection: fake.protection,
+        }),
+      },
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: pinned,
+      }),
+    );
+    expect(recovered.runtime.spec.authority).toEqual(pinned);
+    expect(recovered.runtime.spec.approvals).toBeUndefined();
+  });
+
+  it("fails recovery closed if the pinned Protection host is unavailable", async () => {
+    const opened = await protectedAttach(fakeProtection().protection);
+    await expect(
+      attached(
+        { resolveRuntimeContext: async () => ({ ...context }) },
+        attachmentSpec({
+          continuity: "native_resume",
+          native: opened.binding.native,
+          pinnedAuthority: opened.binding.authority,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "PI_RECOVERY_FAILED",
+      attentionKind: "adapter_unrecoverable",
+      message: expect.stringContaining("Protection approval and audit host"),
+    });
+  });
+
+  it("forwards successful completion to the host only for a protected attachment", async () => {
+    const fake = fakeProtection();
+    const completed = vi.fn();
+    fake.protection.completed = completed;
+    const on = await protectedAttach(fake.protection);
+    on.runtime.spec.approvals!.completed!("call-1");
+    expect(completed).toHaveBeenCalledExactlyOnceWith("call-1");
+    const off = await protectedAttach(fake.protection, "off");
+    expect(off.runtime.spec.approvals).toBeUndefined();
+  });
+
   it("opens the five-choice card in Volli's words and writes the row before the runtime hears", async () => {
     const fake = fakeProtection();
     const { binding, runtime, sink } = await protectedAttach(fake.protection);
@@ -3899,10 +3989,11 @@ describe("Protection across the durable observation boundary", () => {
   function fixture() {
     db = openTestDb();
     insertProject(db.db, testProject({ id: "project-1" }));
+    updateProjectAuthorityPolicy(db.db, "project-1", { enforcement: "enforce" }, clock++);
     return launch();
   }
 
-  function launch() {
+  function launch(protectionEnabled = true) {
     const engine = createSessionEngine({
       ledger: createSqliteSessionLedger(db.db),
       clock: { now: () => clock++ },
@@ -3914,7 +4005,10 @@ describe("Protection across the durable observation boundary", () => {
         role: "project",
         ticketId: null,
         rootThreadId: sessionRootThreadId(sessionId),
-        authorityPolicy: resolveAuthorityPolicy({ enforcement: "enforce" }),
+        authorityPolicy: getProjectAuthorityPolicy(db.db, "project-1"),
+        protectionEnabled,
+        // Main supplies the host even when current settings are off; the
+        // attachment's pinned Snapshot decides whether it can use the port.
         protection: createProtection({
           db: db.db,
           now: () => clock++,
@@ -4111,6 +4205,64 @@ describe("Protection across the durable observation boundary", () => {
     expect(await pending).toEqual({ outcome: "allow" });
     expect(listApprovals(db.db, "project-1")).toEqual([]);
     expect(listDecisions(db.db, sessionId)).toMatchObject([{ authoriser: "user:once" }]);
+  });
+
+  it("recovers pinned Protection after current policy and experiment turn off, retaining grants and audit", async () => {
+    const prior = fixture();
+    const sessionId = await start(prior);
+    const first = run(prior);
+    const initialCard = await card(prior, sessionId);
+    await answer(prior, sessionId, initialCard.id, "session");
+    expect(await first).toEqual({ outcome: "allow" });
+    const attachmentId = (await prior.host.snapshot({ sessionId })).projection.liveExecutor!.id;
+    updateProjectAuthorityPolicy(db.db, "project-1", { enforcement: "off" }, clock++);
+    db.db.close();
+    db.db = openRawDb(db.dbPath);
+    db.db.pragma("foreign_keys = ON");
+    const restarted = launch(false);
+    restarted.model.reconciliationObservations.push({
+      kind: "turn",
+      state: "interrupted",
+      turnId: "turn-protected",
+    });
+    const errors: unknown[] = [];
+    await closeStaleAttachments({
+      engine: restarted.engine,
+      reconcile: (input) => restarted.host.reconcile(input),
+      projectIds: ["project-1"],
+      newId: () => `boot-${clock++}`,
+      now: () => clock++,
+      onError: (_id, error) => errors.push(error),
+    });
+    expect(errors).toEqual([]);
+    expect(restarted.model.spec.recovery).toBeDefined();
+    expect(restarted.model.spec.authority).toMatchObject({
+      enforcement: "enforce",
+      protection: true,
+    });
+    expect(restarted.model.spec.approvals).toBeDefined();
+    expect((await restarted.host.snapshot({ sessionId })).projection.liveExecutor!.id).toBe(
+      attachmentId,
+    );
+    await restarted.model.observe({ kind: "turn", state: "started", turnId: "turn-retry" });
+    expect(await run(restarted)).toEqual({ outcome: "allow" });
+    expect(listDecisions(db.db, sessionId).map((decision) => decision.authoriser)).toEqual([
+      "policy:ledger",
+      "user:session",
+    ]);
+    // Ledger-hit receipt lines settle asynchronously through the observation
+    // pipeline; let their resolved fact commit before looking for a new card.
+    await expect
+      .poll(
+        async () => (await restarted.host.snapshot({ sessionId })).projection.interactions.active,
+      )
+      .toEqual([]);
+    const pending = run(restarted, [writeScope("/another/a.md")]);
+    const newCard = await card(restarted, sessionId);
+    await answer(restarted, sessionId, newCard.id, "session");
+    expect(await pending).toEqual({ outcome: "allow" });
+    expect(listApprovals(db.db, "project-1")).toHaveLength(2);
+    expect(listDecisions(db.db, sessionId)).toHaveLength(3);
   });
 
   it("reopens SQLite and the host after a crash with a pending card, then asks anew without granting", async () => {

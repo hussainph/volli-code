@@ -1749,36 +1749,32 @@ app.whenReady().then(async () => {
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
               authorityPolicy,
-              // Protection mode (VC-480): only with the experiment on AND this
-              // project protected. Absent, the runtime never learns approvals
-              // exist and nothing about authority changes.
-              ...(protectionExperimentEnabled(dbHandle.db) &&
-              authorityPolicy.enforcement === "enforce"
-                ? {
-                    protection: createProtection({
-                      db: dbHandle.db,
-                      now: () => Date.now(),
-                      projectId: project.id,
-                      sessionId,
-                      // A delegated subagent reads its parent's live "this
-                      // Session" approvals; nothing it adds ever flows back.
-                      inheritedFrom:
-                        attaching.role === "subagent" && attaching.parentSessionId !== null
-                          ? [attaching.parentSessionId]
-                          : [],
-                      sessionTitle: attaching.title ?? null,
-                      ticketDisplayId: (() => {
-                        const owned =
-                          attaching.ticketId === null
-                            ? undefined
-                            : getTicket(dbHandle.db, attaching.ticketId);
-                        return owned === undefined
-                          ? null
-                          : displayTicketId(project.ticketPrefix, owned.ticketNumber);
-                      })(),
-                    }),
-                  }
-                : {}),
+              // Current settings select only a FRESH attachment's mode. Main
+              // always supplies the host so a recovered attachment can retain
+              // the approvals/audit it pinned, even after settings turn off.
+              protectionEnabled: protectionExperimentEnabled(dbHandle.db),
+              protection: createProtection({
+                db: dbHandle.db,
+                now: () => Date.now(),
+                projectId: project.id,
+                sessionId,
+                // A delegated subagent reads its parent's live "this
+                // Session" approvals; nothing it adds ever flows back.
+                inheritedFrom:
+                  attaching.role === "subagent" && attaching.parentSessionId !== null
+                    ? [attaching.parentSessionId]
+                    : [],
+                sessionTitle: attaching.title ?? null,
+                ticketDisplayId: (() => {
+                  const owned =
+                    attaching.ticketId === null
+                      ? undefined
+                      : getTicket(dbHandle.db, attaching.ticketId);
+                  return owned === undefined
+                    ? null
+                    : displayTicketId(project.ticketPrefix, owned.ticketNumber);
+                })(),
+              }),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
               // this one attachment.

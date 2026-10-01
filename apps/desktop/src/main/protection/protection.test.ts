@@ -99,12 +99,25 @@ describe("the protection host", () => {
     };
   }
 
-  it("writes a row with provenance from a person's answer, and serves it back as a counted hit", () => {
+  it("writes provenance, but counts a ledger hit only after the call completes", () => {
     const { protection } = host("parent");
     expect(protection.covers(writeScope("/Users/me/code/docs/guides/b.md"))).toBeNull();
     protection.remember(grant("project"));
     const hit = protection.covers(writeScope("/Users/me/code/docs/guides/b.md"));
     expect(hit).toMatchObject({ summary: "Write to /Users/me/code/docs/guides" });
+    expect(listApprovals(ctx.db, projectId)[0].useCount).toBe(0);
+    protection.decided({
+      toolCallId: "call-1",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "path.outside-workspace",
+      summary: hit!.summary,
+      asked: "write b.md",
+      approvalId: hit!.approvalId,
+    });
+    expect(listApprovals(ctx.db, projectId)[0].useCount).toBe(0);
+    protection.completed?.("call-1");
+    protection.completed?.("call-1"); // a repeated completion never double-counts
     const [row] = listApprovals(ctx.db, projectId);
     expect(row).toMatchObject({
       scope: "project",
@@ -149,7 +162,18 @@ describe("the protection host", () => {
     const child = host("child", ["parent"]).protection;
     const parent = host("parent").protection;
     const scope = writeScope("/Users/me/code/docs/guides/x.md");
-    expect(child.covers(scope)).not.toBeNull();
+    const hit = child.covers(scope)!;
+    expect(hit).not.toBeNull();
+    child.decided({
+      toolCallId: "child-call",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "path.outside-workspace",
+      summary: hit.summary,
+      asked: "write x.md",
+      approvalId: hit.approvalId,
+    });
+    child.completed?.("child-call");
     expect(listApprovals(ctx.db, projectId)[0].lastUsedBySessionId).toBe("child");
 
     const own = readScope("/Users/me/.npmrc");

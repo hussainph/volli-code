@@ -1023,6 +1023,18 @@ describe("violations", () => {
     expect(
       volli.find((violation) => violation.rule === "path.volli-internals")?.scopes?.[0].key,
     ).toBe(`${WORKSPACE}/.volli/state.json`);
+    // Ordinary folder grants must not authorise exact-only plumbing scopes.
+    for (const target of [
+      `${WORKSPACE}/.git/hooks/pre-commit`,
+      `${WORKSPACE}/.git/config`,
+      `${WORKSPACE}/.volli/state.json`,
+    ]) {
+      const scope = all(call({ tool: "write", writes: [target] }))
+        .flatMap((violation) => violation.scopes ?? [])
+        .find((candidate) => candidate.key === target)!;
+      expect(approvalCovers({ operation: "write", key: WORKSPACE }, scope)).toBe(false);
+      expect(approvalCovers({ operation: "write", key: target }, scope)).toBe(true);
+    }
     const config = all(exec(segment("git", ["config", "core.editor", "vim"])));
     expect(config.find((violation) => violation.rule === "path.git-internals")?.scopes).toBeNull();
   });

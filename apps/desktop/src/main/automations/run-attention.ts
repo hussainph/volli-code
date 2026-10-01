@@ -212,13 +212,19 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
     observe(projection) {
       try {
         const sessionId = projection.session.id;
-        const open = projection.interactions.active;
         // The quiet line a ledger hit leaves is opened and answered in one
-        // breath; folded in between it must not read as a person being needed.
-        const need =
-          open.length > 0 && open.every((interaction) => interaction.id.startsWith("ledger-hit:"))
-            ? null
-            : sessionPersonNeed(projection);
+        // breath. Exclude those cosmetic interactions, not the whole need:
+        // a simultaneous failure or real question still needs a person.
+        const attentionProjection: SessionProjection = {
+          ...projection,
+          interactions: {
+            ...projection.interactions,
+            active: projection.interactions.active.filter(
+              (interaction) => !interaction.id.startsWith("ledger-hit:"),
+            ),
+          },
+        };
+        const need = sessionPersonNeed(attentionProjection);
         const known = seen.has(sessionId);
         const previous = seen.get(sessionId) ?? null;
         seen.set(sessionId, need);
@@ -242,8 +248,8 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
         // preference read to forget here and none to get wrong.
         ports.notify({
           producer: "run-attention",
-          ...runAttentionNotification(need, projection.session, openApproval(projection)),
-          target: runAttentionTarget(need, projection),
+          ...runAttentionNotification(need, projection.session, openApproval(attentionProjection)),
+          target: runAttentionTarget(need, attentionProjection),
         });
       } catch (error) {
         onError(error);

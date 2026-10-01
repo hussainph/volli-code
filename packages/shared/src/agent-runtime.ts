@@ -413,8 +413,8 @@ export interface RuntimeApprovalAsk {
 export interface RuntimeApprovals {
   /**
    * The approval that covers this scope right now, or null. Read live on every
-   * call, never cached, so a revoke applies from the very next call. The host
-   * counts the use.
+   * call, never cached, so a revoke applies from the very next call. Lookup
+   * alone is not a use: the call may still be denied or abandoned.
    */
   covers(scope: ApprovalScope): RuntimeApprovalHit | null;
   /**
@@ -423,6 +423,8 @@ export interface RuntimeApprovals {
    * closed without a pre-execution decision record.
    */
   decided(decision: ApprovalDecision): void;
+  /** Counts ledger use only after successful execution, never during lookup. */
+  completed?(toolCallId: string): void;
 }
 
 /** A remembered approval that allowed a scope. */

@@ -144,6 +144,82 @@ describe("authority approvals", () => {
     expect(findCoveringApproval(f.db, who, { ...writeScope("/a/b/c/d"), key: null })).toBeNull();
   });
 
+  it.each(["session", "project"] as const)(
+    "reuses an identical live %s grant so revoking it leaves no duplicate coverage",
+    (scope) => {
+      const f = fixture();
+      const approval = writeScope("/Users/me/code/docs/guides/a.md");
+      const row = add(f, scope, approval);
+      recordApprovalUse(f.db, row.id, "child", 6_000);
+      const existing = listApprovals(f.db, f.projectId)[0];
+      const repeated = insertApproval(f.db, {
+        projectId: f.projectId,
+        scope,
+        sessionId: "parent",
+        approval: writeScope("/Users/me/code/docs/guides/b.md"),
+        rule: "another-rule",
+        provenance: { ...PROVENANCE, interactionId: "ask:call-2" },
+        now: 7_000,
+      });
+      expect(repeated).toEqual(existing);
+      expect(listApprovals(f.db, f.projectId)).toEqual([existing]);
+      revokeApproval(f.db, row.id, 8_000);
+      expect(
+        findCoveringApproval(f.db, { projectId: f.projectId, sessionIds: ["parent"] }, approval),
+      ).toBeNull();
+      const renewed = add(f, scope, approval);
+      expect(renewed.id).not.toBe(row.id);
+      expect(listApprovals(f.db, f.projectId)).toEqual([renewed]);
+    },
+  );
+
+  it("keeps grants distinct across project, row scope, Session, operation and key", () => {
+    const f = fixture();
+    const approval = writeScope("/Users/me/code/docs/guides/a.md");
+    const parent = add(f, "session", approval);
+    const child = add(f, "session", approval, "child");
+    const project = add(f, "project", approval);
+    const read = add(f, "session", { ...approval, operation: "read" });
+    const differentKey = add(f, "session", writeScope("/Users/me/code/docs/other/a.md"));
+    const otherProject = testProject();
+    insertProject(f.db, otherProject);
+    const other = add({ db: f.db, projectId: otherProject.id }, "project", approval);
+    expect(
+      new Set([parent, child, project, read, differentKey, other].map((row) => row.id)).size,
+    ).toBe(6);
+    revokeApproval(f.db, parent.id, 8_000);
+    expect(
+      listApprovals(f.db, f.projectId)
+        .map((row) => row.id)
+        .toSorted(),
+    ).toEqual([child.id, project.id, read.id, differentKey.id].toSorted());
+    expect(listApprovals(f.db, otherProject.id)).toEqual([other]);
+  });
+
+  it("revokes all identical legacy rows without leaving hidden coverage", () => {
+    const f = fixture();
+    const approval = writeScope("/Users/me/code/docs/guides/a.md");
+    const row = add(f, "session", approval);
+    // Simulate duplicate grants persisted before inserts became idempotent.
+    f.db
+      .prepare(`INSERT INTO authority_approvals
+      (id, project_id, scope, session_id, operation, key, rule, provenance, created_at)
+      SELECT 'legacy-duplicate', project_id, scope, session_id, operation, key, rule,
+             provenance, created_at FROM authority_approvals WHERE id = ?`)
+      .run(row.id);
+    expect(revokeApproval(f.db, row.id, 8_000)?.id).toBe(row.id);
+    expect(listApprovals(f.db, f.projectId)).toEqual([]);
+    expect(
+      findCoveringApproval(
+        f.db,
+        { projectId: f.projectId, sessionIds: ["child", "parent"] },
+        approval,
+      ),
+    ).toBeNull();
+    expect(restoreApproval(f.db, row.id)).toEqual(row);
+    expect(listApprovals(f.db, f.projectId)).toEqual([row]);
+  });
+
   it("revokes at once, restores the same row, and ignores a repeat", () => {
     const f = fixture();
     const scope = writeScope("/Users/me/code/docs/guides/a.md");

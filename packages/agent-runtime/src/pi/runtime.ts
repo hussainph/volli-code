@@ -3212,6 +3212,7 @@ async function attachSession(
 
       try {
         await commitObservation(await persistObservation(activity));
+        if (!event.isError) spec.approvals?.completed?.(event.toolCallId);
       } finally {
         activityByToolCallId.delete(event.toolCallId);
       }
