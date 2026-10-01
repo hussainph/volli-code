@@ -85,6 +85,7 @@ import {
 } from "@renderer/components/ui/select";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 
 type LoadState =
@@ -92,10 +93,16 @@ type LoadState =
   | { status: "loaded"; view: DecisionModelSettingsView }
   | { status: "error"; message: string };
 
-/** The view for one page — app-wide, or one project's — and the write that replaces it. */
+/**
+ * The view for one page — app-wide, or one project's — and the write that
+ * replaces it. Re-read whenever Model Access's shared revision moves: a
+ * sign-in under Accounts is what turns a cloud model's "needs setup" into
+ * ready, and this section must not keep saying otherwise.
+ */
 function useDecisionModelView(projectId: string | null) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const fetches = useLatestAsync();
+  const revision = useModelAccessClient()?.revision ?? 0;
   const load = React.useCallback(async () => {
     const token = fetches.claim();
     try {
@@ -113,7 +120,7 @@ function useDecisionModelView(projectId: string | null) {
   React.useEffect(() => {
     void load();
     return () => fetches.invalidate();
-  }, [load, fetches]);
+  }, [load, fetches, revision]);
   const adopt = React.useCallback((result: Extract<DecisionModelResult, { ok: true }>) => {
     setState({ status: "loaded", view: result.settings });
   }, []);
