@@ -32,6 +32,12 @@ for this project can use. A Session keeps the MCP tool definitions it received
 when it was created, so changing the server or its tool selection does not
 update an existing Session.
 
+When [Code Mode](/guides/code-mode/) is on, a server with more than 20 enabled
+tools, or with very long tool definitions, is not sent to the model tool by
+tool. A Session sees the server's name and tool count and finds the tools it
+needs from a short program, which keeps every request smaller. Enabling only
+the tools you need keeps a server under that size.
+
 Prefer switching a server off when you want new Sessions to stop receiving its
 tools. This keeps the configuration older Sessions need and does not revoke
 their existing tools.

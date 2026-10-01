@@ -13,6 +13,7 @@
  *   PI_BENCH_TRIALS=3                            # per arm per task
  *   PI_BENCH_TASKS=loop-filter,single-call       # optional subset
  *   PI_BENCH_ARMS=direct,codemode-nudge          # optional subset of arms
+ *   PI_BENCH_REASONING=low                       # default off; for models without it
  *
  * Spends real money through the developer's own Pi credentials, so it never
  * runs by default. Results print as tables and land as JSON beside this file,
@@ -27,6 +28,7 @@ import {
   codeModeSurfaceFor,
   DEFAULT_CODE_MODE_LIMITS,
   sessionToolIds,
+  type ReasoningLevel,
   type RuntimeObservation,
   type SessionRuntimeSpec,
 } from "@volli/shared";
@@ -135,7 +137,11 @@ async function runTrial(
           },
     workspacePath: run.workspacePath,
     venue: "local",
-    model: { providerId, modelId, reasoningLevel: "off" },
+    model: {
+      providerId,
+      modelId,
+      reasoningLevel: (process.env.PI_BENCH_REASONING ?? "off") as ReasoningLevel,
+    },
     brief: { text: "VC-471 benchmark fixture. Answer exactly in the format asked." },
     tools: { tools: ["read", "edit", "write", "execute"] },
     observer: async (observation) => {
