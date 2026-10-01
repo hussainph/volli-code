@@ -607,6 +607,9 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         title,
         actor: input.actor,
         ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
+        // The task is the request an automatic model choice reads (VC-432); it
+        // is ignored when the caller named a model, tier or level.
+        autoSelect: { request: input.task },
       });
       ports.onMutation?.({
         kind: "session",

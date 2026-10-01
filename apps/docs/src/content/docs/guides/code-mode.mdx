@@ -1,0 +1,101 @@
+---
+title: Code Mode
+description: What Code Mode lets a Session do, what its programs can and cannot do, and how to turn it off.
+sidebar:
+  label: Code Mode
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+**Code Mode** lets a Session write a short JavaScript program that calls its
+own tools, instead of calling them one at a time. The program loops, filters
+and combines what the tools return, and only the result reaches the model.
+A step like "read these forty files and tell me which ones still use the old
+API" becomes one program that returns a short list, rather than forty file
+reads the model has to read through.
+
+Code Mode is on by default. Turn it off, or choose how a particular model uses
+it, in **Settings → Models → Code Mode**.
+
+## When a Session uses it
+
+A Session with Code Mode has one extra tool, `codemode`. The model decides when
+to use it. It pays off when one step needs many calls whose raw results are
+mostly thrown away:
+
+- a loop of shell commands or file reads, keeping only what matches;
+- the same check across many files;
+- several Browser Tabs or pages handled the same way;
+- starting several Sessions and watching them.
+
+For a single call, the model calls the tool directly, as it would without Code
+Mode. In chat, a program appears as one tool call, and each call it made
+appears beneath it as its own activity row.
+
+## What a program can and cannot do
+
+A program runs in a sandbox that starts fresh for every run. It can only call
+the tools its Session already has, and nothing else:
+
+- It has no file system, network, process, environment, timers or modules.
+  To read a file it calls `read`; to run a command it calls `bash`.
+- Every call it makes is checked exactly as if the model had made it directly,
+  as the same Session. [Agent authority](/guides/authority/) rules, budgets and
+  approvals all apply. A call that needs your approval pauses the program until
+  you answer, and only one question is ever open at a time.
+- It cannot call a few tools at all: asking you a question, the todo list,
+  background shells, Browser screenshots, and taking or releasing a Browser
+  Tab's hold. The model calls those directly.
+- No image enters or leaves a program.
+- Each run is limited to 200 calls, 5 minutes of running time (time spent
+  waiting for your answer does not count), and about 20 KB of output. Longer
+  output is shortened, and the full text is saved where the Session can read
+  it.
+- Output from a program that used web, Browser or MCP tools, or read another
+  Session's words, is marked as untrusted content, exactly as those tools'
+  direct results are.
+
+Stopping the turn stops the program and every call it has in flight.
+
+## Modes
+
+Each model gets a mode chosen from Volli's measurements of that model:
+
+| Mode | What the model gets |
+| --- | --- |
+| **Off** | No `codemode` tool, except to reach a very large MCP server (see below). |
+| **Both** | `codemode` beside every normal tool. The model chooses per step. |
+| **Only** | Tools a program can call are reached only through `codemode`. Tool groups that include something a program cannot call, such as the Browser, stay available directly. This sends the model the fewest tool definitions. |
+
+Claude Haiku and Claude Sonnet use **Both** by default. Every other model,
+including Claude Opus, GPT and GLM models, uses **Off**: in Volli's
+measurements those models either rarely chose to write a program or did not
+save anything when they did, so Code Mode would only have added to every
+request. To choose a different mode for one model, open
+**Advanced** in the Code Mode section, choose the model under **Pin a model**,
+and set its **Mode**. The **Default** column shows the mode the model would
+otherwise get.
+
+## Large MCP servers
+
+A project MCP server with more than 20 tools, or whose tool definitions are
+very long, would otherwise add thousands of tokens to every request a Session
+sends. When Code Mode is on, such a server's tools are not sent to the model
+directly, whatever the model's mode. The model sees the server's name and how
+many tools it has, and a program searches for the tools it needs and calls
+them. This applies even to models whose mode is **Off**.
+
+## Turn Code Mode off
+
+1. Open **Settings → Models**.
+2. In **Code Mode**, turn the **Code Mode** switch off.
+
+New Sessions then get no `codemode` tool, and every tool, including every MCP
+tool, is sent to the model directly, as before Code Mode existed. Your pinned
+modes are kept for when you turn it back on.
+
+<Aside type="note">
+  A Session keeps the tools it was created with. Changing Code Mode, or a
+  model's mode, affects only Sessions created afterwards; an existing Session
+  keeps working exactly as it began.
+</Aside>

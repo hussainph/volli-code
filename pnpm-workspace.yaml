@@ -120,6 +120,12 @@ patchedDependencies:
   # 47 MB). Same recovered state; see packages/agent-runtime/UPSTREAM.md.
   # 0.99.2 still reads the whole file in one pass, so the hunk stays.
   "@earendil-works/pi-agent-core@0.99.2": patches/@earendil-works__pi-agent-core@0.99.2.patch
+  # Adds `maxOutputChars` to the Code Mode sandbox (VC-471): the host stops
+  # keeping a program's `text()`/`console.*`/`image()` output past a bound and
+  # fails the run, so a program that prints in a loop cannot grow Electron
+  # main's memory for the length of its deadline. Upstream bounds the VM heap
+  # but not what the host accumulates from it. Absent, upstream behavior.
+  "@earendil-works/pi-codemode@0.99.2": patches/@earendil-works__pi-codemode@0.99.2.patch
 
 peerDependencyRules:
   allowAny:

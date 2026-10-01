@@ -12,6 +12,7 @@ import {
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
 import type {
+  CodeModePolicy,
   CompactionPolicy,
   HiddenModelRef,
   ModelAccessDefaults,
@@ -121,6 +122,8 @@ export interface RegisterSessionRpcIpcOptions {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  readCodeModePolicy?: () => CodeModePolicy;
+  writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
   readModelPickerView?: () => ModelPickerView;
   writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
   /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
@@ -180,6 +183,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           writeHiddenModels: options.writeHiddenModels,
           readCompactionPolicy: options.readCompactionPolicy,
           writeCompactionPolicy: options.writeCompactionPolicy,
+          readCodeModePolicy: options.readCodeModePolicy,
+          writeCodeModePolicy: options.writeCodeModePolicy,
           readModelPickerView: options.readModelPickerView,
           writeModelPickerView: options.writeModelPickerView,
           createSession: options.createSession,
@@ -319,6 +324,10 @@ async function callProcedure(
       return caller.modelAccess.compactionPolicy();
     case "modelAccess.setCompactionPolicy":
       return caller.modelAccess.setCompactionPolicy(request.input as never);
+    case "modelAccess.codeModePolicy":
+      return caller.modelAccess.codeModePolicy();
+    case "modelAccess.setCodeModePolicy":
+      return caller.modelAccess.setCodeModePolicy(request.input as never);
     case "modelAccess.pickerView":
       return caller.modelAccess.pickerView();
     case "modelAccess.setPickerView":

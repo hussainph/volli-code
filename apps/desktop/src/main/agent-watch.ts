@@ -313,12 +313,21 @@ export async function watchTool(
   const tickets = resolveTickets(ports, project, displays);
   if (!tickets.ok) return refusal(tickets.text);
 
+  // The targets as resolved, as data (VC-471), in the shape the registry's
+  // `resultDetails` declares: canonical handles and display ids, so a program
+  // compares them with what it started rather than reading the receipt.
+  const named = {
+    sessions: sessions.targets.map((target) => target.handle),
+    tickets: tickets.targets.map((target) => target.display),
+  };
+
   if (action === "unwatch") {
     const removed = watches.unwatch(session.sessionId, {
       sessions: sessions.targets.map((target) => target.id),
       tickets: tickets.targets.map((target) => target.id),
     });
     return {
+      details: { action, ...named, ended: removed },
       text:
         removed === 0
           ? "None of those were being watched by this Session; nothing changed."
@@ -370,7 +379,7 @@ export async function watchTool(
   lines.push(
     "This call did not wait. Keep working, or end your turn: a notice from Volli opens a new turn when something changes. Changes that land together arrive as one notice.",
   );
-  return { text: lines.join("\n") };
+  return { details: { action, ...named, ended: 0 }, text: lines.join("\n") };
 }
 
 /** The line every retired await answers with, before what it armed. */

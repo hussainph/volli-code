@@ -24,6 +24,7 @@ import {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  codeModeSurfaceFor,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
   mcpProviderToolName,
@@ -1175,6 +1176,42 @@ describe("Pi native adapter attach", () => {
     await expect(attempt).rejects.toThrow(/shell/);
   });
 
+  it("binds no classify port to a Session born without a decision model, whatever the host has now (VC-478)", async () => {
+    // The frozen record decides: a Session created before a decision model
+    // was configured keeps its tool array and its Cache Prefix.
+    const { runtime } = await attached({
+      resolveClassifyPort: () => ({ classify: unusedPortMethod }),
+    });
+    expect("classify" in runtime.spec).toBe(false);
+  });
+
+  it("hands a recorded classify surface the decision port, bound to its Session and project (VC-478)", async () => {
+    const scopes: unknown[] = [];
+    const port = { classify: unusedPortMethod };
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+      resolveClassifyPort: (scope) => {
+        scopes.push(scope);
+        return port;
+      },
+    });
+    expect(scopes).toEqual([{ sessionId: SESSION_ID, projectId: "project-1" }]);
+    expect(runtime.spec.classify).toBe(port);
+  });
+
+  it("refuses attachment rather than dropping a frozen classify tool the launch cannot answer (VC-478)", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+    });
+    await expect(attempt).rejects.toThrow(/classify/);
+  });
+
   it("resolves the ports once per attachment rather than per turn", async () => {
     let resolutions = 0;
     const { runtime } = await attached({
@@ -1358,6 +1395,53 @@ describe("Pi native adapter attach", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("routes an MCP sign-in question through Code Mode's call scope (VC-470 / VC-471)", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: () => ({
+        call: async (_request, signal, hostAsk) => {
+          const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
+          return { content: [{ type: "text", text: choice }], isError: false };
+        },
+        dispose: async () => undefined,
+      }),
+    });
+    const question = vi.fn();
+    const result = runtime.spec.mcp!.call(
+      { serverId: "fixture-1", toolName: "echo", arguments: {}, toolCallId: "call-12" },
+      new AbortController().signal,
+      {
+        question: async (performAsk) => {
+          question();
+          return performAsk();
+        },
+      },
+    );
+    await flush();
+    expect(question).toHaveBeenCalledOnce();
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    );
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await result).toEqual({ content: [{ type: "text", text: "allow" }], isError: false });
+    await binding.release("requested");
+  });
+
   it("disposes the MCP attachment host when runtime setup fails", async () => {
     const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
     const dispose = vi.fn(async () => undefined);
@@ -1431,6 +1515,44 @@ describe("Pi native adapter attach", () => {
       tools: ["read", "edit", "write", "execute"],
       todoWrite: true,
     });
+  });
+
+  it("carries Code Mode's frozen routes into the bundle, and refuses a surface that names it without them (VC-471)", async () => {
+    const codeMode = codeModeSurfaceFor({
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+    });
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+        codeMode,
+      }),
+    });
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      codeMode,
+    });
+    const missing = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+      }),
+    });
+    await expect(missing).rejects.toThrow("names codemode without its routes");
+  });
+
+  it("hands the runtime host the Code Mode sandbox location when main supplies one (VC-471)", () => {
+    const seen: unknown[] = [];
+    createPiRuntimeHost({
+      sessionDataDir: "/tmp/volli-codemode-host",
+      codeModeSandbox: { wasmPath: "/opt/quickjs.wasm" },
+      createRuntime: (options) => {
+        seen.push(options.codeModeSandbox);
+        return new FakeRuntime();
+      },
+      resolveRuntimeContext: async () => context,
+    });
+    expect(seen).toEqual([{ wasmPath: "/opt/quickjs.wasm" }]);
   });
 
   it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
@@ -2415,6 +2537,52 @@ describe("Pi native adapter escalation", () => {
       interactionId: "budget-ask:call-9",
       resolution: { optionIds: ["once"], response: null },
     });
+  });
+
+  it("asks a Code Mode program's budget question through the scope the call was lent (VC-471)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "claimed at the limit" };
+      },
+    });
+    const scoped: string[] = [];
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "cm-1:abc:1" },
+      new AbortController().signal,
+      {
+        question: async (asking) => {
+          scoped.push("waiting");
+          const answer = await asking();
+          scoped.push("answered");
+          return answer;
+        },
+      },
+    );
+    if (lent === undefined) throw new Error("The binding lent no budget ask");
+    const choice = lent(
+      {
+        cause: "budget.delegation-children",
+        tool: "session_start",
+        toolCallId: "cm-1:abc:1",
+        turnId: null,
+        reason: "At the limit.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(scoped).toEqual(["waiting"]);
+    expect(sink.observations[0]).toMatchObject({ kind: "interaction", state: "opened" });
+    await binding.dispatch(answerCommand("budget-ask:cm-1:abc:1", ["once"]));
+    expect(await choice).toBe("allow");
+    expect(scoped).toEqual(["waiting", "answered"]);
   });
 
   /**

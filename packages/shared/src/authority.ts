@@ -145,6 +145,31 @@ export const NON_CODING_TOOL_IDS = [
    * list and every position in it — and is handed a port without `find`.
    */
   "browser_find",
+  /**
+   * Asking the configured decision model typed questions about a JSON state —
+   * one of N, a level, or yes/no — and reading back probabilities, not text
+   * (VC-478).
+   *
+   * A port decides it, like the web tools: a Session born with no decision
+   * model configured (or a cloud one nobody opted into) has no port and is
+   * offered no tool. It reaches the rule pack as a name no rule objects to,
+   * because it has no side effect and carries no path or command; what it can
+   * send off the machine was decided by the person's opt-in, not per call.
+   * Appended last for the Cache Prefix reason every name above was.
+   */
+  "classify",
+  /**
+   * Running a short JavaScript program that calls this Session's other tools
+   * and returns only what the model needs (VC-471).
+   *
+   * Like `todo_write`, no port decides it: the bundle's `codeMode` record
+   * does, and the record also carries the route of every other tool. The
+   * tool reaches the rule pack as a name no rule objects to, because it
+   * carries nothing a rule reads — every call the program makes is judged on
+   * its own, through the same gate a direct call passes. Appended last for
+   * the Cache Prefix reason every name above was.
+   */
+  "codemode",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

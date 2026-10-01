@@ -419,6 +419,19 @@ function subjectFor(
       sessionId: cleanPayloadText(readField(details, "sessionId")),
     };
   }
+  if (toolName === "classify") {
+    // A decision (VC-478) is named by what it asked: the question names, the
+    // first three and a count, so a loop of classify rows reads as a list of
+    // decisions rather than a column of one word.
+    const questions = recordOf(readField(source, "questions"));
+    const names = questions === null ? [] : Object.keys(questions);
+    const shown = `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3}` : ""}`;
+    return {
+      label: names.length === 0 ? "classify" : `classify: ${shown}`,
+      path: null,
+      lineRange: null,
+    };
+  }
   const path =
     cleanPayloadText(readField(source, "path")) ?? cleanPayloadText(readField(source, "filePath"));
   return {

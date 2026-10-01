@@ -305,7 +305,13 @@ export async function modelListVerb(
   // runtime can actually use. There is deliberately no opt-out: asking an
   // agent to choose from a signed-out catalog is both context waste and a
   // misleading instruction.
-  const shownProviders = snapshot.providers.filter((provider) => provider.state === "available");
+  // A provider that serves only decision models (VC-478) has no chat model a
+  // Session could run on, so it is not named here either.
+  const shownProviders = snapshot.providers.filter(
+    (provider) =>
+      provider.state === "available" &&
+      snapshot.models.some((model) => model.providerId === provider.id),
+  );
   const shownProviderIds = new Set(shownProviders.map((provider) => provider.id));
   const shownModels = snapshot.models.filter(
     (model) => shownProviderIds.has(model.providerId) && model.state === "available",

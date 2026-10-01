@@ -27,6 +27,7 @@ import type {
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  DecisionModelSetting,
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   OverlayEdits,
@@ -246,6 +247,9 @@ import type {
   WebAccessProvider,
   KeyedWebAccessProvider,
   WebAccessResult,
+  DecisionModelResult,
+  DecisionModelScope,
+  DecisionModelTestResult,
   AgentObservabilityResult,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -905,6 +909,25 @@ const api = {
     /** Forgets one provider's key. The provider choice, and the other key, are left alone. */
     clearKey: (provider: KeyedWebAccessProvider): Promise<WebAccessResult> =>
       invoke("volli:web-access-clear-key", provider),
+  },
+  /**
+   * Decision models (VC-478): the setting, the cloud catalog, and the
+   * connection test. Its own door beside `webAccess`; unlike that one it
+   * carries no secret and has no channel that could take one — a cloud
+   * model's key goes in through `modelAccess` sign-in.
+   */
+  decisionModel: {
+    /** The app-wide setting, the project's override when named, and the cloud catalog. */
+    get: (projectId: string | null): Promise<DecisionModelResult> =>
+      invoke("volli:decision-model-get", projectId),
+    /** Stores one scope's setting; `null` clears a project's override to inherit. */
+    set: (
+      scope: DecisionModelScope,
+      setting: DecisionModelSetting | null,
+    ): Promise<DecisionModelResult> => invoke("volli:decision-model-set", scope, setting),
+    /** Asks the given model one fixed question, end to end. */
+    test: (setting: DecisionModelSetting): Promise<DecisionModelTestResult> =>
+      invoke("volli:decision-model-test", setting),
   },
   /**
    * The opt-in agent-telemetry export switch (VC-119).

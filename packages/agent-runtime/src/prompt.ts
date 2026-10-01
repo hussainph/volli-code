@@ -172,11 +172,39 @@ const DELEGATION_PARAGRAPH: Record<Exclude<RuntimeSessionRole, "subagent">, stri
   ].join("\n"),
 };
 
+/**
+ * When to write a program (VC-471, the "nudge").
+ *
+ * The `codemode` tool's own description says when it pays, but a description
+ * is read when a tool is already being considered: in phase 1's benchmark
+ * GPT-5.5 and GLM, offered `codemode` beside every tool, never called it
+ * once in 24 trials, while Claude models reached for it exactly on the loop
+ * and multi-page tasks. Measured as its own arm in phase 2, this paragraph
+ * moved GPT-5.5 to 3/24 and GLM to 9/24 without routing a single call through
+ * a program, and cost Sonnet, which already chose well, a six-call Browser
+ * run. So it is said only to the families it helps (`nudge` in
+ * `CODE_MODE_MODEL_DEFAULTS`), and only in mode `both` — under `only` there is
+ * no other way to call a tool to choose.
+ *
+ * The negative case is the last sentence on purpose: a program around one
+ * call costs a turn's worth of tokens to save none. Rendered from the frozen
+ * record (`codeMode.nudge`), so a Session's prompt never changes after birth.
+ */
+const CODE_MODE_PARAGRAPH = [
+  "Use codemode when one step needs several tool calls whose raw results you",
+  "would otherwise read and throw away: a loop of bash or read calls, the same",
+  "check across many files, several Browser pages, or a long output filtered to",
+  "the lines that matter. The program does the looping and returns only the",
+  "answer. For a single call, or a result you need to see whole, call the tool",
+  "directly.",
+].join("\n");
+
 function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
+  const codeMode = tools.codeMode?.nudge === true ? `\n\n${CODE_MODE_PARAGRAPH}` : "";
   if (role === "subagent" || !(tools.verbs ?? []).includes("session.delegate")) {
-    return EXECUTION_CORE;
+    return `${EXECUTION_CORE}${codeMode}`;
   }
-  return `${EXECUTION_CORE}\n\n${DELEGATION_PARAGRAPH[role]}`;
+  return `${EXECUTION_CORE}\n\n${DELEGATION_PARAGRAPH[role]}${codeMode}`;
 }
 
 const ROLE_LAYER: Record<RuntimeSessionRole, string> = {

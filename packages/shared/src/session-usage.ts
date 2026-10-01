@@ -41,10 +41,15 @@ export type CostBasis = (typeof COST_BASES)[number];
  * be able to say so.
  *
  * `compaction` is Context Compaction. `utility` is product work with no
- * transcript of its own — auto-titling is the current one. Both are real spend
- * against the Session and both are counted in its total.
+ * transcript of its own — auto-titling is the current one. `decision` is a
+ * decision-model call (VC-478): a classifier answering a typed question for
+ * the Session, through the `classify` tool or a host feature. All three are
+ * real spend against the Session and all are counted in its total.
+ *
+ * Appended, never reordered: a build reading a cause it does not know fails
+ * the event, and history outlives the build that wrote it.
  */
-export const SESSION_USAGE_CAUSES = ["assistant", "compaction", "utility"] as const;
+export const SESSION_USAGE_CAUSES = ["assistant", "compaction", "utility", "decision"] as const;
 
 export type SessionUsageCause = (typeof SESSION_USAGE_CAUSES)[number];
 

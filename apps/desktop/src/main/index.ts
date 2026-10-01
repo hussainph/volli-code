@@ -37,6 +37,7 @@ import {
   makeAgentError,
   memoizedPathExists,
   resolveAgentToolSurface,
+  DEFAULT_CODE_MODE_POLICY,
   resolveDefaultModel,
   resolveShell,
   roleImpliedByTicket,
@@ -51,6 +52,7 @@ import {
   workspaceInstallCommand,
 } from "@volli/shared";
 import type {
+  CodeModeSurface,
   McpToolDefinition,
   PromptResource,
   RuntimeVerbResult,
@@ -76,6 +78,8 @@ import {
   McpSessionHost,
   serversForFrozenMcpTools,
 } from "./mcp/session-host";
+import { desktopCodeMode } from "./codemode/dev-config";
+import { codeModeSandboxAssets } from "./codemode/sandbox-assets";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -175,6 +179,9 @@ import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { createModelAutoSelect } from "./decision/auto-select";
+import { createDesktopDecisions } from "./decision/desktop";
+import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
 import {
@@ -212,11 +219,13 @@ import {
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
+  readCodeModePolicy,
   readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
   readModelPickerView,
   reconcileModelAccessPreferences,
+  writeCodeModePolicy,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
@@ -527,6 +536,19 @@ function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" |
       event.payload.input.kind === "tool-surface"
     ) {
       return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
+}
+
+/** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
+function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.codeMode;
     }
   }
   return undefined;
@@ -1105,6 +1127,37 @@ app.whenReady().then(async () => {
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  // Decision models (VC-478): the host decision service every feature that
+  // asks a classifier goes through, the `classify` tool's per-Session port,
+  // and the Settings owner. Built over the same Pi collection as chat, so a
+  // cloud classifier's key is the one a person signed in with under Model
+  // Access. Its usage is billed into the Session it was asked for, as
+  // `usage.recorded` with cause `decision` and the purpose in the provenance.
+  const desktopDecisions =
+    dbHandle.ok && piModelAccess !== null
+      ? createDesktopDecisions({
+          db: dbHandle.db,
+          models: piModelAccess.models,
+          catalogReady: piModelAccess.catalogReady,
+          recordUsage: async (sessionId, usage, purpose) => {
+            if (sessionEngine === null) return;
+            await sessionEngine.observe({
+              // A fresh id per call: every decision is its own bill.
+              id: `usage:decision:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "decision-service", detail: { purpose } },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
+        })
+      : null;
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -1152,6 +1205,27 @@ app.whenReady().then(async () => {
     packaged: !isDev,
     log: (message) => console.warn(`[volli] ${message}`),
   });
+  // Code Mode (VC-471): the stored setting, read at each birth, which an
+  // unpackaged build's environment can override like the parallel-read opt-in
+  // above. It decides only what NEW Sessions are born with; a Session's own
+  // record decides the rest.
+  // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
+  // workspace's installed copy unpackaged, and the copy electron-builder
+  // unpacks beside app.asar when packaged. Located once, at boot: a launch
+  // that cannot find them offers no Session Code Mode at all.
+  const codeModeSandbox = codeModeSandboxAssets({
+    packaged: app.isPackaged,
+    appPath: () => app.getAppPath(),
+    resourcesPath: () => process.resourcesPath,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
+  const codeMode = desktopCodeMode({
+    env: process.env,
+    packaged: !isDev,
+    log: (message) => console.warn(`[volli] ${message}`),
+    policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
+    sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
+  });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1176,7 +1250,7 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants, within, mcpTools = []) => {
+          resolve: (role, grants, within, mcpTools = [], codeModeBirth, classify = false) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -1224,6 +1298,16 @@ app.whenReady().then(async () => {
                   // before it keeps its list and is handed a port without
                   // `find`.
                   "browser_find",
+                  // The decision model (VC-478), appended last for the same
+                  // reason, and only for a Session born with one configured:
+                  // `resolveClassify` answered that at birth, and the record
+                  // keeps the answer for the Session's whole life.
+                  ...(classify ? (["classify"] as const) : []),
+                  // Code Mode (VC-471), when the setting gives this model a
+                  // mode or the Session holds an MCP server too large to
+                  // declare. Last, for the Cache Prefix reason every name
+                  // above is.
+                  ...(codeModeBirth?.offered === true ? (["codemode"] as const) : []),
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1239,12 +1323,25 @@ app.whenReady().then(async () => {
           // tool (VC-454).
           resolveMcp: (projectId) =>
             mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
+          resolveClassify: (projectId) =>
+            desktopDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           recordedMcp: async (sessionId) =>
             recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
-          record: async (sessionId, tools, mcpTools = []) => {
+          // Code Mode's one decision per birth (VC-471), from the Session's
+          // own model; `resolve` and `record` are both handed this answer.
+          codeModeAt: (model, mcpTools) => codeMode.birth(model, mcpTools),
+          record: async (sessionId, tools, mcpTools = [], { codeMode: codeModeBirth } = {}) => {
+            // Code Mode's routes and limits are frozen beside the names they
+            // route, at the same birth, from the decision `resolve` was given.
+            // A child's names are already bounded by its parent's record
+            // (VC-9); its routes follow its own model's mode.
+            const codeModeSurface =
+              codeModeBirth === undefined
+                ? undefined
+                : codeMode.surfaceFor(codeModeBirth, tools, mcpTools);
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {
@@ -1254,6 +1351,7 @@ app.whenReady().then(async () => {
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },
               provenance: {
                 source: { kind: "system", id: "pi-runtime", detail: null },
@@ -1396,6 +1494,8 @@ app.whenReady().then(async () => {
           // Frozen parallel-read marks take effect only while the developer
           // opt-in is set (VC-454); unset, every Session is sequential again.
           parallelMcpReads: mcpDispatch.parallelMcpReads,
+          // Code Mode's sandbox (VC-471), located once at boot above.
+          ...codeModeSandbox,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
@@ -1467,6 +1567,15 @@ app.whenReady().then(async () => {
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
             }),
+          // The Session's decision port (VC-478), bound to the Session and its
+          // project at attach. Membership is the frozen record's; this only
+          // answers it. Absent when the database never opened.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
+                  desktopDecisions.classifyPort(scope),
+              }),
           resolveMcpPort:
             mcpSettings === null
               ? undefined
@@ -1565,6 +1674,7 @@ app.whenReady().then(async () => {
           // recorded once before the first runtime construction; every later
           // attach reuses those exact bytes.
           resolveRuntimeContext: async (sessionId) => {
+            await sessions?.waitForBirth?.(sessionId);
             if (sessionEngine === null) return null;
             const projection = await sessionEngine.getSession({ sessionId });
             const attaching = projection?.session;
@@ -1581,6 +1691,7 @@ app.whenReady().then(async () => {
             // allowlist (VC-454): a tool taken off it stops overlapping.
             let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
             let mcpManagementNames = recordedMcpManagementNames(events);
+            const codeModeSurface = recordedCodeMode(events);
             if (toolSurface === null) {
               mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
@@ -1596,7 +1707,11 @@ app.whenReady().then(async () => {
                   sessionId,
                   input: {
                     kind: "tool-surface",
-                    tools: sessionToolSurface.resolve(attaching.role, []),
+                    // Nor is it born into Code Mode: that is a birth record
+                    // with routes, and a backfill has none to freeze.
+                    tools: sessionToolSurface
+                      .resolve(attaching.role, [])
+                      .filter((tool) => tool !== "codemode"),
                     mcpManagementNames: "server",
                   },
                   provenance,
@@ -1613,6 +1728,7 @@ app.whenReady().then(async () => {
               toolSurface,
               ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
+              ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
               // edit. Resolved per attach for the reason the web ports are: what
@@ -1937,6 +2053,33 @@ app.whenReady().then(async () => {
             const { projection } = await sessionRuntime.projection({ sessionId });
             return { selection: projection.modelSelection, tier: projection.modelTier };
           },
+          readBirthModel: async (sessionId, commandId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            const intent = projection.commands?.find((command) => command.id === commandId)?.intent;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
+          readBirthModelFromLedger: async (sessionId, commandId) => {
+            const events = await sessionEngine!.listEvents({ sessionId });
+            const recorded = events.find(
+              (event) =>
+                event.payload.kind === "command.recorded" && event.payload.command.id === commandId,
+            );
+            const intent =
+              recorded?.payload.kind === "command.recorded"
+                ? recorded.payload.command.intent
+                : null;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,
@@ -1944,6 +2087,16 @@ app.whenReady().then(async () => {
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // A start that named no model may have one chosen from the person's
+          // approved pairs by the decision model (VC-432), once, at birth.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                autoSelect: createModelAutoSelect({
+                  db: sessionDb,
+                  port: desktopDecisions.port,
+                }),
+              }),
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
@@ -1996,6 +2149,13 @@ app.whenReady().then(async () => {
           writeCompactionPolicy:
             sessionDb !== null
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
+              : undefined,
+          // Read again at each Session's birth, never pushed: a write here
+          // reaches the next Session created and no Session already running.
+          readCodeModePolicy: sessionDb !== null ? () => readCodeModePolicy(sessionDb) : undefined,
+          writeCodeModePolicy:
+            sessionDb !== null
+              ? (policy) => writeCodeModePolicy(sessionDb, policy, Date.now())
               : undefined,
           readModelPickerView:
             sessionDb !== null ? () => readModelPickerView(sessionDb) : undefined,
@@ -2299,6 +2459,12 @@ app.whenReady().then(async () => {
   registerWebAccessIpcHandlers(
     webAccess,
     dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
+  );
+  // Decision models (VC-478): the setting, the cloud catalog with each
+  // provider's sign-in state, and the connection test. No key crosses it.
+  registerDecisionModelIpcHandlers(
+    desktopDecisions,
+    dbHandle.ok ? undefined : `Decision models are unavailable. ${dbHandle.error}`,
   );
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing

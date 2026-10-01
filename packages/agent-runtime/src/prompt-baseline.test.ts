@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CODE_MODE_LIMITS,
   skillPromptResource,
   skillsIndexResource,
   type PromptResource,
@@ -6,6 +7,7 @@ import {
   type SkillReference,
   SKILL_POLICY_DEFAULT,
   SKILLS_INDEX_MAX_CHARS,
+  type CodeModeSurface,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -183,6 +185,46 @@ describe("promptBaseline", () => {
     // Board Session after. 1,685 of the 1,700 estimated tokens are now spent.
     expect(measured.system).toEqual({ chars: 5_691, tokens: 1_423 });
     expect(measured.total).toEqual({ chars: 6_736, tokens: 1_685 });
+  });
+});
+
+/**
+ * Code Mode's paragraph (VC-471) is priced on its own, not inside the 1,700
+ * ceiling above. That ceiling is the base Board package every Session is
+ * sent; the paragraph is a conditional layer like the MCP trust layer, sent
+ * only to a Session whose frozen record says `nudge` — mode `both`, on a
+ * model family the benchmark found it helps. So it can never push the base
+ * package past its ceiling, and what it costs the Sessions that carry it is
+ * stated here as a delta rather than absorbed silently.
+ */
+describe("promptBaseline — the Code Mode paragraph as its own delta (VC-471)", () => {
+  const routes = { read: "both", edit: "both", write: "both", execute: "both" } as const;
+  const codeMode = (nudge: boolean): CodeModeSurface => ({
+    routes,
+    limits: DEFAULT_CODE_MODE_LIMITS,
+    mode: "both",
+    ...(nudge ? { nudge: true as const } : {}),
+  });
+
+  it("leaves the base package untouched without the record's say-so", () => {
+    const tools = {
+      tools: ["read", "edit", "write", "execute"] as const,
+      verbs: ["session.start"] as const,
+    };
+    expect(promptBaseline(input({ tools: { ...tools, codeMode: codeMode(false) } })).total).toEqual(
+      promptBaseline(input({ tools })).total,
+    );
+  });
+
+  it("costs a nudged Session 97 estimated tokens on top of the base", () => {
+    const tools = {
+      tools: ["read", "edit", "write", "execute"] as const,
+      verbs: ["session.start"] as const,
+    };
+    const base = promptBaseline(input({ tools }));
+    const nudged = promptBaseline(input({ tools: { ...tools, codeMode: codeMode(true) } }));
+    expect(nudged.system.chars - base.system.chars).toBe(387);
+    expect(nudged.total.tokens - base.total.tokens).toBe(97);
   });
 });
 

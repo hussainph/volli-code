@@ -50,6 +50,10 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import {
+  isDeclaredRoute,
+  routeOf,
+  type CodeModeSurface,
+  type SessionToolBinding,
   MCP_RESULT_IMAGE_MAX_BYTES,
   MCP_RESULT_INLINE_MAX_BYTES,
   MCP_RESULT_MAX_BYTES,
@@ -61,7 +65,10 @@ import {
   verbToolWireName,
 } from "@volli/shared";
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { createClassifyTool } from "./classify-tool";
 import { createShellTool } from "./shell-tools";
+import { currentCallScope } from "./call-scope";
+import type { SurfaceTool } from "../codemode/tool";
 import { piContext } from "./pi-context";
 import { MAX_READ_IMAGE_BASE64_BYTES, processReadImage } from "./read-image-processor";
 import {
@@ -249,65 +256,112 @@ export function createSessionTools(
   spec: SessionToolInput,
   env: ExecutionEnv,
   output?: ToolOutputStore,
+  buildCodeMode?: CodeModeBuilder,
 ): AgentTool[] {
-  return sessionToolBindings(spec).map((binding) => {
-    switch (binding.tool) {
-      case "read":
-      case "edit":
-      case "write":
-      case "execute":
-        return createTool(binding.tool, env, output);
-      case "ask_user":
-        return createAskUserTool(binding.port, spec.signal);
-      case "web_fetch":
-        return createWebFetchTool(binding.port, spec.signal);
-      case "web_search":
-        return createWebSearchTool(binding.port, spec.signal);
-      case "todo_write":
-        // The one arm that takes neither the environment nor a port: the
-        // binding carries a name because there is nothing behind the name to
-        // carry (VC-6).
-        return createTodoWriteTool();
-      case "browser_tabs":
-      case "browser_navigate":
-      case "browser_snapshot":
-      case "browser_act":
-      case "browser_screenshot":
-      case "browser_console":
-        // Six names, one port, one factory: the binding arms all carry the
-        // whole RuntimeBrowserPort, and the factory picks the method the name
-        // stands for. See ./browser-tools.ts for why the grain is per intent.
-        return createBrowserTool(binding.tool, binding.port, spec.signal);
-      case "browser_acquire":
-      case "browser_release":
-        // The hold pair (VC-239) binds to the port with `acquire`/`release`
-        // proven present — `sessionToolBindings` offered these names only
-        // because the port carries both.
-        return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
-      case "browser_find":
-        // Bound to the port with `find` proven present (VC-364), on the hold
-        // pair's terms: a Session frozen before it is handed a port without.
-        return createBrowserFindTool(binding.port, spec.signal);
-      case "shell_start":
-      case "shell_output":
-      case "shell_kill":
-        // Three names, one port, one factory (VC-270), on the browser arms'
-        // terms. See ./shell-tools.ts for what a background shell is.
-        return createShellTool(binding.tool, binding.port, spec.signal);
-      default:
-        if ("definition" in binding) return createMcpTool(binding, spec.signal, output);
-        // The verb half, and the one branch that cannot be a case label: its
-        // members are registry data, so there is no closed set of literals to
-        // enumerate here. Exhaustiveness is kept by the assignment below —
-        // `binding` narrows to the verb arm, and a name added to
-        // `SessionToolBinding` with no case above would not satisfy it.
-        return createVerbTool(
-          binding satisfies { verb: VerbToolKey },
-          spec.signal,
-          spec.tools.mcpManagementNames,
-        );
-    }
+  const bindings = sessionToolBindings(spec);
+  const built = bindings.map((binding): SurfaceTool | null =>
+    binding.tool === "codemode"
+      ? null
+      : {
+          id: binding.tool,
+          tool: createBoundTool(binding, spec, env, output),
+          verb: "verb" in binding,
+          ...("verb" in binding ? verbDetailsSchema(binding.verb) : {}),
+          ...("definition" in binding ? { mcp: binding.definition } : {}),
+        },
+  );
+  const codeMode = spec.tools.codeMode;
+  if (codeMode === undefined) return built.map((entry) => entry!.tool);
+  // Code Mode (VC-471) is built last, over every other tool of the surface —
+  // declared or not — and the array the Agent declares is then the routes'
+  // answer: `direct` and `both` tools, and `codemode` at its own frozen
+  // position. A `code`, `deferred` or `hidden` tool is bound and reachable
+  // only from a program, which is what makes its route structural: the Agent
+  // has no tool of that name to resolve a model's direct call against.
+  if (buildCodeMode === undefined) {
+    throw new Error("This Session's surface names codemode, but no Code Mode host is wired.");
+  }
+  const codemode = buildCodeMode(
+    codeMode,
+    built.filter((entry): entry is SurfaceTool => entry !== null),
+  );
+  return bindings.flatMap((binding, index) => {
+    if (binding.tool === "codemode") return [codemode];
+    return isDeclaredRoute(routeOf(codeMode, binding.tool)) ? [built[index]!.tool] : [];
   });
+}
+
+/** Builds the `codemode` tool over the rest of a Session's surface; supplied by the runtime. */
+export type CodeModeBuilder = (
+  surface: CodeModeSurface,
+  tools: readonly SurfaceTool[],
+) => AgentTool;
+
+function createBoundTool(
+  binding: Exclude<SessionToolBinding, { tool: "codemode" }>,
+  spec: SessionToolInput,
+  env: ExecutionEnv,
+  output: ToolOutputStore | undefined,
+): AgentTool {
+  switch (binding.tool) {
+    case "read":
+    case "edit":
+    case "write":
+    case "execute":
+      return createTool(binding.tool, env, output);
+    case "ask_user":
+      return createAskUserTool(binding.port, spec.signal);
+    case "web_fetch":
+      return createWebFetchTool(binding.port, spec.signal);
+    case "web_search":
+      return createWebSearchTool(binding.port, spec.signal);
+    case "todo_write":
+      // The one arm that takes neither the environment nor a port: the
+      // binding carries a name because there is nothing behind the name to
+      // carry (VC-6).
+      return createTodoWriteTool();
+    case "browser_tabs":
+    case "browser_navigate":
+    case "browser_snapshot":
+    case "browser_act":
+    case "browser_screenshot":
+    case "browser_console":
+      // Six names, one port, one factory: the binding arms all carry the
+      // whole RuntimeBrowserPort, and the factory picks the method the name
+      // stands for. See ./browser-tools.ts for why the grain is per intent.
+      return createBrowserTool(binding.tool, binding.port, spec.signal);
+    case "browser_acquire":
+    case "browser_release":
+      // The hold pair (VC-239) binds to the port with `acquire`/`release`
+      // proven present — `sessionToolBindings` offered these names only
+      // because the port carries both.
+      return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
+    case "browser_find":
+      // Bound to the port with `find` proven present (VC-364), on the hold
+      // pair's terms: a Session frozen before it is handed a port without.
+      return createBrowserFindTool(binding.port, spec.signal);
+    case "shell_start":
+    case "shell_output":
+    case "shell_kill":
+      // Three names, one port, one factory (VC-270), on the browser arms'
+      // terms. See ./shell-tools.ts for what a background shell is.
+      return createShellTool(binding.tool, binding.port, spec.signal);
+    case "classify":
+      // The decision model (VC-478): one name, one port. See ./classify-tool.ts.
+      return createClassifyTool(binding.port, spec.signal);
+    default:
+      if ("definition" in binding) return createMcpTool(binding, spec.signal, output);
+      // The verb half, and the one branch that cannot be a case label: its
+      // members are registry data, so there is no closed set of literals to
+      // enumerate here. Exhaustiveness is kept by the assignment below —
+      // `binding` narrows to the verb arm, and a name added to
+      // `SessionToolBinding` with no case above would not satisfy it.
+      return createVerbTool(
+        binding satisfies { verb: VerbToolKey },
+        spec.signal,
+        spec.tools.mcpManagementNames,
+      );
+  }
 }
 
 export const MCP_UNTRUSTED_DATA_WARNING =
@@ -489,15 +543,18 @@ export function createMcpTool(
       try {
         let result;
         try {
-          result = await binding.port.call(
-            {
-              serverId: definition.serverId,
-              toolName: definition.toolName,
-              arguments: params as Readonly<Record<string, unknown>>,
-              toolCallId,
-            },
-            combined.signal,
-          );
+          const request = {
+            serverId: definition.serverId,
+            toolName: definition.toolName,
+            arguments: params as Readonly<Record<string, unknown>>,
+            toolCallId,
+          };
+          // A program's call carries its scope, so a question the host puts
+          // to a person mid-call waits its turn (VC-471).
+          const scope = currentCallScope();
+          result = await (scope === undefined
+            ? binding.port.call(request, combined.signal)
+            : binding.port.call(request, combined.signal, scope));
         } catch {
           throw new Error("The MCP tool call failed without a safe result.");
         }
@@ -648,6 +705,26 @@ function managementNamesIn(text: string, prefix: "mcp" | "server"): string {
     : text.replace(LEGACY_MANAGEMENT_NAMES, "server_$1");
 }
 
+/**
+ * The schema a verb's registry entry declares for its result's `details`
+ * (VC-471), as Code Mode's `SurfaceTool.detailsSchema` carries it — or
+ * nothing, for a verb that declares none.
+ *
+ * Read from the same entry {@link createVerbTool} builds the tool from — this
+ * build's Verb Registry, read at attach, not anything frozen with the
+ * Session — and handed beside the tool rather than on it: a direct call's
+ * model never sees `details`, so the schema is a fact about what a program
+ * receives and lives only where programs are typed. Like every verb's
+ * description, it is the current build's; the frozen part of a Session is its
+ * names and order, which this does not touch.
+ */
+export function verbDetailsSchema(verb: VerbToolKey): Pick<SurfaceTool, "detailsSchema"> {
+  const schema = verbEntry(verb)?.tool?.resultDetails;
+  return schema === undefined
+    ? {}
+    : { detailsSchema: schema as unknown as Record<string, unknown> };
+}
+
 export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
@@ -684,17 +761,20 @@ export function createVerbTool(
         else one.addEventListener("abort", abandon, { once: true });
       }
       try {
-        const result = await binding.port(
-          {
-            verb: binding.verb,
-            input: params as Readonly<Record<string, unknown>>,
-            // Passed through rather than regenerated: the host derives its
-            // durable operation id from this plus the caller it already knows,
-            // which is what makes a replayed call one act instead of two.
-            toolCallId,
-          },
-          withdrawn.signal,
-        );
+        const request = {
+          verb: binding.verb,
+          input: params as Readonly<Record<string, unknown>>,
+          // Passed through rather than regenerated: the host derives its
+          // durable operation id from this plus the caller it already knows,
+          // which is what makes a replayed call one act instead of two.
+          toolCallId,
+        };
+        // A program's call carries its scope, so a budget question the door
+        // puts to a person waits its turn (VC-471).
+        const scope = currentCallScope();
+        const result = await (scope === undefined
+          ? binding.port(request, withdrawn.signal)
+          : binding.port(request, withdrawn.signal, scope));
         // `details` is the host's structured aside for the transcript row; the
         // model reads `content` and nothing else.
         // The host's canonical verb and legacy result copy remain unchanged.

@@ -25,6 +25,8 @@ import type {
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -302,6 +304,15 @@ export interface RuntimeToolBundle {
   mcp?: readonly McpToolDefinition[];
   /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
   mcpManagementNames?: "server";
+  /**
+   * Whether this Session's surface names `codemode`, and if so the route of
+   * every other tool and the limits each script run is held to (VC-471).
+   *
+   * `todo_write`'s reasoning: no port answers Code Mode — the runtime builds
+   * it over the Session's own tools — so the bundle is what decides it. Absent
+   * on every Session born without it, which keeps their surface unchanged.
+   */
+  codeMode?: CodeModeSurface;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -1027,6 +1038,33 @@ export interface RuntimeShellPort {
 }
 
 /**
+ * What one `classify` call came to (VC-478): the decision, or the miss that
+ * says why there is none. Never a rejection for a decision not made — the
+ * host's decision port turns every such outcome into a miss, which the tool
+ * shows the model as an error result it can recover from by deciding itself.
+ */
+export type RuntimeClassifyOutcome =
+  | { kind: "answered"; answered: DecisionAnswered }
+  | { kind: "miss"; miss: DecisionMiss };
+
+/**
+ * Ask the Session's decision model typed questions about a JSON state
+ * (VC-478).
+ *
+ * The arguments are what the model said, unchecked: the host holds the
+ * bounds, and its answer for a request that breaks one is a miss naming the
+ * bound. The port is bound to its Session at attach, so the call carries no
+ * Session, no project and no purpose — those are the host's to state.
+ */
+export interface RuntimeClassifyPort {
+  classify(input: {
+    state: unknown;
+    questions: unknown;
+    signal: AbortSignal;
+  }): Promise<RuntimeClassifyOutcome>;
+}
+
+/**
  * What the workspace's own package state was when this attachment started —
  * the two {@link SessionEnvReport} facts an agent can act on.
  *
@@ -1239,6 +1277,13 @@ export interface SessionRuntimeSpec {
    */
   shell?: RuntimeShellPort;
   /**
+   * Ask the decision model, through the host's decision service (VC-478).
+   * Optional on {@link webFetch}'s terms: absence is what decides whether the
+   * model is offered `classify`, and the host wires it only for a Session
+   * whose frozen surface names the tool.
+   */
+  classify?: RuntimeClassifyPort;
+  /**
    * Call the exact server/tool identity behind this Session's frozen MCP
    * definitions. Main owns clients and transports; this typed port owns no
    * configuration and lets the model change none of it.
@@ -1271,7 +1316,11 @@ export interface SessionRuntimeSpec {
    * can act on rather than as thrown errors — the line {@link webFetch} draws
    * between a refusal and a host that could not answer at all.
    */
-  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
+  callVerb?: (
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
@@ -1294,8 +1343,26 @@ export interface RuntimeMcpCall {
   toolCallId: string;
 }
 
+/**
+ * What the runtime lends one tool call while it runs (VC-471).
+ *
+ * A Code Mode program can have several calls in flight, and a host may put a
+ * question to the person driving from inside a call — a verb's spent budget,
+ * an MCP server's sign-in. `question` is the program's own door for that: the
+ * host runs its ask through it, and the program holds every question to one
+ * at a time and stops its own clock while a person answers. Absent for a call
+ * the model made directly: the host then asks exactly as it always has.
+ */
+export interface RuntimeCallScope {
+  question<T>(ask: () => Promise<T>): Promise<T>;
+}
+
 export interface RuntimeMcpPort {
-  call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult>;
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ): Promise<RuntimeMcpCallResult>;
 }
 
 /** One product verb call, as the runtime hands it to the host. */
@@ -1315,25 +1382,50 @@ export interface RuntimeVerbCall {
   toolCallId: string;
 }
 
+/** One JSON scalar a verb result's `details` may carry. */
+export type RuntimeVerbDetailScalar = string | number | boolean | null;
+
+/**
+ * One value of a verb result's `details`: a scalar, a list of strings, or a
+ * flat object of scalars — the shapes `VerbResultFieldSchema` can declare.
+ */
+export type RuntimeVerbDetailValue =
+  | RuntimeVerbDetailScalar
+  | readonly string[]
+  | Readonly<Record<string, RuntimeVerbDetailScalar>>;
+
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
   /**
-   * Structured facts for the transcript row, never for the model (VC-9).
+   * Structured facts beside the text, never shown to a model calling the verb
+   * directly (VC-9).
    *
    * Rides the tool result's `details` slot, which the activity mapper reads
-   * and the model does not see. Exists for one row today: a `delegate` row
-   * links to the child Session by id and names it by title, and parsing
-   * either out of {@link text} would tie the transcript to the door's prose.
-   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   * and the model does not see. Two readers today. A `delegate` row links to
+   * the child Session by id and names it by title, and parsing either out of
+   * {@link text} would tie the transcript to the door's prose. And a Code Mode
+   * program receives it as `details` (VC-471), typed by the verb's
+   * `resultDetails` schema in the Verb Registry when it declares one.
+   *
+   * One level deep at most — scalars, string lists, flat objects of scalars —
+   * so the durable activity marker stays small and bounded.
    */
-  details?: Readonly<Record<string, string | number | boolean | null>>;
+  details?: Readonly<Record<string, RuntimeVerbDetailValue>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "mcp" | "callVerb"
+  | "tools"
+  | "askUser"
+  | "webFetch"
+  | "webSearch"
+  | "browser"
+  | "shell"
+  | "classify"
+  | "mcp"
+  | "callVerb"
 >;
 
 /**
@@ -1366,6 +1458,9 @@ export type SessionToolBinding =
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
   // The search (VC-364) carries the port with its optional `find` proven.
   | { tool: "browser_find"; port: RuntimeBrowserFindPort }
+  // Code Mode (VC-471) carries its frozen record: the runtime builds the tool
+  // over the Session's other tools, so there is no port to carry.
+  | { tool: "codemode"; codeMode: CodeModeSurface }
   // A name and nothing else, like a coding tool — but for the opposite reason.
   // A coding tool carries nothing because the runtime holds the environment
   // this package cannot see; `todo_write` carries nothing because there is
@@ -1375,6 +1470,8 @@ export type SessionToolBinding =
   | { tool: "shell_start"; port: RuntimeShellPort }
   | { tool: "shell_output"; port: RuntimeShellPort }
   | { tool: "shell_kill"; port: RuntimeShellPort }
+  // The decision model (VC-478), one name and one port, on the web tools' terms.
+  | { tool: "classify"; port: RuntimeClassifyPort }
   | {
       tool: McpToolId;
       definition: McpToolDefinition;
@@ -1440,6 +1537,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
     browser_find: find === undefined ? null : { tool: "browser_find", port: find },
+    classify: spec.classify === undefined ? null : { tool: "classify", port: spec.classify },
+    codemode:
+      spec.tools.codeMode === undefined
+        ? null
+        : { tool: "codemode", codeMode: spec.tools.codeMode },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -1459,7 +1561,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       "This Session's bundle names MCP tools, but no MCP port is wired to answer them.",
     );
   }
-  return [
+  const bindings: SessionToolBinding[] = [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
     ...verbs.map((verb): SessionToolBinding => ({
@@ -1473,6 +1575,17 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       port: mcp as RuntimeMcpPort,
     })),
   ];
+  // Held to the surface it routes, at the boundary that builds the surface: a
+  // record routing a tool the Session does not hold, or leaving one out, is
+  // a Session whose provider tool array would differ from the one it was
+  // born with (VC-471).
+  if (spec.tools.codeMode !== undefined) {
+    parseCodeModeSurface(
+      spec.tools.codeMode,
+      bindings.map((binding) => binding.tool),
+    );
+  }
+  return bindings;
 }
 
 /**

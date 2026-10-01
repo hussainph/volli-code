@@ -528,7 +528,11 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // prints, rather than a second spelling of "nothing named this".
         title: plan.automationName ?? UNBOUND_RUN_LABEL,
         actor: { kind: "automation" },
-        ...(plan.runtime === null ? {} : { modelOverride: runtimeOverride(plan.runtime) }),
+        // A definition that pins no Runtime lets a decision model choose from
+        // the Instructions (VC-432); a pinned one never does.
+        ...(plan.runtime === null
+          ? { autoSelect: { request: plan.text } }
+          : { modelOverride: runtimeOverride(plan.runtime) }),
       });
     } catch (error) {
       const mapped = mapSessionStartFailure(error);

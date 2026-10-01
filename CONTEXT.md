@@ -270,6 +270,27 @@ Session ledger. Availability and billing source are explicit; Volli never
 silently falls back to another model or account.
 _Avoid_: harness profile, provider picker (when meaning the complete access model)
 
+**Decision Model**:
+The second model kind beside the chat model: a classifier that reads a JSON
+state and answers named, typed questions — one of N (`choice`), a level
+(`score`), or yes/no (`bool`) — with probabilities and a confidence, and writes
+no text. Configured per profile with a per-project override, and `none` by
+default: nothing calls a model nobody configured. Local means a llama.cpp
+server on this Mac (loopback only, nothing leaves it); cloud means a Pi
+catalog classifier such as TypeSafe's Jev, reached with the provider's own
+Model Access credential and only for the purposes the person opted into.
+Every caller goes through the host **Decision Service** under a named
+**Decision Purpose** (`agent.classify` and `model.select`) and must state a deterministic
+fallback, which is its answer whenever the model is unset, unreachable, slow,
+wrong-shaped or refused. Agents reach it through the `classify` tool, present
+only in Sessions created while one was configured.
+**Automatic model choice** (`model.select`) lets a cloud Decision Model, behind
+its own switch, pick a new Session's model and reasoning level from the
+person's approved pairs — once, at birth, falling back to the configured default
+on any miss — and the Session records and shows the pick (`Auto-picked`).
+_Avoid_: classifier model (when meaning the setting), router, judge (that is a
+purpose)
+
 **Web Access**:
 The app-wide decision about whether Volli may reach the Internet on a
 Session's behalf, and through whose search provider. Off is the default and the
@@ -519,8 +540,9 @@ stability), static/dynamic (says nothing about how often)
 One model call Volli made on a Session's behalf, and what the provider said it
 consumed: uncached input, output, cache-read and cache-write tokens, each
 counted apart because each is priced apart. Its `cause` says which kind of work
-bought it — an `assistant` reply, a Context Compaction, or `utility` work such
-as auto-titling. A reply that only called tools, a reply that failed after its
+bought it — an `assistant` reply, a Context Compaction, `utility` work such
+as auto-titling, or a `decision` a Decision Model made for the Session (its
+purpose rides the event's provenance). A reply that only called tools, a reply that failed after its
 prompt was billed, and every attempt in a retry storm are each one of these; a
 turn is usually several. Recorded as a `usage.recorded` Session Event, never as
 metadata on the message it happened to produce — most metered operations produce

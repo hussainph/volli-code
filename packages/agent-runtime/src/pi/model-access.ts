@@ -1,4 +1,9 @@
-import { getSupportedThinkingLevels, type Model, type Models } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  isModelType,
+  type Model,
+  type Models,
+} from "@earendil-works/pi-ai";
 import {
   usageLimitsProbeFailed,
   type ModelAccessBillingSource,
@@ -74,16 +79,33 @@ export interface UsageLimitsSource {
 export const PROBE_TIMEOUT_MS = 5_000;
 
 /**
- * Whether a provider belongs on this page, which picks chat models (VC-469).
+ * Whether a provider belongs on this page: one that serves a chat model or a
+ * decision model (VC-469, VC-478).
  *
  * Pi 0.99 lists image and classifier models beside chat ones, and ships a
- * provider (`typesafe`) that serves classifiers only. Listed here it asked a
- * person to sign in to something with no model to pick. A provider with no
- * models of any type stays: a dynamic provider lists nothing until its first
- * refresh, and hiding it would hide the sign-in that fills it.
+ * provider (`typesafe`) that serves classifiers only. VC-469 left it out,
+ * because there was then nothing on this page to pick it for. Decision models
+ * are that thing: Settings → Models offers its classifiers, and a person signs
+ * in to it here like any other provider. A provider serving only image models
+ * still has nothing to pick and stays out. A provider with no models of any
+ * type stays in: a dynamic provider lists nothing until its first refresh, and
+ * hiding it would hide the sign-in that fills it.
  */
-function offersChat(models: Models, providerId: string): boolean {
-  return models.getModels(providerId).length > 0 || models.getAllModels(providerId).length === 0;
+function offersChatOrDecisions(models: Models, providerId: string): boolean {
+  const all = models.getAllModels(providerId);
+  return (
+    models.getModels(providerId).length > 0 ||
+    all.length === 0 ||
+    all.some((model) => isModelType(model, "classifier"))
+  );
+}
+
+/** Whether a provider serves decision models and no chat model at all. */
+function servesOnlyDecisions(models: Models, providerId: string): boolean {
+  return (
+    models.getModels(providerId).length === 0 &&
+    models.getAllModels(providerId).some((model) => isModelType(model, "classifier"))
+  );
 }
 
 /** Maps Pi-owned auth and catalog state into Volli's secret-free Model Access vocabulary. */
@@ -95,7 +117,9 @@ export async function inspectPiModelAccess(
   const models = source.models;
   input.signal?.throwIfAborted();
   await (source.catalogReady ?? Promise.resolve());
-  const chatProviders = models.getProviders().filter((provider) => offersChat(models, provider.id));
+  const listedProviders = models
+    .getProviders()
+    .filter((provider) => offersChatOrDecisions(models, provider.id));
   input.signal?.throwIfAborted();
   // One read of the whole file rather than one per provider: every credential
   // lives in the same document, and `list` yields ids and types only — the
@@ -126,7 +150,7 @@ export async function inspectPiModelAccess(
       refreshErrors = refreshed.errors;
     } else {
       const preflight = await Promise.all(
-        chatProviders.map(async (provider) => ({
+        listedProviders.map(async (provider) => ({
           provider,
           probe: await probeProviderAuth(models, provider.id, input.signal, PROBE_TIMEOUT_MS),
         })),
@@ -138,8 +162,12 @@ export async function inspectPiModelAccess(
           .filter(({ provider, probe }) => stored.has(provider.id) || probe.auth !== undefined)
           .map(({ provider }) => provider.id),
       );
-      const publicIds = source.catalogs.providerIds.filter((providerId) =>
-        connected.has(providerId),
+      // A decision-only provider has no chat catalog to refresh: its public
+      // feed publishes no chat model, which the feed reader refuses as an
+      // empty list, and the refusal would put a Retry beside a provider that
+      // is working fine (VC-478). Its classifiers come from Pi's catalog.
+      const publicIds = source.catalogs.providerIds.filter(
+        (providerId) => connected.has(providerId) && !servesOnlyDecisions(models, providerId),
       );
       // Public list discovery is deliberately separate from Pi's refresh: Pi
       // skips the network phase for providers whose credential is unresolved,
@@ -189,7 +217,7 @@ export async function inspectPiModelAccess(
   // once and is bounded by its own timeout, so the inspection costs the slowest
   // single probe plus overhead rather than their sum — see {@link probeProvider}.
   const probed = await Promise.all(
-    chatProviders.map(async (provider) => {
+    listedProviders.map(async (provider) => {
       // The usage read runs beside the provider probe, not inside it: it has
       // its own bound, so a slow usage endpoint cannot turn a provider that just
       // passed auth and availability into an `unavailable` row.
@@ -217,14 +245,20 @@ export async function inspectPiModelAccess(
     // Keep usable static/restored models available and offer Retry beside them;
     // otherwise one shared feed outage would turn every configured provider
     // red despite leaving every request path intact.
-    const providerState: ModelAccessState =
-      available.length > 0
-        ? "available"
-        : refreshError !== undefined || probeFailed
-          ? "unavailable"
-          : auth === undefined
-            ? "authentication-required"
-            : "unavailable";
+    // A decision-only provider has no chat model to be available, so its
+    // credential resolving is what makes it reachable (Pi's own rule for
+    // `getAvailableOfType`). Its classifiers are listed by the decision
+    // surface, never in this snapshot's chat catalog.
+    const reachable =
+      available.length > 0 ||
+      (!probeFailed && auth !== undefined && servesOnlyDecisions(models, provider.id));
+    const providerState: ModelAccessState = reachable
+      ? "available"
+      : refreshError !== undefined || probeFailed
+        ? "unavailable"
+        : auth === undefined
+          ? "authentication-required"
+          : "unavailable";
     providers.push({
       id: provider.id,
       label: provider.name,

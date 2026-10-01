@@ -60,6 +60,8 @@ import type {
   McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
+  DecisionModelCatalogEntry,
+  DecisionModelSetting,
   DeliberateMoveChoice,
   ModelSelection,
   NotificationEvent,
@@ -1679,6 +1681,75 @@ export interface VolliWebAccessIpcContract {
 
 export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
 
+// ---- decision models (VC-478) ---------------------------------------------
+
+/**
+ * Everything Settings is told about decision models, for one page.
+ *
+ * `project` is present when the page asked about a project: its override, or
+ * `null` when it inherits. `catalog` is every cloud classifier Pi offers, each
+ * with whether this profile has signed in to its provider — the only
+ * credential fact the renderer is given, and a state rather than a value.
+ */
+export interface DecisionModelSettingsView {
+  global: DecisionModelSetting;
+  project?: DecisionModelSetting | null;
+  catalog: readonly DecisionModelCatalogEntry[];
+}
+
+export type DecisionModelResult = Result<{
+  settings: DecisionModelSettingsView;
+  /** The project row as the write left it, when the write was a project's. */
+  project?: Project;
+}>;
+
+/** What a connection test found, end to end: one small question asked for real. */
+export type DecisionModelTestView =
+  | { ok: true; elapsedMs: number; probability: number }
+  | { ok: false; elapsedMs: number; message: string };
+
+export type DecisionModelTestResult = Result<{ test: DecisionModelTestView }>;
+
+/** Which setting a write changes: the app-wide one, or one project's override. */
+export type DecisionModelScope = { scope: "global" } | { scope: "project"; projectId: string };
+
+/**
+ * The decision model setting (VC-478), on its own door.
+ *
+ * Nothing on this surface carries a secret, and it cannot start carrying one:
+ * a setting names a provider and a model or a loopback URL, and main re-reads
+ * every write through `parseDecisionModelSetting`, which keeps only those
+ * fields. A cloud model's key is entered through Model Access sign-in and
+ * lives in Pi's own `auth.json`; this door only reports whether one exists.
+ */
+export interface VolliDecisionModelIpcContract {
+  /** The app-wide setting, a project's override when named, and the cloud catalog. */
+  "volli:decision-model-get": {
+    args: [projectId: string | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Stores one scope's setting. `null` clears a project's override back to
+   * inheriting; the app-wide setting cannot be null (`none` turns it off). A
+   * cloud setting must carry the person's opt-in, which main time-stamps.
+   */
+  "volli:decision-model-set": {
+    args: [scope: DecisionModelScope, setting: DecisionModelSetting | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Asks a local server or a cloud model one fixed question, end to end. Sends
+   * a probe sentence Volli wrote, never a Session's data, so it needs no
+   * opt-in; it is how a person checks a URL or a sign-in before relying on it.
+   */
+  "volli:decision-model-test": {
+    args: [setting: DecisionModelSetting];
+    result: DecisionModelTestResult;
+  };
+}
+
+export type DecisionModelIpcChannel = keyof VolliDecisionModelIpcContract;
+
 /** Whether agent telemetry is exported, and whether it is actually landing. */
 export interface AgentObservabilityView {
   enabled: boolean;
@@ -2669,6 +2740,7 @@ export interface VolliInvokeContract
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
+    VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
