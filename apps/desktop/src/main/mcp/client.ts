@@ -410,6 +410,70 @@ export function boundedFetch(base: McpFetch, maxBytes: number): McpFetch {
   };
 }
 
+/**
+ * pi-mcp sends notifications/cancelled but gives every HTTP POST the same
+ * connection-wide signal. Preserve the old client's per-request withdrawal:
+ * stateless servers have no session in which to match that notification.
+ * Keep the request controller through SSE consumption, until its reply, and
+ * never abort a sibling call or the server-to-client GET stream.
+ */
+function cancellableHttpTransport(
+  options: ConstructorParameters<typeof StreamableHttpTransport>[0],
+): StreamableHttpTransport {
+  const requests = new Map<string | number, AbortController>();
+  const baseFetch = options.fetch ?? fetch;
+  const endpoint = new URL(options.url).href;
+  const transport = new StreamableHttpTransport({
+    ...options,
+    fetch: (input, init) => {
+      const message: unknown =
+        String(input) === endpoint && init?.method === "POST" && typeof init.body === "string"
+          ? JSON.parse(init.body)
+          : null;
+      const controller =
+        isRecord(message) &&
+        typeof message["method"] === "string" &&
+        (typeof message["id"] === "string" || typeof message["id"] === "number")
+          ? requests.get(message["id"])
+          : undefined;
+      return baseFetch(
+        input,
+        controller === undefined
+          ? init
+          : {
+              ...init,
+              signal:
+                init?.signal == null
+                  ? controller.signal
+                  : AbortSignal.any([init.signal, controller.signal]),
+            },
+      );
+    },
+  });
+  const send = transport.send.bind(transport);
+  transport.send = async (message) => {
+    if ("method" in message && message.method === "notifications/cancelled") {
+      const id = isRecord(message.params) ? message.params["requestId"] : undefined;
+      if (typeof id === "string" || typeof id === "number") {
+        requests.get(id)?.abort(new McpAbortError());
+      }
+    }
+    if (!("method" in message) || !("id" in message)) return send(message);
+    requests.set(message.id, new AbortController());
+    try {
+      await send(message);
+    } catch (error) {
+      requests.delete(message.id);
+      throw error;
+    }
+  };
+  transport.onMessage((message) => {
+    if (!("method" in message)) requests.delete(message.id);
+  });
+  transport.onClose(() => requests.clear());
+  return transport;
+}
+
 function transportFor(
   server: McpServerDraft,
   workspacePath: string,
@@ -438,7 +502,7 @@ function transportFor(
       maxMessageBytes: MCP_STDIO_BUFFER_MAX_BYTES,
     });
   }
-  return new StreamableHttpTransport({
+  return cancellableHttpTransport({
     url: server.transport.url,
     fetch: boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
     maxMessageBytes: MCP_HTTP_MESSAGE_MAX_BYTES,

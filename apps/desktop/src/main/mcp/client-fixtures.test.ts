@@ -14,6 +14,7 @@ import {
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { McpCredentialRejectedError, McpProtocolEraError } from "./credentials";
 import { McpSessionHost } from "./session-host";
+import { startFixtureMcpServer } from "../../../e2e/bench/mcp-parallel/http-fixture";
 import type { McpProtocolClient } from "./discovery";
 
 const opened: McpProtocolClient[] = [];
@@ -91,6 +92,42 @@ describe("real MCP transport fixtures", () => {
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(Buffer.byteLength(text)).toBeGreaterThan(1_100_000);
     expect(text.endsWith(`row 19999 ${"-".repeat(45)}`)).toBe(true);
+  });
+
+  it("withdraws a cancelled HTTP request without cancelling its sibling or closing the connection", async () => {
+    const fixture = await startFixtureMcpServer({ id: "cancel-fixture", latencyMs: 500 });
+    closing.push(() => fixture.close());
+    const client = await openMcpProtocolClient(
+      {
+        id: fixture.id,
+        name: "Cancellation fixture",
+        enabled: true,
+        transport: { type: "streamable-http", url: fixture.url },
+      },
+      process.cwd(),
+      new AbortController().signal,
+    );
+    opened.push(client);
+    const abort = new AbortController();
+    const cancelled = client.callTool({
+      name: "fixture_read",
+      arguments: {},
+      signal: abort.signal,
+    });
+    const rejected = expect(cancelled).rejects.toThrow();
+    const sibling = client.callTool({
+      name: "fixture_read",
+      arguments: {},
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => expect(fixture.activeCalls).toBe(2));
+    abort.abort();
+    await rejected;
+    await vi.waitFor(() => expect(fixture.cancelled).toBe(1));
+    expect(fixture.activeCalls).toBe(1);
+    await expect(sibling).resolves.toMatchObject({ content: [{ type: "text" }] });
+    expect(fixture.calls.map((call) => call.status).toSorted()).toEqual(["cancelled", "completed"]);
+    await expect(client.listTools(new AbortController().signal)).resolves.toHaveLength(2);
   });
 
   it("discovers and calls a local unauthenticated Streamable HTTP server", async () => {
