@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { VERB_REGISTRY, type VerbToolField } from "./verb-registry";
+
 import {
   checkDecisionRequest,
   decisionCloudDisclosure,
@@ -389,5 +391,37 @@ describe("answers", () => {
         { approved: { type: "bool", probability: 1 } },
       ),
     ).toEqual({ approved: { type: "bool", value: true, probability: 1, confidence: 1 } });
+  });
+});
+
+describe("credentials are routed to the person", () => {
+  // The ticket's rule (VC-470's, carried here): no agent verb or tool accepts,
+  // sees or stores a key. The classify tool's own inputs are pinned in
+  // `classify-tool.test.ts`; this pins the Verb Registry — every door an agent
+  // can reach a product operation through — and the setting itself.
+  const SECRETISH = /api.?key|token|secret|credential|password/i;
+
+  function fieldNames(fields: readonly VerbToolField[], prefix: string): string[] {
+    return fields.flatMap((field) => [
+      `${prefix}.${field.name}`,
+      ...(field.type === "object" ? fieldNames(field.fields, `${prefix}.${field.name}`) : []),
+    ]);
+  }
+
+  it("offers no agent verb that configures a decision model or carries a key", () => {
+    for (const verb of VERB_REGISTRY) {
+      expect(verb.key).not.toMatch(/decision|classif/i);
+      const names = [
+        ...fieldNames(verb.tool?.input ?? [], verb.key),
+        ...verb.options.map((option) => `${verb.key} ${option.name}`),
+      ];
+      for (const name of names) expect(name).not.toMatch(SECRETISH);
+    }
+  });
+
+  it("has no setting field a key could occupy", () => {
+    for (const setting of [NO_DECISION_MODEL, LOCAL, CLOUD]) {
+      expect(JSON.stringify(Object.keys(setting))).not.toMatch(SECRETISH);
+    }
   });
 });
