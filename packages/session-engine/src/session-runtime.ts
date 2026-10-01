@@ -2416,6 +2416,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           ...base,
           kind: observation.kind,
           turnId: observation.turnId,
+          ...(observation.kind === "turn.interrupted" && observation.stopDetail !== undefined
+            ? { stopDetail: observation.stopDetail }
+            : {}),
         });
         if (observation.kind === "turn.started") {
           const admission = this.#messageAdmissions.get(spec.sessionId);

@@ -1387,3 +1387,41 @@ describe("cold replay translation", () => {
     ]);
   });
 });
+
+it("preserves stop facts on live and replayed interruption and Attention without changing old ids", async () => {
+  const stopDetail = {
+    category: "provider-refused" as const,
+    message: "Declined",
+    providerType: "refusal",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  const translator = tickingTranslator();
+  const sink = new Recorder();
+  const turn: RuntimeObservation = {
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    stopDetail,
+    occurredAt: 100,
+    recoveryCursor: "e1",
+  };
+  await translator.translate(turn, sink.emit);
+  expect(sink.of("turn.interrupted")[0]).toEqual(translator.replay(turn)[0]);
+  expect(sink.of("turn.interrupted")[0]).toMatchObject({ id: "pi:turn:t:interrupted", stopDetail });
+  for (const reason of ["runtime-failure", "auth"] as const) {
+    const attention: RuntimeObservation = {
+      kind: "attention",
+      state: "raised",
+      reason,
+      message: "Declined",
+      stopDetail,
+      occurredAt: 100,
+      recoveryCursor: `e-${reason}`,
+    };
+    await translator.translate(attention, sink.emit);
+    expect(sink.of("attention.raised").at(-1)).toEqual(translator.replay(attention)[0]);
+    expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
+  }
+});

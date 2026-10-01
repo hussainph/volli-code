@@ -1,5 +1,8 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
+import { ProviderStopCapture, finalStopDetail, safeStopMessage } from "./provider-stop";
+import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
+
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -1242,7 +1245,8 @@ function isRecoverableObservation(value: unknown): boolean {
     case "turn":
       return (
         isOneOf(value["state"], ["started", "completed", "interrupted"]) &&
-        typeof value["turnId"] === "string"
+        typeof value["turnId"] === "string" &&
+        validStopDetail(value["stopDetail"])
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
@@ -1302,7 +1306,8 @@ function isRecoverableObservation(value: unknown): boolean {
           "transport",
         ]) &&
         typeof value["message"] === "string" &&
-        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"])) &&
+        validStopDetail(value["stopDetail"])
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -2263,7 +2268,7 @@ async function attachSession(
     // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
-    let failure: RuntimeFailure | undefined;
+    let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
     let cancelled = false;
     /**
@@ -2690,10 +2695,28 @@ async function attachSession(
       );
     };
 
+    let providerStop = new ProviderStopCapture();
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      const capture = new ProviderStopCapture();
+      providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
       return models.streamSimple(requestModel, context, {
         ...options,
+        // Google/Bedrock cannot accept custom fetch. Missing SDK fields on
+        // those routes remain unknown rather than inferred from their prose.
+        ...(!["google-generative-ai", "google-vertex", "bedrock-converse-stream"].includes(
+          requestModel.api,
+        )
+          ? { fetch: capture.fetch(options?.fetch ?? globalThis.fetch, host.now) }
+          : {}),
+        onResponse: async (response, responseModel) => {
+          capture.response(response, host.now());
+          await options?.onResponse?.(response, responseModel);
+        },
+        onProviderStreamEvent: async (event, responseModel) => {
+          capture.event(event);
+          await options?.onProviderStreamEvent?.(event, responseModel);
+        },
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(nativeCompactionState?.kind === "anthropic-messages"
           ? {
@@ -3539,13 +3562,28 @@ async function attachSession(
         if (dropped !== undefined) {
           pendingReasoningDrop = mergeProviderReasoningDrop(pendingReasoningDrop, dropped);
         }
-        const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        const classified = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        const providerDetail = providerStop.detail(event.message as AssistantMessage);
+        const outcome =
+          providerDetail.category === "provider-refused"
+            ? {
+                kind: "failed" as const,
+                failure: {
+                  reason: "model" as const,
+                  message: providerDetail.message ?? "The provider refused this turn.",
+                },
+              }
+            : classified;
         if (outcome.kind === "settled") {
           await commitObservation(
             await persistObservation({ kind: "message-settled", turnId, message: outcome.message }),
           );
         } else if (outcome.kind === "failed") {
-          failure = outcome.failure;
+          const stopDetail = providerDetail;
+          failure = { ...outcome.failure, stopDetail };
+          // Structured provider facts outrank recovery heuristics over prose.
+          if (stopDetail.category === "auth-failed") failure.reason = "auth";
+          if (stopDetail.category === "context-overflow") failure.reason = "context";
         }
         return;
       }
@@ -3576,6 +3614,7 @@ async function attachSession(
         );
         return;
       }
+      let stopDetail: SessionStopDetail | undefined;
       // An abort Pi named as one, and an abort only this runtime knows it
       // caused, are the same fact reported two ways: the turn ended because it
       // was asked to. Neither is an unrecoverable failure, and neither deserves
@@ -3629,13 +3668,17 @@ async function attachSession(
                   holder: host.usageLimits?.holder,
                 })
               : null;
+          stopDetail = finalStopDetail(failure.stopDetail, autoRetryAttempts, resetsAt);
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
+            stopDetail,
             message:
-              spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
-            ...(resetsAt === null ? {} : { resetsAt }),
+              spent.length === 0
+                ? safeStopMessage(failure.message)
+                : `${safeStopMessage(failure.message)} (${spent.join("; ")})`,
+            ...(stopDetail.resetsAt === null ? {} : { resetsAt: stopDetail.resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
@@ -3644,7 +3687,12 @@ async function attachSession(
       // A Stop during a reconnect ends the wait with the turn.
       await clearTransportNotice();
       await commitObservation(
-        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        await persistObservation({
+          kind: "turn",
+          state: "interrupted",
+          turnId,
+          ...(stopDetail === undefined ? {} : { stopDetail }),
+        }),
       );
     });
 
@@ -4086,5 +4134,15 @@ async function attachSession(
       () => undefined,
     );
     throw error;
+  }
+}
+
+function validStopDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  try {
+    decodeSessionStopDetail(value, "Pi stop detail");
+    return true;
+  } catch {
+    return false;
   }
 }

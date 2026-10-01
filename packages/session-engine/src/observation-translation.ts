@@ -28,6 +28,7 @@
 
 import type {
   AuthorityReviewObservation,
+  SessionStopDetail,
   AttentionObservation,
   CompactionObservation,
   CompactionProgressObservation,
@@ -140,7 +141,11 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
-  | (TranslatedObservationBase & { kind: "turn.interrupted"; turnId: string })
+  | (TranslatedObservationBase & {
+      kind: "turn.interrupted";
+      turnId: string;
+      stopDetail?: SessionStopDetail;
+    })
   /**
    * The executor summarized its context, or tried to and could not.
    *
@@ -216,6 +221,7 @@ export type TranslatedObservation =
       attention:
         | {
             id: string;
+            stopDetail?: SessionStopDetail;
             kind:
               | "auth_required"
               | "configuration_invalid"
@@ -227,6 +233,7 @@ export type TranslatedObservation =
           }
         | {
             id: string;
+            stopDetail?: SessionStopDetail;
             kind: "adapter_unrecoverable";
             detail: string | null;
             diagnostic: SessionNativeDetail | null;
@@ -649,6 +656,7 @@ export class RuntimeObservationTranslator {
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
       turnId: observation.turnId,
+      ...(observation.stopDetail === undefined ? {} : { stopDetail: observation.stopDetail }),
     };
   }
 
@@ -816,6 +824,9 @@ export class RuntimeObservationTranslator {
               id: attentionId,
               kind: ATTENTION_KINDS[observation.reason],
               detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
               diagnostic: null,
               resetsAt: observation.resetsAt ?? null,
             }
@@ -823,6 +834,9 @@ export class RuntimeObservationTranslator {
               id: attentionId,
               kind: ATTENTION_KINDS[observation.reason],
               detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
               diagnostic: null,
             },
     };

@@ -114,3 +114,5 @@ export * from "./theme/ghostty-overlay";
 export * from "./theme/app-state";
 export * from "./theme/project-override";
 export * from "./theme/editor-themes";
+
+export * from "./session-stop";

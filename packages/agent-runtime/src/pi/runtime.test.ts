@@ -13111,3 +13111,77 @@ describe("transcript context (pi 0.87)", () => {
     expect(ceiling).toBe(48_000 - transcriptTokens - 4_096);
   });
 });
+
+describe("provider interruption details (VC-482)", () => {
+  it("persists stream-native usage-limit facts and replays the same turn and Attention", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const finishing = scriptedStream([(emit) => emit.fail("Limit used")]);
+    const models = modelsWithStream((model, context, options) => {
+      void options?.onResponse?.(
+        { status: 429, headers: { "retry-after": "60", authorization: "never-store-this" } },
+        model,
+      );
+      void options?.onProviderStreamEvent?.(
+        {
+          type: "error",
+          error: { type: "usage_limit_reached", message: "Limit used", resets_at: 1800000000 },
+        },
+        model,
+      );
+      return finishing(model, context, options);
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models,
+      retryBackoffMs: instantBackoff,
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    const turn = observations.find((o) => o.kind === "turn" && o.state === "interrupted");
+    expect(turn).toMatchObject({
+      stopDetail: {
+        category: "rate-limited",
+        providerType: "usage_limit_reached",
+        httpStatus: 429,
+        message: "Limit used",
+        resetsAt: 1800000000000,
+        retry: "not-retried",
+      },
+    });
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      stopDetail: (turn as Extract<RuntimeObservation, { kind: "turn" }>).stopDetail,
+    });
+    const recovery = handle.recovery!;
+    await handle.close();
+    expect(readFileSync(recovery.sessionFilePath, "utf8")).not.toContain("never-store-this");
+    const replay = await runtime.startSession({ ...spec, recovery });
+    expect((await replay.reconcile(null)).observations).toContainEqual(turn);
+    await replay.close();
+  });
+
+  it("treats an explicit Responses refusal as interruption even when Pi settles it as stop", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const finishing = scriptedStream([settles("Declined")]);
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream((model, context, options) => {
+        calls += 1;
+        void options?.onProviderStreamEvent?.(
+          { type: "response.refusal.done", refusal: "Declined; you can retry your request" },
+          model,
+        );
+        return finishing(model, context, options);
+      }),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    expect(calls).toBe(1);
+    expect(observations.at(-1)).toMatchObject({
+      kind: "turn",
+      state: "interrupted",
+      stopDetail: { category: "provider-refused" },
+    });
+    await handle.close();
+  });
+});

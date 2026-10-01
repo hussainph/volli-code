@@ -2176,3 +2176,30 @@ describe("sameQueuedMessage", () => {
     expect(holdList(strip, rebuilt, sameQueuedMessage)).toBe(strip);
   });
 });
+
+it("shows the provider's typed interruption cause in the blocker instead of generic stopped", () => {
+  for (const [category, kind, wording] of [
+    ["rate-limited", "adapter_unrecoverable", "usage or rate limit"],
+    ["provider-refused", "adapter_unrecoverable", "declined"],
+    ["auth-failed", "auth_required", "sign-in failed"],
+    ["context-overflow", "context_limit_reached", "context limit"],
+  ] as const) {
+    const blocker = sessionBlocker(
+      raised({
+        ...attention(kind, "Provider sentence"),
+        stopDetail: {
+          category,
+          message: "Provider sentence",
+          providerType: "fixture",
+          httpStatus: null,
+          retry: "not-retried",
+          resetsAt: null,
+        },
+      }),
+      ACTS,
+      false,
+    );
+    expect(blocker?.message).toContain(wording);
+    expect(blocker?.detail).toBe("Provider sentence");
+  }
+});

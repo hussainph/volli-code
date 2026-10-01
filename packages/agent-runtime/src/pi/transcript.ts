@@ -271,6 +271,26 @@ export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] 
  * which the next window answers — is retried.
  */
 export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
+  const category = failure.stopDetail?.category;
+  if (
+    category === "provider-refused" ||
+    category === "auth-failed" ||
+    category === "bad-request" ||
+    category === "context-overflow"
+  )
+    return false;
+  if (
+    category === "provider-overloaded" ||
+    category === "network" ||
+    category === "runtime-stopped"
+  )
+    return true;
+  if (
+    ["usage_limit_reached", "usage_not_included", "insufficient_quota", "quota_exceeded"].includes(
+      failure.stopDetail?.providerType ?? "",
+    )
+  )
+    return false;
   if (failure.reason !== "model") return false;
   const text = failure.message;
   if (QUOTA_SIGNAL.test(text)) return false;

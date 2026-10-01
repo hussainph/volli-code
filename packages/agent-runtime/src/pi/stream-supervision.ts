@@ -130,11 +130,29 @@ export function superviseStreams(
       run?.removeEventListener("abort", forwardStop);
       return true;
     };
-    const fail = (reason: "aborted" | "error", message: string): void => {
+    const fail = (reason: "aborted" | "error", message: string, cause?: unknown): void => {
       const failed: AssistantMessage = {
         ...(partial ?? emptyReply(model)),
         stopReason: reason,
         errorMessage: message,
+        rawStopReason: cause === undefined ? "volli.stream-stalled" : "volli.runtime-error",
+        ...(cause instanceof Error
+          ? {
+              diagnostics: [
+                {
+                  type: "runtime_transport_failure",
+                  timestamp: Date.now(),
+                  error: {
+                    name: cause.name,
+                    message,
+                    ...("code" in cause && typeof cause.code === "string"
+                      ? { code: cause.code }
+                      : {}),
+                  },
+                },
+              ],
+            }
+          : {}),
       };
       out.push({ type: "error", reason, error: failed });
       out.end(failed);
@@ -186,6 +204,7 @@ export function superviseStreams(
         fail(
           run?.aborted ? "aborted" : "error",
           error instanceof Error ? error.message : String(error),
+          error,
         );
       }
     })();

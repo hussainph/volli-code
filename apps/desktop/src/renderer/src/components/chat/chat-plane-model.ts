@@ -1,3 +1,4 @@
+import { sessionStopSummary } from "@volli/shared";
 /**
  * The chat plane's decisions, without a plane.
  *
@@ -1030,7 +1031,9 @@ function attentionBlocker(
   switch (attention.kind) {
     case "auth_required":
       return providerRecovery({
-        message: "Sign-in required",
+        message: attention.stopDetail
+          ? sessionStopSummary(attention.stopDetail)
+          : "Sign-in required",
         detail,
         settings,
         retryRuntime,
@@ -1069,7 +1072,13 @@ function attentionBlocker(
       );
     case "context_limit_reached":
       return errorBlocker(
-        { message: "Context limit reached", detail, action: null },
+        {
+          message: attention.stopDetail
+            ? sessionStopSummary(attention.stopDetail)
+            : "Context limit reached",
+          detail,
+          action: null,
+        },
         dismissKey,
         dismissAttention,
       );
@@ -1126,7 +1135,7 @@ function stoppedRunBlocker(
   const attachmentId = attention.attachmentId;
   return errorBlocker(
     {
-      message: "Session stopped",
+      message: attention.stopDetail ? sessionStopSummary(attention.stopDetail) : "Session stopped",
       detail,
       action: retryRuntime,
       secondaryAction:
