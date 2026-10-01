@@ -284,7 +284,7 @@ Options:
   --project <p>           Target project.
   --all-projects          Every project this profile holds, not just one.
   --since <when>          Only operations at or after this instant or look-back.
-  --group-by <dimension>  Break the total down along one dimension. (valid: ticket, session, model, day)
+  --group-by <dimension>  Break the total down along one dimension. (valid: ticket, session, model, day, cause)
 
 Example: volli cost --ticket VC-12 --group-by session
 
@@ -1268,6 +1268,16 @@ Bundle identity
   Build id: reference-fixture
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
+
+VC-478 (after VC-457)
+Added
+- classify — ask the configured decision model typed questions about a JSON state: choice (one option key of several), score (a level on a scale, lowest first) or bool (yes or no). It answers with probabilities and a confidence from 0 to 1, never text, as structured content beside a short text line, so a script can read answers.<name>. Use it for decisions that repeat — labelling or triaging many items, checking which state a page or element is in, filtering inside a loop — and not for anything needing open-ended reasoning or written output. A Session has it only when a person configured a decision model before the Session was created, and a cloud one only with their opt-in. When it reports no decision (the model was turned off, is slow, or failed), decide yourself.
+Changed
+- None in this record.
+Fixed
+- None in this record.
+Removed
+- None in this record.
 
 VC-457 (after VC-364)
 Added

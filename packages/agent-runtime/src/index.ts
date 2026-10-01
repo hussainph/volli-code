@@ -25,6 +25,27 @@ export {
 export { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./pi/scoped-execution-env";
 export { readHostGitSettings, type GitIdentity, type HostGitSettings } from "./pi/host-git";
 export {
+  decisionTargetReady,
+  inspectDecisionModels,
+  LOCAL_DECISION_PROVIDER_ID,
+  piDecisionClassifier,
+  testDecisionConnection,
+  type ClassifierCallResult,
+  type DecisionClassifier,
+  type DecisionConnectionTest,
+  type LocalClassifierOptions,
+} from "./pi/classifier";
+export {
+  createDecisionService,
+  type DecisionAuditFact,
+  type DecisionServiceOptions,
+} from "./decision/service";
+export {
+  CLASSIFY_DESCRIPTION,
+  createClassifyTool,
+  type ClassifyToolDetails,
+} from "./pi/classify-tool";
+export {
   DEFAULT_MCP_SERVER_LIMITS,
   McpServerBudget,
   validateMcpServerLimits,

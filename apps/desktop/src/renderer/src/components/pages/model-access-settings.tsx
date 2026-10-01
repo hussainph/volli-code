@@ -57,6 +57,7 @@ import {
 } from "@volli/shared";
 
 import { ModelName } from "@renderer/components/models/model-identity";
+import { DecisionModelSettings } from "@renderer/components/pages/decision-model-settings";
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
 import {
   refreshOutcome,
@@ -160,6 +161,13 @@ export function ModelAccessSettings({
   const [compaction, setCompaction] = React.useState<CompactionPolicy>(DEFAULT_COMPACTION_POLICY);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  // A sign-in the Decision model section asked for (VC-478): the Accounts list
+  // remounts under a new key so the named provider's row presses its own
+  // sign-in on arrival, exactly as a deep link from a chat blocker does.
+  const [decisionSignIn, setDecisionSignIn] = React.useState<{
+    providerId: string;
+    nonce: number;
+  } | null>(null);
   // Sign-in/out bumps the shared client revision while its explicit onChanged
   // refresh may still be in flight. Only the latest inspection may project
   // into this pane; otherwise a pre-sign-out snapshot can arrive last and put
@@ -330,6 +338,17 @@ export function ModelAccessSettings({
           {PURPOSE_ROWS.filter((row) => row.depth === 1).map((row) => renderDefaultRow(row))}
         </div>
       </PrefSection>
+      <DecisionModelSettings
+        onSignIn={(providerId) => {
+          setDecisionSignIn((current) => ({ providerId, nonce: (current?.nonce ?? 0) + 1 }));
+          // The row is further down the page; bring it to the person.
+          requestAnimationFrame(() =>
+            document
+              .querySelector(`[data-testid="account-${CSS.escape(providerId)}"]`)
+              ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+          );
+        }}
+      />
       <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
@@ -351,8 +370,9 @@ export function ModelAccessSettings({
         />
       ) : null}
       <ModelAccessAccounts
+        key={decisionSignIn?.nonce ?? 0}
         providers={providers}
-        autoSignInProviderId={deepLinkedProviderId}
+        autoSignInProviderId={decisionSignIn?.providerId ?? deepLinkedProviderId}
         onRecover={() => void retry()}
         onChanged={() => load(true)}
       />

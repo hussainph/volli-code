@@ -281,6 +281,7 @@ describe("buildExportDocument — populated db", () => {
         // No recorded departure, so this project inherits every authority
         // default (migration 025).
         authorityPolicy: null,
+        decisionModel: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.

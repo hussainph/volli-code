@@ -162,9 +162,18 @@ export interface SessionToolSurfacePorts {
     grants: readonly string[],
     within?: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    classify?: boolean,
   ): readonly SessionToolId[];
   /** Selected sanitized definitions for a newly born root Session. */
   resolveMcp?(projectId: string): readonly McpToolDefinition[];
+  /**
+   * Whether a Session born now in this project is offered `classify` (VC-478):
+   * a decision model is configured for the tool and, if it is in the cloud,
+   * opted into (`offersClassifyTool`). Asked once, at birth, and frozen with the rest of
+   * the surface; a Subagent is still bounded by its parent's record (`within`).
+   * Absent reads as no.
+   */
+  resolveClassify?(projectId: string): Promise<boolean>;
   /** Exact definitions a parent froze, used verbatim by a new child. */
   recordedMcp?(sessionId: string): Promise<readonly McpToolDefinition[]>;
   /**
@@ -680,11 +689,13 @@ export function createSessions(options: SessionsOptions): Sessions {
       input.parentSessionId === undefined
         ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
         : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
+    const classify = (await options.toolSurface.resolveClassify?.(input.projectId)) ?? false;
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
       within === null ? undefined : within,
       mcpTools,
+      classify,
     );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),

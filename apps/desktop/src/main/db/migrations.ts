@@ -2230,6 +2230,25 @@ END;
 `;
 
 /**
+ * Migration 053: a project's own decision model (VC-478).
+ *
+ * One nullable JSON column beside `session_model`, on 024's terms: `NULL` is
+ * "inherit the app-wide decision model", and a stored `{ "kind": "none" }` is
+ * a project that turned decision models off for itself — a choice, not an
+ * absence. The document is variable-shaped (none, a local server, a cloud
+ * model with its opt-in), so `json_valid` guards it and the reader re-checks
+ * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
+ * inherit; see `readDecisionModelColumn`).
+ *
+ * No credential is or can be stored here: a cloud setting names a provider and
+ * a model, and the key stays in Pi's own `auth.json`.
+ */
+const MIGRATION_053_PROJECT_DECISION_MODEL = `
+ALTER TABLE projects ADD COLUMN decision_model TEXT
+  CHECK (decision_model IS NULL OR json_valid(decision_model));
+`;
+
+/**
  * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
  *
  * A read receipt is not work, so it is deliberately NOT a Session ledger fact.
@@ -2532,7 +2551,24 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session_read_receipts — unread is its own axis, durable across relaunch (VC-30 × VC-108)",
     sql: MIGRATION_052_SESSION_READ_RECEIPTS,
   },
+  {
+    version: 53,
+    name: "projects.decision_model — a project's own decision model, NULL = inherit (VC-478)",
+    sql: MIGRATION_053_PROJECT_DECISION_MODEL,
+    apply: applyMigration053ProjectDecisionModel,
+  },
 ];
+
+/**
+ * Migration 053's column addition, probe-gated like 051's: `ADD COLUMN` throws
+ * on a column that is already there, and a lineage can be re-offered a version
+ * it already ran.
+ */
+function applyMigration053ProjectDecisionModel(db: Database.Database): void {
+  const columns = db.pragma("table_info(projects)") as { name: string }[];
+  if (columns.some(({ name }) => name === "decision_model")) return;
+  db.exec(MIGRATION_053_PROJECT_DECISION_MODEL);
+}
 
 /**
  * Migration 050's column additions, probe-gated like 040's and 041's.

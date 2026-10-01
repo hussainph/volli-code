@@ -61,6 +61,7 @@ import {
   verbToolWireName,
 } from "@volli/shared";
 import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { createClassifyTool } from "./classify-tool";
 import { createShellTool } from "./shell-tools";
 import { piContext } from "./pi-context";
 import { MAX_READ_IMAGE_BASE64_BYTES, processReadImage } from "./read-image-processor";
@@ -294,6 +295,9 @@ export function createSessionTools(
         // Three names, one port, one factory (VC-270), on the browser arms'
         // terms. See ./shell-tools.ts for what a background shell is.
         return createShellTool(binding.tool, binding.port, spec.signal);
+      case "classify":
+        // The decision model (VC-478): one name, one port. See ./classify-tool.ts.
+        return createClassifyTool(binding.port, spec.signal);
       default:
         if ("definition" in binding) return createMcpTool(binding, spec.signal, output);
         // The verb half, and the one branch that cannot be a case label: its

@@ -58,6 +58,56 @@ selectors when your account can use them. Use **Catalog** to hide or show
 individual models in pickers. Hiding a model does not remove the provider
 account.
 
+## Decision model
+
+A decision model is a second, much smaller kind of model. It does not write
+text. It reads some structured data and answers typed questions about it:
+pick one of several options, place it on a scale, or answer yes or no. Each
+answer comes with probabilities and a confidence. Because it writes nothing,
+it answers in a fraction of a second for a fraction of the cost of a chat
+model.
+
+Agents use it through the **classify** tool, for decisions they repeat many
+times: labelling or triaging a list, checking which state a web page is in,
+or filtering inside a script. Volli features can use it too.
+
+In **Settings → Models → Decision model**, choose one of three options:
+
+- **None** (the default). Nothing uses a decision model, and agents do not get
+  the classify tool.
+- **Local**. A model you run with llama.cpp's `llama-server` on this Mac.
+  Enter the server address (for example `http://127.0.0.1:8080`) and, for a
+  server that loads several models, the model id. Select **Test** to ask the
+  server one question, then **Save**. Only addresses on this Mac are accepted
+  (`localhost`, `127.0.0.1` or `[::1]`), so nothing leaves the machine.
+- **Cloud**. A classifier from a provider, such as TypeSafe's Jev on
+  TypeSafe, OpenRouter, Cloudflare Workers AI, Vercel AI Gateway or OpenCode
+  Zen. When you choose one, Volli asks you to allow sending data to it and
+  says what is sent. If the provider is not signed in yet, the row says
+  **Needs setup**; select **Sign in** and enter the key under
+  **Available to connect**, like any other provider.
+
+### What leaves your Mac
+
+A local model sends nothing off your Mac. A cloud model receives whatever is
+being classified. For the classify tool, that is whatever the agent passes
+it: Session text, tool results and page content. Volli never puts your
+provider key in a Session, a prompt or a tool, and no agent can set one.
+
+### Turning it off
+
+Choose **None**. Calls stop immediately, including calls from Sessions that
+already have the classify tool: the tool then tells the agent that no
+decision model is configured, and the agent decides for itself. A project can
+use a different decision model, or turn it off for itself, in
+**Configure → Sessions → Chat → Decision model**. A project with its own
+choice there keeps it, so to turn decision models off everywhere, also reset
+or set to **None** any project that overrides the app-wide setting.
+
+The classify tool is added only to Sessions created while a decision model is
+set. Turning one on does not add the tool to Sessions that already exist.
+Decision calls are counted in each Session's usage and in `volli cost`.
+
 ## Automatic compaction
 
 **Automatic compaction** is on by default. When a Session's conversation nears

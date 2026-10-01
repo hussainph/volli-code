@@ -45,6 +45,29 @@ describe("mapPiActivity", () => {
     });
   });
 
+  it("names a classify row by the questions it asked (VC-478)", () => {
+    const label = (questions: unknown): unknown =>
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "c",
+          toolName: "classify",
+          args: { state: {}, questions },
+        },
+        activityContext({ observedAt: 1 }),
+      ).descriptor;
+    expect(label({ approved: {}, category: {} })).toMatchObject({
+      kind: "other",
+      nativeToolName: "classify",
+      subject: { label: "classify: approved, category" },
+    });
+    expect(label({ a: {}, b: {}, c: {}, d: {}, e: {} })).toMatchObject({
+      subject: { label: "classify: a, b, c +2" },
+    });
+    expect(label(undefined)).toMatchObject({ subject: { label: "classify" } });
+    expect(label({})).toMatchObject({ subject: { label: "classify" } });
+  });
+
   it("maps exact Pi read lifecycle shapes and retains settled input context", () => {
     const startedEvent = {
       type: "tool_execution_start",

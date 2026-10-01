@@ -1202,6 +1202,42 @@ describe("Pi native adapter attach", () => {
     await expect(attempt).rejects.toThrow(/shell/);
   });
 
+  it("binds no classify port to a Session born without a decision model, whatever the host has now (VC-478)", async () => {
+    // The frozen record decides: a Session created before a decision model
+    // was configured keeps its tool array and its Cache Prefix.
+    const { runtime } = await attached({
+      resolveClassifyPort: () => ({ classify: unusedPortMethod }),
+    });
+    expect("classify" in runtime.spec).toBe(false);
+  });
+
+  it("hands a recorded classify surface the decision port, bound to its Session and project (VC-478)", async () => {
+    const scopes: unknown[] = [];
+    const port = { classify: unusedPortMethod };
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+      resolveClassifyPort: (scope) => {
+        scopes.push(scope);
+        return port;
+      },
+    });
+    expect(scopes).toEqual([{ sessionId: SESSION_ID, projectId: "project-1" }]);
+    expect(runtime.spec.classify).toBe(port);
+  });
+
+  it("refuses attachment rather than dropping a frozen classify tool the launch cannot answer (VC-478)", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+    });
+    await expect(attempt).rejects.toThrow(/classify/);
+  });
+
   it("resolves the ports once per attachment rather than per turn", async () => {
     let resolutions = 0;
     const { runtime } = await attached({
