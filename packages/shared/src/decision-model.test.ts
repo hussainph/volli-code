@@ -222,6 +222,15 @@ const QUESTIONS = {
   },
 } satisfies Record<string, DecisionQuestion>;
 
+function problem(input: unknown): string {
+  const checked = checkDecisionRequest(input);
+  return checked.ok ? "" : checked.problem;
+}
+
+function ask(question: unknown, state: unknown = { x: 1 }): string {
+  return problem({ state, questions: { q: question } });
+}
+
 describe("requests", () => {
   it("accepts every question type and rebuilds only the fields a request has", () => {
     const checked = checkDecisionRequest({
@@ -241,13 +250,6 @@ describe("requests", () => {
     });
     expect(JSON.stringify(checked)).not.toContain("sk-secret");
   });
-
-  const problem = (input: unknown): string => {
-    const checked = checkDecisionRequest(input);
-    return checked.ok ? "" : checked.problem;
-  };
-  const ask = (question: unknown, state: unknown = { x: 1 }): string =>
-    problem({ state, questions: { q: question } });
 
   it("holds the state to JSON, depth and size", () => {
     expect(problem(null)).toMatch(/must be an object/);

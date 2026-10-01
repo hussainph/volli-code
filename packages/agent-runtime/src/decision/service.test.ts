@@ -49,7 +49,7 @@ type Outcome = { answered: DecisionAnswered } | { miss: DecisionMiss };
 
 /** One decision, asked the way every caller must: with a use AND a fallback. */
 function ask(
-  service: ReturnType<typeof createDecisionService>,
+  decisions: ReturnType<typeof createDecisionService>,
   overrides: Partial<{
     purpose: DecisionPurpose;
     sessionId: string | null;
@@ -58,7 +58,7 @@ function ask(
     signal: AbortSignal;
   }> = {},
 ): Promise<Outcome> {
-  return service.decide<Outcome>({
+  return decisions.decide<Outcome>({
     purpose: "agent.classify",
     sessionId: "session-1",
     state: STATE,

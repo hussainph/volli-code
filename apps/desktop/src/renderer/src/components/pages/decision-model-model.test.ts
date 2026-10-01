@@ -41,6 +41,10 @@ const ZEN = entry({
 const ZEN_FREE = { ...ZEN, modelId: "jev-1.13-free", label: "Jev 1.13 Free" };
 const CATALOG = [ZEN, JEV, ZEN_FREE];
 
+function cloud(ref: { providerId: string; modelId: string }) {
+  return cloudSetting(ref, 1) as Extract<DecisionModelSetting, { kind: "cloud" }>;
+}
+
 describe("the decision model control's model", () => {
   it("reads a setting's mode", () => {
     expect(decisionMode({ kind: "none" })).toBe("none");
@@ -109,8 +113,6 @@ describe("the decision model control's model", () => {
   });
 
   it("says where a cloud model stands", () => {
-    const cloud = (ref: DecisionModelCatalogEntry | { providerId: string; modelId: string }) =>
-      cloudSetting(ref, 1) as Extract<DecisionModelSetting, { kind: "cloud" }>;
     expect(cloudStatus(cloud(JEV), CATALOG)).toEqual({ kind: "ready", entry: JEV });
     expect(cloudStatus(cloud(ZEN), CATALOG)).toEqual({ kind: "needs-setup", entry: ZEN });
     expect(cloudStatus(cloud({ providerId: "x", modelId: "y" }), CATALOG)).toEqual({
