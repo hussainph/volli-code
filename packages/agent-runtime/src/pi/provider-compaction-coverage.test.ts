@@ -1154,6 +1154,25 @@ describe("compactProviderNative — Anthropic request shaping", () => {
     expect(outcome.message.length).toBeLessThan(700);
   });
 
+  it("withholds an oversized text fallback without a readable body stream", async () => {
+    const response = new Response(null, { status: 400 });
+    vi.spyOn(response, "text").mockResolvedValue(
+      `Bearer dummy-bodyless-482 ${"word ".repeat(2_000)}`,
+    );
+    const outcome = await compactProviderNative({
+      model: OPENAI_MODEL,
+      models: modelsReturningAuth({ apiKey: "dummy-api-key" }),
+      messages: [user("hello")],
+      enabled: true,
+      fetch: async () => response,
+    });
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: "OpenAI /responses/compact failed with 400: Provider error body withheld.",
+    });
+    expect(JSON.stringify(outcome)).not.toContain("dummy-bodyless-482");
+  });
+
   it("reads a body-less response without pretending it was JSON", async () => {
     const outcome = await compactProviderNative({
       model: ANTHROPIC_MODEL,
