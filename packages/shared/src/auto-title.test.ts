@@ -433,6 +433,9 @@ describe("sanitizeAutoTitle", () => {
     expect(exact).toHaveLength(AUTO_TITLE_MAX_LENGTH);
     expect(sanitizeAutoTitle(exact)).toBe(exact);
     expect(sanitizeAutoTitle(`${exact}.`)).toBe(exact);
+    // 68 characters: one whole word over, so the word goes rather than a cut
+    // landing mid-word.
+    expect(sanitizeAutoTitle(`${exact} now`)).toBe(exact);
   });
 
   it("strips punctuation the cut itself exposed", () => {
