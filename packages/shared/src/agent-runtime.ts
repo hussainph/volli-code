@@ -25,6 +25,7 @@ import type {
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import type { ContainmentMode } from "./capability-policy";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -1007,6 +1008,16 @@ export interface RuntimeShellKillOutcome {
  * Deliberately absent: stdin, a PTY, a restart verb, a filter on reads. A
  * shell a person types into is the terminal, not this.
  */
+/**
+ * One command already wrapped in a Scoped Session's walls (VC-45): the argv to
+ * spawn in place of `/bin/bash -c <command>`, and the whole environment it is
+ * handed.
+ */
+export interface RuntimeContainedLaunch {
+  argv: readonly string[];
+  env: Record<string, string>;
+}
+
 export interface RuntimeShellPort {
   start(input: {
     command: string;
@@ -1014,6 +1025,14 @@ export interface RuntimeShellPort {
     cwd?: string;
     title?: string;
     signal: AbortSignal;
+    /**
+     * Present when the Session runs behind walls (VC-45): the port must spawn
+     * what this returns for the resolved `cwd` instead of the bare command, so
+     * a background shell is contained exactly as the `execute` tool's command
+     * is. It throws when the walls cannot be put up, and the start fails —
+     * never falls back to an uncontained spawn.
+     */
+    contain?: (command: string, cwd: string) => Promise<RuntimeContainedLaunch>;
   }): Promise<RuntimeShellStartOutcome>;
   output(input: {
     shellId: string;
@@ -1051,6 +1070,22 @@ export interface RuntimeWorkspaceEnvironment {
   installCommand: string | null;
 }
 
+/**
+ * What a project's policy says about the walls one Session runs behind (VC-45).
+ *
+ * Policy, not resolution: the runtime turns this into a `CapabilityPolicy` at
+ * attach — the secrets denylist under the user's home, the git directory a
+ * worktree commits into, the Session's own saved output — because only it can
+ * read a filesystem. The same resolved policy then feeds the authority gate and,
+ * when `containment` is `scoped`, the execution environment's file guard and
+ * Seatbelt profile.
+ */
+export interface RuntimeCapability {
+  containment: ContainmentMode;
+  /** The project's declared writable roots, absolute, as the policy stated them. */
+  writableRoots: readonly string[];
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -1086,6 +1121,17 @@ export interface SessionRuntimeSpec {
    * a flag inside the Snapshot.
    */
   authority?: AuthoritySnapshot;
+  /**
+   * The capability axis this Session runs under (VC-45), handed over whenever
+   * its attachment has a Snapshot — under `observe` as much as `enforce`,
+   * because walls do not wait for the rule pack to bind. See
+   * {@link RuntimeCapability}.
+   *
+   * Absent under `off`, the explicit bypass of both axes, and from every caller
+   * that never heard of it: the runtime then builds no walls, and a gate it
+   * does install treats the workspace as the only declared root.
+   */
+  capability?: RuntimeCapability;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could

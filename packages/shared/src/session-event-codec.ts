@@ -50,6 +50,7 @@ import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
+import { CONTAINMENT_MODES } from "./capability-policy";
 import { errorMessage } from "./errors";
 import type { PresentedScheduledResume } from "./scheduled-resume";
 import {
@@ -1433,6 +1434,12 @@ function decodeAttachment(value: unknown, context: string): SessionAttachment {
  * The enums are the exception and are validated, because each names a branch
  * this codebase still switches on; a value outside them is not a record from an
  * older vocabulary but a corrupt one.
+ *
+ * `containment` and `writableRoots` arrived with VC-45, so a record written
+ * before them has neither. Absent reads as `off` with no declared roots, which
+ * is not a guess but the truth of that attachment: nothing contained a Session
+ * before the capability axis came back. Present, they are validated like every
+ * other field.
  */
 function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnapshot {
   const row = asRecord(value, context);
@@ -1449,6 +1456,14 @@ function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnap
       ["observe", "enforce"] as const,
       `${context}.enforcement`,
     ),
+    containment:
+      row.containment === undefined
+        ? "off"
+        : enumValue(row.containment, CONTAINMENT_MODES, `${context}.containment`),
+    writableRoots:
+      row.writableRoots === undefined
+        ? []
+        : readStringList(row.writableRoots, `${context}.writableRoots`),
     judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
     tools: readToolIds(row.tools, `${context}.tools`),
     rulePackId: readString(row.rulePackId, `${context}.rulePackId`),
@@ -1472,6 +1487,11 @@ function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnap
  * record is most valuable precisely then — it is how a reader learns that the
  * Session which made a call held a tool that has since been retired.
  */
+function readStringList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => readString(item, `${context}[${index}]`));
+}
+
 function readToolIds(value: unknown, context: string): AuthoritySnapshot["tools"] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
   return value.map((item, index) =>

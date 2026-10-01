@@ -25,10 +25,11 @@ describe("hashRulePack", () => {
     // and VC-44 is why it now matters: the hash is written into every
     // attachment's durable Authority Snapshot, so a pack that changed without
     // anyone noticing leaves every older denial citing a pack id that no longer
-    // corresponds to any pack that ever ran. Nine rules, `d5e3dd88` before VC-3
-    // deleted `tool.not-bundled`.
-    expect(AUTHORITY_RULE_IDS).toHaveLength(9);
-    expect(BUILTIN_RULE_PACK_HASH).toBe("dca89a93");
+    // corresponds to any pack that ever ran. Ten rules: `d5e3dd88` before VC-3
+    // deleted `tool.not-bundled`, `dca89a93` for the nine it left, and
+    // `e29cd0d8` since VC-45 added `path.secrets` at the head of the pack.
+    expect(AUTHORITY_RULE_IDS).toHaveLength(10);
+    expect(BUILTIN_RULE_PACK_HASH).toBe("e29cd0d8");
   });
 
   it("changes when the pack is reordered, so pack order is part of its identity", () => {
@@ -63,13 +64,15 @@ describe("non-coding tool vocabulary", () => {
    * hash exists to make a changed pack undetectable in neither direction. The
    * literal is the independent source of truth: it came from the pack as it
    * stands, not from re-running the hash over whatever the list happens to say,
-   * which is what makes this test able to fail.
+   * which is what makes this test able to fail. It moved again, to `e29cd0d8`,
+   * when VC-45 added `path.secrets` — a different rule, not `tool.not-bundled`
+   * returning under a new name.
    *
    * Naming a tool below is still not a rule and still must not move it.
    */
   it("pins the built-in rule pack's identity, which moved when the pack lost a rule", () => {
-    expect(BUILTIN_RULE_PACK_HASH).toBe("dca89a93");
-    expect(AUTHORITY_RULE_IDS).toHaveLength(9);
+    expect(BUILTIN_RULE_PACK_HASH).toBe("e29cd0d8");
+    expect(AUTHORITY_RULE_IDS).toHaveLength(10);
     expect(AUTHORITY_RULE_IDS).not.toContain("tool.not-bundled");
   });
 

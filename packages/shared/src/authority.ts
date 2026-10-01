@@ -9,11 +9,12 @@
  * package allowed to.
  *
  * This layer was written as defence in depth beneath a boundary, and the
- * boundary does not ship. The Seatbelt sandbox that used to sit under it is no
- * longer installed, so a Session's tools carry the authority of whoever is
- * running Volli. That is a deliberate decision to run Pi at its own defaults,
- * not an erosion — and the two-axis authority rearchitecture is
- * where both axes come back.
+ * boundary is back as a choice rather than a default. VC-45 rebuilt the
+ * capability axis on one policy (`./capability-policy.ts`): a project whose
+ * policy says `containment: "scoped"` runs its shell behind Seatbelt and its
+ * file tools behind a guard, both compiled from the same secrets denylist and
+ * writable roots this pack's path rules read. A project left at `off` runs Pi
+ * at its own defaults, with this pack as the only layer that can refuse.
  *
  * The gate itself is wired now. VC-44 made `@volli/shared`'s
  * `AuthorityPolicy` a durable per-project document and had the desktop adapter
@@ -24,10 +25,10 @@
  * a project asks them to. See `AuthorityEnforcement` in `./authority-config.ts`.
  *
  * Read the reasoning below with that in mind. Several rules were deliberately
- * scoped against a kernel boundary they could assume beneath them; those
- * arguments describe the layering this pack was designed for, not what a
- * Session runs under now. That gap is what keeps `observe` the honest default
- * until slice 1 gives both layers one read policy.
+ * scoped against a kernel boundary they could assume beneath them; that
+ * boundary now exists exactly where a project asks for it, and the path rules
+ * read the same capability policy the boundary compiles, so the two give one
+ * answer for one path.
  *
  * What a policy decision adds, wherever a project turns it on, is a *countable,
  * nameable* refusal for the risk a kernel cannot see the intent of. A `git reset
@@ -36,6 +37,7 @@
  */
 
 import type { JudgmentMode } from "./authority-config";
+import type { CapabilityPolicy, ContainmentMode } from "./capability-policy";
 import type { McpToolId } from "./mcp";
 import type { VerbToolKey } from "./verb-registry";
 
@@ -264,6 +266,22 @@ export interface AuthoritySnapshot {
    */
   enforcement: "observe" | "enforce";
   /**
+   * Whether this attachment ran behind walls (VC-45). Pinned like the pack:
+   * a Session's blast radius must not change under it because someone edited
+   * Settings mid-turn.
+   *
+   * A record written before VC-45 carries no value and reads back as `off`,
+   * which is true — nothing contained a Session then.
+   */
+  containment: ContainmentMode;
+  /**
+   * The project's declared writable roots, as the policy stated them (VC-45
+   * slice 2). Not the resolved list: the workspace and a worktree's git
+   * directory are facts about the attachment, recomputed from the tree, while
+   * these are policy a person wrote — which is what pinning is for.
+   */
+  writableRoots: readonly string[];
+  /**
    * Who judges a call the deterministic rules cannot settle. Data here,
    * behaviour in VC-28.
    *
@@ -365,17 +383,21 @@ export interface PolicyContext {
   /** Absolute, resolved Session workspace root. */
   workspacePath: string;
   /**
-   * Absolute, resolved directories outside the workspace that hold output this
-   * Session's own tools saved, which `path.outside-workspace` lets it READ and
-   * never write (VC-469).
+   * The capability policy this attachment resolved (VC-45): the secrets
+   * denylist and its carve-backs, and the writable roots. The path rules judge
+   * a call against it rather than against the workspace alone, which is what
+   * makes their answer the answer a Scoped Session's walls give for the same
+   * path.
    *
-   * Today that is one directory: where a tool result too long for the model
-   * was saved whole, beside the Session's recovery sidecar. The result names a
-   * path there and tells the model to `read` it, so refusing that read would
-   * refuse the instruction the runtime itself just gave. The runtime supplies
-   * it; nothing a model says can add to it.
+   * Absent means nothing was resolved for this caller: no secret is known, and
+   * the workspace is the only writable root. The runtime always resolves one.
+   *
+   * The Session's own saved tool output (VC-469) lives in its carve-backs, which
+   * is where the old `readableRoots` field went: under a denylist that holds
+   * every Session's saved output, the one directory this Session may read is a
+   * grant inside a deny rather than an exception to "outside the workspace".
    */
-  readableRoots?: readonly string[];
+  capability?: CapabilityPolicy;
 }
 
 /**
@@ -418,7 +440,18 @@ export type PolicyDecision =
  * that the two are countable apart in the ledger.
  */
 export const AUTHORITY_RULE_IDS = [
-  /** Any path resolving outside the Session workspace root. */
+  /**
+   * A path in the secrets denylist — read, written, or named as a command
+   * operand (VC-45). First, so a write into `~/.ssh` cites the secret rather
+   * than the root it is outside of.
+   */
+  "path.secrets",
+  /**
+   * A write landing outside the Session's writable roots. Reads are no longer
+   * judged here: since VC-45 they are machine-wide minus the secrets denylist,
+   * and `path.secrets` is the rule that refuses one. The id kept its name
+   * because the ledger already holds it; the workspace is still the first root.
+   */
   "path.outside-workspace",
   /** Repository plumbing that rewrites what later commands will do. */
   "path.git-internals",
@@ -546,31 +579,33 @@ export type AuthorityDenialCause =
  * `path.outside-workspace` and `command.git-escapes-workspace` were hard denials
  * on a reason that expired, and VC-44 re-derived them. Seatbelt denied both
  * whatever this layer decided, so consent was genuinely moot and the list was
- * right; with the sandbox no longer installed the kernel refuses nothing, so a
- * "yes" here would be carried out and the first test above is met.
+ * right; with the sandbox out of the default path the kernel refuses nothing, so
+ * a "yes" here would be carried out and the first test above is met. Where a
+ * project turns the walls back on (`containment: "scoped"`) consent is moot
+ * again for exactly the calls the walls refuse — see `walled` below.
  *
- * The second test — could a reasonable person want it — is what settles them,
- * and the product answers it rather than the rule. Volli's own skills index
- * tells a Session to activate a skill by reading its `SKILL.md`, and a
- * personal-tier skill lives under the home directory; a ticket brief offers the
- * Main checkout as reference. Both are reads outside the workspace that the
- * product asked for. A refusal no person may lift would make those permanently
- * impossible while `cat` through `execute` still reads the same bytes, because
- * no rule judges command operands — an unliftable wall around an open door.
+ * The second test — could a reasonable person want it — settled them, and VC-45
+ * changed what it is asked about. The reads that made the case (a skill's
+ * `SKILL.md` under the home directory, the Main checkout a brief offers as
+ * reference) are no longer refused at all: reads are machine-wide minus the
+ * secrets denylist, so `path.outside-workspace` now judges only writes outside
+ * the Session's writable roots — still a thing a person may reasonably want
+ * once, so it stays here.
  *
- * They stay refusals rather than becoming allowances: the read is still worth
- * stopping to confirm, and slice 1 of
- * the two-axis authority rearchitecture replaces the question with
- * one coherent read policy for both layers (VC-45). Until then a person can say
- * yes, which is the honest state of a boundary with nothing underneath it.
+ * `path.secrets` is NOT here, and it fails the first test in the one posture
+ * where it would matter most and the second in the rest. In a Scoped Session
+ * the walls refuse the same path whatever this layer says, so a "yes" could not
+ * be carried out — consent is moot, the reason the plan's original hard denials
+ * were hard. Without walls a "yes" would be carried out, and that is worse:
+ * every entry on the denylist holds credentials or another party's data, and a
+ * read puts the bytes into a transcript that leaves the machine over the
+ * provider connection. Exfiltration is the one category neither vendor lets
+ * intent clear, and a person answering a question mid-task cannot weigh it.
  *
- * On the blast radius of moving them, because this is a security-relevant edit
- * inside a slice that is otherwise about storage: today it changes nothing that
- * runs. Membership here is read only when a rule has already refused a call, and
- * the day-one posture is `observe`, which installs no gate — so no call reaches
- * this list until a project chooses `enforce`. At that point the change is the
- * difference between a refusal a person may lift and one nobody can, over reads
- * `execute` was never refused in the first place.
+ * The same moot-consent test is applied per call, not only per rule: a refusal
+ * from an overridable rule over a path the Session's walls ALSO refuse is not
+ * offered as a question either (`walled` on the gate's verdict), because the
+ * person's "yes" would reach the tool and be refused there.
  */
 export const OVERRIDABLE_AUTHORITY_RULES = [
   "path.outside-workspace",

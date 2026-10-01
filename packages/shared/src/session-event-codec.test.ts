@@ -68,6 +68,8 @@ const recordedAuthority: AuthoritySnapshot = {
   rulePackHash: BUILTIN_RULE_PACK_HASH,
   classifierModel: null,
   fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+  containment: "off",
+  writableRoots: [],
 };
 
 const interaction: SessionInteraction = {
@@ -1163,11 +1165,39 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
       rulePackHash: BUILTIN_RULE_PACK_HASH,
       classifierModel: null,
       fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+      containment: "scoped",
+      writableRoots: ["/Users/dev/scratch"],
     };
 
     const decoded = openedAttachment({ ...attachment, authority });
 
     expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("reads a Snapshot written before VC-45 as uncontained with no declared roots", () => {
+    // True rather than guessed: nothing contained a Session before the capability
+    // axis came back, so the absent fields have exactly one honest reading.
+    const { containment: _c, writableRoots: _w, ...legacy } = recordedAuthority;
+
+    const decoded = openedAttachment({ ...attachment, authority: legacy });
+
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual({
+      ...legacy,
+      containment: "off",
+      writableRoots: [],
+    });
+  });
+
+  it("rejects a containment or writable-roots value that is not one this build switches on", () => {
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, containment: "jail" } }),
+    ).toThrow("containment has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, writableRoots: "/x" } }),
+    ).toThrow("writableRoots must be an array");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, writableRoots: [7] } }),
+    ).toThrow("writableRoots[0] must be a string");
   });
 
   it("reads an attachment written before authority was recorded as governed by nothing", () => {

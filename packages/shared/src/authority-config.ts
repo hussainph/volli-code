@@ -17,15 +17,16 @@
  * write its own permissions. A policy store the agent can edit is not a policy
  * store.
  *
- * Say the limit of that honestly, because today it is a limit and not a
- * guarantee. The database is outside every Session workspace, so no file tool
- * reaches it — `path.outside-workspace` refuses reads and writes there. But the
- * pack does not judge command *operands*, and the capability axis is off, so a
- * Session's `execute` tool can still reach the database through an ordinary
- * shell command. What closes that is `writableRoots` in VC-45, not anything
- * here. What this module does buy today is that policy is never sourced from
- * the tree the agent is editing, which is the mistake that costs nothing to
- * avoid and everything to make.
+ * Say the limit of that honestly, because it is still a limit and not a
+ * guarantee everywhere. VC-45 put the database — all of `userData` — in the
+ * secrets denylist and outside every writable root, so the gate refuses a file
+ * tool there and a Scoped Session's shell cannot reach it at the kernel
+ * ({@link AuthorityPolicy.containment}). A Session running with containment
+ * `off` still runs its shell as the user, and a shell command that names the
+ * database through a variable is one the gate cannot read. What this module
+ * buys in every posture is that policy is never sourced from the tree the agent
+ * is editing, which is the mistake that costs nothing to avoid and everything
+ * to make.
  *
  * Nothing here is a rule. The rule pack stays compiled (`./authority-policy.ts`)
  * and its identity stays {@link AUTHORITY_RULE_IDS}; what became data is which
@@ -35,6 +36,7 @@
  */
 
 import type { AuthorityFallback } from "./authority";
+import { CONTAINMENT_MODES, type ContainmentMode } from "./capability-policy";
 import { SESSION_AWAIT_KINDS, type SessionAwaitKind } from "./session-await";
 import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
 
@@ -213,6 +215,25 @@ export interface AuthorityActorPolicy {
  */
 export interface AuthorityPolicy {
   enforcement: AuthorityEnforcement;
+  /**
+   * Whether this project's Sessions run behind walls — the capability axis,
+   * independent of {@link enforcement} (VC-45). See {@link ContainmentMode}.
+   *
+   * Only meaningful while enforcement is not `off`: `off` is the explicit
+   * bypass of BOTH axes (Codex's `--dangerously-bypass-approvals-and-sandbox`,
+   * not merely its approval policy), so it builds no Snapshot to carry walls on.
+   */
+  containment: ContainmentMode;
+  /**
+   * Directories this project's Sessions may write beyond their workspace, as
+   * absolute paths (VC-45 slice 2).
+   *
+   * Additions, never a replacement: the workspace — and the git directory a
+   * Ticket worktree commits into — is always writable. Every root has the same
+   * metadata carved out of it (`writeCarveOut` in `./capability-policy.ts`),
+   * and a root that lies over a secret store does not make the secret writable.
+   */
+  writableRoots: readonly string[];
   judgmentMode: JudgmentMode;
   /** The model allowed to judge what the rules cannot. Null until VC-28. */
   classifierModel: string | null;
@@ -286,9 +307,14 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  * learn to reach for `cat` where `read` was refused, which is the workaround
  * coaching the plan's denial-semantics slice exists to stop. `observe` pins and
  * records the Snapshot, changes nothing a Session can do, and leaves the flip to
- * `enforce` a per-project decision that needs no build. Slice 1 of the plan —
- * one read policy for both layers — is what makes `enforce` the right default,
- * and it is VC-45's to ship.
+ * `enforce` a per-project decision that needs no build.
+ *
+ * VC-45 shipped the plan's slice 1 — one read policy for both layers — which
+ * removes that reason: reads are machine-wide minus the secrets denylist, so the
+ * skill and the Main checkout are no longer refused, and `cat` and `read` get
+ * the same answer for the same path. Whether `enforce` now becomes the default
+ * is a product decision of its own (it installs a gate on every Session), and
+ * this default deliberately did not move with the slice.
  *
  * `judgmentMode: "ask"` because no classifier exists yet; `auto` without VC-28
  * would name a judge that cannot judge.
@@ -314,6 +340,13 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  */
 export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
   enforcement: "observe",
+  // `off` because Scoped Sessions have no network until slice 6 lands with the
+  // classifier (VC-28 v1): walls by default would refuse every `pnpm install`
+  // and `git push`, which is the breakage that took containment out of the
+  // product in the first place. A project opts in; the default moves when
+  // egress can open safely.
+  containment: "off",
+  writableRoots: Object.freeze([]),
   judgmentMode: "ask",
   classifierModel: null,
   // Anthropic's published defaults for the same mechanism, adopted with no
@@ -424,6 +457,12 @@ export interface AuthorityBudgetPolicyOverride {
  */
 export interface AuthorityPolicyOverride {
   enforcement?: AuthorityEnforcement;
+  containment?: ContainmentMode;
+  /**
+   * A project's extra writable roots. A list with no `$defaults` token,
+   * because the default is empty: there is nothing to splice.
+   */
+  writableRoots?: readonly string[];
   judgmentMode?: JudgmentMode;
   classifierModel?: string | null;
   fallback?: Partial<AuthorityFallback>;
@@ -480,6 +519,11 @@ export function resolveAuthorityPolicy(
   if (override === null || override === undefined) return defaults;
   return {
     enforcement: override.enforcement ?? defaults.enforcement,
+    containment: override.containment ?? defaults.containment,
+    writableRoots:
+      override.writableRoots === undefined
+        ? defaults.writableRoots
+        : Object.freeze([...new Set(override.writableRoots)]),
     judgmentMode: override.judgmentMode ?? defaults.judgmentMode,
     classifierModel:
       override.classifierModel === undefined ? defaults.classifierModel : override.classifierModel,
@@ -522,6 +566,13 @@ export function parseAuthorityPolicyOverride(value: unknown): AuthorityPolicyOve
   const override: AuthorityPolicyOverride = {};
   const enforcement = enumOrUndefined(row.enforcement, AUTHORITY_ENFORCEMENTS);
   if (enforcement !== undefined) override.enforcement = enforcement;
+  const containment = enumOrUndefined(row.containment, CONTAINMENT_MODES);
+  if (containment !== undefined) override.containment = containment;
+  // All-or-nothing, like every list here: a roots list that silently lost an
+  // entry would grant less than it says with nothing to show it happened.
+  if (Array.isArray(row.writableRoots) && row.writableRoots.every(isWritableRoot)) {
+    override.writableRoots = row.writableRoots;
+  }
   const judgmentMode = enumOrUndefined(row.judgmentMode, JUDGMENT_MODES);
   if (judgmentMode !== undefined) override.judgmentMode = judgmentMode;
   if (typeof row.classifierModel === "string" || row.classifierModel === null) {
@@ -534,6 +585,25 @@ export function parseAuthorityPolicyOverride(value: unknown): AuthorityPolicyOve
   const actors = parseActors(row.actors);
   if (actors !== undefined) override.actors = actors;
   return override;
+}
+
+/**
+ * Whether a stored writable root is one the policy can honestly mean: an
+ * absolute path, spelled without `.`/`..` steps or doubled slashes, and not the
+ * filesystem root.
+ *
+ * Normalized rather than normalizable, because this package may not import
+ * `node:path` and a root stored as `/a/../b` reads as `/a` to a person and as
+ * `/b` to the kernel. `/` is refused because a root over the whole machine is
+ * containment switched off by another name, and that already has a control.
+ */
+export function isWritableRoot(value: unknown): value is string {
+  if (typeof value !== "string" || !value.startsWith("/") || value === "/") return false;
+  if (value.endsWith("/") || value.includes("\0")) return false;
+  return value
+    .slice(1)
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 function enumOrUndefined<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
@@ -685,7 +755,16 @@ export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicy
 
   rejectUnknownKeys(
     row,
-    ["enforcement", "judgmentMode", "classifierModel", "fallback", "budgets", "actors"],
+    [
+      "enforcement",
+      "containment",
+      "writableRoots",
+      "judgmentMode",
+      "classifierModel",
+      "fallback",
+      "budgets",
+      "actors",
+    ],
     "",
     errors,
   );
@@ -694,6 +773,17 @@ export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicy
     const enforcement = enumOrUndefined(row.enforcement, AUTHORITY_ENFORCEMENTS);
     if (enforcement === undefined) errors.push(badEnum("enforcement", AUTHORITY_ENFORCEMENTS));
     else override.enforcement = enforcement;
+  }
+
+  if (row.containment !== undefined) {
+    const containment = enumOrUndefined(row.containment, CONTAINMENT_MODES);
+    if (containment === undefined) errors.push(badEnum("containment", CONTAINMENT_MODES));
+    else override.containment = containment;
+  }
+
+  if (row.writableRoots !== undefined) {
+    const roots = validateWritableRoots(row.writableRoots, errors);
+    if (roots !== undefined) override.writableRoots = roots;
   }
 
   if (row.judgmentMode !== undefined) {
@@ -766,6 +856,28 @@ function rejectUnknownKeys(
   for (const key of Object.keys(row)) {
     if (!allowed.includes(key)) errors.push(`Unknown field: ${prefix}${key}.`);
   }
+}
+
+/**
+ * A writable-roots list, refused whole when any entry is not an absolute,
+ * normalized path other than `/` — {@link isWritableRoot}'s rule, reported per
+ * entry so a person fixing a form sees every bad one at once.
+ */
+function validateWritableRoots(value: unknown, errors: string[]): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    errors.push("writableRoots must be an array of absolute paths.");
+    return undefined;
+  }
+  const invalid = value.filter((entry) => !isWritableRoot(entry));
+  if (invalid.length > 0) {
+    for (const entry of invalid) {
+      errors.push(
+        `writableRoots entry ${JSON.stringify(entry)} must be an absolute path other than /, with no . or .. steps.`,
+      );
+    }
+    return undefined;
+  }
+  return value as string[];
 }
 
 function validateFallback(
