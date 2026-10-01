@@ -42,6 +42,7 @@ import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useBoardStore } from "@renderer/stores/board";
 import {
   useProjectSessionsStore,
   type ProjectSessionRows,
@@ -159,13 +160,21 @@ export function PeekConversation({
       : (id: string) => {
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(id);
-          chat.openChatTab(subject.ticketId ?? subject.projectId, id);
+          // Archived/deleted tickets keep their durable Session scope but no
+          // longer host tabs. Read liveness at the press, even if the ticket
+          // left the board while this preview was open.
+          const ticketId = useBoardStore
+            .getState()
+            .ticketsByProject[subject.projectId]?.some((ticket) => ticket.id === subject.ticketId)
+            ? subject.ticketId
+            : null;
+          chat.openChatTab(ticketId ?? subject.projectId, id);
           useProjectsStore.getState().select(subject.projectId);
           const workspace = useWorkspaceStore.getState();
-          if (subject.ticketId === null) {
+          if (ticketId === null) {
             workspace.openHome(subject.projectId, chatTabId(id));
           } else {
-            workspace.openTicketWorkspace(subject.projectId, subject.ticketId, {
+            workspace.openTicketWorkspace(subject.projectId, ticketId, {
               tabId: chatTabId(id),
             });
           }

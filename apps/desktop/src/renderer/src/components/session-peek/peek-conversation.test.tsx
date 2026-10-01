@@ -12,6 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  createTicket,
   PERSON_STARTED,
   SPLIT_VIEW_ROOT_PANE_ID,
   SESSION_HOST_NOTICE_METADATA_KIND,
@@ -23,6 +24,7 @@ import { disposeChatClient, EMPTY_TRANSCRIPT } from "@volli/session-presentation
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useBoardStore } from "@renderer/stores/board";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -93,7 +95,30 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  useChatSessionsStore.setState({ sessions: {}, openTabs: {} });
+  useChatSessionsStore.setState({ sessions: {}, openTabs: {}, rehomedTicketBySession: {} });
+  useBoardStore.setState({
+    ticketsByProject: Object.fromEntries(
+      (
+        [
+          ["project-1", "ticket-6"],
+          ["project-2", "ticket-current"],
+        ] as const
+      ).map(([projectId, id]) => [
+        projectId,
+        [
+          createTicket({
+            projectId,
+            id,
+            ticketNumber: 1,
+            title: "Ticket",
+            status: "doing",
+            order: 0,
+            now: 0,
+          }),
+        ],
+      ]),
+    ),
+  });
   useWorkspaceStore.setState({ byProject: {} });
   vi.spyOn(useProjectsStore.getState(), "select").mockImplementation(() => {});
   useTicketSessionRecordsStore.setState({ byTicket: { "ticket-6": [row] } });
@@ -181,6 +206,32 @@ describe("PeekConversation", () => {
     expect(dialog()).toBeNull();
     expect(useChatSessionsStore.getState().sessions[SESSION]).toBeDefined();
   });
+
+  it.each([false, true])(
+    "opens a departed ticket's chat on Home (tab already open: %s)",
+    async (alreadyOpen) => {
+      const onClose = vi.fn();
+      const chat = useChatSessionsStore.getState();
+      if (alreadyOpen) chat.openChatTab("ticket-6", SESSION);
+      await render(SESSION, onClose);
+      // The cache still names the durable ticket, but it leaves the board
+      // while the overlay is open. Existing tabs are rehomed by the board.
+      useBoardStore.setState({ ticketsByProject: { "project-1": [] } });
+      chat.reconcileTicketChatTabs("project-1", ["ticket-6"], []);
+      await act(async () =>
+        [...dialog()!.querySelectorAll("button")]
+          .find((one) => one.textContent === "Open as tab")!
+          .click(),
+      );
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(useChatSessionsStore.getState().openTabs["project-1"]).toEqual([SESSION]);
+      expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toBeUndefined();
+      const workspace = useWorkspaceStore.getState().byProject["project-1"]!;
+      expect(workspace.homeActiveTab).toBe(chatTabId(SESSION));
+      expect(workspace.openTicketId).toBeNull();
+    },
+  );
 
   it("opens a Board Session on Home without losing the remembered ticket", async () => {
     useTicketSessionRecordsStore.setState({ byTicket: {} });
