@@ -17,6 +17,7 @@ import {
   piDecisionClassifier,
   testDecisionConnection,
   type DecisionClassifier,
+  type DecisionAuditFact,
   type PiModelAccess,
 } from "@volli/agent-runtime";
 import {
@@ -59,6 +60,8 @@ export interface DesktopDecisionsOptions {
   catalogReady: Promise<void>;
   /** Appends one `usage.recorded` fact to a Session's ledger. */
   recordUsage(sessionId: string, usage: SessionUsage, purpose: DecisionPurpose): Promise<void>;
+  /** Audited verdicts must await this durable write before the service returns. */
+  recordDecision?(fact: DecisionAuditFact): Promise<void>;
   /** The classifier, for a test that has no Pi collection to hand. */
   classifier?: DecisionClassifier;
   now?: () => number;
@@ -117,9 +120,10 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
     resolveSetting: (scope) => resolveScopedDecisionModel(db, scope),
     classifier,
     recordUsage: ({ sessionId, purpose, usage }) => options.recordUsage(sessionId, usage, purpose),
+    ...(options.recordDecision === undefined ? {} : { recordDecision: options.recordDecision }),
     // Metering is work nobody asked for; a failed write is logged and the
     // decision the caller already holds stands (CLAUDE.md's one exception).
-    onRecordFailure: (error) => log("[decision] could not record usage", error),
+    onRecordFailure: (error) => log("[decision] could not record usage or audit", error),
     now,
   });
 

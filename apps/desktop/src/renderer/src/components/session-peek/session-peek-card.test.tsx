@@ -21,6 +21,12 @@ import {
 
 import { SessionPeekCard, type SessionPeekCardProps } from "./session-peek-card";
 import type { SessionPeekRow } from "./use-session-peek";
+import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
+
+const held = vi.hoisted(() => ({ catalogue: null as ModelCatalogue | null }));
+vi.mock("@renderer/lib/use-model-catalogue", () => ({
+  useModelCatalogue: () => held.catalogue,
+}));
 
 const NOW = 1_700_000_600_000;
 
@@ -28,6 +34,7 @@ let container: HTMLElement;
 let root: Root | null = null;
 
 beforeEach(() => {
+  held.catalogue = null;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -245,6 +252,29 @@ describe("identity", () => {
     expect(line).toContain("Automation · Nightly triage");
   });
 
+  it("resolves the peek's model name and mark without losing provenance", () => {
+    held.catalogue = {
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5",
+          label: "Claude Opus 5",
+          state: "available",
+          reasoningLevels: [],
+          acceptsImageInput: true,
+        },
+      ],
+      providers: [],
+    };
+    render({ row: row({ provenance: { kind: "automation", automationName: "Nightly triage" } }) });
+    const identity = container.querySelector("[data-peek-identity]");
+    expect(identity?.textContent).toContain(
+      "Claude Opus 5 · Anthropic · Automation · Nightly triage",
+    );
+    expect(identity?.textContent).not.toContain("claude-opus-5");
+    expect(identity?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+  });
+
   it("offers Close only while pinned", () => {
     render();
     expect(() => button("Close reply")).toThrow();
@@ -255,6 +285,52 @@ describe("identity", () => {
 });
 
 describe("the summary", () => {
+  it("shows the full generated summary in non-shrinking blocks inside the scroller", () => {
+    const summary = Array.from(
+      { length: 12 },
+      (_, index) => `Step ${index + 1}: the gutter now tracks the viewport without lag.`,
+    ).join("\n");
+    render({
+      content: content({ summary, entries: [] }),
+      position: { left: 288, top: 120, maxHeight: 240 },
+    });
+    const prose = container.querySelector("[data-peek-summary]");
+    expect(prose?.textContent).toBe(summary);
+    expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+    expect(prose?.classList.contains("whitespace-pre-wrap")).toBe(true);
+    const body = prose?.closest(".overflow-y-auto");
+    expect(body).not.toBeNull();
+    expect(body?.classList.contains("min-h-0")).toBe(true);
+    for (const block of body?.children ?? []) {
+      expect(block.classList.contains("shrink-0")).toBe(true);
+    }
+    expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
+  });
+
+  it.each([undefined, null])(
+    "shows the full durable-tail fallback when summary is %s",
+    (summary) => {
+      const text = "The gutter tracks the viewport. ".repeat(80);
+      render({
+        content: content({
+          summary,
+          entries: [{ at: NOW, role: "assistant", text, tools: [] }],
+        }),
+      });
+      const prose = container.querySelector("[data-peek-summary]");
+      expect(prose?.textContent).toBe(text);
+      expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+      expect(prose?.closest(".overflow-y-auto")).not.toBeNull();
+    },
+  );
+
+  it("prefers the generated summary over the transcript fallback", () => {
+    render({ content: content({ summary: "The gutter fix is ready for review." }) });
+    expect(container.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "The gutter fix is ready for review.",
+    );
+  });
+
   it("is the newest assistant words from the durable tail", () => {
     render();
     expect(container.querySelector("[data-peek-summary]")?.textContent).toBe(

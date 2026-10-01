@@ -518,13 +518,11 @@ describe("Pi native adapter authority snapshot", () => {
     expect(binding.authority?.tools).toEqual(["read", "edit", "write", "execute", "ask_user"]);
   });
 
-  it("observes by default: the Snapshot is pinned and the runtime is handed none", async () => {
+  it("observes by default: the pinned Snapshot reaches the behavior-neutral shadow gate", async () => {
     const { binding, runtime } = await attached(policy(null));
 
     expect(binding.authority?.enforcement).toBe("observe");
-    // Absent, not present-and-permissive: Pi installs `beforeToolCall` on this
-    // field's presence, so absence is what keeps the pack dormant.
-    expect("authority" in runtime.spec).toBe(false);
+    expect(runtime.spec.authority).toEqual(binding.authority);
   });
 
   it("hands the runtime the Snapshot only when the project asks it to enforce", async () => {
@@ -586,9 +584,8 @@ describe("Pi native adapter authority snapshot", () => {
     );
 
     expect(binding.authority).toEqual(pinned);
-    // And the posture rides with it: the replayed Snapshot still observes, so
-    // the gate stays uninstalled for the attachment that opened without it.
-    expect("authority" in runtime.spec).toBe(false);
+    // Replay keeps shadow posture rather than adopting the newer enforcement.
+    expect(runtime.spec.authority).toEqual(pinned);
   });
 
   it("hands a context_replay attach the earlier attachment's sidecar to carry, and nothing for anything else (VC-457)", async () => {
@@ -787,9 +784,8 @@ describe("Pi native adapter attach", () => {
     expect(spec.venue).toBe("local");
     expect(spec.workspacePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(context.model);
-    // Ungated: no Snapshot means the runtime installs no gate at all, so the
-    // rule pack cannot run however the resolved location reads.
-    expect(spec.authority).toBeUndefined();
+    // Observe now supplies a Snapshot for behavior-neutral shadow review.
+    expect(spec.authority?.enforcement).toBe("observe");
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     // No skills named at start — the field is absent, not an empty list.
@@ -3522,6 +3518,32 @@ describe("a departure written by the product reaches the next attachment's Snaps
       }),
     };
   }
+
+  it("carries the existing automatic policy and host-only decision/wording ports to the runtime", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+    updateProjectAuthorityPolicy(
+      db.db,
+      "p1",
+      { enforcement: "enforce", judgmentMode: "auto" },
+      1000,
+    );
+    const decisions: import("@volli/shared").DecisionPort = {
+      decide: async (call) =>
+        call.fallback({ status: "unavailable", reason: "unset", message: "No model" }),
+    };
+    const authorityReason = vi.fn(async () => "Person-facing wording");
+    const { binding, runtime } = await attached({
+      ...fromDatabase("p1"),
+      decisions,
+      authorityReason,
+    });
+    expect(binding.authority).toMatchObject({ enforcement: "enforce", judgmentMode: "auto" });
+    expect(runtime.spec.authority).toEqual(binding.authority);
+    expect(runtime.spec.decisions).toBe(decisions);
+    expect(runtime.spec.authorityReason).toBe(authorityReason);
+    expect(authorityReason).not.toHaveBeenCalled();
+  });
 
   it("carries enforcement from the write, through resolution, into the pinned Snapshot", async () => {
     db = openTestDb();

@@ -19,13 +19,20 @@ import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
   AuthorityDenialCause,
+  AuthorityJudgeDenialCause,
   AuthoritySnapshot,
   CodingToolId,
   NonCodingToolId,
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
-import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import type {
+  DecisionAnswer,
+  DecisionAnswered,
+  DecisionMiss,
+  DecisionMissReason,
+  DecisionPort,
+} from "./decision-model";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
@@ -379,7 +386,7 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
  * allowance and escalate a Session that was never refused anything. The same
  * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm" | "classifier";
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -406,7 +413,7 @@ export interface RuntimeAskRequest {
   toolCallId: string;
   /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** The refusing rule's own words, as the model would otherwise have received them. */
+  /** Person-facing refusal explanation; may include labelled model prose, never an agent result. */
   reason: string;
   trip: RuntimeAskTrip;
   /**
@@ -1106,24 +1113,22 @@ export interface SessionRuntimeSpec {
    * one at all.
    *
    * Optional, and the optionality carries meaning that a value could not.
-   * Absence is not a Snapshot that allows everything: with no Snapshot the
-   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
-   * thresholds and {@link ask} are structurally unreachable rather than merely
-   * permissive. A Snapshot that meant "do not consult me" would still have to
-   * carry a pack id, a pack hash and two thresholds describing rules nobody will
-   * ever run, and the one path that must not reach the gate would depend on
-   * every caller remembering to check.
-   *
-   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
-   * (VC-44), and fills it only when that policy says `enforce`. The two other
-   * postures both arrive here as absence, for different reasons: `off` builds no
-   * Snapshot at all, and `observe` builds one, records it on the attachment, and
-   * deliberately does not hand it over. So a Session whose policy is `observe`
-   * has a durable Snapshot and an unreachable gate at the same time — which is
-   * the state slice 7 wanted, and the reason this field is the seam rather than
-   * a flag inside the Snapshot.
+   * Absence means off: no gate is installed. An observe Snapshot installs
+   * reasoning-blind shadow review but never changes what executes. Enforce
+   * binds the rule pack; judgmentMode chooses ask or automatic review.
+   * The desktop pins this Snapshot on the attachment so replay keeps its
+   * original posture rather than picking up a project edit mid-attachment.
    */
   authority?: AuthoritySnapshot;
+  /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
+  decisions?: DecisionPort;
+  /** Optional person-facing wording only. Never insert its output into agent context. */
+  authorityReason?: (input: {
+    sessionId: string;
+    tool: string;
+    cause: AuthorityJudgeDenialCause;
+    signal?: AbortSignal;
+  }) => Promise<string>;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -1661,7 +1666,23 @@ export interface SettledAssistantMessage {
   usage?: SanitizedUsage;
 }
 
+export interface AuthorityReviewObservation {
+  kind: "authority-review";
+  turnId: string | null;
+  toolCallId: string;
+  tool: string;
+  mode: "shadow" | "auto";
+  authoriser: "classifier";
+  wouldFlag: boolean | null;
+  reason: string;
+  category: string | null;
+  answers: Readonly<Record<string, DecisionAnswer>> | null;
+  missReason: DecisionMissReason | null;
+  thresholds: { allow: number; flag: number };
+}
+
 export type RuntimeObservation =
+  | AuthorityReviewObservation
   | AttachmentObservation
   | TurnObservation
   | CompactionProgressObservation
@@ -2169,6 +2190,8 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /** A small output budget for latency-sensitive utility explanations. */
+  maxOutputTokens?: number;
   /**
    * The caller's deadline. Background work has no one waiting on it, so a
    * provider that never answers must not leave a promise pending for the life

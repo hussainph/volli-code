@@ -2472,6 +2472,27 @@ class DefaultSessionRuntime implements SessionRuntime {
           reason: observation.reason,
         });
         break;
+      case "authority.reviewed":
+        event = await this.ports.engine.observe({
+          ...base,
+          provenance: {
+            source: { kind: "system", id: "authority-classifier", detail: null },
+            venue,
+          },
+          kind: observation.kind,
+          turnId: observation.turnId,
+          toolCallId: observation.toolCallId,
+          tool: observation.tool,
+          mode: observation.mode,
+          authoriser: observation.authoriser,
+          wouldFlag: observation.wouldFlag,
+          reason: observation.reason,
+          category: observation.category,
+          answers: observation.answers,
+          missReason: observation.missReason,
+          thresholds: observation.thresholds,
+        });
+        break;
       case "usage.recorded":
         event = await this.ports.engine.observe({
           ...base,

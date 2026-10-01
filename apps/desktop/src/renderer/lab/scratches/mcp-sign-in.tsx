@@ -28,7 +28,10 @@ import { McpPane } from "@renderer/components/settings/configure/mcp-pane";
 import type { ApiOverrides } from "../fake-api";
 
 export const title = "MCP servers — tools, sign-in and credentials";
-export const note = "Server list, server dialog, tool picker with select all and groups";
+export const note = "Server table, connection setup and tool choice";
+// Give this flow the viewport: the lab navigation otherwise consumes most of
+// a browser panel's width and is easily mistaken for the Settings layout.
+export const viewport = "window";
 
 const project: Project = {
   id: "lab-project",
@@ -569,8 +572,10 @@ export const api: ApiOverrides = {
 
 export default function McpSignInScratch() {
   return (
-    <div className="max-w-5xl">
-      <McpPane project={project} />
-    </div>
+    <main className="h-full overflow-auto bg-background px-gutter pt-4 pb-16">
+      <div className="mx-auto max-w-5xl">
+        <McpPane project={project} />
+      </div>
+    </main>
   );
 }

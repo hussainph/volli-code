@@ -53,6 +53,7 @@ import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from ".
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
+import type { DecisionAnswer, DecisionMissReason } from "./decision-model";
 import { errorMessage } from "./errors";
 import type { PresentedScheduledResume } from "./scheduled-resume";
 import type { SecretRequestMetadata } from "./secrets";
@@ -464,6 +465,12 @@ const codecs = {
     // `authority.denied` crosses untouched — `tool`, `cause` and `reason` are
     // Volli's own vocabulary already, not a harness's.
     scrub: (payload) => payload,
+  },
+  "authority.reviewed": {
+    decode: decodeAuthorityReview,
+    // Project only named verdict fields, including typed answers. Never carry
+    // an accidental request/state/args property over the renderer boundary.
+    scrub: (payload) => decodeAuthorityReview(payload, "authority.reviewed"),
   },
   "adapter.observed": {
     decode: (record, context) => ({
@@ -1842,11 +1849,112 @@ function readAbsentableInteger(value: unknown, context: string): number | null {
   return value === undefined ? null : readNullableInteger(value, context);
 }
 
+/** A metadata-only verdict. Never decode the request or classifier state here. */
+function decodeAuthorityReview(
+  record: JsonRecord,
+  context: string,
+): PayloadOf<"authority.reviewed"> {
+  const thresholds = asRecord(record.thresholds, `${context}.thresholds`);
+  return {
+    kind: "authority.reviewed",
+    attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+    turnId: readNullableString(record.turnId, `${context}.turnId`),
+    toolCallId: readString(record.toolCallId, `${context}.toolCallId`),
+    tool: readString(record.tool, `${context}.tool`),
+    mode: enumValue(record.mode, ["shadow", "auto"], `${context}.mode`),
+    authoriser: enumValue(record.authoriser, ["classifier"], `${context}.authoriser`),
+    wouldFlag:
+      record.wouldFlag === null ? null : readBoolean(record.wouldFlag, `${context}.wouldFlag`),
+    reason: readString(record.reason, `${context}.reason`),
+    category: readNullableString(record.category, `${context}.category`),
+    answers: readReviewAnswers(record.answers, `${context}.answers`),
+    missReason:
+      record.missReason === null
+        ? null
+        : enumValue(record.missReason, REVIEW_MISS_REASONS, `${context}.missReason`),
+    thresholds: {
+      allow: readProbability(thresholds.allow, `${context}.thresholds.allow`),
+      flag: readProbability(thresholds.flag, `${context}.thresholds.flag`),
+    },
+  };
+}
+
+const REVIEW_MISS_REASONS = [
+  "unset",
+  "not-opted-in",
+  "needs-setup",
+  "unaudited",
+  "invalid-request",
+  "timeout",
+  "aborted",
+  "provider-error",
+  "malformed-answer",
+] as const satisfies readonly DecisionMissReason[];
+
+function readReviewAnswers(
+  value: unknown,
+  context: string,
+): Readonly<Record<string, DecisionAnswer>> | null {
+  if (value === null) return null;
+  const answers = asRecord(value, context);
+  return Object.fromEntries(
+    Object.entries(answers).map(([key, raw]) => {
+      const at = `${context}.${key}`;
+      const answer = asRecord(raw, at);
+      const confidence = readProbability(answer.confidence, `${at}.confidence`);
+      switch (enumValue(answer.type, ["bool", "choice", "score"], `${at}.type`)) {
+        case "bool":
+          return [
+            key,
+            {
+              type: "bool",
+              value: readBoolean(answer.value, `${at}.value`),
+              probability: readProbability(answer.probability, `${at}.probability`),
+              confidence,
+            },
+          ];
+        case "choice": {
+          const probabilities = asRecord(answer.probabilities, `${at}.probabilities`);
+          return [
+            key,
+            {
+              type: "choice",
+              choice: readString(answer.choice, `${at}.choice`),
+              probabilities: Object.fromEntries(
+                Object.entries(probabilities).map(([option, p]) => [
+                  option,
+                  readProbability(p, `${at}.probabilities.${option}`),
+                ]),
+              ),
+              confidence,
+            },
+          ];
+        }
+        case "score": {
+          const score = readNullableFiniteNumber(answer.score, `${at}.score`);
+          const level = readInteger(answer.level, `${at}.level`);
+          if (score === null || score < 0 || level < 0) {
+            throw new Error(`${at} must have a nonnegative score and level`);
+          }
+          return [
+            key,
+            {
+              type: "score",
+              score,
+              level,
+              label: readString(answer.label, `${at}.label`),
+              confidence,
+            },
+          ];
+        }
+      }
+    }),
+  );
+}
+
 /**
- * A money amount, which is the one durable number here that is not whole.
- * NaN and the infinities are refused rather than carried: JSON writes NaN as
- * `null`, so a poisoned cost would come back looking exactly like an honest
- * absent one, and every total it entered afterwards would be NaN.
+ * A finite durable measurement. NaN and infinities cannot survive JSON intact:
+ * they become null and would masquerade as an honestly absent value.
  */
 function readNullableFiniteNumber(value: unknown, context: string): number | null {
   if (value === null) return null;

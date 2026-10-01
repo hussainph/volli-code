@@ -94,10 +94,18 @@ describe("createSidebarPeekPorts · readContent", () => {
     await expect(ports.readContent("s1")).resolves.toEqual(CONTENT);
     await read.readContent("s1");
 
-    expect(peekContent).toHaveBeenCalledWith({ sessionId: "s1" });
+    expect(peekContent).toHaveBeenCalledWith({ sessionId: "s1", refine: false });
     expect(adoptChatSession).not.toHaveBeenCalled();
     // A peek never reads (D6).
     expect(surfaces.setRead).not.toHaveBeenCalled();
+  });
+
+  it("forwards utility refinement only when explicitly requested", async () => {
+    const target = surface();
+    await expect(createSidebarPeekPorts(target).readContent("s1", true)).resolves.toEqual(CONTENT);
+    expect(peekContent).toHaveBeenCalledWith({ sessionId: "s1", refine: true });
+    expect(adoptChatSession).not.toHaveBeenCalled();
+    expect(target.setRead).not.toHaveBeenCalled();
   });
 
   it("rejects when the door refuses, rather than answering an empty peek", async () => {

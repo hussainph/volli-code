@@ -1,7 +1,9 @@
 import type { DecisionClassifier, PiModelAccess } from "@volli/agent-runtime";
+import { createSessionEngine } from "@volli/session-engine";
 import type {
   DecisionModelCatalogEntry,
   DecisionModelSetting,
+  DecisionRequest,
   DecisionTarget,
   SessionUsage,
 } from "@volli/shared";
@@ -9,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createDesktopDecisions, type DesktopDecisionsOptions } from "./desktop";
 import {
   DECISION_MODEL_APP_STATE_KEY,
@@ -131,6 +134,178 @@ function decisions(overrides: Partial<DesktopDecisionsOptions> = {}) {
 }
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+describe("authority review audit", () => {
+  const judge = (built: ReturnType<typeof createDesktopDecisions>) =>
+    built.port.decide({
+      purpose: "authority.judge",
+      sessionId: "session-1",
+      state: { call: { tool: "bash", args: { command: "printf hi" } }, userMessages: ["Run it"] },
+      questions: QUESTIONS,
+      use: () => "allowed",
+      fallback: (miss) => miss.reason,
+    });
+  it.each(["answered", "miss"] as const)(
+    "persists only the redacted classifier request in the actual SQLite %s audit",
+    async (kind) => {
+      let nextId = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(fixture.db),
+        clock: { now: () => 5_000 },
+        ids: { next: (idKind) => `${idKind}-${++nextId}` },
+      });
+      const seen: DecisionRequest[] = [];
+      const state = {
+        call: {
+          tool: "bash",
+          args: {
+            command:
+              "AWS_SECRET_ACCESS_KEY='dummy aws; secret';GITHUB_TOKEN=dummy-gh-token|rm -rf /important",
+            env: { VENDOR_KEY: "dummy-env-key", AWS_ACCESS_KEY_ID: "dummy-env-access-id" },
+          },
+        },
+        userMessages: [
+          "Use github_pat_dummy_pat AKIA0123456789ABCDEF sk-dummy-api-key",
+          "eyJhbGciOiJub25lIn0.eyJmaXh0dXJlIjp0cnVlfQ.ZHVtbXk",
+          "-----BEGIN PRIVATE KEY-----\nZHVtbXk=\n-----END PRIVATE KEY-----",
+        ],
+        nested: { ghp_dummy_object_name: "ordinary value" },
+      };
+      const { built } = decisions({
+        classifier: {
+          classify: async (target, request, options) => {
+            seen.push(request);
+            return kind === "answered"
+              ? answering.classify(target, request, options)
+              : {
+                  ok: false,
+                  usage: null,
+                  miss: { status: "error", reason: "provider-error", message: "Unavailable" },
+                };
+          },
+        },
+        recordDecision: async (fact) => {
+          // Same observation/serialization seam as main's production recorder.
+          await engine.observe({
+            id: "audit:decision:redaction-test",
+            kind: "adapter.observed",
+            sessionId: fact.sessionId!,
+            occurredAt: 5_000,
+            provenance: {
+              source: {
+                kind: "system",
+                id: "authority-classifier",
+                detail: { purpose: fact.purpose, authoriser: "classifier" },
+              },
+              venue: { id: "local", kind: "local" },
+            },
+            attachmentId: null,
+            name: "authority.judge.audit",
+            native: JSON.parse(JSON.stringify(fact)),
+          });
+        },
+      });
+      await built.set(
+        { scope: "global" },
+        { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["authority.judge"] } },
+      );
+      expect(
+        await built.port.decide({
+          purpose: "authority.judge",
+          sessionId: "session-1",
+          state,
+          questions: QUESTIONS,
+          use: () => "allowed",
+          fallback: (miss) => miss.reason,
+        }),
+      ).toBe(kind === "answered" ? "allowed" : "provider-error");
+
+      const rows = fixture.db
+        .prepare("SELECT payload FROM session_events WHERE session_id = ?")
+        .all("session-1") as Array<{ payload: string }>;
+      expect(rows).toHaveLength(1);
+      const persisted = JSON.parse(rows[0]!.payload);
+      expect(persisted).toMatchObject({
+        kind: "adapter.observed",
+        name: "authority.judge.audit",
+        native: { purpose: "authority.judge", request: seen[0], outcome: { kind } },
+      });
+      expect(seen[0]?.state).toEqual({
+        call: {
+          tool: "bash",
+          args: {
+            command: "AWS_SECRET_ACCESS_KEY= [redacted];GITHUB_TOKEN= [redacted]|rm -rf /important",
+            env: { VENDOR_KEY: "[redacted]", AWS_ACCESS_KEY_ID: "[redacted]" },
+          },
+        },
+        userMessages: ["Use [redacted] [redacted] [redacted]", "[redacted]", "[redacted]"],
+        nested: { "[redacted]": "ordinary value" },
+      });
+      const stored = rows[0]!.payload;
+      expect(stored).toContain("rm -rf /important");
+      for (const raw of [
+        "dummy aws; secret",
+        "dummy-gh-token",
+        "dummy-env-key",
+        "dummy-env-access-id",
+        "github_pat_dummy_pat",
+        "AKIA0123456789ABCDEF",
+        "sk-dummy-api-key",
+        "eyJhbGci",
+        "ZHVtbXk=",
+        "ghp_dummy_object_name",
+      ]) {
+        expect(JSON.stringify(seen)).not.toContain(raw);
+        expect(stored).not.toContain(raw);
+      }
+    },
+  );
+
+  it("cannot release a verdict until its durable audit lands", async () => {
+    const entered = Promise.withResolvers<void>();
+    const written = Promise.withResolvers<void>();
+    const { built } = decisions({
+      recordDecision: async (fact) => {
+        expect(fact).toMatchObject({
+          purpose: "authority.judge",
+          sessionId: "session-1",
+          outcome: { kind: "answered" },
+        });
+        entered.resolve();
+        await written.promise;
+      },
+    });
+    await built.set(
+      { scope: "global" },
+      { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["agent.classify", "authority.judge"] } },
+    );
+    let settled = false;
+    const pending = judge(built).then((value) => {
+      settled = true;
+      return value;
+    });
+    await entered.promise;
+    expect(settled).toBe(false);
+    written.resolve();
+    expect(await pending).toBe("allowed");
+  });
+  it("uses misses, never allowance, for absent or failing recorders and old opt-ins", async () => {
+    const { built } = decisions();
+    await built.set({ scope: "global" }, CLOUD);
+    expect(await judge(built)).toBe("not-opted-in");
+    await built.set(
+      { scope: "global" },
+      { ...CLOUD, optIn: { acceptedAt: 1, purposes: ["authority.judge"] } },
+    );
+    expect(await judge(built)).toBe("unaudited");
+    const broken = decisions({
+      recordDecision: async () => {
+        throw new Error("disk full");
+      },
+    }).built;
+    expect(await judge(broken)).toBe("unaudited");
+  });
+});
 
 describe("the decision model setting", () => {
   it("is none until a person chooses one, and reads a damaged row as none", () => {

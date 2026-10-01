@@ -15,7 +15,15 @@ import type {
   RuntimeActivityObservation,
   RuntimeActivityValue,
 } from "@volli/shared";
-import { isActivityBrowseAction, isMcpToolId, readActivityBrowse } from "@volli/shared";
+import {
+  isActivityBrowseAction,
+  isMcpToolId,
+  isSensitiveKey,
+  readActivityBrowse,
+  redactPayloadSecrets,
+} from "@volli/shared";
+// Preserve the existing adapter exports while every consumer shares one policy.
+export { isSensitiveKey, redactPayloadSecrets } from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
@@ -97,17 +105,6 @@ const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
 /** Binary content never enters an activity payload. */
 const BINARY_OMITTED = { image: "[image]", audio: "[audio]" } as const;
 
-const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
-const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
-const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;]+/gi;
-const NAMED_SECRET =
-  /\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
-const SENSITIVE_KEY = /(?:token|apikey|password|secret|authorization|credential)/i;
-// Every redaction pattern starts with one of these markers. Most tool output
-// has none, so one scan avoids four full-string replacement scans while
-// retaining the exact slow path for anything that might contain a secret.
-const SECRET_MARKER =
-  /(?:\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_]|\bbearer\s|\bauthorization\s*:|\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:))/i;
 const REDACTED_VALUE = "[redacted]";
 
 /**
@@ -275,7 +272,11 @@ function browseFacet(
 ): ActivityBrowse | null {
   const base = BROWSER_TOOL_ACTION[toolName];
   if (base === undefined) return null;
-  const reported = readActivityBrowse(readField(recordOf(rawOutput), "details"));
+  // Facets leave the adapter alongside the normalized output: the host's
+  // original details must not bypass payload redaction (notably URL userinfo).
+  const reported = readActivityBrowse(
+    normalizeActivityValue(readField(recordOf(rawOutput), "details")),
+  );
   if (reported !== null) return reported;
   const source = recordOf(input);
   return {
@@ -646,13 +647,10 @@ function normalizedString(value: string, state: { remaining: number }): string |
 }
 
 function boundActivityKey(value: string): string {
-  return value.length > MAX_ACTIVITY_VALUE_KEY_LENGTH
-    ? value.slice(0, MAX_ACTIVITY_VALUE_KEY_LENGTH)
-    : value;
-}
-
-function isSensitiveKey(value: string): boolean {
-  return SENSITIVE_KEY.test(value.replace(/[^a-z]/gi, ""));
+  const redacted = redactPayloadSecrets(value);
+  return redacted.length > MAX_ACTIVITY_VALUE_KEY_LENGTH
+    ? redacted.slice(0, MAX_ACTIVITY_VALUE_KEY_LENGTH)
+    : redacted;
 }
 
 function boundPayloadText(value: string): string {
@@ -667,21 +665,6 @@ function boundSummaryText(value: string): string {
   return redacted.length > MAX_ACTIVITY_SUMMARY_LENGTH
     ? `${redacted.slice(0, MAX_ACTIVITY_SUMMARY_LENGTH)}…`
     : redacted;
-}
-
-function redactPayloadSecrets(value: string): string {
-  if (!SECRET_MARKER.test(value)) return value;
-  return value
-    .replace(PREFIXED_SECRET, "[redacted]")
-    .replace(
-      AUTHORIZATION_HEADER_SECRET,
-      (_match, scheme: string) => `Authorization: ${scheme} [redacted]`,
-    )
-    .replace(BEARER_SECRET, "Bearer [redacted]")
-    .replace(NAMED_SECRET, (match) => {
-      const separator = match.search(/(?:=|:)/);
-      return `${match.slice(0, separator + 1)} [redacted]`;
-    });
 }
 
 function cleanPayloadText(value: unknown): string | null {

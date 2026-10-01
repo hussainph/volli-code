@@ -79,6 +79,7 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
+  authorityReviewNoticeCopy,
   projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
@@ -1404,8 +1405,14 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
-    [session.compactions, session.reasoningDrops, turns],
+    () =>
+      projectTranscriptRows(
+        turns,
+        session.compactions,
+        session.reasoningDrops,
+        session.authorityReviews,
+      ),
+    [session.compactions, session.reasoningDrops, session.authorityReviews, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -2289,6 +2296,8 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
+    case "authority-review":
+      return `authority-review:${row.review.sequence}`;
   }
 }
 
@@ -2316,6 +2325,13 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
+    case "authority-review":
+      return (
+        <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
+          <WarningIcon aria-hidden className="size-3.5 shrink-0" />
+          <p>{authorityReviewNoticeCopy(row.review)}</p>
+        </div>
+      );
     case "turn":
       return <ChatTurn messages={row.messages} context={context} live={live} />;
   }

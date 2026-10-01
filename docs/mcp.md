@@ -34,12 +34,14 @@ just installed a server will otherwise try to call its tools in the same turn.
 
 ## Configuring a server by hand
 
-**Settings → Configure → MCP Servers.** Each server is one row: where it lives,
-how many of its tools are on, and whether it works. Refresh age and detailed
-provenance live in the server dialog. When it does not, the row says why and offers the one fix
-(*Sign in*, *Add credential*, *Retry*). A switch turns the server off without
-forgetting it, and a menu holds the rest: tools, connection, refresh, sign out
-and remove (which asks first, because it deletes stored credentials).
+**Settings → Configure → MCP Servers.** A table gives each server stable columns:
+**Server**, **Tools**, **Status**, **Enabled**, and actions. Narrow windows scroll
+the table sideways rather than wrapping its controls. The tools count opens the
+picker; the server name opens its details. A blocked server offers one fix
+(*Sign in*, *Add credential*, *Retry*). Detailed errors, refresh age and provenance
+live in the dialog. A switch turns the server off without forgetting it, and a
+menu holds the rest: tools, connection, refresh, sign out and remove (which asks
+first, because it deletes stored credentials).
 
 Everything about one server opens as one dialog, with one *Save*:
 
@@ -50,7 +52,7 @@ Everything about one server opens as one dialog, with one *Save*:
   that wants sign-in or a credential says so, with its next action in the footer. Nothing is stored
   until discovery succeeds, and **discovered tools start off**: every tool is an
   explicit choice, and *Add server* saves only what you ticked.
-- **Choosing tools.** Clicking a row opens its tools: a filter (name, title or
+- **Choosing tools.** Clicking the server name or its tools count opens its tools: a filter (name, title or
   description), *All · On · Off*, **Select all**, and — when the server labels
   its tools read-only — a **Read-only** group and a **Can make changes** group,
   each with its own checkbox, so every read can be turned on in one click and
