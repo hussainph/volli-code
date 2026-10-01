@@ -19,6 +19,7 @@ import {
   UnknownSessionEventKindError,
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
@@ -186,6 +187,18 @@ const payloads = samples(
   {
     kind: "session.input.recorded",
     input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "server" },
+  },
+  // Code Mode's routes and limits travel with the names they route (VC-471).
+  {
+    kind: "session.input.recorded",
+    input: {
+      kind: "tool-surface",
+      tools: ["read", "execute", "ask_user", "codemode", "session.start"],
+      codeMode: {
+        routes: { read: "code", execute: "both", ask_user: "direct", "session.start": "both" },
+        limits: { ...DEFAULT_CODE_MODE_LIMITS },
+      },
+    },
   },
   { kind: "session.signaled", signal: "done", reason: null },
   { kind: "session.signaled", signal: "blocked", reason: "stuck" },
@@ -960,6 +973,43 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    // Code Mode's name and its record travel together, and the record routes
+    // exactly the surface it was frozen with (VC-471).
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["read", "codemode"] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input names codemode without its routes");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode is present but the surface does not hold codemode");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read", "write", "codemode"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode.routes must name exactly the tools of the surface");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },

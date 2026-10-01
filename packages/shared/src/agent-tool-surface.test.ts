@@ -98,6 +98,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_find",
       // The decision model (VC-478), appended after the Browser search.
       "classify",
+      "codemode",
       "session.start",
       "automation.run",
       "session.stop",
@@ -151,6 +152,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_kill",
       "browser_find",
       "classify",
+      "codemode",
       "session.delegate",
       "watch",
     ]);
@@ -201,6 +203,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_find",
       // A helper may classify too: it sends nothing its parent could not.
       "classify",
+      "codemode",
     ]);
   });
 

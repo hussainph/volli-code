@@ -30,6 +30,7 @@ export * from "./usage-limits";
 export * from "./compaction-policy";
 export * from "./authority";
 export * from "./agent-tool-surface";
+export * from "./code-mode";
 export * from "./mcp";
 export * from "./authority-config";
 export * from "./authority-policy";

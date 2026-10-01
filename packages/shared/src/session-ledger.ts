@@ -12,6 +12,7 @@ import type {
   SessionRole,
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import type { CodeModeSurface } from "./code-mode";
 import type { McpToolDefinition } from "./mcp";
 import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
@@ -599,6 +600,11 @@ export type SessionInput =
       mcpManagementNames?: "server";
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
+      /**
+       * Code Mode's routes and limits, present exactly when `tools` names
+       * `codemode` (VC-471). Written by the host at birth, never by a Session.
+       */
+      codeMode?: CodeModeSurface;
     };
 
 /**
