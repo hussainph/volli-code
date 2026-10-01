@@ -5,52 +5,71 @@
  * where `n` counts the calls in the order the program issued them. A program
  * is deterministic given its inputs — the VM is single-threaded, has no timers
  * and no I/O, and `Date` and `Math.random` are pinned per run (see the
- * prelude) — so a run of the same outer call issues the same calls in the same
- * order for as long as it receives the same results.
+ * prelude) — so a run of the same program under the same outer call issues the
+ * same calls in the same order for as long as it receives the same results.
  *
- * The journal holds those results. When the same outer call id runs again —
- * a host retry, a replayed drive, a run cancelled half-way and started over —
- * each call that completed the first time answers from the journal instead of
- * running, and the program carries on from where real work is needed. A call
- * that never completed (it was in flight when the run stopped) runs, because
- * nothing says it happened.
+ * The journal holds those results for a run that did not finish. When the
+ * same program runs again under the same outer call id — a host retry, a
+ * replayed drive, a run cancelled half-way and started over — each call that
+ * completed the first time answers from the journal instead of running, and
+ * the program carries on from where real work is needed. A call that never
+ * completed runs, because nothing says it happened.
  *
- * If the program issues a DIFFERENT call at a position the journal already
- * holds — another tool, other arguments — the replay has diverged, and the run
- * stops there with nothing executed for that call. Continuing would either
- * hand the program another call's result or run a call whose position a
- * completed one already claimed; both are wrong in ways the program cannot see.
+ * Three rules keep the journal from answering a call it should not:
+ *
+ * - **Keyed by the outer id AND the program.** Pi does not promise unique
+ *   tool-call ids (an OpenAI-compatible backend may send none), so an id
+ *   alone could turn a new program into a "replay" of an old one.
+ * - **Dropped when a run finishes.** Only an unfinished run — cancelled, timed
+ *   out, stopped — is worth replaying. A run that reached its end is never
+ *   answered from again, so a reused id after it starts fresh.
+ * - **A different call at a held position stops the run.** If the program
+ *   issues another tool, or other arguments, where the journal holds a call,
+ *   the replay has diverged and nothing is run for it.
+ *
+ * It is bounded in memory: a run keeps at most {@link RUN_JOURNAL_MAX_BYTES}
+ * of results and the journal at most {@link JOURNAL_RUNS} runs, so a program
+ * cannot make Electron main hold its results. A completed call whose result
+ * was past the bound is remembered without it, and a replay reaching it stops
+ * rather than run it a second time.
  *
  * Scope, stated plainly: the journal lives as long as the attachment. Pi's
  * `Agent` never runs a tool call twice within an attachment, and a relaunch
  * does not re-run an unfinished tool call at all, so the journal is the
- * guarantee for any future path that does replay, not a fix for a replay that
- * happens today. The durable half of replay safety is where it already was:
- * Volli verbs derive their operation id from the call id they are handed, so a
- * nested `session.start` replayed after a relaunch is still one start.
+ * guarantee for a replay path Volli does not take today. The durable half is
+ * the one that matters now: Volli verbs derive their operation id from the
+ * call id they are handed, so a nested `session.start` replayed after a
+ * relaunch is still one start.
  */
 
+import { createHash } from "node:crypto";
 import type { ShapedOutcome } from "./shape";
 
 /** One completed nested call, as the journal remembers it. */
 export interface JournaledCall {
   name: string;
-  /** The arguments as canonical JSON, so the same call is recognised whatever its key order. */
-  argumentsKey: string;
-  outcome: ShapedOutcome;
+  /** A digest of the arguments as canonical JSON, never the arguments themselves. */
+  argumentsDigest: string;
+  /** What it came to; `null` when it was past the run's bound and not kept. */
+  outcome: ShapedOutcome | null;
 }
 
-/** One outer call's record. */
+/** One unfinished program's record. */
 export interface RunJournal {
   /** The run's pinned clock, in epoch milliseconds. */
   epoch: number;
   calls: Map<number, JournaledCall>;
-  /** How many times this outer call has been run before this one. */
+  /** How many times this program has been run under this id before this one. */
   previousRuns: number;
+  /** Result bytes kept so far. */
+  bytes: number;
 }
 
-/** Runs remembered per attachment; the oldest is forgotten first. */
-export const JOURNAL_RUNS = 64;
+/** Unfinished runs remembered per attachment; the oldest is forgotten first. */
+export const JOURNAL_RUNS = 16;
+
+/** Result bytes one run's journal keeps. */
+export const RUN_JOURNAL_MAX_BYTES = 4 * 1_024 * 1_024;
 
 export class CodeModeJournal {
   readonly #runs = new Map<string, RunJournal>();
@@ -60,23 +79,52 @@ export class CodeModeJournal {
     this.#capacity = capacity;
   }
 
-  /** The record for one outer call: the existing one on a replay, a fresh one otherwise. */
-  open(outerId: string, now: number): RunJournal {
-    const existing = this.#runs.get(outerId);
+  /**
+   * The record for one program under one outer call: the existing one on a
+   * replay, a fresh one otherwise. `key` comes from {@link runKey}.
+   */
+  open(key: string, now: number): RunJournal {
+    const existing = this.#runs.get(key);
     if (existing !== undefined) {
       existing.previousRuns += 1;
       // Most recently used last, so eviction takes the stalest run.
-      this.#runs.delete(outerId);
-      this.#runs.set(outerId, existing);
+      this.#runs.delete(key);
+      this.#runs.set(key, existing);
       return existing;
     }
-    const run: RunJournal = { epoch: now, calls: new Map(), previousRuns: 0 };
-    this.#runs.set(outerId, run);
+    const run: RunJournal = { epoch: now, calls: new Map(), previousRuns: 0, bytes: 0 };
+    this.#runs.set(key, run);
     while (this.#runs.size > this.#capacity) {
       this.#runs.delete(this.#runs.keys().next().value!);
     }
     return run;
   }
+
+  /** Forget a run that reached its end: it is never replayed. */
+  finish(key: string): void {
+    this.#runs.delete(key);
+  }
+}
+
+/** The journal key for one program under one outer call id. */
+export function runKey(outerId: string, source: string): string {
+  return `${outerId}\u0000${digest(source)}`;
+}
+
+/** Remember one completed call, keeping its result while the run's bound allows. */
+export function remember(
+  run: RunJournal,
+  position: number,
+  call: { name: string; argumentsDigest: string; outcome: ShapedOutcome },
+): void {
+  const size = Buffer.byteLength(JSON.stringify(call.outcome), "utf8");
+  const keep = run.bytes + size <= RUN_JOURNAL_MAX_BYTES;
+  if (keep) run.bytes += size;
+  run.calls.set(position, { ...call, outcome: keep ? call.outcome : null });
+}
+
+export function digest(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /** JSON with object keys sorted, so two spellings of the same arguments compare equal. */

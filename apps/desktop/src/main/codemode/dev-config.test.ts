@@ -59,6 +59,7 @@ describe("readCodeModeDevConfig", () => {
       ['{"mcp": {"github": "everywhere"}}', 'mcp route for "github" is not a route'],
       ['{"limits": 1}', "limits must be an object"],
       ['{"limits": {"maxImages": 1}}', 'unknown limit "maxImages"'],
+      ['{"limits": {"toString": 5}}', 'unknown limit "toString"'],
       ['{"limits": {"maxNestedCalls": 0}}', "limit maxNestedCalls must be a whole number"],
       ['{"limits": {"maxNestedCalls": "5"}}', "limit maxNestedCalls must be a whole number"],
       ['{"limits": {"maxNestedCalls": 1.5}}', "limit maxNestedCalls must be a whole number"],

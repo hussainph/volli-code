@@ -24,6 +24,7 @@
  *   carries a bounded record of them in Pi's `NestedToolCalls` shape.
  */
 
+import { randomUUID } from "node:crypto";
 import type {
   AgentContext,
   AgentLoopConfig,
@@ -49,7 +50,7 @@ import {
 import {
   CODE_MODE_TOOL_ID,
   MCP_RESULT_MAX_BYTES,
-  isCodeCallableRoute,
+  isCodeCallable,
   isDeclaredRoute,
   isListedRoute,
   routeOf,
@@ -61,14 +62,18 @@ import {
 import {
   cutMiddle,
   cutResultText,
+  formatBytes,
   toolOutputCut,
   type ToolOutputCut,
   type ToolOutputStore,
 } from "../pi/tool-output";
-import { describeCodeMode, describeTool, searchTools, type CallableTool } from "./describe";
+import { describeCodeMode, describeTool, ToolSearch, type CallableTool } from "./describe";
 import {
   canonicalJson,
   determinismPrelude,
+  digest,
+  remember,
+  runKey,
   seedOf,
   type CodeModeJournal,
   type RunJournal,
@@ -121,6 +126,19 @@ export interface CodeModeHost {
   /** The activity path a direct call's tool events take. */
   observe: (event: NestedToolEvent) => Promise<void>;
   journal: CodeModeJournal;
+  /**
+   * Whether host-authored MCP parallel-read marks may take effect (VC-454's
+   * runtime switch). Off, every MCP call in a program runs alone, as it would
+   * in the Agent's own batches.
+   */
+  honourParallelReads?: boolean;
+  /**
+   * How long a run may spend paused — on approvals and Volli verbs — before
+   * it is stopped anyway, in milliseconds. Pausing stops the run's own clock,
+   * but not the VM: a program that spins instead of awaiting keeps a core busy
+   * for as long as a person takes, so the pause is bounded too.
+   */
+  pauseAllowanceMs?: number;
   output?: ToolOutputStore | undefined;
   sandbox?: CodeModeSandboxAssets | undefined;
   /** The attachment's own cancellation. */
@@ -170,6 +188,22 @@ export const MAX_HELD_OUTPUT_CHARS = MCP_RESULT_MAX_BYTES;
  * return what it has; one that keeps calling is looping on it.
  */
 const CALLS_PAST_LIMIT = 10;
+
+/** How long a run may stay paused on approvals and verbs before it is stopped anyway. */
+export const DEFAULT_PAUSE_ALLOWANCE_MS = 15 * 60_000;
+
+/**
+ * The largest arguments one nested call may carry, as canonical JSON. A
+ * program passes paths and commands, not payloads; past this the call fails
+ * inside the program and nothing of it is kept.
+ */
+export const MAX_NESTED_ARGUMENT_BYTES = 1_024 * 1_024;
+
+/**
+ * `searchTools()` and `describeTool()` calls one run may make. They are not
+ * tool calls, but they run on the host thread, so they are counted.
+ */
+export const MAX_DISCOVERY_CALLS = 100;
 
 /** Records kept per run in the result; the rest are counted, not listed. */
 const MAX_RECORDED_CALLS = 50;
@@ -231,10 +265,9 @@ export function createCodeModeTool(
   host: CodeModeHost,
 ): AgentTool<typeof codemodeSchema, CodeModeDetails> {
   const limits = host.surface.limits;
-  const callable = host.tools.filter(
-    (entry) =>
-      entry.tool.name !== CODE_MODE_TOOL_ID &&
-      isCodeCallableRoute(routeFor(host.surface, entry.id)),
+  // The route, held to the rules no record decides (`isCodeCallable`).
+  const callable = host.tools.filter((entry) =>
+    isCodeCallable(entry.id, routeFor(host.surface, entry.id)),
   );
   const kinds = new Map<string, ToolKind>(
     callable.map((entry) => [entry.tool.name, toolKind(entry.tool.name, entry.verb)]),
@@ -260,9 +293,14 @@ export function createCodeModeTool(
   }
   const overlapping = new Set(
     callable
-      .filter((entry) => OVERLAPPING_TOOLS.has(entry.tool.name) || entry.mcp?.parallelRead === true)
+      .filter(
+        (entry) =>
+          OVERLAPPING_TOOLS.has(entry.tool.name) ||
+          (host.honourParallelReads === true && entry.mcp?.parallelRead === true),
+      )
       .map((entry) => entry.tool.name),
   );
+  const search = new ToolSearch(listing);
   const description = describeCodeMode({
     tools: listing,
     budgetTokens: limits.declarationBudgetTokens,
@@ -280,6 +318,7 @@ export function createCodeModeTool(
         callable: callable.map((entry) => entry.tool),
         kinds,
         listing,
+        search,
         names,
         overlapping,
         outerId: toolCallId,
@@ -296,6 +335,7 @@ interface RunInput {
   callable: readonly AgentTool[];
   kinds: ReadonlyMap<string, ToolKind>;
   listing: readonly CallableTool[];
+  search: ToolSearch;
   names: ReadonlyMap<string, string>;
   overlapping: ReadonlySet<string>;
   outerId: string;
@@ -306,7 +346,9 @@ interface RunInput {
 interface CallRecord {
   id: string;
   name: string;
-  args: unknown;
+  /** The arguments when they are small enough to keep in the record; their size otherwise. */
+  args: JsonObject | undefined;
+  argumentsBytes: number;
   startedAt: number;
   status: "ok" | "error" | "unfinished";
   durationMs?: number;
@@ -343,7 +385,14 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     };
   }
 
-  const journal: RunJournal = host.journal.open(input.outerId, now());
+  // A provider that sends no tool-call id gets one minted for this run: nested
+  // ids must be unique, and an empty id must never match a journal.
+  const outerId = input.outerId === "" ? `codemode-${randomUUID()}` : input.outerId;
+  const journalKey = input.outerId === "" ? undefined : runKey(input.outerId, input.source);
+  const journal: RunJournal =
+    journalKey === undefined
+      ? { epoch: now(), calls: new Map(), previousRuns: 0, bytes: 0 }
+      : host.journal.open(journalKey, now());
   const run = new AbortController();
   // The first reason wins: aborting an aborted controller changes nothing.
   const stop = (reason: RunStop): void => run.abort(reason);
@@ -363,6 +412,20 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       ),
     ),
   );
+  // The pause is bounded too: the VM keeps running while the clock is
+  // stopped, so a program that spins instead of awaiting an approval would
+  // otherwise hold a core for as long as nobody answers.
+  const pauseAllowanceMs = host.pauseAllowanceMs ?? DEFAULT_PAUSE_ALLOWANCE_MS;
+  const ceiling = setTimeout(
+    () =>
+      stop(
+        new RunStop(
+          "timeout",
+          `The program ran past its ${Math.round(check.timeoutMs / 1_000)} s limit plus ${seconds(pauseAllowanceMs)} paused, and was stopped.`,
+        ),
+      ),
+    check.timeoutMs + pauseAllowanceMs,
+  );
   const judging = new Mutex();
   const slots = new ExecutionSlots(limits.maxConcurrency);
   const records: CallRecord[] = [];
@@ -370,6 +433,10 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   const inflight = new Set<Promise<unknown>>();
   let issued = 0;
   let replayed = 0;
+  let discoveries = 0;
+  const markUntrusted = (name: string): void => {
+    untrusted.set(name, (untrusted.get(name) ?? 0) + 1);
+  };
 
   // The Session's own gate, with the clock stopped while it decides:
   // judgement is where a call may wait on a person.
@@ -413,11 +480,13 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         `This program has made its ${limits.maxNestedCalls} calls; no more are run. Return what you have.`,
       );
     }
-    const id = `${input.outerId}:${position}`;
-    const argumentsKey = canonicalJson(args);
+    const id = `${outerId}:${position}`;
+    const json = canonicalJson(args);
+    const argumentsBytes = Buffer.byteLength(json, "utf8");
+    const argumentsDigest = digest(json);
     const remembered = journal.calls.get(position);
     if (remembered !== undefined) {
-      if (remembered.name !== tool.name || remembered.argumentsKey !== argumentsKey) {
+      if (remembered.name !== tool.name || remembered.argumentsDigest !== argumentsDigest) {
         const diverged = new RunStop(
           "replay",
           `Replay diverged at call ${position}: the earlier run called ${remembered.name} there, this one ${tool.name}. Nothing was run for it.`,
@@ -425,20 +494,39 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         stop(diverged);
         throw diverged;
       }
+      if (remembered.outcome === null) {
+        const unkept = new RunStop(
+          "replay",
+          `Replay cannot answer call ${position} (${tool.name}): it ran before and its result was too large to keep, so it is not run again.`,
+        );
+        stop(unkept);
+        throw unkept;
+      }
+      // A remembered answer from an untrusted source is still one.
+      if (isUntrustedSource(tool.name)) markUntrusted(tool.name);
       replayed += 1;
       return deliver(remembered.outcome);
-    }
-    if (isUntrustedSource(tool.name)) {
-      untrusted.set(tool.name, (untrusted.get(tool.name) ?? 0) + 1);
     }
     const record: CallRecord = {
       id,
       name: tool.name,
-      args,
+      args:
+        argumentsBytes <= MAX_RECORDED_ARGUMENT_BYTES && isPlainObject(args)
+          ? (args as JsonObject)
+          : undefined,
+      argumentsBytes,
       startedAt: now(),
       status: "unfinished",
     };
     records.push(record);
+    if (argumentsBytes > MAX_NESTED_ARGUMENT_BYTES) {
+      record.status = "error";
+      record.error = "arguments over the limit";
+      throw new Error(
+        `The arguments to ${tool.name} are ${formatBytes(argumentsBytes)}, over the ${formatBytes(MAX_NESTED_ARGUMENT_BYTES)} a call may carry. Pass a path or a command, not the data.`,
+      );
+    }
+    if (isUntrustedSource(tool.name)) markUntrusted(tool.name);
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
     // A verb's only wait is a person answering its budget question, so its
@@ -473,14 +561,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     // execution can ask a person (a verb's budget) — holds the judgement
     // lock from its judgement to its end, so no other judgement, and so no
     // other question, can start while it runs.
-    const work = shared ? call(lockedJudge) : judging.run(() => call(judge));
-    inflight.add(work);
-    let outcome;
-    try {
-      outcome = await work;
-    } finally {
-      inflight.delete(work);
-    }
+    const outcome = await (shared ? call(lockedJudge) : judging.run(() => call(judge)));
     await host.observe({
       type: "tool_execution_end",
       toolCallId: id,
@@ -495,36 +576,69 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       // journaled nor reported as an answer. A call that SUCCEEDED after its
       // signal fired did complete — a Session start cannot be withdrawn half
       // way — so it falls through and is journaled like any other.
-      record.status = "unfinished";
       throw new Error("The program was cancelled before this call finished.");
     }
     record.status = shaped.ok ? "ok" : "error";
     if (!shaped.ok) record.error = shaped.message.slice(0, MAX_RECORDED_ERROR_CHARS);
-    journal.calls.set(position, { name: tool.name, argumentsKey, outcome: shaped });
+    remember(journal, position, { name: tool.name, argumentsDigest, outcome: shaped });
     return deliver(shaped);
   };
 
+  /** Tracked from the moment it is issued, so none outlives the run that issued it. */
+  const tracked = <T>(work: Promise<T>): Promise<T> => {
+    inflight.add(work);
+    const settle = (): void => {
+      inflight.delete(work);
+    };
+    work.then(settle, settle);
+    return work;
+  };
+  const discover = (): void => {
+    discoveries += 1;
+    if (discoveries > MAX_DISCOVERY_CALLS) {
+      throw new Error(
+        `This program has searched and described tools ${MAX_DISCOVERY_CALLS} times; no more are answered.`,
+      );
+    }
+  };
   const sandboxTools: CodemodeTool[] = input.callable.map((tool) => ({
     name: tool.name,
-    execute: (args, context) => nestedCall(tool, args, context.signal),
+    execute: (args, context) => tracked(nestedCall(tool, args, context.signal)),
   }));
   const globals: CodemodeTool[] = [
     {
       name: "searchTools",
       spread: true,
       execute: (args) => {
+        discover();
         const [query, options] = args as [unknown, unknown];
         const opts = (typeof options === "object" && options !== null ? options : {}) as {
           limit?: number;
           namespace?: string;
         };
-        return searchTools(input.listing, String(query ?? ""), opts);
+        const found = input.search.search(String(query ?? ""), opts);
+        // An MCP server's own descriptions are third-party text.
+        if (found.some((hit) => hit.namespace.startsWith("mcp:"))) markUntrusted("searchTools");
+        return found;
       },
     },
     {
       name: "describeTool",
       spread: true,
-      execute: (args) => describeTool(input.listing, String((args as unknown[])[0] ?? "")),
+      execute: (args) => {
+        discover();
+        const name = String((args as unknown[])[0] ?? "");
+        const described = describeTool(input.listing, name);
+        if (
+          input.listing.some(
+            (tool) =>
+              (tool.identifier === name || tool.name === name) && tool.namespace.startsWith("mcp:"),
+          )
+        ) {
+          markUntrusted("describeTool");
+        }
+        return described;
+      },
     },
   ];
   const sandbox = new CodemodeSandbox({
@@ -543,7 +657,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   let result: CodemodeResult;
   try {
     result = await sandbox.execute(
-      determinismPrelude(seedOf(input.outerId), journal.epoch) + check.code,
+      determinismPrelude(seedOf(outerId), journal.epoch) + check.code,
       { signal: run.signal },
     );
     // No nested call outlives the run that issued it: the sandbox has aborted
@@ -551,11 +665,21 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     await Promise.allSettled(inflight);
   } finally {
     clock.dispose();
+    clearTimeout(ceiling);
     for (const one of outerSignals) one.removeEventListener("abort", onOuterAbort);
     await sandbox.close();
   }
   const reason: unknown = run.signal.reason;
   const stopped = reason instanceof RunStop ? reason : undefined;
+  // A run that reached its own end is never replayed, so its journal goes:
+  // only a run something stopped part-way is worth answering again.
+  if (
+    journalKey !== undefined &&
+    stopped === undefined &&
+    (result.ok || result.error.kind === "script")
+  ) {
+    host.journal.finish(journalKey);
+  }
   return assemble({
     result,
     stopped,
@@ -566,9 +690,13 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     pausedMs: clock.pausedMs,
     peak: slots.peak,
     maxOutputBytes: check.maxOutputBytes,
-    outerId: input.outerId,
+    outerId,
     output: host.output,
   });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Hand one shaped outcome to the program: a value, or a rejection with the reason. */
@@ -584,18 +712,15 @@ function seconds(ms: number): string {
 function nestedCalls(records: readonly CallRecord[]): NestedToolCalls {
   let complete = records.length <= MAX_RECORDED_CALLS;
   const calls = records.slice(0, MAX_RECORDED_CALLS).map((record): NestedToolCallRecord => {
-    const json = JSON.stringify(record.args ?? {});
-    const bytes = Buffer.byteLength(json, "utf8");
-    const small = bytes <= MAX_RECORDED_ARGUMENT_BYTES && typeof record.args === "object";
-    if (!small) complete = false;
+    if (record.args === undefined) complete = false;
     if (record.status === "unfinished") complete = false;
     const recorded: NestedToolCallRecord = {
       id: record.id,
       name: record.name,
       status: record.status,
     };
-    if (small) recorded.arguments = record.args as JsonObject;
-    else recorded.argumentsBytes = bytes;
+    if (record.args !== undefined) recorded.arguments = record.args;
+    else recorded.argumentsBytes = record.argumentsBytes;
     if (record.durationMs !== undefined) recorded.durationMs = Math.round(record.durationMs);
     if (record.error !== undefined) recorded.error = record.error;
     return recorded;
