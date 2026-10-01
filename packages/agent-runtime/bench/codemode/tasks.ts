@@ -311,6 +311,9 @@ function sessionFanout(): TaskRun {
       const ticket = String(request.input.ticket);
       const handle = `s${(0xa0 + started.size).toString(16)}${ticket.slice(-3)}`;
       started.set(ticket, handle);
+      // The real door watches every Session `session_start` opens, and its
+      // description says so; a model that relies on that has watched it.
+      watched.add(handle);
       return {
         text: [
           `Started Session ${handle} on ${ticket}. It runs on its own; it does not move the Ticket.`,
@@ -361,13 +364,28 @@ function sessionFanout(): TaskRun {
       `Start a Session on each of ${tickets.join(", ")} with the kickoff message "Run the test suite and report failures.", ` +
       "then watch all four Sessions. Reply with the started Session handles, one per line, and nothing else.",
     evidence: () => ({ started: Object.fromEntries(started), watched: [...watched] }),
-    grade: (answer) =>
-      started.size === tickets.length &&
-      tickets.every((ticket) => started.has(ticket)) &&
-      [...started.values()].every((handle) => watched.has(handle)) &&
-      sameSet(lines(answer), [...started.values()]),
+    grade: (answer) => fanoutGrade(answer, { started: Object.fromEntries(started) }),
     hostCalls,
   };
+}
+
+/**
+ * The fan-out grade, from the answer and what the host saw: every Ticket
+ * started once, and the reply is exactly their handles. Watching is implied
+ * by starting — the real `session_start` watches what it opens — so phase 1's
+ * runs, whose stand-in did not, are graded again with this by the report.
+ */
+export function fanoutGrade(
+  answer: string,
+  evidence: { started?: Record<string, string> },
+): boolean {
+  const started = evidence.started ?? {};
+  const tickets = ["VC-101", "VC-102", "VC-103", "VC-104"];
+  return (
+    Object.keys(started).length === tickets.length &&
+    tickets.every((ticket) => Object.hasOwn(started, ticket)) &&
+    sameSet(lines(answer), Object.values(started))
+  );
 }
 
 /** (d) One read, one answer: the control. Code Mode should cost here, not save. */

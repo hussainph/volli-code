@@ -44,7 +44,7 @@ describe("per-model defaults", () => {
   it("answers each family's measured mode, and off for a model no row knows", () => {
     expect(defaultCodeModeMode("claude-haiku-4-5")).toBe("both");
     expect(defaultCodeModeMode("claude-sonnet-4-6")).toBe("both");
-    expect(defaultCodeModeMode("claude-opus-4-7")).toBe("both");
+    expect(defaultCodeModeMode("claude-opus-5-5")).toBe("off");
     expect(defaultCodeModeMode("gpt-5.5")).toBe("off");
     expect(defaultCodeModeMode("glm-5.3-flash")).toBe("off");
     expect(defaultCodeModeMode("llama-4")).toBe("off");
@@ -53,7 +53,7 @@ describe("per-model defaults", () => {
   it("finds the family behind a routed or regional id", () => {
     expect(defaultCodeModeMode("anthropic/claude-sonnet-4.6")).toBe("both");
     expect(defaultCodeModeMode("us.anthropic.claude-haiku-4-5-v1:0")).toBe("both");
-    expect(defaultCodeModeMode("Claude-Opus-4")).toBe("both");
+    expect(defaultCodeModeMode("Claude-Sonnet-4")).toBe("both");
   });
 });
 

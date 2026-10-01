@@ -387,6 +387,41 @@ VOLLI_DEV_MCP_PARALLEL='{
   variable entirely. A value that does not parse is logged at launch and
   ignored.
 
+## How a server's tools reach the model (Code Mode, VC-471)
+
+Without Code Mode, every selected MCP tool is declared to the model, and its
+name, description and input schema are resent with every request. With Code
+Mode on (**Settings → Models → Code Mode**, on by default), each tool of a new
+Session is frozen with a **route** at birth (`packages/shared/src/code-mode.ts`):
+
+| Route | Declared to the model | Callable from a `codemode` program | In the `codemode` description |
+| --- | --- | --- | --- |
+| `direct` | yes | no | no |
+| `both` | yes | yes | named |
+| `code` | no | yes | declared in TypeScript, under a token budget |
+| `deferred` | no | yes | counted; found with `searchTools()` |
+
+A server is **large** when it has more than 20 tools
+(`LARGE_MCP_SERVER_TOOLS`) or its declarations are estimated past 3,000 tokens
+(`LARGE_MCP_SERVER_TOKENS`, at four characters a token). A large server's tools
+are routed `deferred` **whatever the model's mode**: a Session whose mode is
+`off` still gets `codemode`, for its large servers alone, with every other tool
+declared as before. Smaller servers follow the mode — `both` declares and lists
+them, `only` routes each server's tools `code` as one group. Measured at 120
+tools (o200k, `bench/codemode/prompt-cost.bench.test.ts`): 17,297 declaration
+tokens declared directly against 2,217 deferred.
+
+A nested call from a program reaches the server through the same
+`RuntimeMcpPort`, the same per-server bound and the same trust notice as a
+direct call; a program's output after any MCP call comes back inside
+untrusted-content markers. Routes are frozen with the Session like the tool
+definitions, so changing the setting, or a server growing past the threshold,
+changes only Sessions created afterwards. With the Code Mode switch off, no new
+Session gets routes at all and every tool is declared, as before.
+
+The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`; the design
+and the measurements are `docs/research/code-mode-vc-471.md`.
+
 ## What a call returns
 
 A call returns what the server sent, in the shape Pi 0.99 gives every tool

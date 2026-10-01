@@ -403,7 +403,7 @@ function ModesHint() {
   );
 }
 
-/** `Default: Both for Claude Haiku, Claude Sonnet and Claude Opus; Off for every other model.` */
+/** `Default: Both for Claude Haiku and Claude Sonnet; Off for every other model.` */
 export function builtInDefaultsSentence(): string {
   const parts = CODE_MODE_MODES.filter((mode) => mode !== "off").flatMap((mode) => {
     const families = CODE_MODE_MODEL_DEFAULTS.filter((row) => row.mode === mode).map(

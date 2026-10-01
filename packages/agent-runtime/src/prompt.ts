@@ -179,9 +179,12 @@ const DELEGATION_PARAGRAPH: Record<Exclude<RuntimeSessionRole, "subagent">, stri
  * is read when a tool is already being considered: in phase 1's benchmark
  * GPT-5.5 and GLM, offered `codemode` beside every tool, never called it
  * once in 24 trials, while Claude models reached for it exactly on the loop
- * and multi-page tasks. So the decision is taught here, for the families the
- * benchmark found it helps (`CODE_MODE_MODEL_DEFAULTS`), and only in mode
- * `both` — under `only` there is no other way to call a tool to choose.
+ * and multi-page tasks. Measured as its own arm in phase 2, this paragraph
+ * moved GPT-5.5 to 3/24 and GLM to 9/24 without routing a single call through
+ * a program, and cost Sonnet, which already chose well, a six-call Browser
+ * run. So it is said only to the families it helps (`nudge` in
+ * `CODE_MODE_MODEL_DEFAULTS`), and only in mode `both` — under `only` there is
+ * no other way to call a tool to choose.
  *
  * The negative case is the last sentence on purpose: a program around one
  * call costs a turn's worth of tokens to save none. Rendered from the frozen

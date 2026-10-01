@@ -66,8 +66,22 @@ export function codeModeModelKey(model: { providerId: string; modelId: string })
  * family's default). First match wins; a model no row matches is `off`.
  *
  * Each row is a benchmark finding, recorded in
- * `docs/research/code-mode-vc-471.md` §4, not a guess: a mode is the default
- * only where it measured cheaper at the same correctness.
+ * `docs/research/code-mode-vc-471.md` (phase 2), not a guess: a mode is the
+ * default only where it measured cheaper at the same correctness.
+ *
+ * - Haiku 4.5 and Sonnet 4.6: `both`. Each wrote a program on the loop task
+ *   every time (6/6), and Sonnet on the Browser and fan-out tasks too, at 24/24
+ *   correct; the loop task cost 17–19% fewer input tokens. `only` measured
+ *   cheaper still for Haiku, but the four tasks hold no edit-heavy work, which
+ *   under `only` would be written as string literals inside programs — a pin,
+ *   not a default.
+ * - Opus 5.5: `off`. It solved the loop with one shell pipeline and wrote a
+ *   program only for the fan-out, so `both` cost it 9–31% more input tokens on
+ *   every task.
+ * - GPT-5.5 and GLM-5.3 Flash: `off`. Offered `codemode` beside every tool they
+ *   rarely chose it (GPT 0/24, GLM 5/24), so its description was paid for
+ *   nothing. The paragraph (`nudge`) raised that to 3/24 and 9/24 without a
+ *   single call routed through a program, so a pin to `both` carries it.
  */
 export const CODE_MODE_MODEL_DEFAULTS: readonly {
   readonly family: string;
@@ -83,7 +97,7 @@ export const CODE_MODE_MODEL_DEFAULTS: readonly {
 }[] = Object.freeze([
   { family: "Claude Haiku", match: /^claude-(?:3-5-)?haiku/u, mode: "both" },
   { family: "Claude Sonnet", match: /^claude-(?:3-[57]-)?sonnet/u, mode: "both" },
-  { family: "Claude Opus", match: /^claude-opus/u, mode: "both" },
+  { family: "Claude Opus", match: /^claude-opus/u, mode: "off" },
   { family: "GPT-5", match: /^gpt-5/u, mode: "off", nudge: true },
   { family: "GLM", match: /^glm-/u, mode: "off", nudge: true },
 ]);

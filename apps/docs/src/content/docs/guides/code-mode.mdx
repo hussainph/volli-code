@@ -67,8 +67,11 @@ Each model gets a mode chosen from Volli's measurements of that model:
 | **Both** | `codemode` beside every normal tool. The model chooses per step. |
 | **Only** | Tools a program can call are reached only through `codemode`. Tool groups that include something a program cannot call, such as the Browser, stay available directly. This sends the model the fewest tool definitions. |
 
-Claude models use **Both** by default. Models that did not benefit in Volli's
-measurements use **Off**. To choose a different mode for one model, open
+Claude Haiku and Claude Sonnet use **Both** by default. Every other model,
+including Claude Opus, GPT and GLM models, uses **Off**: in Volli's
+measurements those models either rarely chose to write a program or did not
+save anything when they did, so Code Mode would only have added to every
+request. To choose a different mode for one model, open
 **Advanced** in the Code Mode section, choose the model under **Pin a model**,
 and set its **Mode**. The **Default** column shows the mode the model would
 otherwise get.
