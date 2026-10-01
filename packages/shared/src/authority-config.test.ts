@@ -12,18 +12,20 @@ import {
   parseAuthorityPolicyOverride,
   resolveAuthorityPolicy,
   validateAuthorityPolicyOverride,
+  isWritableRoot,
 } from "./authority-config";
+import { CONTAINMENT_MODES } from "./capability-policy";
 import { SESSION_AWAIT_KINDS } from "./session-await";
 import { TICKET_AWAIT_KINDS } from "./ticket-await";
 import { VERB_REGISTRY, verbTier } from "./verb-registry";
 
 describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("observes rather than enforces, which is VC-44's recorded day-one posture", () => {
-    // Enforcing the nine-rule pack on day one refuses reads the product itself
+    // Enforcing the nine-rule pack on day one refused reads the product itself
     // asks for: a personal-tier SKILL.md the skills index points at, and the
-    // Main checkout a ticket brief offers as reference. Both are outside the
-    // Session workspace. `observe` pins the Snapshot without re-activating a
-    // pack that has been dormant since the sandbox came out.
+    // Main checkout a ticket brief offers as reference. VC-45's one read policy
+    // stopped refusing both; the default stayed put, because installing a gate
+    // on every Session is its own decision.
     expect(DEFAULT_AUTHORITY_POLICY.enforcement).toBe("observe");
   });
 
@@ -720,5 +722,67 @@ describe("coordinationVerbAllowed", () => {
     for (const kind of AUTHORITY_ACTOR_KINDS) {
       expect(coordinationVerbAllowed(policy, kind, "verb.that.does.not.exist")).toBe(false);
     }
+  });
+});
+
+describe("the capability axis in policy (VC-45)", () => {
+  it("leaves containment off and declares no extra roots by default", () => {
+    // Scoped Sessions have no network until slice 6 pairs with the classifier,
+    // so walls by default would refuse every install and push.
+    expect(DEFAULT_AUTHORITY_POLICY.containment).toBe("off");
+    expect(DEFAULT_AUTHORITY_POLICY.writableRoots).toEqual([]);
+    expect(CONTAINMENT_MODES).toEqual(["off", "scoped"]);
+  });
+
+  it("resolves a stated containment and roots, de-duplicated, and inherits them unsaid", () => {
+    const resolved = resolveAuthorityPolicy({
+      containment: "scoped",
+      writableRoots: ["/Users/dev/scratch", "/Users/dev/scratch", "/opt/cache"],
+    });
+    expect(resolved.containment).toBe("scoped");
+    expect(resolved.writableRoots).toEqual(["/Users/dev/scratch", "/opt/cache"]);
+    expect(resolveAuthorityPolicy({ enforcement: "enforce" })).toMatchObject({
+      containment: "off",
+      writableRoots: [],
+    });
+  });
+
+  it("parses both fields and drops what it cannot read, roots all-or-nothing", () => {
+    expect(
+      parseAuthorityPolicyOverride({ containment: "scoped", writableRoots: ["/a", "/b/c"] }),
+    ).toEqual({ containment: "scoped", writableRoots: ["/a", "/b/c"] });
+    expect(
+      parseAuthorityPolicyOverride({ containment: "jail", writableRoots: ["/a", "relative"] }),
+    ).toEqual({});
+    expect(parseAuthorityPolicyOverride({ writableRoots: "/a" })).toEqual({});
+  });
+
+  it("accepts only absolute, normalized roots other than /", () => {
+    for (const root of ["/a", "/Users/dev/My Projects/x", "/a/.b/c"]) {
+      expect(isWritableRoot(root), root).toBe(true);
+    }
+    for (const root of [7, "", "/", "a/b", "/a/", "/a//b", "/a/./b", "/a/../b", "/a\0b", "~/x"]) {
+      expect(isWritableRoot(root), String(root)).toBe(false);
+    }
+  });
+
+  it("validates both at the write, reporting every bad root", () => {
+    expect(
+      validateAuthorityPolicyOverride({ containment: "scoped", writableRoots: ["/Users/dev/x"] }),
+    ).toEqual({ ok: true, override: { containment: "scoped", writableRoots: ["/Users/dev/x"] } });
+    const refused = validateAuthorityPolicyOverride({
+      containment: "jail",
+      writableRoots: ["relative", "/", "/fine"],
+    });
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.errors).toEqual([
+      "containment must be one of: off, scoped.",
+      'writableRoots entry "relative" must be an absolute path other than /, with no . or .. steps.',
+      'writableRoots entry "/" must be an absolute path other than /, with no . or .. steps.',
+    ]);
+    expect(validateAuthorityPolicyOverride({ writableRoots: "/x" })).toEqual({
+      ok: false,
+      errors: ["writableRoots must be an array of absolute paths."],
+    });
   });
 });

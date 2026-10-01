@@ -46,9 +46,11 @@ describe("shellPathTokenToPath", () => {
 
   it.each([
     ["build", "/work/build"],
-    ["  ./build  ", "/work/build"],
+    // Joined, not normalized: `.` and `..` are the walk's to apply, through links.
+    ["  ./build  ", "/work/./build"],
+    ["s/../x", "/work/s/../x"],
     ["/etc/hosts", "/etc/hosts"],
-  ])("resolves %j against the workspace", (token, path) => {
+  ])("joins %j to the workspace", (token, path) => {
     expect(shellPathTokenToPath(token, "/work")).toEqual({ kind: "path", path });
   });
 
@@ -83,8 +85,8 @@ describe("shellPathTokenToPath", () => {
   // `$`, or one before punctuation or a digit, names no variable.
   it.each([
     ["^foo$", "/work/^foo$"],
-    ["s/$/x/", "/work/s/$/x"],
-    ["s/foo$/bar/", "/work/s/foo$/bar"],
+    ["s/$/x/", "/work/s/$/x/"],
+    ["s/foo$/bar/", "/work/s/foo$/bar/"],
     ["$", "/work/$"],
     ["cost $5", "/work/cost $5"],
     ["{print $1}", "/work/{print $1}"],
@@ -130,6 +132,58 @@ describe("resolvePathForPolicy", () => {
   it("refuses a path the filesystem cannot name at all", () => {
     const { raw } = workspace();
     expect(resolvePathForPolicy(join(raw, "x".repeat(400)))).toBeUndefined();
+  });
+
+  it("follows a link before applying the .. after it, as the kernel does (VC-45 review, B1)", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "out", "Caches"), { recursive: true });
+    mkdirSync(join(raw, "ws"));
+    symlinkSync(join(raw, "out", "Caches"), join(raw, "ws", "s"));
+    symlinkSync("s/../LaunchAgents/x.plist", join(raw, "ws", "x"));
+    // Lexically `ws/s/../LaunchAgents` is `ws/LaunchAgents`; through `s` it is `out/LaunchAgents`.
+    expect(resolvePathForPolicy(join(raw, "ws", "x"))).toBe(join(real, "out/LaunchAgents/x.plist"));
+    // A relative target with `.` components is walked from the link's directory.
+    symlinkSync("./s/./new.txt", join(raw, "ws", "dotted"));
+    expect(resolvePathForPolicy(join(raw, "ws", "dotted"))).toBe(join(real, "out/Caches/new.txt"));
+  });
+
+  // APFS's folding; a case-sensitive Linux volume stores `.SSH` as a different name.
+  it.skipIf(process.platform !== "darwin")(
+    "spells an existing prefix as the filesystem stores it",
+    () => {
+      const { raw, real } = workspace();
+      mkdirSync(join(raw, ".ssh"));
+      // APFS folds case and normalization; these name the same directory, and so does the policy.
+      for (const spelling of [".SSH", ".sſh", ".ssh".normalize("NFD")]) {
+        expect(resolvePathForPolicy(join(raw, spelling, "id_rsa"))).toBe(join(real, ".ssh/id_rsa"));
+      }
+    },
+  );
+
+  it("spells only the prefix that exists, and appends the rest as named, however long", () => {
+    const { raw, real } = workspace();
+    const tail = Array.from({ length: 25 }, () => "x".repeat(200));
+    expect(resolvePathForPolicy(join(raw, "missing", ...tail))).toBe(
+      join(real, "missing", ...tail),
+    );
+  });
+
+  it("walks again once a .. climbs back above a missing directory", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "elsewhere"));
+    symlinkSync(join(raw, "elsewhere"), join(raw, "link"));
+    // Unnormalized on purpose, as callers now hand it over: `missing/..` is
+    // undone by the walk, and `link` after it is a real link again.
+    expect(resolvePathForPolicy(`${raw}/missing/../link/x`)).toBe(join(real, "elsewhere/x"));
+    expect(resolvePathForPolicy(`${raw}/missing/deeper/../../link`)).toBe(join(real, "elsewhere"));
+    // A link followed before a `..` in the operand itself: kernel order.
+    mkdirSync(join(raw, "elsewhere", "inner"));
+    symlinkSync(join(raw, "elsewhere", "inner"), join(raw, "deep"));
+    expect(resolvePathForPolicy(`${raw}/deep/../sibling.txt`)).toBe(
+      join(real, "elsewhere/sibling.txt"),
+    );
+    // A relative path is taken against the process's directory, unnormalized.
+    expect(resolvePathForPolicy("x/../y")).toBe(join(realpathSync(process.cwd()), "y"));
   });
 
   it("resolves through an ancestor that turns out to be a file", () => {

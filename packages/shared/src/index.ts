@@ -33,6 +33,7 @@ export * from "./mcp";
 export * from "./mcp-credentials";
 export * from "./authority-config";
 export * from "./authority-policy";
+export * from "./capability-policy";
 export * from "./web-address-policy";
 export * from "./web-target-policy";
 export * from "./session-activity";

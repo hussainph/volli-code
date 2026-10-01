@@ -24,14 +24,14 @@ import type { LedgerCommit, LedgerFrame, RawTurn, RecordedEnvelope } from "./har
 /**
  * What one scripted turn must produce in VC-119 terms: VC-441's shape on the
  * real path. Three provider attempts (tool round, overflow error, final); one
- * tool round of two reads and a bash; one authority wait (the escalated read);
+ * tool round of two reads, a write and a bash; one authority wait (the escalated write);
  * one overflow compaction, whose summary request goes through Pi's
  * `completeSimple` and so is not a provider attempt; one retry (the attempt
  * after the error); one `turn-queue` from the Session runtime.
  */
 export const REAL_PATH_EXPECTED: TurnExpectations = {
   modelAttempts: 3,
-  toolsByName: { read: 2, bash: 1 },
+  toolsByName: { read: 2, write: 1, bash: 1 },
   authorityWaits: 1,
   compactions: 1,
   retries: 1,

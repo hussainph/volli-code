@@ -192,11 +192,54 @@ departures; a project list that names `$defaults` extends rather than replaces.
 _Avoid_: rule pack (that is the compiled rules the policy runs), settings
 
 **Enforcement posture**:
-What a project's Authority Policy does with the rule pack. `off` builds no
-Snapshot, so no gate is installed and the Session runs at the runtime's own
-defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
-hands the Snapshot to the runtime and the pack binds. `observe` is the default.
+What a project's Authority Policy does with the rule pack. `off` installs no
+gate; with containment also `off` it builds no Snapshot and the Session runs at
+the runtime's own defaults, while with containment `scoped` it still pins one,
+because walls ride the Snapshot and `off` bypasses the rules, not the walls.
+`observe` pins and
+records the Snapshot and installs no gate. `enforce` hands the Snapshot to the
+runtime and the pack binds. `observe` is the default.
 _Avoid_: auto mode (that is the judgment mode), permission mode
+
+**Containment**:
+The capability axis of a project's Authority Policy, set apart from the
+enforcement posture: whether a Session's tools run behind walls. `off` runs the
+shell as the user with the network reachable. `scoped` makes a **Scoped
+Session**: its shell runs behind Seatbelt and its file tools behind a guard, both
+compiled from one capability policy — reads anywhere except the denylist,
+writes only in the writable roots minus git plumbing (hooks, config, the files
+that redirect a worktree, nested `.git` directories), `.gitmodules` and
+`.volli/` — and its commands have no network until egress opens together with
+the classifier. Seatbelt and the guard agree on every spelling APFS folds
+together (case, Unicode case, normalization form, the Data-volume firmlink);
+they disagree on a hard link planted before the Session, which only the guard's
+inode index recognises. The authority gate judges paths against the same
+policy, but its reading of a shell command's operands is best-effort: the
+kernel guarantee holds only in a Scoped Session. `off` is the default.
+_Avoid_: sandbox mode, full access (as a setting name)
+
+**Credential tier** / **Private tier**:
+The two halves of the read denylist. The credential tier is key material — an
+explicit, named list (`HOME_CREDENTIAL_PATHS`, `SYSTEM_CREDENTIAL_PATHS`, the
+host's credential files, browser cookie and login stores) — refused by
+`path.credentials`, which no approval overrules: credentials never enter the
+model's context. The private tier is everything else on the denylist — home
+dotfiles, `~/.config`, other agents' homes, app data, other users' homes,
+Volli's own data — refused by `path.private`, which a person may approve once.
+A grant or root at equal or greater depth beats a private entry; nothing beats
+a credential entry. Volli's own data is read as private but WRITTEN as hard:
+`path.host-data` refuses any change to it — file-tool write, redirect, or an
+operand of a command that can change files — and no root or approval
+overrules it, so no approval can let a Session edit its own approvals or
+policy.
+_Avoid_: secrets denylist (the two tiers are refused differently)
+
+**Writable roots**:
+Where a Session may write: its workspace, the slices of its repository's common
+git directory a Ticket worktree's own commits need (objects, its worktree
+directory, its branch's ref and reflog), and any directory the project's
+Authority Policy document declares. The metadata carve-outs hold inside every
+root, and a root never makes a credential writable.
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,

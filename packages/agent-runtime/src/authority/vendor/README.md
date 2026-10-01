@@ -71,9 +71,20 @@ to path resolution.
   write `resolvePathForPolicy(p) ?? p`, so an unresolvable path is checked in
   its raw form. Here undefined propagates and the call is blocked: the
   normalizer treats "cannot say what file this is" as a refusal.
-- **The resolver walks with `readlinkSync`, not `lstatSync` + `readlinkSync`.**
-  Same semantics, one syscall, and no branch that only a hypothetical
-  filesystem could reach.
+- **The resolver walks component by component, as the kernel does (VC-45).**
+  Upstream resolves the nearest existing ancestor and joins a dangling link's
+  target lexically, so `x -> s/../LaunchAgents/x.plist` beside `s ->
+~/Library/Caches` read as `<dir>/LaunchAgents/x.plist` — the `..` cancelled
+  `s` — while the kernel follows `s` first and writes into `~/Library`. Here
+  each component is `lstat`ed and a link's target is spliced back into the
+  queue still to walk, so `..` applies to where the link led. The existing
+  prefix is then spelled through `realpathSync.native`, which returns the
+  name as stored: `.SSH`, `.sſh` and an NFD spelling all come back `.ssh`,
+  the comparison APFS itself makes. For the same reason `resolveInputPath`'s
+  sibling `shellPathTokenToPath` JOINS an operand to its directory instead of
+  resolving it: `resolve` would collapse `s/..` before the walk could see
+  that `s` is a link, so `cat s/../../.ssh/id_rsa` would be judged where the
+  kernel never goes.
 - **Input and output redirects are separated.** Upstream collects `<` targets
   into the same `redirectTargets` list as `>`, which would report a read as a
   write. Here `>`/`>>`/`2>`/`>&file` become writes, `<` becomes a read, and a

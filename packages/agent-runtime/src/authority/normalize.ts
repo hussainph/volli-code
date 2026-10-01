@@ -323,23 +323,62 @@ function lexCommand(raw: string, workspacePath: string): PolicyCommand {
  * One command line as the rules see it: its own segments, plus the segments of
  * any script it hands to a shell, spliced in after the shell's own segment. The
  * shell really does run, so its redirects stay its own.
+ *
+ * Operands resolve against the directory each segment runs in, as far as the
+ * lexer can follow it (VC-45 review): a `cd`/`pushd` to a resolvable directory
+ * moves every later segment of the line, and a `-C`/`--directory` flag moves
+ * its own segment's operands — so `cd ~ && cat .ssh/id_rsa` and `tar -C ~ -cf -
+ * .ssh` name `~/.ssh`, not the workspace's. A `cd` to something the lexer
+ * cannot resolve (`cd "$DIR"`) leaves the directory where it was: the kernel,
+ * in a Scoped Session, is what sees past it.
  */
 function policySegments(
   commandLine: string,
-  workspacePath: string,
+  startDirectory: string,
   depth: number,
 ): PolicyCommandSegment[] {
   if (depth === MAX_COMMAND_DEPTH) {
     throw new Error("This command nests shells deeper than policy will follow.");
   }
   const segments: PolicyCommandSegment[] = [];
+  let cwd = startDirectory;
   for (const lexed of lexCommandLine(commandLine)) {
     const invocation = unwrapPrefixes(splitProgram(lexed.words), 0);
-    segments.push(policySegment(invocation, lexed, workspacePath));
+    segments.push(policySegment(invocation, lexed, directoryFlag(invocation, cwd) ?? cwd));
     const script = nestedScript(invocation);
-    if (script !== undefined) segments.push(...policySegments(script, workspacePath, depth + 1));
+    if (script !== undefined) segments.push(...policySegments(script, cwd, depth + 1));
+    cwd = changedDirectory(invocation, cwd) ?? cwd;
   }
   return segments;
+}
+
+const CD_PROGRAMS = new Set(["cd", "pushd"]);
+
+/** Programs whose `-C <dir>` / `--directory <dir>` moves where their operands resolve. */
+const DIRECTORY_FLAG_PROGRAMS = new Set(["tar", "bsdtar", "gtar", "make", "gmake"]);
+
+/** A token as a directory against `cwd`, or undefined when the lexer cannot say. */
+function directoryAt(token: string, cwd: string): string | undefined {
+  const operand = shellPathTokenToPath(token, cwd);
+  return operand.kind === "path" ? resolvePathForPolicy(operand.path) : undefined;
+}
+
+/** Where a `cd` or `pushd` leaves the rest of the line, or undefined when it does not move it. */
+function changedDirectory(invocation: Invocation, cwd: string): string | undefined {
+  if (!CD_PROGRAMS.has(programName(invocation.program))) return undefined;
+  const target = invocation.args.find((arg) => !arg.startsWith("-"));
+  return directoryAt(target ?? "~", cwd);
+}
+
+/** The directory a `-C`-style flag runs this segment in, or undefined. */
+function directoryFlag(invocation: Invocation, cwd: string): string | undefined {
+  if (!DIRECTORY_FLAG_PROGRAMS.has(programName(invocation.program))) return undefined;
+  const { args } = invocation;
+  for (const [index, arg] of args.entries()) {
+    if (arg === "-C" || arg === "--directory") return directoryAt(args[index + 1] ?? "", cwd);
+    if (arg.startsWith("--directory=")) return directoryAt(arg.slice("--directory=".length), cwd);
+  }
+  return undefined;
 }
 
 /** git's flags whose value is a tree, and the only git operands a rule resolves. */
@@ -348,12 +387,17 @@ const GIT_PATH_FLAGS = new Set(["-C", "--git-dir", "--work-tree", "--exec-path"]
 /**
  * Which of a segment's operands must resolve or refuse.
  *
- * A coupling to `authority-policy.ts`, and it has to move with it. `rm` is
- * strict everywhere, because every operand is a deletion target. `git` is strict
- * only where a path is actually expected: `git commit -m "$MSG"` is close to
- * universal in agent scripts, and refusing it three times would exhaust the
- * Session's fallback budget over a commit message. Everything else is strict
- * nowhere — no rule resolves its operands, so an unexpandable one is dropped.
+ * A coupling to `authority-policy.ts`, and it has to move with it. Every
+ * resolvable operand of every program reaches the rules — `path.credentials`
+ * and `path.private` judge them all, glob-aware — but only some positions are
+ * STRICT, where an operand this process cannot expand refuses the call. `rm`
+ * is strict everywhere, because every operand is a deletion target. `git` is
+ * strict only where a path is actually expected: `git commit -m "$MSG"` is
+ * close to universal in agent scripts, and refusing it three times would
+ * exhaust the Session's fallback budget over a commit message. Everywhere else
+ * an unexpandable operand is DROPPED, and that drop is the documented edge of
+ * the shell check: a path hidden in a variable or `$(…)` reaches no rule, and
+ * only a Scoped Session's kernel refuses it.
  */
 function judgedOperands(invocation: Invocation): (token: string) => boolean {
   const name = programName(invocation.program);
@@ -368,20 +412,16 @@ function judgedOperands(invocation: Invocation): (token: string) => boolean {
 function policySegment(
   invocation: Invocation,
   lexed: LexedSegment,
-  workspacePath: string,
+  cwd: string,
 ): PolicyCommandSegment {
   const { env, program, args } = invocation;
   return {
     program,
     args,
-    paths: operandPaths(
-      [program, ...args, ...lexed.readTargets],
-      workspacePath,
-      judgedOperands(invocation),
-    ),
+    paths: operandPaths([program, ...args, ...lexed.readTargets], cwd, judgedOperands(invocation)),
     // A redirect target is always judged — it is the one operand position every
     // path rule reads, whatever the program.
-    writes: operandPaths(lexed.writeTargets, workspacePath, () => true),
+    writes: operandPaths(lexed.writeTargets, cwd, () => true),
     env,
   };
 }

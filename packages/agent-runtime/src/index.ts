@@ -16,7 +16,14 @@ export {
   type PiSignInOptions,
   type PiSignInSteps,
 } from "./pi/sign-in";
-export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export {
+  createPiAgentRuntime,
+  type ExecutionEnvFactory,
+  type PiRuntimeHostOptions,
+  type ScopedContainment,
+} from "./pi/runtime";
+export { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./pi/scoped-execution-env";
+export { readHostGitSettings, type GitIdentity, type HostGitSettings } from "./pi/host-git";
 export { codeModeSandboxAssetsFrom } from "./codemode/assets";
 export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";
 export {
@@ -42,6 +49,7 @@ export {
   type PromptCachePlacement,
 } from "./prompt-baseline";
 export {
+  identityVariables,
   piExecutionEnv,
   sessionCommandEnvironment,
   type PiExecutionEnvOptions,

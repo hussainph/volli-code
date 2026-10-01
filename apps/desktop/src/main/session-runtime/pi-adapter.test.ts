@@ -540,6 +540,33 @@ describe("Pi native adapter authority snapshot", () => {
     expect("authority" in runtime.spec).toBe(false);
   });
 
+  it("hands the runtime the capability axis under every posture that pins a Snapshot (VC-45)", async () => {
+    // Walls do not wait for the rule pack to bind: `observe` still gets them.
+    const observing = await attached(
+      policy({ containment: "scoped", writableRoots: ["/Users/dev/scratch"] }),
+    );
+    expect(observing.binding.authority).toMatchObject({
+      containment: "scoped",
+      writableRoots: ["/Users/dev/scratch"],
+    });
+    expect("authority" in observing.runtime.spec).toBe(false);
+    expect(observing.runtime.spec.capability).toEqual({
+      containment: "scoped",
+      writableRoots: ["/Users/dev/scratch"],
+    });
+
+    const enforcing = await attached(policy({ enforcement: "enforce" }));
+    expect(enforcing.runtime.spec.capability).toEqual({ containment: "off", writableRoots: [] });
+
+    // `off` bypasses the rules, not the walls (VC-45 review, N1): a scoped
+    // project with enforcement off pins a Snapshot for the walls, and the
+    // gate still does not install.
+    const off = await attached(policy({ enforcement: "off", containment: "scoped" }));
+    expect(off.binding.authority).toMatchObject({ enforcement: "off", containment: "scoped" });
+    expect("authority" in off.runtime.spec).toBe(false);
+    expect(off.runtime.spec.capability).toEqual({ containment: "scoped", writableRoots: [] });
+  });
+
   it("carries the judgment mode and thresholds the project recorded", async () => {
     const { binding } = await attached(
       policy({ judgmentMode: "auto", fallback: { consecutiveDenials: 1 } }),
@@ -1378,8 +1405,8 @@ describe("Pi native adapter attach", () => {
         mcpTools: [tool],
       }),
       resolveMcpPort: () => ({
-        call: async (_request, _signal, ask) => {
-          hostAsk = ask;
+        call: async (_request, _signal, lentAsk) => {
+          hostAsk = lentAsk;
           return { content: [], isError: false };
         },
         dispose: async () => undefined,

@@ -263,7 +263,11 @@ export class AuthorityEscalation {
     // overridable is not obeyed: those rules are grantable and must not be
     // granted, nothing below stops them, and this is the layer that enforces the
     // distinction rather than the layer that trusts its caller.
-    const overridable = isOverridableAuthorityRule(verdict.cause);
+    //
+    // A refusal the Session's own walls repeat (`walled`, VC-45) is not
+    // overridable whatever its rule says: the tool would be refused at the
+    // file guard or the kernel a moment after the person said yes.
+    const overridable = isOverridableAuthorityRule(verdict.cause) && verdict.walled !== true;
     const waitStartedAt = this.#measurementStartedAt();
     const answer = await this.#askUntilAnsweredOrAbandoned(
       ask,

@@ -93,6 +93,7 @@ describe("Configure → Authority", () => {
 
     for (const testId of [
       "authority-enforcement",
+      "authority-containment",
       "authority-judgment",
       "authority-consecutive-denials",
       "authority-session-denials",
@@ -205,7 +206,9 @@ describe("Configure → Authority", () => {
       expect(html).toContain("Not active while calls are allowed.");
       expect(html).toContain(`value="${DEFAULT_AUTHORITY_POLICY.fallback.consecutiveDenials}"`);
       expect(html).toContain(`value="${DEFAULT_AUTHORITY_POLICY.fallback.sessionDenials}"`);
-      expect(html.match(/<input[^>]*disabled=""/g) ?? []).toHaveLength(2);
+      expect(
+        html.match(/<input[^>]*id="authority-(consecutive|session)"[^>]*disabled=""/g) ?? [],
+      ).toHaveLength(2);
     }
   });
 
@@ -287,6 +290,30 @@ describe("Configure → Authority", () => {
         `"${label}" is drawn in Configure → Authority and nothing in the rail finds it`,
       ).toBe(true);
     }
+  });
+
+  it("says what each containment posture costs, beside the control (VC-45)", () => {
+    expect(render(null)).toContain("Off \u2014 commands run as you, with the network.");
+    const scoped = render({ containment: "scoped" });
+    expect(scoped).toContain("credentials unreadable, no network");
+    expect(scoped).toContain("Reset Containment to the app-wide value, Off");
+  });
+
+  it("keeps containment live under every enforcement, Off included (VC-45 review, N1)", () => {
+    // Off bypasses the rules, not the walls: the two are separate dials.
+    for (const enforcement of ["off", "observe", "enforce"] as const) {
+      const html = render({ enforcement, containment: "scoped" });
+      expect(html, enforcement).toContain("sandboxed to the workspace");
+      expect(html.match(/<button[^>]*id="authority-containment"[^>]*>/)?.[0]).not.toContain(
+        'disabled=""',
+      );
+    }
+  });
+
+  it("draws no row for the writable roots: policy data, set in the project document (VC-480)", () => {
+    const html = render({ writableRoots: ["/Users/dev/scratch"] });
+    expect(html).not.toContain("authority-writable-roots");
+    expect(html).not.toContain("/Users/dev/scratch");
   });
 
   it("names the unauthenticated caller as its own kind, not a borrowed one", () => {

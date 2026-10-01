@@ -5,6 +5,8 @@ sidebar:
   label: Authority
 ---
 
+import { Aside } from "@astrojs/starlight/components";
+
 **Configure → Authority** sets the policy for a project’s Sessions. An
 **attachment** is the live connection a Session runs on, and it pins the policy
 when it opens. A change in Configure applies when a new attachment is created,
@@ -27,6 +29,73 @@ in a row** or **20 denials total**. You can change either threshold. Only denial
 from rules that allow an override can be allowed; other rule violations stay
 blocked.
 
+## What a Session can read and write
+
+Every Session follows one read policy, whatever its settings. It can read
+anywhere on your Mac except two groups of files:
+
+- **Credentials**, which no approval unlocks: `~/.ssh`, `~/.gnupg`,
+  `~/.password-store`, token files such as `~/.netrc`, `~/.npmrc`,
+  `~/.git-credentials` and `~/.aws/credentials`, cloud and platform CLI
+  sign-ins, other agent tools’ sign-in files, keychains, browser cookie and
+  password stores, and Volli’s stored MCP credentials. Credentials never reach
+  the model.
+- **Private data**, which you can approve once in **Enforce**: your home
+  folder’s top-level dotfiles such as `~/.zshrc` and `~/.gitconfig`,
+  `~/.config`, other agent tools’ folders such as `~/.claude` and `~/.pi`,
+  `~/Library/Application Support` and other app data, other users’ home
+  folders, and Volli’s own data, including its database and other Sessions’
+  saved output. A Session can always read its own saved tool output.
+
+A Session can never change Volli’s own data: its database, its policy and
+approvals, its stored MCP credentials, or any Session’s records. No approval
+unlocks that, so approving a request can never let a Session edit its own
+approvals or policy. At attachment, Volli also records the live database,
+SQLite WAL and shared-memory files, and MCP credential store by device and
+inode. If a hard link to one already exists in the workspace, the shell’s
+sandbox denies that literal name too; file tools refuse every multiply-linked
+write. Reading the database is private data, as above.
+
+A Session writes only in its workspace. A ticket worktree can also write the
+parts of its repository’s Git directory its own commits need: objects, its own
+worktree state, and its branch. Git hooks, Git config, `.gitmodules`, nested
+repositories’ `.git` folders and `.volli/` stay read-only everywhere.
+
+<Aside type="note" title="Upgrading an Enforce project">
+Before this policy, **Enforce** refused every read outside the workspace and
+offered it for approval. Reads outside the workspace are now ordinary, except
+for the two groups above: reading a dotfile, `~/.config`, another agent’s
+folder or Volli’s data now needs your approval, and reading a credential is
+refused outright.
+</Aside>
+
+## Contain a project’s Sessions
+
+**Containment** decides whether a Session’s tools run inside a sandbox:
+
+| Containment | Effect |
+| --- | --- |
+| **Off** | The default. Shell commands run as your macOS user, with network access. |
+| **Scoped** | Shell commands, including background shells, run in a macOS sandbox, and the file tools follow the same policy. Commands have no network access. |
+
+Containment works whatever **Rule enforcement** is set to: **Off** turns off the
+rules, not the sandbox. In a Scoped Session, macOS itself refuses credentials
+and private data, under any spelling of the path, and blocks the keychain
+services, so approving a read there changes nothing. Editor and agent
+configuration such as `.vscode/`, `.mcp.json` and shell profiles is read-only
+as well.
+
+A Scoped Session has no network access, so commands such as `pnpm install`,
+`git fetch` and `git push` fail inside it. Run those commands yourself, or keep
+containment **Off** for projects that need them.
+
+Inside a ticket worktree, Git commits, amends and rebases of the ticket’s
+branch work. `git stash`, creating a branch or tag, and anything that rewrites
+`packed-refs` fail, because each writes state shared with the main checkout.
+A commit that your Git config says to sign fails rather than going unsigned:
+the signing key is out of reach. Git hooks and credential helpers from your
+Git config do not run.
+
 ## Understand the other controls
 
 **Decision mode — not active yet** stores whether the policy names **Ask me** or
@@ -45,10 +114,37 @@ caller can read. The inherited choices are:
 
 ## Know the enforcement boundary
 
-**Enforce** is a rule gate, not a sandbox. A Session’s tools still run with the
-authority of the account running Volli, and the built-in rules do not isolate
-commands from every possible side effect. Do not treat Authority as
-operating-system containment.
+**Enforce** is a rule gate, not a sandbox. With containment **Off**, a
+Session’s tools still run with the authority of the account running Volli. The
+rules check a command’s file arguments on a best-effort basis: they follow
+`cd`, `-C` and globs, and refuse a recursive read that would reach a
+credential, but they cannot see a path hidden in a variable, a `$(…)` or a
+script. Only **Scoped** containment has the operating system enforce the
+boundary.
+
+Known limits, even in a Scoped Session:
+
+- **Hard-link reads.** A hard link to a credential that existed before the
+  Session started reads through the sandbox, which matches paths, not files.
+  The file tools recognise hard links to credentials and to top-level dotfiles;
+  a hard link into any other private folder is not recognised. This read limit
+  does not apply to writes through aliases of Volli’s live database, SQLite
+  sidecars or MCP credential store: those workspace names are denied at attach.
+- **Concurrent swaps.** The file tools check a write’s path, then open it
+  without following links. A command running at the same moment can still
+  swap a parent folder for a link in between; closing that window is planned.
+- **Copies elsewhere.** A credential copied out of its folder, for example
+  into a dotfiles repository’s Git history, is protected only where it is
+  listed.
+- **Hidden shell operands.** The rules cannot inspect a path hidden in a shell
+  variable, a `$(…)` or a script. Scoped containment still enforces filesystem
+  boundaries around the command.
+
+In **Enforce**, the `security` command is denied as credential access, including
+interactive mode and commands fed on stdin. Only `find-certificate`,
+`verify-cert` and `dump-trust-settings` are allowed, because they inspect public
+certificate or trust material rather than passwords, private keys or identities.
+A Scoped Session also cannot connect to the macOS keychain services.
 
 See [Settings and configuration](/guides/settings/) for the difference between
 app-wide Settings and project Configure options.

@@ -1,8 +1,9 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
@@ -51,6 +52,8 @@ import {
   CODE_MODE_TOOL_ID,
   type AgentRuntime,
   type AuthoritySnapshot,
+  type CapabilityPolicy,
+  type RuntimeShellPort,
   type CompactionObservation,
   type CompactionPolicy,
   type CompactionWorkReason,
@@ -76,6 +79,7 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
+import { resolveCapabilityPolicy } from "../authority/capability";
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
@@ -103,6 +107,13 @@ import {
 } from "./provider-compaction";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
+import { ScopedExecutionEnv } from "./scoped-execution-env";
+import {
+  hostGitReadables,
+  NO_HOST_GIT,
+  readHostGitSettings,
+  type HostGitSettings,
+} from "./host-git";
 import {
   inspectPiModelAccess,
   type InspectPiModelAccessInput,
@@ -261,18 +272,45 @@ export interface PiRuntimeHostOptions {
    * The filesystem and shell capability one Session's tools are given.
    *
    * Injectable so deterministic Node runtime tests can script it, and so a
-   * caller that wants a narrower environment than the default can supply one —
-   * `ScopedExecutionEnv` is exactly that and is still built and tested for it.
+   * host can add what only it knows — main exports the Session's identity,
+   * its CLI's bin dir and its concurrency budget. For a Scoped Session the
+   * factory is handed the resolved policy and must build `ScopedExecutionEnv`
+   * from it; see {@link ExecutionEnvFactory}.
    *
    * Called with the Session's own identity beside the workspace, so a host can
    * export who is running — main maps it to `VOLLI_SESSION`/`VOLLI_TICKET` via
    * `piExecutionEnv`'s `identity` option (VC-51). The default factory sets
    * neither: only a host knows a Ticket's display id.
    */
-  executionEnvFactory?: (
-    workspacePath: string,
-    identity: RuntimeSessionIdentity,
-  ) => Promise<ExecutionEnv>;
+  executionEnvFactory?: ExecutionEnvFactory;
+  /**
+   * The host's own private state, on the denylist of every Session
+   * this runtime attaches (VC-45): main passes its `userData`, which holds the
+   * database, `mcp-credentials.json`, backups, and every Session's sidecar and
+   * saved output. The runtime adds {@link sessionDataDir} itself, so one
+   * Session's saved output stays unreadable to another even for a host that
+   * names nothing.
+   */
+  hostPrivateRoots?: readonly string[];
+  /**
+   * The host's own credential files, in the credential tier of every Session's
+   * denylist (VC-45): main passes `mcp-credentials.json`. Inside
+   * {@link hostPrivateRoots} already, and named again so no grant and no
+   * person's "yes" to a private read reaches them.
+   */
+  hostCredentialPaths?: readonly string[];
+  /**
+   * Live files whose inode identity must remain protected through hard-link
+   * aliases in a Session workspace: the Volli database and SQLite sidecars,
+   * plus the MCP credential store.
+   */
+  hostCriticalDataPaths?: readonly string[];
+  /**
+   * Paths inside {@link hostPrivateRoots} the host exposes to its Sessions on
+   * purpose, read-only: the directory the `volli` shim lives in, so a Scoped
+   * Session's shell can still run the CLI it is told to use.
+   */
+  hostExposedPaths?: readonly string[];
   /**
    * The wait before an auto-retried attempt, by zero-based attempt number.
    * Injectable so deterministic tests need not spend the real backoff.
@@ -351,6 +389,61 @@ export interface PiRuntimeHostOptions {
   codeModeSandbox?: CodeModeSandboxAssets;
 }
 
+/**
+ * What a Scoped Session's environment is built from (VC-45): the attachment's
+ * resolved capability policy — the same object the authority gate judges calls
+ * against — and the scratch directory its commands are handed as `TMPDIR`,
+ * which the runtime created inside the policy's writable roots and removes when
+ * the attachment closes.
+ */
+export interface ScopedContainment {
+  policy: CapabilityPolicy;
+  scratchDirectory: string;
+  /** The host's git settings a contained git is handed; their files are among the policy's grants. */
+  git: HostGitSettings;
+}
+
+/**
+ * Builds the filesystem and shell capability one Session's tools are given.
+ *
+ * `containment` is present exactly when the Session's policy says `scoped`, and
+ * a factory handed one MUST build walls from it — `ScopedExecutionEnv` is the
+ * one that does — because the gate has already been told the Session is
+ * contained and stops offering overrides the walls would refuse.
+ */
+export type ExecutionEnvFactory = (
+  workspacePath: string,
+  identity: RuntimeSessionIdentity,
+  containment?: ScopedContainment,
+) => Promise<ExecutionEnv>;
+
+/**
+ * A Scoped Session's background shell port: the host's own, with every start
+ * wrapped in the walls the `execute` tool's commands run behind (VC-45).
+ *
+ * The background shell host spawns its own children, so the walls travel to it
+ * as a `contain` hook rather than as an environment. A factory that answered a
+ * Scoped Session with something other than `ScopedExecutionEnv` has no walls to
+ * offer, and its shells are refused rather than started uncontained.
+ */
+function containedShellPort(port: RuntimeShellPort, env: ExecutionEnv): RuntimeShellPort {
+  const contain =
+    env instanceof ScopedExecutionEnv
+      ? (command: string, cwd: string) => env.containLaunch(command, cwd)
+      : async (): Promise<never> => {
+          throw new Error(
+            "This Scoped Session's execution environment cannot wrap a background shell in its walls, so none was started.",
+          );
+        };
+  // No `dispose`: the runtime never calls it. The host disposes its own port,
+  // the one this wraps, when the attachment ends.
+  return {
+    start: (input) => port.start({ ...input, contain }),
+    output: (input) => port.output(input),
+    kill: (input) => port.kill(input),
+  };
+}
+
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
@@ -363,10 +456,11 @@ interface PiRuntimeHost {
   catalogReady: Promise<void>;
   catalogs?: RefreshableCatalogs;
   now: () => number;
-  executionEnvFactory: (
-    workspacePath: string,
-    identity: RuntimeSessionIdentity,
-  ) => Promise<ExecutionEnv>;
+  executionEnvFactory: ExecutionEnvFactory;
+  hostPrivateRoots: readonly string[];
+  hostCredentialPaths: readonly string[];
+  hostCriticalDataPaths: readonly string[];
+  hostExposedPaths: readonly string[];
   retryBackoffMs: (attempt: number) => number;
   connectivity: ConnectivityPort;
   streamSupervision: StreamSupervisionTiming;
@@ -423,8 +517,23 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     // Wrapped rather than passed by reference: `piExecutionEnv`'s second
     // parameter is its options bag, and handing it the identity positionally
     // would silently misread it.
+    // The default Scoped factory knows no host: it names no unix socket and no
+    // Session identity, so the bundled `volli` CLI is unavailable inside it.
+    // The desktop injects its own factory, which supplies both.
     executionEnvFactory:
-      options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
+      options.executionEnvFactory ??
+      ((workspacePath, _identity, containment) =>
+        containment === undefined
+          ? piExecutionEnv(workspacePath)
+          : ScopedExecutionEnv.create(workspacePath, {
+              policy: containment.policy,
+              scratchDirectory: containment.scratchDirectory,
+              git: containment.git,
+            })),
+    hostPrivateRoots: options.hostPrivateRoots ?? [],
+    hostCredentialPaths: options.hostCredentialPaths ?? [],
+    hostCriticalDataPaths: options.hostCriticalDataPaths ?? [],
+    hostExposedPaths: options.hostExposedPaths ?? [],
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     connectivity: options.connectivity ?? ALWAYS_ONLINE,
     streamSupervision: options.streamSupervision ?? DEFAULT_STREAM_SUPERVISION,
@@ -1612,6 +1721,13 @@ async function attachSession(
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
   let toolEnv: ExecutionEnv | undefined;
+  /** A Scoped Session's `TMPDIR`, created at attach and removed on every close path. */
+  let scratchDirectory: string | undefined;
+  const removeScratch = async (): Promise<void> => {
+    const directory = scratchDirectory;
+    scratchDirectory = undefined;
+    if (directory !== undefined) await rm(directory, { recursive: true, force: true });
+  };
   let unsubscribe: (() => void) | undefined;
   let stopWatchingResume: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
@@ -2069,12 +2185,59 @@ async function attachSession(
         });
       }
     }
-    // No preflight before the tools are built. There is no boundary left to
-    // prove: an attachment that hands Pi its own environment cannot fail for
-    // want of `sandbox-exec`, and a caller who injects a contained environment
-    // gets one that is fail-closed at its own `exec`.
-    toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
+    // Long tool results are cut for the model and saved whole beside this
+    // attachment's sidecar (VC-469), under the runtime-wide bound. The gate
+    // below lets the Session read them, and every other saved-output directory
+    // its own history names: an earlier attachment's results reach this one
+    // through a carry, after a relaunch as much as on the first attach, and
+    // through every link of a chain of carries.
+    const toolOutput = new ToolOutputStore({
+      directory: toolOutputDirectoryFor(sidecarMetadata.path),
+      namedDirectories: savedOutputDirectoriesIn(
+        savedOutputPathsIn(recoveredEntries),
+        host.sessionDataDir,
+      ),
+      dataDirectory: host.sessionDataDir,
+      ledger: host.toolOutputLedger,
+      workspacePath: spec.workspacePath,
+    });
+    // The capability axis (VC-45), resolved once for this attachment: the
+    // denylist's two tiers — the host's credential files in the credential
+    // tier; its own data and every Session's saved output in the private one,
+    // with this Session's own carved back — and the writable roots.
+    // The gate below judges calls against exactly this object, and a Scoped
+    // Session's walls are compiled from it, so the two give one answer.
+    const scoped = spec.capability?.containment === "scoped";
+    // A contained git is handed the user's excludes, attributes, identity and
+    // signing settings (VC-45 review, S3); their files must be readable inside.
+    const git = scoped ? await readHostGitSettings(spec.workspacePath) : NO_HOST_GIT;
+    if (scoped) {
+      scratchDirectory = await realpath(await mkdtemp(join(tmpdir(), "volli-scoped-")));
+    }
+    const capability = resolveCapabilityPolicy({
+      workspacePath: spec.workspacePath,
+      writableRoots: spec.capability?.writableRoots ?? [],
+      runtimeRoots: scratchDirectory === undefined ? [] : [scratchDirectory],
+      privateRoots: [...host.hostPrivateRoots, host.sessionDataDir],
+      credentialPaths: host.hostCredentialPaths,
+      criticalHostDataPaths: host.hostCriticalDataPaths,
+      grants: [
+        ...toolOutput.readableDirectories,
+        ...host.hostExposedPaths,
+        ...hostGitReadables(git),
+      ],
+      sandboxCarveOuts: scoped,
+    });
+    // No preflight before the tools are built: an attachment that hands Pi its
+    // own environment cannot fail for want of `sandbox-exec`, and a Scoped
+    // environment is fail-closed at its own `exec`.
+    toolEnv = await host.executionEnvFactory(
+      spec.workspacePath,
+      spec.identity,
+      scratchDirectory === undefined ? undefined : { policy: capability, scratchDirectory, git },
+    );
     const ownedToolEnv = toolEnv;
+
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
@@ -2093,28 +2256,6 @@ async function attachSession(
     // bindings: the array Pi resolves against and the list the Snapshot records
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
-    // Selected per Session from its own frozen record (VC-454). Sequential
-    // dispatch hands the array back untouched; a Session whose MCP definitions
-    // carry host-authored parallel-read marks — honoured only when this
-    // runtime was built to — gets every other tool marked sequential. Names
-    // and schemas, the provider-visible half, never change.
-    //
-    // Long tool results are cut for the model and saved whole beside this
-    // attachment's sidecar (VC-469), under the runtime-wide bound. The gate
-    // below lets the Session read them, and every other saved-output directory
-    // its own history names: an earlier attachment's results reach this one
-    // through a carry, after a relaunch as much as on the first attach, and
-    // through every link of a chain of carries.
-    const toolOutput = new ToolOutputStore({
-      directory: toolOutputDirectoryFor(sidecarMetadata.path),
-      namedDirectories: savedOutputDirectoriesIn(
-        savedOutputPathsIn(recoveredEntries),
-        host.sessionDataDir,
-      ),
-      dataDirectory: host.sessionDataDir,
-      ledger: host.toolOutputLedger,
-      workspacePath: spec.workspacePath,
-    });
     // Code Mode (VC-471), for a Session born with it: one more tool, built over
     // the Session's own tools and reaching them through the gate below — the
     // same function instance the Agent holds, assigned where the Agent is
@@ -2136,8 +2277,20 @@ async function attachSession(
         signal: spec.signal,
         now: host.now,
       });
+    // Selected per Session from its own frozen record (VC-454). Sequential
+    // dispatch hands the array back untouched; a Session whose MCP definitions
+    // carry host-authored parallel-read marks — honoured only when this
+    // runtime was built to — gets every other tool marked sequential. Names
+    // and schemas, the provider-visible half, never change.
     const { tools, toolExecution } = applyToolDispatch(
-      createSessionTools(spec, ownedToolEnv, toolOutput, buildCodeMode),
+      createSessionTools(
+        scoped && spec.shell !== undefined
+          ? { ...spec, shell: containedShellPort(spec.shell, ownedToolEnv) }
+          : spec,
+        ownedToolEnv,
+        toolOutput,
+        buildCodeMode,
+      ),
       spec.tools.mcp ?? [],
       host.parallelMcpReads,
     );
@@ -2372,7 +2525,8 @@ async function attachSession(
           args,
           authority,
           workspacePath: spec.workspacePath,
-          readableRoots: toolOutput.readableDirectories,
+          capability,
+          contained: scoped,
         });
         // The program a `codemode` call carries is not itself an act: every
         // call it makes is judged on its own, through this same gate (VC-471).
@@ -3765,6 +3919,10 @@ async function attachSession(
         // just abandoned.
         await ownedToolEnv.cleanup(piContext());
         toolEnv = undefined;
+        await removeScratch().catch(
+          /* v8 ignore next -- a scratch directory that will not go is the OS temp sweep's. */
+          () => undefined,
+        );
         await sidecarEnv.cleanup(piContext());
         await observe({ kind: "attachment", state: "closed" });
       },
@@ -3850,6 +4008,10 @@ async function attachSession(
     stopWatchingResume?.();
     await toolEnv?.cleanup(piContext()).catch(
       /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
+      () => undefined,
+    );
+    await removeScratch().catch(
+      /* v8 ignore next -- scratch removal is best effort after a failed attach. */
       () => undefined,
     );
     if (createdSidecar && sidecarPath !== undefined) {

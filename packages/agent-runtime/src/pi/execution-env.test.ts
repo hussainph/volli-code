@@ -353,9 +353,12 @@ describe("piExecutionEnv", () => {
 });
 
 describe("scopedEnvironment", () => {
-  // The contained path keeps the stricter set; `ScopedExecutionEnv`'s own suite
-  // proves the same thing through the class.
-  it("filters PATH to system roots and withholds HOME and the SSH agent", () => {
+  // The contained path withholds the SSH agent and every host credential;
+  // `ScopedExecutionEnv`'s own suite proves the same thing through the class.
+  it("keeps the host's PATH and HOME, and withholds the SSH agent and every credential", () => {
+    // Unfiltered since VC-45: reads are machine-wide, so a toolchain under
+    // `~/.nvm` runs by absolute path whatever PATH says, and filtering it only
+    // cost a Session the toolchain its repository is built with.
     expect(
       scopedEnvironment({
         PATH: "/Users/me/.nvm/versions/node/v22/bin:/usr/local/bin:/bin",
@@ -365,11 +368,15 @@ describe("scopedEnvironment", () => {
         GITHUB_TOKEN: "host-secret",
         OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer host-secret",
       }),
-    ).toEqual({ PATH: "/usr/local/bin:/bin", LANG: "C.UTF-8" });
+    ).toEqual({
+      PATH: "/Users/me/.nvm/versions/node/v22/bin:/usr/local/bin:/bin",
+      HOME: "/Users/me",
+      LANG: "C.UTF-8",
+    });
   });
 
-  it("uses the system PATH fallback when the host supplies no PATH", () => {
-    expect(scopedEnvironment({})).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+  it("adds nothing the host did not supply", () => {
+    expect(scopedEnvironment({})).toEqual({});
   });
 });
 

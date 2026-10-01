@@ -403,9 +403,11 @@ export interface SessionAttachment {
    * Snapshot.
    *
    * `null` is a real and permanent answer, not a migration gap. A Session whose
-   * project sets `enforcement: "off"` is handed no Snapshot at all, and every
-   * attachment written before VC-44 has none either; both mean "this ran at the
-   * runtime's own defaults", which is the same fact.
+   * project sets `enforcement: "off"` with containment off is handed no
+   * Snapshot at all, and every attachment written before VC-44 has none
+   * either; both mean "this ran at the runtime's own defaults", which is the
+   * same fact. Enforcement off with containment `scoped` IS pinned (VC-45): Off
+   * bypasses the rules, not the walls, and the walls ride the Snapshot.
    */
   authority: AuthoritySnapshot | null;
 }

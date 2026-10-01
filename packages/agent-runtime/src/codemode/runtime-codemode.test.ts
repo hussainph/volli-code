@@ -147,6 +147,8 @@ function authority(tools: readonly SessionToolId[], consecutiveDenials = 3): Aut
     rulePackHash: BUILTIN_RULE_PACK_HASH,
     classifierModel: null,
     fallback: { consecutiveDenials, sessionDenials: 20 },
+    containment: "off",
+    writableRoots: [],
   };
 }
 
@@ -255,6 +257,33 @@ function activities(h: Harness) {
   return h.observations.flatMap((observation) =>
     observation.kind === "activity" && observation.state !== "progress" ? [observation] : [],
   );
+}
+
+/**
+ * The capability axis (VC-45) reaches a program's calls because they go
+ * through the Session's own gate instance and its own tools, built over the
+ * same environment: one read policy, whichever door a call came through.
+ * Another Session's saved output, under the runtime's session data
+ * directory, is the private tier's canonical case.
+ */
+function otherSessionsOutput(h: Harness): string {
+  const path = join(h.sessions, "--other--", "other.tool-output", "tc-1.txt");
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, "other-session-output\n");
+  return path;
+}
+
+function readAndCatProgram(path: string): string {
+  return `
+    const out = {};
+    try { out.read = await tools.read({ path: ${JSON.stringify(path)} }); }
+    catch (error) { out.read = "refused: " + error.message; }
+    try {
+      const ran = await tools.bash({ command: ${JSON.stringify(`cat ${JSON.stringify(path)}`)} });
+      out.bash = "exit " + ran.exitCode + ": " + ran.output;
+    } catch (error) { out.bash = "refused: " + error.message; }
+    return out;
+  `;
 }
 
 describe("Code Mode through the real Session path", () => {
@@ -755,4 +784,70 @@ describe("Code Mode through the real Session path", () => {
     expect(scoped).toEqual([true, true]);
     expect(peakAsking).toBe(1);
   }, 15_000);
+
+  it("refuses a nested read and bash of another Session's saved output exactly as it refuses the direct ones (non-Scoped)", async () => {
+    const h = harness();
+    const path = otherSessionsOutput(h);
+    await runTurn(h, specFor(h, { ask: async () => "refuse" }), [
+      {
+        calls: [
+          { id: "d-1", name: "read", args: { path } },
+          { id: "d-2", name: "bash", args: { command: `cat ${JSON.stringify(path)}` } },
+        ],
+      },
+      { calls: [{ id: "cm-1", name: "codemode", args: { code: readAndCatProgram(path) } }] },
+      { text: "done" },
+    ]);
+    const denials = h.observations.flatMap((observation) =>
+      observation.kind === "authority" && observation.state === "denied" ? [observation] : [],
+    );
+    const byCall = new Map(denials.map((denial) => [short(denial.toolCallId ?? ""), denial]));
+    // The gate judged every one against the same capability policy.
+    expect(byCall.get("cm-1:1")?.cause).toBe(byCall.get("d-1")?.cause);
+    expect(byCall.get("cm-1:1")?.reason).toBe(byCall.get("d-1")?.reason);
+    expect(byCall.get("cm-1:2")?.cause).toBe(byCall.get("d-2")?.cause);
+    expect(byCall.get("cm-1:2")?.reason).toBe(byCall.get("d-2")?.reason);
+    expect([...byCall.entries()].map(([id, denial]) => [id, denial.cause])).toEqual([
+      ["d-1", "path.private"],
+      ["d-2", "path.private"],
+      ["cm-1:1", "path.private"],
+      ["cm-1:2", "path.private"],
+    ]);
+    for (const id of ["d-1", "d-2", "cm-1"]) {
+      expect(resultText(h, id)).not.toContain("other-session-output");
+    }
+    expect(resultText(h, "cm-1")).toContain(`refused: ${byCall.get("d-1")!.reason}`);
+  });
+
+  it("refuses a nested read and bash of another Session's saved output exactly as it refuses the direct ones (Scoped)", async () => {
+    const h = harness();
+    const path = otherSessionsOutput(h);
+    // `observe`: no gate is installed, so every refusal is the Scoped
+    // environment's — the guard for a file tool, the walls for the shell.
+    await runTurn(
+      h,
+      specFor(h, { gated: false, capability: { containment: "scoped", writableRoots: [] } }),
+      [
+        {
+          calls: [
+            { id: "d-1", name: "read", args: { path } },
+            { id: "d-2", name: "bash", args: { command: `cat ${JSON.stringify(path)}` } },
+          ],
+        },
+        { calls: [{ id: "cm-1", name: "codemode", args: { code: readAndCatProgram(path) } }] },
+        { text: "done" },
+      ],
+    );
+    const direct = { read: resultText(h, "d-1"), bash: resultText(h, "d-2") };
+    const nested = resultText(h, "cm-1");
+    expect(direct.read).toContain("holds private data outside this Session's work");
+    // The nested read was refused in the guard's own words.
+    expect(nested).toContain(`refused: ${direct.read}`);
+    // Whatever the walls do to the direct `cat` — a denied open under
+    // Seatbelt, a refused start where there is none — they do to the nested
+    // one, and neither sees a byte of the file.
+    expect(direct.bash).not.toContain("other-session-output");
+    expect(nested).not.toContain("other-session-output");
+    expect(nested).toMatch(/"bash":"(exit [1-9]\d*|refused)/u);
+  });
 });

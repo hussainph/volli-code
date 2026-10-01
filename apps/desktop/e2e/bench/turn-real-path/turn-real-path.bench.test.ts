@@ -231,6 +231,7 @@ describe("VC-456 real-path smoke", () => {
         expect(sample.modelAttemptCount).toBe(3);
         expect(sample.toolRoundCount).toBe(1);
         expect(sample.toolsByName["read"]?.count).toBe(2);
+        expect(sample.toolsByName["write"]?.count).toBe(1);
         expect(sample.toolsByName["bash"]?.count).toBe(1);
         expect(sample.authorityWaitCount).toBe(1);
         expect(sample.compactionCount).toBe(1);
