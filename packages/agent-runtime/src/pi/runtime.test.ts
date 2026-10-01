@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -49,6 +50,7 @@ import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-respo
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  capabilityRead,
   mcpProviderToolName,
   parseMcpToolKey,
   withParallelReadEligibility,
@@ -65,6 +67,7 @@ import {
   type ProviderAttemptEvent,
   type RuntimeObservation,
   type RuntimeSessionIdentity,
+  type RuntimeShellPort,
   type RuntimeVerbCall,
   type SessionRuntimeSpec,
 } from "@volli/shared";
@@ -694,6 +697,8 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
     rulePackHash: BUILTIN_RULE_PACK_HASH,
     classifierModel: null,
     fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    containment: "off",
+    writableRoots: [],
   };
   const spec: SessionRuntimeSpec = {
     identity: {
@@ -2873,8 +2878,11 @@ describe("startSession", () => {
   });
 
   it("commits exactly one authority observation, ahead of the turn's own completion, naming what refused the call", async () => {
-    const { spec, observations, worktreePath, sessionDataDir } = fixture();
-    const outsidePath = join(worktreePath, "..", "SECRET.txt");
+    const { spec, observations, sessionDataDir } = fixture();
+    // Another Session's saved tool output: on the denylist since VC-45, because
+    // the runtime's own data directory is, whatever the host names.
+    const outsidePath = join(sessionDataDir, "--ws--", "other.tool-output", "tc-1.txt");
+    mkdirSync(join(outsidePath, ".."), { recursive: true });
     writeFileSync(outsidePath, "outside-secret-value\n");
     let toolResultContext: Context | undefined;
 
@@ -2932,7 +2940,7 @@ describe("startSession", () => {
       state: "denied",
       turnId: expect.any(String),
       tool: "read",
-      cause: "path.outside-workspace",
+      cause: "path.secrets",
     });
     // Not a paraphrase: the exact reason the model was refused with.
     expect(JSON.stringify(toolResultContext?.messages)).toContain(authority?.reason);
@@ -4056,9 +4064,46 @@ describe("startSession", () => {
     ).toEqual([0.003]);
   });
 
-  it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
-    const { spec, observations, worktreePath, sessionDataDir } = fixture();
-    const outsidePath = join(worktreePath, "..", "SECRET.txt");
+  it("reads off the denylist outside the Ticket worktree, and keeps another Session's saved output unread (VC-45)", async () => {
+    const { spec, worktreePath, sessionDataDir } = fixture();
+    const siblingPath = join(worktreePath, "..", "SIBLING.txt");
+    writeFileSync(siblingPath, "sibling-value\n");
+    const outsidePath = join(sessionDataDir, "--ws--", "other.tool-output", "tc-1.txt");
+    mkdirSync(join(outsidePath, ".."), { recursive: true });
+    writeFileSync(outsidePath, "outside-secret-value\n");
+    let toolResultContext: Context | undefined;
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: siblingPath });
+            emit.toolCall("read", { path: outsidePath });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("One read, one refusal.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("Read both files.");
+    await handle.close();
+
+    const serialized = JSON.stringify(toolResultContext?.messages);
+    expect(serialized).toContain("sibling-value");
+    expect(serialized).toContain("holds credentials or another party's data");
+    expect(serialized).not.toContain("outside-secret-value");
+  });
+
+  it("keeps an actual Pi read turn off Volli's own data", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const outsidePath = join(sessionDataDir, "mcp-credentials.json");
     writeFileSync(outsidePath, "outside-secret-value\n");
     let toolResultContext: Context | undefined;
 
@@ -4084,7 +4129,7 @@ describe("startSession", () => {
     await handle.close();
 
     const serialized = JSON.stringify(toolResultContext?.messages);
-    expect(serialized).toContain("outside the Session workspace");
+    expect(serialized).toContain("holds credentials or another party's data");
     expect(serialized).not.toContain("outside-secret-value");
     expect(observations.filter((observation) => observation.kind === "message-settled")).toEqual([
       expect.objectContaining({
@@ -12289,5 +12334,289 @@ describe("transcript context (pi 0.87)", () => {
     // The ceiling is what the window has left after the whole transcript, prefix
     // included, less the reply's headroom — so the head is inside the budget.
     expect(ceiling).toBe(48_000 - transcriptTokens - 4_096);
+  });
+});
+
+/** A sandbox that records the per-command profile it was handed and runs `false`. */
+function recordingSandbox() {
+  const wraps: unknown[][] = [];
+  let config: unknown;
+  return {
+    wraps,
+    sandbox: {
+      isSupportedPlatform: () => true,
+      isSandboxingEnabled: () => config !== undefined,
+      checkDependenciesAsync: async () => ({ errors: [], warnings: [] }),
+      initialize: async (next: unknown) => {
+        config = next;
+      },
+      getConfig: () => config,
+      wrapWithSandboxArgv: async (...args: unknown[]) => {
+        wraps.push(args);
+        return { argv: ["/usr/bin/false"], env: { PATH: "/usr/bin:/bin" } };
+      },
+      cleanupAfterCommand: () => undefined,
+    } as never,
+  };
+}
+
+describe("Scoped Sessions (VC-45)", () => {
+  /**
+   * Volli's own layout, in miniature: `userData` holds the database, the MCP
+   * credential file and every Session's sidecar and saved output, and the
+   * runtime's session data directory sits inside it — which is what puts a
+   * Session's own saved output inside a denied tree as a grant.
+   */
+  function layout() {
+    const attachment = fixture();
+    const userData = realpathSync(mkdtempSync(join(tmpdir(), "volli-userdata-")));
+    const sessionDataDir = join(userData, "pi-sessions");
+    mkdirSync(sessionDataDir);
+    const credentials = join(userData, "mcp-credentials.json");
+    writeFileSync(credentials, "mcp-token-value\n");
+    const otherOutput = join(sessionDataDir, "--other--", "other.tool-output", "tc-1.txt");
+    mkdirSync(join(otherOutput, ".."), { recursive: true });
+    writeFileSync(otherOutput, "other-session-output\n");
+    return { attachment, userData, sessionDataDir, credentials, otherOutput };
+  }
+
+  it("refuses mcp-credentials.json and another Session's saved output from read AND the shell's profile", async () => {
+    const { attachment, userData, sessionDataDir, credentials, otherOutput } = layout();
+    const { wraps, sandbox } = recordingSandbox();
+    let containment: Parameters<NonNullable<PiRuntimeHostOptions["executionEnvFactory"]>>[2];
+    let scratchWhileRunning: boolean | undefined;
+    let toolResultContext: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      hostPrivateRoots: [userData],
+      executionEnvFactory: async (workspacePath, _identity, scoped) => {
+        containment = scoped;
+        scratchWhileRunning = scoped !== undefined && existsSync(scoped.scratchDirectory);
+        return ScopedExecutionEnv.create(workspacePath, {
+          ...(scoped === undefined
+            ? {}
+            : { policy: scoped.policy, scratchDirectory: scoped.scratchDirectory }),
+          sandbox,
+          gitIdentity: null,
+        });
+      },
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: credentials });
+            emit.toolCall("read", { path: otherOutput });
+            emit.toolCall("bash", { command: `cat ${JSON.stringify(credentials)}` });
+            emit.toolCall("shell_start", { command: `cat ${JSON.stringify(credentials)}` });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("Nothing to read.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    // A background shell's start is wrapped by the same walls: the host's port
+    // is handed a `contain` that compiles the same profile.
+    const launches: unknown[] = [];
+    const shell: RuntimeShellPort = {
+      start: async (input) => {
+        launches.push(await input.contain?.(input.command, attachment.worktreePath));
+        throw new Error("not under test");
+      },
+      output: async () => {
+        throw new Error("not under test");
+      },
+      kill: async () => {
+        throw new Error("not under test");
+      },
+    };
+    // `observe`: no gate is installed, so every refusal below is the walls'.
+    const { authority: _observe, ...spec } = attachment.spec;
+    const handle = await runtime.startSession({
+      ...spec,
+      tools: { tools: ["read", "execute"] },
+      shell,
+      capability: { containment: "scoped", writableRoots: [] },
+    });
+    await handle.submitUserMessage("Read the credentials.");
+    await handle.close();
+
+    // The file tools: refused by the guard, in the policy's own words.
+    const serialized = JSON.stringify(toolResultContext?.messages);
+    expect(serialized).not.toContain("mcp-token-value");
+    expect(serialized).not.toContain("other-session-output");
+    expect(serialized.match(/holds credentials or another party's data/g)).toHaveLength(2);
+
+    // The shell: its Seatbelt profile was compiled from the SAME policy, and
+    // that policy denies both files — one answer, whichever tool asks.
+    expect(containment).toBeDefined();
+    const policy = containment!.policy;
+    for (const path of [credentials, otherOutput]) {
+      expect(capabilityRead(policy, path).outcome, path).toBe("deny");
+    }
+    expect(wraps).toHaveLength(2);
+    expect(launches).toEqual([expect.objectContaining({ argv: ["/usr/bin/false"] })]);
+    for (const wrap of wraps) {
+      const [, , each] = wrap as [string, string, { filesystem: Record<string, string[]> }];
+      expect(each.filesystem.denyRead).toEqual([...policy.readDeny]);
+    }
+    const [, , profile] = wraps[0] as [string, string, { filesystem: Record<string, string[]> }];
+    expect(profile.filesystem.denyRead).toEqual([...policy.readDeny]);
+    expect(profile.filesystem.allowRead).toEqual([...policy.readAllow]);
+    expect(profile.filesystem.denyRead).toEqual(expect.arrayContaining([userData, sessionDataDir]));
+    // No grant reaches into another Session's output.
+    expect(policy.readAllow.some((grant) => otherOutput.startsWith(`${grant}/`))).toBe(false);
+
+    // The scratch directory existed for the attachment and went with it.
+    expect(scratchWhileRunning).toBe(true);
+    expect(existsSync(containment!.scratchDirectory)).toBe(false);
+    expect(policy.writableRoots).toContain(containment!.scratchDirectory);
+  });
+
+  it("builds Scoped walls by default, and wraps a background shell in them", async () => {
+    const { attachment, sessionDataDir, otherOutput } = layout();
+    let toolResultContext: Context | undefined;
+    const contains: unknown[] = [];
+    const shell: RuntimeShellPort = {
+      start: async (input) => {
+        contains.push(input.contain);
+        throw new Error("not under test");
+      },
+      output: async () => {
+        throw new Error("not under test");
+      },
+      kill: async () => {
+        throw new Error("not under test");
+      },
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: otherOutput });
+            emit.toolCall("shell_start", { command: "sleep 1" });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("Done.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const { authority: _observe, ...spec } = attachment.spec;
+    const handle = await runtime.startSession({
+      ...spec,
+      tools: { tools: ["read"] },
+      shell,
+      capability: { containment: "scoped", writableRoots: [] },
+    });
+    await handle.submitUserMessage("Go.");
+    await handle.close();
+
+    // The runtime's own default factory built the walls — no host, no gate
+    // (`observe`) — so the guard is what refused: the runtime denies its own
+    // session data directory whether or not a host names anything.
+    const serialized = JSON.stringify(toolResultContext?.messages);
+    expect(serialized).not.toContain("other-session-output");
+    expect(serialized).toContain("holds credentials or another party's data");
+    expect(contains).toHaveLength(1);
+    expect(typeof contains[0]).toBe("function");
+  });
+
+  it("refuses a background shell rather than starting it uncontained when the factory built no walls", async () => {
+    const attachment = fixture();
+    const calls: string[] = [];
+    let contained: Promise<unknown> | undefined;
+    const shell: RuntimeShellPort = {
+      start: async (input) => {
+        contained = input.contain?.("sleep 1", attachment.worktreePath);
+        await contained?.catch(() => undefined);
+        throw new Error("refused by the walls");
+      },
+      output: async () => {
+        calls.push("output");
+        throw new Error("no such shell");
+      },
+      kill: async () => {
+        calls.push("kill");
+        throw new Error("no such shell");
+      },
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      // A factory that ignores the containment it was handed.
+      executionEnvFactory: async (workspacePath) => new NodeExecutionEnv({ cwd: workspacePath }),
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("shell_start", { command: "sleep 1" });
+            emit.toolCall("shell_output", { shellId: "s-1" });
+            emit.toolCall("shell_kill", { shellId: "s-1" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Done.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const { authority: _observe, ...spec } = attachment.spec;
+    const handle = await runtime.startSession({
+      ...spec,
+      shell,
+      capability: { containment: "scoped", writableRoots: [] },
+    });
+    await handle.submitUserMessage("Go.");
+    await handle.close();
+
+    await expect(contained).rejects.toThrow("cannot wrap a background shell");
+    // Reads and kills pass through to the host's own port untouched.
+    expect(calls).toEqual(["output", "kill"]);
+  });
+
+  it("offers no override for a refusal the walls would repeat", async () => {
+    const attachment = fixture({ tools: { tools: ["write"] } });
+    attachment.spec.authority = {
+      ...attachment.spec.authority!,
+      fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+    };
+    const asked: boolean[] = [];
+    attachment.spec.ask = async (request) => {
+      asked.push(request.overridable);
+      return "allow";
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("write", {
+              path: join(attachment.worktreePath, "..", "outside.txt"),
+              content: "x",
+            });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Refused.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      capability: { containment: "scoped", writableRoots: [] },
+    });
+    await handle.submitUserMessage("Write outside.");
+    await handle.close();
+
+    expect(asked).toEqual([false]);
+    expect(existsSync(join(attachment.worktreePath, "..", "outside.txt"))).toBe(false);
   });
 });

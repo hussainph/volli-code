@@ -624,6 +624,8 @@ describe("piOwnedModels", () => {
           rulePackHash: BUILTIN_RULE_PACK_HASH,
           classifierModel: null,
           fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+          containment: "off",
+          writableRoots: [],
         },
         brief: { text: "brief" },
         tools: { tools: [] },

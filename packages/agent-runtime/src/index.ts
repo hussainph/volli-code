@@ -16,7 +16,17 @@ export {
   type PiSignInOptions,
   type PiSignInSteps,
 } from "./pi/sign-in";
-export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export {
+  createPiAgentRuntime,
+  type ExecutionEnvFactory,
+  type PiRuntimeHostOptions,
+  type ScopedContainment,
+} from "./pi/runtime";
+export {
+  ScopedExecutionEnv,
+  type GitIdentity,
+  type ScopedExecutionEnvOptions,
+} from "./pi/scoped-execution-env";
 export {
   DEFAULT_MCP_SERVER_LIMITS,
   McpServerBudget,

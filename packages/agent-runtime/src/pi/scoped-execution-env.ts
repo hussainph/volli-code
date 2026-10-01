@@ -1,9 +1,9 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import {
   BACKGROUND_CONTEXT,
@@ -28,9 +28,24 @@ import {
   type ShellOutputUpdate,
   type ShellOutputView,
 } from "@earendil-works/pi-agent-core/node";
-import type { SpawnLedgerPort } from "@volli/shared";
+import {
+  capabilityRead,
+  capabilityWrite,
+  containsPath,
+  sandboxWriteCarveOuts,
+  type CapabilityPolicy,
+  type RuntimeContainedLaunch,
+  type SpawnLedgerPort,
+} from "@volli/shared";
+import { resolveCapabilityPolicy } from "../authority/capability";
+import { resolvePathForPolicy } from "../authority/vendor/paths";
 import { refuseDaemonizingExecute } from "../shell/refusal";
-import { scopedEnvironment } from "./execution-env";
+import {
+  identityVariables,
+  prefixedPath,
+  scopedEnvironment,
+  type PiSessionEnvIdentity,
+} from "./execution-env";
 
 const KILL_GRACE_MS = 250;
 /** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
@@ -70,7 +85,51 @@ export interface ExecutionEnvOwner {
   projectId: string | null;
 }
 
+/** The commit identity a contained `git` is handed in place of the denied `~/.gitconfig`. */
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
 export interface ScopedExecutionEnvOptions {
+  /**
+   * The capability policy the walls are compiled from (VC-45) — the same
+   * object the authority gate judges calls against, so the file guard, the
+   * kernel and the gate give one answer for one path. Absent, it is resolved
+   * for this root alone: the built-in denylist, and the workspace (plus the git
+   * directory a worktree commits into) as the only writable roots.
+   */
+  policy?: CapabilityPolicy;
+  /**
+   * A directory inside the policy's writable roots, handed to every command as
+   * `TMPDIR`. Without one, a compiler or a test runner that writes the system
+   * temporary directory is refused there. Owned by whoever created it.
+   */
+  scratchDirectory?: string;
+  /**
+   * Unix sockets a contained command may connect to: the `volli` socket, so the
+   * bundled CLI keeps working behind the walls. SRT takes these only from its
+   * process-global configuration, so every environment in one process must
+   * name the same set — a different one fails closed at the preflight.
+   */
+  unixSockets?: readonly string[];
+  /** As `piExecutionEnv`'s: directories put in front of `PATH`, in order. */
+  pathPrefixes?: readonly string[];
+  /** As `piExecutionEnv`'s: the host-minted Session identity every command is told. */
+  identity?: PiSessionEnvIdentity;
+  /** As `piExecutionEnv`'s: host facts about the machine, such as the concurrency budget. */
+  environment?: Readonly<Record<string, string>>;
+  /** As `piExecutionEnv`'s: runs once when the attachment cleans this environment up. */
+  onCleanup?: () => void | Promise<void>;
+  /**
+   * The commit identity handed to `git`. `~/.gitconfig` is on the secrets
+   * denylist and git refuses to run at all when its global config exists and
+   * cannot be read, so a contained `git` is pointed at no global config and
+   * told who is committing instead. Absent, it is read from git on the host —
+   * outside the walls, which is the point — when the environment is created;
+   * `null` hands over none.
+   */
+  gitIdentity?: GitIdentity | null;
   /**
    * Where each spawned command is recorded, and who it is recorded as.
    *
@@ -97,6 +156,46 @@ export interface ScopedExecutionEnvOptions {
 
 const processPreflights = new WeakMap<object, Promise<void>>();
 
+/** Read the host's commit identity for `root`, outside any sandbox; null when either half is unset. */
+async function hostGitIdentity(root: string): Promise<GitIdentity | null> {
+  const run = promisify(execFile);
+  try {
+    const [name, email] = await Promise.all(
+      ["user.name", "user.email"].map(async (key) =>
+        (await run("git", ["config", "--get", key], { cwd: root, timeout: 5_000 })).stdout.trim(),
+      ),
+    );
+    return name && email ? { name: name!, email: email! } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a contained `git` needs in place of the global config it can no longer
+ * read: no global file at all (git fails outright on an unreadable one), the
+ * user's commit identity, and no per-user excludes or attributes files, which
+ * live under the denied `~/.config` and would otherwise warn on every command.
+ */
+function gitVariables(identity: GitIdentity | null): Record<string, string> {
+  return {
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "core.excludesFile",
+    GIT_CONFIG_VALUE_0: "/dev/null",
+    GIT_CONFIG_KEY_1: "core.attributesFile",
+    GIT_CONFIG_VALUE_1: "/dev/null",
+    ...(identity === null
+      ? {}
+      : {
+          GIT_AUTHOR_NAME: identity.name,
+          GIT_AUTHOR_EMAIL: identity.email,
+          GIT_COMMITTER_NAME: identity.name,
+          GIT_COMMITTER_EMAIL: identity.email,
+        }),
+  };
+}
+
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const child of Object.values(value)) deepFreeze(child);
@@ -105,24 +204,36 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const PROCESS_SANDBOX_CONFIG: SandboxRuntimeConfig = deepFreeze({
-  network: {
-    allowedDomains: [],
-    deniedDomains: ["*"],
-    strictAllowlist: true,
-    allowUnixSockets: [],
-    allowAllUnixSockets: false,
-    allowLocalBinding: false,
-    allowMachLookup: [],
-  },
-  filesystem: {
-    denyRead: [],
-    allowRead: [],
-    allowWrite: [],
-    denyWrite: [],
-  },
-  allowAppleEvents: false,
-});
+/**
+ * SRT's process-global configuration: no network, and nothing on the
+ * filesystem — every path travels per command, so two Sessions in one process
+ * cannot see each other's roots. The one exception is the unix sockets, which
+ * SRT reads from here alone.
+ *
+ * The network stays denied, and that is the pairing rule rather than an
+ * oversight: egress opens in the sandbox only together with the Tier 3
+ * classifier (VC-28 v1), never before it.
+ */
+function processSandboxConfig(unixSockets: readonly string[]): SandboxRuntimeConfig {
+  return deepFreeze({
+    network: {
+      allowedDomains: [],
+      deniedDomains: ["*"],
+      strictAllowlist: true,
+      allowUnixSockets: [...unixSockets],
+      allowAllUnixSockets: false,
+      allowLocalBinding: false,
+      allowMachLookup: [],
+    },
+    filesystem: {
+      denyRead: [],
+      allowRead: [],
+      allowWrite: [],
+      denyWrite: [],
+    },
+    allowAppleEvents: false,
+  });
+}
 
 function executionError<T = never>(
   code: ConstructorParameters<typeof ExecutionError>[0],
@@ -140,6 +251,9 @@ function isInside(root: string, path: string): boolean {
   const rel = relative(root, path);
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
+
+/** A guarded file operation is one of two accesses, judged by the policy's two verdicts. */
+type FileAccess = "read" | "write";
 
 function countNewlines(text: string): number {
   let count = 0;
@@ -330,27 +444,33 @@ function isSafeTempFragment(value: string): boolean {
 }
 
 /**
- * The boundary one command runs behind: no network, the workspace as the only
- * writable root, and two carve-outs from that root.
+ * The boundary one command runs behind, compiled from the attachment's
+ * capability policy (VC-45): no network; reads machine-wide minus the secrets
+ * denylist, with the Session's own grants carved back; writes in the writable
+ * roots, minus the metadata carved out of every root and any secret that lies
+ * inside one.
  *
- * The `.git` entries are deliberately not the whole of `.git` — a Session that
- * cannot write the index, refs, and objects cannot commit. Hooks and config are
- * the paths ordinary git operation never writes and the only ones that change
- * what *later* commands do, which is what makes them worth denying, and a
- * submodule's copies under `.git/modules/<name>/` execute exactly the same way.
- * They close what the rule pack cannot reach: `path.git-internals` sees
- * file-tool writes, shell redirects, and `git config`, so a plain
- * `cp evil.sh .git/hooks/pre-commit` passes it as an opaque operand. Neither
- * layer is complete alone.
+ * The carve-outs are the kernel spelling of `writeCarveOut`, from the same
+ * module (`sandboxWriteCarveOuts`), so the file guard below and this profile
+ * refuse the same paths. They are deliberately not the whole of `.git`: a
+ * Session that cannot write the index, refs and objects cannot commit, which is
+ * also why a Ticket worktree's common git directory is a writable root at all.
+ * Hooks and config are the paths ordinary git operation never writes and the
+ * only ones that change what *later* commands do. They close what the rule pack
+ * cannot reach: `path.git-internals` sees file-tool writes, shell redirects and
+ * `git config`, so a plain `cp evil.sh .git/hooks/pre-commit` passes it as an
+ * opaque operand. Neither layer is complete alone.
  *
- * Only a Main checkout is affected. A Ticket worktree's `.git` is a file
- * pointing into the main repository, whose real hooks and config lie outside the
- * workspace that `allowWrite` already limits this to.
+ * A secret is denied for writing only where it lies inside a root. A deny over
+ * a root would revoke the root itself (Seatbelt's last match wins), and a write
+ * outside every root is refused already — which is exactly `writeDenial`'s
+ * "the deeper of the two decides".
  */
 function perCommandSandboxConfig(
-  workspace: string,
+  policy: CapabilityPolicy,
   homeDir: string,
 ): Partial<SandboxRuntimeConfig> {
+  const roots = policy.writableRoots;
   return {
     network: {
       allowedDomains: [],
@@ -362,42 +482,43 @@ function perCommandSandboxConfig(
       allowMachLookup: [],
     },
     filesystem: {
-      // SRT's maintained macOS policy uses deny-read plus this carve-back for a
-      // workspace that is commonly nested under the user's home directory.
-      denyRead: [homeDir],
-      allowRead: [workspace],
-      allowWrite: [workspace],
-      // SRT adds these compatibility defaults. Deny its home and temporary
-      // Claude scratch paths so the Session workspace remains the only writable
-      // agent-controlled location.
+      denyRead: [...policy.readDeny],
+      allowRead: [...policy.readAllow],
+      allowWrite: [...roots],
       denyWrite: [
+        // SRT adds these compatibility defaults. Deny its home and temporary
+        // Claude scratch paths so the writable roots remain the only writable
+        // agent-controlled locations.
         join(homeDir, ".npm", "_logs"),
         join(homeDir, ".claude", "debug"),
         "/tmp/claude",
         "/private/tmp/claude",
-        join(workspace, ".git", "hooks"),
-        join(workspace, ".git", "config"),
-        // A submodule's hooks live at `.git/modules/<name>/hooks` and execute
-        // exactly like the superproject's. SRT compiles a pattern containing
-        // glob characters into a Seatbelt regex, so the whole family is one
-        // entry rather than a scan of whatever submodules existed at attach.
-        //
-        // The trailing `/*` is load-bearing: SRT strips a trailing `/**` before
-        // compiling, which would anchor the regex to the directory itself and
-        // let every file inside it through.
-        join(workspace, ".git", "modules", "**", "hooks"),
-        join(workspace, ".git", "modules", "**", "hooks", "**", "*"),
-        join(workspace, ".git", "modules", "**", "config"),
+        ...roots.flatMap((root) => sandboxWriteCarveOuts(root, policy.sandboxCarveOuts)),
+        ...policy.readDeny.filter((deny) => roots.some((root) => containsPath(root, deny))),
       ],
     },
     allowAppleEvents: false,
   };
 }
 
-async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
+async function prepareSandbox(
+  sandbox: SandboxRuntime,
+  required: SandboxRuntimeConfig,
+): Promise<void> {
   const key = sandbox as object;
   const cached = processPreflights.get(key);
-  if (cached) return cached;
+  if (cached) {
+    await cached;
+    // The cache is per manager, not per configuration: an environment asking
+    // for different sockets than the one that initialized SRT must not be
+    // told the boundary it wants is in place.
+    if (!isDeepStrictEqual(sandbox.getConfig(), required)) {
+      throw new Error(
+        "The process-global sandbox was initialized with an incompatible configuration.",
+      );
+    }
+    return;
+  }
 
   const preflight = (async () => {
     if (!sandbox.isSupportedPlatform()) {
@@ -411,20 +532,20 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
     // initialize as well: a caller can leave configuration behind while a
     // mocked/partially-initialized manager still reports disabled.
     const beforeInitialize = sandbox.getConfig();
-    if (beforeInitialize && !isDeepStrictEqual(beforeInitialize, PROCESS_SANDBOX_CONFIG)) {
+    if (beforeInitialize && !isDeepStrictEqual(beforeInitialize, required)) {
       throw new Error(
         "The process-global sandbox was initialized with an incompatible configuration.",
       );
     }
     if (sandbox.isSandboxingEnabled()) {
-      if (!isDeepStrictEqual(beforeInitialize, PROCESS_SANDBOX_CONFIG)) {
+      if (!isDeepStrictEqual(beforeInitialize, required)) {
         throw new Error(
           "The process-global sandbox was initialized with an incompatible configuration.",
         );
       }
     } else {
-      await sandbox.initialize(PROCESS_SANDBOX_CONFIG);
-      if (!isDeepStrictEqual(sandbox.getConfig(), PROCESS_SANDBOX_CONFIG)) {
+      await sandbox.initialize(required);
+      if (!isDeepStrictEqual(sandbox.getConfig(), required)) {
         throw new Error(
           "The process-global sandbox did not retain Volli's required configuration.",
         );
@@ -443,19 +564,27 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
 }
 
 /**
- * The Seatbelt-backed execution capability — built and tested, and no longer
- * installed.
+ * The Seatbelt-backed execution capability: what a Scoped Session runs in
+ * (VC-45).
  *
- * The runtime hands Pi its own uncontained environment now, so this reaches a
- * Session only through an injected `executionEnvFactory`. It is kept whole
- * because the two-axis authority rearchitecture rebuilds the
- * boundary on it, and a boundary is a bad thing to delete and rewrite from
- * memory.
+ * A project whose authority policy says `containment: "scoped"` gets this in
+ * place of Pi's own environment. Both of its layers read ONE capability policy:
+ * the file tools through {@link ScopedExecutionEnv.#guard}, and the shell
+ * through the Seatbelt profile {@link exec} compiles per command. The authority
+ * gate judges calls against the same object, so a path gets the same answer
+ * from `read`, from `cat`, and from the rule pack.
  *
  * What it contains is whatever that Session's workspace is — a Ticket worktree,
  * or the project's Main checkout for a Ticket that never took one — and nothing
  * here reads the difference. Process execution stays fail-closed on its own
  * terms: {@link exec} proves SRT's boundary before it spawns anything.
+ *
+ * The file guard is userspace and checks before it opens, so a symlink swapped
+ * in between the two is a seam the kernel does not share. The plan's slice 8 —
+ * one enforcement layer, the seam closed — is where that goes; what this guard
+ * does in the meantime is judge both the path as named and the path it
+ * resolves to, so a link planted beforehand reaches nothing the target could
+ * not.
  *
  * Pi 0.85 replaced every method's trailing `abortSignal?: AbortSignal` with a
  * required trailing chord `Context`, cancellation riding `context.abortSignal`.
@@ -470,6 +599,8 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  */
 export class ScopedExecutionEnv implements ExecutionEnv {
   readonly cwd: string;
+  /** The capability policy both layers are compiled from. */
+  readonly policy: CapabilityPolicy;
   readonly #delegate: NodeExecutionEnv;
   readonly #sandbox: SandboxRuntime;
   readonly #spawn: Spawn;
@@ -477,11 +608,22 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   readonly #processKill: ProcessKill;
   readonly #fileOperations: FileOperations;
   readonly #ledger: { port: SpawnLedgerPort; owner: ExecutionEnvOwner } | undefined;
+  readonly #processConfig: SandboxRuntimeConfig;
+  readonly #commandVariables: Record<string, string>;
+  readonly #pathPrefixes: readonly string[];
+  readonly #onCleanup: (() => void | Promise<void>) | undefined;
   readonly #activeChildren = new Set<ChildProcess>();
   readonly #tempDirectories = new Set<string>();
+  #cleaned = false;
 
-  private constructor(root: string, options: ScopedExecutionEnvOptions) {
+  private constructor(
+    root: string,
+    policy: CapabilityPolicy,
+    gitIdentity: GitIdentity | null,
+    options: ScopedExecutionEnvOptions,
+  ) {
     this.cwd = root;
+    this.policy = policy;
     this.#ledger = options.ledger;
     this.#delegate = new NodeExecutionEnv({ cwd: root });
     this.#sandbox = options.sandbox ?? SandboxManager;
@@ -489,13 +631,37 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     this.#homeDir = options.homeDir ?? homedir();
     this.#processKill = options.processKill ?? process.kill;
     this.#fileOperations = options.fileOperations ?? { mkdtemp, rm, writeFile };
+    this.#processConfig = processSandboxConfig(options.unixSockets ?? []);
+    this.#pathPrefixes = options.pathPrefixes ?? [];
+    this.#onCleanup = options.onCleanup;
+    // Composed once: everything here is host-minted, so nothing a command
+    // asks for can change it. Identity last, as `sessionCommandEnvironment`
+    // orders it, so the budget channel cannot shadow who is running.
+    this.#commandVariables = {
+      ...options.environment,
+      ...gitVariables(gitIdentity),
+      ...(options.scratchDirectory === undefined ? {} : { TMPDIR: options.scratchDirectory }),
+      ...identityVariables(options.identity),
+    };
   }
 
   static async create(
     root: string,
     options: ScopedExecutionEnvOptions = {},
   ): Promise<ScopedExecutionEnv> {
-    return new ScopedExecutionEnv(await realpath(root), options);
+    const canonicalRoot = await realpath(root);
+    const policy =
+      options.policy ??
+      resolveCapabilityPolicy({
+        workspacePath: canonicalRoot,
+        ...(options.homeDir === undefined ? {} : { home: options.homeDir }),
+        sandboxCarveOuts: true,
+      });
+    const gitIdentity =
+      options.gitIdentity === undefined
+        ? await hostGitIdentity(canonicalRoot)
+        : options.gitIdentity;
+    return new ScopedExecutionEnv(canonicalRoot, policy, gitIdentity, options);
   }
 
   /**
@@ -509,41 +675,47 @@ export class ScopedExecutionEnv implements ExecutionEnv {
    */
   async prepareProcessExecution(): Promise<Result<void, ExecutionError>> {
     try {
-      await prepareSandbox(this.#sandbox);
+      await prepareSandbox(this.#sandbox, this.#processConfig);
       return { ok: true, value: undefined };
     } catch (error) {
       return executionError("shell_unavailable", asError(error).message, asError(error));
     }
   }
 
-  async #guard(path: string, context: Context): Promise<Result<string, FileError>> {
+  /**
+   * One file operation, judged against the capability policy before it runs.
+   *
+   * Both the path as named and the path it resolves to must pass, so a symlink
+   * reaches nothing its target could not and a link named into a denied tree is
+   * refused by name. The refusal carries the policy's own sentence, which is
+   * what the model reads.
+   */
+  async #guard(
+    path: string,
+    access: FileAccess,
+    context: Context,
+  ): Promise<Result<string, FileError>> {
     if (context.abortSignal?.aborted) {
       return err(new FileError("aborted", "Operation aborted.", path));
     }
     const target = resolve(this.cwd, path);
-    if (!isInside(this.cwd, target)) {
+    const resolved = resolvePathForPolicy(target);
+    if (resolved === undefined) {
       return err(
-        new FileError("permission_denied", "Path is outside the Session workspace.", target),
+        new FileError(
+          "permission_denied",
+          "This path cannot be resolved, so the Session's capability policy cannot say what it names.",
+          target,
+        ),
       );
     }
-
-    let current = this.cwd;
-    for (const part of relative(this.cwd, target).split(sep).filter(Boolean)) {
-      current = join(current, part);
-      try {
-        if ((await lstat(current)).isSymbolicLink()) {
-          return err(
-            new FileError(
-              "permission_denied",
-              "Symlinks are not available inside the contained Session tool boundary.",
-              current,
-            ),
-          );
-        }
-      } catch (error) {
-        const cause = asError(error);
-        if ((cause as NodeJS.ErrnoException).code === "ENOENT") break;
-        return err(new FileError("unknown", cause.message, current, cause));
+    for (const candidate of new Set([target, resolved])) {
+      const verdict =
+        access === "read"
+          ? capabilityRead(this.policy, candidate)
+          : capabilityWrite(this.policy, candidate);
+      if (verdict.outcome === "deny") {
+        return err(new FileError("permission_denied", verdict.reason, target));
       }
     }
     return { ok: true, value: target };
@@ -569,26 +741,26 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   }
 
   async absolutePath(path: string, context: Context = BACKGROUND_CONTEXT) {
-    return this.#guard(path, context);
+    return this.#guard(path, "read", context);
   }
 
   async exists(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "read", context);
     return guarded.ok ? this.#delegate.exists(guarded.value, context) : guarded;
   }
 
   async readBinaryFile(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "read", context);
     return guarded.ok ? this.#delegate.readBinaryFile(guarded.value, context) : guarded;
   }
 
   async fileInfo(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "read", context);
     return guarded.ok ? this.#delegate.fileInfo(guarded.value, context) : guarded;
   }
 
   async readTextFile(path: string, context: Context = BACKGROUND_CONTEXT) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "read", context);
     return guarded.ok ? this.#delegate.readTextFile(guarded.value, context) : guarded;
   }
 
@@ -597,7 +769,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     content: string | Uint8Array,
     context: Context = BACKGROUND_CONTEXT,
   ) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "write", context);
     return guarded.ok ? this.#delegate.writeFile(guarded.value, content, context) : guarded;
   }
 
@@ -632,7 +804,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     content: string | Uint8Array,
     context: Context = BACKGROUND_CONTEXT,
   ) {
-    const guarded = await this.#guard(path, context);
+    const guarded = await this.#guard(path, "write", context);
     if (!guarded.ok) return guarded;
     // 0.84's Node environment took a third argument and ignored it, so this
     // forwarded through a cast. 0.85's honours the context it is given, so the
@@ -791,7 +963,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       descriptor = await this.#sandbox.wrapWithSandboxArgv(
         command,
         "/bin/bash",
-        perCommandSandboxConfig(this.cwd, this.#homeDir),
+        perCommandSandboxConfig(this.policy, this.#homeDir),
         abortSignal,
         commandCwd.value,
       );
@@ -949,7 +1121,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       try {
         child = this.#spawn(descriptor.argv[0]!, descriptor.argv.slice(1), {
           cwd: commandCwd.value,
-          env: scopedEnvironment(descriptor.env),
+          env: this.#childEnvironment(descriptor.env),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
@@ -1052,7 +1224,55 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     });
   }
 
+  /**
+   * One background shell's command, wrapped in the same walls as {@link exec}
+   * (VC-45): the argv a host spawns in place of `/bin/bash -c`, and the whole
+   * environment it is handed.
+   *
+   * The background shell host owns the child — it spawns with pipes and
+   * outlives the turn — so this returns the launch rather than running it. It
+   * throws rather than answering with something uncontained: a Scoped Session
+   * whose walls cannot be put up gets no shell at all.
+   */
+  async containLaunch(command: string, cwd: string): Promise<RuntimeContainedLaunch> {
+    const prepared = await this.prepareProcessExecution();
+    if (!prepared.ok) throw prepared.error;
+    const commandCwd = await this.#commandCwd(cwd);
+    if (!commandCwd.ok) throw commandCwd.error;
+    const descriptor = await this.#sandbox.wrapWithSandboxArgv(
+      command,
+      "/bin/bash",
+      perCommandSandboxConfig(this.policy, this.#homeDir),
+      undefined,
+      commandCwd.value,
+    );
+    if (descriptor.argv.length === 0) throw new Error("Sandbox returned no command argv.");
+    return { argv: descriptor.argv, env: this.#childEnvironment(descriptor.env) };
+  }
+
+  /**
+   * What one contained command is handed: {@link scopedEnvironment} over what
+   * SRT returned, the host-minted variables composed at construction, and the
+   * prefixes in front of whatever `PATH` that came to — the contained twin of
+   * `sessionCommandEnvironment`. The caller's own `env` is not consulted: a
+   * command does not get to choose what crosses the boundary.
+   */
+  #childEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
+    const merged = { ...scopedEnvironment(source), ...this.#commandVariables };
+    return { ...merged, PATH: prefixedPath(merged.PATH ?? "", this.#pathPrefixes) };
+  }
+
   async cleanup(context: Context = BACKGROUND_CONTEXT): Promise<void> {
+    if (this.#cleaned) return;
+    this.#cleaned = true;
+    try {
+      await this.#releaseOwned(context);
+    } finally {
+      await this.#onCleanup?.();
+    }
+  }
+
+  async #releaseOwned(context: Context): Promise<void> {
     const children = [...this.#activeChildren];
     await Promise.all(
       children.map(async (child) => {

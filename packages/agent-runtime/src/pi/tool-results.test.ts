@@ -167,6 +167,8 @@ function attachment(answer: () => RuntimeMcpCallResult): {
     rulePackHash: BUILTIN_RULE_PACK_HASH,
     classifierModel: null,
     fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    containment: "off",
+    writableRoots: [],
   };
   return { spec: { ...spec, authority }, observations, sessionDataDir };
 }

@@ -105,7 +105,9 @@ const BENIGN_VARIABLES = [
   "NO_COLOR",
 ] as const;
 
-const UNSANDBOXED_VARIABLES = [...BENIGN_VARIABLES, "PATH", "HOME", "SSH_AUTH_SOCK"] as const;
+const SCOPED_VARIABLES = [...BENIGN_VARIABLES, "PATH", "HOME"] as const;
+
+const UNSANDBOXED_VARIABLES = [...SCOPED_VARIABLES, "SSH_AUTH_SOCK"] as const;
 
 function carriedOver(source: NodeJS.ProcessEnv, names: readonly string[]): Record<string, string> {
   const environment: Record<string, string> = {};
@@ -116,27 +118,22 @@ function carriedOver(source: NodeJS.ProcessEnv, names: readonly string[]): Recor
   return environment;
 }
 
-function sanitizedPath(pathValue: string | undefined): string {
-  const safeRoots = ["/opt/homebrew", "/usr/local", "/System", "/usr", "/bin", "/sbin"];
-  const safe = (pathValue ?? "")
-    .split(":")
-    .filter((entry) => safeRoots.some((root) => entry === root || entry.startsWith(`${root}/`)));
-  return [...new Set(safe)].join(":") || "/usr/bin:/bin:/usr/sbin:/sbin";
-}
-
 /**
- * Everything a child command is given behind `ScopedExecutionEnv`'s boundary: a
- * `PATH` filtered to system roots, the locale and terminal variables, and
- * nothing else. No `HOME`, and none of the host's own variables.
+ * Everything a child command is given behind `ScopedExecutionEnv`'s walls: the
+ * host's `PATH` and `HOME`, the locale and terminal variables, and nothing else
+ * the host process holds — not even the SSH agent, whose socket the sandbox
+ * would refuse anyway.
  *
- * The `PATH` filter costs a Session the toolchains it was pointed at — nvm,
- * pyenv, cargo, `~/Library/pnpm` — and that price is only worth paying where
- * something enforces the rest of the story. Behind Seatbelt the set of binaries
- * a command can reach is one clause of a boundary; on the default path it is a
- * suggestion, so {@link unsandboxedEnvironment} does not pay it.
+ * The `PATH` used to be filtered to system roots, on the argument that behind
+ * Seatbelt the binaries a command can reach were one clause of a boundary.
+ * VC-45 retired that argument with the reads it rested on: reads are
+ * machine-wide minus the secrets denylist, so a toolchain under `~/.nvm` is
+ * readable and executable by absolute path whatever `PATH` says, and filtering
+ * it only cost a Session the toolchain its repository is built with. What
+ * contains a Scoped Session is the profile, not the variables.
  */
 export function scopedEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  return { PATH: sanitizedPath(source.PATH), ...carriedOver(source, BENIGN_VARIABLES) };
+  return carriedOver(source, SCOPED_VARIABLES);
 }
 
 /**
@@ -177,7 +174,7 @@ function unsandboxedEnvironment(source: NodeJS.ProcessEnv): Record<string, strin
  * appears LATER in `path` is still prepended: the point is that a session's
  * commands find it first, not that they find it at all.
  */
-function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
+export function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
   const result = path.length === 0 ? [] : path.split(":");
   for (let i = pathPrefixes.length - 1; i >= 0; i -= 1) {
     const prefix = pathPrefixes[i];
@@ -188,7 +185,9 @@ function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
 }
 
 /** The two identity variables, as the environment entries a child is handed. */
-function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<string, string> {
+export function identityVariables(
+  identity: PiSessionEnvIdentity | undefined,
+): Record<string, string> {
   if (identity === undefined) return {};
   return {
     [VOLLI_SESSION_ENV]: identity.sessionId,
@@ -320,13 +319,13 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * was ever the thing holding a command back: `~` expands from the password
  * database whether or not `HOME` is set, so `~/.pi/agent/auth.json` was an
  * ordinary readable file before this passed `HOME` and is one after — measured,
- * not assumed. Only Seatbelt's `denyRead` ever answered that, and nothing
- * installs it today.
+ * not assumed. Only Seatbelt's `denyRead` answers that, and it is installed only
+ * for a Scoped Session.
  *
- * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one the two-axis authority rearchitecture rebuilds on. It is kept
- * whole, with the stricter {@link scopedEnvironment} it was written against;
- * nothing wires it up.
+ * `ScopedExecutionEnv` is the boundary a project gets instead when its policy
+ * says `containment: "scoped"` (VC-45): the same identity, prefixes and budget,
+ * with the shell behind Seatbelt and the file tools behind a guard, both
+ * compiled from one capability policy. This path is what `off` means.
  *
  * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
  * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and

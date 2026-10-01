@@ -180,9 +180,11 @@ describe("promptBaseline", () => {
     // The rest of the Execution core was reworded shorter to pay part of it;
     // the net is +725 chars of system prompt, ~181 tokens. All of it is
     // Role-static, so it is bought once per Role and read from cache by every
-    // Board Session after. 1,685 of the 1,700 estimated tokens are now spent.
-    expect(measured.system).toEqual({ chars: 5_691, tokens: 1_423 });
-    expect(measured.total).toEqual({ chars: 6_736, tokens: 1_685 });
+    // Board Session after. VC-45 spent 6 chars more naming "package stores"
+    // where "app data" stood, since app data is on the secrets denylist.
+    // 1,687 of the 1,700 estimated tokens are now spent.
+    expect(measured.system).toEqual({ chars: 5_697, tokens: 1_425 });
+    expect(measured.total).toEqual({ chars: 6_742, tokens: 1_687 });
   });
 });
 
