@@ -1,0 +1,75 @@
+diff --git a/dist/runtime/host.js b/dist/runtime/host.js
+index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..40646d21f45028434af4a06801e3046b885db9af 100644
+--- a/dist/runtime/host.js
++++ b/dist/runtime/host.js
+@@ -56,10 +56,13 @@ class Execution {
+     signal;
+     timer;
+     output = [];
++    outputChars = 0;
++    maxOutputChars;
+     calls = [];
+     pending = new Map();
+     finished = false;
+     constructor(options) {
++        this.maxOutputChars = options.maxOutputChars;
+         this.promise = new Promise((resolve) => {
+             this.resolveResult = resolve;
+         });
+@@ -139,6 +142,15 @@ class Execution {
+             return;
+         switch (message.type) {
+             case "output":
++                this.outputChars += message.item.type === "text" ? message.item.text.length : message.item.data.length;
++                if (this.maxOutputChars !== undefined && this.outputChars > this.maxOutputChars) {
++                    this.finish({
++                        kind: "script",
++                        name: "RangeError",
++                        message: `The script's output passed its limit of ${this.maxOutputChars} characters`,
++                    });
++                    break;
++                }
+                 this.output.push(message.item);
+                 break;
+             case "call":
+@@ -240,6 +252,7 @@ export class CodemodeSandbox {
+     globalsByName = new Map();
+     timeoutMs;
+     memoryLimitBytes;
++    maxOutputChars;
+     wasm;
+     workerUrl;
+     running = new Set();
+@@ -247,6 +260,7 @@ export class CodemodeSandbox {
+     constructor(options = {}) {
+         this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+         this.memoryLimitBytes = options.memoryLimitBytes;
++        this.maxOutputChars = options.maxOutputChars;
+         this.wasm = options.wasm;
+         this.workerUrl = options.workerUrl ?? defaultWorkerUrl();
+         for (const tool of options.tools ?? [])
+@@ -298,6 +312,7 @@ export class CodemodeSandbox {
+             timeoutMs: options.timeoutMs ?? this.timeoutMs,
+             signal: options.signal,
+             memoryLimitBytes: this.memoryLimitBytes,
++            maxOutputChars: this.maxOutputChars,
+             store: serializeStore(options.store),
+             wasm: this.wasm === undefined ? loadQuickJSWasm() : Promise.resolve(this.wasm),
+             workerUrl: this.workerUrl,
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 9a5259bfde448c5f92426c2fee5a4d39087d1697..849ff48d141b79a374eb031d1566b98249dc68a1 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -110,6 +110,12 @@ export interface CodemodeSandboxOptions {
+      * `InternalError: out of memory`. Default: no limit beyond wasm32's 4 GiB address space.
+      */
+     memoryLimitBytes?: number;
++    /**
++     * Most characters of `text()`, `console.*` and `image()` output the host keeps. Past it the
++     * execution fails as a `script` error and the worker is terminated, so a program that prints in a
++     * loop cannot grow the host's memory without bound. Default: no limit.
++     */
++    maxOutputChars?: number;
+     /**
+      * Compiled `quickjs-wasi/quickjs.wasm`, usually from {@link loadQuickJSWasm}. Default:
+      * `loadQuickJSWasm()`, the file in the installed `quickjs-wasi` package. Pass it when that file

@@ -19,6 +19,15 @@ Direct dependencies, pinned exactly:
   environment
 - `@earendil-works/pi-ai` `0.99.2` — model catalog, provider streams, and
   message types
+- `@earendil-works/pi-codemode` `0.99.2` (VC-471) — the Code Mode sandbox: a
+  QuickJS VM (WebAssembly, from its one dependency `quickjs-wasi` 3.6.2, MIT) in
+  a worker per run, whose only capability is calling the tools it is handed.
+  Standalone: no Pi dependency and no Pi extension API. Used through
+  `CodemodeSandbox`, `loadQuickJSWasm`, `renderDeclarations`/`renderToolSample`
+  and `parseCodemodeSource`; the coding agent's codemode extension (exposure,
+  `tool_search`, the session store) is not. Keep it on the same release as
+  `pi-agent-core`. Volli's layer over it is `src/codemode/`, and the design is
+  `docs/research/code-mode-vc-471.md`.
 
 `@earendil-works/pi-telemetry` and `@earendil-works/chord` arrive transitively
 (both were already dependencies of `pi-agent-core` at 0.87.1) and neither is
@@ -60,9 +69,19 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-One patch file, declared in `pnpm-workspace.yaml` under `patchedDependencies`
-and stored in `patches/` at the repo root. It carries two independent changes,
-and both rebased unchanged onto 0.99.2 (VC-469): 0.99.2's
+Two patch files, declared in `pnpm-workspace.yaml` under `patchedDependencies`
+and stored in `patches/` at the repo root.
+
+- `@earendil-works/pi-codemode@0.99.2` (VC-471) — adds `maxOutputChars` to
+  `CodemodeSandboxOptions` (`dist/runtime/host.js`, `dist/types.d.ts`). Upstream
+  bounds the VM's heap but not the output items the host accumulates from it,
+  so a program that called `text()` in a loop could grow Electron main's memory
+  for its whole deadline. Past the bound the execution fails as a `script`
+  error and the worker is terminated; absent, upstream behavior. Small enough to
+  offer upstream as-is.
+
+The `pi-agent-core` patch carries two independent changes, and both rebased
+unchanged onto 0.99.2 (VC-469): 0.99.2's
 `dist/harness/compaction/compaction.{js,d.ts}` and
 `dist/harness/session/jsonl/storage.js` are byte-identical to 0.87.1's, so the
 patch file and its hash are the 0.87.1 ones under the new version's name.
