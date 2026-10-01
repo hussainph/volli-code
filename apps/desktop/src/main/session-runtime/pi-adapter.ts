@@ -196,17 +196,20 @@ function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
  * is read back months later to interpret a denial, and a tool list that was
  * never the Session's is a record that lies.
  *
- * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
- * with no Snapshot to pin, which is what every Session did before VC-44 and what
- * Codex and Claude Code both ship as an explicit bypass. It is a decision a
- * project makes, not a state the product falls into.
+ * `null` for `enforcement: "off"` with containment off — the Session then runs
+ * at Pi's own defaults with no Snapshot to pin, which is what every Session did
+ * before VC-44 and what Codex and Claude Code both ship as an explicit bypass.
+ * It is a decision a project makes, not a state the product falls into.
+ * Enforcement off with containment `scoped` still pins one (VC-45 review, N1):
+ * Off bypasses the rules, not the walls, and the walls ride the Snapshot. The
+ * gate still installs only under `enforce`.
  */
 function piAuthoritySnapshot(
   policy: AuthorityPolicy,
   location: WorkLocationKind,
   toolSurface: readonly SessionToolId[],
 ): AuthoritySnapshot | null {
-  if (policy.enforcement === "off") return null;
+  if (policy.enforcement === "off" && policy.containment === "off") return null;
   return {
     mode: "auto",
     location,
@@ -402,6 +405,8 @@ export interface PiAdapterOptions {
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /** See `PiRuntimeHostOptions.hostPrivateRoots`: main's `userData`, on every Session's denylist. */
   hostPrivateRoots?: PiRuntimeHostOptions["hostPrivateRoots"];
+  /** See `PiRuntimeHostOptions.hostCredentialPaths`: the MCP token store, in the credential tier. */
+  hostCredentialPaths?: PiRuntimeHostOptions["hostCredentialPaths"];
   /** See `PiRuntimeHostOptions.hostExposedPaths`: the CLI's bin dir, readable inside the denylist. */
   hostExposedPaths?: PiRuntimeHostOptions["hostExposedPaths"];
   /**
@@ -759,6 +764,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.hostPrivateRoots === undefined
       ? {}
       : { hostPrivateRoots: options.hostPrivateRoots }),
+    ...(options.hostCredentialPaths === undefined
+      ? {}
+      : { hostCredentialPaths: options.hostCredentialPaths }),
     ...(options.hostExposedPaths === undefined
       ? {}
       : { hostExposedPaths: options.hostExposedPaths }),
@@ -1140,9 +1148,9 @@ class PiBinding implements BindingHandle {
       // is what makes `enforcement` real rather than advisory (VC-44). Pi
       // installs `beforeToolCall` on this field's PRESENCE, so:
       //
-      //   off      → no Snapshot at all      → absent → no gate
-      //   observe  → Snapshot, recorded only → absent → no gate
-      //   enforce  → Snapshot, handed over   → present → gate installs
+      //   off      → no Snapshot (unless scoped) → absent → no gate
+      //   observe  → Snapshot, recorded only     → absent → no gate
+      //   enforce  → Snapshot, handed over       → present → gate installs
       //
       // `observe` is deliberately absent here rather than present-and-permissive.
       // A gate that installs and allows everything would still normalize every
@@ -1156,10 +1164,10 @@ class PiBinding implements BindingHandle {
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
       ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
-      // The capability axis rides every Snapshot, `observe` included (VC-45):
-      // walls do not wait for the rule pack to bind, and a pinned Snapshot
-      // replayed after a relaunch keeps the walls it opened under. `off` has
-      // no Snapshot and so no walls — the explicit bypass of both axes.
+      // The capability axis rides every Snapshot, `observe` and `off`
+      // included (VC-45): walls do not wait for the rule pack to bind, and a
+      // pinned Snapshot replayed after a relaunch keeps the walls it opened
+      // under. No Snapshot means both dials are off, and so no walls.
       ...(this.#authority === null
         ? {}
         : {

@@ -1435,14 +1435,18 @@ app.whenReady().then(async () => {
               ...shared,
               policy: containment.policy,
               scratchDirectory: containment.scratchDirectory,
+              git: containment.git,
               unixSockets: [runtimePaths.socketPath],
             });
           },
-          // The host's own data is on every Session's secrets denylist
-          // (VC-45): the database, `mcp-credentials.json`, backups, and every
-          // Session's sidecar and saved output. The CLI's bin dir is the one
-          // part a Session reads on purpose — the `volli` shim lives there.
+          // The host's own data is on every Session's denylist (VC-45): the
+          // database, backups, and every Session's sidecar and saved output,
+          // in the private tier a person may approve once. The MCP servers'
+          // stored tokens (VC-470) are credential material, in the tier no
+          // approval reaches. The CLI's bin dir is the one part a Session
+          // reads on purpose — the `volli` shim lives there.
           hostPrivateRoots: [...new Set([app.getPath("userData"), dirname(dbPath)])],
+          hostCredentialPaths: [join(app.getPath("userData"), "mcp-credentials.json")],
           hostExposedPaths: [runtimePaths.binDir],
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the

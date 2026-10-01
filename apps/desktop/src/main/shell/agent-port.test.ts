@@ -103,7 +103,8 @@ describe("createAgentShellPort", () => {
 
   it("spawns a Scoped Session's shell through the runtime's wrap, in the contained environment (VC-45)", async () => {
     const { port: shell, ws } = port({
-      concurrencyEnv: async () => ({ VITEST_MAX_WORKERS: "1" }),
+      // A budget that names an identity variable must not shadow the identity (N2).
+      concurrencyEnv: async () => ({ VITEST_MAX_WORKERS: "1", VOLLI_SESSION: "forged" }),
     });
     const asked: { command: string; cwd: string }[] = [];
     const started = await shell.start({
@@ -114,13 +115,17 @@ describe("createAgentShellPort", () => {
       contain: async (command, cwd) => {
         asked.push({ command, cwd });
         return {
-          argv: ["/bin/sh", "-c", 'printf "%s|%s|%s" "$WRAPPED" "$VITEST_MAX_WORKERS" "$PWD"'],
+          argv: [
+            "/bin/sh",
+            "-c",
+            'printf "%s|%s|%s|%s" "$WRAPPED" "$VITEST_MAX_WORKERS" "$PWD" "$VOLLI_SESSION"',
+          ],
           env: { WRAPPED: "yes", PATH: "/usr/bin:/bin" },
         };
       },
     });
     expect(asked).toEqual([{ command: "echo never-run-bare", cwd: ws }]);
-    expect(started.output).toBe(`yes|1|${ws}`);
+    expect(started.output).toBe(`yes|1|${ws}|session-1`);
     // The record keeps what the agent asked for, not the wrapper.
     expect(started.shell.command).toBe("echo never-run-bare");
   });

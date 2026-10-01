@@ -126,9 +126,6 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             // holds this list to that contract.
             "rule enforcement",
             "containment",
-            "writable roots",
-            "secrets",
-            "network",
             // The whole label, em dash included, because the rail matches a
             // lowercased SUBSTRING of a stored term: "decision mode" alone
             // could not be found by someone typing what the row says. VC-285

@@ -31,7 +31,7 @@ import type { LedgerCommit, LedgerFrame, RawTurn, RecordedEnvelope } from "./har
  */
 export const REAL_PATH_EXPECTED: TurnExpectations = {
   modelAttempts: 3,
-  toolsByName: { read: 2, bash: 1 },
+  toolsByName: { read: 2, write: 1, bash: 1 },
   authorityWaits: 1,
   compactions: 1,
   retries: 1,

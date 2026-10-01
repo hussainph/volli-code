@@ -34,6 +34,7 @@
 import { isAbsolute, resolve } from "node:path";
 
 import {
+  identityVariables,
   sessionCommandEnvironment,
   ShellRefusal,
   type PiSessionEnvIdentity,
@@ -109,7 +110,9 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
       // A Scoped Session's shell runs behind the same walls as its `execute`
       // tool (VC-45): the runtime hands the wrap over, and the host spawns
       // what it returns. Its environment is the contained one, built from the
-      // same identity; only the budget is re-read at the start.
+      // same identity; only the budget is re-read at the start. Identity goes
+      // last, as `sessionCommandEnvironment` puts it, so no budget variable
+      // can ever shadow who the shell is (VC-45 review, N2).
       const launch =
         input.contain === undefined ? undefined : await input.contain(input.command, cwd);
       const env =
@@ -119,7 +122,7 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
               pathPrefixes: options.pathPrefixes,
               environment: concurrency,
             })
-          : { ...launch.env, ...concurrency };
+          : { ...launch.env, ...concurrency, ...identityVariables(options.identity) };
       const started = await options.host.start(owner, {
         command: input.command,
         cwd,

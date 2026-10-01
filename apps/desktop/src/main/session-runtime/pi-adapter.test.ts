@@ -556,9 +556,13 @@ describe("Pi native adapter authority snapshot", () => {
     const enforcing = await attached(policy({ enforcement: "enforce" }));
     expect(enforcing.runtime.spec.capability).toEqual({ containment: "off", writableRoots: [] });
 
-    // `off` is the bypass of both axes: no Snapshot, so no walls either.
+    // `off` bypasses the rules, not the walls (VC-45 review, N1): a scoped
+    // project with enforcement off pins a Snapshot for the walls, and the
+    // gate still does not install.
     const off = await attached(policy({ enforcement: "off", containment: "scoped" }));
-    expect("capability" in off.runtime.spec).toBe(false);
+    expect(off.binding.authority).toMatchObject({ enforcement: "off", containment: "scoped" });
+    expect("authority" in off.runtime.spec).toBe(false);
+    expect(off.runtime.spec.capability).toEqual({ containment: "scoped", writableRoots: [] });
   });
 
   it("carries the judgment mode and thresholds the project recorded", async () => {
