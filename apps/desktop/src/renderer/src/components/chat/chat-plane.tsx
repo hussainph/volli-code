@@ -430,7 +430,7 @@ export function ChatPlane({
   // named tier would read its label: the same "qualifier · model" grammar.
   const selectionAuto = projection?.modelAuto ?? null;
   const selectionTier =
-    modelTier !== null ? modelTierRow(modelTier).label : selectionAuto === null ? null : "Auto";
+    selectionAuto !== null ? "Auto" : modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null || provisional !== undefined,
