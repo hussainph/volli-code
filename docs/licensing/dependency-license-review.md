@@ -497,9 +497,6 @@ the license, and the III.3 problem that did conflict is fixed.
 - **`@yuku-codegen/binding-*`, `@yuku-parser/binding-*` (MIT).** Generated napi platform packages
   with neither a `license` field nor a license file. Their parents `yuku-codegen@0.5.48` and
   `yuku-parser@0.5.48` declare MIT and publish from the same repository and release.
-- **`@img/sharp-libvips-darwin-arm64@1.3.1`.** A second copy in the store, pulled by Astro's own
-  `sharp@0.35.2` while building the website. Build-time only; the desktop app ships 1.3.3. Recorded
-  because a license scan reports both and the difference matters.
 
 ## 5. What a reviewer should check next
 
