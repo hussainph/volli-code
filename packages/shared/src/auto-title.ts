@@ -338,21 +338,20 @@ function withoutLeadIn(words: readonly string[]): readonly string[] {
 }
 
 /**
- * The trailing words a title may not end on.
+ * The trailing words that can never end a title, and the only ones a trim removes.
  *
  * Each one needs a word after it — an article with no noun, a possessive with
  * nothing possessed, a conjunction with no second clause, a preposition with
  * no object — so a title that stops here was cut, and what a reader sees is
  * the cut rather than the subject.
  *
- * A word that can end a title on its own is deliberately absent, however
- * tempting: "Fix this", "Do it all" and "Wait a while" are whole titles, and
- * dropping their last word would break them to fix nothing. The words here
- * read as unfinished wherever they land; the ones a title may legitimately end
- * on — as an adverb ("Nothing left behind") or a particle ("Turn
- * notifications off") — are held back to {@link CUT_DANGLING_TAIL}, which only
- * a cut this file made may take from, because there the tail is the cut's
- * artifact rather than the model's own last word.
+ * A word a whole title may legitimately end on is deliberately absent, however
+ * tempting: "Fix this", "Do it all", "Wait a while", "Turn notifications
+ * off", "Nothing left behind" and "Implement bitwise AND" are whole titles,
+ * and dropping their last word would break them to fix nothing. That is also
+ * why this list is consulted ONLY for a cut this file made: a word alone is
+ * not proof that a phrase is incomplete, and an answer that fits is left
+ * exactly as the model wrote it.
  */
 const DANGLING_TAIL = new Set([
   // Articles and possessives: a noun is required next.
@@ -393,124 +392,40 @@ const DANGLING_TAIL = new Set([
   "with",
 ]);
 
-/**
- * What is dangling only after a cut this file made: a word a whole title may
- * legitimately end on as an adverb or a particle ("Nothing left behind",
- * "The morning after", "Turn notifications off", "Find out"), a demonstrative
- * with no noun, an auxiliary with no verb.
- */
-const CUT_DANGLING_TAIL = new Set([
-  "above",
-  "after",
-  "before",
-  "behind",
-  "below",
-  "beneath",
-  "between",
-  "beyond",
-  "since",
-  "underneath",
-  "within",
-  "without",
-  "in",
-  "on",
-  "off",
-  "out",
-  "up",
-  "down",
-  "over",
-  "through",
-  "around",
-  "along",
-  "past",
-  "back",
-  "away",
-  "forward",
-  "ahead",
-  "under",
-  "across",
-  "by",
-  "about",
-  "to",
-  "like",
-  "near",
-  "till",
-  "as",
-  "than",
-  "when",
-  "where",
-  "if",
-  "while",
-  "because",
-  "so",
-  "yet",
-  "this",
-  "that",
-  "these",
-  "those",
-  "is",
-  "are",
-  "was",
-  "were",
-  "be",
-  "been",
-  "being",
-  "has",
-  "have",
-  "had",
-  "do",
-  "does",
-  "did",
-  "will",
-  "would",
-  "can",
-  "could",
-  "should",
-  "may",
-  "might",
-  "must",
-]);
-
 /** The word a dangling check reads: lowercased, with its trailing punctuation gone. */
 function bareTail(word: string): string {
   return word.toLowerCase().replace(TRAILING_PUNCTUATION, "");
 }
 
-/** Whether `word` needs a next word — always, or only after a cut this file made. */
-function isDanglingTail(word: string, cut: boolean): boolean {
-  const tail = bareTail(word);
-  return DANGLING_TAIL.has(tail) || (cut && CUT_DANGLING_TAIL.has(tail));
-}
-
 /**
- * Drops trailing words that need a next word, so a title ends on its subject
- * instead of on the cut. `cut` admits {@link CUT_DANGLING_TAIL}: the model's
- * own last word is only removed when a trim this file made left it hanging.
+ * Drops the trailing words a cut left hanging, so a title ends on its subject
+ * instead of on the cut. Called only after a cut this file made: see
+ * {@link DANGLING_TAIL} for why a word alone never earns a removal.
  */
-function withoutDanglingTail(words: readonly string[], cut: boolean): readonly string[] {
+function withoutDanglingTail(words: readonly string[]): readonly string[] {
   let end = words.length;
-  // `cut` is admitted for the word this pass is about to expose as well: the
-  // tail after a removal is the removal's artifact, whether or not a ceiling
-  // trim started the pass.
-  while (end > 0 && isDanglingTail(words[end - 1]!, cut || end < words.length)) end -= 1;
+  while (end > 0 && DANGLING_TAIL.has(bareTail(words[end - 1]!))) end -= 1;
   return end === words.length ? words : words.slice(0, end);
 }
 
 /**
  * The words that fit {@link AUTO_TITLE_MAX_LENGTH}, dropping whole trailing
- * words — never cutting one in half, and never leaving the connector a drop
- * exposed hanging off the end.
+ * words — never cutting one in half, and repairing the tail of every drop.
  *
- * A single word that cannot fit on its own is kept: a title of one long word
- * has nothing left to cut it to, and refusing it would lose a title the model
- * did answer with.
+ * `cut` says a word-ceiling trim already happened. An answer that fits is
+ * returned untouched, and every drop below repairs the tail it exposed: the
+ * only cuts worth repairing are this file's own.
+ *
+ * A single word that cannot fit on its own has nothing left to cut it to, and
+ * a title past the budget is not a title — the result is empty, and the
+ * caller keeps the heuristic.
  */
 function fitWholeWords(words: readonly string[], max: number, cut: boolean): readonly string[] {
-  let kept = withoutDanglingTail(words, cut);
+  let kept = cut ? withoutDanglingTail(words) : words;
   while (kept.length > 1 && kept.join(" ").length > max) {
-    kept = withoutDanglingTail(kept.slice(0, -1), true);
+    kept = withoutDanglingTail(kept.slice(0, -1));
   }
-  return kept;
+  return kept.join(" ").length > max ? [] : kept;
 }
 
 /**
@@ -524,10 +439,13 @@ function fitWholeWords(words: readonly string[], max: number, cut: boolean): rea
  * model's own overshoot is KEPT: the prompt asks for
  * {@link AUTO_TITLE_MAX_WORDS} words and models answer seven, and cutting that
  * seventh word off is what produced names like "Polish MCP page for simplicity
- * and" — a phrase that stopped at the cut rather than at a subject. A trim
- * never leaves a connector hanging, and a phrase past
- * {@link AUTO_TITLE_MAX_LENGTH} gives up whole words rather than growing an
- * ellipsis a model title never had.
+ * and" — a phrase that stopped at the cut rather than at a subject. Only a cut
+ * THIS function made is repaired: a trim never leaves a connector hanging, and
+ * a phrase past {@link AUTO_TITLE_MAX_LENGTH} gives up whole words rather than
+ * growing an ellipsis a model title never had. An answer that fits both budgets
+ * is returned exactly as the model wrote it — "Implement bitwise AND" and
+ * "Turn all notifications off" are whole answers a word-list repair would
+ * otherwise damage.
  *
  * The one thing it will NOT do is salvage prose. A reply several times over
  * the ceiling did not answer the question, and its first eight words are a
@@ -558,6 +476,11 @@ export function sanitizeAutoTitle(raw: string): string | null {
   if (words.length > AUTO_TITLE_MAX_WORDS * PROSE_WORD_FACTOR) return null;
   const overCeiling = words.length > AUTO_TITLE_TOLERATED_WORDS;
   const ceilinged = overCeiling ? words.slice(0, AUTO_TITLE_TOLERATED_WORDS) : words;
-  const budgeted = fitWholeWords(ceilinged, AUTO_TITLE_MAX_LENGTH, overCeiling).join(" ");
+  // The strip runs again after the words: a trim can land on a word that
+  // carried internal punctuation ("…plans providers, more"), leaving a comma
+  // the pre-cut strip never saw.
+  const budgeted = fitWholeWords(ceilinged, AUTO_TITLE_MAX_LENGTH, overCeiling)
+    .join(" ")
+    .replace(TRAILING_PUNCTUATION, "");
   return budgeted.length === 0 ? null : budgeted;
 }

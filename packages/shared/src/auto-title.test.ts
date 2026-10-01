@@ -375,33 +375,71 @@ describe("sanitizeAutoTitle", () => {
   });
 
   it("leaves a word a whole title may end on standing", () => {
-    // "behind" and "after" are adverbs as often as prepositions; a title that
-    // ends on one is whole, so only a cut this file made may take it.
+    // "behind", "after" and "AND" are adverbs, particles or operators as often
+    // as they are connectors; a word alone is not proof a phrase is incomplete.
     expect(sanitizeAutoTitle("Nothing left behind")).toBe("Nothing left behind");
     expect(sanitizeAutoTitle("The morning after")).toBe("The morning after");
+    expect(sanitizeAutoTitle("Implement bitwise AND")).toBe("Implement bitwise AND");
+    expect(sanitizeAutoTitle("Compare before and after")).toBe("Compare before and after");
+  });
+
+  it("leaves an in-budget answer exactly as the model wrote it", () => {
+    // The repair only ever touches a cut this file made (VC-490 review): a
+    // trailing word alone never earns a removal, or "Implement bitwise AND"
+    // would lose its operator and "Turn notifications off" its action.
+    expect(sanitizeAutoTitle("Polish MCP page for simplicity and")).toBe(
+      "Polish MCP page for simplicity and",
+    );
+    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
   });
 
   it("drops the connector a drop exposed, not just the one it removed", () => {
-    // Removing "the" leaves "in" hanging, and the same pass must take it too —
+    // Removing "the" leaves "and" hanging, and the same pass must take it too —
     // otherwise the title reads as cut, which is the whole defect (VC-490).
-    expect(sanitizeAutoTitle("Check the docs in the")).toBe("Check the docs");
+    expect(sanitizeAutoTitle("Check the docs in the portal and the CLI")).toBe(
+      "Check the docs in the portal",
+    );
+  });
+
+  it("keeps a particle at the cut boundary, which may complete an action", () => {
+    // "off" ends a complete action, so a cut boundary is not proof it dangles
+    // (VC-490 review); the same word in an untrimmed answer is kept too.
+    expect(sanitizeAutoTitle("Review session settings and turn all notifications off today")).toBe(
+      "Review session settings and turn all notifications off",
+    );
+    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
   });
 
   it("takes trailing punctuation off before the words are judged", () => {
     // A lone "." used to leave a trailing space behind, and to hide the
     // connector it was hanging off (VC-490 review).
     expect(sanitizeAutoTitle("Fix the login flow .")).toBe("Fix the login flow");
-    expect(sanitizeAutoTitle("Polish MCP page for simplicity and .")).toBe(
-      "Polish MCP page for simplicity",
+    expect(sanitizeAutoTitle("Polish the MCP page for simplicity and clarity and speed .")).toBe(
+      "Polish the MCP page for simplicity and clarity",
     );
   });
 
-  it("strips an ellipsis the model wrote, and the connector it hid", () => {
+  it("strips an ellipsis the model wrote", () => {
     expect(sanitizeAutoTitle("Review classifier decision service…")).toBe(
       "Review classifier decision service",
     );
-    expect(sanitizeAutoTitle("Polish MCP page for simplicity and…")).toBe(
-      "Polish MCP page for simplicity",
+  });
+
+  it("strips punctuation before the character budget, so it cannot force a cut", () => {
+    // 64 characters exactly, and 65 with the period: the period must come off
+    // before the budget decides, or "across clients" is dropped for its sake
+    // (VC-490 review).
+    const exact = "Review classifier decision service implementation across clients";
+    expect(exact).toHaveLength(AUTO_TITLE_MAX_LENGTH);
+    expect(sanitizeAutoTitle(exact)).toBe(exact);
+    expect(sanitizeAutoTitle(`${exact}.`)).toBe(exact);
+  });
+
+  it("strips punctuation the cut itself exposed", () => {
+    // The trim can land on a word that carried internal punctuation, leaving a
+    // trailing comma the pre-cut strip never saw (VC-490 review).
+    expect(sanitizeAutoTitle("Review docs settings models tests runs plans providers, more")).toBe(
+      "Review docs settings models tests runs plans providers",
     );
   });
 
@@ -411,20 +449,10 @@ describe("sanitizeAutoTitle", () => {
     );
   });
 
-  it("drops a particle only when the trim is what left it hanging", () => {
-    // "Turn notifications off" is a whole title, so an answer inside the
-    // ceilings keeps the model's own last word. The same word at the end of a
-    // trimmed answer is the cut's artifact and goes.
-    expect(sanitizeAutoTitle("Turn notifications off")).toBe("Turn notifications off");
-    expect(
-      sanitizeAutoTitle("Review Pi context scaling measurements in production in detail"),
-    ).toBe("Review Pi context scaling measurements in production");
-  });
-
-  it("never leaves a title ending on a connector the model wrote", () => {
-    expect(sanitizeAutoTitle("Polish MCP page for simplicity and")).toBe(
-      "Polish MCP page for simplicity",
-    );
+  it("refuses a single word that cannot fit the budget", () => {
+    // A title past the budget is not a title, and a single word has nothing
+    // left to cut it to — the heuristic stands instead (VC-490 review).
+    expect(sanitizeAutoTitle("x".repeat(1000))).toBeNull();
   });
 
   it("gives up whole words rather than growing an ellipsis", () => {
