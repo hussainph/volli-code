@@ -110,6 +110,12 @@ export interface SurfaceTool {
   tool: AgentTool;
   /** Built from a Volli verb, so its result has the verb shape. */
   verb: boolean;
+  /**
+   * The JSON Schema of a verb's `details`, from its registry entry's
+   * `resultDetails`; absent when the verb declares none. Types `details` in
+   * the TypeScript a program is written against.
+   */
+  detailsSchema?: Record<string, unknown>;
   /** The frozen MCP definition, for an MCP tool. */
   mcp?: McpToolDefinition;
 }
@@ -299,7 +305,10 @@ export function createCodeModeTool(
       identifier: toCodemodeIdentifier(entry.tool.name),
       description: entry.mcp?.description ?? entry.tool.description,
       inputSchema: entry.tool.parameters as unknown as Record<string, unknown>,
-      outputSchema: outputSchemaFor(kinds.get(entry.tool.name)!, entry.mcp?.outputSchema),
+      outputSchema: outputSchemaFor(
+        kinds.get(entry.tool.name)!,
+        entry.mcp?.outputSchema ?? entry.detailsSchema,
+      ),
       namespace: namespaceOf(entry),
       listed: isListedRoute(route),
       declared: isDeclaredRoute(route),
@@ -331,6 +340,11 @@ export function createCodeModeTool(
   const search = new ToolSearch(listing);
   const description = describeCodeMode({
     tools: listing,
+    directOnly: host.tools
+      .filter(
+        (entry) => !callable.includes(entry) && isDeclaredRoute(routeFor(host.surface, entry.id)),
+      )
+      .map((entry) => entry.tool.name),
     budgetTokens: limits.declarationBudgetTokens,
     limits,
   });

@@ -1,5 +1,6 @@
 import * as React from "react";
 import type {
+  CodeModePolicy,
   CompactionPolicy,
   HiddenModelRef,
   ModelAccessDefaults,
@@ -40,6 +41,10 @@ export interface ModelAccessClient {
   compactionPolicy(): Promise<CompactionPolicy>;
   /** Saves the whole policy — the one global switch. */
   setCompactionPolicy(policy: CompactionPolicy): Promise<CompactionPolicy>;
+  /** Code Mode's switch and per-model pins (VC-471). */
+  codeModePolicy(): Promise<CodeModePolicy>;
+  /** Saves the whole policy — the switch and every pin — and answers what was stored. */
+  setCodeModePolicy(policy: CodeModePolicy): Promise<CodeModePolicy>;
   /** Which list the model pickers open on (VC-259). */
   pickerView(): Promise<ModelPickerView>;
   setPickerView(view: ModelPickerView): Promise<ModelPickerView>;
@@ -197,6 +202,11 @@ export function ModelAccessProvider({
       // reads this policy per compaction, off the database, so a Session
       // already running picks the change up without anything here telling it.
       setCompactionPolicy: (policy) => client.setCompactionPolicy(policy),
+      // No revision bump either, and for a stronger reason: Code Mode changes
+      // nothing any open surface offers, and nothing running reads it at all.
+      // A Session reads the policy once, at birth, and keeps what it got.
+      codeModePolicy: () => client.codeModePolicy(),
+      setCodeModePolicy: (policy) => client.setCodeModePolicy(policy),
       // No revision bump here either: the view is how a picker OPENS, not what
       // it may offer, and the pill that changed it already holds the new word.
       pickerView: () => client.pickerView(),

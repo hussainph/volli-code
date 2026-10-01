@@ -26,9 +26,12 @@
  * transitively through each kept package's own production `dependencies` —
  * the automated version of the "KEEP IN SYNC" comment above that whitelist,
  * so a whitelisted package quietly gaining a new dependency doesn't produce
- * the same class of crash one layer down.
+ * the same class of crash one layer down. A package main reaches by file path
+ * instead of by require() (Code Mode's sandbox worker, VC-471) is named in
+ * PATH_REACHED_PACKAGES below and seeds that same walk; a chunk requiring one
+ * fails, because it is inlined on purpose.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { builtinModules } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -125,6 +128,36 @@ if (!keepSetEntry) {
 }
 const keepSet = new Set(keepSetEntry.match(/^!node_modules\/!\((.*)\)\/\*\*$/)[1].split("|"));
 
+// A kept SCOPE can be narrowed by a second entry of the same shape one level
+// down — `!node_modules/@trpc/!(server)/**` keeps @trpc/server and drops the
+// rest of @trpc. Read too, so a package that entry drops is not counted as
+// shipped merely because its scope is listed: `@earendil-works` is kept for
+// pi-codemode alone, and a chunk that came to require pi-ai must still fail.
+const SCOPE_NARROWING = /^!node_modules\/(@[^/]+)\/!\((.*)\)\/\*\*$/;
+const scopeKeeps = new Map(
+  filesEntries
+    .filter((entry) => typeof entry === "string" && SCOPE_NARROWING.test(entry))
+    .map((entry) => {
+      const [, scope, names] = entry.match(SCOPE_NARROWING);
+      return [scope, new Set(names.split("|"))];
+    }),
+);
+
+// Packages main reaches BY FILE PATH rather than by require(), mapped to why.
+// No chunk names them, so the scan below would never seed the transitive walk
+// from them — and the files they import at runtime are exactly what a pruned
+// tree would silently lack. Each must be kept by the whitelist, its own
+// production dependencies are walked like a required package's, and a chunk
+// that DOES require one fails: these are inlined on purpose (vite.config.ts),
+// and whitelisting a package for its files is what would otherwise let a
+// broken runtime require() of it pass this check.
+const PATH_REACHED_PACKAGES = new Map([
+  [
+    "@earendil-works/pi-codemode",
+    "Code Mode's sandbox worker (VC-471): main starts dist/runtime/worker.js from the unpacked tree, and the host half is bundled",
+  ],
+]);
+
 // Strips // and /* */ comments while leaving string/template contents intact,
 // so a JSDoc example like `* const keys = require('/path/to/key.json');`
 // (real text sitting in google-shared-*.cjs, copied in from google-auth-
@@ -182,8 +215,11 @@ function isRelativeSpecifier(specifier) {
 
 function isInKeepSet(packageName) {
   if (keepSet.has(packageName)) return true;
-  const scope = packageName.split("/")[0];
-  return packageName.startsWith("@") && keepSet.has(scope);
+  if (!packageName.startsWith("@")) return false;
+  const [scope, name] = packageName.split("/");
+  if (!keepSet.has(scope)) return false;
+  const narrowed = scopeKeeps.get(scope);
+  return narrowed === undefined || narrowed.has(name);
 }
 
 // Same candidate order Node's own CJS resolver tries for a relative
@@ -240,9 +276,28 @@ function resolvePackageDir(packageName, fromDir) {
       if (parent === dir) return null;
       dir = parent;
     }
-  } catch {
-    return null;
+  } catch (err) {
+    if (err?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return null;
+    return installedPackageDir(packageName, paths);
   }
+}
+
+// Last resort for an ESM-only package whose `exports` offers CommonJS nothing
+// at all — no `require` or `default` condition, no "./package.json" — so both
+// lookups above refuse it (pi-codemode is one). Find its directory the way
+// Node's own lookup walks: the nearest node_modules/<name> above each start.
+function installedPackageDir(packageName, paths) {
+  for (const start of paths) {
+    let dir = start;
+    while (true) {
+      const candidate = join(dir, "node_modules", packageName);
+      if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
 }
 
 function productionDependencyNames(packageDir) {
@@ -284,6 +339,13 @@ for (const chunkFile of chunkFiles) {
     const packageName = packageNameFromSpecifier(specifier);
     if (IGNORED_PACKAGES.has(packageName)) continue;
 
+    if (PATH_REACHED_PACKAGES.has(packageName)) {
+      violations.push(
+        `${chunkFile} → ${specifier} → package "${packageName}" must stay bundled: ${PATH_REACHED_PACKAGES.get(packageName)}`,
+      );
+      continue;
+    }
+
     if (isInKeepSet(packageName)) {
       externalPackages.add(packageName);
       directSeeds.add(packageName);
@@ -293,6 +355,26 @@ for (const chunkFile of chunkFiles) {
       );
     }
   }
+}
+
+// electron-builder collects what apps/desktop's own `dependencies` reach, so a
+// package no chunk requires ships only while it is declared there.
+const desktopDependencies = new Set(productionDependencyNames(DESKTOP_DIR));
+for (const [packageName, reason] of PATH_REACHED_PACKAGES) {
+  if (!isInKeepSet(packageName)) {
+    violations.push(
+      `${packageName} → not in electron-builder.yml whitelist, but reached by path: ${reason}`,
+    );
+    continue;
+  }
+  if (!desktopDependencies.has(packageName)) {
+    violations.push(
+      `${packageName} → not in apps/desktop's dependencies, so electron-builder will not collect it: ${reason}`,
+    );
+    continue;
+  }
+  externalPackages.add(packageName);
+  directSeeds.add(packageName);
 }
 
 // Transitive completeness: walk every kept, directly-required package's own

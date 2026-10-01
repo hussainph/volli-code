@@ -25,6 +25,10 @@
  * The one question a person can actually answer — whether a Session may
  * interrupt them to make room — is the one control left.
  *
+ * Code Mode is one switch too, with its per-model pins behind an Advanced
+ * disclosure (VC-471). It lives in its own file, `code-mode-settings.tsx`,
+ * and loads and saves its own policy — see that file for why.
+ *
  * Every control saves on change. A Save button earned its place when there was
  * one selection to compose; three purposes and a control per model would
  * make this pane a form, and a picker whose choice does not hold is a picker
@@ -57,6 +61,7 @@ import {
 } from "@volli/shared";
 
 import { ModelName } from "@renderer/components/models/model-identity";
+import { CodeModeSettings } from "@renderer/components/pages/code-mode-settings";
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
 import {
   refreshOutcome,
@@ -342,6 +347,16 @@ export function ModelAccessSettings({
           />
         </PrefRow>
       </PrefSection>
+      <CodeModeSettings
+        models={models}
+        providers={providers}
+        // A pin is offered for what the default pickers offer: models this
+        // profile can run, minus the ones curated out of every picker.
+        pickable={availableModelsByProvider(
+          offerable.filter((model) => !isModelHidden(hidden, model)),
+          providers,
+        )}
+      />
       {offerable.length > 0 ? (
         <CatalogSection
           offerable={offerable}

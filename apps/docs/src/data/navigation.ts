@@ -53,6 +53,7 @@ export const DOC_SECTIONS: DocSection[] = [
     label: "Configure Volli",
     items: [
       { label: "Models and usage", slug: "guides/models" },
+      { label: "Code Mode", slug: "guides/code-mode" },
       { label: "Skills and commands", slug: "guides/skills-and-commands" },
       { label: "MCP servers", slug: "guides/mcp-servers" },
       { label: "Agent authority", slug: "guides/authority" },

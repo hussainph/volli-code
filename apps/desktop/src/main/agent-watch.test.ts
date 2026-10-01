@@ -176,18 +176,38 @@ describe("watch", () => {
       "Watching VC-12, VC-14: a notice arrives on signals, comments, moves made by anyone but this Session",
     );
     expect(result.text).toContain("This call did not wait.");
+    // The same targets as data (VC-471), canonical as the door resolved them,
+    // so a program compares them with what it started.
+    expect(result.details).toEqual({
+      action: "watch",
+      sessions: ["aaaaaaaa"],
+      tickets: ["VC-12", "VC-14"],
+      ended: 0,
+    });
   });
 
   it("unwatches, and says when there was nothing to end", async () => {
     const h = harness();
-    expect((await h.call(watchTool, { tickets: "VC-12", action: "unwatch" })).text).toBe(
+    const ended = await h.call(watchTool, { tickets: "VC-12", action: "unwatch" });
+    expect(ended.text).toBe(
       "Stopped watching 2 targets. Nothing more about them will arrive here.",
     );
+    expect(ended.details).toEqual({
+      action: "unwatch",
+      sessions: [],
+      tickets: ["VC-12"],
+      ended: 2,
+    });
     const none = harness();
     none.watches.unwatch = () => 0;
-    expect((await none.call(watchTool, { sessions: "aaaaaaaa", action: "unwatch" })).text).toMatch(
-      /nothing changed/,
-    );
+    const nothing = await none.call(watchTool, { sessions: "aaaaaaaa", action: "unwatch" });
+    expect(nothing.text).toMatch(/nothing changed/);
+    expect(nothing.details).toEqual({
+      action: "unwatch",
+      sessions: ["aaaaaaaa"],
+      tickets: [],
+      ended: 0,
+    });
     const one = harness();
     one.watches.unwatch = () => 1;
     expect((await one.call(watchTool, { tickets: "VC-12", action: "unwatch" })).text).toMatch(
@@ -212,7 +232,10 @@ describe("watch", () => {
       [{ tickets: "VC-99" }, /No ticket VC-99/],
     ] as const;
     for (const [input, expected] of refusals) {
-      expect((await h.call(watchTool, input)).text).toMatch(expected);
+      const refused = await h.call(watchTool, input);
+      expect(refused.text).toMatch(expected);
+      // A refusal is prose alone: a program reads its absent details as "not armed".
+      expect(refused.details).toBeUndefined();
     }
     expect(h.sessions).toEqual([]);
     expect(h.tickets).toEqual([]);

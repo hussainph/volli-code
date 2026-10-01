@@ -1,40 +1,43 @@
 /**
- * The developer-only opt-in for Code Mode (VC-471, phase 1).
+ * Code Mode at a Session's birth, in main (VC-471).
  *
- * There is no product setting and no UI yet: phase 2 ships those only if the
- * owner accepts phase 1's numbers. Until then Code Mode is read from one
- * environment variable, and only by an unpackaged build, exactly as VC-454's
- * parallel MCP reads are. A packaged app ignores it, so a shipped Volli cannot
- * be talked into Code Mode by its environment.
+ * The product setting — one switch, a built-in mode per model, Advanced
+ * per-model pins — is the {@link CodeModePolicy} stored in app state and edited
+ * in Settings → Models. {@link desktopCodeMode} reads it when a Session is born
+ * and answers two questions for the surface resolver: is `codemode` offered,
+ * and what routes does the new Session freeze. A Session keeps what it was
+ * born with; changing the setting reaches only Sessions born after it.
+ *
+ * A developer can override the setting from an unpackaged build's environment,
+ * exactly as VC-454's parallel MCP reads are. A packaged app ignores the
+ * variable, so a shipped Volli cannot be talked into Code Mode by its
+ * environment.
  *
  * ```sh
- * VOLLI_DEV_CODE_MODE=1 pnpm dev
+ * VOLLI_DEV_CODE_MODE=1 pnpm dev                      # every model, mode `both`
  * VOLLI_DEV_CODE_MODE='{
+ *   "mode": "only",
  *   "mcp": { "<serverId>": "deferred" },
  *   "limits": { "maxNestedCalls": 100 }
  * }' pnpm dev
  * ```
  *
- * While it is set, every Session CREATED gets the `codemode` tool, its routes
- * and its limits frozen into its `tool-surface` record; `mcp` sets the route
- * of a server's tools (default `both`). A Session keeps what it was born with:
- * unsetting the variable stops new Sessions getting Code Mode and changes
- * nothing about Sessions that already have it, because their provider tool
- * array is part of their frozen Cache Prefix.
- *
- * Everything here is the developer's own statement, read from main's process
- * environment — never from the worktree a Session can edit.
+ * Everything here is the person's or developer's own statement, read from
+ * main's state or process environment — never from the worktree a Session
+ * can edit.
  */
-import { join } from "node:path";
-import { codeModeSandboxAssetsFrom, type CodeModeSandboxAssets } from "@volli/agent-runtime";
 import {
   CODE_MODE_LIMIT_BOUNDS,
-  CODE_MODE_TOOL_ID,
-  codeModeSurfaceFor,
+  codeModeBirth,
+  codeModeSurfaceAtBirth,
   DEFAULT_CODE_MODE_LIMITS,
+  isCodeModeMode,
   isToolRoute,
   MCP_SERVER_ID_MAX_CHARS,
+  type CodeModeBirth,
   type CodeModeLimits,
+  type CodeModeMode,
+  type CodeModePolicy,
   type CodeModeSurface,
   type McpToolDefinition,
   type SessionToolId,
@@ -44,7 +47,9 @@ import {
 export const CODE_MODE_DEV_ENV = "VOLLI_DEV_CODE_MODE";
 
 export interface CodeModeDevConfig {
-  /** A server's route, by server id; servers it does not name are `both`. */
+  /** The mode every model is born with while the variable is set. */
+  mode: CodeModeMode;
+  /** A server's route, by server id; servers it does not name follow the mode. */
   mcpRoutes: ReadonlyMap<string, ToolRoute>;
   limits: CodeModeLimits;
 }
@@ -62,12 +67,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readConfig(raw: string): CodeModeDevConfig {
   if (raw === "1" || raw === "on" || raw === "true") {
-    return { mcpRoutes: new Map(), limits: { ...DEFAULT_CODE_MODE_LIMITS } };
+    return { mode: "both", mcpRoutes: new Map(), limits: { ...DEFAULT_CODE_MODE_LIMITS } };
   }
   const parsed: unknown = JSON.parse(raw);
   if (!isRecord(parsed)) throw new Error("must be 1 or a JSON object");
   for (const key of Object.keys(parsed)) {
-    if (key !== "mcp" && key !== "limits") throw new Error(`unknown field "${key}"`);
+    if (key !== "mode" && key !== "mcp" && key !== "limits") {
+      throw new Error(`unknown field "${key}"`);
+    }
+  }
+  if (parsed.mode !== undefined && !isCodeModeMode(parsed.mode)) {
+    throw new Error("mode must be off, both or only");
   }
   const mcpRoutes = new Map<string, ToolRoute>();
   if (parsed.mcp !== undefined) {
@@ -97,7 +107,7 @@ function readConfig(raw: string): CodeModeDevConfig {
       limits[key as keyof CodeModeLimits] = value;
     }
   }
-  return { mcpRoutes, limits };
+  return { mode: parsed.mode ?? "both", mcpRoutes, limits };
 }
 
 export function readCodeModeDevConfig(
@@ -116,13 +126,24 @@ export function readCodeModeDevConfig(
   }
 }
 
+/** The model a Session is born on, as far as Code Mode reads it. */
+export interface CodeModeModel {
+  providerId: string;
+  modelId: string;
+}
+
 export interface DesktopCodeMode {
-  /** Whether new Sessions are offered `codemode`. */
-  readonly enabled: boolean;
+  /**
+   * What Code Mode gives a Session born on `model` with `mcpTools`: whether
+   * its surface names `codemode`, in which mode, and which servers are too
+   * large to declare. Read from the setting now, at birth.
+   */
+  birth(model: CodeModeModel | undefined, mcpTools: readonly McpToolDefinition[]): CodeModeBirth;
   /** The record a new Session's surface freezes, when that surface names `codemode`. */
   surfaceFor(
     tools: readonly SessionToolId[],
     mcpTools: readonly McpToolDefinition[],
+    model: CodeModeModel | undefined,
   ): CodeModeSurface | undefined;
 }
 
@@ -130,51 +151,35 @@ export function desktopCodeMode(options: {
   env: Readonly<Record<string, string | undefined>>;
   packaged: boolean;
   log: (message: string) => void;
+  /** The stored setting, read per birth so a change reaches the next Session. */
+  policy: () => CodeModePolicy;
 }): DesktopCodeMode {
   const read = readCodeModeDevConfig(options.env, { packaged: options.packaged });
   if (read.kind === "invalid") options.log(read.reason);
   const config = read.kind === "on" ? read.config : undefined;
+  // The developer's variable stands in for the setting while it is set: on,
+  // with its one mode for every model.
+  const policy = (model: CodeModeModel | undefined): CodeModePolicy =>
+    config === undefined
+      ? options.policy()
+      : {
+          enabled: true,
+          models:
+            model === undefined ? {} : { [`${model.providerId}/${model.modelId}`]: config.mode },
+        };
+  const birth = (
+    model: CodeModeModel | undefined,
+    mcpTools: readonly McpToolDefinition[],
+  ): CodeModeBirth => codeModeBirth({ policy: policy(model), model: model ?? null, mcpTools });
   return {
-    enabled: config !== undefined,
-    surfaceFor: (tools, mcpTools) => {
-      if (!tools.includes(CODE_MODE_TOOL_ID)) return undefined;
-      return codeModeSurfaceFor({
+    birth,
+    surfaceFor: (tools, mcpTools, model) =>
+      codeModeSurfaceAtBirth({
+        birth: birth(model, mcpTools),
         tools,
         mcpTools,
-        mcpRoute: (definition) => config?.mcpRoutes.get(definition.serverId),
         limits: config?.limits ?? DEFAULT_CODE_MODE_LIMITS,
-      });
-    },
+        mcpRoute: (definition) => config?.mcpRoutes.get(definition.serverId),
+      }),
   };
-}
-
-/**
- * Where an unpackaged build's Code Mode sandbox finds its worker and its
- * WebAssembly: the workspace's own installed copy of `@volli/agent-runtime`,
- * reached through the app directory's `node_modules`. Bundled into main, the
- * sandbox cannot find either beside itself.
- *
- * Answered for every unpackaged build, opt-in or not, so a Session born with
- * Code Mode keeps a working sandbox after the variable is unset. A packaged
- * build answers nothing: it offers Code Mode to no Session in phase 1, and a
- * Session that reaches it anyway gets a failed run rather than a crash.
- */
-export function codeModeSandboxFor(
-  unpackaged: boolean,
-  appPath: () => string,
-  log: (message: string) => void,
-): { codeModeSandbox?: CodeModeSandboxAssets } {
-  if (!unpackaged) return {};
-  try {
-    return {
-      codeModeSandbox: codeModeSandboxAssetsFrom(
-        join(appPath(), "node_modules", "@volli", "agent-runtime"),
-      ),
-    };
-  } catch (error) {
-    log(
-      `Code Mode's sandbox could not be located: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return {};
-  }
 }

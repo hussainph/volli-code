@@ -636,6 +636,30 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("routes the Code Mode policy over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const stored = { enabled: true, models: { "anthropic/claude-opus-4-5": "only" as const } };
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readCodeModePolicy: () => stored,
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.codeModePolicy", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: stored });
+    const saved = { enabled: false, models: { "openai-codex/gpt-5.5": "both" } };
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.setCodeModePolicy", input: saved }),
+    ).resolves.toEqual({ ok: true, data: saved });
+    expect(writes).toEqual([saved]);
+    await registration.close();
+  });
+
   it("routes the picker view over IPC", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];

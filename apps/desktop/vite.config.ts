@@ -45,10 +45,23 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // makes inlining safe here. Bundling it also spares this repo from tracking its
 // runtime tree (cross-spawn, zod, jose, eventsource, @modelcontextprotocol/core
 // …) in the electron-builder whitelist as that graph moves.
+//
+// Code Mode's sandbox (VC-471) is the one package here that is BOTH bundled
+// and shipped. apps/desktop declares `@earendil-works/pi-codemode` only so
+// electron-builder collects it: its worker file and the `quickjs-wasi`
+// WebAssembly it compiles are reached BY PATH at runtime and ship unpacked
+// (electron-builder.yml). The host half — `CodemodeSandbox`, imported by
+// @volli/agent-runtime — must stay inlined all the same, which is why it is
+// named here: a declared dependency is external by default, and the package
+// is ESM-only, exporting no `require` condition, so the `require()` main.cjs
+// would be left with fails at boot. `verify-packed-requires.mjs` fails the
+// build if a chunk ever requires it.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") ||
   id.startsWith("@opentelemetry/") ||
-  id.startsWith("@modelcontextprotocol/");
+  id.startsWith("@modelcontextprotocol/") ||
+  id === "@earendil-works/pi-codemode" ||
+  id.startsWith("@earendil-works/pi-codemode/");
 
 function sourceFilesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

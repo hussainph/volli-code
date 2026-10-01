@@ -109,12 +109,14 @@ describe("Sessions", () => {
         resolveMcp: () => [settingsTool],
         recorded: async () => ["read", parentTool.providerName],
         recordedMcp: async () => [parentTool],
-        record: async (sessionId, tools, mcpTools = [], parentSessionId) => {
+        record: async (sessionId, tools, mcpTools = [], birth) => {
           records.push({
             sessionId,
             tools,
             mcpTools,
-            ...(parentSessionId === undefined ? {} : { parentSessionId }),
+            ...(birth?.parentSessionId === undefined
+              ? {}
+              : { parentSessionId: birth.parentSessionId }),
           });
         },
       },
@@ -151,6 +153,32 @@ describe("Sessions", () => {
         parentSessionId: "parent-1",
       },
     ]);
+  });
+
+  it("hands the surface ports the model a Session is born on, for Code Mode's per-model mode (VC-471)", async () => {
+    const resolved: unknown[] = [];
+    const recorded: unknown[] = [];
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: (_role, _grants, _within, _mcpTools, model) => {
+          resolved.push(model);
+          return ["read"];
+        },
+        recorded: async () => null,
+        record: async (_sessionId, _tools, _mcpTools, birth) => {
+          recorded.push(birth);
+        },
+      },
+    });
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    expect(resolved).toEqual([MODEL]);
+    expect(recorded).toEqual([{ model: MODEL }]);
   });
 
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {

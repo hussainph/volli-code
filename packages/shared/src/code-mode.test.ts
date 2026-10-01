@@ -13,8 +13,10 @@ import {
   isListedRoute,
   isToolRoute,
   parseCodeModeSurface,
+  isCodeModeMode,
   routeOf,
   TOOL_ROUTES,
+  toolGroupOf,
   type CodeModeSurface,
 } from "./code-mode";
 import { mcpProviderToolName, type McpToolDefinition } from "./mcp";
@@ -128,6 +130,77 @@ describe("codeModeSurfaceFor", () => {
     expect(surface.limits).not.toBe(DEFAULT_CODE_MODE_LIMITS);
   });
 
+  it("routes whole groups under `only`, keeping a group with a direct-only member declared", () => {
+    const search = mcp("search");
+    const tools = [
+      "read",
+      "execute",
+      "web_fetch",
+      "browser_snapshot",
+      "browser_screenshot",
+      "ask_user",
+      "session.delegate",
+      "watch",
+      search.providerName,
+      "codemode",
+    ] as const;
+    const only = codeModeSurfaceFor({ tools, mcpTools: [search], mode: "only" });
+    expect(only.mode).toBe("only");
+    expect(only.routes).toEqual({
+      read: "code",
+      execute: "code",
+      web_fetch: "code",
+      // The Browser keeps its screenshot declared, so the whole group stays.
+      browser_snapshot: "both",
+      browser_screenshot: "direct",
+      ask_user: "direct",
+      // A Ticket Session's agent group is all callable, so it goes whole.
+      "session.delegate": "code",
+      watch: "code",
+      [search.providerName]: "code",
+    });
+    // In a Board Session the same verbs sit beside `session.stop`, which stays.
+    expect(
+      codeModeSurfaceFor({ tools: ["session.start", "session.stop", "codemode"], mode: "only" })
+        .routes,
+    ).toEqual({ "session.start": "both", "session.stop": "direct" });
+    const off = codeModeSurfaceFor({ tools, mcpTools: [search], mode: "off" });
+    expect(Object.values(off.routes).every((route) => route === "direct")).toBe(true);
+    expect(codeModeSurfaceFor({ tools, mode: "both" }).routes["read"]).toBe("both");
+    expect(codeModeSurfaceFor({ tools, mode: "both", nudge: true }).nudge).toBe(true);
+    expect(codeModeSurfaceFor({ tools, mode: "both", nudge: false })).not.toHaveProperty("nudge");
+  });
+
+  it("names a tool's capability group", () => {
+    expect(
+      [
+        "read",
+        "web_search",
+        "todo_write",
+        "shell_kill",
+        "browser_find",
+        "session.send",
+        "watch",
+        "automation.run",
+        "mcp.install",
+        "classify",
+      ].map((tool) => toolGroupOf(tool)),
+    ).toEqual([
+      "coding",
+      "web",
+      "conversation",
+      "shell",
+      "browser",
+      "agents",
+      "agents",
+      "agents",
+      "mcp-management",
+      "tool:classify",
+    ]);
+    expect(toolGroupOf(mcp("search").providerName, mcp("search"))).toBe("mcp:srv");
+    expect(toolGroupOf(mcp("search").providerName)).toBe(`mcp:${mcp("search").providerName}`);
+  });
+
   it("records limits a host chose", () => {
     const limits = { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 10 };
     expect(codeModeSurfaceFor({ tools: ["read"], limits }).limits.maxNestedCalls).toBe(10);
@@ -141,8 +214,15 @@ describe("parseCodeModeSurface", () => {
   };
   const tools = ["read", "write", "codemode"];
 
-  it("reads back a record that routes exactly its surface", () => {
+  it("reads back a record that routes exactly its surface, with its mode when it has one", () => {
     expect(parseCodeModeSurface(good, tools)).toEqual(good);
+    expect(parseCodeModeSurface({ ...good, mode: "only" }, tools)).toEqual({
+      ...good,
+      mode: "only",
+    });
+    expect(parseCodeModeSurface({ ...good, nudge: true }, tools)).toEqual({ ...good, nudge: true });
+    expect(isCodeModeMode("both")).toBe(true);
+    expect(isCodeModeMode("sometimes")).toBe(false);
   });
 
   it("refuses every way a record can be damaged", () => {
@@ -176,6 +256,15 @@ describe("parseCodeModeSurface", () => {
     expect(() =>
       parseCodeModeSurface({ ...good, limits: { ...good.limits, maxImages: 3 } }, tools),
     ).toThrow("codeMode.limits names a limit this build does not know");
+    expect(() => parseCodeModeSurface({ ...good, mode: "sometimes" }, tools)).toThrow(
+      "codeMode.mode is not a Code Mode mode",
+    );
+    expect(() => parseCodeModeSurface({ ...good, nudge: false }, tools)).toThrow(
+      "codeMode.nudge is true or absent",
+    );
+    expect(() => parseCodeModeSurface({ ...good, extra: 1 }, tools)).toThrow(
+      "codeMode.extra is not part of a Code Mode record",
+    );
   });
 });
 
@@ -190,6 +279,9 @@ describe("inheritCodeModeSurface", () => {
       limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 9 },
     });
     expect(inheritCodeModeSurface(parent, ["read"])).toBeUndefined();
+    expect(
+      inheritCodeModeSurface({ ...parent, mode: "both", nudge: true }, ["read", "codemode"]),
+    ).toMatchObject({ mode: "both", nudge: true });
   });
 });
 
