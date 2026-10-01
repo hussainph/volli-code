@@ -1,10 +1,13 @@
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -12379,6 +12382,40 @@ describe("Scoped Sessions (VC-45)", () => {
     writeFileSync(otherOutput, "other-session-output\n");
     return { attachment, userData, sessionDataDir, credentials, otherOutput };
   }
+
+  it("refuses Scoped attachment before building tools when a credential folder cannot be scanned", async () => {
+    const attachment = fixture();
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "volli-unreadable-credential-")));
+    const ssh = join(base, "dummy-home", ".ssh");
+    mkdirSync(ssh, { recursive: true });
+    const key = join(ssh, "id_ed25519");
+    writeFileSync(key, "dummy-credential-never-real");
+    const alias = join(attachment.worktreePath, "planted-credential");
+    linkSync(key, alias);
+    const executionEnvFactory = vi.fn();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: join(base, "sessions"),
+      hostCredentialPaths: [ssh],
+      executionEnvFactory,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    try {
+      chmodSync(ssh, 0o000);
+      await expect(
+        runtime.startSession({
+          ...attachment.spec,
+          capability: { containment: "scoped", writableRoots: [] },
+        }),
+      ).rejects.toThrow(
+        `Cannot scan folder "${ssh}" because permission was denied; refusing Scoped attachment.`,
+      );
+      expect(executionEnvFactory).not.toHaveBeenCalled();
+    } finally {
+      chmodSync(ssh, 0o700);
+      rmSync(alias, { force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 
   it("refuses mcp-credentials.json and another Session's saved output from read AND the shell's profile", async () => {
     const { attachment, userData, sessionDataDir, credentials, otherOutput } = layout();

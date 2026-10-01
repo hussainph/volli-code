@@ -344,28 +344,41 @@ const LINK_INDEX_BUDGET = 65_536;
 const ALIAS_INDEX_BUDGET = 250_000;
 const LINK_INDEX_TIMEOUT_MS = 5_000;
 
+/** Missing paths are harmless; incomplete scans must never yield an attachment policy. */
+function scanFailure(error: unknown, folder: string): void {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ENOENT" || code === "ENOTDIR") return;
+  if (code === "EACCES" || code === "EPERM") {
+    throw new Error(
+      `Cannot scan folder "${folder}" because permission was denied; refusing Scoped attachment.`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
 function fileIdentity(path: string): { identity: string; path: string } | undefined {
   try {
     const entry = lstatSync(path);
     if (!entry.isFile() || entry.nlink < 2) return undefined;
     return { identity: `${entry.dev}:${entry.ino}`, path };
-  } catch {
+  } catch (error) {
+    scanFailure(error, dirname(path));
     return undefined;
   }
 }
 
 /**
  * Walk once, without following symlinks or materializing a huge directory
- * listing. Overlapping roots are visited only once. Source permission errors
- * can be skipped: the user (and hence the sandbox) cannot read those files.
- * An unlistable granted root instead refuses attachment, as do exhausted entry
+ * listing. Overlapping roots are visited only once. An unreadable source can
+ * still have readable hard-link aliases, so it must refuse attachment too.
+ * An unlistable granted root refuses attachment, as do exhausted entry
  * and wall-clock bounds. No caller ever receives a partially scanned policy.
  */
 function walkLinkedFiles(
   roots: readonly string[],
   limit: number,
   deadline: number,
-  sources: boolean,
   found: (identity: string, path: string) => void,
 ): void {
   let remaining = limit;
@@ -386,14 +399,8 @@ function walkLinkedFiles(
     try {
       entry = lstatSync(path);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (
-        code === "ENOENT" ||
-        code === "ENOTDIR" ||
-        (sources && (code === "EACCES" || code === "EPERM"))
-      )
-        return;
-      throw error;
+      scanFailure(error, dirname(path));
+      return;
     }
     if (entry.isFile() && entry.nlink > 1) found(`${entry.dev}:${entry.ino}`, path);
     if (!entry.isDirectory()) return;
@@ -401,14 +408,15 @@ function walkLinkedFiles(
     try {
       directory = opendirSync(path);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (sources && (code === "EACCES" || code === "EPERM")) return;
-      throw error;
+      scanFailure(error, path);
+      return;
     }
     try {
       for (let child = directory.readSync(); child !== null; child = directory.readSync()) {
         visit(join(path, child.name));
       }
+    } catch (error) {
+      scanFailure(error, path);
     } finally {
       directory.closeSync();
     }
@@ -433,7 +441,7 @@ function linkedFilesIn(
   deadline: number,
 ): Record<string, string> {
   const linked: Record<string, string> = {};
-  walkLinkedFiles(roots, limit, deadline, true, (identity, path) => {
+  walkLinkedFiles(roots, limit, deadline, (identity, path) => {
     linked[identity] = path;
   });
   return linked;
@@ -449,7 +457,7 @@ function protectedAliases(
 ): { credentials: string[]; critical: string[] } {
   const aliases: { credentials: string[]; critical: string[] } = { credentials: [], critical: [] };
   if (Object.keys(credentials).length === 0 && Object.keys(critical).length === 0) return aliases;
-  walkLinkedFiles(roots, limit, deadline, false, (identity, path) => {
+  walkLinkedFiles(roots, limit, deadline, (identity, path) => {
     if (credentials[identity] !== undefined && path !== credentials[identity])
       aliases.credentials.push(path);
     if (critical[identity] !== undefined && path !== critical[identity])

@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -18,7 +20,7 @@ import {
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-const indexFault: { stat?: string; directory?: string; code?: string } = {};
+const indexFault: { stat?: string; directory?: string; read?: string; code?: string } = {};
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const fail = (path: unknown, expected: string | undefined) => {
@@ -33,7 +35,13 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     opendirSync: (...args: Parameters<typeof actual.opendirSync>) => {
       fail(args[0], indexFault.directory);
-      return actual.opendirSync(...args);
+      const directory = actual.opendirSync(...args);
+      const read = directory.readSync.bind(directory);
+      directory.readSync = () => {
+        fail(args[0], indexFault.read);
+        return read();
+      };
+      return directory;
     },
   };
 });
@@ -332,6 +340,74 @@ describe("resolveCapabilityPolicy", () => {
 });
 
 describe("hard-link index limits and all granted roots", () => {
+  it("refuses attachment when a planted credential's .ssh folder is unreadable", () => {
+    const base = scratch();
+    const home = join(base, "home");
+    const workspace = join(base, "workspace");
+    const ssh = join(home, ".ssh");
+    mkdirSync(ssh, { recursive: true });
+    mkdirSync(workspace);
+    const key = join(ssh, "id_ed25519");
+    writeFileSync(key, "dummy-credential-never-real");
+    linkSync(key, join(workspace, "planted"));
+    const input = {
+      workspacePath: workspace,
+      home,
+      xdgConfigHome: join(home, ".config"),
+      sandboxCarveOuts: true,
+    };
+    try {
+      // Positive control: the scan finds the planted alias when it can read .ssh.
+      expect(resolveCapabilityPolicy(input).credentialDeny).toContain(join(workspace, "planted"));
+      chmodSync(ssh, 0o000);
+      expect(() => resolveCapabilityPolicy(input)).toThrow(
+        `Cannot scan folder "${ssh}" because permission was denied; refusing Scoped attachment.`,
+      );
+    } finally {
+      chmodSync(ssh, 0o700);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["EACCES", "EPERM", "EIO"])("refuses critical-file stat failure %s", (code) => {
+    const base = scratch();
+    const db = join(base, "volli.db");
+    writeFileSync(db, "dummy-host-data");
+    indexFault.stat = db;
+    indexFault.code = code;
+    try {
+      expect(() =>
+        resolveCapabilityPolicy({
+          workspacePath: base,
+          home: join(base, "home"),
+          sandboxCarveOuts: true,
+          criticalHostDataPaths: [db],
+        }),
+      ).toThrow(code === "EIO" ? "index fault" : `Cannot scan folder "${base}"`);
+    } finally {
+      delete indexFault.stat;
+      delete indexFault.code;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("allows absent credential folders and critical files", () => {
+    const base = scratch();
+    try {
+      expect(() =>
+        resolveCapabilityPolicy({
+          workspacePath: base,
+          home: join(base, "missing-home"),
+          xdgConfigHome: join(base, "missing-config"),
+          sandboxCarveOuts: true,
+          criticalHostDataPaths: [join(base, "missing-db")],
+        }),
+      ).not.toThrow();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("refuses an incomplete alias walk at its entry or time limit", () => {
     const base = scratch();
     const workspace = join(base, "workspace");
@@ -350,7 +426,7 @@ describe("hard-link index limits and all granted roots", () => {
     );
   });
 
-  it.each(["stat", "directory"] as const)(
+  it.each(["stat", "directory", "read"] as const)(
     "handles %s errors without silently skipping an unscannable writable root",
     (operation) => {
       const base = scratch();
@@ -371,26 +447,24 @@ describe("hard-link index limits and all granted roots", () => {
       try {
         for (const code of ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EIO"]) {
           indexFault.code = code;
-          indexFault[operation] = source;
-          if (
-            code === "EACCES" ||
-            code === "EPERM" ||
-            (operation === "stat" && (code === "ENOENT" || code === "ENOTDIR"))
-          ) {
-            expect(() => resolveCapabilityPolicy(input)).not.toThrow();
-          } else {
-            expect(() => resolveCapabilityPolicy(input)).toThrow("index fault");
-          }
-          indexFault[operation] = workspace;
-          if (operation === "stat" && (code === "ENOENT" || code === "ENOTDIR")) {
-            expect(() => resolveCapabilityPolicy(input)).not.toThrow();
-          } else {
-            expect(() => resolveCapabilityPolicy(input)).toThrow("index fault");
+          for (const path of [source, workspace]) {
+            indexFault[operation] = path;
+            if (code === "ENOENT" || code === "ENOTDIR") {
+              expect(() => resolveCapabilityPolicy(input)).not.toThrow();
+            } else {
+              const folder = operation === "stat" ? join(path, "..") : path;
+              expect(() => resolveCapabilityPolicy(input)).toThrow(
+                code === "EACCES" || code === "EPERM"
+                  ? `Cannot scan folder "${folder}" because permission was denied; refusing Scoped attachment.`
+                  : "index fault",
+              );
+            }
           }
         }
       } finally {
         delete indexFault.stat;
         delete indexFault.directory;
+        delete indexFault.read;
         delete indexFault.code;
       }
     },
