@@ -1033,7 +1033,7 @@ describe("results", () => {
 
   it("says when a run made no calls and returned nothing", async () => {
     const f = fixture({ tools: [textTool("echo", () => "hi")] });
-    expect((await run(f, "1;")).text).toBe("Program completed in 0.0 s · no calls.");
+    expect((await run(f, "1;")).text).toMatch(/^Program completed in \d+\.\d s · no calls\.$/u);
   });
 
   it("bounds the nested call record it keeps", async () => {
