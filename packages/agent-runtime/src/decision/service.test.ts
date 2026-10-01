@@ -531,6 +531,44 @@ describe("bounds", () => {
     expect(await second).toMatchObject({ miss: { reason: "timeout" } });
   });
 
+  it("does not free a slot twice when a call settles after the cap already freed it", async () => {
+    vi.useFakeTimers();
+    const settle: Array<() => void> = [];
+    const slow: DecisionClassifier = {
+      classify: (target, request, options) => {
+        return new Promise((resolve) =>
+          settle.push(() => {
+            resolve(piDecisionClassifier(fixtureModels()).classify(target, request, options));
+          }),
+        );
+      },
+    };
+    const { decisions } = service({
+      classifier: slow,
+      maxConcurrent: 1,
+      slotGraceMs: 100,
+      policyFor: withPolicy({ timeoutMs: 100 }),
+    });
+    const first = ask(decisions);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await first).toMatchObject({ miss: { reason: "timeout" } });
+    // The cap freed the slot; the first call then settles late.
+    const second = ask(decisions);
+    await vi.advanceTimersByTimeAsync(0);
+    settle[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    // A double release would have let a third call start beside the second.
+    const third = ask(decisions);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settle).toHaveLength(2);
+    settle[1]!();
+    await vi.advanceTimersByTimeAsync(0);
+    settle[2]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect("answered" in (await second)).toBe(true);
+    expect("answered" in (await third)).toBe(true);
+  });
+
   it("frees the slot when a call the caller gave up on finally settles", async () => {
     vi.useFakeTimers();
     const settle: Array<() => void> = [];
@@ -713,6 +751,16 @@ describe("audit", () => {
       },
     });
     expect(await ask(sync.decisions)).toMatchObject({ miss: { reason: "unaudited" } });
+  });
+
+  it("falls back as unaudited when the record of a miss cannot be written either", async () => {
+    const { decisions, failures } = service({
+      policyFor: audited,
+      resolveSetting: () => ({ ...CLOUD, modelId: "retired" }),
+      recordDecision: () => Promise.reject(new Error("disk full")),
+    });
+    expect(await ask(decisions)).toMatchObject({ miss: { reason: "unaudited" } });
+    expect(failures).toHaveLength(1);
   });
 
   it("does not let a hung audit write hold the caller", async () => {
