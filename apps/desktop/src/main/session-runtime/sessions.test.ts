@@ -2041,6 +2041,170 @@ describe("a decision model's choice of model, at birth (VC-432)", () => {
     }
   });
 
+  it("holds concurrent attach until model, skills, grants and tools finish birth", async () => {
+    const answer = Promise.withResolvers<void>();
+    const deciding = Promise.withResolvers<void>();
+    const surface = Promise.withResolvers<void>();
+    const recording = Promise.withResolvers<void>();
+    const order: string[] = [];
+    let anchor: Awaited<ReturnType<SessionsOptions["readModelAnchor"]>> = FRESH;
+    const { port } = pick({
+      decide: async () => {
+        deciding.resolve();
+        await answer.promise;
+        return { selection: DEEP, auto: AUTO };
+      },
+    });
+    const { sessions: door } = born({
+      readDefaultModel: tiers,
+      readModelAnchor: async () => anchor,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+      skills: {
+        ...NO_SKILLS,
+        index: async () => ({ name: "index", text: "skills" }),
+        record: async () => {
+          order.push("skills");
+        },
+      },
+      grants: {
+        ...NO_GRANTS,
+        recordBirth: () => {
+          order.push("grants");
+        },
+      },
+      toolSurface: {
+        ...CODING_AND_ASK,
+        record: async () => {
+          recording.resolve();
+          await surface.promise;
+          order.push("tools");
+        },
+      },
+      runtime: {
+        command: async (request) => {
+          if (request.command.kind === "model.select") {
+            anchor = { selection: request.command.selection, tier: null };
+            order.push("model");
+          }
+          if (request.command.kind === "adapter.attach") order.push("attach");
+          return result(request);
+        },
+      },
+    });
+    const birth = door.create({ ...startInput("operation-race"), autoSelect: { request: "x" } });
+    await deciding.promise;
+    const attached = door.attach({ operationId: "concurrent-attach", sessionId: "session-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual([]);
+    answer.resolve();
+    await recording.promise;
+    expect(order).toEqual(["model", "skills", "grants"]);
+    surface.resolve();
+    await Promise.all([birth, attached]);
+    expect(order).toEqual(["model", "skills", "grants", "tools", "attach"]);
+    expect(anchor.selection).toEqual(DEEP);
+  });
+
+  it("guards the durable-create publication window before the Session id is returned", async () => {
+    const creating = Promise.withResolvers<void>();
+    const created = Promise.withResolvers<void>();
+    const readModelAnchor = vi.fn(async () => ({ selection: MODEL, tier: null }));
+    const { sessions: door } = sessions({
+      readModelAnchor,
+      runtime: {
+        command: async (request) => {
+          if (request.command.kind === "session.create") {
+            creating.resolve();
+            await created.promise;
+          }
+          return result(request);
+        },
+      },
+    });
+    const birth = door.create(startInput("operation-publishing"));
+    await creating.promise;
+    const attach = door.attach({ sessionId: "session-1", operationId: "publishing-attach" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readModelAnchor).not.toHaveBeenCalled();
+    created.resolve();
+    await Promise.all([birth, attach]);
+    expect(readModelAnchor).toHaveBeenCalledOnce();
+  });
+
+  it("does not hold another Session behind a deciding birth", async () => {
+    const deciding = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<void>();
+    const { port } = pick({
+      decide: async () => {
+        deciding.resolve();
+        await answer.promise;
+        return { selection: DEEP, auto: AUTO };
+      },
+    });
+    const { sessions: door, commands } = sessions({
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+    });
+    const birth = door.create({ ...startInput("operation-other"), autoSelect: { request: "x" } });
+    await deciding.promise;
+    await door.attach({ sessionId: "other-session", operationId: "other-attach" });
+    expect(commands.at(-1)?.command.kind).toBe("adapter.attach");
+    answer.resolve();
+    await birth;
+  });
+
+  it("an incomplete birth is not legacy, and a successful retry releases its latch", async () => {
+    let fail = true;
+    const { sessions: door, commands } = born({
+      toolSurface: {
+        ...CODING_AND_ASK,
+        record: async () => {
+          if (fail) throw new Error("surface write failed");
+        },
+      },
+    });
+    const input = startInput("operation-incomplete");
+    await expect(door.create(input)).rejects.toThrow("surface write failed");
+    await expect(door.attach({ sessionId: "session-1", operationId: "too-early" })).rejects.toThrow(
+      "surface write failed",
+    );
+    expect(commands.some((command) => command.command.kind === "adapter.attach")).toBe(false);
+    fail = false;
+    await door.create(input);
+    await expect(
+      door.attach({ sessionId: "session-1", operationId: "after-retry" }),
+    ).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("never reclassifies a completed birth when its history read fails", async () => {
+    const { asked, port } = pick();
+    const commands: SessionRuntimeCommandRequest[] = [];
+    let historyFails = false;
+    const { sessions: door } = born({
+      commands,
+      readDefaultModel: tiers,
+      inspectModelAccess: async () => access,
+      autoSelect: port,
+      readBirthModel: async () => {
+        if (historyFails) throw new Error("history unavailable");
+        return null;
+      },
+      readBirthModelFromLedger: async (_sessionId, commandId) => {
+        const intent = commands.find((command) => command.commandId === commandId)?.command;
+        return intent?.kind === "model.select"
+          ? { selection: intent.selection, tier: intent.tier ?? null, auto: intent.auto }
+          : null;
+      },
+    });
+    const input = { ...startInput("operation-history-failure"), autoSelect: { request: "x" } };
+    const first = await door.create(input);
+    historyFails = true;
+    await expect(door.create(input)).resolves.toEqual(first);
+    expect(asked).toHaveLength(1);
+  });
+
   it("lets concurrent replays of one operation share one decision", async () => {
     const { asked, port } = pick();
     const { sessions: door } = born({

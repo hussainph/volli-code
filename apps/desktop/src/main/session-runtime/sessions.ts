@@ -481,6 +481,8 @@ export interface Sessions {
    * is no wrong namespace left to catch.
    */
   attach(input: SessionAttachInput): Promise<SessionStartResult>;
+  /** Also guards runtime-context backfill when attachment bypasses this facade. */
+  waitForBirth?(sessionId: string): Promise<void>;
 }
 
 export interface SessionAttachInput {
@@ -550,6 +552,8 @@ export interface SessionsOptions {
     sessionId: string,
     commandId: string,
   ): Promise<{ selection: ModelSelection; tier: ModelTier | null; auto?: ModelAutoPick } | null>;
+  /** Canonical command history, independent of the current projection. */
+  readBirthModelFromLedger?: SessionsOptions["readBirthModel"];
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
   /** Durable per-Session grants and ancestry, resolved and recorded at birth (VC-183, VC-9). */
@@ -792,8 +796,31 @@ async function runnableSelections(
 
 /** Product-owned Session start commands over private adapter migration scaffolding. */
 export function createSessions(options: SessionsOptions): Sessions {
-  /** Birth choices in flight through their durable write, so concurrent replays agree. */
-  const autoBirths = new Map<string, Promise<ModelSelection>>();
+  // Publish the id before any birth writes, and release only after ALL of
+  // them. A failed birth stays latched: it is incomplete, not a legacy Session.
+  const births = new Map<
+    string,
+    {
+      sessionId: string | null;
+      failed: boolean;
+      published: ReturnType<typeof Promise.withResolvers<void>>;
+      complete: Promise<SessionCreateResult & { model: ModelSelection }>;
+    }
+  >();
+  const sessionBirths = new Map<string, Promise<SessionCreateResult & { model: ModelSelection }>>();
+  async function waitForBirth(sessionId: string): Promise<void> {
+    const known = sessionBirths.get(sessionId);
+    if (known !== undefined) {
+      await known;
+      return;
+    }
+    // Snapshot: a different birth added while we wait must not hold this attach.
+    const pending = [...births.values()];
+    for (const birth of pending) {
+      await birth.published.promise;
+      if (birth.sessionId === sessionId) await birth.complete;
+    }
+  }
   /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
   async function mint(
     input: SessionStartInput,
@@ -884,105 +911,144 @@ export function createSessions(options: SessionsOptions): Sessions {
       mcpTools,
       classify,
     );
-    const created = await options.runtime.command({
-      commandId: sessionCreateCommandId(input.operationId),
-      command: {
-        kind: "session.create",
-        projectId: input.projectId,
-        ticketId: input.ticketId,
-        role,
-        parentSessionId: input.parentSessionId ?? null,
-        title: input.title,
-        // The client-minted id rides only this intent (VC-358); a legacy
-        // caller that names none omits the key entirely, so its durable
-        // create intent is byte-identical to what it always wrote.
-        ...(input.requestedSessionId === undefined
-          ? {}
-          : { requestedSessionId: input.requestedSessionId }),
-      },
-    });
-    // The Session now exists durably, so planner history says so — whatever
-    // the model record or a later attach do next, the app carries the recovery.
-    if (input.ticketId !== null) {
-      options.recordSessionStarted?.({
-        ticketId: input.ticketId,
-        sessionId: created.sessionId,
-        actor: input.actor ?? { kind: "user" },
+    const createIdentity = () =>
+      options.runtime.command({
+        commandId: sessionCreateCommandId(input.operationId),
+        command: {
+          kind: "session.create",
+          projectId: input.projectId,
+          ticketId: input.ticketId,
+          role,
+          parentSessionId: input.parentSessionId ?? null,
+          title: input.title,
+          // Keep legacy intent byte-identical when the caller names no id.
+          ...(input.requestedSessionId === undefined
+            ? {}
+            : { requestedSessionId: input.requestedSessionId }),
+        },
       });
+    const existing = births.get(input.operationId);
+    if (existing !== undefined && !existing.failed) {
+      // Still validate create intent: coalescing cannot bless a reused command
+      // id whose project, title or requested Session differs.
+      await createIdentity();
+      return existing.complete;
     }
-    // The tier the override named rides beside the resolved model (VC-259):
-    // provenance for the pin, so the Session header and `session list` can say
-    // "Fast · <model>". It is the RESOLVED override's tier, not the caller's,
-    // so a subagent that inherited a rung records the rung it inherited — both
-    // for the header and because that is what its own children read next
-    // (VC-431).
-    //
-    // VC-432: a start that named nothing may have its model chosen by the
-    // decision model, once, here at birth. The configured default resolved
-    // above IS the fallback, so every miss lands exactly where a start with no
-    // decision model would have. A pick that is the default itself keeps the
-    // default's tier provenance; any other pick is an exact model.
-    //
-    // A replayed start finds its Session already carrying a model, and states
-    // that same record again: the engine refuses a replay whose intent
-    // differs, and a second decision (or a miss) is exactly such a difference.
-    // The record is read back only for a start that offered a request, and
-    // best-effort: a start that cannot read its own Session back is a start
-    // with nothing replayed, never one that fails over a refinement.
-    const offered = autoSelectOffered(options, input);
-    const recordBirthModel = async (): Promise<ModelSelection> => {
-      const modelCommandId = `${input.operationId}:model`;
-      const birth =
-        offered && options.readBirthModel !== undefined
-          ? await options.readBirthModel(created.sessionId, modelCommandId).catch(() => null)
-          : null;
-      const picked =
-        birth === null
-          ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
-          : null;
-      const chosen = birth?.selection ?? picked?.selection ?? model;
-      const auto = birth === null ? picked?.auto : birth.auto;
-      const tier =
-        birth !== null
-          ? (birth.tier ?? undefined)
-          : picked !== null && !sameSelection(picked.selection, model)
-            ? undefined
-            : override?.tier;
-      await recordModelSelection(options.runtime, {
-        commandId: modelCommandId,
-        sessionId: created.sessionId,
-        model: chosen,
-        ...(tier === undefined ? {} : { tier }),
-        ...(auto === undefined ? {} : { auto }),
-      });
-      return chosen;
+    const published = Promise.withResolvers<void>();
+    const birthLatch = {
+      sessionId: null as string | null,
+      failed: false,
+      published,
+      complete: Promise.resolve().then(finishBirth),
     };
-    // Share the read, decision AND write. Releasing at decision completion
-    // leaves a window where a replay sees no record and asks a second time.
-    let choosing = offered ? autoBirths.get(input.operationId) : undefined;
-    if (choosing === undefined) {
-      choosing = recordBirthModel().finally(() => autoBirths.delete(input.operationId));
-      if (offered) autoBirths.set(input.operationId, choosing);
+    births.set(input.operationId, birthLatch);
+    return birthLatch.complete;
+
+    async function finishBirth(): Promise<SessionCreateResult & { model: ModelSelection }> {
+      try {
+        const created = await createIdentity();
+        birthLatch.sessionId = created.sessionId;
+        sessionBirths.set(created.sessionId, birthLatch.complete);
+        published.resolve();
+        // The Session now exists durably, so planner history says so — whatever
+        // the model record or a later attach do next, the app carries the recovery.
+        if (input.ticketId !== null) {
+          options.recordSessionStarted?.({
+            ticketId: input.ticketId,
+            sessionId: created.sessionId,
+            actor: input.actor ?? { kind: "user" },
+          });
+        }
+        // The tier the override named rides beside the resolved model (VC-259):
+        // provenance for the pin, so the Session header and `session list` can say
+        // "Fast · <model>". It is the RESOLVED override's tier, not the caller's,
+        // so a subagent that inherited a rung records the rung it inherited — both
+        // for the header and because that is what its own children read next
+        // (VC-431).
+        //
+        // VC-432: a start that named nothing may have its model chosen by the
+        // decision model, once, here at birth. The configured default resolved
+        // above IS the fallback, so every miss lands exactly where a start with no
+        // decision model would have. A pick that is the default itself keeps the
+        // default's tier provenance; any other pick is an exact model.
+        //
+        // A replayed start finds its Session already carrying a model, and states
+        // that same record again: the engine refuses a replay whose intent
+        // differs, and a second decision (or a miss) is exactly such a difference.
+        // Unavailable history is NOT empty history. Recover the original command
+        // from the canonical ledger; if both reads fail, do not ask again.
+        const offered = autoSelectOffered(options, input);
+        const recordBirthModel = async (): Promise<ModelSelection> => {
+          const modelCommandId = `${input.operationId}:model`;
+          let historyAvailable = true;
+          const read = options.readBirthModel ?? options.readBirthModelFromLedger;
+          const birth =
+            offered && read !== undefined
+              ? await read(created.sessionId, modelCommandId).catch(async () => {
+                  if (options.readBirthModelFromLedger !== undefined) {
+                    try {
+                      return await options.readBirthModelFromLedger(
+                        created.sessionId,
+                        modelCommandId,
+                      );
+                    } catch {
+                      /* No history means no second inference. */
+                    }
+                  }
+                  historyAvailable = false;
+                  return null;
+                })
+              : null;
+          const picked =
+            birth === null && historyAvailable
+              ? await autoSelectModel(options, input, model, parentAnchor, created.sessionId)
+              : null;
+          const chosen = birth?.selection ?? picked?.selection ?? model;
+          const auto = birth === null ? picked?.auto : birth.auto;
+          const tier =
+            birth !== null
+              ? (birth.tier ?? undefined)
+              : picked !== null && !sameSelection(picked.selection, model)
+                ? undefined
+                : override?.tier;
+          await recordModelSelection(options.runtime, {
+            commandId: modelCommandId,
+            sessionId: created.sessionId,
+            model: chosen,
+            ...(tier === undefined ? {} : { tier }),
+            ...(auto === undefined ? {} : { auto }),
+          });
+          return chosen;
+        };
+        const chosen = await recordBirthModel();
+        // Durable inside MINT, not beside the attach: VC-16 split the start so a
+        // chat can open optimistically — `create` lands the tab and `attach`
+        // follows separately — and the record has to exist before whichever
+        // attach eventually composes the system prompt from it. The grant reaches
+        // the store first: a tool surface without its scope would be a capability
+        // that the door could not honestly bound.
+        if (resources.length > 0) await options.skills.record(created.sessionId, resources);
+        options.grants.recordBirth(created.sessionId, grants);
+        await options.toolSurface.record(
+          created.sessionId,
+          toolSurface,
+          mcpTools,
+          ...(input.parentSessionId === undefined ? [] : [input.parentSessionId]),
+        );
+        births.delete(input.operationId);
+        sessionBirths.delete(created.sessionId);
+        return { sessionId: created.sessionId, model: chosen };
+      } catch (error) {
+        birthLatch.failed = true;
+        throw error;
+      } finally {
+        published.resolve();
+      }
     }
-    const chosen = await choosing;
-    // Durable inside MINT, not beside the attach: VC-16 split the start so a
-    // chat can open optimistically — `create` lands the tab and `attach`
-    // follows separately — and the record has to exist before whichever
-    // attach eventually composes the system prompt from it. The grant reaches
-    // the store first: a tool surface without its scope would be a capability
-    // that the door could not honestly bound.
-    if (resources.length > 0) await options.skills.record(created.sessionId, resources);
-    options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(
-      created.sessionId,
-      toolSurface,
-      mcpTools,
-      ...(input.parentSessionId === undefined ? [] : [input.parentSessionId]),
-    );
-    return { sessionId: created.sessionId, model: chosen };
   }
 
   return {
+    waitForBirth,
     async create(input) {
       const created = await mint(input);
       return { sessionId: created.sessionId, model: created.model };
@@ -999,6 +1065,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     },
 
     async attach(input) {
+      await waitForBirth(input.sessionId);
       // One rule for every Session: nothing recorded gets the default recorded
       // at attach. Only a Session born before the model policy existed can
       // reach the branch in real data — every mint above records at birth — so

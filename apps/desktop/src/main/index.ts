@@ -1615,6 +1615,7 @@ app.whenReady().then(async () => {
           // recorded once before the first runtime construction; every later
           // attach reuses those exact bytes.
           resolveRuntimeContext: async (sessionId) => {
+            await sessions?.waitForBirth?.(sessionId);
             if (sessionEngine === null) return null;
             const projection = await sessionEngine.getSession({ sessionId });
             const attaching = projection?.session;
@@ -1996,6 +1997,23 @@ app.whenReady().then(async () => {
           readBirthModel: async (sessionId, commandId) => {
             const { projection } = await sessionRuntime.projection({ sessionId });
             const intent = projection.commands?.find((command) => command.id === commandId)?.intent;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
+          readBirthModelFromLedger: async (sessionId, commandId) => {
+            const events = await sessionEngine!.listEvents({ sessionId });
+            const recorded = events.find(
+              (event) =>
+                event.payload.kind === "command.recorded" && event.payload.command.id === commandId,
+            );
+            const intent =
+              recorded?.payload.kind === "command.recorded"
+                ? recorded.payload.command.intent
+                : null;
             if (intent?.kind !== "model.select") return null;
             return {
               selection: intent.selection,
