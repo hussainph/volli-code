@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
@@ -22,13 +23,20 @@ beforeEach(() => {
   held.catalogue = { models: [model], providers: [] };
 });
 
+function expectModelMark(markup: string): void {
+  const container = document.createElement("div");
+  container.innerHTML = markup;
+  const caption = container.querySelector('[data-slot="model-name"]');
+  expect(caption).not.toBeNull();
+  expect(caption?.parentElement?.querySelector(":scope > svg[aria-hidden] path")).not.toBeNull();
+}
+
 describe("ResolvedModelName", () => {
   it("names a durable selection from the whole catalogue, even if unavailable", () => {
     const markup = renderToStaticMarkup(<ResolvedModelName selection={selection} />);
     expect(markup).toContain("Claude Opus 4.1");
     expect(markup).not.toContain("claude-opus-4-1");
-    expect(markup).toContain("<svg");
-    expect(markup).toContain('aria-hidden="true"');
+    expectModelMark(markup);
   });
 
   it("disambiguates the same name offered through two providers", () => {
@@ -90,7 +98,7 @@ describe("ResolvedModelName", () => {
     expect(markup).toContain("claude-opus-4-1");
     expect(markup).toContain("· Anthropic");
     expect(markup).toContain("· High effort");
-    expect(markup).toContain("<svg");
+    expectModelMark(markup);
     const emptyProvider = renderToStaticMarkup(
       <ResolvedModelName selection={selection} providerLabel="" />,
     );
@@ -114,7 +122,7 @@ describe("ResolvedModelName", () => {
     expect(markup).not.toContain("claude-opus-4-1");
     expect(markup).toContain("Reasoning effort:");
     expect(markup).toContain("Extra high");
-    expect(markup).toContain("<svg");
+    expectModelMark(markup);
     expect(
       renderToStaticMarkup(
         <AgentModelLine

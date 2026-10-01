@@ -17,6 +17,7 @@ import type { ModelAccessModel, ModelAccessProvider, ModelSelection, Project } f
 
 import { ProjectDecisionModelRow } from "@renderer/components/pages/decision-model-settings";
 import {
+  availableModelsByProvider,
   offerableModels,
   preferredReasoning,
 } from "@renderer/components/pages/model-access-settings";
@@ -32,7 +33,9 @@ import { MODELS_CATEGORY_KEY } from "@renderer/components/settings/settings-grou
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
@@ -189,14 +192,19 @@ export function SessionsPane({ project }: { project: Project }) {
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableModels.map((availableModel) => (
-                    <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
-                      <ModelName
-                        model={availableModel}
-                        models={availableModels}
-                        providers={providers}
-                      />
-                    </SelectItem>
+                  {availableModelsByProvider(availableModels, providers).map((group) => (
+                    <SelectGroup key={group.providerId}>
+                      <SelectLabel>{group.providerLabel}</SelectLabel>
+                      {group.models.map((availableModel) => (
+                        <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
+                          <ModelName
+                            model={availableModel}
+                            models={availableModels}
+                            providers={providers}
+                          />
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
