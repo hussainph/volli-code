@@ -368,7 +368,7 @@ export class AuthorityEscalation {
     if (hits.length > 0) {
       decided(
         "policy:ledger",
-        found[0]?.rule ?? verdict.cause,
+        found[0].rule,
         hits.map((hit) => hit.summary).join("; "),
         hits[0].approvalId,
       );
