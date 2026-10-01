@@ -215,6 +215,69 @@ export type VerbToolField = {
   | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
 );
 
+/** One scalar field of a verb result's `details`, as JSON Schema. */
+export type VerbResultScalarSchema =
+  | {
+      readonly type: "string";
+      readonly description: string;
+      /** The closed set of values, when there is one. */
+      readonly enum?: readonly string[];
+    }
+  | { readonly type: "number"; readonly description: string }
+  | { readonly type: "boolean"; readonly description: string };
+
+/**
+ * One field of a verb result's `details`: a scalar, a list of strings, or a
+ * flat object of scalars — the same three shapes
+ * `RuntimeVerbResult.details` can carry, and nothing deeper.
+ */
+export type VerbResultFieldSchema =
+  | VerbResultScalarSchema
+  | {
+      readonly type: "array";
+      readonly description: string;
+      readonly items: { readonly type: "string" };
+    }
+  | {
+      readonly type: "object";
+      readonly description: string;
+      readonly properties: Readonly<Record<string, VerbResultScalarSchema>>;
+      readonly required: readonly string[];
+      readonly additionalProperties: false;
+    };
+
+/**
+ * What a verb's result carries as data beside its prose (VC-471), as a plain
+ * JSON Schema.
+ *
+ * A model calling a verb directly reads its `text`. A Code Mode program calls
+ * the same verb as `await tools.session_start(…)` and gets `{ text, details }`
+ * back, and a program that parses the prose for a handle is a program that
+ * breaks — measured: a fan-out read the wrong handle out of `session_start`'s
+ * sentence three runs in five. So a verb whose answer a program needs to act
+ * on declares that answer here, and Code Mode renders it into the TypeScript
+ * the model writes against.
+ *
+ * A plain JSON Schema object rather than a {@link VerbToolField} list because
+ * it is rendered, not compiled: the renderer reads `type`, `properties`,
+ * `required`, `enum` and each property's `description`, and nothing else.
+ * Kept closed and shallow on purpose — the vocabulary is exactly what
+ * `RuntimeVerbResult.details` may hold, so a host cannot be asked to return a
+ * shape its result type cannot carry. Every key is required and no other key
+ * is allowed, so a program can rely on what it reads. Descriptions are the
+ * only documentation a program's author sees.
+ *
+ * Describes a result the verb DID something with. A refusal is a result with
+ * `text` alone, and Code Mode says so beside the type.
+ */
+export interface VerbResultDetailsSchema {
+  readonly type: "object";
+  readonly description: string;
+  readonly properties: Readonly<Record<string, VerbResultFieldSchema>>;
+  readonly required: readonly string[];
+  readonly additionalProperties: false;
+}
+
 /**
  * How one verb is projected onto the Agent Tool Surface (VC-162).
  *
@@ -242,6 +305,12 @@ export interface VerbToolProjection {
   readonly description: string;
   /** The tool's input, semantically. Empty means a tool that takes nothing. */
   readonly input: readonly VerbToolField[];
+  /**
+   * The `details` a successful call returns, for a verb whose answer a program
+   * acts on (VC-471). Absent means the verb's details are unspecified: the
+   * host may still send some, and a program is told nothing about them.
+   */
+  readonly resultDetails?: VerbResultDetailsSchema;
 }
 
 /** One agent-facing verb. Pure data; see the module comment for what is not here. */
@@ -352,6 +421,49 @@ function modelTierDescription(subject: string): string {
 
 const MODEL_TIER_DESCRIPTION = modelTierDescription("the Session");
 const DELEGATE_MODEL_TIER_DESCRIPTION = modelTierDescription("the subagent");
+
+/**
+ * The Session a start or a delegation opened, as a program reads it (VC-471).
+ *
+ * One field set for both verbs, so a program that fans out with either reads
+ * the same keys. `handle` is the id every other Volli door takes back.
+ * `sessionId` is kept because the transcript row links a delegation by it, and
+ * its description steers a program to `handle` instead.
+ */
+const OPENED_SESSION_FIELDS = {
+  sessionId: {
+    type: "string",
+    description:
+      "The Session's full id: unique, but not what other tools take — pass `handle` to them.",
+  },
+  handle: {
+    type: "string",
+    description:
+      "Its short session id, the one watch, session_send, session_stop and `volli session` commands accept.",
+  },
+  title: { type: "string", description: "The Session's title." },
+  model: {
+    type: "object",
+    description: "The model it runs on, with any tier already resolved.",
+    properties: {
+      providerId: { type: "string", description: "Provider id, as `model list` prints it." },
+      modelId: { type: "string", description: "Model id, as `model list` prints it." },
+      reasoningLevel: {
+        type: "string",
+        enum: REASONING_LEVELS,
+        description: "The reasoning level it runs at.",
+      },
+    },
+    required: ["providerId", "modelId", "reasoningLevel"],
+    additionalProperties: false,
+  },
+  state: {
+    type: "string",
+    enum: ["running", "needs-recovery"],
+    description:
+      "running: attached, with its first message sent. needs-recovery: created, but its attachment failed and nothing was sent; a person can retry it from the app.",
+  },
+} as const satisfies Readonly<Record<string, VerbResultFieldSchema>>;
 
 /**
  * The confirmation field the two destructive MCP verbs share (VC-380).
@@ -1442,6 +1554,26 @@ export const VERB_REGISTRY = [
           description: "Reasoning level override; the chosen model must support it.",
         },
       ],
+      // What a program fanning out Sessions acts on (VC-471): the handle it
+      // watches or steers, and the Ticket it started on, so it never parses
+      // the prose for either.
+      resultDetails: {
+        type: "object",
+        description: "The Session this call started.",
+        properties: {
+          sessionId: OPENED_SESSION_FIELDS.sessionId,
+          handle: OPENED_SESSION_FIELDS.handle,
+          ticket: {
+            type: "string",
+            description: "The display id of the Ticket it works, for example VC-12.",
+          },
+          title: OPENED_SESSION_FIELDS.title,
+          model: OPENED_SESSION_FIELDS.model,
+          state: OPENED_SESSION_FIELDS.state,
+        },
+        required: ["sessionId", "handle", "ticket", "title", "model", "state"],
+        additionalProperties: false,
+      },
     },
     positionalId: "required",
     positionalSubject: "ticket",
@@ -2262,6 +2394,16 @@ export const VERB_REGISTRY = [
           description: "Reasoning level override; the chosen model must support it.",
         },
       ],
+      // `sessionId` and `title` predate this schema (VC-9): the transcript's
+      // delegate row links the child by the one and names it by the other
+      // (`agent-runtime/src/pi/activity.ts`), so both keep their names.
+      resultDetails: {
+        type: "object",
+        description: "The subagent Session this call started.",
+        properties: OPENED_SESSION_FIELDS,
+        required: ["sessionId", "handle", "title", "model", "state"],
+        additionalProperties: false,
+      },
     },
     options: [],
   },
@@ -2814,6 +2956,38 @@ export const VERB_REGISTRY = [
           description: "watch (the default) arms the watches; unwatch ends them.",
         },
       ],
+      // The targets as the door resolved them, so a program can check what it
+      // armed without reading the receipt's sentences back.
+      resultDetails: {
+        type: "object",
+        description: "What this call armed or ended.",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["watch", "unwatch"],
+            description: "Which of the two this call did.",
+          },
+          sessions: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The short session ids this call named, each one now watched (watch) or no longer watched (unwatch).",
+          },
+          tickets: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The ticket display ids this call named, each one now watched (watch) or no longer watched (unwatch).",
+          },
+          ended: {
+            type: "number",
+            description:
+              "unwatch: how many of the named targets this Session was watching and now is not. watch: always 0.",
+          },
+        },
+        required: ["action", "sessions", "tickets", "ended"],
+        additionalProperties: false,
+      },
     },
     options: [],
   },

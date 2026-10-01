@@ -1382,19 +1382,36 @@ export interface RuntimeVerbCall {
   toolCallId: string;
 }
 
+/** One JSON scalar a verb result's `details` may carry. */
+export type RuntimeVerbDetailScalar = string | number | boolean | null;
+
+/**
+ * One value of a verb result's `details`: a scalar, a list of strings, or a
+ * flat object of scalars — the shapes `VerbResultFieldSchema` can declare.
+ */
+export type RuntimeVerbDetailValue =
+  | RuntimeVerbDetailScalar
+  | readonly string[]
+  | Readonly<Record<string, RuntimeVerbDetailScalar>>;
+
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
   /**
-   * Structured facts for the transcript row, never for the model (VC-9).
+   * Structured facts beside the text, never shown to a model calling the verb
+   * directly (VC-9).
    *
    * Rides the tool result's `details` slot, which the activity mapper reads
-   * and the model does not see. Exists for one row today: a `delegate` row
-   * links to the child Session by id and names it by title, and parsing
-   * either out of {@link text} would tie the transcript to the door's prose.
-   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   * and the model does not see. Two readers today. A `delegate` row links to
+   * the child Session by id and names it by title, and parsing either out of
+   * {@link text} would tie the transcript to the door's prose. And a Code Mode
+   * program receives it as `details` (VC-471), typed by the verb's
+   * `resultDetails` schema in the Verb Registry when it declares one.
+   *
+   * One level deep at most — scalars, string lists, flat objects of scalars —
+   * so the durable activity marker stays small and bounded.
    */
-  details?: Readonly<Record<string, string | number | boolean | null>>;
+  details?: Readonly<Record<string, RuntimeVerbDetailValue>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */

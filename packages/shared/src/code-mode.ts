@@ -133,6 +133,25 @@ export const CODE_MODE_LIMIT_BOUNDS: Readonly<
   declarationBudgetTokens: { min: 0, max: 100_000 },
 });
 
+/**
+ * How much of a Session's surface goes through Code Mode, chosen per model.
+ *
+ * - `off` — no `codemode` tool, unless a large MCP server needs one (see
+ *   `code-mode-policy.ts`); every other tool is declared and called directly.
+ * - `both` — `codemode` beside every tool, each tool also declared: the model
+ *   picks per step. Costs the `codemode` description on every turn.
+ * - `only` — `codemode` instead of every capability group a program can call
+ *   whole (coding, web, each MCP server…); groups with a member a program
+ *   cannot call (the Browser's screenshot, the shells, a person's question)
+ *   stay declared whole.
+ */
+export const CODE_MODE_MODES = ["off", "both", "only"] as const;
+export type CodeModeMode = (typeof CODE_MODE_MODES)[number];
+
+export function isCodeModeMode(value: unknown): value is CodeModeMode {
+  return typeof value === "string" && (CODE_MODE_MODES as readonly string[]).includes(value);
+}
+
 /** Code Mode as one Session was born with it. */
 export interface CodeModeSurface {
   /**
@@ -142,6 +161,19 @@ export interface CodeModeSurface {
    */
   routes: Readonly<Record<string, ToolRoute>>;
   limits: CodeModeLimits;
+  /**
+   * The mode the routes were derived from, for a reader (the Session header,
+   * a benchmark). The routes are what binds; a record from before modes
+   * existed has none.
+   */
+  mode?: CodeModeMode;
+  /**
+   * Whether the system prompt carries Code Mode's short "when to write a
+   * program" paragraph. Frozen with the routes because the system prompt is
+   * part of the Cache Prefix; chosen per model at birth, because whether the
+   * paragraph helps is a measured property of the model.
+   */
+  nudge?: true;
 }
 
 /**
@@ -189,6 +221,45 @@ const CODE_CALLABLE_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The capability group a tool belongs to, for routing whole groups at once.
+ *
+ * Code Mode routes a group, not a tool: a model that sees three of the
+ * Browser's nine tools declared and six only inside programs reaches for the
+ * three (a phase 1 benchmark watched GLM call `browser_screenshot` over and
+ * over, the only Browser tool left declared). So under `only` a group either
+ * leaves the declared array whole or stays in it whole.
+ *
+ * Each MCP server is its own group, named by the server id its definition
+ * froze; one the caller has no definition for is grouped by its own name.
+ */
+export function toolGroupOf(tool: string, definition?: McpToolDefinition): string {
+  if (isMcpToolId(tool)) return `mcp:${definition?.serverId ?? tool}`;
+  switch (tool) {
+    case "read":
+    case "edit":
+    case "write":
+    case "execute":
+      return "coding";
+    case "web_fetch":
+    case "web_search":
+      return "web";
+    case "ask_user":
+    case "todo_write":
+      return "conversation";
+    case "shell_start":
+    case "shell_output":
+    case "shell_kill":
+      return "shell";
+  }
+  if (tool.startsWith("browser_")) return "browser";
+  if (tool.startsWith("session.") || tool === "watch" || tool === "automation.run") {
+    return "agents";
+  }
+  if (tool.startsWith("mcp.")) return "mcp-management";
+  return `tool:${tool}`;
+}
+
+/**
  * The default route for one tool, given the route the host chose for its MCP
  * server when it is an MCP tool.
  */
@@ -224,58 +295,62 @@ export function isCodeCallable(tool: string, route: ToolRoute): boolean {
  * The Code Mode record a new Session is born with: one route per tool of its
  * resolved surface, and the limits.
  *
- * `mcpRoute` is the host's per-server (or per-tool) choice for MCP tools —
- * `deferred` for a large server, say. It is consulted only for MCP tools, and
- * only for the definition the surface actually froze.
+ * `mode` (default `both`) says how far the surface goes through programs; see
+ * {@link CodeModeMode}. `mcpRoute` is the host's per-server choice for MCP
+ * tools — `deferred` for a large server, say — and wins over the mode for
+ * the tools it answers; it is consulted only for MCP tools, and only for the
+ * definition the surface actually froze. A route is always held to
+ * {@link isCodeCallable}: no choice routes a direct-only tool into programs.
  */
 export function codeModeSurfaceFor(input: {
   tools: readonly SessionToolId[];
   mcpTools?: readonly McpToolDefinition[];
   mcpRoute?: (definition: McpToolDefinition) => ToolRoute | undefined;
   limits?: CodeModeLimits;
+  mode?: CodeModeMode;
+  nudge?: boolean;
 }): CodeModeSurface {
+  const mode = input.mode ?? "both";
   const definitions = new Map(
     (input.mcpTools ?? []).map((definition) => [definition.providerName as string, definition]),
   );
-  const routes: Record<string, ToolRoute> = {};
-  for (const tool of input.tools) {
-    if (tool === CODE_MODE_TOOL_ID) continue;
-    const definition = definitions.get(tool);
-    routes[tool] = defaultToolRoute(
-      tool,
-      definition === undefined ? undefined : input.mcpRoute?.(definition),
-    );
+  const tools = input.tools.filter((tool) => tool !== CODE_MODE_TOOL_ID);
+  // A group leaves the declared array only when every member this surface
+  // holds can be called from a program.
+  const mixed = new Set<string>();
+  for (const tool of tools) {
+    if (!isCodeCallable(tool, "both")) mixed.add(toolGroupOf(tool, definitions.get(tool)));
   }
-  return { routes, limits: { ...(input.limits ?? DEFAULT_CODE_MODE_LIMITS) } };
-}
-
-/**
- * A subagent's Code Mode record, bounded by its parent's (VC-9's rule, for
- * routes): the child's tools are already a subset of the parent's, and each
- * keeps the route the parent froze for it, with the parent's limits. So a
- * tool the parent could only call directly is never callable from a child's
- * program, whatever today's defaults say. Absent when the child's surface
- * does not hold `codemode`.
- */
-export function inheritCodeModeSurface(
-  parent: CodeModeSurface,
-  tools: readonly SessionToolId[],
-): CodeModeSurface | undefined {
-  if (!tools.includes(CODE_MODE_TOOL_ID)) return undefined;
   const routes: Record<string, ToolRoute> = {};
   for (const tool of tools) {
-    if (tool === CODE_MODE_TOOL_ID) continue;
-    routes[tool] = Object.hasOwn(parent.routes, tool) ? parent.routes[tool]! : "direct";
+    const definition = definitions.get(tool);
+    const chosen = definition === undefined ? undefined : input.mcpRoute?.(definition);
+    if (chosen !== undefined) {
+      routes[tool] = defaultToolRoute(tool, chosen);
+      continue;
+    }
+    const callable = defaultToolRoute(tool) === "both";
+    if (!callable || mode === "off") routes[tool] = "direct";
+    else if (mode === "both" || mixed.has(toolGroupOf(tool, definition))) routes[tool] = "both";
+    else routes[tool] = "code";
   }
-  return { routes, limits: { ...parent.limits } };
+  return {
+    routes,
+    limits: { ...(input.limits ?? DEFAULT_CODE_MODE_LIMITS) },
+    ...(input.mode === undefined ? {} : { mode }),
+    ...(input.nudge === true ? { nudge: true as const } : {}),
+  };
 }
 
 /**
  * A Code Mode record read back against the surface it was frozen with.
  *
- * Strict in both directions, on the frozen-surface rule's reasoning: a record
- * that names a tool the surface does not hold, or leaves one out, would bind a
- * different provider tool array than the one the Session was born with.
+ * Strict in both directions about routes, on the frozen-surface rule's
+ * reasoning: a record that names a tool the surface does not hold, or leaves
+ * one out, would bind a different provider tool array than the one the
+ * Session was born with. Strict about every limit and field this build
+ * knows; a key it does not know is ignored, so an older build can still
+ * decode a newer Session's record.
  */
 export function parseCodeModeSurface(
   value: unknown,
@@ -315,10 +390,23 @@ export function parseCodeModeSurface(
     }
     limits[key] = limit;
   }
-  if (Object.keys(limitsRow).length !== Object.keys(CODE_MODE_LIMIT_BOUNDS).length) {
-    throw new Error(`${context}.limits names a limit this build does not know`);
+  // A key this build does not know — a limit or a field a newer build added —
+  // is left unread rather than refused, so a downgrade can still attach a
+  // Session a newer build created. Every key this build DOES know is held to
+  // its rule above and below; the routes, which bind the tool array, stay
+  // exact in both directions.
+  if (row.mode !== undefined && !isCodeModeMode(row.mode)) {
+    throw new Error(`${context}.mode is not a Code Mode mode`);
   }
-  return { routes, limits };
+  if (row.nudge !== undefined && row.nudge !== true) {
+    throw new Error(`${context}.nudge is true or absent`);
+  }
+  return {
+    routes,
+    limits,
+    ...(row.mode === undefined ? {} : { mode: row.mode }),
+    ...(row.nudge === true ? { nudge: true as const } : {}),
+  };
 }
 
 /** The route of one tool in a surface that holds Code Mode; `direct` for one it does not route. */

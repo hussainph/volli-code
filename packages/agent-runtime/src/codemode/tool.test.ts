@@ -1005,6 +1005,8 @@ describe("results", () => {
           mcp: unschemed,
         },
       ],
+      // Declared only to programs, so the description declares it in full.
+      routes: { [definition.providerName]: "code" },
     });
     expect(plain.tool.description).toContain("structuredContent?: unknown");
     const empty = fixture({
@@ -1075,6 +1077,40 @@ describe("results", () => {
       (await run(refused, "try { await tools.session_start({}); } catch (e) { return e.message; }"))
         .text,
     ).toContain("Returned: No.");
+  });
+
+  it("declares a verb's details by the schema it carries, and a program reads them", async () => {
+    const detailsSchema = {
+      type: "object",
+      description: "The Session this call started.",
+      properties: { handle: { type: "string", description: "Its short session id." } },
+      required: ["handle"],
+      additionalProperties: false,
+    };
+    const typed = fixture({
+      tools: [
+        {
+          id: "session.start",
+          tool: resultTool("session_start", {
+            content: [{ type: "text", text: "Started Session a1b2c3d4." }],
+            details: { handle: "a1b2c3d4" },
+          }),
+          verb: true,
+          detailsSchema,
+        },
+      ],
+    });
+    // What a program is written against: the handle, typed and described,
+    // and `details` itself optional, because a refusal carries none.
+    expect(typed.tool.description).toMatch(/\/\/ Its short session id\.\n\s*handle: string;/u);
+    expect(typed.tool.description).toContain(
+      "// The Session this call started. Absent when the call was refused; `text` then says why.",
+    );
+    expect(typed.tool.description).toContain("details?: {");
+    // And what it reads at run time, without touching the prose.
+    expect(
+      (await run(typed, "return (await tools.session_start({})).details.handle;")).text,
+    ).toContain("Returned: a1b2c3d4");
   });
 
   it("lets no image into a program or out of one", async () => {
@@ -1208,7 +1244,9 @@ describe("discovery", () => {
       routes: { list_issues: "deferred", close_issue: "deferred" },
     });
     expect(f.tool.description).not.toContain("list_issues(");
-    expect(f.tool.description).toContain("volli (3, 1 declared below)");
+    expect(f.tool.description).toContain(
+      "Not declared here: volli (2). Find them with searchTools() and describeTool().",
+    );
     const { text } = await run(
       f,
       `const hits = await searchTools("open issues", { limit: 1 });

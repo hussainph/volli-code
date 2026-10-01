@@ -12,10 +12,14 @@
  *   PI_BENCH_MODEL=anthropic/claude-haiku-4-5    # optional, provider/model
  *   PI_BENCH_TRIALS=3                            # per arm per task
  *   PI_BENCH_TASKS=loop-filter,single-call       # optional subset
+ *   PI_BENCH_ARMS=direct,codemode-nudge          # optional subset of arms
+ *   PI_BENCH_REASONING=low                       # default off; for models without it
+ *   PI_BENCH_OUT=phase2b                         # results/ subdirectory, default phase2
  *
  * Spends real money through the developer's own Pi credentials, so it never
- * runs by default. Results print as tables and land as JSON beside this file
- * in `results/` for the design note.
+ * runs by default. Results print as tables and land as JSON beside this file,
+ * in `results/phase2/` (phase 1's runs stay in `results/`), for the design
+ * note.
  */
 
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -23,7 +27,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   codeModeSurfaceFor,
+  DEFAULT_CODE_MODE_LIMITS,
   sessionToolIds,
+  type ReasoningLevel,
   type RuntimeObservation,
   type SessionRuntimeSpec,
 } from "@volli/shared";
@@ -36,13 +42,19 @@ import { TASKS, type TaskId } from "./tasks";
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 
 /**
- * `direct`: no Code Mode. `codemode`: Code Mode added and every other tool
- * still declared (`both`) — the model chooses. `codemode-only`: Pi's `only`
- * mode, every code-callable tool routed `code`, so programs are the way to
- * reach `bash`, `read` and the rest.
+ * `direct`: no Code Mode. `codemode`: mode `both` — Code Mode added and every
+ * other tool still declared, the model chooses. `codemode-nudge`: the same,
+ * plus the system prompt's "when to write a program" paragraph (the nudge),
+ * so its effect is measured on its own. `codemode-only`: mode `only` — every
+ * capability group a program can call whole is reachable only through
+ * programs.
  */
-type Arm = "direct" | "codemode" | "codemode-only";
-const ARMS: readonly Arm[] = ["direct", "codemode", "codemode-only"];
+type Arm = "direct" | "codemode" | "codemode-nudge" | "codemode-only";
+const ALL_ARMS: readonly Arm[] = ["direct", "codemode", "codemode-nudge", "codemode-only"];
+const ARMS: readonly Arm[] =
+  (process.env.PI_BENCH_ARMS?.split(",") as Arm[] | undefined)?.filter((arm) =>
+    ALL_ARMS.includes(arm),
+  ) ?? ALL_ARMS;
 
 interface Trial {
   task: TaskId;
@@ -126,7 +138,11 @@ async function runTrial(
           },
     workspacePath: run.workspacePath,
     venue: "local",
-    model: { providerId, modelId, reasoningLevel: "off" },
+    model: {
+      providerId,
+      modelId,
+      reasoningLevel: (process.env.PI_BENCH_REASONING ?? "off") as ReasoningLevel,
+    },
     brief: { text: "VC-471 benchmark fixture. Answer exactly in the format asked." },
     tools: { tools: ["read", "edit", "write", "execute"] },
     observer: async (observation) => {
@@ -137,7 +153,7 @@ async function runTrial(
   // No Authority Snapshot: the product default (`observe`) installs no gate,
   // so this is the path a real Session takes. The gate's own parity is
   // proven in the unit suite, not measured here.
-  const surface = codeModeSurfaceFor({ tools: sessionToolIds(base) });
+  // The record main freezes at birth, for the arm's mode.
   const spec: SessionRuntimeSpec =
     arm === "direct"
       ? base
@@ -145,18 +161,12 @@ async function runTrial(
           ...base,
           tools: {
             ...base.tools,
-            codeMode:
-              arm === "codemode"
-                ? surface
-                : {
-                    ...surface,
-                    routes: Object.fromEntries(
-                      Object.entries(surface.routes).map(([tool, route]) => [
-                        tool,
-                        route === "both" ? "code" : route,
-                      ]),
-                    ),
-                  },
+            codeMode: codeModeSurfaceFor({
+              tools: sessionToolIds(base),
+              mode: arm === "codemode-only" ? "only" : "both",
+              nudge: arm === "codemode-nudge",
+              limits: DEFAULT_CODE_MODE_LIMITS,
+            }),
           },
         };
   const runtime = createPiAgentRuntime({ sessionDataDir });
@@ -239,8 +249,12 @@ function table(headers: string[], rows: string[][]): string {
 
 describe.skipIf(process.env.PI_LIVE_BENCH !== "1")("VC-471 Code Mode, live", () => {
   it("runs each task direct and with Code Mode, and reports medians", async () => {
-    const model = process.env.PI_BENCH_MODEL ?? DEFAULT_MODEL;
-    const [providerId = "", modelId = ""] = model.split("/");
+    const reasoning = process.env.PI_BENCH_REASONING ?? "off";
+    const [providerId = "", modelId = ""] = (process.env.PI_BENCH_MODEL ?? DEFAULT_MODEL).split(
+      "/",
+    );
+    // The reasoning level is part of what was measured, so it names the row.
+    const model = `${providerId}/${modelId}${reasoning === "off" ? "" : ` (${reasoning})`}`;
     const trials = Number(process.env.PI_BENCH_TRIALS ?? 3);
     const tasks = (process.env.PI_BENCH_TASKS?.split(",") ?? Object.keys(TASKS)) as TaskId[];
     const results: Trial[] = [];
@@ -302,12 +316,12 @@ describe.skipIf(process.env.PI_LIVE_BENCH !== "1")("VC-471 Code Mode, live", () 
     console.log(
       `\n# VC-471 — ${model}, ${trials} trials per cell, medians\n\n${printed}\n\ntotal spend: $${spend.toFixed(4)}\n`,
     );
-    const directory = join(import.meta.dirname, "results");
+    const directory = join(import.meta.dirname, "results", process.env.PI_BENCH_OUT ?? "phase2");
     mkdirSync(directory, { recursive: true });
     writeFileSync(
       join(
         directory,
-        `${model.replace(/[^A-Za-z0-9.-]+/gu, "_")}__${process.env.PI_BENCH_TASKS === undefined ? "all" : tasks.join("+")}.json`,
+        `${model.replace(/[^A-Za-z0-9.-]+/gu, "_")}__${process.env.PI_BENCH_TASKS === undefined ? "all" : tasks.join("+")}${process.env.PI_BENCH_ARMS === undefined ? "" : `__${ARMS.join("+")}`}.json`,
       ),
       `${JSON.stringify({ model, trials, table: printed, spend, results }, null, 2)}\n`,
     );
