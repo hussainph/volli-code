@@ -1796,7 +1796,7 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 // ---- protection (VC-480) ---------------------------------------------------
 
 /**
- * The Protection experiment and its remembered approvals.
+ * Protection's remembered approvals.
  *
  * App-only, and the agent has no door to any of it: no verb projects these, the
  * socket does not carry them, and the rows live in the app-owned database the
@@ -1804,9 +1804,6 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
  * WRITTEN only in main, from a person's answer on a card.
  */
 export interface VolliProtectionIpcContract {
-  /** Whether the experiment is switched on. Off by default. */
-  "volli:protection-get": { args: []; result: Result<{ enabled: boolean }> };
-  "volli:protection-set": { args: [enabled: boolean]; result: Result<{ enabled: boolean }> };
   /** A project's live remembered approvals, newest first. */
   "volli:protection-approvals": {
     args: [projectId: string];

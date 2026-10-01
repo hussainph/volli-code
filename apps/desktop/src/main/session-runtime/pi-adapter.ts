@@ -266,8 +266,6 @@ export interface PiProtection {
 interface PiRuntimeContextFields {
   /** Host capability, available even when current policy is off (VC-480). */
   protection?: PiProtection;
-  /** Fresh-attachment mode only; recovery uses the Snapshot, never this value. */
-  protectionEnabled?: boolean;
   projectId: string;
   /**
    * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
@@ -1089,7 +1087,7 @@ class PiBinding implements BindingHandle {
             options.context.authorityPolicy,
             options.context.location,
             options.context.toolSurface,
-            options.context.protectionEnabled ?? options.context.protection !== undefined,
+            options.context.protection !== undefined,
           );
   }
 
@@ -1787,7 +1785,9 @@ class PiBinding implements BindingHandle {
    * decision it reports is already recorded and the call is already allowed.
    */
   async #showLedgerHit(decision: ApprovalDecision): Promise<void> {
-    const id = `ledger-hit:${decision.toolCallId}`;
+    // One call can use several grants. Each audited row needs its own receipt
+    // identity or the second row collides with the first resolved interaction.
+    const id = `ledger-hit:${decision.toolCallId}:${decision.approvalId}`;
     const option = {
       id: "ledger",
       label: "Allowed by your earlier approval",

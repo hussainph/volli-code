@@ -949,12 +949,10 @@ const api = {
       invoke("volli:agent-observability-set", enabled, endpoint),
   },
   /**
-   * The Protection experiment and its remembered approvals (VC-480). List and
+   * Protection's remembered approvals (VC-480). List and
    * revoke only: a row is written in main, from a person's answer on a card.
    */
   protection: {
-    get: () => invoke("volli:protection-get"),
-    set: (enabled: boolean) => invoke("volli:protection-set", enabled),
     approvals: (projectId: string) => invoke("volli:protection-approvals", projectId),
     revoke: (approvalId: string) => invoke("volli:protection-revoke", approvalId),
     restore: (approvalId: string) => invoke("volli:protection-restore", approvalId),

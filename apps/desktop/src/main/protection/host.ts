@@ -2,8 +2,8 @@
  * The host half of protection mode for one attachment (VC-480): the ledger the
  * gate reads and the one door that writes it.
  *
- * Built by main per attach, only when the experiment is on and the project is
- * protected. Everything here touches the app-owned database; the runtime is
+ * Built by main per attach and activated by the pinned Protection state.
+ * Everything here touches the app-owned database; the runtime is
  * handed `covers` and `decided` and nothing else, and `remember` is called by
  * the adapter from a person's answer, never from the runtime.
  *

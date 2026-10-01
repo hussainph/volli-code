@@ -8,11 +8,8 @@
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
  *
- * The Protection experiment (VC-480) swaps what the Authority entry draws, not
- * where it sits: the same key, so a selection survives the switch flipping,
- * labelled "Protection" and drawing `ProtectionPane` while it is on, and exactly
- * the Authority entry while it is off. The flag arrives as an argument rather
- * than a store read so the page that owns the rail re-derives it reactively.
+ * Protection replaces Authority (VC-480). The category keeps its existing key
+ * so stored selections and deep links still reach this project's policy.
  */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
@@ -25,7 +22,6 @@ import type { Project } from "@volli/shared";
 
 import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
-import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
 import { ProtectionPane } from "./configure/protection-pane";
@@ -33,12 +29,8 @@ import { SessionsPane } from "./configure/sessions-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
 
-/**
- * The Authority entry's search terms. Held apart because the Protection
- * experiment extends them: the rail matches a lowercased SUBSTRING of a stored
- * term, so every label the Protection page draws needs one here too.
- */
-const AUTHORITY_KEYWORDS: readonly string[] = [
+/** The rail matches a lowercased substring, including every label the page draws. */
+const PROTECTION_KEYWORDS: readonly string[] = [
   "authority",
   "permission",
   "permissions",
@@ -52,31 +44,7 @@ const AUTHORITY_KEYWORDS: readonly string[] = [
   "denial",
   "transcript",
   "peek",
-  "auto mode",
-  // The row labels, so rail search finds the page from what is on
-  // it — `settings-search-smoke.mjs` walks every visible label and
-  // holds this list to that contract.
-  "rule enforcement",
-  // The whole label, em dash included, because the rail matches a
-  // lowercased SUBSTRING of a stored term: "decision mode" alone
-  // could not be found by someone typing what the row says. VC-285
-  // renamed this row from "Who judges the rest" and the old term
-  // went with it — a keyword for a label nobody can see finds
-  // nothing and hides the one that is missing.
-  "decision mode \u2014 not active yet",
-  "ask me after",
-  "or after, in total",
-  "you can read",
-  "an authenticated session can read",
-  "an unauthenticated caller can read",
-];
 
-/**
- * What the Protection page adds, only while it is the page drawn — a term for
- * a page nobody can see would land a search on one that cannot answer it. The
- * section titles are whole, for the same substring reason as above.
- */
-const PROTECTION_KEYWORDS: readonly string[] = [
   "protection",
   "protect",
   "protection is on",
@@ -89,10 +57,7 @@ const PROTECTION_KEYWORDS: readonly string[] = [
   "transcripts a session can read",
 ];
 
-export function configureGroups(
-  project: Project,
-  { protection = false }: { protection?: boolean } = {},
-): readonly PrefGroup[] {
+export function configureGroups(project: Project): readonly PrefGroup[] {
   return [
     {
       key: "agent",
@@ -170,16 +135,10 @@ export function configureGroups(
           // that writes authority policy — no agent verb projects it, by
           // design (VC-172).
           key: "authority",
-          label: protection ? "Protection" : "Authority",
+          label: "Protection",
           icon: ShieldCheckIcon,
-          keywords: protection
-            ? [...AUTHORITY_KEYWORDS, ...PROTECTION_KEYWORDS]
-            : AUTHORITY_KEYWORDS,
-          content: protection ? (
-            <ProtectionPane project={project} />
-          ) : (
-            <AuthorityPane project={project} />
-          ),
+          keywords: PROTECTION_KEYWORDS,
+          content: <ProtectionPane project={project} />,
         },
       ],
     },

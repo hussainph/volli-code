@@ -332,7 +332,9 @@ export class AuthorityEscalation {
       if (first === undefined) {
         // No await between this live ledger read, its audit, and permission to
         // execute. Earlier snapshots never authorise the call or its receipt.
-        for (const hit of new Map(hits.map((hit) => [hit.approvalId, hit])).values()) {
+        for (const hit of new Map(
+          hits.map((candidate) => [candidate.approvalId, candidate]),
+        ).values()) {
           decided("policy:ledger", found[0].rule, hit.summary, hit.approvalId);
         }
         return ALLOW;

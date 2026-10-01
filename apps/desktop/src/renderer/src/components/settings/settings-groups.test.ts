@@ -7,6 +7,7 @@
  * sharded smoke that costs minutes. This is the same rule stated where it
  * costs milliseconds.
  */
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { MODEL_TIER_ROWS } from "@volli/shared";
 
@@ -20,6 +21,22 @@ function keywordsFor(key: string): readonly string[] {
   }
   throw new Error(`no settings category ${key}`);
 }
+
+describe("Settings → General", () => {
+  it("offers window preferences, with no app-wide Protection experiment or search entry", () => {
+    const general = settingsGroups()
+      .flatMap((group) => group.categories)
+      .find((category) => category.key === "general");
+    expect(general).toBeDefined();
+    const html = renderToStaticMarkup(general?.content);
+
+    expect(html).toContain("Show the project switcher");
+    expect(html).toContain("Keep the sidebar open");
+    expect(html).not.toContain("Protection");
+    expect(html).not.toContain("experimental");
+    expect(keywordsFor("general").some((term) => term.includes("protection"))).toBe(false);
+  });
+});
 
 describe("the Models category's search index", () => {
   it("finds every default-model row by its own label", () => {

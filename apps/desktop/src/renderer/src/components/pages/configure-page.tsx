@@ -21,19 +21,12 @@ import { PrefShell } from "@renderer/components/settings/kit";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
-import { useProtectionExperiment } from "@renderer/stores/protection";
 
 export function ConfigurePage() {
   const project = useSelectedProject();
   const [activeKey, setActiveKey] = React.useState("skills");
 
-  // The Protection experiment (VC-480) relabels and redraws the Authority
-  // entry, so a flip in Settings must re-derive the rail.
-  const protection = useProtectionExperiment();
-  const groups = React.useMemo(
-    () => (project === null ? [] : configureGroups(project, { protection })),
-    [project, protection],
-  );
+  const groups = React.useMemo(() => (project === null ? [] : configureGroups(project)), [project]);
 
   if (project === null) {
     return (

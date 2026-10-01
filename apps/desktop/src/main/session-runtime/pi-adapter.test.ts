@@ -3583,7 +3583,7 @@ describe("Protection mode (VC-480)", () => {
     );
   }
 
-  it("hands the runtime a read port only when the experiment is on and the gate binds", async () => {
+  it("hands the runtime approvals only when Protection is on and the gate binds", async () => {
     const on = await protectedAttach(fakeProtection().protection);
     expect(on.runtime.spec.approvals).toBeDefined();
     expect(Object.keys(on.runtime.spec.approvals ?? {}).toSorted()).toEqual(["covers", "decided"]);
@@ -3593,19 +3593,33 @@ describe("Protection mode (VC-480)", () => {
     expect(observing.runtime.spec.approvals).toBeUndefined();
   });
 
-  it.each([
-    { enforcement: "enforce", protectionEnabled: false },
-    { enforcement: "off", protectionEnabled: true },
-    { enforcement: "observe", protectionEnabled: true },
-  ] as const)(
-    "does not opt a recovered attachment into Protection ($enforcement, $protectionEnabled)",
-    async ({ enforcement, protectionEnabled }) => {
+  it("keeps a fresh default-off attachment identical to main's ungated runtime", async () => {
+    const fake = fakeProtection();
+    const opened = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        authorityPolicy: resolveAuthorityPolicy(null),
+        protection: fake.protection,
+      }),
+    });
+    expect(opened.binding.authority?.enforcement).toBe("observe");
+    expect(opened.runtime.spec).not.toHaveProperty("authority");
+    expect(opened.runtime.spec).not.toHaveProperty("approvals");
+    expect(opened.runtime.spec.tools).toEqual(
+      expect.objectContaining({ tools: expect.any(Array) }),
+    );
+    expect(fake.decisions).toEqual([]);
+    expect(fake.grants).toEqual([]);
+  });
+
+  it.each(["off", "observe"] as const)(
+    "does not opt a recovered %s attachment into Protection after the switch turns on",
+    async (enforcement) => {
       const fake = fakeProtection();
       const opened = await attached({
         resolveRuntimeContext: async () => ({
           ...context,
           authorityPolicy: resolveAuthorityPolicy({ enforcement }),
-          protectionEnabled,
           protection: fake.protection,
         }),
       });
@@ -3614,7 +3628,6 @@ describe("Protection mode (VC-480)", () => {
           resolveRuntimeContext: async () => ({
             ...context,
             authorityPolicy: resolveAuthorityPolicy({ enforcement: "enforce" }),
-            protectionEnabled: true,
             protection: fake.protection,
           }),
         },
@@ -3640,7 +3653,6 @@ describe("Protection mode (VC-480)", () => {
         resolveRuntimeContext: async () => ({
           ...context,
           authorityPolicy: resolveAuthorityPolicy({ enforcement: "enforce" }),
-          protectionEnabled: true,
           protection: fake.protection,
         }),
       },
@@ -3864,8 +3876,11 @@ describe("Protection mode (VC-480)", () => {
     expect(await outcome).toEqual({ answered: "refuse" });
   });
 
-  it("never stamps a model-authored steer question as an approval when the flag is off", async () => {
-    const { binding, runtime, sink } = await protectedAttach(undefined);
+  it("never stamps a model-authored steer question as an approval when Protection is off", async () => {
+    const { binding, runtime, sink } = await protectedAttach(
+      fakeProtection().protection,
+      "observe",
+    );
     const outcome = askUser(runtime, {
       question: "Ordinary question",
       options: [{ id: "steer", label: "Steer the story" }],
@@ -3897,16 +3912,28 @@ describe("Protection mode (VC-480)", () => {
       expect.objectContaining({
         state: "opened",
         interaction: expect.objectContaining({
-          id: "ledger-hit:call-9",
+          id: "ledger-hit:call-9:row-1",
           title: "Allowed by your earlier approval: Write to /Users/me/code/docs/guides",
         }),
       }),
       expect.objectContaining({
         state: "resolved",
-        interactionId: "ledger-hit:call-9",
+        interactionId: "ledger-hit:call-9:row-1",
         resolution: { optionIds: ["ledger"], response: null },
       }),
     ]);
+    runtime.spec.approvals?.decided({
+      toolCallId: "call-9",
+      tool: "write",
+      authoriser: "policy:ledger",
+      rule: "path.outside-workspace",
+      summary: "Write to another folder",
+      asked: "write b.md and c.md",
+      approvalId: "row-2",
+    });
+    await flush();
+    expect(sink.observations[2]).toMatchObject({ interaction: { id: "ledger-hit:call-9:row-2" } });
+    expect(sink.observations[3]).toMatchObject({ interactionId: "ledger-hit:call-9:row-2" });
     runtime.spec.approvals?.decided({
       toolCallId: "call-10",
       tool: "write",
@@ -3917,7 +3944,7 @@ describe("Protection mode (VC-480)", () => {
       approvalId: null,
     });
     await flush();
-    expect(sink.observations).toHaveLength(2);
+    expect(sink.observations).toHaveLength(4);
   });
 
   it("does not let a failed receipt line change the decision it reports", async () => {
@@ -3993,7 +4020,7 @@ describe("Protection across the durable observation boundary", () => {
     return launch();
   }
 
-  function launch(protectionEnabled = true) {
+  function launch() {
     const engine = createSessionEngine({
       ledger: createSqliteSessionLedger(db.db),
       clock: { now: () => clock++ },
@@ -4006,7 +4033,6 @@ describe("Protection across the durable observation boundary", () => {
         ticketId: null,
         rootThreadId: sessionRootThreadId(sessionId),
         authorityPolicy: getProjectAuthorityPolicy(db.db, "project-1"),
-        protectionEnabled,
         // Main supplies the host even when current settings are off; the
         // attachment's pinned Snapshot decides whether it can use the port.
         protection: createProtection({
@@ -4207,7 +4233,7 @@ describe("Protection across the durable observation boundary", () => {
     expect(listDecisions(db.db, sessionId)).toMatchObject([{ authoriser: "user:once" }]);
   });
 
-  it("recovers pinned Protection after current policy and experiment turn off, retaining grants and audit", async () => {
+  it("recovers pinned Protection after the current Protection switch turns off, retaining grants and audit", async () => {
     const prior = fixture();
     const sessionId = await start(prior);
     const first = run(prior);
@@ -4219,7 +4245,7 @@ describe("Protection across the durable observation boundary", () => {
     db.db.close();
     db.db = openRawDb(db.dbPath);
     db.db.pragma("foreign_keys = ON");
-    const restarted = launch(false);
+    const restarted = launch();
     restarted.model.reconciliationObservations.push({
       kind: "turn",
       state: "interrupted",

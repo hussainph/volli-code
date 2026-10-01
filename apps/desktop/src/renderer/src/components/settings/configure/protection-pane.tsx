@@ -1,13 +1,11 @@
 /**
- * Configure → Protection: the Authority entry while the Protection experiment
- * is on (VC-480).
+ * Configure → Protection: what this project's Sessions are governed by (VC-480).
  *
  * ONE SWITCH, and it is a reading of the policy rather than a setting of its
  * own. Protection is on exactly when the resolved policy enforces. Turning it
  * on states `enforcement: "enforce"`. Off clears hidden departures to defaults,
  * retaining only the transcript control this page exposes. Main's command/file
  * gate is the only protection here; Scoped containment is deferred to VC-45.
- * The experimental flag still selects this page, so flag-off policy is untouched.
  *
  * APPROVED ACTIONS is the ledger main keeps of a person's "Allow for this
  * Session" and "Always allow" answers. Rows are written only in main, from a
@@ -110,9 +108,9 @@ export function ProtectionPane({ project }: { project: Project }) {
   const on = effective.enforcement === "enforce";
 
   /**
-   * Merge one departure into the stored document and write the whole thing —
-   * `authority-pane.tsx`'s `patch`, unchanged. Merge so fields this page draws
-   * no control for survive; prune so a reverted field leaves no trace.
+   * Merge one departure into the stored document and write the whole thing.
+   * Merge so fields this page draws no control for survive; prune so a reverted
+   * field leaves no trace.
    */
   async function patch(change: Partial<AuthorityPolicyOverride>): Promise<boolean> {
     if (saving) return false;

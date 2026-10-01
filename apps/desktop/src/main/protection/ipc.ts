@@ -1,6 +1,6 @@
 /**
  * The door Settings and Configure speak to protection through (VC-480): the
- * experiment switch, and listing and revoking remembered approvals.
+ * listing and revoking remembered approvals.
  *
  * Writing a row is not here. Rows are written in main from a person's answer on
  * a card, so the renderer — and anything that could impersonate it — can revoke
@@ -16,7 +16,6 @@ import {
   type IpcHandlerTable,
 } from "../ipc-registry";
 import { listApprovals, restoreApproval, revokeApproval } from "../db/authority-approvals-repo";
-import { protectionExperimentEnabled, setProtectionExperimentEnabled } from "./settings";
 
 export function registerProtectionIpcHandlers(
   db: Database.Database | null,
@@ -28,11 +27,6 @@ export function registerProtectionIpcHandlers(
     return;
   }
   const handlers: IpcHandlerTable<ProtectionIpcChannel> = {
-    "volli:protection-get": () => ({ ok: true, enabled: protectionExperimentEnabled(db) }),
-    "volli:protection-set": (enabled) => {
-      setProtectionExperimentEnabled(db, enabled, now());
-      return { ok: true, enabled };
-    },
     "volli:protection-approvals": (projectId) => ({
       ok: true,
       approvals: listApprovals(db, projectId),

@@ -185,7 +185,7 @@ import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { createProtection } from "./protection/host";
 import { registerProtectionIpcHandlers } from "./protection/ipc";
-import { migrateProtectionPolicies, protectionExperimentEnabled } from "./protection/settings";
+import { migrateProtectionPolicies } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -1749,10 +1749,9 @@ app.whenReady().then(async () => {
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
               authorityPolicy,
-              // Current settings select only a FRESH attachment's mode. Main
-              // always supplies the host so a recovered attachment can retain
-              // the approvals/audit it pinned, even after settings turn off.
-              protectionEnabled: protectionExperimentEnabled(dbHandle.db),
+              // Main always supplies the host. The adapter activates it from
+              // the pinned Snapshot: fresh enforcing attachments use Protection;
+              // an off switch never adds a gate to a running/recovered attachment.
               protection: createProtection({
                 db: dbHandle.db,
                 now: () => Date.now(),

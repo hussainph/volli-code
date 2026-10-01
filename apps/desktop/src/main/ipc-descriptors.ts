@@ -2113,15 +2113,6 @@ export const AGENT_OBSERVABILITY_CHANNELS = Object.keys(
 export const PROTECTION_IPC: {
   readonly [C in ProtectionIpcChannel]: IpcRequestDescriptor<C>;
 } = {
-  "volli:protection-get": {
-    guard: (args): args is [] => args.length === 0,
-    invalidError: "Invalid request",
-  },
-  "volli:protection-set": {
-    guard: (args): args is IpcArgs<"volli:protection-set"> =>
-      args.length === 1 && typeof args[0] === "boolean",
-    invalidError: "Invalid request",
-  },
   "volli:protection-approvals": {
     guard: (args): args is IpcArgs<"volli:protection-approvals"> =>
       args.length === 1 && typeof args[0] === "string" && args[0] !== "",

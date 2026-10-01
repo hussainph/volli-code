@@ -126,12 +126,14 @@ describe("Configure rail", () => {
       "Skills",
       "Commands",
       "MCP Servers",
+      "Protection",
       "Sessions",
       "Appearance",
       "Worktrees",
     ]) {
       expect(html).toContain(category);
     }
+    expect(html).not.toContain("Authority");
   });
 
   /**

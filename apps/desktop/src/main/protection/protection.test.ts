@@ -16,17 +16,11 @@ vi.mock("electron", () => ({
 }));
 
 import { listApprovals, listDecisions } from "../db/authority-approvals-repo";
-import { setAppState } from "../db/app-state-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { PROTECTION_CHANNELS, PROTECTION_IPC } from "../ipc-descriptors";
 import { createProtection } from "./host";
 import { registerProtectionIpcHandlers } from "./ipc";
-import {
-  PROTECTION_EXPERIMENT_KEY,
-  protectionExperimentEnabled,
-  setProtectionExperimentEnabled,
-} from "./settings";
 
 let ctx: TestDb;
 let projectId: string;
@@ -54,22 +48,6 @@ beforeEach(() => {
 
 afterEach(() => {
   ctx.cleanup();
-});
-
-describe("the experiment switch", () => {
-  it("is off until someone turns it on, and reads anything odd as off", () => {
-    expect(protectionExperimentEnabled(ctx.db)).toBe(false);
-    setProtectionExperimentEnabled(ctx.db, true, 1);
-    expect(protectionExperimentEnabled(ctx.db)).toBe(true);
-    setProtectionExperimentEnabled(ctx.db, false, 2);
-    expect(protectionExperimentEnabled(ctx.db)).toBe(false);
-    setAppState(ctx.db, PROTECTION_EXPERIMENT_KEY, "not json", 3);
-    expect(protectionExperimentEnabled(ctx.db)).toBe(false);
-    setAppState(ctx.db, PROTECTION_EXPERIMENT_KEY, "null", 4);
-    expect(protectionExperimentEnabled(ctx.db)).toBe(false);
-    setAppState(ctx.db, PROTECTION_EXPERIMENT_KEY, '{"enabled":"yes"}', 5);
-    expect(protectionExperimentEnabled(ctx.db)).toBe(false);
-  });
 });
 
 const grant = (scope: "session" | "project") => ({
@@ -246,13 +224,6 @@ describe("the protection host", () => {
 });
 
 describe("the protection IPC surface", () => {
-  it("reads and writes the switch", async () => {
-    registerProtectionIpcHandlers(ctx.db, undefined, () => 7);
-    expect(await invoke("volli:protection-get")).toEqual({ ok: true, enabled: false });
-    expect(await invoke("volli:protection-set", true)).toEqual({ ok: true, enabled: true });
-    expect(await invoke("volli:protection-get")).toEqual({ ok: true, enabled: true });
-  });
-
   it("lists, revokes and restores approvals, and says so when one is already gone", async () => {
     createProtection({
       db: ctx.db,
@@ -294,10 +265,6 @@ describe("the protection IPC surface", () => {
 
   it("refuses malformed requests before they reach anything", async () => {
     registerProtectionIpcHandlers(ctx.db);
-    expect(await invoke("volli:protection-set", "yes")).toEqual({
-      ok: false,
-      error: "Invalid request",
-    });
     expect(await invoke("volli:protection-approvals", "")).toEqual({
       ok: false,
       error: "Invalid request",
@@ -310,10 +277,6 @@ describe("the protection IPC surface", () => {
       ok: false,
       error: "Invalid request",
     });
-    expect(await invoke("volli:protection-get", "junk")).toEqual({
-      ok: false,
-      error: "Invalid request",
-    });
   });
 
   it("answers every channel with the reason when the database never opened", async () => {
@@ -323,7 +286,7 @@ describe("the protection IPC surface", () => {
     }
     handlers.clear();
     registerProtectionIpcHandlers(null);
-    expect(await invoke("volli:protection-get")).toEqual({
+    expect(await invoke("volli:protection-approvals")).toEqual({
       ok: false,
       error: "Protection settings are unavailable.",
     });
@@ -332,8 +295,6 @@ describe("the protection IPC surface", () => {
   it("derives its channel list from the descriptor table", () => {
     expect(PROTECTION_CHANNELS).toEqual(Object.keys(PROTECTION_IPC));
     expect(PROTECTION_CHANNELS).toEqual([
-      "volli:protection-get",
-      "volli:protection-set",
       "volli:protection-approvals",
       "volli:protection-revoke",
       "volli:protection-restore",

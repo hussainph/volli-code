@@ -1,72 +1,66 @@
 ---
-title: Project authority
-description: Understand how a project’s Authority policy gates Session actions and when Volli asks you to decide.
+title: Protection
+description: Turn on project Protection, approve actions when asked, and manage remembered approvals.
 sidebar:
-  label: Authority
+  label: Protection
 ---
 
-**Configure → Authority** sets the policy for a project’s Sessions. An
-**attachment** is the live connection a Session runs on, and it pins the policy
-when it opens. A change in Configure applies when a new attachment is created,
-not to one already running. Relaunching the app replays an existing
-attachment’s recorded policy. Volli stores the policy with its project data,
-not in a repository configuration file.
+Open **Configure → Protection** for your project. The switch is **off by
+default**. Off adds no file or command gate: agents behave as before.
 
-## Choose a rule-enforcement posture
+Turn it on to check Session file and command calls. An approvable refusal asks
+immediately, without waiting for a denial threshold or a classifier:
 
-The **Rule enforcement** setting has three postures:
+- **Allow once** — only this call; nothing is remembered.
+- **Allow for this Session** — remember the action for this Session (and its delegated subagents).
+- **Always allow in this project** — remember the action for future Sessions in this project.
+- **Deny** — carry on without the action.
+- **Deny and steer** — tell the agent what to do instead.
 
-| Posture | Effect |
-| --- | --- |
-| **Off** | Creates no Authority Snapshot and runs no rule checks. |
-| **Observe** | The default. Saves the policy for the attachment and allows calls; it does not record individual allowed or refused calls. |
-| **Enforce** | Checks calls against Volli’s built-in rules and blocks calls those rules deny. |
+Some commands can only be allowed once or for the Session. Hard refusals, such
+as disabling platform protections or certificate checks, explain why they are
+blocked and have no approval button.
 
-In **Enforce**, the default fallback asks you once a Session reaches **3 denials
-in a row** or **20 denials total**. You can change either threshold. Only denials
-from rules that allow an override can be allowed; other rule violations stay
-blocked.
+## Approved actions
 
-## Understand the other controls
+Remembered approvals appear under **Approved actions**, with the Session,
+Ticket, original request and time. Each covers a narrow operation and target;
+a read approval does not allow writes, and a folder approval does not cover
+exact-only Git hooks or configuration. Matching approvals allow deterministically
+without another card. **Revoke** removes coverage so the next matching call asks
+again. Passed-request counts increase only after successful execution.
 
-**Decision mode — not active yet** stores whether the policy names **Ask me** or
-**Classifier** as the judge for calls the rules cannot settle. Volli does not
-use this setting yet to decide calls, and **Classifier** is unavailable until a
-classifier is configured.
+An unattended Automation pauses at a card and notifies you. It never invents an
+answer. The notification opens the same Session card; there is no second inbox.
 
-The **can read** rows control how much of a Session’s transcript each kind of
-caller can read. The inherited choices are:
+## When changes apply
 
-| Caller | Default access |
-| --- | --- |
-| **You** | Any transcript in the project |
-| **An authenticated session** | Its own transcript |
-| **An unauthenticated caller** | No transcripts |
+A live Session attachment pins its Protection state when it opens. Changing the
+switch applies to new attachments, not an attachment already running. Restart
+and recovery retain the pinned state. The ledger stays live, so revocation takes
+effect on the next call even in a running Session.
 
-## Know the enforcement boundary
+**Advanced** is collapsed by default and retains the Session transcript-read
+control. Protection inherits the app's built-in off default; there is no separate
+Settings opt-in.
 
-**Enforce** is a rule gate, not a sandbox. A Session’s tools still run with the
-authority of the account running Volli, and the built-in rules do not isolate
-commands from every possible side effect. Do not treat Authority as
-operating-system containment.
+## Existing projects
 
-## Protection experiment
+On upgrade, projects stored as `enforce` show On and retain their policy. All
+others show Off. A one-time, atomic cleanup backs up their raw policy documents
+in app-owned storage before clearing hidden judgment, classifier, fallback,
+budget, other actor and unknown containment/writable-root departures to built-in
+defaults. It retains explicit Off/Observe and the visible Session transcript-read
+setting. Writable roots are **not** converted into approvals. Turning Protection
+off also clears hidden supported departures. The original backup is never
+replaced.
 
-With **Settings → General → Protection (experimental)** enabled,
-**Configure → Protection** replaces this project's Authority controls with an
-Off-by-default switch and an **Approved actions** list. An approvable refusal
-asks immediately: allow once, allow for this Session, always allow in this
-project, deny, or deny and steer. Remembered approvals can be revoked in the list.
-An unattended Session waits for your answer; hard refusals offer no approval.
+## Know the boundary
 
-Protection uses the same file and command checks described above, **not a
-sandbox or a credential isolation boundary**. Scoped containment and writable
-roots are deferred. Scripts can bypass command-text checks.
+Protection is a **file and command rule gate, not a sandbox or credential
+isolation boundary**. Scripts can bypass command-text checks. Scoped containment,
+writable roots and the network ledger are deferred; do not rely on Protection
+to isolate secrets or arbitrary shell side effects.
 
-The first activation backs up stored policy and clears hidden departures for
-projects that are not enforcing, retaining their Off/Observe choice and the
-visible Session transcript setting. Enforcing projects retain their policy.
-With the experiment disabled, existing Authority behavior is unchanged.
-
-See [Settings and configuration](/guides/settings/) for the difference between
-app-wide Settings and project Configure options.
+See [Settings and configuration](/guides/settings/) for app-wide preferences
+and project Configure options.

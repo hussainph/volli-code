@@ -1,15 +1,13 @@
 // @vitest-environment jsdom
 /**
- * Configure → Protection, the Authority entry while the experiment is on
- * (VC-480).
+ * Configure → Protection, the project's policy page (VC-480).
  *
  * Mounted for real rather than rendered to static markup, because what is
  * worth pinning here is what a click WRITES: the switch is a reading of the
  * stored policy, and the two directions write different departures — on
  * states `enforcement`, off clears hidden policy departures. The
  * list is the same: a revoke is a call, a removed row and a toast whose Undo is
- * another call. The bridge is a stub per test, as `authority-pane.test.tsx`
- * stubs nothing because it writes nothing.
+ * another call. The bridge is a stub per test.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -159,17 +157,21 @@ function lastWrittenOverride(bridge: Bridge): unknown {
 }
 
 describe("the switch", () => {
-  it("reads off, in the off words, for a project that states nothing", async () => {
-    stubBridge();
-    const html = (await renderPane(null)).innerHTML;
+  it.each([null, {}, { enforcement: "off" as const }, { enforcement: "observe" as const }])(
+    "reads off for a fresh or non-enforcing project: %j",
+    async (policy) => {
+      const bridge = stubBridge();
+      const html = (await renderPane(policy)).innerHTML;
 
-    expect(protectionSwitch()?.getAttribute("aria-checked")).toBe("false");
-    expect(html).toContain("Protection is off");
-    expect(html).toContain(
-      "Agents run as you. They can read, change and run anything you can, without asking.",
-    );
-    expect(html).not.toContain("Reset Protection");
-  });
+      expect(protectionSwitch()?.getAttribute("aria-checked")).toBe("false");
+      expect(html).toContain("Protection is off");
+      expect(html).toContain(
+        "Agents run as you. They can read, change and run anything you can, without asking.",
+      );
+      if (policy?.enforcement === undefined) expect(html).not.toContain("Reset Protection");
+      expect(bridge.setAuthorityPolicy).not.toHaveBeenCalled();
+    },
+  );
 
   it("reads on, in the on words, exactly when the policy enforces", async () => {
     stubBridge();
@@ -446,9 +448,9 @@ describe("Advanced", () => {
  * `settings-search-smoke.mjs` states in minutes. Section titles and row
  * labels, read off the kit's markers, with Advanced open so its row counts.
  */
-describe("the Configure rail with the experiment on", () => {
-  function entry(protection: boolean) {
-    for (const group of configureGroups(project(), { protection })) {
+describe("the Configure rail", () => {
+  function entry(policy: Project["authorityPolicy"] = null) {
+    for (const group of configureGroups(project(policy))) {
       for (const category of group.categories) {
         if (category.key === "authority") return category;
       }
@@ -456,14 +458,31 @@ describe("the Configure rail with the experiment on", () => {
     throw new Error("no Configure category `authority`");
   }
 
-  it("relabels the same entry and leaves it untouched while the experiment is off", () => {
-    expect(entry(true).label).toBe("Protection");
-    expect(entry(false).label).toBe("Authority");
-    expect(entry(false).keywords).not.toContain("approved actions");
-    for (const keyword of entry(false).keywords ?? []) {
-      expect(entry(true).keywords).toContain(keyword);
-    }
-  });
+  it.each([null, { enforcement: "enforce" as const }])(
+    "always draws Protection, mapping the persisted policy without rewriting it: %j",
+    async (policy) => {
+      const bridge = stubBridge();
+      const category = entry(policy);
+      expect(category.label).toBe("Protection");
+      expect(category.keywords).toContain("approved actions");
+      expect(category.keywords).not.toContain("decision mode — not active yet");
+
+      container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+      await act(async () => root?.render(category.content));
+
+      expect(protectionSwitch()?.getAttribute("aria-checked")).toBe(
+        policy?.enforcement === "enforce" ? "true" : "false",
+      );
+      expect(container.textContent).toContain("Approved actions");
+      expect(container.textContent).toContain("Advanced");
+      expect(container.textContent).not.toContain("Transcripts a Session can read");
+      expect(container.textContent).not.toContain("Rule enforcement");
+      expect(container.textContent).not.toContain("experimental");
+      expect(bridge.setAuthorityPolicy).not.toHaveBeenCalled();
+    },
+  );
 
   it("finds this page from every title and label it draws", async () => {
     stubBridge([approval("docs")]);
@@ -475,9 +494,7 @@ describe("the Configure rail with the experiment on", () => {
           '[data-slot="pref-section-title"], [data-slot="pref-row-label"]',
         ),
       ].map((node) => (node.textContent ?? "").trim());
-      const terms = [entry(true).label, ...(entry(true).keywords ?? [])].map((term) =>
-        term.toLowerCase(),
-      );
+      const terms = [entry().label, ...(entry().keywords ?? [])].map((term) => term.toLowerCase());
 
       expect(drawn.length).toBeGreaterThan(3);
       for (const label of drawn) {
