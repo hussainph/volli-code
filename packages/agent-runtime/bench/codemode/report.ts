@@ -43,9 +43,21 @@ interface Saved {
   results: Trial[];
 }
 
-const ANSWER_GRADED: ReadonlySet<TaskId> = new Set(["loop-filter", "browser-tabs", "single-call"]);
+const ANSWER_GRADED: ReadonlySet<TaskId> = new Set([
+  "loop-filter",
+  "browser-tabs",
+  "single-call",
+  "browser-crawl",
+]);
 const ARMS = ["direct", "codemode", "codemode-nudge", "codemode-only"];
-const ORDER: TaskId[] = ["loop-filter", "browser-tabs", "session-fanout", "single-call"];
+const ORDER: TaskId[] = [
+  "loop-filter",
+  "browser-tabs",
+  "session-fanout",
+  "single-call",
+  "browser-crawl",
+  "edit-loop",
+];
 
 function median(values: readonly number[]): number {
   const sorted = values.toSorted((left, right) => left - right);
@@ -61,8 +73,9 @@ function table(headers: string[], rows: string[][]): string {
   ].join("\n");
 }
 
-const pooled = process.argv.includes("phase2");
-const directory = join(import.meta.dirname, "results", ...(pooled ? ["phase2"] : []));
+const phase = process.argv.find((argument) => /^phase2b?$/u.test(argument));
+const pooled = phase !== undefined;
+const directory = join(import.meta.dirname, "results", ...(phase === undefined ? [] : [phase]));
 const files = readdirSync(directory)
   .filter((name) => name.endsWith(".json") && statSync(join(directory, name)).isFile())
   .map((name) => ({ path: join(directory, name), at: statSync(join(directory, name)).mtimeMs }))

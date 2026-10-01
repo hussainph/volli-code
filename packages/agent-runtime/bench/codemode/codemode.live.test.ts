@@ -14,6 +14,7 @@
  *   PI_BENCH_TASKS=loop-filter,single-call       # optional subset
  *   PI_BENCH_ARMS=direct,codemode-nudge          # optional subset of arms
  *   PI_BENCH_REASONING=low                       # default off; for models without it
+ *   PI_BENCH_OUT=phase2b                         # results/ subdirectory, default phase2
  *
  * Spends real money through the developer's own Pi credentials, so it never
  * runs by default. Results print as tables and land as JSON beside this file,
@@ -248,8 +249,12 @@ function table(headers: string[], rows: string[][]): string {
 
 describe.skipIf(process.env.PI_LIVE_BENCH !== "1")("VC-471 Code Mode, live", () => {
   it("runs each task direct and with Code Mode, and reports medians", async () => {
-    const model = process.env.PI_BENCH_MODEL ?? DEFAULT_MODEL;
-    const [providerId = "", modelId = ""] = model.split("/");
+    const reasoning = process.env.PI_BENCH_REASONING ?? "off";
+    const [providerId = "", modelId = ""] = (process.env.PI_BENCH_MODEL ?? DEFAULT_MODEL).split(
+      "/",
+    );
+    // The reasoning level is part of what was measured, so it names the row.
+    const model = `${providerId}/${modelId}${reasoning === "off" ? "" : ` (${reasoning})`}`;
     const trials = Number(process.env.PI_BENCH_TRIALS ?? 3);
     const tasks = (process.env.PI_BENCH_TASKS?.split(",") ?? Object.keys(TASKS)) as TaskId[];
     const results: Trial[] = [];
@@ -311,7 +316,7 @@ describe.skipIf(process.env.PI_LIVE_BENCH !== "1")("VC-471 Code Mode, live", () 
     console.log(
       `\n# VC-471 — ${model}, ${trials} trials per cell, medians\n\n${printed}\n\ntotal spend: $${spend.toFixed(4)}\n`,
     );
-    const directory = join(import.meta.dirname, "results", "phase2");
+    const directory = join(import.meta.dirname, "results", process.env.PI_BENCH_OUT ?? "phase2");
     mkdirSync(directory, { recursive: true });
     writeFileSync(
       join(
