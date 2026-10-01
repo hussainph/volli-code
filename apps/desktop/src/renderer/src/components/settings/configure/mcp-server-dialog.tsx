@@ -555,6 +555,9 @@ export function McpServerDialog({
               </div>
             </DialogDescription>
           )}
+          {health?.fix === "retry" && !connectedHere ? (
+            <p className="text-ui text-destructive">{health.detail}</p>
+          ) : null}
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">

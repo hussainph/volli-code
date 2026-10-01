@@ -217,7 +217,32 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe("the server list", () => {
+describe("the server table", () => {
+  it("gives identity, tools, status and controls their own columns", async () => {
+    await render({ list: listing([record(), remote()]) });
+    const table = document.body.querySelector("table")!;
+    expect(table.querySelector("caption")?.textContent).toBe("MCP servers");
+    expect([...table.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
+      "Server",
+      "Tools",
+      "Status",
+      "Enabled",
+      "Actions",
+    ]);
+    expect(table.querySelectorAll('th[scope="col"]')).toHaveLength(5);
+    const rows = [...table.querySelectorAll("tbody tr")];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelectorAll("td")).toHaveLength(5);
+      expect(row.children[0]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
+      expect(row.children[1]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
+      expect(row.children[3]?.querySelector('[role="switch"]')).not.toBeNull();
+      expect(row.children[4]?.querySelector('button[aria-label^="More"]')).not.toBeNull();
+    }
+    await click(labelled("Choose Fixture tools"));
+    expect(dialog().querySelector('[role="checkbox"]')).not.toBeNull();
+  });
+
   it("keeps the scan to identity and tool counts, with freshness in the server dialog", async () => {
     await render({
       list: listing([
@@ -229,7 +254,7 @@ describe("the server list", () => {
     expect(text()).toContain("A local MCP command runs as you");
     expect(text()).toContain("a remote server receives the arguments sent to its tools");
     expect(text()).toContain("node fixture.mjs");
-    expect(text()).toContain("3 of 34 tools on");
+    expect(text()).toContain("3 of 34");
     expect(text()).toContain("mcp.sentry.dev/mcp");
     expect(text()).not.toContain("Refreshed");
     expect(text()).not.toContain("Never refreshed");
@@ -268,11 +293,13 @@ describe("the server list", () => {
     });
 
     expect(text()).toContain("Refresh failed");
-    expect(text()).toContain("Could not refresh Fixture.");
+    expect(text()).not.toContain("Could not refresh Fixture.");
+    expect(document.body.querySelector('[title="Could not refresh Fixture."]')).not.toBeNull();
     expect(text()).not.toContain("sha256:2f0c1d");
     await click(labelled("Open Fixture"));
     expect(dialog().textContent).toContain("registry.modelcontextprotocol.io/io.github.acme/files");
     expect(dialog().textContent).toContain("sha256:2f0c1d");
+    expect(dialog().textContent).toContain("Could not refresh Fixture.");
     // A version and a digest shown without this read as a guarantee Volli
     // never made: nothing is downloaded, so nothing is checked against them.
     expect(dialog().textContent).toMatch(/not verified/i);
@@ -389,7 +416,7 @@ describe("opening a server", () => {
       enabledTools: ["list_items", "get_item"],
     });
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-    expect(text()).toContain("2 of 3 tools on");
+    expect(text()).toContain("2 of 3");
   });
 
   it("says why a tools save failed, and stays open on the choice", async () => {
@@ -940,7 +967,7 @@ describe("sign-in and credentials (VC-470)", () => {
 
     expect(() => button("Sign in")).toThrow();
     expect(text()).toContain("Missing credential");
-    expect(text()).toContain("Missing header Authorization");
+    expect(document.body.querySelector('[title="Missing header Authorization"]')).not.toBeNull();
   });
 
   it("opens a missing credential straight on its field, sends a typed secret once, and never shows a stored one back", async () => {
