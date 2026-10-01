@@ -14,9 +14,10 @@
  *     on the fields. *Connect* reads the tool list, and a server that needs a
  *     sign-in or a credential says so right there with the one fix.
  *  2. **Tools.** The shared picker (`mcp-tool-picker.tsx`).
- *  3. **Save.** Nothing is written until then. A change to the connection is
- *     read again before it is saved, so what is saved is what answered; a
- *     change to tools alone is written without touching the network.
+ *  3. **Save.** Nothing is written until then. Connect lives in the footer
+ *     while editing; once it answers, the same slot becomes Add server or
+ *     Save. A changed endpoint always gets a tool review before it is saved;
+ *     a change to tools alone is written without touching the network.
  *
  * Newly discovered tools start off, as they always have: a person chooses each
  * one, and *Select all* or a group's checkbox makes that one click.
@@ -90,8 +91,8 @@ const NEW_SERVER: McpServerDraft = {
 };
 
 const TRANSPORTS = [
-  { key: "streamable-http", label: "Remote (HTTP)" },
-  { key: "stdio", label: "Local (stdio)" },
+  { key: "streamable-http", label: "Remote" },
+  { key: "stdio", label: "Local" },
 ] as const satisfies readonly { key: McpTransportConfig["type"]; label: string }[];
 
 function freshId(): string {
@@ -266,12 +267,14 @@ export function McpServerDialog({
   const [fieldFocus, setFieldFocus] = React.useState<string | null>(() =>
     target.kind === "add"
       ? "endpoint"
-      : target.section === "connection" && missing.length > 0
-        ? missingField(missing[0]!)
+      : target.section === "connection"
+        ? missing.length > 0
+          ? missingField(missing[0]!)
+          : "endpoint"
         : null,
   );
   const toolChanges = changedTools(savedSelection, selected);
-  const dirty = saved === null || connectionChanged || toolChanges > 0;
+  const dirty = connectionChanged || toolChanges > 0 || (saved === null && connectedHere);
   const ready =
     (transport.type === "stdio" ? transport.command.trim() : transport.url.trim()).length > 0;
 
@@ -471,12 +474,13 @@ export function McpServerDialog({
   const health = saved === null ? null : serverHealth(saved, access, signingIn === saved.id);
   const provenance = saved === null ? null : provenanceLine(saved.provenance);
   const title = saved === null ? "Add MCP server" : saved.name;
-  const showTools = catalog.length > 0 || discovered;
-  // A new server is added only once its tools have been read and chosen; a
-  // saved one whose connection changed is read again as part of saving.
-  const saveLabel =
-    saved === null ? "Add server" : connectionChanged && unread ? "Connect and save" : "Save";
+  // Connection and tool choice are separate decisions. Hide the old catalog
+  // while editing so it cannot be mistaken for the changed endpoint's tools.
+  const showTools = !editing && discovered;
+  const saveLabel = saved === null ? "Add server" : "Save";
   const canSave = busy === null && ready && (saved === null ? discovered && !unread : dirty);
+  const needsSignIn = editing && blocked?.kind === "sign-in";
+  const waitingForSignIn = draftSigningIn !== null;
 
   /** A saved server's sign-in act, run by the pane, with its failure said here. */
   async function savedAct(act: (serverId: string) => Promise<string | null>): Promise<void> {
@@ -489,16 +493,16 @@ export function McpServerDialog({
     <Dialog open onOpenChange={(open) => (open ? undefined : void close())}>
       <DialogContent
         className={cn(
-          "flex max-h-[88vh] flex-col gap-0 p-0 sm:max-w-3xl",
-          showTools && "h-[min(46rem,88vh)]",
+          "flex max-h-[88vh] flex-col gap-0 p-0",
+          showTools ? "h-[min(46rem,88vh)] sm:max-w-3xl" : "sm:max-w-xl",
         )}
         // A half-made choice of forty tools is not lost to a stray click on
         // the scrim; Escape and Cancel still close it.
         onInteractOutside={(event) => {
           if (dirty) event.preventDefault();
         }}
-        // Escape clears a typed filter first (the picker does that), never
-        // drops unsaved changes, and never closes under a save in flight.
+        // Escape clears a typed filter first (the picker does that), closes
+        // untouched setup, and never drops edits or closes under a save.
         // Cancel is the way to leave with changes unsaved.
         onEscapeKeyDown={(event) => {
           const from = event.target;
@@ -533,9 +537,15 @@ export function McpServerDialog({
           {saved === null || health === null ? null : (
             <DialogDescription asChild>
               <div className="flex flex-wrap items-center gap-x-2 text-ui text-muted-foreground">
-                <Health state={health.state}>{health.label}</Health>
-                <span aria-hidden>·</span>
-                <span>{refreshedLabel(saved)}</span>
+                <Health state={connectedHere && !unread ? "ready" : health.state}>
+                  {connectedHere && !unread ? "Connected" : health.label}
+                </Health>
+                {connectedHere && !unread ? null : (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>{refreshedLabel(saved)}</span>
+                  </>
+                )}
                 {provenance === null ? null : (
                   <>
                     <span aria-hidden>·</span>
@@ -569,7 +579,7 @@ export function McpServerDialog({
                 transport={applyCredentials(transport, credentials).transport}
                 // Sign-in and stored secrets are the SAVED server's; a changed
                 // connection has neither until it is saved.
-                access={saved !== null && !unread ? access : undefined}
+                access={saved !== null && !connectionChanged ? access : undefined}
                 waiting={saved !== null && signingIn === saved.id}
                 busy={busy !== null || (signingIn !== null && signingIn !== saved?.id)}
                 onSignIn={() => void savedAct(onSignIn)}
@@ -599,23 +609,18 @@ export function McpServerDialog({
             )}
             {editing ? (
               <ConnectResult
-                primary={!discovered || unread}
                 busy={busy}
-                ready={ready}
                 discovered={connectedHere && !unread}
                 count={catalog.length}
                 blocked={blocked}
-                waiting={draftSigningIn !== null}
-                onConnect={() => void connect()}
-                onSignIn={() => void signInDraft()}
-                onCancelSignIn={() => void cancelDraftSignIn()}
+                waiting={waitingForSignIn}
               />
             ) : null}
           </section>
 
           {showTools ? (
             <section aria-label="Tools" className="flex min-h-72 flex-1 flex-col gap-2">
-              <h3 className="text-label text-muted-foreground uppercase">Tools</h3>
+              <h3 className="text-label text-muted-foreground uppercase">Tools for new Sessions</h3>
               <McpToolPicker
                 serverName={draft.name.trim().length > 0 ? draft.name : suggested}
                 tools={catalog}
@@ -628,7 +633,7 @@ export function McpServerDialog({
           ) : null}
         </div>
 
-        <DialogFooter className="shrink-0 items-center border-t border-border/50 px-4 py-4 sm:justify-between">
+        <DialogFooter className="shrink-0 flex-col items-stretch gap-2 border-t border-border/50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 flex-1">
             {error === null ? (
               // Not a live region: the picker's own count already announces
@@ -644,7 +649,7 @@ export function McpServerDialog({
               </p>
             )}
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 justify-end gap-2">
             <Button
               size="sm"
               variant="ghost"
@@ -653,9 +658,31 @@ export function McpServerDialog({
             >
               Cancel
             </Button>
-            <Button size="sm" disabled={!canSave} onClick={() => void save()}>
-              {busy === "save" ? "Saving…" : saveLabel}
-            </Button>
+            {needsSignIn ? (
+              waitingForSignIn ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void cancelDraftSignIn().then(setError)}
+                >
+                  <XIcon />
+                  Cancel sign-in
+                </Button>
+              ) : (
+                <Button size="sm" disabled={busy !== null} onClick={() => void signInDraft()}>
+                  <SignInIcon />
+                  Sign in
+                </Button>
+              )
+            ) : editing ? (
+              <Button size="sm" disabled={busy !== null || !ready} onClick={() => void connect()}>
+                {busy === "connect" ? "Connecting…" : "Connect"}
+              </Button>
+            ) : (
+              <Button size="sm" disabled={!canSave} onClick={() => void save()}>
+                {busy === "save" ? "Saving…" : saveLabel}
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>
@@ -690,7 +717,7 @@ function ConnectionSummary({
     <div className="flex flex-col gap-1 rounded-lg bg-muted/30 px-4 py-2">
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <span className="shrink-0 text-muted-foreground">
-          {transport.type === "stdio" ? "Local (stdio)" : "Remote (HTTP)"}
+          {transport.type === "stdio" ? "Local" : "Remote"}
         </span>
         <code className="min-w-0 truncate font-mono" title={where}>
           {where}
@@ -793,11 +820,11 @@ function ConnectionFields({
             (input) => input.getAttribute("aria-label")?.toLowerCase() === focusField.toLowerCase(),
           );
     field?.focus();
-  }, [focusField]);
+  }, [focusField, transport.type]);
   const name = (
     <div className="grid gap-1 sm:col-span-2">
       <label className="text-ui" htmlFor="mcp-server-name">
-        Name
+        Name (optional)
       </label>
       <Input
         id="mcp-server-name"
@@ -828,9 +855,9 @@ function ConnectionFields({
       }}
     >
       <div className="grid gap-1 sm:col-span-2">
-        <span className="text-ui">Transport</span>
+        <span className="text-ui">Location</span>
         <Segmented<McpTransportConfig["type"]>
-          ariaLabel="Transport"
+          ariaLabel="Server location"
           value={transport.type}
           options={TRANSPORTS}
           onChange={onTransport}
@@ -868,7 +895,7 @@ function ConnectionFields({
       ) : (
         <div className="grid gap-1 sm:col-span-2">
           <label className="text-ui" htmlFor="mcp-url">
-            Endpoint URL
+            Server URL
           </label>
           <Input
             id="mcp-url"
@@ -892,71 +919,38 @@ function ConnectionFields({
   );
 }
 
-/** *Connect*, and what the last attempt found: the tools, or the one thing in the way. */
+/** What the last connection attempt found; its next action lives in the footer. */
 function ConnectResult({
-  primary,
   busy,
-  ready,
   discovered,
   count,
   blocked,
   waiting,
-  onConnect,
-  onSignIn,
-  onCancelSignIn,
 }: {
-  /** Connecting is the next step (nothing read yet, or the connection changed). */
-  primary: boolean;
   busy: null | "connect" | "save" | "sign-in";
-  ready: boolean;
   discovered: boolean;
   count: number;
   blocked: McpConnectionBlock | null;
   waiting: boolean;
-  onConnect: () => void;
-  onSignIn: () => void;
-  onCancelSignIn: () => void;
 }) {
+  if (busy === null && !waiting && blocked === null && !discovered) return null;
   return (
-    <div className="flex min-h-7 flex-wrap items-center justify-end gap-2">
-      <span className="mr-auto text-ui text-muted-foreground" aria-live="polite">
-        {busy === "connect" ? (
-          "Connecting…"
-        ) : waiting ? (
-          <Health state="starting">Waiting for the browser…</Health>
-        ) : blocked?.kind === "sign-in" ? (
-          <Health state="waiting">This server needs you to sign in</Health>
-        ) : blocked?.kind === "credential" ? (
-          <Health state="waiting">
-            {blocked.rejected === true
-              ? `The server refused ${blocked.missing.join(", ")}`
-              : `Missing ${blocked.missing.join(", ")}`}
-          </Health>
-        ) : discovered ? (
-          <Health state="ready">{`Connected · ${count} ${count === 1 ? "tool" : "tools"}`}</Health>
-        ) : null}
-      </span>
-      {blocked?.kind === "sign-in" ? (
-        waiting ? (
-          <Button size="sm" variant="outline" onClick={onCancelSignIn}>
-            <XIcon />
-            Cancel sign-in
-          </Button>
-        ) : (
-          <Button size="sm" disabled={busy !== null} onClick={onSignIn}>
-            <SignInIcon />
-            Sign in
-          </Button>
-        )
+    <div className="text-ui text-muted-foreground" role="status">
+      {busy === "connect" ? (
+        "Connecting…"
+      ) : waiting ? (
+        <Health state="starting">Waiting for the browser…</Health>
+      ) : blocked?.kind === "sign-in" ? (
+        <Health state="waiting">This server needs you to sign in</Health>
+      ) : blocked?.kind === "credential" ? (
+        <Health state="waiting">
+          {blocked.rejected === true
+            ? `The server refused ${blocked.missing.join(", ")}`
+            : `Missing ${blocked.missing.join(", ")}`}
+        </Health>
+      ) : discovered ? (
+        <Health state="ready">{`Connected · ${count} ${count === 1 ? "tool" : "tools"}`}</Health>
       ) : null}
-      <Button
-        size="sm"
-        variant={primary && blocked?.kind !== "sign-in" ? "default" : "outline"}
-        disabled={busy !== null || !ready}
-        onClick={onConnect}
-      >
-        {discovered ? "Connect again" : "Connect"}
-      </Button>
     </div>
   );
 }

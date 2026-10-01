@@ -178,7 +178,8 @@ export function applyCredentials(
   };
 }
 
-const KIND_SELECT = "h-7 rounded-control border border-border bg-background px-2 text-ui";
+const KIND_SELECT =
+  "h-7 shrink-0 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The value field for one row: a write-only secret, or a `${NAME}` reference. */
 function ValueField({
@@ -238,8 +239,8 @@ function KindSelect({
       value={value}
       onChange={(event) => onChange(event.target.value as McpCredentialSource["kind"])}
     >
-      <option value="secret">Secret</option>
-      <option value="reference">Reference</option>
+      <option value="secret">Stored secret</option>
+      <option value="reference">Environment variable</option>
     </select>
   );
 }
@@ -258,65 +259,87 @@ function CredentialRows({
   onChange: (rows: readonly EditorCredential[]) => void;
 }) {
   const noun = family === "header" ? "header" : "variable";
+  const title = family === "header" ? "Headers" : "Environment variables";
+  const [open, setOpen] = React.useState(rows.length > 0);
   const update = (index: number, patch: Partial<EditorCredential>): void =>
     onChange(rows.map((row, at) => (at === index ? { ...row, ...patch } : row)));
   return (
-    <div className="grid gap-2 sm:col-span-2">
-      <div className="flex items-center justify-between">
-        <span className="text-ui">{family === "header" ? "Headers" : "Environment"}</span>
+    <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 sm:col-span-2">
+      <CollapsibleTrigger asChild>
         <Button
           size="xs"
           variant="ghost"
-          onClick={() =>
-            onChange([
-              ...rows,
-              { key: rowKey(), name: "", kind: "secret", template: "", secret: "" },
-            ])
-          }
+          aria-label={`${open ? "Hide" : "Show"} ${title.toLowerCase()}`}
         >
-          <PlusIcon />
-          {`Add ${noun}`}
+          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          {title}
+          {rows.length > 0 ? (
+            <span className="text-muted-foreground tabular-nums">{rows.length}</span>
+          ) : null}
         </Button>
-      </div>
-      {rows.map((row, index) => {
-        const label = row.name.trim().length === 0 ? `${noun} ${index + 1}` : row.name.trim();
-        return (
-          <div key={row.key} className="flex items-center gap-2">
-            <Input
-              aria-label={`${noun} ${index + 1} name`}
-              className="w-40 shrink-0"
-              spellCheck={false}
-              placeholder={family === "header" ? "Authorization" : "API_KEY"}
-              value={row.name}
-              onChange={(event) => update(index, { name: event.target.value })}
-            />
-            <KindSelect
-              label={label}
-              value={row.kind}
-              onChange={(kind) => update(index, { kind })}
-            />
-            <ValueField
-              id={`mcp-${family}-${index}`}
-              label={label}
-              kind={row.kind}
-              template={row.template}
-              secret={row.secret}
-              stored={stored.has(mcpCredentialSlot(family, row.name.trim()))}
-              onTemplate={(template) => update(index, { template })}
-              onSecret={(secret) => update(index, { secret })}
-            />
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label={`Remove ${label}`}
-              onClick={() => onChange(rows.filter((_row, at) => at !== index))}
-            >
-              <XIcon />
-            </Button>
-          </div>
-        );
-      })}
-    </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="@container/credentials flex min-w-0 flex-col gap-2 pt-2">
+          <Button
+            className="self-start"
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              onChange([
+                ...rows,
+                { key: rowKey(), name: "", kind: "secret", template: "", secret: "" },
+              ])
+            }
+          >
+            <PlusIcon />
+            {`Add ${noun}`}
+          </Button>
+          {rows.map((row, index) => {
+            const label = row.name.trim().length === 0 ? `${noun} ${index + 1}` : row.name.trim();
+            return (
+              <div
+                key={row.key}
+                className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/30 p-2"
+              >
+                <Input
+                  aria-label={`${noun} ${index + 1} name`}
+                  className="min-w-0 flex-1 basis-40"
+                  spellCheck={false}
+                  placeholder={family === "header" ? "Authorization" : "API_KEY"}
+                  value={row.name}
+                  onChange={(event) => update(index, { name: event.target.value })}
+                />
+                <KindSelect
+                  label={label}
+                  value={row.kind}
+                  onChange={(kind) => update(index, { kind })}
+                />
+                <div className="min-w-0 flex-1 basis-48 @max-[32rem]/credentials:order-last @max-[32rem]/credentials:basis-full">
+                  <ValueField
+                    id={`mcp-${family}-${index}`}
+                    label={label}
+                    kind={row.kind}
+                    template={row.template}
+                    secret={row.secret}
+                    stored={stored.has(mcpCredentialSlot(family, row.name.trim()))}
+                    onTemplate={(template) => update(index, { template })}
+                    onSecret={(secret) => update(index, { secret })}
+                  />
+                </div>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Remove ${label}`}
+                  onClick={() => onChange(rows.filter((_row, at) => at !== index))}
+                >
+                  <XIcon />
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -331,19 +354,26 @@ function OAuthClientFields({
   onChange: (oauth: EditorOAuth) => void;
 }) {
   const [open, setOpen] = React.useState(
-    oauth.clientId.length > 0 || oauth.scope.length > 0 || oauth.callbackPort.length > 0,
+    oauth.clientId.length > 0 ||
+      oauth.scope.length > 0 ||
+      oauth.callbackPort.length > 0 ||
+      oauth.callbackUrl.length > 0,
   );
   const set = (patch: Partial<EditorOAuth>): void => onChange({ ...oauth, ...patch });
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="sm:col-span-2">
       <CollapsibleTrigger asChild>
-        <Button size="xs" variant="ghost" aria-label={`${open ? "Hide" : "Show"} OAuth client`}>
-          <CaretDownIcon aria-hidden className={cn("transition-transform", open && "rotate-180")} />
-          OAuth client
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-label={`${open ? "Hide" : "Show"} custom OAuth client`}
+        >
+          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          Custom OAuth client
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        <div className="mt-2 grid min-w-0 gap-4 sm:grid-cols-2">
           <div className="grid gap-1">
             <label className="text-ui" htmlFor="mcp-oauth-client-id">
               Client ID
@@ -370,8 +400,8 @@ function OAuthClientFields({
                 }
               >
                 <option value="none">None</option>
-                <option value="secret">Secret</option>
-                <option value="reference">Reference</option>
+                <option value="secret">Stored secret</option>
+                <option value="reference">Environment variable</option>
               </select>
               {oauth.secretKind === "none" ? null : (
                 <ValueField

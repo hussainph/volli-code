@@ -71,7 +71,8 @@ function dealTabStop(list: HTMLElement | null, holder: string | null): void {
   const usable = stops.filter((stop) => !stop.disabled);
   const held = usable.find((stop) => stop.getAttribute(ROVE) === holder) ?? usable[0];
   for (const stop of stops) stop.tabIndex = stop === held ? 0 : -1;
-  for (const details of list?.querySelectorAll<HTMLElement>("[data-details]") ?? []) {
+  for (const details of list?.querySelectorAll<HTMLElement>("[data-details]:not([data-rove])") ??
+    []) {
     details.tabIndex = -1;
   }
 }
@@ -150,7 +151,11 @@ export function McpToolPicker({
     const stops = [
       ...event.currentTarget.querySelectorAll<HTMLButtonElement>(`[${ROVE}]:not(:disabled)`),
     ];
-    if (event.key === "ArrowLeft" && target.hasAttribute("data-details")) {
+    if (
+      event.key === "ArrowLeft" &&
+      target.hasAttribute("data-details") &&
+      !target.hasAttribute(ROVE)
+    ) {
       event.preventDefault();
       target.closest('[role="listitem"]')?.querySelector<HTMLElement>(`[${ROVE}]`)?.focus();
       return;
@@ -183,7 +188,7 @@ export function McpToolPicker({
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col gap-2">
       <div
-        className="flex items-center gap-2"
+        className="flex flex-wrap items-center gap-2"
         onKeyDown={(event) => {
           // Escape in a filter with text clears the text. The dialog around
           // this list sees the same key first and stays open for it (its
@@ -195,14 +200,19 @@ export function McpToolPicker({
           }
         }}
       >
-        <TableSearch value={query} placeholder="Filter tools" onChange={setQuery} />
+        <div className="min-w-0 flex-1 basis-48 [&>div]:w-full">
+          <TableSearch value={query} placeholder="Filter tools" onChange={setQuery} />
+        </div>
         <Segmented<McpToolShow>
           ariaLabel="Show tools"
           value={show}
           options={SHOW_OPTIONS}
           onChange={choose}
         />
-        <span className="ml-auto text-ui text-muted-foreground tabular-nums" aria-live="polite">
+        <span
+          className="ml-auto shrink-0 text-ui text-muted-foreground tabular-nums"
+          aria-live="polite"
+        >
           {on} of {total} on
         </span>
       </div>
@@ -383,7 +393,8 @@ function ToolRow({
             rather than on the whole row. */}
         <span className="flex h-5 shrink-0 items-center">
           <Checkbox
-            data-rove={`tool:${tool.name}`}
+            data-rove={selectable ? `tool:${tool.name}` : undefined}
+            tabIndex={selectable ? undefined : -1}
             id={`${describedBy}-box`}
             // The exact name is always in the accessible name: a server's
             // title is its own words, and the name is what an agent calls.
@@ -445,11 +456,12 @@ function ToolRow({
           variant="ghost"
           className="shrink-0"
           data-details=""
+          data-rove={!selectable ? `details:${tool.name}` : undefined}
           aria-expanded={open}
           aria-label={`${open ? "Hide" : "Show"} details for ${title}`}
           onClick={onToggleOpen}
         >
-          <CaretDownIcon className={cn("transition-transform", open && "rotate-180")} />
+          <CaretDownIcon className={cn(open && "rotate-180")} />
         </Button>
       ) : null}
     </div>

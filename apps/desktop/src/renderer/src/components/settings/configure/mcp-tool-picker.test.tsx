@@ -304,8 +304,14 @@ describe("McpToolPicker", () => {
     await key(first, "ArrowUp");
     expect(document.activeElement).toBe(first);
     await key(first, "End");
-    expect(document.activeElement).toBe(box("Delete issue (delete_issue)"));
-    await key(box("Delete issue (delete_issue)"), "ArrowDown");
+    const unavailableDetails = button("Show details for render_graph");
+    expect(document.activeElement).toBe(unavailableDetails);
+    expect(unavailableDetails.tabIndex).toBe(0);
+    await key(unavailableDetails, "ArrowDown");
+    expect(document.activeElement).toBe(unavailableDetails);
+    await key(unavailableDetails, "ArrowLeft");
+    expect(document.activeElement).toBe(unavailableDetails);
+    await key(unavailableDetails, "ArrowUp");
     expect(document.activeElement).toBe(box("Delete issue (delete_issue)"));
     // A row with no details, and keys that mean nothing here, go nowhere.
     await key(box("Select all tools"), "ArrowRight");

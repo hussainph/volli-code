@@ -35,18 +35,19 @@ just installed a server will otherwise try to call its tools in the same turn.
 ## Configuring a server by hand
 
 **Settings → Configure → MCP Servers.** Each server is one row: where it lives,
-how many of its tools are on, how fresh that list is, where it came from, and
-whether it works. When it does not, the row says why and offers the one fix
+how many of its tools are on, and whether it works. Refresh age and detailed
+provenance live in the server dialog. When it does not, the row says why and offers the one fix
 (*Sign in*, *Add credential*, *Retry*). A switch turns the server off without
 forgetting it, and a menu holds the rest: tools, connection, refresh, sign out
 and remove (which asks first, because it deletes stored credentials).
 
 Everything about one server opens as one dialog, with one *Save*:
 
-- **Adding a server.** Choose *Remote (HTTP)* or *Local (stdio)*, give the URL
-  (or the executable and its arguments), and press *Connect* (or Enter). The name
-  is suggested from the host or package. A server that wants a sign-in or a
-  credential says so beside the *Connect* button with the fix. Nothing is stored
+- **Adding a server.** Choose *Remote* or *Local*, give the URL
+  (or the executable and its arguments), and press *Connect* in the footer (or Enter).
+  The optional name is suggested from the host or package. Headers, environment
+  variables and custom OAuth client settings open only when needed. A server
+  that wants sign-in or a credential says so, with its next action in the footer. Nothing is stored
   until discovery succeeds, and **discovered tools start off**: every tool is an
   explicit choice, and *Add server* saves only what you ticked.
 - **Choosing tools.** Clicking a row opens its tools: a filter (name, title or
@@ -63,9 +64,11 @@ Everything about one server opens as one dialog, with one *Save*:
   trusts them for anything else. A tool whose definition Volli cannot offer is
   listed last with the reason and cannot be ticked. Saving a change to tools
   alone writes it without connecting.
-- **Editing the connection.** *Edit* in the dialog opens the fields. A changed
-  connection is read again as it is saved (*Connect and save*); a tool still
-  offered keeps its choice, and one that is gone is dropped.
+- **Editing the connection.** *Edit* in the dialog opens the fields. Press
+  *Connect*, review the tools, then *Save*. On the same endpoint, a tool still
+  offered keeps its choice, and one that is gone is dropped. Changing endpoints
+  starts every tool off again; the old catalog is hidden while editing. Tool
+  choices apply to new Sessions only.
 
 ## The agent-facing verbs
 
@@ -359,7 +362,7 @@ One sign-in runs per server at a time: Settings and an agent's question join the
 same one, an agent that stops waiting leaves it running for the person, and the
 person's *Cancel sign-in* stops it for everyone.
 
-**Pre-registered clients.** Under *OAuth client* in the connection fields: a client ID, an
+**Pre-registered clients.** Under *Custom OAuth client* in the connection fields: a client ID, an
 optional client secret (a stored secret or a `${NAME}` reference), and either a
 callback port — the redirect is then `http://127.0.0.1:<port>/callback` — or a
 whole loopback callback URL (`http://localhost:…`, `127.0.0.1` or `[::1]`) for a
@@ -379,13 +382,13 @@ is signed in to.
 ### Headers and environment values
 
 In the connection fields, a remote server takes **Headers** and a local server takes
-**Environment** entries. Each value is one of two kinds, and neither is stored
+**Environment variables** entries. Each value is one of two kinds, and neither is stored
 as plain text in configuration:
 
 | Kind | What is stored in the project | Where the value comes from |
 | --- | --- | --- |
-| **Secret** | Only that a secret exists for this slot. | You type it once. It is kept in a file readable only by you (below), never shown back — the field reads *Stored* — and replaced by typing a new one. |
-| **Reference** | The reference, e.g. `Bearer ${GITHUB_TOKEN}`. | Volli's own environment, read when the server connects. Literal text may surround `${NAME}` references; a value with no reference must be a secret. |
+| **Stored secret** | Only that a secret exists for this slot. | You type it once. It is kept in a file readable only by you (below), never shown back — the field reads *Stored* — and replaced by typing a new one. |
+| **Environment variable** | The reference, e.g. `Bearer ${GITHUB_TOKEN}`. | Volli's own environment, read when the server connects. Literal text may surround `${NAME}` references; a value with no reference must be a secret. |
 
 There is no third, literal kind. A plain value typed into configuration would be
 stored in the project database and copied into every backup bundle, and Volli

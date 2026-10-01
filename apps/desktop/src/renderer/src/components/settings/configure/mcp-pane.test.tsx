@@ -168,6 +168,12 @@ async function click(element: HTMLElement): Promise<void> {
   await act(async () => element.click());
 }
 
+function escape(): void {
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+}
+
 /** Radix opens a dropdown on pointerdown. */
 async function openMenu(trigger: HTMLElement): Promise<void> {
   await act(async () => {
@@ -212,7 +218,7 @@ afterEach(async () => {
 });
 
 describe("the server list", () => {
-  it("says what each server is, where it lives, how many tools are on, and how fresh that is", async () => {
+  it("keeps the scan to identity and tool counts, with freshness in the server dialog", async () => {
     await render({
       list: listing([
         record({ catalog: manyTools(), refreshedAt: Date.now() - 7_200_000 }),
@@ -224,10 +230,15 @@ describe("the server list", () => {
     expect(text()).toContain("a remote server receives the arguments sent to its tools");
     expect(text()).toContain("node fixture.mjs");
     expect(text()).toContain("3 of 34 tools on");
-    expect(text()).toContain("2h ago");
     expect(text()).toContain("mcp.sentry.dev/mcp");
-    expect(text()).toContain("Never refreshed");
+    expect(text()).not.toContain("Refreshed");
+    expect(text()).not.toContain("Never refreshed");
     expect(text()).toContain("Ready");
+    await click(labelled("Open Fixture"));
+    expect(dialog().textContent).toContain("2h ago");
+    await click(button("Cancel", dialog()));
+    await click(labelled("Open Sentry"));
+    expect(dialog().textContent).toContain("Never refreshed");
   });
 
   it("keeps a 34-tool catalog to a count: no description and no tool control until a server is opened (VC-397)", async () => {
@@ -238,7 +249,7 @@ describe("the server list", () => {
     expect(document.body.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
   });
 
-  it("says what is wrong and where a server came from without opening it, and offers the fix", async () => {
+  it("offers the fix on the row and keeps detailed provenance in the dialog", async () => {
     const refresh = vi.fn(async () => ({ ok: true as const, server: record() }));
     await render({
       list: listing([
@@ -258,11 +269,14 @@ describe("the server list", () => {
 
     expect(text()).toContain("Refresh failed");
     expect(text()).toContain("Could not refresh Fixture.");
-    expect(text()).toContain("registry.modelcontextprotocol.io/io.github.acme/files");
-    expect(text()).toContain("sha256:2f0c1d");
+    expect(text()).not.toContain("sha256:2f0c1d");
+    await click(labelled("Open Fixture"));
+    expect(dialog().textContent).toContain("registry.modelcontextprotocol.io/io.github.acme/files");
+    expect(dialog().textContent).toContain("sha256:2f0c1d");
     // A version and a digest shown without this read as a guarantee Volli
     // never made: nothing is downloaded, so nothing is checked against them.
-    expect(text()).toMatch(/not verified/i);
+    expect(dialog().textContent).toMatch(/not verified/i);
+    await click(button("Cancel", dialog()));
 
     await click(button("Retry"));
     expect(refresh).toHaveBeenCalledWith({ projectId: project.id, serverId: "server-1" });
@@ -404,7 +418,9 @@ describe("opening a server", () => {
     await click(menuItem("Edit connection"));
     expect((document.body.querySelector("#mcp-command") as HTMLInputElement).value).toBe("node");
     await setValue("#mcp-server-name", "Edited fixture");
-    await click(button("Connect and save", dialog()));
+    await click(button("Connect", dialog()));
+    expect(save).not.toHaveBeenCalled();
+    await click(button("Save", dialog()));
 
     expect(test).toHaveBeenCalledWith({
       projectId: project.id,
@@ -459,6 +475,9 @@ describe("opening a server", () => {
     });
     expect(test).toHaveBeenCalledTimes(1);
     expect(button("Save", dialog()).disabled).toBe(false);
+    expect(dialog().textContent).toContain("Connected");
+    expect(dialog().textContent).not.toContain("Missing credential");
+    expect(dialog().textContent).not.toContain("Missing header Authorization");
 
     await click(checkbox("echo"));
     await click(button("Save", dialog()));
@@ -473,24 +492,33 @@ describe("opening a server", () => {
     );
   });
 
-  it("starts every tool off again when the endpoint changes", async () => {
+  it("requires review before saving a changed endpoint, with every tool off", async () => {
     const test = vi.fn(async () => ({ ok: true as const, catalog: [tool("echo")] }));
+    const save = vi.fn(async (input: { server: McpServerRecord }) => ({
+      ok: true as const,
+      server: remote({ ...input.server }),
+    }));
     await render({
       list: listing([remote({ catalog: [tool("echo", { enabled: true })] })]),
       test,
+      save,
     });
 
     await openMenu(labelled("More for Sentry"));
     await click(menuItem("Edit connection"));
     await setValue("#mcp-url", "https://other.example.com/mcp");
+    expect(dialog().querySelector('[role="checkbox"]')).toBeNull();
+    expect(() => button("Save", dialog())).toThrow();
     await click(button("Connect", dialog()));
+    expect(save).not.toHaveBeenCalled();
+    expect(button("Save", dialog()).disabled).toBe(false);
     expect(checkbox("echo").getAttribute("aria-checked")).toBe("false");
 
     // Back to the endpoint the choice was made on keeps nothing either: the
     // list on screen was read from the other one.
     await click(labelled("Edit Sentry connection"));
     await setValue("#mcp-url", "https://other.example.com/mcp");
-    await click(button("Connect again", dialog()));
+    await click(button("Connect", dialog()));
     expect(checkbox("echo").getAttribute("aria-checked")).toBe("false");
   });
 
@@ -575,6 +603,41 @@ describe("opening a server", () => {
 });
 
 describe("adding a server", () => {
+  it("starts with one next action and hides optional credential fields", async () => {
+    await render({ list: listing([]) });
+    await click(button("Add server"));
+    expect(button("Connect", dialog()).disabled).toBe(true);
+    expect(() => button("Add server", dialog())).toThrow();
+    expect(() => button("Add header", dialog())).toThrow();
+    expect(document.body.querySelector("#mcp-oauth-client-id")).toBeNull();
+    await click(labelled("Show headers"));
+    await click(button("Add header", dialog()));
+    expect(dialog().querySelector("select")?.textContent).toContain("Environment variable");
+    expect(dialog().querySelector('input[type="password"]')).not.toBeNull();
+  });
+
+  it("closes an untouched add dialog on Escape but protects typed configuration", async () => {
+    await render({ list: listing([]) });
+    await click(button("Add server"));
+    await act(async () => {
+      escape();
+    });
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.linear.app/mcp");
+    await act(async () => {
+      escape();
+    });
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("keeps the caret on the connection when switching to a local server", async () => {
+    await render({ list: listing([]) });
+    await click(button("Add server"));
+    await click(button("Local", dialog()));
+    expect(document.activeElement).toBe(document.body.querySelector("#mcp-command"));
+  });
+
   it("connects a direct argv command, starts every discovered tool off, and adds only an explicit choice", async () => {
     const test = vi.fn(async () => ({ ok: true as const, catalog: [tool("echo"), tool("ping")] }));
     const save = vi.fn(async (input: { server: McpServerRecord }) => ({
@@ -584,8 +647,9 @@ describe("adding a server", () => {
     await render({ list: listing([]), test, save });
 
     await click(button("Add server"));
-    expect(button("Add server", dialog()).disabled).toBe(true);
-    await click(button("Local (stdio)", dialog()));
+    expect(button("Connect", dialog()).disabled).toBe(true);
+    expect(() => button("Add server", dialog())).toThrow();
+    await click(button("Local", dialog()));
     expect(text()).toContain("Executable");
     expect(text()).toContain("Arguments");
     expect(text()).not.toContain("Shell command");
@@ -647,7 +711,8 @@ describe("adding a server", () => {
     await setValue("#mcp-url", "https://example.com/mcp");
     await click(button("Connect", dialog()));
     expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Connection refused.");
-    expect(button("Add server", dialog()).disabled).toBe(true);
+    expect(() => button("Add server", dialog())).toThrow();
+    expect(button("Connect", dialog()).disabled).toBe(false);
   });
 
   it("offers Sign in when a connection is refused for one, then reads the tools, and forgets the draft on Cancel", async () => {
@@ -719,14 +784,47 @@ describe("adding a server", () => {
     expect(dialog().querySelector('[role="alert"]')).toBeNull();
   });
 
+  it("shows a failed draft sign-in cancellation inside the dialog", async () => {
+    let finish: ((value: unknown) => void) | undefined;
+    const signIn = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const cancelSignIn = vi.fn(async () => ({
+      ok: false as const,
+      error: "Could not cancel sign-in.",
+    }));
+    await render({
+      list: listing([]),
+      test: vi.fn(async () => ({
+        ok: false as const,
+        error: "needs sign-in",
+        blocked: { kind: "sign-in" as const, insufficientScope: false },
+      })),
+      signIn,
+      cancelSignIn,
+    });
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.linear.app/mcp");
+    await click(button("Connect", dialog()));
+    await click(button("Sign in", dialog()));
+    expect(() => button("Connect", dialog())).toThrow();
+    await click(button("Cancel sign-in", dialog()));
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Could not cancel sign-in.");
+    await act(async () => finish?.({ ok: false, cancelled: true, error: "cancelled" }));
+  });
+
   it("adds an environment reference to a local server", async () => {
     const test = vi.fn(async () => ({ ok: true as const, catalog }));
     await render({ list: listing([]), test });
 
     await click(button("Add server"));
-    await click(button("Local (stdio)", dialog()));
+    await click(button("Local", dialog()));
     await setValue("#mcp-command", "uvx");
     await setValue("#mcp-args", "tools-mcp");
+    await click(labelled("Show environment variables"));
     await click(button("Add variable", dialog()));
     await setValue('input[aria-label="variable 1 name"]', "API_KEY");
     await act(async () => {
@@ -888,7 +986,8 @@ describe("sign-in and credentials (VC-470)", () => {
     ).toBe("${ORG}");
 
     await setValue('input[aria-label="Authorization value"]', "Bearer replaced");
-    await click(button("Connect and save", dialog()));
+    await click(button("Connect", dialog()));
+    await click(button("Save", dialog()));
 
     const transport = {
       type: "streamable-http",
@@ -952,12 +1051,12 @@ describe("sign-in and credentials (VC-470)", () => {
 
     await openMenu(labelled("More for Sentry"));
     await click(menuItem("Edit connection"));
-    expect(document.body.querySelector('[aria-label="Show OAuth client"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-label="Show custom OAuth client"]')).not.toBeNull();
     await click(button("Cancel", dialog()));
 
     await openMenu(labelled("More for Keyed"));
     await click(menuItem("Edit connection"));
-    expect(document.body.querySelector('[aria-label="Show OAuth client"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label="Show custom OAuth client"]')).toBeNull();
   });
 
   it("says once that a plain-http endpoint on another host carries no credential", async () => {

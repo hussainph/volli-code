@@ -8,11 +8,10 @@
  * (`mcp-server-dialog.tsx`), and its tools are chosen in one picker
  * (`mcp-tool-picker.tsx`) with search, select all and read-only grouping.
  *
- * A SERVER ROW says what a person scans for and nothing they must open to
- * find: the server, where it lives, how many of its tools are on, how fresh
- * that list is, where it came from, whether it works — and, when it does not,
- * the one action that fixes it (Sign in, Add credential, Retry) beside the
- * word that says so. The switch and a menu of the rest (tools, connection,
+ * A SERVER ROW says what a person scans for: the server, where it lives,
+ * how many tools are on, whether it works — and, when it does not, the one
+ * action that fixes it (Sign in, Add credential, Retry). Refresh age and
+ * detailed provenance live in the dialog, not in the default scan path. The switch and a menu of the rest (tools, connection,
  * refresh, sign out, remove) close the row. A row is `ui/list-row.tsx`'s
  * two-line row rather than a `DataTable` line: a server's status carries an
  * action and its detail a sentence, which a 36px table cell cannot hold
@@ -75,8 +74,6 @@ import { cn } from "@renderer/lib/utils";
 
 import {
   McpServerDialog,
-  provenanceLine,
-  refreshedLabel,
   signsIn,
   TransportIcon,
   type McpServerDialogTarget,
@@ -268,7 +265,7 @@ export function McpPane({ project }: { project: Project }) {
         hint={
           <>
             Server metadata and results are untrusted data, never instructions. Tool choices affect
-            new Sessions only; a Session keeps the definitions frozen at birth.
+            new Sessions only; running Sessions keep the tools they started with.
           </>
         }
         action={
@@ -299,7 +296,10 @@ export function McpPane({ project }: { project: Project }) {
         {servers.length === 0 ? (
           <Empty>{loading ? "Loading MCP servers…" : "No MCP servers yet."}</Empty>
         ) : (
-          <ul aria-label="MCP servers" className={cn("-mx-2 flex flex-col", SERVER_BOX)}>
+          <ul
+            aria-label="MCP servers"
+            className={cn("@container/mcp-servers -mx-2 flex flex-col", SERVER_BOX)}
+          >
             {servers.map((server) => (
               <li key={server.id}>
                 <ServerRow
@@ -423,11 +423,11 @@ function ServerRow({
 }) {
   const described = React.useId();
   const health = serverHealth(server, access, signingIn === server.id);
-  const provenance = provenanceLine(server.provenance);
   const otherSignIn = signingIn !== null && signingIn !== server.id;
   return (
     <ListRow
       density="two-line"
+      className="@max-[40rem]/mcp-servers:flex-wrap"
       // The name is what the row opens; its status, counts and anything wrong
       // are read after it rather than hidden by the label.
       aria-label={`Open ${server.name}`}
@@ -439,30 +439,26 @@ function ServerRow({
         </span>
       }
       primary={<span className="min-w-0 truncate text-ui font-medium">{server.name}</span>}
-      secondary={
-        <span id={`${described}-detail`} className="block min-w-0 text-ui text-muted-foreground">
-          <span className="block truncate">
-            {endpointLabel(server.transport)}
-            {" · "}
-            {toolCountLabel(server)}
-            {" · "}
-            {refreshedLabel(server)}
-          </span>
-          {provenance === null ? null : <span className="block truncate">{provenance}</span>}
-          {health.detail === null ? null : (
-            <span className="block truncate text-destructive" title={health.detail}>
-              {health.detail}
-            </span>
-          )}
-        </span>
-      }
-      trailing={
-        <span id={`${described}-status`} className="shrink-0">
+      primaryTrailing={
+        <span id={`${described}-status`} className="ml-auto shrink-0">
           <Health state={health.state}>{health.label}</Health>
         </span>
       }
+      secondary={
+        <span id={`${described}-detail`} className="block min-w-0 text-ui text-muted-foreground">
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className="min-w-0 truncate" title={endpointLabel(server.transport)}>
+              {endpointLabel(server.transport)}
+            </span>
+            <span className="shrink-0 tabular-nums">{toolCountLabel(server)}</span>
+          </span>
+          {health.detail === null ? null : (
+            <span className="block break-words text-destructive">{health.detail}</span>
+          )}
+        </span>
+      }
       actions={
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 @max-[40rem]/mcp-servers:w-full @max-[40rem]/mcp-servers:justify-end">
           {health.fix === "sign-in" ? (
             <Button size="xs" variant="outline" disabled={busy || otherSignIn} onClick={onSignIn}>
               <SignInIcon />
@@ -534,7 +530,7 @@ function ServerRow({
 
 /** The caret every disclosure on this pane turns. */
 function DisclosureCaret({ open }: { open: boolean }) {
-  return <CaretDownIcon aria-hidden className={cn("transition-transform", open && "rotate-180")} />;
+  return <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />;
 }
 
 /**
