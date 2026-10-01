@@ -197,52 +197,89 @@ function words(text: string): string[] {
   );
 }
 
+/** The longest query a search reads, and the most distinct words it ranks by. */
+export const SEARCH_QUERY_MAX_CHARS = 200;
+export const SEARCH_QUERY_MAX_TERMS = 16;
+
 /**
  * BM25 over the callable tools, the ranking Pi's `searchTools()` uses. The
  * name counts twice, because a query that names the tool should find it.
+ *
+ * Built once per Code Mode tool: every document's word counts are computed up
+ * front, and a query is cut to {@link SEARCH_QUERY_MAX_CHARS} and
+ * {@link SEARCH_QUERY_MAX_TERMS} words, because a search runs synchronously
+ * on the host thread — Electron main — and a program chooses the query.
  */
+export class ToolSearch {
+  readonly #tools: readonly CallableTool[];
+  readonly #counts: readonly Map<string, number>[];
+  readonly #lengths: readonly number[];
+
+  constructor(tools: readonly CallableTool[]) {
+    this.#tools = tools;
+    const documents = tools.map((tool) => [
+      ...words(tool.name),
+      ...words(tool.name),
+      ...words(tool.description),
+    ]);
+    this.#lengths = documents.map((document) => document.length);
+    this.#counts = documents.map((document) => {
+      const counts = new Map<string, number>();
+      for (const word of document) counts.set(word, (counts.get(word) ?? 0) + 1);
+      return counts;
+    });
+  }
+
+  search(
+    query: string,
+    options: { limit?: number; namespace?: string } = {},
+  ): Array<{ name: string; namespace: string; description: string }> {
+    const pool = this.#tools
+      .map((tool, index) => ({ tool, index }))
+      .filter(
+        ({ tool }) => options.namespace === undefined || tool.namespace === options.namespace,
+      );
+    const terms = [...new Set(words(query.slice(0, SEARCH_QUERY_MAX_CHARS)))].slice(
+      0,
+      SEARCH_QUERY_MAX_TERMS,
+    );
+    const averageLength =
+      pool.reduce((sum, { index }) => sum + this.#lengths[index]!, 0) / Math.max(1, pool.length);
+    const k1 = 1.2;
+    const b = 0.75;
+    const scored = pool.map(({ tool, index }) => {
+      let score = 0;
+      for (const term of terms) {
+        const frequency = this.#counts[index]!.get(term) ?? 0;
+        if (frequency === 0) continue;
+        const containing = pool.filter((other) => this.#counts[other.index]!.has(term)).length;
+        const idf = Math.log(1 + (pool.length - containing + 0.5) / (containing + 0.5));
+        score +=
+          (idf * (frequency * (k1 + 1))) /
+          (frequency + k1 * (1 - b + (b * this.#lengths[index]!) / averageLength));
+      }
+      return { tool, score };
+    });
+    const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 10)));
+    return scored
+      .filter((entry) => entry.score > 0)
+      .toSorted((left, right) => right.score - left.score)
+      .slice(0, limit)
+      .map(({ tool }) => ({
+        name: tool.identifier,
+        namespace: tool.namespace,
+        description: firstSentence(tool.description),
+      }));
+  }
+}
+
+/** A one-off search over `tools`; {@link ToolSearch} keeps the index for repeated ones. */
 export function searchTools(
   tools: readonly CallableTool[],
   query: string,
   options: { limit?: number; namespace?: string } = {},
 ): Array<{ name: string; namespace: string; description: string }> {
-  const pool = tools.filter(
-    (tool) => options.namespace === undefined || tool.namespace === options.namespace,
-  );
-  const documents = pool.map((tool) => [
-    ...words(tool.name),
-    ...words(tool.name),
-    ...words(tool.description),
-  ]);
-  const terms = [...new Set(words(query))];
-  const averageLength =
-    documents.reduce((sum, document) => sum + document.length, 0) / Math.max(1, documents.length);
-  const k1 = 1.2;
-  const b = 0.75;
-  const scored = pool.map((tool, index) => {
-    const document = documents[index]!;
-    let score = 0;
-    for (const term of terms) {
-      const frequency = document.filter((word) => word === term).length;
-      if (frequency === 0) continue;
-      const containing = documents.filter((other) => other.includes(term)).length;
-      const idf = Math.log(1 + (documents.length - containing + 0.5) / (containing + 0.5));
-      score +=
-        (idf * (frequency * (k1 + 1))) /
-        (frequency + k1 * (1 - b + (b * document.length) / averageLength));
-    }
-    return { tool, score };
-  });
-  const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 10)));
-  return scored
-    .filter((entry) => entry.score > 0)
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, limit)
-    .map(({ tool }) => ({
-      name: tool.identifier,
-      namespace: tool.namespace,
-      description: firstSentence(tool.description),
-    }));
+  return new ToolSearch(tools).search(query, options);
 }
 
 /** One tool's whole description and declaration, by either of its names. */

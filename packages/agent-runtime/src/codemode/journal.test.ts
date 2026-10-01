@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import { canonicalJson, CodeModeJournal, determinismPrelude, seedOf } from "./journal";
+import {
+  canonicalJson,
+  CodeModeJournal,
+  determinismPrelude,
+  remember,
+  RUN_JOURNAL_MAX_BYTES,
+  runKey,
+  seedOf,
+} from "./journal";
 
 describe("canonicalJson", () => {
   it("spells the same arguments the same way whatever their key order", () => {
@@ -24,6 +32,25 @@ describe("CodeModeJournal", () => {
     journal.open("c", 1);
     expect(journal.open("a", 5).previousRuns).toBe(3);
     expect(journal.open("b", 5).previousRuns).toBe(0);
+  });
+});
+
+describe("finish, remember and runKey", () => {
+  it("forgets a finished run, keys by program, and keeps results within the run's bound", () => {
+    const journal = new CodeModeJournal();
+    const key = runKey("toolu_1", "return 1;");
+    expect(key).not.toBe(runKey("toolu_1", "return 2;"));
+    const run = journal.open(key, 1);
+    remember(run, 1, { name: "read", argumentsDigest: "d", outcome: { ok: true, value: "x" } });
+    remember(run, 2, {
+      name: "read",
+      argumentsDigest: "d",
+      outcome: { ok: true, value: "y".repeat(RUN_JOURNAL_MAX_BYTES) },
+    });
+    expect(run.calls.get(1)!.outcome).toEqual({ ok: true, value: "x" });
+    expect(run.calls.get(2)!.outcome).toBeNull();
+    journal.finish(key);
+    expect(journal.open(key, 5).previousRuns).toBe(0);
   });
 });
 

@@ -6,6 +6,7 @@ import {
   codeModeSurfaceFor,
   DEFAULT_CODE_MODE_LIMITS,
   defaultToolRoute,
+  isCodeCallable,
   isCodeCallableRoute,
   isDeclaredRoute,
   isListedRoute,
@@ -83,6 +84,19 @@ describe("routes", () => {
     const definition = mcp("search");
     expect(defaultToolRoute(definition.providerName)).toBe("both");
     expect(defaultToolRoute(definition.providerName, "deferred")).toBe("deferred");
+  });
+});
+
+describe("isCodeCallable", () => {
+  it("holds a damaged record to the rules: no direct-only tool, unlisted verb or codemode in a program", () => {
+    expect(isCodeCallable("read", "both")).toBe(true);
+    expect(isCodeCallable("read", "direct")).toBe(false);
+    expect(isCodeCallable("shell_start", "code")).toBe(false);
+    expect(isCodeCallable("ask_user", "both")).toBe(false);
+    expect(isCodeCallable("session.start", "code")).toBe(true);
+    expect(isCodeCallable("mcp.install", "both")).toBe(false);
+    expect(isCodeCallable("codemode", "both")).toBe(false);
+    expect(isCodeCallable(mcp("search").providerName, "deferred")).toBe(true);
   });
 });
 

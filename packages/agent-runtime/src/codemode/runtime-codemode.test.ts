@@ -206,10 +206,13 @@ async function runTurn(
   h: Harness,
   spec: SessionRuntimeSpec,
   replies: Reply[],
-  options: { interruptWhen?: Promise<void> } = {},
+  options: { interruptWhen?: Promise<void>; parallelMcpReads?: boolean } = {},
 ) {
   const runtime = createPiAgentRuntime({
     sessionDataDir: h.sessions,
+    ...(options.parallelMcpReads === undefined
+      ? {}
+      : { parallelMcpReads: options.parallelMcpReads }),
     models: scripted(replies, h.seen),
     observability: { record: (event) => void h.observability.push(event) },
   });
@@ -591,69 +594,81 @@ describe("Code Mode through the real Session path", () => {
     );
   });
 
-  it("keeps a program's overlapping MCP reads inside the per-server bound (VC-454)", async () => {
-    const h = harness();
-    const definitions = withParallelReadEligibility(
-      ["first", "second"].map((toolName) => ({
-        serverId: "fixture-1",
-        toolName,
-        providerName: mcpProviderToolName("fixture-1", "Fixture", toolName),
-        description: "Read one fixture record.",
-        inputSchema: { type: "object", properties: { n: { type: "number" } } },
-      })),
-      new Set([
-        mcpToolKey({ serverId: "fixture-1", toolName: "first" }),
-        mcpToolKey({ serverId: "fixture-1", toolName: "second" }),
-      ]),
-    );
-    let active = 0;
-    let peak = 0;
-    const raw: RuntimeMcpPort = {
-      call: async (request) => {
-        active += 1;
-        peak = Math.max(peak, active);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        active -= 1;
-        return {
-          content: [{ type: "text", text: `${request.toolName} ${String(request.arguments.n)}` }],
-          isError: false,
-        };
-      },
-    };
-    const budget = new McpServerBudget({
-      limitsFor: () => ({ maxConcurrent: 2, maxStarts: Number.POSITIVE_INFINITY, windowMs: 1_000 }),
-    });
-    const bound = budget.bind(raw);
-    const [first, second] = definitions.map((definition) => definition.providerName);
-    await runTurn(
-      h,
-      specFor(h, {
-        tools: { tools: ["read"], mcp: definitions },
-        mcp: { call: bound.call },
-        limits: { maxConcurrency: 6 },
-      }),
-      [
-        {
-          calls: [
-            {
-              id: "cm-1",
-              name: "codemode",
-              args: {
-                code: `const got = await Promise.all([1, 2, 3, 4, 5, 6].map((n) =>
+  it.each([
+    { parallelMcpReads: true, expected: 2 },
+    { parallelMcpReads: false, expected: 1 },
+  ])(
+    "keeps a program's MCP reads inside the per-server bound, overlapping only when the runtime honours marks ($parallelMcpReads)",
+    async ({ parallelMcpReads, expected }) => {
+      const h = harness();
+      const definitions = withParallelReadEligibility(
+        ["first", "second"].map((toolName) => ({
+          serverId: "fixture-1",
+          toolName,
+          providerName: mcpProviderToolName("fixture-1", "Fixture", toolName),
+          description: "Read one fixture record.",
+          inputSchema: { type: "object", properties: { n: { type: "number" } } },
+        })),
+        new Set([
+          mcpToolKey({ serverId: "fixture-1", toolName: "first" }),
+          mcpToolKey({ serverId: "fixture-1", toolName: "second" }),
+        ]),
+      );
+      let active = 0;
+      let peak = 0;
+      const raw: RuntimeMcpPort = {
+        call: async (request) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          active -= 1;
+          return {
+            content: [{ type: "text", text: `${request.toolName} ${String(request.arguments.n)}` }],
+            isError: false,
+          };
+        },
+      };
+      const budget = new McpServerBudget({
+        limitsFor: () => ({
+          maxConcurrent: 2,
+          maxStarts: Number.POSITIVE_INFINITY,
+          windowMs: 1_000,
+        }),
+      });
+      const bound = budget.bind(raw);
+      const [first, second] = definitions.map((definition) => definition.providerName);
+      await runTurn(
+        h,
+        specFor(h, {
+          tools: { tools: ["read"], mcp: definitions },
+          mcp: { call: bound.call },
+          limits: { maxConcurrency: 6 },
+        }),
+        [
+          {
+            calls: [
+              {
+                id: "cm-1",
+                name: "codemode",
+                args: {
+                  code: `const got = await Promise.all([1, 2, 3, 4, 5, 6].map((n) =>
                          (n % 2 ? tools.${first} : tools.${second})({ n })));
                        return got.map((one) => one.text);`,
+                },
               },
-            },
-          ],
-        },
-        { text: "done" },
-      ],
-    );
-    expect(resultText(h, "cm-1")).toContain(
-      'Returned: ["first 1","second 2","first 3","second 4","first 5","second 6"]',
-    );
-    // The program asked for six at once; the server never saw more than two.
-    expect(peak).toBe(2);
-    bound.close();
-  });
+            ],
+          },
+          { text: "done" },
+        ],
+        { parallelMcpReads },
+      );
+      expect(resultText(h, "cm-1")).toContain(
+        'Returned: ["first 1","second 2","first 3","second 4","first 5","second 6"]',
+      );
+      // The program asked for six at once; the server never saw more than its
+      // bound — and saw them one at a time when the runtime's switch is off.
+      expect(peak).toBe(expected);
+      bound.close();
+    },
+  );
 });

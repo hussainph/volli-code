@@ -2128,6 +2128,8 @@ async function attachSession(
         gate: () => sessionGate,
         observe: (event) => observeToolActivity(event),
         journal: codeModeJournal,
+        // The same switch the Agent's own batches obey (VC-454).
+        honourParallelReads: host.parallelMcpReads,
         output: toolOutput,
         sandbox: host.codeModeSandbox,
         signal: spec.signal,

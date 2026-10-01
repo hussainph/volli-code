@@ -202,6 +202,25 @@ export function defaultToolRoute(tool: SessionToolId, mcpRoute?: ToolRoute): Too
 }
 
 /**
+ * Whether a program may call `tool` on `route` — the route, held to the
+ * rules {@link defaultToolRoute} was written from.
+ *
+ * A record is host-written, but it is durable data, and durable data can be
+ * damaged. Read through this, a record that routed `shell_start`, `ask_user`
+ * or an agent-control verb into programs still leaves it direct: the
+ * exclusions above are about what a program cannot do safely, and no record
+ * decides those. `codemode` itself is never callable from a program.
+ */
+export function isCodeCallable(tool: string, route: ToolRoute): boolean {
+  if (!isCodeCallableRoute(route) || tool === CODE_MODE_TOOL_ID) return false;
+  if (isMcpToolId(tool)) return true;
+  if ((CAPABILITY_TOOL_IDS as readonly string[]).includes(tool)) {
+    return !DIRECT_ONLY_CAPABILITIES.has(tool);
+  }
+  return CODE_CALLABLE_VERBS.has(tool);
+}
+
+/**
  * The Code Mode record a new Session is born with: one route per tool of its
  * resolved surface, and the limits.
  *

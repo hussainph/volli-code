@@ -84,7 +84,7 @@ function readConfig(raw: string): CodeModeDevConfig {
   if (parsed.limits !== undefined) {
     if (!isRecord(parsed.limits)) throw new Error("limits must be an object");
     for (const [key, value] of Object.entries(parsed.limits)) {
-      if (!(key in CODE_MODE_LIMIT_BOUNDS)) throw new Error(`unknown limit "${key}"`);
+      if (!Object.hasOwn(CODE_MODE_LIMIT_BOUNDS, key)) throw new Error(`unknown limit "${key}"`);
       const bound = CODE_MODE_LIMIT_BOUNDS[key as keyof CodeModeLimits];
       if (
         typeof value !== "number" ||
