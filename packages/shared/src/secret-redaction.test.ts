@@ -60,6 +60,31 @@ describe("credential text", () => {
     expect(redactPayloadSecrets(`before ${secret} after`)).toBe("before [redacted] after");
   });
 
+  it("scrubs multiple, nested, and overlapping PEM blocks without leaking bodies or command tails", () => {
+    const a = "-----BEGIN A-----";
+    const b = "-----BEGIN B-----";
+    const endA = "-----END A-----";
+    const endB = "-----END B-----";
+    const tail = " && rm -rf /important";
+    expect(redactPayloadSecrets(`${a}dummy${endA} then ${b}dummy${endB}${tail}`)).toBe(
+      `[redacted] then [redacted]${tail}`,
+    );
+    expect(redactPayloadSecrets(`${a}${b}dummy${endB}${endA}${tail}`)).toBe(`[redacted]${tail}`);
+    expect(redactPayloadSecrets(`${a}${b}dummy${endA}${endB}${tail}`)).toBe(`[redacted]${tail}`);
+    expect(redactPayloadSecrets(`${a}${a}dummy${endA}${tail}`)).toBe(`[redacted]${tail}`);
+    // An unmatched outer label must not hide a complete inner block.
+    expect(redactPayloadSecrets(`${a}${b}dummy${endB}${tail}`)).toBe(`${a}[redacted]${tail}`);
+    expect(redactPayloadSecrets(`token budget ${endA}`)).toBe(`token budget ${endA}`);
+  });
+
+  it.each([
+    ["repeated BEGIN candidates", "-----BEGIN 0".repeat(10_000)],
+    ["ambiguous delimiter runs", "-----BEGIN 0-----" + "-----".repeat(20_000)],
+  ])("preserves malformed PEM %s without backtracking over bodies", (_name, value) => {
+    const command = `${value} && rm -rf /important`;
+    expect(redactPayloadSecrets(command)).toBe(command);
+  });
+
   it("scrubs URL userinfo only, retaining hosts, paths, queries and command tails", () => {
     expect(
       redactPayloadSecrets(

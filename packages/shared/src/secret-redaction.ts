@@ -7,7 +7,11 @@ const REDACTED = "[redacted]";
 const PREFIXED_SECRET = /\b(?:sk|pk|gh[pousr]|github_pat|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
 const AWS_SECRET = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g;
 const JWT_SECRET = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
-const PEM_SECRET = /-----BEGIN ([A-Z0-9][A-Z0-9 -]*)-----[\s\S]*?-----END \1-----/g;
+// Labels are alphanumeric words separated by one space or hyphen. A label
+// cannot consume the five-hyphen delimiter (separator and word are disjoint).
+// Never search a body with regex: unmatched BEGIN candidates must not each
+// rescan the remaining uncontrolled text.
+const PEM_BOUNDARY = /-----(BEGIN|END) ([A-Z0-9]+(?:[ -][A-Z0-9]+)*)-----/g;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;|&()<>]+/gi;
 // Start at the fixed scheme delimiter and stay within one authority, so a
@@ -42,6 +46,39 @@ export function isSensitiveKey(value: string): boolean {
     SENSITIVE_KEY.test(value.replace(/[^a-z]/gi, "")) ||
     KEY_SUFFIX.test(value.replace(/([a-z0-9])([A-Z])/g, "$1_$2"))
   );
+}
+
+/** Scan boundaries once, then merge overlapping/nested complete blocks. */
+function redactPemBlocks(value: string): string {
+  PEM_BOUNDARY.lastIndex = 0;
+  const pending = new Map<string, number>();
+  const blocks: Array<{ start: number; end: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = PEM_BOUNDARY.exec(value)) !== null) {
+    const label = match[2]!;
+    if (match[1] === "BEGIN") {
+      // The first unmatched opening for this label owns its first closing.
+      if (!pending.has(label)) pending.set(label, match.index);
+    } else {
+      const start = pending.get(label);
+      if (start !== undefined) {
+        blocks.push({ start, end: PEM_BOUNDARY.lastIndex });
+        pending.delete(label);
+      }
+    }
+  }
+  if (blocks.length === 0) return value;
+  blocks.sort((a, b) => a.start - b.start);
+  const parts: string[] = [];
+  let copied = 0;
+  for (const block of blocks) {
+    if (block.start >= copied) {
+      parts.push(value.slice(copied, block.start), REDACTED);
+    }
+    copied = Math.max(copied, block.end);
+  }
+  parts.push(value.slice(copied));
+  return parts.join("");
 }
 
 /** Track surrounding quotes incrementally, never rescanning each preceding prefix. */
@@ -148,9 +185,7 @@ function redactAssignments(value: string): string {
 export function redactPayloadSecrets(value: string): string {
   if (!SECRET_MARKER.test(value)) return value;
   return redactAssignments(
-    redactBasicAuth(
-      value.replace(PEM_SECRET, REDACTED).replace(URL_USERINFO_SECRET, "$1[redacted]@"),
-    )
+    redactBasicAuth(redactPemBlocks(value).replace(URL_USERINFO_SECRET, "$1[redacted]@"))
       .replace(PREFIXED_SECRET, REDACTED)
       .replace(AWS_SECRET, REDACTED)
       .replace(JWT_SECRET, REDACTED)
