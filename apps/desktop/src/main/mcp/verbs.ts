@@ -387,7 +387,10 @@ function holdsPersonCredentials(mcp: McpSettingsService, server: McpServerDraft)
     transport.type === "stdio"
       ? (transport.env ?? []).length > 0
       : (transport.headers ?? []).length > 0 || transport.oauth !== undefined;
-  return configured || mcp.credentials.read(server.id) !== undefined;
+  const stored = mcp.credentials.read(server.id);
+  // A refusal the server gave is recorded beside credentials, but it is not
+  // one: only a stored value or a sign-in counts.
+  return configured || stored?.oauth !== undefined || Object.keys(stored?.secrets ?? {}).length > 0;
 }
 
 /**
@@ -724,10 +727,14 @@ export async function mcpPreviewTool(
   // A server already configured at this same target is previewed with the
   // credentials a person gave it, so a keyed server does not read as one that
   // needs a sign-in. Any other target is previewed bare.
+  // A different target under the id of a server holding a person's
+  // credentials is one server_install would refuse; previewing it under that
+  // id would also file its refusals against the person's server.
   const plan = installPlan(found.mcp, session.projectId, draft.server);
+  if (!plan.ok) return refusal(plan.text);
   const result = await found.mcp.test({
     projectId: session.projectId,
-    server: plan.ok ? plan.target : draft.server,
+    server: plan.target,
     signal,
   });
   if (!result.ok) {
@@ -819,6 +826,27 @@ export async function mcpInstallTool(
   );
   if (!confirmed.granted) return refusal(confirmed.text);
 
+  // A refusal that stops an install the person already confirmed is recorded
+  // like any other failed install, so it is findable in Settings.
+  const refuseRecorded = (text: string): RuntimeVerbResult => {
+    record(options, session, {
+      toolCallId: request.toolCallId,
+      serverId: draft.server.id,
+      serverName: draft.server.name,
+      operation: "install",
+      outcome: "failed",
+      summary: `Could not install ${draft.server.name}.`,
+      detail: `${text} Attempted: ${transportSummary(draft.server)}.`,
+      provenance: provenance.provenance,
+    });
+    return refusal(text);
+  };
+  // Re-read after the confirmation: it can wait on the person indefinitely,
+  // and they may have changed this server in Settings meanwhile — the install
+  // must not write over that, or drop a value they just stored.
+  let current = installPlan(found.mcp, session.projectId, draft.server);
+  if (!current.ok) return refuseRecorded(current.text);
+
   const install = (target: McpServerDraft) =>
     found.mcp.save({
       projectId: session.projectId,
@@ -827,7 +855,7 @@ export async function mcpInstallTool(
       provenance: provenanceFromInput(request.input),
       signal,
     });
-  let saved = await install(plan.target);
+  let saved = await install(current.target);
   let personNote: string | null = null;
   if (!saved.ok && saved.blocked !== undefined) {
     // Blocked on something only a person can give. Ask them; the agent gets
@@ -836,7 +864,7 @@ export async function mcpInstallTool(
       ask,
       found.mcp,
       session,
-      plan.target,
+      current.target,
       saved.blocked,
       request,
       "server_install",
@@ -846,14 +874,14 @@ export async function mcpInstallTool(
       personNote = routed.note;
       // Re-read: the person may have changed this server in Settings while
       // the question was up, and the retry must not write over that.
-      const retry = installPlan(found.mcp, session.projectId, draft.server);
-      if (!retry.ok) return refusal(retry.text);
-      saved = await install(retry.target);
+      current = installPlan(found.mcp, session.projectId, draft.server);
+      if (!current.ok) return refuseRecorded(current.text);
+      saved = await install(current.target);
     } else {
       saved = { ...saved, error: `${saved.error} ${routed.text}` };
     }
   }
-  if (!saved.ok && existing === undefined) {
+  if (!saved.ok && current.existing === undefined) {
     // A first install that did not land keeps nothing a sign-in gathered.
     found.mcp.discardDraft({ projectId: session.projectId, serverId: draft.server.id });
   }
@@ -890,7 +918,7 @@ export async function mcpInstallTool(
     operation: "install",
     outcome: "applied",
     summary,
-    detail: `${existing === undefined ? "Added." : "Updated the existing server in place."} ${transportSummary(saved.server)}; tools on: ${on.length === 0 ? "none" : on.join(", ")}.`,
+    detail: `${current.existing === undefined ? "Added." : "Updated the existing server in place."} ${transportSummary(saved.server)}; tools on: ${on.length === 0 ? "none" : on.join(", ")}.`,
     provenance: recorded,
   });
   return {

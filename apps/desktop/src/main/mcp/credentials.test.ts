@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { createAgentToolDoor, type VerbBudgetAsk } from "../agent-tool-door";
 import { listMcpOperations } from "../db/mcp-operations-repo";
+import { getMcpServer, putMcpServer } from "../db/mcp-servers-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
@@ -145,6 +146,21 @@ async function headerServer(expected: string) {
       }),
   );
   return { url: `http://127.0.0.1:${address.port}/mcp`, received };
+}
+
+/** A configured server row, written straight to the database as Settings would leave it. */
+function seed(server: McpServerDraft): void {
+  putMcpServer(ctx.db, {
+    ...server,
+    projectId: "p1",
+    provenance: { source: null, registryType: null, version: null, digest: null },
+    catalog: [],
+    stale: false,
+    error: null,
+    refreshedAt: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  });
 }
 
 /** A bare HTTP server answering every request with `respond`, recording headers. */
@@ -445,6 +461,21 @@ describe("where a header value can and cannot go", () => {
     expect(JSON.stringify(result)).not.toContain(sentinel);
   });
 
+  it("follows a same-origin 307 with it", async () => {
+    const sentinel = `same-origin-${Date.now()}-SENTINEL`;
+    const server = await rawServer((request, response) =>
+      request.url === "/mcp"
+        ? response.writeHead(307, { location: "/mcp/v2" }).end()
+        : response.writeHead(500).end(),
+    );
+    const h = harness({ API_KEY: sentinel });
+
+    await h.settings.test({ projectId: "p1", server: keyed(server.url) });
+
+    expect(server.received).toHaveLength(2);
+    expect(server.received[1]).toContain(sentinel);
+  });
+
   it("keeps it out of results, records and logs when the server echoes it back in an error", async () => {
     const sentinel = `echo-${Date.now()}-SENTINEL`;
     const echoing = await rawServer((request, response) =>
@@ -460,6 +491,11 @@ describe("where a header value can and cannot go", () => {
     };
 
     const tested = await h.settings.test({ projectId: "p1", server: keyed(echoing.url) });
+    // A saved server carrying the header, so the agent's refresh and its
+    // same-target re-install both connect WITH the value and both fail on the
+    // echo — the failures that land in the server row and the audit record.
+    seed(keyed(echoing.url));
+    const refreshed = await h.verb("mcp.refresh", { server: "keyed" }, undefined, ticketCaller);
     const installed = await h.verb(
       "mcp.install",
       { id: "keyed", name: "Keyed", url: echoing.url, confirm: "apply" },
@@ -473,13 +509,18 @@ describe("where a header value can and cannot go", () => {
         new AbortController().signal,
       );
 
-    expect(echoing.received.join("\n")).toContain(sentinel);
+    // Every one of those connections sent the value, and got it echoed back.
+    expect(
+      echoing.received.filter((headers) => headers.includes(sentinel)).length,
+    ).toBeGreaterThanOrEqual(3);
     // The install failure was recorded — in mcp_operations and, for a Ticket
-    // caller, as a ticket comment — and none of it carries the echoed value.
+    // caller, as a ticket comment — and the refresh marked the row stale; none
+    // of it carries the echoed value.
     expect(listMcpOperations(ctx.db, "p1")).toHaveLength(1);
     expect(databaseText()).toContain("Could not install Keyed");
+    expect(getMcpServer(ctx.db, "keyed")?.stale).toBe(true);
     for (const text of [
-      JSON.stringify([tested, installed, called]),
+      JSON.stringify([tested, refreshed, installed, called]),
       databaseText(),
       logged.join("\n"),
     ]) {
@@ -512,6 +553,88 @@ describe("where a header value can and cannot go", () => {
     expect(fixture.seen.apiKeys.mcp.length).toBeGreaterThan(0);
     expect(new Set(fixture.seen.apiKeys.mcp)).toEqual(new Set([sentinel]));
     expect(fixture.seen.apiKeys.elsewhere).toEqual([]);
+  });
+});
+
+describe("an agent's install meets what a person set up", () => {
+  it("re-reads the server after the confirmation, keeping a credential the person added while it was open", async () => {
+    const value = `added-during-confirm-${Date.now()}`;
+    const fixture = await headerServer(`Bearer ${value}`);
+    const h = harness();
+    seed({
+      id: "api",
+      name: "API",
+      enabled: true,
+      transport: { type: "streamable-http", url: fixture.url },
+    });
+    const { ask } = asking({ "confirm.mcp-install": "allow" }, (request) => {
+      if (request.cause !== "confirm.mcp-install") return;
+      // The person adds the header in Settings while the confirmation is up.
+      seed({
+        id: "api",
+        name: "API",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: fixture.url,
+          headers: [{ name: "Authorization", source: { kind: "secret" } }],
+        },
+      });
+      h.store.update("api", () => ({ secrets: { "header:authorization": `Bearer ${value}` } }));
+    });
+
+    const result = await h.verb(
+      "mcp.install",
+      { id: "api", name: "API", url: fixture.url, tools: "lookup", confirm: "apply" },
+      ask,
+    );
+
+    expect(result.text).toContain("Installed API");
+    expect(getMcpServer(ctx.db, "api")?.transport).toMatchObject({
+      headers: [{ name: "Authorization", source: { kind: "secret" } }],
+    });
+    expect(h.store.read("api")?.secrets).toEqual({ "header:authorization": `Bearer ${value}` });
+    expect(JSON.stringify(result)).not.toContain(value);
+  });
+
+  it("refuses a re-target when only a sign-in is stored, and allows it when only a refusal is", async () => {
+    const elsewhere = await headerServer("unused");
+    const h = harness();
+    seed({
+      id: "signed",
+      name: "Signed",
+      enabled: true,
+      transport: { type: "streamable-http", url: "https://a.example.com/mcp" },
+    });
+    h.store.update("signed", () => ({
+      oauth: {
+        serverUrl: "https://a.example.com/mcp",
+        tokens: { access_token: "tok", token_type: "Bearer" },
+      },
+    }));
+    seed({
+      id: "refused",
+      name: "Refused",
+      enabled: true,
+      transport: { type: "streamable-http", url: "https://b.example.com/mcp" },
+    });
+    h.store.update("refused", () => ({
+      signInRequired: { at: 1, serverUrl: "https://b.example.com/mcp", insufficientScope: false },
+    }));
+
+    const signed = await h.verb("mcp.install", {
+      id: "signed",
+      name: "Signed",
+      url: elsewhere.url,
+    });
+    const refused = await h.verb("mcp.install", {
+      id: "refused",
+      name: "Refused",
+      url: elsewhere.url,
+    });
+
+    expect(signed.text).toMatch(/cannot move them to a different endpoint/);
+    expect(refused.text).toMatch(/^PREVIEW/);
   });
 });
 

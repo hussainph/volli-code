@@ -299,8 +299,9 @@ press *Cancel sign-in*) for the browser to come back to a temporary server on
   requests what was granted plus what was asked for (step-up).
 
 *Sign out* deletes the stored tokens and the client registration. Every request
-Volli makes to an authorization server has a 10-second limit, so one that stops
-answering fails a call rather than holding every call to that server behind it.
+Volli makes to an authorization server has a 10-second limit and a 1 MiB limit
+on its answer, so one that stops answering fails a call rather than holding
+every call to that server behind it.
 One sign-in runs per server at a time: Settings and an agent's question join the
 same one, an agent that stops waiting leaves it running for the person, and the
 person's *Cancel sign-in* stops it for everyone.
@@ -415,8 +416,10 @@ credentials; re-adding it means storing them or signing in again.
   environment or OAuth settings, a stored secret, a sign-in — at a *different*
   endpoint or command is **refused**, before anything is asked or connected:
   carrying the credential along would send it where the agent chose, and
-  dropping it would destroy a person's sign-in on an agent's say-so. Install it
-  under a new id, or the person changes it in Settings.
+    dropping it would destroy a person's sign-in on an agent's say-so. Install it
+  under a new id, or the person changes it in Settings. The configuration is
+  read again after the person confirms the install, so a credential they add in
+  Settings while the question is open is kept, not written over.
 - `server_preview` never asks anyone: it reports that a sign-in is needed and that
   `server_install` will ask.
 

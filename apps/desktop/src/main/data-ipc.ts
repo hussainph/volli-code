@@ -833,7 +833,14 @@ export function registerDataIpcHandlers(
     // not tied to this request: the pane's Cancel stops it for everyone
     // waiting on it, an agent's question included.
     "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
-      const outcome = await mcpSettings.signIn(input);
+      // Only the fields a renderer may set: nothing it sends can stand in for
+      // the cancellation main owns.
+      const outcome = await mcpSettings.signIn({
+        projectId: input.projectId,
+        ...(input.serverId === undefined ? {} : { serverId: input.serverId }),
+        ...(input.server === undefined ? {} : { server: input.server }),
+        ...(input.secrets === undefined ? {} : { secrets: input.secrets }),
+      });
       return outcome.ok
         ? { ok: true, message: outcome.message }
         : { ok: false, cancelled: outcome.cancelled, error: outcome.message };

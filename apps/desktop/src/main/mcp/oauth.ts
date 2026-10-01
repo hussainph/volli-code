@@ -63,6 +63,7 @@ import type {
   McpSignInRequirement,
   McpStoredOAuthState,
 } from "./credential-store";
+import { boundedFetch } from "./client";
 import {
   connectionProblemIn,
   McpConnectionProblem,
@@ -76,6 +77,9 @@ export const MCP_OAUTH_CLIENT_NAME = "Volli Code";
 
 /** How long a sign-in waits for the browser to come back. */
 export const MCP_SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+
+/** The most an authorization server's metadata, registration or token answer may be. */
+export const MCP_OAUTH_RESPONSE_MAX_BYTES = 1_024 * 1_024;
 
 /** A remote server, as the OAuth half needs to see it. */
 export interface McpOAuthServer {
@@ -219,6 +223,8 @@ export interface McpOAuthBrokerOptions {
 
 /** One sign-in in flight, and who is waiting on it. */
 interface SignInRun {
+  /** The endpoint it signs in to: a draft at another URL under the same id starts its own. */
+  readonly url: string;
   readonly outcome: Promise<McpSignInOutcome>;
   readonly controller: AbortController;
   waiters: number;
@@ -250,13 +256,15 @@ export class McpOAuthBroker {
     this.#now = options.now ?? Date.now;
     this.#timeoutMs = options.signInTimeoutMs ?? MCP_SIGN_IN_TIMEOUT_MS;
     const requestTimeoutMs = options.requestTimeoutMs ?? MCP_CONNECTION_TIMEOUT_MS;
-    this.#fetch = (input, init) => {
+    // Bounded in time and in size: these hosts are whatever a server's
+    // metadata names, and pi-mcp reads their answers whole.
+    this.#fetch = boundedFetch((input, init) => {
       const deadline = AbortSignal.timeout(requestTimeoutMs);
       return fetch(input, {
         ...init,
         signal: init?.signal == null ? deadline : AbortSignal.any([init.signal, deadline]),
       });
-    };
+    }, MCP_OAUTH_RESPONSE_MAX_BYTES);
   }
 
   /** Where one server stands, without disclosing anything stored. */
@@ -342,10 +350,19 @@ export class McpOAuthBroker {
     // interrupted, say) leaves it running for the others, and only when every
     // waiter has gone — or a person presses Cancel (`cancelSignIn`) — does the
     // sign-in itself stop.
+    const url = server.transport.type === "streamable-http" ? server.transport.url : "";
     let run = this.#signingIn.get(server.id);
+    if (run !== undefined && (run.url !== url || run.controller.signal.aborted)) {
+      // A different endpoint under the same id, or a run already stopping:
+      // this caller gets a sign-in of its own rather than someone else's.
+      run.controller.abort(new Error("Superseded by a sign-in to another endpoint."));
+      this.#signingIn.delete(server.id);
+      run = undefined;
+    }
     if (run === undefined) {
       const controller = new AbortController();
       const created: SignInRun = {
+        url,
         controller,
         waiters: 0,
         outcome: this.#signIn(server, { ...options, signal: controller.signal }).finally(() => {
@@ -362,6 +379,10 @@ export class McpOAuthBroker {
       cancelled: true,
       message: `The sign-in to ${server.name} was cancelled.`,
     };
+    const stop = (reason: string): void => {
+      joined.controller.abort(new Error(reason));
+      if (this.#signingIn.get(server.id) === joined) this.#signingIn.delete(server.id);
+    };
     return new Promise<McpSignInOutcome>((resolve) => {
       let settled = false;
       const leave = (outcome: McpSignInOutcome): void => {
@@ -373,22 +394,25 @@ export class McpOAuthBroker {
       };
       function abandon(): void {
         leave(cancelled);
-        if (joined.waiters === 0) {
-          joined.controller.abort(new Error("Nobody is waiting on the sign-in."));
-        }
+        if (joined.waiters === 0) stop("Nobody is waiting on the sign-in.");
       }
       if (options.signal.aborted) {
         abandon();
         return;
       }
       options.signal.addEventListener("abort", abandon, { once: true });
-      void joined.outcome.then(leave);
+      void joined.outcome.then(leave, () =>
+        leave({ ok: false, cancelled: false, message: `Could not sign in to ${server.name}.` }),
+      );
     });
   }
 
   /** Stop a sign-in waiting on the browser, for everyone waiting on it — a person's Cancel. */
   cancelSignIn(serverId: string): void {
-    this.#signingIn.get(serverId)?.controller.abort(new Error("The sign-in was cancelled."));
+    const run = this.#signingIn.get(serverId);
+    if (run === undefined) return;
+    run.controller.abort(new Error("The sign-in was cancelled."));
+    this.#signingIn.delete(serverId);
   }
 
   async #signIn(
@@ -474,10 +498,14 @@ export class McpOAuthBroker {
             message: `${server.name}'s authorization page is not an https address, so Volli did not open it.`,
           };
         }
+        // Discovery and registration watch no signal of their own: a Cancel
+        // that landed during them must still stop the browser opening.
+        options.signal.throwIfAborted();
         const waiting = callback.waitForCallback(await provider.state());
         // The wait settles on close as well; a rejection nobody awaits yet
         // must not become an unhandled one while the browser opens.
         waiting.catch(() => undefined);
+        options.signal.throwIfAborted();
         await this.#openExternal(url.href);
         const { code } = await untilAborted(waiting, options.signal, () => {
           void callback?.close().catch(() => undefined);
@@ -728,6 +756,8 @@ export class McpOAuthBroker {
 function transient(error: unknown): boolean {
   return (
     error instanceof TypeError ||
+    // pi-mcp's own reading too: an authorization server's 5xx is not a verdict on the grant.
+    (error instanceof OAuthError && error.code === "server_error") ||
     (error instanceof DOMException &&
       (error.name === "TimeoutError" || error.name === "AbortError"))
   );

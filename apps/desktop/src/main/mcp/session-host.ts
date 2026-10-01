@@ -491,16 +491,22 @@ export class McpSessionHost {
   ): Promise<RouteDecision> {
     const key = `${server.id}\u0000${block.kind}`;
     let pending = this.#deciding.get(key);
+    const joined = pending !== undefined;
     if (pending === undefined) {
-      pending = this.#ask(server, block, request, signal, ask).finally(() => {
-        if (this.#deciding.get(key) === pending) this.#deciding.delete(key);
+      const created = this.#ask(server, block, request, signal, ask).finally(() => {
+        if (this.#deciding.get(key) === created) this.#deciding.delete(key);
       });
-      this.#deciding.set(key, pending);
+      // Observed here as well as by whoever waits, so a rejection that lands
+      // after every waiter has stopped waiting is never an unhandled one.
+      created.catch(() => undefined);
+      this.#deciding.set(key, created);
+      pending = created;
     }
-    // A joiner whose own signal is still live is not stopped by the first
-    // caller giving up: it reads as a question nobody could answer.
     return untilAborted(pending, signal).catch((error: unknown) => {
       if (signal.aborted) throw error;
+      // The question this call joined was withdrawn because the call that
+      // asked it gave up. This call is still live, so it asks for itself.
+      if (joined) return this.#decide(server, block, request, signal, ask);
       return { kind: "unasked" } as const;
     });
   }
