@@ -33,6 +33,7 @@ import type {
   CliIpcChannel,
   SupportIpcChannel,
   DataIpcChannel,
+  DecisionModelIpcChannel,
   FileIpcChannel,
   HarnessIpcChannel,
   IpcArgs,
@@ -517,7 +518,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 &&
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
-      isRecord(args[0]["server"]),
+      isRecord(args[0]["server"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server test",
   },
   "volli:mcp-save": {
@@ -526,7 +528,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
       isRecord(args[0]["server"]) &&
-      isStringArray(args[0]["enabledTools"]),
+      isStringArray(args[0]["enabledTools"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server save",
   },
   "volli:mcp-refresh": {
@@ -562,6 +565,39 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       typeof args[0]["projectId"] === "string" &&
       typeof args[0]["serverId"] === "string",
     invalidError: "Invalid MCP server removal",
+  },
+  "volli:mcp-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      (typeof args[0]["serverId"] === "string" || isRecord(args[0]["server"])) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
+    invalidError: "Invalid MCP sign-in",
+  },
+  "volli:mcp-cancel-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-cancel-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-in cancellation",
+  },
+  "volli:mcp-sign-out": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-out"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-out",
+  },
+  "volli:mcp-discard-draft": {
+    guard: (args): args is IpcArgs<"volli:mcp-discard-draft"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP draft",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
@@ -1993,6 +2029,57 @@ export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDe
 
 /** Every channel the Web Access surface owns, derived — never hand-synced. */
 export const WEB_ACCESS_CHANNELS = Object.keys(WEB_ACCESS_IPC) as readonly WebAccessIpcChannel[];
+
+// ---- decision model descriptor table (VC-478) -----------------------------
+// The guards check SHAPE only. Whether a setting is one this build can honour
+// — a loopback URL, a cloud model with its opt-in, a model in the catalog — is
+// `parseDecisionModelSetting`'s and the owner's call, and its refusals are
+// sentences a person reads in Settings, not "Invalid request".
+
+function isDecisionModelScope(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const scope = value as Record<string, unknown>;
+  return (
+    scope["scope"] === "global" ||
+    (scope["scope"] === "project" && typeof scope["projectId"] === "string")
+  );
+}
+
+function isDecisionModelSettingShape(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>)["kind"] === "string"
+  );
+}
+
+export const DECISION_MODEL_IPC: {
+  readonly [C in DecisionModelIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:decision-model-get": {
+    guard: (args): args is IpcArgs<"volli:decision-model-get"> =>
+      args.length === 1 && (args[0] === null || typeof args[0] === "string"),
+    invalidError: "Invalid request",
+  },
+  "volli:decision-model-set": {
+    guard: (args): args is IpcArgs<"volli:decision-model-set"> =>
+      args.length === 2 &&
+      isDecisionModelScope(args[0]) &&
+      (args[1] === null || isDecisionModelSettingShape(args[1])),
+    invalidError: "Invalid decision model setting",
+  },
+  "volli:decision-model-test": {
+    guard: (args): args is IpcArgs<"volli:decision-model-test"> =>
+      args.length === 1 && isDecisionModelSettingShape(args[0]),
+    invalidError: "Invalid decision model setting",
+  },
+};
+
+/** Every channel the decision model surface owns, derived — never hand-synced. */
+export const DECISION_MODEL_CHANNELS = Object.keys(
+  DECISION_MODEL_IPC,
+) as readonly DecisionModelIpcChannel[];
 
 // ---- agent observability descriptor table (VC-119) ------------------------
 // The endpoint is deliberately NOT validated here, for the reason the Web

@@ -115,6 +115,23 @@ describe("tool identity", () => {
 });
 
 describe("path.outside-workspace", () => {
+  it("lets a Session read, and never write, its own saved tool output (VC-469)", () => {
+    const saved = "/Users/dev/Library/Application Support/Volli/pi-sessions/--ws--/s.tool-output";
+    const context = { workspacePath: WORKSPACE, readableRoots: [saved] };
+    const judged = (toolCall: PolicyToolCall) => evaluate(toolCall, snapshot(), context).outcome;
+
+    expect(judged(call({ tool: "read", reads: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe("allow");
+    expect(judged(call({ tool: "read", reads: [`${WORKSPACE}/src/app.ts`] }))).toBe("allow");
+    // A sibling of the root is not inside it, and the root grants no write.
+    expect(judged(call({ tool: "read", reads: [`${saved}-other/x.txt`] }))).toBe("deny");
+    expect(judged(call({ tool: "write", writes: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe("deny");
+    expect(judged(exec(segment("echo", ["hi"], { writes: [`${saved}/x.txt`] })))).toBe("deny");
+    // Without the root, the same read is outside the workspace as ever.
+    expect(ruleOf(call({ tool: "read", reads: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe(
+      "path.outside-workspace",
+    );
+  });
+
   it("refuses a read above the workspace", () => {
     const decision = decide(call({ tool: "read", reads: ["/etc/passwd"] }));
     expect(decision).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });

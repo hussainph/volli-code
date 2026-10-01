@@ -18,6 +18,8 @@ import {
   UPDATE_IPC,
   AGENT_OBSERVABILITY_CHANNELS,
   AGENT_OBSERVABILITY_IPC,
+  DECISION_MODEL_CHANNELS,
+  DECISION_MODEL_IPC,
   WEB_ACCESS_CHANNELS,
   WEB_ACCESS_IPC,
   BROWSER_CHANNELS,
@@ -2146,6 +2148,34 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: "server-1" }])).toBe(true);
     });
 
+    it("accepts sign-in for a saved server or a draft, with typed secrets as strings only (VC-470)", () => {
+      const secrets = { "header:authorization": "typed" };
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, serverId: "server-1" }])).toBe(
+        true,
+      );
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets: { slot: 1 } }]),
+      ).toBe(false);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets: "x" }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets }]),
+      ).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets: [1] }]),
+      ).toBe(false);
+      for (const channel of [
+        "volli:mcp-cancel-sign-in",
+        "volli:mcp-sign-out",
+        "volli:mcp-discard-draft",
+      ] as const) {
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: "server-1" }])).toBe(true);
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: 1 }])).toBe(false);
+      }
+    });
+
     it("rejects malformed operation-specific fields", () => {
       expect(DATA_IPC["volli:mcp-list"].guard([])).toBe(false);
       expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server: null }])).toBe(false);
@@ -2172,8 +2202,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 80 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(80);
+    it("covers all 84 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(84);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
@@ -2193,6 +2223,11 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:mcp-list");
       expect(DATA_CHANNELS).toContain("volli:mcp-save");
       expect(DATA_CHANNELS).toContain("volli:mcp-remove");
+      // Sign-in is a person's act (VC-470), and lives only on this app door.
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-cancel-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-out");
+      expect(DATA_CHANNELS).toContain("volli:mcp-discard-draft");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -3126,6 +3161,48 @@ describe("WEB_ACCESS_IPC descriptor table", () => {
         "volli:web-access-clear-key",
       ]);
     });
+  });
+});
+
+describe("DECISION_MODEL_IPC descriptor table (VC-478)", () => {
+  it("takes a project id or null to read", () => {
+    const { guard } = DECISION_MODEL_IPC["volli:decision-model-get"];
+    expect(guard([null])).toBe(true);
+    expect(guard(["project-1"])).toBe(true);
+    expect(guard([])).toBe(false);
+    expect(guard([7])).toBe(false);
+  });
+
+  it("takes a scope and a setting-shaped value or null to write, and leaves policy to the owner", () => {
+    const { guard, invalidError } = DECISION_MODEL_IPC["volli:decision-model-set"];
+    expect(guard([{ scope: "global" }, { kind: "none" }])).toBe(true);
+    expect(guard([{ scope: "project", projectId: "p" }, null])).toBe(true);
+    // A URL off this Mac is the owner's sentence to say, not the guard's.
+    expect(
+      guard([{ scope: "global" }, { kind: "local", baseUrl: "http://10.0.0.1", modelId: "m" }]),
+    ).toBe(true);
+    expect(guard([{ scope: "project" }, null])).toBe(false);
+    expect(guard([{ scope: "everywhere" }, null])).toBe(false);
+    expect(guard([null, null])).toBe(false);
+    expect(guard([{ scope: "global" }, "none"])).toBe(false);
+    expect(guard([{ scope: "global" }, []])).toBe(false);
+    expect(guard([{ scope: "global" }])).toBe(false);
+    expect(invalidError).toBe("Invalid decision model setting");
+  });
+
+  it("tests a setting-shaped value", () => {
+    const { guard } = DECISION_MODEL_IPC["volli:decision-model-test"];
+    expect(guard([{ kind: "local" }])).toBe(true);
+    expect(guard([{}])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("derives the channel list from the table", () => {
+    expect(DECISION_MODEL_CHANNELS).toEqual([
+      "volli:decision-model-get",
+      "volli:decision-model-set",
+      "volli:decision-model-test",
+    ]);
   });
 });
 

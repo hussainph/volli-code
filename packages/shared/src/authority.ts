@@ -145,6 +145,31 @@ export const NON_CODING_TOOL_IDS = [
    * list and every position in it — and is handed a port without `find`.
    */
   "browser_find",
+  /**
+   * Asking the configured decision model typed questions about a JSON state —
+   * one of N, a level, or yes/no — and reading back probabilities, not text
+   * (VC-478).
+   *
+   * A port decides it, like the web tools: a Session born with no decision
+   * model configured (or a cloud one nobody opted into) has no port and is
+   * offered no tool. It reaches the rule pack as a name no rule objects to,
+   * because it has no side effect and carries no path or command; what it can
+   * send off the machine was decided by the person's opt-in, not per call.
+   * Appended last for the Cache Prefix reason every name above was.
+   */
+  "classify",
+  /**
+   * Running a short JavaScript program that calls this Session's other tools
+   * and returns only what the model needs (VC-471).
+   *
+   * Like `todo_write`, no port decides it: the bundle's `codeMode` record
+   * does, and the record also carries the route of every other tool. The
+   * tool reaches the rule pack as a name no rule objects to, because it
+   * carries nothing a rule reads — every call the program makes is judged on
+   * its own, through the same gate a direct call passes. Appended last for
+   * the Cache Prefix reason every name above was.
+   */
+  "codemode",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
@@ -364,6 +389,18 @@ export interface PolicyToolCall {
 export interface PolicyContext {
   /** Absolute, resolved Session workspace root. */
   workspacePath: string;
+  /**
+   * Absolute, resolved directories outside the workspace that hold output this
+   * Session's own tools saved, which `path.outside-workspace` lets it READ and
+   * never write (VC-469).
+   *
+   * Today that is one directory: where a tool result too long for the model
+   * was saved whole, beside the Session's recovery sidecar. The result names a
+   * path there and tells the model to `read` it, so refusing that read would
+   * refuse the instruction the runtime itself just gave. The runtime supplies
+   * it; nothing a model says can add to it.
+   */
+  readableRoots?: readonly string[];
 }
 
 /**
@@ -486,6 +523,16 @@ export const CONFIRM_CAUSE_IDS = [
   "confirm.mcp-install",
   /** Deleting an MCP server, which breaks reattachment for older Sessions using it. */
   "confirm.mcp-remove",
+  /**
+   * Signing in to an MCP server (VC-470): allowing it opens the server's OAuth
+   * page in the person's browser, and the agent learns only whether it worked.
+   */
+  "confirm.mcp-sign-in",
+  /**
+   * An MCP server missing a credential only a person can supply (VC-470): the
+   * person adds it in Settings and allows the retry; the agent never sees it.
+   */
+  "confirm.mcp-credential",
 ] as const;
 
 export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
@@ -493,6 +540,17 @@ export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
 /** Whether a cause is a confirmation — an operation asking before it acts. */
 export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCauseId {
   return (CONFIRM_CAUSE_IDS as readonly string[]).includes(cause);
+}
+
+/**
+ * Whether a confirmation is a credential question (VC-470): a sign-in, or a
+ * value only a person can supply. These can follow another confirmation on
+ * the same tool call, so they are asked under their own interaction id.
+ */
+export function isCredentialConfirmCause(
+  cause: AuthorityDenialCause,
+): cause is "confirm.mcp-sign-in" | "confirm.mcp-credential" {
+  return cause === "confirm.mcp-sign-in" || cause === "confirm.mcp-credential";
 }
 
 /**

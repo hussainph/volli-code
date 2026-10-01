@@ -38,7 +38,11 @@ import type { ChatSessionRecord, SessionActivityState, SessionListingRow } from 
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { SessionPeekDialog } from "@renderer/components/chat/session-peek-dialog";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { useProjectsStore } from "@renderer/stores/projects";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useBoardStore } from "@renderer/stores/board";
 import {
   useProjectSessionsStore,
   type ProjectSessionRows,
@@ -148,6 +152,34 @@ export function PeekConversation({
     (projection.interactions.active.length > 0 || projection.attention.primary !== null);
   const working = projection !== null && projection.turnActive && projection.liveExecutor !== null;
 
+  // Navigate by the Session's own scope, not the workspace behind the overlay.
+  // Opening the tab is idempotent and activates its existing pane when split.
+  const openAsTab =
+    subject === null
+      ? undefined
+      : (id: string) => {
+          const chat = useChatSessionsStore.getState();
+          chat.adoptChatSession(id);
+          // Archived/deleted tickets keep their durable Session scope but no
+          // longer host tabs. Read liveness at the press, even if the ticket
+          // left the board while this preview was open.
+          const ticketId = useBoardStore
+            .getState()
+            .ticketsByProject[subject.projectId]?.some((ticket) => ticket.id === subject.ticketId)
+            ? subject.ticketId
+            : null;
+          chat.openChatTab(ticketId ?? subject.projectId, id);
+          useProjectsStore.getState().select(subject.projectId);
+          const workspace = useWorkspaceStore.getState();
+          if (ticketId === null) {
+            workspace.openHome(subject.projectId, chatTabId(id));
+          } else {
+            workspace.openTicketWorkspace(subject.projectId, ticketId, {
+              tabId: chatTabId(id),
+            });
+          }
+        };
+
   return (
     <SessionPeekDialog
       open
@@ -155,21 +187,32 @@ export function PeekConversation({
       // A Session with no title is still a conversation; the header says the
       // generic noun rather than an empty line.
       state={stateWordOf(subject, waiting, working)}
+      onOpen={openAsTab === undefined ? undefined : () => openAsTab(sessionId)}
       onClose={onClose}
     >
-      <ChatPlane
-        // Keyed by Session: switching rows must not carry one Session's plane
-        // state onto another's.
-        key={sessionId}
-        constrainComposer
-        sessionId={sessionId}
-        // Empty only while no store can name the scope, which is a Session this
-        // window has never listed — the plane degrades to no project catalog
-        // rather than claiming a project it was not told.
-        projectId={subject?.projectId ?? ""}
-        ticketId={subject?.ticketId ?? null}
-        onOpenFile={noOpenFile}
-      />
+      {(closeForNavigation) => (
+        <ChatPlane
+          // Keyed by Session: switching rows must not carry one Session's plane
+          // state onto another's.
+          key={sessionId}
+          constrainComposer
+          sessionId={sessionId}
+          // Empty only while no store can name the scope, which is a Session this
+          // window has never listed — the plane degrades to no project catalog
+          // rather than claiming a project it was not told.
+          projectId={subject?.projectId ?? ""}
+          ticketId={subject?.ticketId ?? null}
+          onOpenFile={noOpenFile}
+          onOpenSession={
+            openAsTab === undefined
+              ? undefined
+              : (id) => {
+                  closeForNavigation();
+                  openAsTab(id);
+                }
+          }
+        />
+      )}
     </SessionPeekDialog>
   );
 }

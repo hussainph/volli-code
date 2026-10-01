@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { UIMessage } from "ai";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
@@ -253,6 +254,8 @@ function modelClient(selection: ModelSelection): ModelAccessClient {
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
     setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
     pickerView: async () => "all",
     setPickerView: async (view) => view,
     beginSignIn: async () => {

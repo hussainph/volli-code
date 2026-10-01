@@ -44,9 +44,11 @@ import {
 } from "./agent-runtime";
 import type { ModelSelection, PromptResource, SessionRole } from "./agent-runtime";
 import { MODEL_TIERS } from "./model-access-policy";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
@@ -177,6 +179,7 @@ const codecs = {
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
       ...decodeModelTier(record.tier, `${context}.tier`),
+      ...decodeModelAuto(record.auto, `${context}.auto`),
     }),
     scrub: (payload) => payload,
   },
@@ -899,6 +902,7 @@ export interface SessionPresentationProjection extends Pick<
   | "signal"
   | "modelSelection"
   | "modelTier"
+  | "modelAuto"
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
@@ -1010,6 +1014,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         kind,
         selection: decodeModelSelection(row.selection, `${context}.selection`),
         ...decodeModelTier(row.tier, `${context}.tier`),
+        ...decodeModelAuto(row.auto, `${context}.auto`),
       };
     case "executor.start":
       return {
@@ -1287,8 +1292,14 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
       toolName,
       description,
       inputSchema: row.inputSchema,
+      // Absent on every definition frozen before VC-469, which replays as it
+      // was written: without one.
+      ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
     });
     if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`${context}[${index}] ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(providerName)) {
       throw new Error(`${context}[${index}].providerName is invalid`);
     }
@@ -1316,6 +1327,7 @@ function decodeToolSurfaceInput(
   tools: readonly SessionToolId[];
   mcpManagementNames?: "server";
   mcpTools?: readonly McpToolDefinition[];
+  codeMode?: CodeModeSurface;
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
   const mcpManagementNames =
@@ -1331,11 +1343,22 @@ function decodeToolSurfaceInput(
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
+  // Code Mode's record and its name travel together (VC-471): a surface that
+  // names `codemode` with no routes, or routes with no `codemode`, is damaged
+  // rather than a smaller surface, and its routes must cover it exactly.
+  const codeMode =
+    input.codeMode === undefined
+      ? undefined
+      : parseCodeModeSurface(input.codeMode, tools, `${context}.codeMode`);
+  if (codeMode === undefined && tools.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context} names ${CODE_MODE_TOOL_ID} without its routes`);
+  }
   return {
     kind,
     tools,
     ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
     ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(codeMode === undefined ? {} : { codeMode }),
   };
 }
 
@@ -1384,6 +1407,35 @@ function decodeModelSelection(value: unknown, context: string): ModelSelection {
  */
 function decodeModelTier(value: unknown, context: string): { tier?: ModelTier } {
   return value === undefined ? {} : { tier: enumValue(value, MODEL_TIERS, context) };
+}
+
+/**
+ * The optional automatic-choice provenance beside a model selection (VC-432),
+ * as a spreadable fragment: absent stays absent, so every record written
+ * before it decodes to the object it always did.
+ */
+function readProbability(item: unknown, at: string): number {
+  if (typeof item !== "number" || !Number.isFinite(item) || item < 0 || item > 1) {
+    throw new Error(`${at} must be a number between 0 and 1`);
+  }
+  return item;
+}
+
+function decodeModelAuto(value: unknown, context: string): { auto?: ModelAutoPick } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  return {
+    auto: {
+      confidence: readProbability(row.confidence, `${context}.confidence`),
+      alternatives: readArray(row.alternatives, `${context}.alternatives`, (item, at) => {
+        const alternative = asRecord(item, at);
+        return {
+          selection: decodeModelSelection(alternative.selection, `${at}.selection`),
+          probability: readProbability(alternative.probability, `${at}.probability`),
+        };
+      }),
+    },
+  };
 }
 
 function decodeAttachment(value: unknown, context: string): SessionAttachment {

@@ -15,6 +15,7 @@ import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import type { ModelAccessModel, ModelAccessProvider, ModelSelection, Project } from "@volli/shared";
 
+import { ProjectDecisionModelRow } from "@renderer/components/pages/decision-model-settings";
 import {
   offerableModels,
   preferredReasoning,
@@ -225,6 +226,7 @@ export function SessionsPane({ project }: { project: Project }) {
             </div>
           </OverrideControl>
         </PrefRow>
+        <ProjectDecisionModelRow project={project} onSaved={adoptProject} />
       </PrefSection>
 
       <PrefSection

@@ -177,9 +177,30 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             ...MODEL_TIER_ROWS.map((row) => row.label.toLowerCase()),
             "default models",
             "automatic compaction",
+            // Code Mode (VC-471): its section and switch, the "Pin a model"
+            // row behind Advanced, and the words someone looking for it uses.
+            "code mode",
+            "codemode",
+            "sandbox",
+            "javascript",
+            "program",
+            "pin a model",
             "catalog",
             "signed in",
             "available to connect",
+            // The Decision model section (VC-478), every label it can draw.
+            "decision model",
+            "classifier",
+            "classify",
+            "jev",
+            "llama.cpp",
+            "local",
+            "cloud",
+            "server",
+            "model id",
+            "connection",
+            "cloud model",
+            "status",
           ],
           content: <ModelAccessSettings autoSignInProviderId={signInProviderId} />,
         },
@@ -233,6 +254,9 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "pi session logs",
             "orphaned logs",
             "orphaned pi logs",
+            // Long MCP results saved beside the Session (VC-469).
+            "saved tool output",
+            "tool output",
             // The orphan PROCESS sweep (VC-341). "memory" and "reap" are here
             // because they are what a person actually types when a fan is loud
             // and they are looking for what to stop.

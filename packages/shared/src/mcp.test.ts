@@ -11,6 +11,7 @@ import {
   MCP_SERVER_NAME_MAX_CHARS,
   MCP_TOOL_COUNT_MAX,
   MCP_TOOL_NAME_MAX_CHARS,
+  MCP_TOOL_TITLE_MAX_CHARS,
   UNKNOWN_MCP_PROVENANCE,
   isMcpToolId,
   mcpEndpointSecretRefusal,
@@ -23,6 +24,7 @@ import {
   sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   sanitizeMcpToolDefinition,
+  sanitizeMcpToolHints,
   validateMcpToolDefinitions,
   withParallelReadEligibility,
   type McpToolCandidate,
@@ -223,6 +225,69 @@ describe("sanitizeMcpToolDefinition", () => {
   });
 });
 
+describe("sanitizeMcpToolDefinition output schemas (VC-469)", () => {
+  it("keeps a published output schema that passes the input-schema bounds, unchanged", () => {
+    const outputSchema = {
+      type: "object",
+      properties: { url: { type: "string" }, number: { type: "integer" } },
+      required: ["url", "number"],
+    } as const;
+
+    expect(sanitizeMcpToolDefinition(toolCandidate({ outputSchema }))).toEqual({
+      ok: true,
+      definition: {
+        serverId: "server-1",
+        toolName: "tool",
+        providerName: mcpProviderToolName("server-1", "Fixture", "tool"),
+        description: "Tool",
+        inputSchema: { type: "object" },
+        outputSchema,
+      },
+    });
+  });
+
+  it("declares nothing for a tool whose server published no output schema", () => {
+    const result = sanitizeMcpToolDefinition(toolCandidate());
+    expect(result).toEqual({
+      ok: true,
+      definition: expect.not.objectContaining({ outputSchema: expect.anything() }),
+    });
+    expect(result.ok && "outputSchemaRejected" in result).toBe(false);
+  });
+
+  it.each([
+    [null, "output schema must be a JSON Schema object"],
+    [{ type: "array" }, 'output schema root type must be "object"'],
+    [
+      { type: "object", properties: { value: { type: "not-a-type" } } },
+      "output schema must be valid JSON Schema",
+    ],
+    [
+      { type: "object", description: "x".repeat(MCP_SCHEMA_MAX_CHARS) },
+      "output schema is too large",
+    ],
+    [
+      { type: "object", examples: Array.from({ length: MCP_SCHEMA_MAX_NODES }, () => null) },
+      "output schema has too many values",
+    ],
+  ])("keeps the tool and drops an output schema it cannot accept %#", (outputSchema, reason) => {
+    const result = sanitizeMcpToolDefinition(toolCandidate({ outputSchema }));
+
+    expect(result).toEqual({
+      ok: true,
+      definition: expect.not.objectContaining({ outputSchema: expect.anything() }),
+      outputSchemaRejected: reason,
+    });
+  });
+
+  it("still refuses the tool for its input schema, whatever its output schema", () => {
+    const result = sanitizeMcpToolDefinition(
+      toolCandidate({ inputSchema: { type: "string" }, outputSchema: { type: "object" } }),
+    );
+    expect(result).toEqual({ ok: false, reason: 'input schema root type must be "object"' });
+  });
+});
+
 describe("sanitizeMcpServerDraft", () => {
   it("accepts only direct stdio argv or an unauthenticated Streamable HTTP endpoint", () => {
     expect(
@@ -280,6 +345,134 @@ describe("sanitizeMcpServerDraft", () => {
       if (!result.ok) expect(result.reason).toContain(reason);
     },
   );
+
+  it("keeps person-configured credential references and omits empty credential fields (VC-470)", () => {
+    expect(
+      sanitizeMcpServerDraft({
+        id: "local",
+        name: "Local",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["tools-mcp"],
+          env: [
+            { name: "API_KEY", source: { kind: "reference", template: "${TOOLS_KEY}" } },
+            { name: "OTHER", source: { kind: "secret" } },
+          ],
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "local",
+        name: "Local",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["tools-mcp"],
+          env: [
+            { name: "API_KEY", source: { kind: "reference", template: "${TOOLS_KEY}" } },
+            { name: "OTHER", source: { kind: "secret" } },
+          ],
+        },
+      },
+    });
+    expect(
+      sanitizeMcpServerDraft({
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [
+            { name: "Authorization", source: { kind: "reference", template: "Bearer ${TOKEN}" } },
+          ],
+          oauth: { clientId: "volli", callbackPort: 8765 },
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [
+            { name: "Authorization", source: { kind: "reference", template: "Bearer ${TOKEN}" } },
+          ],
+          oauth: { clientId: "volli", callbackPort: 8765 },
+        },
+      },
+    });
+    // Empty lists and an empty OAuth object store exactly what a server
+    // without credentials always stored.
+    expect(
+      sanitizeMcpServerDraft({
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [],
+          oauth: {},
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: { type: "streamable-http", url: "https://mcp.example.test/mcp" },
+      },
+    });
+  });
+
+  it.each([
+    [
+      {
+        type: "stdio",
+        command: "node",
+        args: [],
+        env: [{ name: "1BAD", source: { kind: "secret" } }],
+      },
+      "environment variable name",
+    ],
+    [
+      {
+        type: "streamable-http",
+        url: "https://example.test/mcp",
+        headers: [{ name: "X", source: { kind: "plain", value: "sk-1" } }],
+      },
+      "reference or a stored secret",
+    ],
+    [
+      { type: "streamable-http", url: "https://example.test/mcp", oauth: { callbackPort: 0 } },
+      "port",
+    ],
+    [
+      {
+        type: "streamable-http",
+        url: "http://example.test/mcp",
+        headers: [{ name: "X-Key", source: { kind: "secret" } }],
+      },
+      "only sent over https",
+    ],
+    [
+      { type: "streamable-http", url: "http://example.test/mcp", oauth: { clientId: "c" } },
+      "only sent over https",
+    ],
+  ])("rejects malformed credential configuration %#", (transport, reason) => {
+    const result = sanitizeMcpServerDraft(serverCandidate({ transport }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain(reason);
+  });
 
   it.each([
     [{ id: 1 }, "server id"],
@@ -343,6 +536,22 @@ describe("validateMcpToolDefinitions", () => {
     expect(validateMcpToolDefinitions([{ ...base, parallelRead: true }])).toEqual([
       { ...base, parallelRead: true },
     ]);
+  });
+
+  it("keeps a frozen output schema and refuses one damaged after it was written (VC-469)", () => {
+    const base: McpToolDefinition = {
+      serverId: "server-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("server-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const typed = { ...base, outputSchema: { type: "object", required: ["echo"] } } as const;
+
+    expect(validateMcpToolDefinitions([typed])).toEqual([typed]);
+    expect(() =>
+      validateMcpToolDefinitions([{ ...base, outputSchema: { type: "string" } }]),
+    ).toThrow('Invalid MCP tool echo: output schema root type must be "object"');
   });
 });
 
@@ -452,6 +661,54 @@ describe("parallel-read eligibility (VC-454)", () => {
   });
 });
 
+describe("sanitizeMcpToolHints (display-only labels)", () => {
+  it("keeps nothing from a value that is not a tool object", () => {
+    expect(sanitizeMcpToolHints(null)).toBeUndefined();
+    expect(sanitizeMcpToolHints("tool")).toBeUndefined();
+    expect(sanitizeMcpToolHints([{ title: "List" }])).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "list" })).toBeUndefined();
+  });
+
+  it("reads the top-level title first, then the annotation title, and drops one that repeats the name", () => {
+    expect(
+      sanitizeMcpToolHints({
+        name: "list_issues",
+        title: "List issues",
+        annotations: { title: "Ignored" },
+      }),
+    ).toEqual({ title: "List issues" });
+    expect(
+      sanitizeMcpToolHints({ name: "list_issues", annotations: { title: "List issues" } }),
+    ).toEqual({ title: "List issues" });
+    expect(sanitizeMcpToolHints({ name: "list_issues", title: "list_issues" })).toBeUndefined();
+  });
+
+  it("keeps a title as one plain line within its bound, or not at all", () => {
+    expect(
+      sanitizeMcpToolHints({ name: "a", title: "  Create\n\tan\u202eissue\u0000 " })?.title,
+    ).toBe("Create an issue");
+    expect(sanitizeMcpToolHints({ name: "a", title: " \n " })).toBeUndefined();
+    expect(
+      sanitizeMcpToolHints({ name: "a", title: "x".repeat(MCP_TOOL_TITLE_MAX_CHARS + 1) }),
+    ).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", title: 7 })).toBeUndefined();
+  });
+
+  it("keeps the read-only and destructive annotations only as booleans, false included", () => {
+    expect(
+      sanitizeMcpToolHints({
+        name: "a",
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      }),
+    ).toEqual({ readOnly: true, destructive: false });
+    expect(
+      sanitizeMcpToolHints({ name: "a", annotations: { readOnlyHint: "yes", destructiveHint: 1 } }),
+    ).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", annotations: null })).toBeUndefined();
+    expect(sanitizeMcpToolHints({ name: "a", annotations: [true] })).toBeUndefined();
+  });
+});
+
 describe("sanitizeMcpProvenance", () => {
   it("records where a config came from, as asked, without pretending to verify it", () => {
     const result = sanitizeMcpProvenance({
@@ -555,10 +812,11 @@ describe("mcpInstallWarning", () => {
     // The origin, never the query string: a path or parameter can carry a token.
     expect(warning).not.toContain("k=1");
     expect(warning).not.toContain("runs on this machine as you");
-    // Volli adds none of its own AND supports none, which is the whole truth
-    // now that a query-string credential is refused rather than tolerated.
-    expect(warning).toContain("Volli adds no credentials of its own");
-    expect(warning).toMatch(/supports no authentication/i);
+    // Volli adds none of its own, and a credential the server needs is the
+    // person's to provide (VC-470) — never the agent's.
+    expect(warning).toContain("Volli sends it no credential of its own");
+    expect(warning).toMatch(/only a person can provide one/i);
+    expect(warning).toMatch(/an agent never supplies, sees or stores it/i);
   });
 });
 
@@ -573,6 +831,7 @@ describe("mcpEndpointSecretRefusal", () => {
     expect(refusal).toMatch(/plain text/i);
     // A refusal with no way forward is a dead end, and the person path is real.
     expect(refusal).toContain("Settings");
+    expect(refusal).not.toMatch(/not supported yet/i);
   });
 });
 
@@ -582,6 +841,7 @@ describe("mcpRemovalWarning", () => {
 
     expect(warning).toContain("Files");
     expect(warning).toContain("fail to reattach");
-    expect(warning).toContain("mcp_disable");
+    expect(warning).toContain("server_disable");
+    expect(warning).toMatch(/cannot be removed by an agent at all/);
   });
 });

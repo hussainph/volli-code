@@ -6,7 +6,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { UIMessage } from "ai";
-import type { SessionPresentationProjection } from "@volli/shared";
+import {
+  SESSION_HOST_NOTICE_METADATA_KIND,
+  type SessionPresentationProjection,
+} from "@volli/shared";
 import {
   EMPTY_TRANSCRIPT,
   disposeChatClient,
@@ -159,7 +162,15 @@ describe("SubagentPeekDialog", () => {
       { id: "a1", role: "assistant", parts: [{ type: "text", text: "It is auth.test.ts." }] },
     ] as UIMessage[]);
     const onOpenAsTab = vi.fn();
-    await render({ ...props(agent({ state: "done", promoted: true })), onOpenAsTab, store });
+    const onClose = vi.fn();
+    const home = document.createElement("button");
+    document.body.append(home);
+    await render({
+      ...props(agent({ state: "done", promoted: true }), onClose),
+      onOpenAsTab,
+      returnFocus: () => home,
+      store,
+    });
     const node = dialog()!;
     expect(node.textContent).toContain("Grep the tests");
     expect(node.querySelector("[data-session-peek-state]")?.textContent).toBe("done · tab");
@@ -174,6 +185,53 @@ describe("SubagentPeekDialog", () => {
       button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
     );
     expect(onOpenAsTab).toHaveBeenCalledWith(CHILD);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(
+      onOpenAsTab.mock.invocationCallOrder[0]!,
+    );
+    await render({ ...props(null, onClose), returnFocus: () => home, store });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).not.toBe(home);
+    expect(store.getState().sessions[CHILD]).toBeDefined();
+    home.remove();
+  });
+
+  it("opens a linked child Session and dismisses the overlay", async () => {
+    const store = chatStore([
+      {
+        id: "notice",
+        role: "user",
+        parts: [{ type: "text", text: "Child finished" }],
+        metadata: {
+          kind: SESSION_HOST_NOTICE_METADATA_KIND,
+          notice: {
+            kind: "subagent",
+            childSessionId: "grandchild",
+            title: "Check the parser",
+            state: "completed",
+            reason: null,
+          },
+        },
+      },
+    ]);
+    const onClose = vi.fn();
+    const onOpenAsTab = vi.fn();
+    const home = document.createElement("button");
+    document.body.append(home);
+    await render({ ...props(agent(), onClose), onOpenAsTab, returnFocus: () => home, store });
+    const button = [...dialog()!.querySelectorAll("button")].find(
+      (one) => one.textContent === "Open",
+    );
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onOpenAsTab).toHaveBeenCalledExactlyOnceWith("grandchild");
+    await render({ ...props(null, onClose), returnFocus: () => home, store });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(document.activeElement).not.toBe(home);
+    home.remove();
   });
 
   // VC-416 remains visible in the shared header, not only in the composer.

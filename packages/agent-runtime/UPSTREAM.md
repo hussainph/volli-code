@@ -6,7 +6,7 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.87.1`. The 0.84.x
+- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.99.2`. The 0.84.x
   split VC-117 tracked is gone; keep the two aligned on every bump.
 - Node floor: `>=22.19.0`. ESM only.
 
@@ -14,14 +14,32 @@ Pi, consumed from npm.
 
 Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` `0.87.1` — `Agent`, JSONL Session
+- `@earendil-works/pi-agent-core` `0.99.2` — `Agent`, JSONL Session
   persistence, context-injected coding tools, and the Node execution
   environment
-- `@earendil-works/pi-ai` `0.87.1` — model catalog, provider streams, and
+- `@earendil-works/pi-ai` `0.99.2` — model catalog, provider streams, and
   message types
+- `@earendil-works/pi-codemode` `0.99.2` (VC-471) — the Code Mode sandbox: a
+  QuickJS VM (WebAssembly, from its one dependency `quickjs-wasi` 3.6.2, MIT) in
+  a worker per run, whose only capability is calling the tools it is handed.
+  Standalone: no Pi dependency and no Pi extension API. Used through
+  `CodemodeSandbox`, `loadQuickJSWasm`, `renderDeclarations`/`renderToolSample`
+  and `parseCodemodeSource`; the coding agent's codemode extension (exposure,
+  `tool_search`, the session store) is not. Keep it on the same release as
+  `pi-agent-core`. Volli's layer over it is `src/codemode/`, and the design is
+  `docs/research/code-mode-vc-471.md`.
 
-`@earendil-works/pi-telemetry` arrives transitively and is not imported here.
-The coding-agent TUI, client, and protocol packages are intentionally absent.
+`@earendil-works/pi-telemetry` and `@earendil-works/chord` arrive transitively
+(both were already dependencies of `pi-agent-core` at 0.87.1) and neither is
+imported here. Telemetry sends nothing in this embedding: `pi-telemetry` is span
+contracts plus a no-op and an in-memory context, with no exporter and no network
+code; Pi reaches it only through an optional `telemetryContext` in a harness
+context or stream options, which this runtime never sets, so every span goes to
+`NOOP_TELEMETRY_CONTEXT`. `chord` is Pi's context, delta and service runtime,
+also with no network code. Both re-checked at the 0.99.2 bump (VC-469):
+`pi-telemetry`'s JavaScript is unchanged from 0.87.1 apart from source maps.
+The coding-agent TUI, client, and protocol packages are intentionally absent,
+as is `@earendil-works/pi-mcp`, which VC-470 adopts in the desktop app.
 
 ## Process sandbox runtime
 
@@ -51,10 +69,24 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-One patch file, declared in `pnpm-workspace.yaml` under `patchedDependencies`
-and stored in `patches/` at the repo root. It carries two independent changes.
+Two patch files, declared in `pnpm-workspace.yaml` under `patchedDependencies`
+and stored in `patches/` at the repo root.
 
-- `@earendil-works/pi-agent-core@0.87.1` — adds an optional `estimateMessage`
+- `@earendil-works/pi-codemode@0.99.2` (VC-471) — adds `maxOutputChars` to
+  `CodemodeSandboxOptions` (`dist/runtime/host.js`, `dist/types.d.ts`). Upstream
+  bounds the VM's heap but not the output items the host accumulates from it,
+  so a program that called `text()` in a loop could grow Electron main's memory
+  for its whole deadline. Past the bound the execution fails as a `script`
+  error and the worker is terminated; absent, upstream behavior. Small enough to
+  offer upstream as-is.
+
+The `pi-agent-core` patch carries two independent changes, and both rebased
+unchanged onto 0.99.2 (VC-469): 0.99.2's
+`dist/harness/compaction/compaction.{js,d.ts}` and
+`dist/harness/session/jsonl/storage.js` are byte-identical to 0.87.1's, so the
+patch file and its hash are the 0.87.1 ones under the new version's name.
+
+- `@earendil-works/pi-agent-core@0.99.2` — adds an optional `estimateMessage`
   parameter to `prepareCompaction` and `findCutPoint` in
   `dist/harness/compaction/compaction.{js,d.ts}`. Upstream hardcodes pi's own
   `estimateTokens` at both the cut-point scan and the `tokensBefore` total, so
@@ -62,12 +94,12 @@ and stored in `patches/` at the repo root. It carries two independent changes.
   budgets against. `prepareModelCompaction` passes the model-aware counter
   (`estimateMessageTokens` ∘ `withoutReasoning`); a caller that passes nothing
   gets upstream behavior unchanged, which is what keeps the patch small and the
-  seam additive. Upstream ships no equivalent hook as of 0.87.1. At the 0.87.1
+  seam additive. Upstream ships no equivalent hook as of 0.99.2. At the 0.87.1
   bump (VC-421) the patch rebased unchanged:
   `dist/harness/compaction/compaction.{js,d.ts}` are byte-identical between
   0.85.1 and 0.87.1 apart from the patched hunks; the 0.86/0.87
   transcript-context work did not touch the harness compaction module.
-- `@earendil-works/pi-agent-core@0.87.1` (VC-462) — re-opening a JSONL sidecar
+- `@earendil-works/pi-agent-core@0.99.2` (VC-462) — re-opening a JSONL sidecar
   (`JsonlStorage.openV4` in `dist/harness/session/jsonl/storage.js`) no longer
   holds the event loop for the whole file. Upstream reads the file as one
   string, splits it, then parses and replays every line in one synchronous
@@ -82,7 +114,7 @@ and stored in `patches/` at the repo root. It carries two independent changes.
   patched repo. The write-up
   that could go upstream as-is is in
   `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`. Upstream ships no
-  equivalent as of 0.87.1; drop the hunk once it does.
+  equivalent as of 0.99.2; drop the hunk once it does.
 
 Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
 (`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale
@@ -117,6 +149,18 @@ against a stub `ExecutionEnv` that records the string Pi passes to
 `absolutePath`, and asserts the replica agrees for every transformation. Bumping
 the pin fails that test if Pi changes the normalization. Re-check it, and this
 section, on every version bump.
+
+`src/pi/tool-output.ts` restates a format, not code: the middle cut that
+`pi-coding-agent` 0.99's MCP extension applies to long results (Codex's
+`…N chars truncated…` marker, half the byte budget from each end, cut on a
+character boundary, behind `Warning: truncated output (original token count:
+N)`). The coding-agent package is not a dependency, so nothing pins the two
+together; if Pi changes its format, this one stays as it is until someone
+decides otherwise. What differs on purpose is where the whole text goes and how
+long it lives: a directory beside the attachment's sidecar, under a per-file,
+per-attachment and runtime-wide bound (oldest removed first), with lines over
+16 KiB split so `read` reaches all of it, instead of an unbounded file in the OS
+temp directory.
 
 ## Transcript-carried prompt and tools (0.86+)
 
@@ -164,12 +208,66 @@ so only test fixtures needed retyping. `ExecutionEnv` gained
 `openTextLineReader`; `ScopedExecutionEnv` returns `not_supported`, as it does
 for `readTextLines`.
 
-The 0.87.1 built-in model catalog was generated 2026-09-22 and lists 41
-providers (including `meta`). The optional `Model.inputLimits` and
-`Model.promptCache` fields are used only by Pi's coding-agent for image resizing
-and cache warming. `model-catalog.ts`'s pi.dev-feed allowlist does not admit
-them; this runtime does not read them, and the pinned built-ins do not ship
-them.
+The optional `Model.inputLimits` and `Model.promptCache` fields (0.87) are used
+only by Pi's coding-agent for image resizing and cache warming.
+`model-catalog.ts`'s pi.dev-feed allowlist does not admit them, and this runtime
+does not read them.
+
+## The 0.99 bump (VC-469)
+
+0.88 through 0.98 were never published; 0.99.0–0.99.2 followed 0.87.1. Audited
+against the `pi-agent-core` and `pi-ai` changelogs and a diff of the published
+tarballs:
+
+- **Tool results.** `AgentToolResult` gained `structuredContent` (JSON for
+  programmatic callers, never sent to the model) and `isError` (report a
+  failure without throwing; `details` and `structuredContent` survive), and
+  `AgentTool` gained `outputSchema`. Neither reaches a provider:
+  `toToolDeclaration` still sends only name, description and parameters, and
+  `ToolResultMessage` carries no `structuredContent`, so the sidecar and the
+  token estimate are unchanged by them. `afterToolCall` drops a result's
+  `structuredContent` when it replaces `content` without it. The MCP wrapper
+  uses all three, and follows Codex in also showing the model the structured
+  data as compact JSON unless a text block already carries it; see
+  `docs/mcp.md`, "What a call returns".
+- **`runToolCall`** runs one call through argument preparation, validation and
+  both hooks without emitting events. Not used yet; it is the seam a nested
+  caller (VC-471's Code Mode) needs so authority still judges each call.
+- **`thinkingLevel` on assistant messages.** The agent loop now stamps the
+  requested level on every assistant message, so new sidecar entries carry it
+  and entries written by 0.87.1 do not. Nothing here reads it.
+- **`onProviderStreamEvent`.** An optional observer of provider events before
+  normalization. Not wired: observability is metadata-only by design.
+- **Model types.** Image models joined the regular `Provider`/`Models` surface
+  and classifier models were added. `Model` is now the chat member of
+  `AnyModel`; unqualified reads stay chat-only. `ModelsStoreEntry.models` and
+  `Provider.getAllModels` hold every type, so `withRefreshableCatalog` restores
+  only chat entries and answers `getAllModels` with its own chat list beside the
+  base provider's other types. Nothing removed (`ImagesModels` and friends) was
+  used here.
+- **Anthropic workload identity federation** (`ANTHROPIC_FEDERATION_RULE_ID`
+  and friends) resolves Anthropic auth from an identity-token file; the test
+  setup clears those variables like the other ambient credentials.
+- **Sign in with ChatGPT.** The `openai` provider gained an OAuth login that
+  sends OpenAI a stable installation UUID as the agent host id, read from
+  `LoginOptions.getDeviceId`, and throws before asking anything without one.
+  `piSignIn` takes a `deviceId` and passes it; main mints one per installation
+  (`installation-id.ts`, kept in `app_state`). `sign-in.integration.test.ts`
+  runs the real flow up to the browser step, with and without it.
+- **Classifier-only providers.** 0.99.2 ships `typesafe`, which lists a
+  classifier and no chat model. Model Access is a chat-model page, so it leaves
+  out any provider that lists models but no chat ones (a provider listing
+  nothing yet, such as a dynamic one before its first refresh, stays).
+  Classifier models get their own Settings slot in VC-478.
+- **Transitive:** `openai` 6.40 → 7.19 (pi-ai's OpenAI adapters; this runtime
+  does not import it). Notices regenerated.
+- **Unchanged and re-checked:** the patched compaction and storage modules,
+  `harness/tools/path-utils.js` (so the `normalizeToolPath` replica below still
+  holds), the JSONL storage format (a 0.87.1 sidecar reopens unchanged;
+  `pi-0.87.1-reattach.test.ts` pins that with a real one).
+
+The 0.99.2 built-in model catalog was generated 2026-09-30 and lists 42
+providers (adding `typesafe`, which serves only classifier models).
 
 ## Credentials
 

@@ -107,6 +107,36 @@ describe("MCP Agent Tool Surface", () => {
     ).toThrow(/providerName is invalid/i);
   });
 
+  it("replays a frozen output schema exactly, a pre-0.99 record without one, and refuses a damaged one (VC-469)", () => {
+    const typed: McpToolDefinition = {
+      ...definition(),
+      outputSchema: { type: "object", properties: { echo: { type: "string" } } },
+    };
+    const recorded = (tool: unknown) => ({
+      kind: "session.input.recorded" as const,
+      input: {
+        kind: "tool-surface" as const,
+        tools: [definition().providerName],
+        mcpTools: [tool],
+      },
+    });
+
+    // Written by this build: the schema comes back as it was frozen.
+    expect(
+      decodeSessionEventPayload(JSON.parse(encodeSessionJson(recorded(typed))), "payload"),
+    ).toEqual(recorded(typed));
+    // Written before the field existed: replayed without one, nothing added.
+    const decoded = decodeSessionEventPayload(recorded(definition()), "payload") as unknown as {
+      input: { mcpTools: McpToolDefinition[] };
+    };
+    expect(decoded.input.mcpTools[0]).toEqual(definition());
+    expect("outputSchema" in decoded.input.mcpTools[0]!).toBe(false);
+    // Discovery never freezes a schema it refused, so one that fails now was damaged.
+    expect(() =>
+      decodeSessionEventPayload(recorded({ ...typed, outputSchema: { type: "array" } }), "payload"),
+    ).toThrow('payload.input.mcpTools[0] output schema root type must be "object"');
+  });
+
   it("round-trips host-authored parallel-read eligibility and refuses any other value (VC-454)", () => {
     const tool: McpToolDefinition = { ...definition(), parallelRead: true };
     const payload = {

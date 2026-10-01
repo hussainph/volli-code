@@ -1,4 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The VC-471 benchmark report runs under Node's type stripper, where an
+    // explicit `.ts` import is required by ESM (as apps/desktop's storage
+    // tools do). Type-checking only: this package emits nothing.
+    "allowImportingTsExtensions": true
+  },
   "include": ["src", "smoke", "bench"]
 }

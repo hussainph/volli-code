@@ -1,7 +1,9 @@
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  DEFAULT_CODE_MODE_LIMITS,
   roleVerbBundle,
+  type CodeModeSurface,
   type SessionRuntimeSpec,
   type VerbToolKey,
 } from "@volli/shared";
@@ -529,6 +531,53 @@ describe("the delegation paragraph", () => {
     expect(execution("ticket", [...roleVerbBundle("ticket"), "session.start"])).toBe(
       execution("ticket", roleVerbBundle("ticket")),
     );
+  });
+});
+
+/** When to write a program (VC-471): said only where the frozen record asks for it. */
+function codeModeSurface(nudge: boolean): CodeModeSurface {
+  return {
+    routes: { read: "both", edit: "both", write: "both", execute: "both" },
+    limits: DEFAULT_CODE_MODE_LIMITS,
+    mode: "both",
+    ...(nudge ? { nudge: true as const } : {}),
+  };
+}
+
+describe("the Code Mode paragraph", () => {
+  const CODING = ["read", "edit", "write", "execute"] as const;
+  const surface = codeModeSurface;
+
+  function execution(role: "ticket" | "subagent", codeMode?: CodeModeSurface) {
+    return systemPromptSections({
+      role,
+      tools: {
+        tools: [...CODING],
+        verbs: role === "ticket" ? roleVerbBundle("ticket") : [],
+        ...(codeMode === undefined ? {} : { codeMode }),
+      },
+    }).find((candidate) => candidate.id === "execution")!.text;
+  }
+
+  it("ends the Execution layer, after any delegation paragraph, when the record says so", () => {
+    for (const role of ["ticket", "subagent"] as const) {
+      const text = execution(role, surface(true));
+      expect(text.startsWith(execution(role))).toBe(true);
+      expect(text.slice(execution(role).length + 2)).toMatchInlineSnapshot(`
+        "Use codemode when one step needs several tool calls whose raw results you
+        would otherwise read and throw away: a loop of bash or read calls, the same
+        check across many files, several Browser pages, or a long output filtered to
+        the lines that matter. The program does the looping and returns only the
+        answer. For a single call, or a result you need to see whole, call the tool
+        directly."
+      `);
+      expect(Math.ceil((text.length - execution(role).length) / 4)).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("is absent without the record's say-so, Code Mode or not", () => {
+    expect(execution("ticket", surface(false))).toBe(execution("ticket"));
+    expect(execution("ticket")).not.toContain("codemode");
   });
 });
 

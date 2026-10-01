@@ -1,12 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import {
+  codeModeSurfaceFor,
   NON_CODING_TOOL_IDS,
   TODO_STATUSES,
+  verbEntry,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -23,6 +25,8 @@ import {
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
+  SAVED_TOOL_OUTPUT_WARNING,
+  verbDetailsSchema,
   WEB_FETCH_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
   type AskUserPort,
@@ -30,6 +34,7 @@ import {
   type WebSearchPort,
 } from "./tools";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
+import { ToolOutputStore } from "./tool-output";
 
 /** What the host was asked, and with which signal, so both can be read back. */
 interface RecordedAsk {
@@ -80,6 +85,42 @@ function resultText(result: AgentToolResult<undefined>): string {
 }
 
 describe("read tool", () => {
+  it("marks a read of saved tool output as untrusted, and no other read (VC-469)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-saved-"));
+    const workspace = join(root, "worktree");
+    await mkdir(workspace);
+    const env = new NodeExecutionEnv({ cwd: workspace });
+    try {
+      await writeFile(join(workspace, "own.txt"), "the Session's own file\n");
+      const output = new ToolOutputStore({
+        directory: join(root, "sidecar.tool-output"),
+        workspacePath: workspace,
+      });
+      const saved = await output.save({ callId: "tc-1", header: "HEADER", text: "server text\n" });
+      const path = (saved as { path: string }).path;
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env, output);
+
+      const savedRead = await read!.execute(
+        "call-1",
+        { path, offset: 3 },
+        new AbortController().signal,
+      );
+      expect(savedRead.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+      expect(JSON.stringify(savedRead.content[1])).toContain("server text");
+
+      const ownRead = await read!.execute(
+        "call-2",
+        { path: "own.txt" },
+        new AbortController().signal,
+      );
+      expect(resultText(ownRead as AgentToolResult<undefined>)).toContain("the Session's own file");
+      expect(JSON.stringify(ownRead.content)).not.toContain("Volli trust notice");
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("compresses a byte-heavy PNG before returning it to the model", async () => {
     const root = await mkdtemp(join(tmpdir(), "volli-read-image-"));
     const env = new NodeExecutionEnv({ cwd: root });
@@ -1516,5 +1557,71 @@ describe("createTodoWriteTool", () => {
     expect(
       createSessionTools({ tools: { tools: ["read"] } }, null as never).map((tool) => tool.name),
     ).toEqual(["read"]);
+  });
+});
+
+describe("createSessionTools with Code Mode (VC-471)", () => {
+  const codeMode = codeModeSurfaceFor({ tools: ["read", "write"] });
+  const spec = {
+    tools: {
+      tools: ["read", "write"] as ("read" | "write")[],
+      codeMode: { ...codeMode, routes: { read: "code" as const, write: "both" as const } },
+    },
+  };
+
+  it("refuses to build a surface that names codemode with no Code Mode host", () => {
+    expect(() => createSessionTools(spec, null as never)).toThrow(
+      "This Session's surface names codemode, but no Code Mode host is wired.",
+    );
+  });
+
+  it("declares the routes' answer and hands Code Mode every other tool, with its durable id", () => {
+    const handed: string[] = [];
+    const declared = createSessionTools(spec, null as never, undefined, (_surface, tools) => {
+      handed.push(...tools.map((entry) => `${entry.id}=${entry.tool.name}`));
+      return {
+        name: "codemode",
+        label: "code",
+        description: "",
+        parameters: {} as never,
+        execute: async () => ({ content: [], details: undefined }),
+      };
+    });
+    expect(declared.map((tool) => tool.name)).toEqual(["write", "codemode"]);
+    expect(handed).toEqual(["read=read", "write=write"]);
+  });
+
+  it("hands Code Mode a verb's declared details schema beside it, and nothing for any other tool", () => {
+    const verbs = ["session.start", "session.stop"] as const;
+    const surface = codeModeSurfaceFor({ tools: ["read", ...verbs] });
+    const handed = new Map<string, Record<string, unknown> | undefined>();
+    createSessionTools(
+      {
+        tools: { tools: ["read"], verbs: [...verbs], codeMode: surface },
+        callVerb: async () => ({ text: "" }),
+      },
+      null as never,
+      undefined,
+      (_surface, tools) => {
+        for (const entry of tools) handed.set(entry.id, entry.detailsSchema);
+        return createTodoWriteTool();
+      },
+    );
+    expect([...handed.keys()]).toEqual(["read", "session.start", "session.stop"]);
+    // The registry's own declaration, read rather than restated.
+    expect(handed.get("session.start")).toBe(verbEntry("session.start")?.tool?.resultDetails);
+    expect(handed.get("session.stop")).toBeUndefined();
+    expect(handed.get("read")).toBeUndefined();
+  });
+});
+
+describe("verbDetailsSchema (VC-471)", () => {
+  it("is the registry's resultDetails for a verb that declares one, and empty otherwise", () => {
+    expect(verbDetailsSchema("watch")).toEqual({
+      detailsSchema: verbEntry("watch")?.tool?.resultDetails,
+    });
+    expect(verbDetailsSchema("session.stop")).toEqual({});
+    // A key this build does not project has nothing to declare either.
+    expect(verbDetailsSchema("ticket.list" as never)).toEqual({});
   });
 });

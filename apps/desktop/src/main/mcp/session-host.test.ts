@@ -1,8 +1,24 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { mcpProviderToolName, type McpServerDraft, type McpToolDefinition } from "@volli/shared";
+import {
+  MCP_RESULT_HOST_MAX_BYTES,
+  mcpProviderToolName,
+  type McpServerDraft,
+  type McpToolDefinition,
+  type RuntimeAskRequest,
+} from "@volli/shared";
 
+import {
+  McpCredentialMissingError,
+  McpCredentialRejectedError,
+  McpSignInRequiredError,
+} from "./credentials";
 import { McpTransportFailure, type McpProtocolClient } from "./discovery";
-import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
+import {
+  exceedsHostBound,
+  McpCallBlocked,
+  McpSessionHost,
+  serversForFrozenMcpTools,
+} from "./session-host";
 
 const server: McpServerDraft = {
   id: "server-1",
@@ -104,8 +120,10 @@ describe("McpSessionHost", () => {
     expect(JSON.stringify(result)).not.toContain("secret-blob");
   });
 
-  it("rejects disabled or unknown servers and oversize results using safe errors", async () => {
-    const huge = "x".repeat(300_000);
+  it("rejects disabled or unknown servers, and passes a megabyte result through whole (VC-469)", async () => {
+    // Over the old 256 KiB refusal by four times: the runtime cuts what the
+    // model reads and saves the whole, so the host hands it over untouched.
+    const huge = "x".repeat(1_048_576);
     const open = vi.fn(async () =>
       client(async () => ({ content: [{ type: "text", text: huge }] })),
     );
@@ -128,7 +146,52 @@ describe("McpSessionHost", () => {
         { serverId: "server-1", toolName: "large", arguments: {}, toolCallId: "one" },
         new AbortController().signal,
       ),
-    ).rejects.toThrow("MCP result exceeded the safe size limit");
+    ).resolves.toEqual({ content: [{ type: "text", text: huge }], isError: false });
+  });
+
+  it("answers a result past the host bound as an error, before converting it, and keeps the connection", async () => {
+    const protocol = client(async () => ({
+      content: [{ type: "text", text: "x".repeat(MCP_RESULT_HOST_MAX_BYTES + 1) }],
+    }));
+    const open = vi.fn(async () => protocol);
+    const host = new McpSessionHost({ workspacePath: "/workspace", servers: [server], open });
+
+    await expect(
+      host.port.call(
+        { serverId: server.id, toolName: "huge", arguments: {}, toolCallId: "one" },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: "MCP server Fixture returned a result over the 32 MiB limit, and Volli did not read it.",
+        },
+      ],
+      isError: true,
+    });
+    expect(protocol.close).not.toHaveBeenCalled();
+  });
+
+  it("counts every string a result carries toward the host bound, and stops counting past it", () => {
+    expect(exceedsHostBound({ content: [{ type: "text", text: "abc" }] }, 20)).toBe(false);
+    // Text, image data, nested resources, structured values and their keys all count.
+    expect(exceedsHostBound({ content: [{ type: "image", data: "x".repeat(30) }] }, 20)).toBe(true);
+    expect(
+      exceedsHostBound(
+        { content: [{ type: "resource", resource: { uri: "u", blob: "y".repeat(30) } }] },
+        20,
+      ),
+    ).toBe(true);
+    expect(
+      exceedsHostBound({ content: [], structuredContent: { rows: [1, 2, true, null] } }, 20),
+    ).toBe(false);
+    expect(exceedsHostBound({ content: [], structuredContent: { ["k".repeat(25)]: 1 } }, 20)).toBe(
+      true,
+    );
+    expect(
+      exceedsHostBound({ content: [], structuredContent: Array.from({ length: 50 }, () => 0) }, 20),
+    ).toBe(true);
   });
 
   it("turns protocol failures into a safe failed result naming only the configured server", async () => {
@@ -505,5 +568,281 @@ describe("McpSessionHost", () => {
     ).resolves.toEqual({ content: [{ type: "text", text: "recovered" }], isError: false });
     expect(open).toHaveBeenCalledTimes(2);
     await host.close();
+  });
+});
+
+describe("McpSessionHost — calls blocked on a person (VC-470)", () => {
+  const call = { serverId: "server-1", toolName: "lookup", arguments: {}, toolCallId: "c1" };
+
+  it("throws the block from the raw port, so a bound around it never waits on a person", async () => {
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () =>
+        client(async () => {
+          throw new McpSignInRequiredError("Fixture", false);
+        }),
+    });
+
+    const blocked = await host.rawPort
+      .call(call, new AbortController().signal)
+      .catch((error) => error);
+    expect(blocked).toBeInstanceOf(McpCallBlocked);
+    expect((blocked as McpCallBlocked).block).toEqual({
+      kind: "sign-in",
+      insufficientScope: false,
+    });
+    await host.close();
+  });
+
+  it("routes a bound call: asks outside the bound, signs in, and retries through the bound", async () => {
+    let signedIn = false;
+    const open = vi.fn(async () =>
+      client(async () => {
+        if (!signedIn) throw new McpSignInRequiredError("Fixture", false);
+        return { content: [{ type: "text", text: "lookup ok" }], isError: false };
+      }),
+    );
+    const signIn = vi.fn(async () => {
+      signedIn = true;
+      return { ok: true as const, message: "Signed in to Fixture." };
+    });
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open,
+      signIn,
+    });
+    const held: string[] = [];
+    // A stand-in for the per-server budget: records when a slot is held.
+    const bound = async (request: typeof call, signal: AbortSignal) => {
+      held.push("acquire");
+      try {
+        return await host.rawPort.call(request, signal);
+      } finally {
+        held.push("release");
+      }
+    };
+    const ask = vi.fn(async () => {
+      held.push("asked");
+      return "allow" as const;
+    });
+
+    await expect(host.routed(bound).call(call, new AbortController().signal, ask)).resolves.toEqual(
+      {
+        content: [{ type: "text", text: "lookup ok" }],
+        isError: false,
+      },
+    );
+    // The person was asked with no slot held.
+    expect(held).toEqual(["acquire", "release", "asked", "acquire", "release"]);
+    expect(signIn).toHaveBeenCalledOnce();
+    // The connection was kept: a refusal for a sign-in is not a transport failure.
+    expect(open).toHaveBeenCalledOnce();
+    await host.close();
+  });
+
+  it("says so when the sign-in did not complete, without retrying", async () => {
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () =>
+        client(async () => {
+          throw new McpSignInRequiredError("Fixture", true);
+        }),
+      signIn: async () => ({
+        ok: false,
+        cancelled: false,
+        message: "Could not sign in to Fixture.",
+      }),
+    });
+    const ask = vi.fn(async () => "allow" as const);
+
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual({
+      content: [{ type: "text", text: "Could not sign in to Fixture. lookup was not called." }],
+      isError: true,
+    });
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cause: "confirm.mcp-sign-in",
+        reason: expect.stringMatching(/more access/),
+      }),
+      expect.any(AbortSignal),
+    );
+    await host.close();
+  });
+
+  it("reports a question nobody could be shown, and a missing credential asked for and declined", async () => {
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () => {
+        throw new McpCredentialMissingError("Fixture", ["env API_KEY"]);
+      },
+    });
+
+    await expect(
+      host.port.call(call, new AbortController().signal, async () => {
+        throw new Error("no host");
+      }),
+    ).resolves.toMatchObject({
+      content: [{ text: "Volli could not put this in front of anyone, so lookup was not called." }],
+    });
+    await expect(
+      host.port.call(call, new AbortController().signal, async () => "refuse"),
+    ).resolves.toMatchObject({
+      content: [
+        {
+          text: "The person driving declined to add env API_KEY for Fixture, so lookup was not called.",
+        },
+      ],
+    });
+    // A sign-in block with no sign-in wired reads as nobody able to ask.
+    const noSignIn = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () => {
+        throw new McpSignInRequiredError("Fixture", false);
+      },
+    });
+    await expect(
+      noSignIn.port.call(call, new AbortController().signal, async () => "allow"),
+    ).resolves.toMatchObject({ isError: true });
+    await Promise.all([host.close(), noSignIn.close()]);
+  });
+
+  it("asks once for parallel calls blocked on the same server, and retries each", async () => {
+    let signedIn = false;
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () =>
+        client(async ({ name }) => {
+          if (!signedIn) throw new McpSignInRequiredError("Fixture", false);
+          return { content: [{ type: "text", text: `${name} ok` }], isError: false };
+        }),
+      signIn: async () => {
+        signedIn = true;
+        return { ok: true as const, message: "Signed in to Fixture." };
+      },
+    });
+    const answer = Promise.withResolvers<"allow">();
+    const ask = vi.fn(() => answer.promise);
+
+    const one = host.port.call(
+      { ...call, toolName: "one", toolCallId: "c1" },
+      new AbortController().signal,
+      ask,
+    );
+    const two = host.port.call(
+      { ...call, toolName: "two", toolCallId: "c2" },
+      new AbortController().signal,
+      ask,
+    );
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledOnce());
+    answer.resolve("allow");
+
+    await expect(one).resolves.toMatchObject({ content: [{ text: "one ok" }] });
+    await expect(two).resolves.toMatchObject({ content: [{ text: "two ok" }] });
+    expect(ask).toHaveBeenCalledOnce();
+    await host.close();
+  });
+
+  it("names a rejected credential as rejected, and the endpoint of a server that asks to sign in", async () => {
+    const remote: McpServerDraft = {
+      id: "server-1",
+      name: "Fixture",
+      enabled: true,
+      transport: { type: "streamable-http", url: "https://mcp.example.com/mcp" },
+    };
+    const rejected = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [remote],
+      open: async () => {
+        throw new McpCredentialRejectedError("Fixture", ["header Authorization"]);
+      },
+    });
+    const asked: RuntimeAskRequest[] = [];
+    await expect(
+      rejected.port.call(call, new AbortController().signal, async (request) => {
+        asked.push(request);
+        return "allow";
+      }),
+    ).resolves.toMatchObject({
+      content: [{ text: expect.stringContaining("still rejects header Authorization") }],
+    });
+    expect(asked[0]?.reason).toContain(
+      "Fixture (https://mcp.example.com) rejected header Authorization",
+    );
+    await expect(rejected.port.call(call, new AbortController().signal)).resolves.toMatchObject({
+      content: [{ text: expect.stringContaining("only a person can replace it") }],
+    });
+    await rejected.close();
+  });
+
+  it("remembers a person's no for this attachment until they provide something, then asks again", async () => {
+    let access = 0;
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () => {
+        throw new McpCredentialMissingError("Fixture", ["env API_KEY"]);
+      },
+      accessRevision: () => access,
+    });
+    const ask = vi.fn(async () => "refuse" as const);
+    const declined = {
+      content: [
+        {
+          type: "text",
+          text: "The person driving declined to add env API_KEY for Fixture, so lookup was not called.",
+        },
+      ],
+      isError: true,
+    };
+
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    // An agent retrying in a loop gets the same answer, and no new card.
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    await expect(host.port.call(call, new AbortController().signal, ask)).resolves.toEqual(
+      declined,
+    );
+    expect(ask).toHaveBeenCalledOnce();
+
+    // The person stores something: the next blocked call may ask again.
+    access = 1;
+    await host.port.call(call, new AbortController().signal, ask);
+    expect(ask).toHaveBeenCalledTimes(2);
+    await host.close();
+  });
+
+  it("retires an idle client opened before a person replaced a stored value", async () => {
+    let revision = 0;
+    const clients: McpProtocolClient[] = [];
+    const open = vi.fn(async () => {
+      const opened = client(async () => ({ content: [], isError: false }));
+      clients.push(opened);
+      return opened;
+    });
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open,
+      credentialsRevision: () => revision,
+    });
+
+    await host.port.call(call, new AbortController().signal);
+    revision = 1;
+    await host.port.call(call, new AbortController().signal);
+
+    expect(open).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(clients[0]!.close).toHaveBeenCalledOnce());
+    expect(clients[1]!.close).not.toHaveBeenCalled();
+    await host.close();
+    expect(clients[1]!.close).toHaveBeenCalledOnce();
   });
 });

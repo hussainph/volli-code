@@ -42,7 +42,7 @@ export interface SessionUsageEntry extends SessionUsage {
  * — and a union that exists only at compile time leaves each of them writing
  * its own copy of the vocabulary to check against.
  */
-export const SESSION_USAGE_GROUPINGS = ["ticket", "session", "model", "day"] as const;
+export const SESSION_USAGE_GROUPINGS = ["ticket", "session", "model", "day", "cause"] as const;
 
 export type SessionUsageGrouping = (typeof SESSION_USAGE_GROUPINGS)[number];
 
@@ -248,6 +248,10 @@ function groupKey(entry: SessionUsageEntry, groupBy: SessionUsageGrouping): stri
       return `${entry.providerId}/${entry.modelId}`;
     case "day":
       return utcDay(entry.occurredAt);
+    // Which kind of work bought it (VC-478): a decision model's spend reads
+    // apart from the chat turns beside it.
+    case "cause":
+      return entry.cause;
   }
 }
 

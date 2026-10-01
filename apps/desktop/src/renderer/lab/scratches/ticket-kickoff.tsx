@@ -49,6 +49,7 @@
  */
 import * as React from "react";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_MODEL_PICKER_VIEW,
   EMPTY_MODEL_ACCESS_DEFAULTS,
@@ -235,6 +236,8 @@ function labModelAccess(): ModelAccessClient {
     },
     compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
     setCompactionPolicy: (policy) => Promise.resolve(policy),
+    codeModePolicy: () => Promise.resolve(DEFAULT_CODE_MODE_POLICY),
+    setCodeModePolicy: (policy) => Promise.resolve(policy),
     pickerView: () => Promise.resolve(pickerView),
     setPickerView: (view) => {
       pickerView = view;

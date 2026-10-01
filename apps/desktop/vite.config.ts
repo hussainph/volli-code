@@ -37,18 +37,34 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // whitelist and keeping that list in sync as their dependency graph moves.
 // `verify-packed-requires.mjs` is what catches getting this wrong.
 //
-// The MCP client (VC-8) rides along on exactly the same reasoning. It is
-// main-only, pure JavaScript, and — checked across every file of its `dist/`,
-// including the stdio transport — reads nothing relative to its own package
-// layout: no `__dirname`, no `require.resolve`, no module-load file read. That
-// is the property that forces jsdom into `neverBundle`, and its absence is what
-// makes inlining safe here. Bundling it also spares this repo from tracking its
-// runtime tree (cross-spawn, zod, jose, eventsource, @modelcontextprotocol/core
-// …) in the electron-builder whitelist as that graph moves.
+// The MCP client rides along on exactly the same reasoning — VC-8's official
+// SDK first, and since VC-470 `@earendil-works/pi-mcp`. It is main-only, pure
+// JavaScript, and — checked across every file of its `dist/`, the stdio
+// transport and the OAuth loopback server included — reads nothing relative to
+// its own package layout: no `__dirname`, no `require.resolve`, no module-load
+// file read. That is the property that forces jsdom into `neverBundle`, and its
+// absence is what makes inlining safe here. It is also ESM-only (its exports
+// have no `require` condition), so a runtime `require()` from the CJS main
+// bundle is not an option anyway. Bundling it spares this repo from tracking
+// its runtime tree (cross-spawn and its three small dependencies) in the
+// electron-builder whitelist.
+//
+// Code Mode's sandbox (VC-471) is the one package here that is BOTH bundled
+// and shipped. apps/desktop declares `@earendil-works/pi-codemode` only so
+// electron-builder collects it: its worker file and the `quickjs-wasi`
+// WebAssembly it compiles are reached BY PATH at runtime and ship unpacked
+// (electron-builder.yml). The host half — `CodemodeSandbox`, imported by
+// @volli/agent-runtime — must stay inlined all the same, which is why it is
+// named here: a declared dependency is external by default, and the package
+// is ESM-only, exporting no `require` condition, so the `require()` main.cjs
+// would be left with fails at boot. `verify-packed-requires.mjs` fails the
+// build if a chunk ever requires it.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") ||
   id.startsWith("@opentelemetry/") ||
-  id.startsWith("@modelcontextprotocol/");
+  id.startsWith("@earendil-works/pi-mcp") ||
+  id === "@earendil-works/pi-codemode" ||
+  id.startsWith("@earendil-works/pi-codemode/");
 
 function sourceFilesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -364,6 +380,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/model-access-refresh-model.ts",
         "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
+        // What the Decision model controls write and say (VC-478). In the gate
+        // because the cloud choice it builds IS the person's opt-in record,
+        // and a status that read "ready" for a provider nobody signed in to
+        // would send them to a model that can only answer "needs setup".
+        "src/components/pages/decision-model-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
@@ -440,6 +461,11 @@ export default defineConfig(({ mode }) => ({
         // of a wide window would never show.
         "src/components/ticket/diff-fit.ts",
         "src/components/ticket/label-picker-model.ts",
+        // What MCP's tool picker selects in bulk and what a server row says
+        // about its health (VC-470): a select-all that reached a hidden or an
+        // unavailable tool, or a row that called a broken server Ready, is a
+        // tool offered to every new Session that nobody chose.
+        "src/components/settings/configure/mcp-tools-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",

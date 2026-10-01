@@ -159,6 +159,8 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "new chats",
             "precedence",
             "override",
+            "decision model",
+            "classifier",
           ],
           content: <SessionsPane project={project} />,
         },

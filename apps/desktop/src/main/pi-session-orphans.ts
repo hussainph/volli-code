@@ -6,12 +6,18 @@ import {
   lstatSync,
   openSync,
   readSync,
+  rmSync,
   unlinkSync,
 } from "node:fs";
 import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type Database from "better-sqlite3";
+import {
+  listSavedOutput,
+  TOOL_OUTPUT_TOTAL_MAX_BYTES,
+  toolOutputDirectoryFor,
+} from "@volli/agent-runtime";
 import type {
   PiSessionOrphanCandidate,
   PiSessionOrphanInventory,
@@ -37,9 +43,15 @@ interface ConfirmedPiSidecar extends PiSessionOrphanCandidate, FileIdentity {
   createdAt: number;
 }
 
+/** A sidecar proposed for removal, with what removing it frees beside it. */
+interface OrphanCandidate extends ConfirmedPiSidecar {
+  /** Bytes of the long tool results saved beside it (VC-469), which go with it. */
+  toolOutputBytes: number;
+}
+
 interface ScanState {
   report: PiSessionOrphanInventory;
-  candidates: Map<string, ConfirmedPiSidecar>;
+  candidates: Map<string, OrphanCandidate>;
 }
 
 export interface PiSessionOrphanServiceOptions {
@@ -85,15 +97,29 @@ export class PiSessionOrphanService {
     const protectedIds = protectedPiSessionIds(this.db);
     const skipped: PiSessionOrphanSkipped[] = [];
     const confirmed = await scanPiSidecars(this.#root, skipped, this.#openSidecar);
-    const candidates = confirmed.filter((entry) => !protectedIds.has(entry.sessionId));
+    const candidates = await Promise.all(
+      confirmed
+        .filter((entry) => !protectedIds.has(entry.sessionId))
+        .map(async (entry): Promise<OrphanCandidate> =>
+          Object.assign(entry, {
+            toolOutputBytes: await directoryFileBytes(toolOutputDirectoryFor(entry.path)),
+          }),
+        ),
+    );
+    const saved = await listSavedOutput(this.#root);
     const revision = this.#nextId();
     const report: PiSessionOrphanInventory = {
       revision,
       scannedAt: this.#now(),
       candidates: candidates.map(publicCandidate),
       candidateCount: candidates.length,
-      candidateBytes: candidates.reduce((sum, candidate) => sum + candidate.sizeBytes, 0),
+      candidateBytes: candidates.reduce((sum, candidate) => sum + publicSize(candidate), 0),
       skipped,
+      toolOutput: {
+        files: saved.length,
+        bytes: saved.reduce((sum, file) => sum + file.bytes, 0),
+        limitBytes: TOOL_OUTPUT_TOTAL_MAX_BYTES,
+      },
     };
     this.#current = {
       report,
@@ -137,6 +163,13 @@ export class PiSessionOrphanService {
         if (protectedIds.has(current.sessionId)) {
           throw new Error("The Pi session is now referenced by a Volli attachment");
         }
+        // The long tool results that sidecar's conversation named (VC-469)
+        // live beside it and go with it; nothing else names them. Removed
+        // FIRST: a directory that will not go keeps the sidecar too, so the
+        // item reads as kept and the next scan offers it again, where the
+        // other order would orphan the directory where no scan looks.
+        // `rmSync` does not follow a link standing in the directory's place.
+        rmSync(toolOutputDirectoryFor(candidate.path), { recursive: true, force: true });
         unlinkSync(candidate.path);
         removed.push(publicCandidate(candidate));
       } catch (error) {
@@ -466,13 +499,33 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   );
 }
 
-function publicCandidate(candidate: ConfirmedPiSidecar): PiSessionOrphanCandidate {
+/** What removing a candidate frees: the sidecar and the saved output beside it. */
+function publicSize(candidate: OrphanCandidate): number {
+  return candidate.sizeBytes + candidate.toolOutputBytes;
+}
+
+function publicCandidate(candidate: OrphanCandidate): PiSessionOrphanCandidate {
   return {
     itemId: candidate.itemId,
     path: candidate.path,
     sessionId: candidate.sessionId,
-    sizeBytes: candidate.sizeBytes,
+    sizeBytes: publicSize(candidate),
   };
+}
+
+/**
+ * The bytes of the regular files directly in `directory`, or 0 when it is
+ * missing or not a real directory. Saved tool output is one flat directory.
+ */
+async function directoryFileBytes(directory: string): Promise<number> {
+  const entry = await lstat(directory).catch(() => undefined);
+  if (entry === undefined || !entry.isDirectory()) return 0;
+  let total = 0;
+  for (const file of await readdir(directory, { withFileTypes: true })) {
+    if (!file.isFile()) continue;
+    total += (await lstat(join(directory, file.name))).size;
+  }
+  return total;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

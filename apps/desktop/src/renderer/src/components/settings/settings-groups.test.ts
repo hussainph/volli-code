@@ -34,6 +34,19 @@ describe("the Models category's search index", () => {
       ).toBe(true);
     }
   });
+
+  it("finds the Code Mode section by its labels and the words someone looks for it by (VC-471)", () => {
+    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+
+    // The section title and switch ("Code Mode"), the row behind Advanced,
+    // and what a person who has only heard of it types.
+    for (const label of ["Code Mode", "Pin a model", "codemode", "sandbox", "javascript"]) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `${label} should find Settings → Models`,
+      ).toBe(true);
+    }
+  });
 });
 
 describe("the Storage category's search index", () => {
@@ -41,6 +54,10 @@ describe("the Storage category's search index", () => {
     const terms = keywordsFor("storage").map((term) => term.toLowerCase());
 
     expect(terms).toContain("orphaned logs");
+  });
+
+  it("finds the saved tool output row by the label on screen (VC-469)", () => {
+    expect(keywordsFor("storage").map((term) => term.toLowerCase())).toContain("saved tool output");
   });
 
   it("finds every label the Running processes section draws (VC-341)", () => {

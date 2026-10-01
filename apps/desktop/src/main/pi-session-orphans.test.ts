@@ -1,10 +1,12 @@
 import {
+  chmodSync,
   constants,
   existsSync,
   mkdirSync,
   openSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,6 +14,7 @@ import { mkdtemp, open as openFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TOOL_OUTPUT_TOTAL_MAX_BYTES } from "@volli/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "./db/projects-repo";
@@ -214,6 +217,66 @@ describe("PiSessionOrphanService explicit reclaim", () => {
     expect(result.kept).toEqual([]);
     expect(existsSync(firstPath)).toBe(false);
     expect(existsSync(secondPath)).toBe(false);
+  });
+
+  it("removes a reclaimed sidecar's saved tool output with it, and no one else's (VC-469)", async () => {
+    const orphanPath = writePiSession("orphan-with-output");
+    const keptPath = writePiSession("attached-with-output");
+    bindPi("attached-with-output");
+    const orphanOutput = orphanPath.replace(/\.jsonl$/u, ".tool-output");
+    const keptOutput = keptPath.replace(/\.jsonl$/u, ".tool-output");
+    for (const directory of [orphanOutput, keptOutput]) {
+      mkdirSync(directory);
+      writeFileSync(join(directory, "tc-1.0a1b2c3d.txt"), "saved");
+    }
+    const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
+    const scan = await service.scan();
+    // The output directory is not a sidecar and is never inventoried as one,
+    // but its bytes are part of what removing the sidecar frees.
+    expect(scan.candidates.map((candidate) => candidate.sessionId)).toEqual(["orphan-with-output"]);
+    expect(scan.skipped).toEqual([]);
+    expect(scan.candidates[0]!.sizeBytes).toBe(statSync(orphanPath).size + "saved".length);
+    expect(scan.candidateBytes).toBe(scan.candidates[0]!.sizeBytes);
+    // Every Session's saved output, against the bound the runtime keeps it under.
+    expect(scan.toolOutput).toEqual({
+      files: 2,
+      bytes: 2 * "saved".length,
+      limitBytes: TOOL_OUTPUT_TOTAL_MAX_BYTES,
+    });
+
+    const report = await service.reclaim({
+      scanRevision: scan.revision,
+      itemIds: [scan.candidates[0]!.itemId],
+    });
+    expect(report.removedBytes).toBe(scan.candidateBytes);
+
+    expect(existsSync(orphanPath)).toBe(false);
+    expect(existsSync(orphanOutput)).toBe(false);
+    expect(existsSync(keptOutput)).toBe(true);
+  });
+
+  it("keeps the sidecar when its saved tool output will not go, so a later scan offers it again", async () => {
+    const path = writePiSession("output-stuck");
+    const output = path.replace(/\.jsonl$/u, ".tool-output");
+    mkdirSync(output);
+    writeFileSync(join(output, "tc-1.0a1b2c3d.txt"), "saved");
+    // A directory whose entries cannot be removed.
+    chmodSync(output, 0o500);
+    try {
+      const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
+      const scan = await service.scan();
+
+      const result = await service.reclaim({
+        scanRevision: scan.revision,
+        itemIds: [scan.candidates[0]!.itemId],
+      });
+
+      expect(result.removedCount).toBe(0);
+      expect(result.kept).toHaveLength(1);
+      expect(existsSync(path)).toBe(true);
+    } finally {
+      chmodSync(output, 0o700);
+    }
   });
 
   it("protects a session attached after scan and leaves its file", async () => {

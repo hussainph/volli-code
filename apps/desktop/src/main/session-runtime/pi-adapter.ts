@@ -79,8 +79,10 @@ import {
   askUserInteractionId,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   isBudgetCause,
   isConfirmCause,
+  isCredentialConfirmCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -95,6 +97,7 @@ import {
   type CommandRefusalSeverity,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type CodeModeSurface,
   type McpToolDefinition,
   type ModelSelection,
   type ModelSelectionOutcome,
@@ -104,7 +107,10 @@ import {
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
-  type RuntimeMcpPort,
+  type RuntimeMcpCall,
+  type RuntimeMcpCallResult,
+  type RuntimeClassifyPort,
+  type RuntimeCallScope,
   type RuntimeObservation,
   type RuntimeShellPort,
   type RuntimeContextCarry,
@@ -246,6 +252,8 @@ interface PiRuntimeContextFields {
   mcpManagementNames?: "server";
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
+  /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
+  codeMode?: CodeModeSurface;
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -334,7 +342,20 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
 
 /** Main-owned MCP port with attachment cleanup for its clients/transports. */
-export type DesktopMcpPort = RuntimeMcpPort & { dispose: () => Promise<void> | void };
+/**
+ * The attachment's MCP host. `call` takes the attachment's ask as an optional
+ * third argument (VC-470): a call blocked on a sign-in or a credential puts
+ * the question to the person driving through the same parked-question
+ * machinery a verb's confirmation uses.
+ */
+export type DesktopMcpPort = {
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
+  ): Promise<RuntimeMcpCallResult>;
+  dispose: () => Promise<void> | void;
+};
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -470,6 +491,12 @@ export interface PiAdapterOptions {
     workspacePath: string;
   }) => DesktopShellPort;
   /**
+   * The Session's decision port (VC-478), bound to the Session and its project
+   * by the host. Absent means a Session whose frozen surface names `classify`
+   * cannot attach — the record promised a tool this launch cannot answer.
+   */
+  resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
+  /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
    * transports, calls, and cleanup.
@@ -553,6 +580,11 @@ export interface PiAdapterOptions {
    * runtime's default holds and every Session dispatches sequentially.
    */
   parallelMcpReads?: PiRuntimeHostOptions["parallelMcpReads"];
+  /**
+   * Where Code Mode's sandbox worker and WebAssembly are when main runs
+   * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
+   */
+  codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -759,6 +791,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.parallelMcpReads === undefined
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
+    ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
   });
 
   return {
@@ -828,6 +861,10 @@ function piNativeAdapter(
           sessionId: spec.sessionId,
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
+        }),
+        classify: options.resolveClassifyPort?.({
+          sessionId: spec.sessionId,
+          projectId: context.projectId,
         }),
         mcp:
           (context.mcpTools?.length ?? 0) === 0
@@ -927,6 +964,8 @@ interface PiBindingOptions {
   browser: DesktopBrowserPort | undefined;
   /** The Session's scoped background shell capability; `undefined` is "no shells". */
   shell: DesktopShellPort | undefined;
+  /** The Session's decision port (VC-478), or undefined when this launch wired none. */
+  classify: RuntimeClassifyPort | undefined;
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -945,6 +984,7 @@ class PiBinding implements BindingHandle {
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
+  readonly #classify: RuntimeClassifyPort | undefined;
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -981,6 +1021,7 @@ class PiBinding implements BindingHandle {
     this.#web = options.web;
     this.#browser = options.browser;
     this.#shell = options.shell;
+    this.#classify = options.classify;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1060,6 +1101,8 @@ class PiBinding implements BindingHandle {
     const wantsFind = context.toolSurface.includes("browser_find");
     // One name stands for the three (VC-270), on the browser's reasoning.
     const wantsShell = context.toolSurface.includes("shell_start");
+    // The decision model (VC-478): one name, one port.
+    const wantsClassify = context.toolSurface.includes("classify");
     const mcpTools = context.mcpTools ?? [];
     const mcpNames = context.toolSurface.filter(isMcpToolId);
     if (
@@ -1071,6 +1114,14 @@ class PiBinding implements BindingHandle {
     if (mcpTools.length > 0 && this.#mcp === undefined) {
       throw new Error(
         "This Session's frozen Agent Tool Surface includes MCP tools, but this launch wired no MCP host.",
+      );
+    }
+    // Code Mode's record is read back with the names it routes (VC-471); the
+    // shared builder then holds it to the surface exactly.
+    const wantsCodeMode = context.toolSurface.includes("codemode");
+    if (wantsCodeMode && context.codeMode === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface names codemode without its routes.",
       );
     }
     if (
@@ -1092,6 +1143,14 @@ class PiBinding implements BindingHandle {
     if (wantsShell && this.#shell === undefined) {
       throw new Error(
         "This Session's frozen Agent Tool Surface includes background shells, but this build wired no shell host. Retry the attachment on a build that carries one.",
+      );
+    }
+    if (wantsClassify && this.#classify === undefined) {
+      // Refused rather than shrunk, on the browser guard's reasoning. A
+      // decision model turned off since birth is NOT this case: the port is
+      // still wired, and each call answers that no model is configured.
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes classify, but this launch wired no decision service. Relaunch the app and retry the attachment.",
       );
     }
     // The verb half of the frozen record, read back rather than re-derived from
@@ -1177,6 +1236,7 @@ class PiBinding implements BindingHandle {
           ? {}
           : { mcpManagementNames: context.mcpManagementNames }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
+        ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       ...this.#carry,
@@ -1195,7 +1255,21 @@ class PiBinding implements BindingHandle {
           }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
-      ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),
+      ...(wantsClassify && this.#classify !== undefined ? { classify: this.#classify } : {}),
+      // The attachment's ask rides into MCP calls (VC-470). Code Mode lends
+      // its question scope (VC-471), serializing asks and pausing its clock.
+      ...(mcpTools.length === 0
+        ? {}
+        : {
+            mcp: {
+              call: (request: RuntimeMcpCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
+                this.#mcp!.call(request, signal, (ask, askSignal) =>
+                  scope === undefined
+                    ? this.#ask(ask, askSignal)
+                    : scope.question(() => this.#ask(ask, askSignal)),
+                ),
+            },
+          }),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1203,9 +1277,14 @@ class PiBinding implements BindingHandle {
       ...(verbs.length === 0
         ? {}
         : {
-            callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
+            // A Code Mode program's call lends its scope (VC-471): the
+            // door's budget question then waits its turn among the
+            // program's questions, and stops the program's clock.
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
               callVerb!(sessionIdentity, request, signal, (ask, askSignal) =>
-                this.#ask(ask, askSignal),
+                scope === undefined
+                  ? this.#ask(ask, askSignal)
+                  : scope.question(() => this.#ask(ask, askSignal)),
               ),
           }),
     };
@@ -1515,11 +1594,16 @@ class PiBinding implements BindingHandle {
     // interaction id — under a shared prefix the second `opened` emit would
     // dedupe against the first and park a question nobody was shown. See
     // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
+    // A credential question (VC-470) has a fourth, because it can follow a
+    // confirmation on the same tool call: `mcp_install` confirms the install,
+    // then asks the person to sign in.
     const interactionId = isBudgetCause(request.cause)
       ? budgetAskInteractionId(request.toolCallId)
-      : isConfirmCause(request.cause)
-        ? confirmAskInteractionId(request.toolCallId)
-        : askInteractionId(request.toolCallId);
+      : isCredentialConfirmCause(request.cause)
+        ? credentialAskInteractionId(request.toolCallId)
+        : isConfirmCause(request.cause)
+          ? confirmAskInteractionId(request.toolCallId)
+          : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",

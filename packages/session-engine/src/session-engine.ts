@@ -1159,6 +1159,7 @@ function modelSelectedPayload(
     kind: "model.selected",
     selection: intent.selection,
     ...(intent.tier === undefined ? {} : { tier: intent.tier }),
+    ...(intent.auto === undefined ? {} : { auto: intent.auto }),
   };
 }
 

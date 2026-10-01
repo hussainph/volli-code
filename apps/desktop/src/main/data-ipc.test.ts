@@ -425,15 +425,20 @@ describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);
     const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
+    const accessFor = vi.fn(() => ({ "server-1": { signIn: "signed-in", missingSecrets: [] } }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list, save, accessFor } as never },
+    );
 
-    // One read carries both halves of what the pane shows: the servers, and
-    // the management history beside them (VC-380). Empty here because no
-    // operation has been recorded against this project.
+    // One read carries what the pane shows: the servers, the management
+    // history beside them (VC-380), and where each stands on credentials
+    // (VC-470). History is empty here because no operation was recorded.
     expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
       ok: true,
       servers: [{ id: "server-1" }],
       operations: [],
+      access: { "server-1": { signIn: "signed-in", missingSecrets: [] } },
     });
     await expect(
       invoke<Promise<unknown>>("volli:mcp-save" as never, {
@@ -473,7 +478,10 @@ describe("MCP settings IPC", () => {
       { ...entry, id: "session-1:b", projectId: "project-2", summary: "Elsewhere." },
       200,
     );
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list: () => [] } as never });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list: () => [], accessFor: () => ({}) } as never },
+    );
 
     const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
       projectId: "project-1",
@@ -482,6 +490,60 @@ describe("MCP settings IPC", () => {
     // The pane reads one project. Another project's history appearing here
     // would be a leak between projects, not merely untidy.
     expect(result.operations.map((row) => row.summary)).toEqual(["Installed Fixture."]);
+  });
+});
+
+describe("MCP sign-in IPC (VC-470)", () => {
+  it("routes sign-in, cancel, sign-out and draft disposal to the service", async () => {
+    const finish = Promise.withResolvers<unknown>();
+    const signIn = vi.fn(() => finish.promise);
+    const cancelSignIn = vi.fn(() => {
+      finish.resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." });
+      return { ok: true };
+    });
+    const signOut = vi.fn(() => ({ ok: true }));
+    const discardDraft = vi.fn(() => ({ ok: true }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { signIn, cancelSignIn, signOut, discardDraft } as never },
+    );
+
+    const waiting = invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+      projectId: "project-1",
+      serverId: "server-1",
+    });
+    expect(signIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    expect(
+      invoke("volli:mcp-cancel-sign-in" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    expect(cancelSignIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    await expect(waiting).resolves.toEqual({
+      ok: false,
+      cancelled: true,
+      error: "The sign-in to X was cancelled.",
+    });
+
+    expect(
+      invoke("volli:mcp-sign-out" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    expect(signOut).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    expect(
+      invoke("volli:mcp-discard-draft" as never, { projectId: "project-1", serverId: "draft-1" }),
+    ).toEqual({ ok: true });
+    expect(discardDraft).toHaveBeenCalledWith({ projectId: "project-1", serverId: "draft-1" });
+  });
+
+  it("answers a completed sign-in with its message, keyed by the draft's own id", async () => {
+    const signIn = vi.fn(async () => ({ ok: true, message: "Signed in to Draft." }));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { signIn } as never });
+
+    await expect(
+      invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+        projectId: "project-1",
+        server: { id: "draft-1" },
+        secrets: { "header:authorization": "typed" },
+      }),
+    ).resolves.toEqual({ ok: true, message: "Signed in to Draft." });
   });
 });
 
@@ -1151,6 +1213,60 @@ describe("volli:ticket-create — ticket numbers never recycle across a hard del
     // branch. The counter must instead keep moving forward.
     const four = createTicket(projectId);
     expect(four.ticketNumber).toBe(4);
+  });
+});
+
+describe("archiving or deleting a ticket drops its Sessions' saved tool output (VC-469)", () => {
+  function piToolOutput(sessionsRoot: string, ticketId: string, name: string): string {
+    const directory = join(sessionsRoot, "--Users-test-project--");
+    mkdirSync(directory, { recursive: true });
+    const sidecar = join(directory, `${name}.jsonl`);
+    writeFileSync(sidecar, "{}\n");
+    const output = join(directory, `${name}.tool-output`);
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "tc-1.txt"), "saved");
+    const session = testSession(
+      ctx.db.prepare("SELECT project_id FROM tickets WHERE id = ?").pluck().get(ticketId) as string,
+      ticketId,
+    );
+    insertSession(ctx.db, session);
+    ctx.db
+      .prepare(
+        `UPDATE session_attachments SET adapter_id = 'pi', native_detail = ? WHERE session_id = ?`,
+      )
+      .run(
+        JSON.stringify({
+          kind: "volli.native-binding.v1",
+          locator: { runtime: "pi", sessionId: name, sessionFilePath: sidecar },
+        }),
+        session.id,
+      );
+    return output;
+  }
+
+  it("removes it on archive, and on deleting a ticket archived before this existed", () => {
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "volli-pi-sessions-"));
+    createdProjectDirs.push(sessionsRoot);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { detectBaseBranch: async () => null, piSessionsDirectory: sessionsRoot },
+    );
+    const projectId = createProject();
+    const archived = createTicket(projectId);
+    const archivedOutput = piToolOutput(sessionsRoot, archived.id, "archived");
+    archiveTicket(archived.id);
+    expect(existsSync(archivedOutput)).toBe(false);
+
+    // A live ticket keeps it, even when a delete is wrongly asked for.
+    const live = createTicket(projectId);
+    const liveOutput = piToolOutput(sessionsRoot, live.id, "live");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: live.id }).ok).toBe(false);
+    expect(existsSync(liveOutput)).toBe(true);
+
+    // Saved again after the archive (an older build, say), then deleted.
+    const again = piToolOutput(sessionsRoot, archived.id, "again");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: archived.id }).ok).toBe(true);
+    expect(existsSync(again)).toBe(false);
   });
 });
 

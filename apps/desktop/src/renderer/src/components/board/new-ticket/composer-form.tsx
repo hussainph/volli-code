@@ -160,7 +160,7 @@ export function ComposerForm({
   // rung order main resolves — read per open, overridable for this ticket
   // alone (`composer-run.tsx`). Deliberately NOT part of the draft above — see
   // that module's header.
-  const run = useComposerRun(target.sessionModel ?? null);
+  const run = useComposerRun(target.sessionModel ?? null, target.id);
 
   // Read on arrival and project changes: a composer can open without ever
   // visiting the board, or retarget to a project whose cache is still cold.
@@ -306,7 +306,7 @@ export function ComposerForm({
     try {
       const result = await runKickoff(currentFields(), deps, {
         createMore,
-        ...(run.selection === null ? {} : { model: run.selection }),
+        ...(!run.explicit || run.selection === null ? {} : { model: run.selection }),
       });
       if (!result.created) return;
       clearDraft(); // the kickoff consumed the draft — next open starts blank
@@ -319,7 +319,17 @@ export function ComposerForm({
     } finally {
       setSubmitting(false);
     }
-  }, [title, submitting, currentFields, deps, createMore, run.selection, resetForm, onClose]);
+  }, [
+    title,
+    submitting,
+    currentFields,
+    deps,
+    createMore,
+    run.explicit,
+    run.selection,
+    resetForm,
+    onClose,
+  ]);
 
   // The third commit (VC-329 item 4): create in the chip's status — never
   // moved to make a column match — then run the chosen saved Automation on it.

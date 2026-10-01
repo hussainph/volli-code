@@ -46,6 +46,7 @@ import type {
   AgentModelTier,
   Automation,
   AuthorityPolicy,
+  ModelSelection,
   Project,
   ReasoningLevel,
   RuntimeAskChoice,
@@ -191,6 +192,18 @@ export type VerbBudgetAsk = (
   request: RuntimeAskRequest,
   signal: AbortSignal,
 ) => Promise<RuntimeAskChoice>;
+
+/**
+ * A model selection as a verb result's `details` carry it: a fresh flat
+ * object, never the caller's own, so nothing else rides into the record.
+ */
+function modelDetails(model: ModelSelection): Readonly<Record<string, string>> {
+  return {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    reasoningLevel: model.reasoningLevel,
+  };
+}
 
 /** The wire name the model called this verb by, read off the registry's own projection. */
 function wireToolName(verb: VerbToolKey): string {
@@ -477,6 +490,17 @@ async function startSessionTool(
         ? ` (${override.choice.tier} tier)`
         : "";
     return {
+      // The same facts as the prose, as data (VC-471), in the shape the
+      // registry's `resultDetails` declares: a Code Mode program reads the
+      // handle here rather than out of the sentence below.
+      details: {
+        sessionId: started.sessionId,
+        handle,
+        ticket: started.ticketDisplayId,
+        title: started.title,
+        model: modelDetails(started.model),
+        state: started.state === "ready" ? "running" : "needs-recovery",
+      },
       text: [
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
@@ -854,8 +878,15 @@ async function delegateSessionTool(
     });
     return {
       // The row's link and name, structured, so the transcript never has to
-      // parse the prose below.
-      details: { sessionId: outcome.childSessionId, title: outcome.title },
+      // parse the prose below — and the rest of what a program acts on
+      // (VC-471), in the shape the registry's `resultDetails` declares.
+      details: {
+        sessionId: outcome.childSessionId,
+        handle: outcome.handle,
+        title: outcome.title,
+        model: modelDetails(outcome.model),
+        state: outcome.state,
+      },
       text: [
         `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
@@ -924,8 +955,11 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
     mcpPreviewTool(mcpPorts(options), session, request, signal),
   "mcp.install": (options, session, request, signal, budgetAsk) =>
     mcpInstallTool(mcpPorts(options), session, request, signal, budgetAsk),
-  "mcp.refresh": (options, session, request, signal) =>
-    mcpRefreshTool(mcpPorts(options), session, request, signal),
+  // Refresh starts a server the project already holds, so it confirms nothing
+  // — but a server that now needs a sign-in asks the person driving through
+  // the same machinery (VC-470).
+  "mcp.refresh": (options, session, request, signal, budgetAsk) =>
+    mcpRefreshTool(mcpPorts(options), session, request, signal, budgetAsk),
   "mcp.enable": (options, session, request) => mcpEnableTool(mcpPorts(options), session, request),
   "mcp.disable": (options, session, request) => mcpDisableTool(mcpPorts(options), session, request),
   "mcp.tools": (options, session, request) => mcpToolsTool(mcpPorts(options), session, request),

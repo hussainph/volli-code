@@ -30,6 +30,7 @@ import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
+import { removeTicketToolOutput } from "./pi-tool-output";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
@@ -61,6 +62,8 @@ import type {
   McpServerInput,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
@@ -493,6 +496,12 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
+    /**
+     * Where Pi keeps its sidecars and the tool output saved beside them
+     * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
+     * output. Absent (tests, degraded boot) means nothing is removed.
+     */
+    piSessionsDirectory?: string;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -506,6 +515,7 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
     // renderers do: coverage says whether an answer can be trusted at all, and
@@ -555,6 +565,21 @@ export function registerDataIpcHandlers(
   const busySeam = (): { busySites?: BusyWorktreeSites } =>
     options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
   const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
+
+  /**
+   * Drops a finished ticket's saved tool output (VC-469). Nobody asked for
+   * this and the archive or delete already happened, so a failure is logged
+   * rather than raised: the runtime's own bound still removes the files,
+   * oldest first, when room is needed.
+   */
+  const releaseTicketToolOutput = (ticketId: string): void => {
+    if (options.piSessionsDirectory === undefined) return;
+    try {
+      removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
+    } catch (error) {
+      console.warn(`[volli] Could not remove ticket ${ticketId}'s saved tool output:`, error);
+    }
+  };
 
   const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
     void trimFinishedWorktree(
@@ -820,6 +845,7 @@ export function registerDataIpcHandlers(
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
       operations: listMcpOperations(db, input.projectId),
+      access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
     "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
@@ -827,6 +853,25 @@ export function registerDataIpcHandlers(
     "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
     "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
     "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
+    // A sign-in waits on the person's browser for up to five minutes. It is
+    // not tied to this request: the pane's Cancel stops it for everyone
+    // waiting on it, an agent's question included.
+    "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
+      // Only the fields a renderer may set: nothing it sends can stand in for
+      // the cancellation main owns.
+      const outcome = await mcpSettings.signIn({
+        projectId: input.projectId,
+        ...(input.serverId === undefined ? {} : { serverId: input.serverId }),
+        ...(input.server === undefined ? {} : { server: input.server }),
+        ...(input.secrets === undefined ? {} : { secrets: input.secrets }),
+      });
+      return outcome.ok
+        ? { ok: true, message: outcome.message }
+        : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
+    },
+    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
+    "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
+    "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());
@@ -1040,6 +1085,7 @@ export function registerDataIpcHandlers(
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      releaseTicketToolOutput(input.ticketId);
       // An archive KEEPS the checkout, which makes an archived ticket the
       // longest-lived carrier of a dead dependency tree in the app (VC-340).
       trimFinishedInBackground(input.ticketId, ticket?.project_id);
@@ -1057,6 +1103,11 @@ export function registerDataIpcHandlers(
     },
 
     "volli:ticket-delete": (input: TicketIdInput): Result => {
+      // Before the delete, which detaches the Sessions from the ticket; and
+      // only for an archived ticket, the one kind the delete accepts.
+      if (getTicketRow(db, input.ticketId)?.archived_at != null) {
+        releaseTicketToolOutput(input.ticketId);
+      }
       deleteTicketCommand(db, input.ticketId);
       return { ok: true };
     },
@@ -1993,6 +2044,7 @@ export function registerDataIpcHandlers(
         releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      releaseTicketToolOutput(input.ticketId);
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
       changeWatchManager.unwatchTicket(input.ticketId);

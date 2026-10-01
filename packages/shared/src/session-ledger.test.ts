@@ -5,6 +5,7 @@ import {
   assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -726,6 +727,32 @@ describe("projectSession", () => {
       event(2, { kind: "model.selected", selection: { ...selection, reasoningLevel: "high" } }),
     ]);
     expect(repinned.modelTier).toBeNull();
+  });
+
+  it("carries a decision model's pick, and drops it with the next selection", () => {
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+    const auto = {
+      confidence: 0.7,
+      alternatives: [
+        { selection: { ...selection, reasoningLevel: "high" as const }, probability: 0.2 },
+      ],
+    };
+    const picked = projectSession(session, [event(1, { kind: "model.selected", selection, auto })]);
+    expect(picked.modelAuto).toEqual(auto);
+    // Absent, not null, on every Session nobody auto-picked.
+    expect(
+      "modelAuto" in projectSession(session, [event(1, { kind: "model.selected", selection })]),
+    ).toBe(false);
+    // A later pick by hand is no longer the decision's.
+    const overridden = projectSession(session, [
+      event(1, { kind: "model.selected", selection, auto }),
+      event(2, { kind: "model.selected", selection: { ...selection, reasoningLevel: "high" } }),
+    ]);
+    expect("modelAuto" in overridden).toBe(false);
   });
 
   it("projects retitle and native-continuation facts without mutating immutable inputs", () => {
@@ -2183,5 +2210,9 @@ describe("the frozen ask interaction id derivations", () => {
     expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
     expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
     expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
+    // VC-470's credential question: it can follow a confirmation on the same
+    // tool call, so it must not share that confirmation's id.
+    expect(credentialAskInteractionId("call-1")).toBe("credential-ask:call-1");
+    expect(credentialAskInteractionId("x")).not.toBe(confirmAskInteractionId("x"));
   });
 });

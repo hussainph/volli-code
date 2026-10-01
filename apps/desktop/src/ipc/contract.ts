@@ -54,10 +54,14 @@ import type {
   LatestSessionSignal,
   LegacyProject,
   ManifestError,
+  McpConnectionBlock,
+  McpServerAccess,
   McpServerDraft,
   McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
+  DecisionModelCatalogEntry,
+  DecisionModelSetting,
   DeliberateMoveChoice,
   ModelSelection,
   NotificationEvent,
@@ -190,11 +194,29 @@ export interface McpProjectInput {
 
 export interface McpServerInput extends McpProjectInput {
   server: McpServerDraft;
+  /**
+   * Secret values typed into the editor and not stored yet, by slot
+   * (`header:authorization`, `env:API_KEY`, `oauth:client-secret`). They cross
+   * this boundary once, renderer to main, and are never sent back: every read
+   * reports only which slots hold a value (VC-470).
+   */
+  secrets?: Readonly<Record<string, string>>;
 }
 
 export interface McpSaveInput extends McpServerInput {
   enabledTools: readonly string[];
 }
+
+/** Sign in to a saved server (`serverId`) or to the editor's unsaved draft (`server`). */
+export interface McpSignInInput extends McpProjectInput {
+  serverId?: string;
+  server?: McpServerDraft;
+  secrets?: Readonly<Record<string, string>>;
+}
+
+export type McpSignInResult =
+  | { ok: true; message: string }
+  | { ok: false; cancelled: boolean; error: string };
 
 export interface McpServerIdInput extends McpProjectInput {
   serverId: string;
@@ -221,14 +243,19 @@ export type McpServersResult =
        * precisely when its server is no longer in the list beside it.
        */
       operations: readonly McpOperationRecord[];
+      /**
+       * Each server's sign-in state and which stored secrets are missing, by
+       * server id (VC-470). Labels and states only — never a value.
+       */
+      access: Readonly<Record<string, McpServerAccess>>;
     }
   | { ok: false; error: string };
 export type McpServerResult =
   | { ok: true; server: McpServerRecord }
-  | { ok: false; error: string; server?: McpServerRecord };
+  | { ok: false; error: string; server?: McpServerRecord; blocked?: McpConnectionBlock };
 export type McpCatalogResult =
   | { ok: true; catalog: McpServerRecord["catalog"] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; blocked?: McpConnectionBlock };
 
 /**
  * A policy write that was refused, with every reason.
@@ -746,6 +773,14 @@ export interface VolliDataIpcContract {
   "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
   "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
   "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
+  /** Opens the server's OAuth page in the browser and waits for the loopback redirect (VC-470). */
+  "volli:mcp-sign-in": { args: [input: McpSignInInput]; result: McpSignInResult };
+  /** Stops a sign-in still waiting on the browser. */
+  "volli:mcp-cancel-sign-in": { args: [input: McpServerIdInput]; result: Result };
+  /** Deletes a server's stored OAuth tokens and registration. */
+  "volli:mcp-sign-out": { args: [input: McpServerIdInput]; result: Result };
+  /** Forgets credentials gathered for an editor draft that was never saved. */
+  "volli:mcp-discard-draft": { args: [input: McpServerIdInput]; result: Result };
   /**
    * Points an existing project at the folder it moved to (VC-430).
    *
@@ -1645,6 +1680,75 @@ export interface VolliWebAccessIpcContract {
 }
 
 export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
+
+// ---- decision models (VC-478) ---------------------------------------------
+
+/**
+ * Everything Settings is told about decision models, for one page.
+ *
+ * `project` is present when the page asked about a project: its override, or
+ * `null` when it inherits. `catalog` is every cloud classifier Pi offers, each
+ * with whether this profile has signed in to its provider — the only
+ * credential fact the renderer is given, and a state rather than a value.
+ */
+export interface DecisionModelSettingsView {
+  global: DecisionModelSetting;
+  project?: DecisionModelSetting | null;
+  catalog: readonly DecisionModelCatalogEntry[];
+}
+
+export type DecisionModelResult = Result<{
+  settings: DecisionModelSettingsView;
+  /** The project row as the write left it, when the write was a project's. */
+  project?: Project;
+}>;
+
+/** What a connection test found, end to end: one small question asked for real. */
+export type DecisionModelTestView =
+  | { ok: true; elapsedMs: number; probability: number }
+  | { ok: false; elapsedMs: number; message: string };
+
+export type DecisionModelTestResult = Result<{ test: DecisionModelTestView }>;
+
+/** Which setting a write changes: the app-wide one, or one project's override. */
+export type DecisionModelScope = { scope: "global" } | { scope: "project"; projectId: string };
+
+/**
+ * The decision model setting (VC-478), on its own door.
+ *
+ * Nothing on this surface carries a secret, and it cannot start carrying one:
+ * a setting names a provider and a model or a loopback URL, and main re-reads
+ * every write through `parseDecisionModelSetting`, which keeps only those
+ * fields. A cloud model's key is entered through Model Access sign-in and
+ * lives in Pi's own `auth.json`; this door only reports whether one exists.
+ */
+export interface VolliDecisionModelIpcContract {
+  /** The app-wide setting, a project's override when named, and the cloud catalog. */
+  "volli:decision-model-get": {
+    args: [projectId: string | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Stores one scope's setting. `null` clears a project's override back to
+   * inheriting; the app-wide setting cannot be null (`none` turns it off). A
+   * cloud setting must carry the person's opt-in, which main time-stamps.
+   */
+  "volli:decision-model-set": {
+    args: [scope: DecisionModelScope, setting: DecisionModelSetting | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Asks a local server or a cloud model one fixed question, end to end. Sends
+   * a probe sentence Volli wrote, never a Session's data, so it needs no
+   * opt-in; it is how a person checks a URL or a sign-in before relying on it.
+   */
+  "volli:decision-model-test": {
+    args: [setting: DecisionModelSetting];
+    result: DecisionModelTestResult;
+  };
+}
+
+export type DecisionModelIpcChannel = keyof VolliDecisionModelIpcContract;
 
 /** Whether agent telemetry is exported, and whether it is actually landing. */
 export interface AgentObservabilityView {
@@ -2636,6 +2740,7 @@ export interface VolliInvokeContract
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
+    VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
@@ -3756,8 +3861,14 @@ export interface PiSessionOrphanInventory {
   scannedAt: number;
   candidates: PiSessionOrphanCandidate[];
   candidateCount: number;
+  /** What removing every candidate frees: the sidecars and the saved tool output beside them. */
   candidateBytes: number;
   skipped: PiSessionOrphanSkipped[];
+  /**
+   * Long tool results saved across every Session (VC-469): how much there is
+   * now, and the bound past which the oldest are removed first.
+   */
+  toolOutput: { files: number; bytes: number; limitBytes: number };
 }
 
 /** One reviewed candidate main kept after its mandatory pre-unlink re-check. */

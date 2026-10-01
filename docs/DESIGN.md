@@ -299,6 +299,13 @@ Heights come from the primitive's size variants — don't restate them per-use:
 `default` is the chip height on purpose: a default Button next to a filter chip reads as one family.
 Nothing in the app should render a taller control than `lg`.
 
+**A checkbox is the one control that is not a pill, and not a rung.** `ui/checkbox.tsx` is a
+16px box whose corner is half the smallest rung (`calc(var(--radius-sm) / 2)`, 4px). Every rung
+of the radius ladder is 8px or more, and at 16px that draws a circle — a radio button, which says
+"one of these" about a control that means "any of these". The value is derived from the ladder
+rather than written beside it, and it is recorded here because the token check cannot see an
+inline style.
+
 **Tabs ride the same rung.** `ui/tab-strip.tsx` is the one tab, at 28px / `text-ui` in both its
 drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-px` over the strip's
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
@@ -387,11 +394,11 @@ whole budget: opacity and its four box properties, named exactly, 150ms `ease-ou
 where the pointer entered, morphs between zones, and never blinks; `motion-reduce` cancels it. A pane opened from the keyboard (`⌘\`, `⇧⌘\`) appears with **no animation at all** —
 it is a chord pressed tens of times a day — and hands focus to its menu's first row.
 
-**The empty pane is a menu, not a message.** Four rows at the `lg` rung (32px, the size this
-document reserves for empty states) in a `w-72` column: New chat `⌘T`, New terminal `⌥⌘T`, Open
-file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' own `MENU_SHORTCUT`.
-No heading, no explanation, and above all no "drag a tab here": every row is a verb that already
-works from the keyboard, and the chord beside it is how the menu teaches itself.
+**The empty pane is a menu, not a message.** Five rows at the `lg` rung (32px, the size this
+document reserves for empty states) in a `w-72` column: New chat `⌘T`, New terminal `⌥⌘T`, New
+browser, Open file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' own `MENU_SHORTCUT`.
+No heading, no explanation, and above all no "drag a tab here": each row is a verb, with a chord
+beside it where one exists. Browser and Close pane have no chord.
 
 ## The ticket rail (VC-406)
 

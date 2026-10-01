@@ -19,6 +19,7 @@ import {
   UnknownSessionEventKindError,
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
@@ -146,6 +147,20 @@ const payloads = samples(
     selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
     tier: "fast",
   },
+  // A decision model's pick at birth (VC-432) writes its provenance beside it.
+  {
+    kind: "model.selected",
+    selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+    auto: {
+      confidence: 0.64,
+      alternatives: [
+        {
+          selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+          probability: 0.21,
+        },
+      ],
+    },
+  },
   { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
   // The attach-time skill record: names + whole delivered bodies, so a
   // recovery re-attach composes the prompt the first attach composed.
@@ -172,6 +187,18 @@ const payloads = samples(
   {
     kind: "session.input.recorded",
     input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "server" },
+  },
+  // Code Mode's routes and limits travel with the names they route (VC-471).
+  {
+    kind: "session.input.recorded",
+    input: {
+      kind: "tool-surface",
+      tools: ["read", "execute", "ask_user", "codemode", "session.start"],
+      codeMode: {
+        routes: { read: "code", execute: "both", ask_user: "direct", "session.start": "both" },
+        limits: { ...DEFAULT_CODE_MODE_LIMITS },
+      },
+    },
   },
   { kind: "session.signaled", signal: "done", reason: null },
   { kind: "session.signaled", signal: "blocked", reason: "stuck" },
@@ -525,6 +552,19 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
         tier: "deep",
       },
+      {
+        kind: "model.select",
+        selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
+        auto: {
+          confidence: 0.64,
+          alternatives: [
+            {
+              selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+              probability: 0.21,
+            },
+          ],
+        },
+      },
       { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
@@ -862,6 +902,30 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.tier has an unsupported value");
+    // Provenance is held to its shape too: a probability is a number in [0, 1].
+    const selection = { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" };
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 2, alternatives: [] } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.confidence must be a number between 0 and 1");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 0.5, alternatives: "x" } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "model.selected",
+          selection,
+          auto: { confidence: 0.5, alternatives: [{ selection, probability: "high" }] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives[0].probability must be a number between 0 and 1");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },
@@ -909,6 +973,43 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    // Code Mode's name and its record travel together, and the record routes
+    // exactly the surface it was frozen with (VC-471).
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["read", "codemode"] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input names codemode without its routes");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode is present but the surface does not hold codemode");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read", "write", "codemode"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode.routes must name exactly the tools of the surface");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },
