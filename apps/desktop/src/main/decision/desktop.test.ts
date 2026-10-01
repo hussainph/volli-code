@@ -243,20 +243,64 @@ describe("the classify offer at Session birth", () => {
     expect(await built.offersClassify(PROJECT)).toBe(false);
   });
 
-  it("is not offered for a cloud model whose provider is not signed in", async () => {
+  it("is offered for an opted-in cloud model before its provider is signed in", async () => {
+    // A key added later reaches the Session that was waiting for it; until
+    // then its calls answer "needs setup" and the agent decides itself.
     const signedOut = decisions({ models: fakeModels(false) });
     await signedOut.built.set({ scope: "global" }, CLOUD);
-    expect(await signedOut.built.offersClassify(PROJECT)).toBe(false);
-    const signedIn = decisions();
-    expect(await signedIn.built.offersClassify(PROJECT)).toBe(true);
+    expect(await signedOut.built.offersClassify(PROJECT)).toBe(true);
   });
 
-  it("is not offered when the catalog never came back", async () => {
-    const { built } = decisions({ catalogReady: Promise.reject(new Error("restore failed")) });
-    await built.set({ scope: "global" }, LOCAL).catch(() => undefined);
+  it("does not wait on the model catalog, and decides locally when it never came back", async () => {
+    const { built, billed } = decisions({
+      catalogReady: Promise.reject(new Error("restore failed")),
+    });
     fixture.db
-      .prepare("INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES (?, ?, 0)")
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 0)")
       .run(DECISION_MODEL_APP_STATE_KEY, JSON.stringify(LOCAL));
+    expect(await built.offersClassify(PROJECT)).toBe(true);
+    const outcome = await built
+      .classifyPort({ sessionId: "session-1", projectId: PROJECT })
+      .classify({
+        state: { review: "LGTM" },
+        questions: QUESTIONS,
+        signal: new AbortController().signal,
+      });
+    expect(outcome.kind).toBe("answered");
+    await flush();
+    expect(billed).toHaveLength(1);
+  });
+
+  it("asks a cloud model after a failed catalog restore, on Pi's built-in catalog", async () => {
+    const { built } = decisions({ catalogReady: Promise.reject(new Error("restore failed")) });
+    await built.set({ scope: "global" }, CLOUD);
+    const outcome = await built
+      .classifyPort({ sessionId: "session-1", projectId: PROJECT })
+      .classify({
+        state: { review: "LGTM" },
+        questions: QUESTIONS,
+        signal: new AbortController().signal,
+      });
+    expect(outcome.kind).toBe("answered");
+  });
+});
+
+describe("a project row that no longer reads", () => {
+  it("turns decision models off for that project rather than inheriting a cloud model", async () => {
+    const { built } = decisions();
+    await built.set({ scope: "global" }, CLOUD);
+    // A later build's local server kind, read by this one.
+    fixture.db
+      .prepare("UPDATE projects SET decision_model = ? WHERE id = ?")
+      .run(
+        JSON.stringify({ kind: "local", server: "ollama", baseUrl: "http://127.0.0.1:11434" }),
+        PROJECT,
+      );
+    expect(
+      resolveScopedDecisionModel(fixture.db, { sessionId: "session-1", projectId: null }),
+    ).toEqual({
+      kind: "none",
+    });
     expect(await built.offersClassify(PROJECT)).toBe(false);
   });
 });
@@ -316,6 +360,21 @@ describe("the connection test", () => {
     expect(await built.test(CLOUD)).toMatchObject({
       ok: false,
       message: expect.stringMatching(/signed in/),
+    });
+  });
+
+  it("reads a test request through the setting parser, so a probe needs no opt-in and nothing else rides along", async () => {
+    let clock = 0;
+    const { built } = decisions({ now: () => (clock += 10) });
+    expect(
+      await built.test({ kind: "cloud", providerId: "typesafe", modelId: "jev-latest" } as never),
+    ).toMatchObject({ ok: true, probability: 0.96 });
+    expect(await built.test({ kind: "mystery" } as never)).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/Choose a decision model/),
+    });
+    expect(await built.test({ kind: "cloud", providerId: 3 } as never)).toMatchObject({
+      ok: false,
     });
   });
 

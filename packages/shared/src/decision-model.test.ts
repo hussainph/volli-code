@@ -283,6 +283,22 @@ describe("requests", () => {
     );
   });
 
+  it("refuses names that would not stay a question or an option", () => {
+    // JSON.parse makes `__proto__` an own key; assigning it would have swapped
+    // a prototype and sent the state with no question at all.
+    const parsed = JSON.parse(
+      '{"state":{"x":1},"questions":{"__proto__":{"type":"bool","instructions":"q","criteria":{"true":"y","false":"n"}}}}',
+    ) as unknown;
+    expect(problem(parsed)).toMatch(/identifier/);
+    expect(problem({ state: {}, questions: { constructor: QUESTIONS.approved } })).toMatch(
+      /identifier/,
+    );
+    const option = JSON.parse(
+      '{"type":"choice","instructions":"q","criteria":{"__proto__":"x","b":"B"}}',
+    ) as unknown;
+    expect(ask(option)).toMatch(/cannot have an option named __proto__/);
+  });
+
   it("holds each question to its shape", () => {
     expect(ask("yes?")).toMatch(/must be an object/);
     expect(ask({ ...QUESTIONS.approved, instructions: "" })).toMatch(/instructions must be text/);
@@ -373,6 +389,8 @@ describe("answers", () => {
     expect(wrong({ approved: { type: "bool", probability: 1.5 } })).toBeNull();
     expect(wrong({ approved: "yes" })).toBeNull();
     expect(wrong({ category: { ...PI_ANSWERS.category, choice: "other" } })).toBeNull();
+    // An inherited name is not one of the options.
+    expect(wrong({ category: { ...PI_ANSWERS.category, choice: "toString" } })).toBeNull();
     expect(wrong({ category: { ...PI_ANSWERS.category, probabilities: null } })).toBeNull();
     expect(wrong({ category: { ...PI_ANSWERS.category, confidence: Number.NaN } })).toBeNull();
     expect(

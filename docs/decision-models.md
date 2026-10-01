@@ -23,8 +23,13 @@ Storage: the app-wide setting is `app_state["volli:decision-model"]`; a
 project's override is `projects.decision_model` (migration 053, `NULL` =
 inherit, `{ "kind": "none" }` = this project turned it off). Every read goes
 back through `parseDecisionModelSetting`, so a row another build wrote — a
-cloud setting without its opt-in, a non-loopback local URL — reads as no
-decision model rather than as a call nobody agreed to.
+cloud setting without its opt-in, a non-loopback local URL, a server kind
+this build does not know — reads as no decision model rather than as a call
+nobody agreed to. That holds for a project row too: an unreadable project row
+turns decision models off for that project, never falls through to an
+app-wide cloud model. A project override can pick None, the app-wide local
+server (or the default one), or a cloud model; its own server URL is not
+configurable in this version.
 
 ### Credentials
 
@@ -73,12 +78,16 @@ decision that was not made. A `use` that throws (an answer the caller cannot
 act on) also falls back.
 
 **Bounds** (`DECISION_LIMITS`, checked before anything is sent): state ≤ 32 KiB
-of JSON and ≤ 32 levels deep, 1–16 questions with identifier names, choices of
-2–32 options, scores of 2–10 levels, instructions ≤ 2,000 and criteria ≤ 500
-characters. **Concurrency:** 4 calls in flight across every purpose; the rest
-queue in arrival order. **Timeout:** per purpose (`agent.classify`: 30 s), and
-it includes the queue — a caller is promised an answer or its fallback within
-its purpose's time, even from a model that ignores its abort signal.
+of JSON and ≤ 32 levels deep, 1–16 questions with identifier names
+(`__proto__`, `constructor` and `prototype` refused), choices of 2–32 options,
+scores of 2–10 levels, instructions ≤ 2,000 and criteria ≤ 500 characters.
+**Concurrency:** 4 calls in flight per purpose, so a purpose with a deadline
+of seconds never queues behind another's slow calls; the rest queue in
+arrival order. **Timeout:** per purpose (`agent.classify`: 30 s), covering
+reading the setting, queueing and asking — a caller is promised an answer or
+its fallback within its purpose's time, even from a model that ignores its
+abort signal. Nothing local waits on the model catalog; a cloud call waits for
+its restore, and uses Pi's built-in catalog if the restore failed.
 
 **Answers** are held to the questions asked, all or nothing, and normalised so
 every answer can be thresholded the same way: `confidence` everywhere
@@ -87,14 +96,22 @@ a score.
 
 **Usage** is billed into the Session as a `usage.recorded` event with cause
 `decision` and `{ purpose }` in the provenance, so `volli cost` and every usage
-surface count it. Cloud usage is Pi's catalog estimate; a local call is one
+surface count it, and `volli cost --group-by cause` shows it on its own line.
+An answer that lands after its caller gave up is still billed — the provider
+charged for it. Cloud usage is Pi's catalog estimate; a local call is one
 request that cost $0 with unknown tokens. A call with no Session is not
 metered by the service — its caller attributes it once there is a Session.
+With one purpose, cause `decision` is that purpose; when a second ships,
+`purpose` should join the usage index (`session_usage`) so `volli cost` can
+group by it — today it is in each fact's provenance only.
 
 **Audit.** A purpose marked `audit: true` must leave a durable, attributed
-fact per decision, through `recordDecision`. With no recorder wired, an
-audited purpose is refused as `unaudited`. `agent.classify` is not audited:
-routine agent calls get usage records, not per-call ledger facts.
+fact per decision, through `recordDecision`: the answer the caller acted on,
+or the miss it fell back on (an answer whose `use` threw is recorded as that
+miss). Misses before any model was chosen — unset, not opted in — have no
+target and leave no fact; VC-28 may record those itself. With no recorder
+wired, an audited purpose is refused as `unaudited`. `agent.classify` is not
+audited: routine agent calls get usage records, not per-call ledger facts.
 
 ### Adding a purpose (VC-28, VC-432)
 
@@ -114,9 +131,12 @@ routine agent calls get usage records, not per-call ledger facts.
 
 A capability tool (`NON_CODING_TOOL_IDS`, appended after `browser_find`), bound
 to a per-Session `RuntimeClassifyPort`. Its presence is decided **once, at
-Session birth**: `resolveClassify(projectId)` answers whether the project's
-setting offers it (configured, opted in for `agent.classify`, and for cloud,
-signed in), and the answer is frozen into the Session's `tool-surface` record.
+Session birth**: `resolveClassify(projectId)` answers `offersClassifyTool` for
+the project's setting (configured, and for cloud opted into for
+`agent.classify`), and the answer is frozen into the Session's `tool-surface`
+record. Sign-in is deliberately not part of the rule: a Session born while a
+cloud provider still needs its key keeps the tool, its calls answer "needs
+setup" until a person signs in, and then they work.
 A setting changed later reaches only new Sessions; a Session frozen without
 the tool replays without it, and one frozen with it but launched without a
 decision service refuses to attach rather than shrinking its surface. Turning
@@ -129,6 +149,9 @@ call answers that no model is configured.
   elapsedMs }`) with a declared `outputSchema`, plus one text line per answer.
   A miss is an `isError` result whose structured content is `{ miss }` and
   whose text tells the model to decide for itself.
+- **Batches:** outside Code Mode, several `classify` calls in one reply run one
+  after another — Pi's parallel dispatch is opt-in per Session and today only
+  for marked MCP reads (VC-454). Bulk decisions belong in a Code Mode loop.
 - **Code Mode (VC-471):** the tool is on the default `both` route, so a script
   can loop over items. VC-471's result shaping currently hands scripts a
   capability tool's *text*; it should hand them `structuredContent` for a tool

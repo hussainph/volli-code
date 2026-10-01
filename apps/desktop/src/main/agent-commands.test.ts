@@ -6466,6 +6466,29 @@ describe("model.list", () => {
     });
   });
 
+  it("does not name a provider that serves only decision models (VC-478)", async () => {
+    const harness = modelListHarness({
+      snapshot: {
+        observedAt: 900,
+        providers: [
+          {
+            id: "typesafe",
+            label: "TypeSafe",
+            state: "available",
+            accountLabel: null,
+            billingSource: "unknown",
+            recovery: null,
+            signIn: [],
+            hasStoredCredential: true,
+          },
+        ],
+        models: [],
+      },
+    });
+    const response = (await harness.execute()) as { data: { providers: unknown[] } };
+    expect(response.data.providers).toEqual([]);
+  });
+
   it("never leaks credential-adjacent snapshot fields", async () => {
     const harness = modelListHarness();
 

@@ -224,12 +224,16 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const [test, setTest] = React.useState<DecisionModelTestView | null>(null);
 
   const stored = state.status === "loaded" ? state.view.global : null;
-  // The fields follow what is stored until a person starts editing them.
+  // The fields follow what is STORED, keyed on the stored values rather than
+  // on the view object: a re-read that changed nothing (a sign-in elsewhere
+  // on the page) must not wipe what a person is halfway through typing.
+  const storedUrl = stored?.kind === "local" ? stored.baseUrl : null;
+  const storedModel = stored?.kind === "local" ? stored.modelId : null;
   React.useEffect(() => {
-    if (stored?.kind !== "local") return;
-    setServerUrl(stored.baseUrl);
-    setModelId(stored.modelId === DEFAULT_LOCAL_DECISION_MODEL_ID ? "" : stored.modelId);
-  }, [stored]);
+    if (storedUrl === null || storedModel === null) return;
+    setServerUrl(storedUrl);
+    setModelId(storedModel === DEFAULT_LOCAL_DECISION_MODEL_ID ? "" : storedModel);
+  }, [storedUrl, storedModel]);
 
   async function save(setting: DecisionModelSetting): Promise<void> {
     if (busy) return;
@@ -299,11 +303,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const cloud = global.kind === "cloud" ? cloudStatus(global, view.catalog) : null;
 
   return (
-    <PrefSection
-      title="Decision model"
-      icon={SignpostIcon}
-      hint={<>Answers typed questions without writing text. New Sessions get the classify tool.</>}
-    >
+    <PrefSection title="Decision model" icon={SignpostIcon}>
       <PrefRow label="Model" testId="decision-model-mode">
         <Segmented
           ariaLabel="Decision model"
@@ -473,16 +473,23 @@ export function ProjectDecisionModelRow({
   project: Project;
   onSaved(project: Project): void;
 }) {
-  const { state, adopt } = useDecisionModelView(project.id);
+  const { state, load, adopt } = useDecisionModelView(project.id);
   const [asking, setAsking] = React.useState<DecisionModelCatalogEntry | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   if (state.status !== "loaded") {
     return (
       <PrefRow label="Decision model" testId="project-decision-model">
-        <span className="text-ui text-muted-foreground">
-          {state.status === "loading" ? "Loading…" : "Unavailable"}
-        </span>
+        {state.status === "loading" ? (
+          <span className="text-ui text-muted-foreground">Loading…</span>
+        ) : (
+          <div className="flex items-center gap-3" title={state.message}>
+            <span className="text-ui text-muted-foreground">Couldn&rsquo;t load</span>
+            <Button size="xs" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
+        )}
       </PrefRow>
     );
   }

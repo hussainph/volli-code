@@ -364,6 +364,81 @@ describe("bounds", () => {
     });
   });
 
+  it("falls back on timeout when reading the setting is what hangs", async () => {
+    vi.useFakeTimers();
+    const seen: unknown[] = [];
+    const { decisions } = service({
+      resolveSetting: () => new Promise(() => {}),
+      classifier: piDecisionClassifier(fixtureModels({ seen: seen as never })),
+      policyFor: withPolicy({ timeoutMs: 1_000 }),
+    });
+    const pending = ask(decisions);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ miss: { reason: "timeout" } });
+    expect(seen).toEqual([]);
+  });
+
+  it("treats a classifier that throws synchronously as a provider error, never a rejection", async () => {
+    const { decisions } = service({
+      classifier: {
+        classify: () => {
+          throw new Error(FIXTURE_SECRET);
+        },
+      },
+    });
+    const outcome = await ask(decisions);
+    expect(outcome).toMatchObject({ miss: { reason: "provider-error" } });
+    expect(JSON.stringify(outcome)).not.toContain(FIXTURE_SECRET);
+  });
+
+  it("bills an answer that lands after the deadline, because the provider charged for it", async () => {
+    vi.useFakeTimers();
+    let answer: (() => void) | undefined;
+    const slow: DecisionClassifier = {
+      classify: (target, request, options) =>
+        new Promise((resolve) => {
+          answer = () =>
+            void piDecisionClassifier(fixtureModels())
+              .classify(target, request, { ...options, signal: new AbortController().signal })
+              .then(resolve);
+        }),
+    };
+    const { decisions, usage } = service({
+      classifier: slow,
+      policyFor: withPolicy({ timeoutMs: 500 }),
+    });
+    const pending = ask(decisions);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await pending).toMatchObject({ miss: { reason: "timeout" } });
+    vi.useRealTimers();
+    answer!();
+    await flush();
+    await flush();
+    expect(usage).toHaveLength(1);
+  });
+
+  it("admits a queued call the moment the one before it finishes", async () => {
+    const releases: Array<() => void> = [];
+    let classify = 0;
+    const gated: DecisionClassifier = {
+      classify: async (target, request, options) => {
+        classify += 1;
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return piDecisionClassifier(fixtureModels()).classify(target, request, options);
+      },
+    };
+    const { decisions } = service({ classifier: gated, maxConcurrent: 1 });
+    const first = ask(decisions);
+    const second = ask(decisions);
+    await flush();
+    expect(classify).toBe(1);
+    releases.shift()!();
+    expect("answered" in (await first)).toBe(true);
+    await flush();
+    releases.shift()!();
+    expect("answered" in (await second)).toBe(true);
+  });
+
   it("aborts the model's request when the deadline passes", async () => {
     vi.useFakeTimers();
     let aborted = false;
@@ -512,6 +587,25 @@ describe("audit", () => {
         outcome: { kind: "miss", miss: expect.objectContaining({ reason: "needs-setup" }) },
       }),
     ]);
+  });
+
+  it("records a decision the caller could not act on as the miss it fell back on", async () => {
+    const facts: Array<{ outcome: { kind: string } }> = [];
+    const { decisions } = service({
+      policyFor: audited,
+      recordDecision: (fact) => void facts.push(fact),
+    });
+    await decisions.decide({
+      purpose: "agent.classify",
+      state: STATE,
+      questions: QUESTIONS,
+      use: () => {
+        throw new Error("not a candidate");
+      },
+      fallback: () => null,
+    });
+    await flush();
+    expect(facts.map((fact) => fact.outcome.kind)).toEqual(["miss"]);
   });
 
   it("records nothing for an unaudited purpose, even with a recorder wired", async () => {

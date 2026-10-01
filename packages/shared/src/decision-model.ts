@@ -369,11 +369,17 @@ export function decisionTargetFor(
 }
 
 /**
- * Whether a Session born under this setting is offered the `classify` tool.
+ * Whether a Session born under this setting is offered the `classify` tool:
+ * a decision model is configured and, if it is in the cloud, opted into for
+ * the tool's purpose. The one statement of the rule; the desktop asks it at
+ * Session birth.
  *
  * Decided once, at birth, and frozen into the Session's tool surface: a
  * setting changed later reaches the next Session, never this one. A cloud
- * model nobody opted into for the tool offers no tool at all.
+ * model nobody opted into for the tool offers no tool at all. Whether its
+ * provider is signed in is NOT part of the rule — a key added later should
+ * reach the Session that was waiting for it, and until then each call
+ * answers "needs setup", which the agent recovers from by deciding itself.
  */
 export function offersClassifyTool(setting: DecisionModelSetting): boolean {
   return decisionTargetFor(setting, "agent.classify").ok;
@@ -490,6 +496,14 @@ export const DECISION_MAX_CONCURRENT = 4;
 
 const QUESTION_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * Names an object key cannot safely be: assigning `__proto__` replaces a
+ * prototype instead of adding a question, and the other two read as members
+ * of every object. A question or option by one of these names is refused
+ * rather than silently dropped from the request.
+ */
+const RESERVED_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
 /** A value held to its bounds, or the first bound it broke, in one sentence. */
 export type DecisionCheck<T> = { ok: true; value: T } | { ok: false; problem: string };
 
@@ -555,6 +569,9 @@ function checkQuestion(id: string, value: unknown): DecisionCheck<DecisionQuesti
         };
       }
       for (const key of keys) {
+        if (RESERVED_KEYS.has(key)) {
+          return { ok: false, problem: `Question ${id} cannot have an option named ${key}.` };
+        }
         if (key.trim().length === 0 || key.length > DECISION_LIMITS.choiceKeyMaxChars) {
           return {
             ok: false,
@@ -642,9 +659,13 @@ export function checkDecisionRequest(input: unknown): DecisionCheck<DecisionRequ
       problem: `Ask between 1 and ${DECISION_LIMITS.questionsMax} questions, not ${ids.length}.`,
     };
   }
-  const checked: Record<string, DecisionQuestion> = {};
+  const checked: Array<[string, DecisionQuestion]> = [];
   for (const id of ids) {
-    if (!QUESTION_ID.test(id) || id.length > DECISION_LIMITS.questionIdMaxChars) {
+    if (
+      !QUESTION_ID.test(id) ||
+      id.length > DECISION_LIMITS.questionIdMaxChars ||
+      RESERVED_KEYS.has(id)
+    ) {
       return {
         ok: false,
         problem: `Question name ${JSON.stringify(id.slice(0, 80))} must be an identifier: letters, digits and _, up to ${DECISION_LIMITS.questionIdMaxChars} characters.`,
@@ -652,9 +673,9 @@ export function checkDecisionRequest(input: unknown): DecisionCheck<DecisionRequ
     }
     const question = checkQuestion(id, questions[id]);
     if (!question.ok) return question;
-    checked[id] = question.value;
+    checked.push([id, question.value]);
   }
-  return { ok: true, value: { state: state.value, questions: checked } };
+  return { ok: true, value: { state: state.value, questions: Object.fromEntries(checked) } };
 }
 
 function isProbability(value: unknown): value is number {
@@ -678,7 +699,7 @@ function readAnswer(question: DecisionQuestion, raw: unknown): DecisionAnswer | 
       const choice = raw["choice"];
       const probabilities = raw["probabilities"];
       const confidence = raw["confidence"];
-      if (typeof choice !== "string" || !(choice in question.criteria)) return null;
+      if (typeof choice !== "string" || !Object.hasOwn(question.criteria, choice)) return null;
       if (!isRecord(probabilities) || !isProbability(confidence)) return null;
       const keys = Object.keys(question.criteria);
       const read: Record<string, number> = {};
@@ -717,13 +738,13 @@ export function readDecisionAnswers(
   raw: unknown,
 ): Record<string, DecisionAnswer> | null {
   if (!isRecord(raw)) return null;
-  const answers: Record<string, DecisionAnswer> = {};
+  const answers: Array<[string, DecisionAnswer]> = [];
   for (const [id, question] of Object.entries(questions)) {
-    const answer = readAnswer(question, raw[id]);
+    const answer = readAnswer(question, Object.hasOwn(raw, id) ? raw[id] : undefined);
     if (answer === null) return null;
-    answers[id] = answer;
+    answers.push([id, answer]);
   }
-  return answers;
+  return Object.fromEntries(answers);
 }
 
 // ---- the port ---------------------------------------------------------------

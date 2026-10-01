@@ -247,7 +247,13 @@ describe("safeProviderDetail", () => {
     expect(
       safeProviderDetail(`401: Bearer abc.def apiKey=${FIXTURE_SECRET} sk-live_123 x`),
     ).not.toMatch(/abc\.def|SECRET|sk-live/);
-    expect(safeProviderDetail("x".repeat(300))?.length).toBe(160);
+    expect(
+      safeProviderDetail(
+        "403 key AIzaSyA1234567890abcdefghijklmnopqrs jwt eyJhbGciOi.eyJzdWIiOjF9.c2ln",
+      ),
+    ).toBe("403 key [redacted] jwt [redacted]");
+    expect(safeProviderDetail(`opaque ${"Ab9".repeat(20)} end`)).toBe("opaque [redacted] end");
+    expect(safeProviderDetail("x ".repeat(150))?.length).toBe(160);
   });
 });
 

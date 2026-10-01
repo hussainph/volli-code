@@ -8,6 +8,7 @@ import {
   isAppearance,
   isEmptyAuthorityPolicyOverride,
   isProjectThemeOverrideEmpty,
+  NO_DECISION_MODEL,
   parseAuthorityPolicyOverride,
   parseCanvas,
   parseDecisionModelSetting,
@@ -151,14 +152,25 @@ function mapProject(row: ProjectRow): Project {
     // it resolves because the attach path wants the answer, not the question.
     authorityPolicy: parseAuthorityPolicyOverride(parseJsonColumn(row.authority_policy)),
     sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
-    // A row that no longer parses (a URL off this Mac, a cloud model without
-    // its opt-in) reads as inherit — never as a model nobody configured.
-    decisionModel: parseDecisionModelSetting(parseJsonColumn(row.decision_model)),
+    decisionModel: readDecisionModelColumn(row.decision_model),
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * A project's decision model column (migration 053). `NULL` inherits. A row
+ * that no longer parses — a URL off this Mac, a cloud model without its
+ * opt-in, a kind a later build wrote — reads as NO decision model, never as
+ * inherit: a project that chose Local to keep its data on this Mac must not
+ * start reaching the app-wide cloud model because its own row became
+ * unreadable.
+ */
+function readDecisionModelColumn(value: string | null): DecisionModelSetting | null {
+  if (value === null) return null;
+  return parseDecisionModelSetting(parseJsonColumn(value)) ?? NO_DECISION_MODEL;
 }
 
 /** Every project, ordered by rail position. */

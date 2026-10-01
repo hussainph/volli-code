@@ -169,7 +169,7 @@ export interface SessionToolSurfacePorts {
   /**
    * Whether a Session born now in this project is offered `classify` (VC-478):
    * a decision model is configured for the tool and, if it is in the cloud,
-   * opted into and signed in. Asked once, at birth, and frozen with the rest of
+   * opted into (`offersClassifyTool`). Asked once, at birth, and frozen with the rest of
    * the surface; a Subagent is still bounded by its parent's record (`within`).
    * Absent reads as no.
    */

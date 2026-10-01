@@ -264,7 +264,11 @@ export function safeProviderDetail(message: string | undefined): string | null {
     .replace(
       /\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)\s*[^\s,;]+/gi,
       "[redacted]",
-    );
+    )
+    // Google keys, JWTs, and any other long opaque run a key could be.
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){1,2}/g, "[redacted]")
+    .replace(/[A-Za-z0-9_+/=-]{32,}/g, "[redacted]");
   return redacted.length > 160 ? `${redacted.slice(0, 159)}…` : redacted;
 }
 

@@ -38,7 +38,11 @@ import {
   type SessionUsage,
 } from "@volli/shared";
 
-import { LOCAL_DECISION_PROVIDER_ID, type DecisionClassifier } from "../pi/classifier";
+import {
+  LOCAL_DECISION_PROVIDER_ID,
+  type ClassifierCallResult,
+  type DecisionClassifier,
+} from "../pi/classifier";
 
 /** What one audited decision leaves behind (VC-28's authority verdicts will need it). */
 export interface DecisionAuditFact {
@@ -80,7 +84,7 @@ export interface DecisionServiceOptions {
   /** Where a failure to record goes. The decision itself never waits on it. */
   onRecordFailure?(error: unknown): void;
   now?(): number;
-  /** Calls in flight at once. Defaults to {@link DECISION_MAX_CONCURRENT}. */
+  /** Calls in flight at once, per purpose. Defaults to {@link DECISION_MAX_CONCURRENT}. */
   maxConcurrent?: number;
   /**
    * The policy each purpose runs under. Defaults to
@@ -106,8 +110,12 @@ class Slots {
     this.#free = Math.max(1, Math.floor(capacity));
   }
 
+  /**
+   * A slot, or `false` when `signal` aborts first. The caller acquires only
+   * with a live signal — it has just raced the same signal — so an
+   * already-aborted one needs no branch of its own here.
+   */
   acquire(signal: AbortSignal): Promise<boolean> {
-    if (signal.aborted) return Promise.resolve(false);
     if (this.#free > 0) {
       this.#free -= 1;
       return Promise.resolve(true);
@@ -146,7 +154,16 @@ function describeTarget(target: DecisionTarget): DecisionAnswered["model"] {
 /** The decision service, as every caller holds it. */
 export function createDecisionService(options: DecisionServiceOptions): DecisionPort {
   const now = options.now ?? Date.now;
-  const slots = new Slots(options.maxConcurrent ?? DECISION_MAX_CONCURRENT);
+  // One queue per purpose, so a purpose with a deadline of seconds (VC-28's
+  // authority judge) never waits behind another purpose's slow calls.
+  const queues = new Map<DecisionPurpose, Slots>();
+  const slotsFor = (purpose: DecisionPurpose): Slots => {
+    const existing = queues.get(purpose);
+    if (existing !== undefined) return existing;
+    const created = new Slots(options.maxConcurrent ?? DECISION_MAX_CONCURRENT);
+    queues.set(purpose, created);
+    return created;
+  };
 
   const recordSafely = (work: () => void | Promise<void>): void => {
     // Metering and audit never hold the caller: a decision already made is
@@ -176,45 +193,22 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
       if (!checked.ok) return miss(decisionMiss("invalid-request", checked.problem));
       const request = checked.value;
 
-      let setting: DecisionModelSetting;
-      try {
-        setting = await options.resolveSetting({ sessionId, projectId: call.projectId ?? null });
-      } catch {
-        setting = { kind: "none" };
-      }
-      const routed = decisionTargetFor(setting, purpose);
-      if (!routed.ok) return miss(routed.miss);
-      const target = routed.target;
-      if (policy.audit && options.recordDecision === undefined) {
-        return miss(
-          decisionMiss("unaudited", "This decision needs an audit trail, and none is recorded."),
-        );
-      }
-      const audit = (outcome: DecisionAuditFact["outcome"]): void => {
-        const record = options.recordDecision;
-        if (!policy.audit || record === undefined) return;
-        recordSafely(() => record({ purpose, sessionId, target, request, outcome }));
-      };
-      const audited = (value: DecisionMiss): T => {
-        audit({ kind: "miss", miss: value });
-        return miss(value);
-      };
-
-      // One deadline for the whole call, queueing included: a caller is
-      // promised an answer or its fallback within its purpose's time.
+      // One deadline for the whole call — reading the setting, queueing and
+      // asking: a caller is promised an answer or its fallback within its
+      // purpose's time, whatever part of the way is slow.
       const timeoutMs = policy.timeoutMs;
       const withdraw = new AbortController();
       let timedOut = false;
+      // Settles when the call is withdrawn for any reason. Created before any
+      // abort can land, so it cannot miss one; a call withdrawn before it
+      // starts never waits on it.
+      const gaveUp = new Promise<null>((resolve) => {
+        withdraw.signal.addEventListener("abort", () => resolve(null), { once: true });
+      });
       const timer = setTimeout(() => {
         timedOut = true;
         withdraw.abort(new Error("decision timed out"));
       }, timeoutMs);
-      // Settles when the call is withdrawn for any reason. Created before any
-      // abort can land, so it cannot miss one; a call withdrawn before it
-      // starts never reaches the race below, which is the only reader.
-      const gaveUp = new Promise<null>((resolve) => {
-        withdraw.signal.addEventListener("abort", () => resolve(null), { once: true });
-      });
       const onCallerAbort = (): void => withdraw.abort(call.signal?.reason);
       if (call.signal?.aborted === true) withdraw.abort(call.signal.reason);
       else call.signal?.addEventListener("abort", onCallerAbort, { once: true });
@@ -227,29 +221,66 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
           : decisionMiss("aborted", "The decision was withdrawn.");
 
       try {
+        if (withdraw.signal.aborted) return miss(late());
+        let setting: DecisionModelSetting | null;
+        try {
+          setting = await Promise.race([
+            Promise.resolve().then(() =>
+              options.resolveSetting({ sessionId, projectId: call.projectId ?? null }),
+            ),
+            gaveUp,
+          ]);
+        } catch {
+          setting = { kind: "none" };
+        }
+        if (setting === null) return miss(late());
+        const routed = decisionTargetFor(setting, purpose);
+        if (!routed.ok) return miss(routed.miss);
+        const target = routed.target;
+        if (policy.audit && options.recordDecision === undefined) {
+          return miss(
+            decisionMiss("unaudited", "This decision needs an audit trail, and none is recorded."),
+          );
+        }
+        const audit = (outcome: DecisionAuditFact["outcome"]): void => {
+          const record = options.recordDecision;
+          if (!policy.audit || record === undefined) return;
+          recordSafely(() => record({ purpose, sessionId, target, request, outcome }));
+        };
+        const audited = (value: DecisionMiss): T => {
+          audit({ kind: "miss", miss: value });
+          return miss(value);
+        };
+
+        const slots = slotsFor(purpose);
         if (!(await slots.acquire(withdraw.signal))) return audited(late());
         let result;
         try {
-          // Raced against the deadline as well as signalled: a classifier
-          // that ignores its signal still cannot hold the caller past it.
-          const asked = options.classifier
-            .classify(target, request, { signal: withdraw.signal })
-            .catch(() => ({
-              ok: false as const,
+          // Through `then`, so a classifier that throws instead of rejecting
+          // is a provider error like any other, never a rejected `decide`.
+          const asked = Promise.resolve()
+            .then(() => options.classifier.classify(target, request, { signal: withdraw.signal }))
+            .catch((): ClassifierCallResult => ({
+              ok: false,
               usage: null,
               miss: decisionMiss("provider-error", "The decision model could not answer."),
             }));
+          // Billed whenever the answer lands — after a timeout or an abort
+          // too: a provider that answered late still charged for it, and
+          // `volli cost` must see what was spent.
+          void asked.then((settled) => {
+            const record = options.recordUsage;
+            const usage = settled.usage;
+            if (usage === null || sessionId === null || record === undefined) return;
+            recordSafely(() => record({ sessionId, purpose, usage }));
+          });
+          // Raced against the deadline as well as signalled: a classifier
+          // that ignores its signal still cannot hold the caller past it.
           result = await Promise.race([asked, gaveUp]);
         } finally {
           slots.release();
         }
-        if (result === null || withdraw.signal.aborted) return audited(late());
-
-        const usage = result.usage;
-        const record = options.recordUsage;
-        if (usage !== null && sessionId !== null && record !== undefined) {
-          recordSafely(() => record({ sessionId, purpose, usage }));
-        }
+        if (result === null) return audited(late());
         if (!result.ok) return audited(result.miss);
         const answers = readDecisionAnswers(request.questions, result.answers);
         if (answers === null) {
@@ -265,14 +296,17 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
           model: describeTarget(target),
           elapsedMs: Math.max(0, now() - started),
         };
-        audit({ kind: "answered", answered });
+        let value: T;
         try {
-          return call.use(answered);
+          value = call.use(answered);
         } catch {
-          return miss(
+          // The caller fell back, so that is what the record says happened.
+          return audited(
             decisionMiss("malformed-answer", "The caller could not act on the decision's answer."),
           );
         }
+        audit({ kind: "answered", answered });
+        return value;
       } finally {
         clearTimeout(timer);
         call.signal?.removeEventListener("abort", onCallerAbort);

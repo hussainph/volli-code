@@ -13,7 +13,6 @@
 import type Database from "better-sqlite3";
 import {
   createDecisionService,
-  decisionTargetReady,
   inspectDecisionModels,
   piDecisionClassifier,
   testDecisionConnection,
@@ -21,8 +20,9 @@ import {
   type PiModelAccess,
 } from "@volli/agent-runtime";
 import {
-  decisionTargetFor,
+  DECISION_PURPOSES,
   localDecisionUrlProblem,
+  offersClassifyTool,
   parseDecisionModelSetting,
   type DecisionModelSetting,
   type DecisionPort,
@@ -46,8 +46,8 @@ import {
   writeGlobalDecisionModel,
 } from "./settings";
 
-/** How long a birth-time readiness check may hold a Session's creation. */
-const READINESS_TIMEOUT_MS = 3_000;
+/** How long the Settings catalog's sign-in sweep may take before it reports what it has. */
+const CATALOG_TIMEOUT_MS = 5_000;
 /** How long a person's connection test may run before it reports a timeout. */
 const TEST_TIMEOUT_MS = 30_000;
 
@@ -70,9 +70,9 @@ export interface DesktopDecisions {
   port: DecisionPort;
   /**
    * Whether a Session born now in this project is offered `classify`: a
-   * decision model is configured for the tool's purpose, and — for a cloud
-   * model — its provider is signed in. Frozen into the Session's tool surface;
-   * a later change reaches only Sessions born after it.
+   * decision model is configured for the tool's purpose and, for a cloud
+   * model, opted into (`offersClassifyTool`). Frozen into the Session's tool
+   * surface; a later change reaches only Sessions born after it.
    */
   offersClassify(projectId: string): Promise<boolean>;
   /** The `classify` port one Session's tool calls go through, bound to that Session. */
@@ -94,13 +94,27 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
   const { db, models } = options;
   const now = options.now ?? Date.now;
   const log = options.log ?? ((message, error) => console.warn(message, error));
-  const classifier = options.classifier ?? piDecisionClassifier(models);
+  /**
+   * The persisted catalog, restored — or Pi's built-in one when restoring
+   * failed. Only a cloud model is looked up in it, and the built-in catalog
+   * already carries every classifier Pi ships; a failed restore must not stop
+   * a decision, and nothing local waits on it at all.
+   */
+  const restored = options.catalogReady.catch((error: unknown) => {
+    log("[decision] the model catalog did not restore; using the built-in one", error);
+  });
+  const catalog = (): Promise<void> => restored;
+  const base = options.classifier ?? piDecisionClassifier(models);
+  const classifier: DecisionClassifier = {
+    classify: async (target, request, classifyOptions) => {
+      if (target.where === "cloud") await catalog();
+      return base.classify(target, request, classifyOptions);
+    },
+  };
 
   const port = createDecisionService({
-    resolveSetting: async (scope) => {
-      await options.catalogReady;
-      return resolveScopedDecisionModel(db, scope);
-    },
+    // A database read: synchronous, and inside the purpose's deadline.
+    resolveSetting: (scope) => resolveScopedDecisionModel(db, scope),
     classifier,
     recordUsage: ({ sessionId, purpose, usage }) => options.recordUsage(sessionId, usage, purpose),
     // Metering is work nobody asked for; a failed write is logged and the
@@ -146,33 +160,26 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
   };
 
   const view = async (projectId: string | null): Promise<DecisionModelSettingsView> => {
-    await options.catalogReady;
+    await catalog();
     return {
       global: readGlobalDecisionModel(db),
       ...(projectId === null ? {} : { project: readProjectDecisionModel(db, projectId) }),
-      catalog: await inspectDecisionModels(models, { signal: deadline(READINESS_TIMEOUT_MS) }),
+      catalog: await inspectDecisionModels(models, { signal: deadline(CATALOG_TIMEOUT_MS) }),
     };
   };
 
   return {
     port,
 
-    async offersClassify(projectId) {
-      const routed = decisionTargetFor(
-        resolveScopedDecisionModel(db, { sessionId: null, projectId }),
-        "agent.classify",
-      );
-      if (!routed.ok) return false;
-      try {
-        await options.catalogReady;
-        return await decisionTargetReady(models, routed.target, deadline(READINESS_TIMEOUT_MS));
-      } catch (error) {
-        // A Session start does not fail because a readiness probe did; it is
-        // born without the tool, which is the setting's own fallback.
-        log("[decision] could not check the decision model at Session birth", error);
-        return false;
-      }
-    },
+    // The shared rule, and only the rule: configured and, for the cloud,
+    // opted in. A provider still waiting on its key does not cost a Session
+    // the tool for life — its calls answer "needs setup" until a person signs
+    // in, and then they work. One database read, no probe, so a Session's
+    // birth never waits on a provider.
+    offersClassify: (projectId) =>
+      Promise.resolve(
+        offersClassifyTool(resolveScopedDecisionModel(db, { sessionId: null, projectId })),
+      ),
 
     classifyPort: ({ sessionId, projectId }) => ({
       classify: ({ state, questions, signal }) =>
@@ -192,6 +199,9 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
     view,
 
     async set(scope, setting) {
+      // A cloud model is checked against the catalog, so the catalog a
+      // refresh restored must be in place first.
+      await catalog();
       if (scope.scope === "global") {
         if (setting === null) {
           throw new Error("The app-wide decision model cannot inherit; choose None instead.");
@@ -214,15 +224,24 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
       };
     },
 
-    async test(setting) {
-      if (setting.kind === "none") {
-        return { ok: false, elapsedMs: 0, message: "Choose a decision model to test." };
-      }
-      if (setting.kind === "local") {
-        const problem = localDecisionUrlProblem(setting.baseUrl);
+    async test(candidate) {
+      if (candidate.kind === "local") {
+        const problem = localDecisionUrlProblem(String(candidate.baseUrl));
         if (problem !== null) return { ok: false, elapsedMs: 0, message: problem };
       }
-      await options.catalogReady;
+      // Read through the shared parser like every write, so only a setting's
+      // own fields reach a model. The probe is a fixed sentence Volli wrote,
+      // never a Session's data, so a cloud test needs no opt-in of the
+      // person's; the parser is handed one that names every purpose only so
+      // it will read the provider and model back.
+      const setting = parseDecisionModelSetting(
+        candidate.kind === "cloud"
+          ? { ...candidate, optIn: { acceptedAt: now(), purposes: DECISION_PURPOSES } }
+          : candidate,
+      );
+      if (setting === null || setting.kind === "none") {
+        return { ok: false, elapsedMs: 0, message: "Choose a decision model to test." };
+      }
       const target =
         setting.kind === "local"
           ? {
@@ -232,6 +251,7 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
               modelId: setting.modelId,
             }
           : { where: "cloud" as const, providerId: setting.providerId, modelId: setting.modelId };
+      if (target.where === "cloud") await catalog();
       try {
         return await testDecisionConnection(models, target, {
           signal: deadline(TEST_TIMEOUT_MS),
