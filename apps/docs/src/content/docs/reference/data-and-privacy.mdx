@@ -45,8 +45,10 @@ commands and local MCP servers run on your Mac. A local MCP server runs as
 your macOS user and can access the files and network that user can access.
 
 Project authority settings control supported agent operations. The default
-**Observe** posture saves the attachment's policy without enforcing a gate. See
-[Agent authority](/guides/authority/) before relying on it as a restriction.
+**Observe** posture saves the attachment's policy without enforcing a gate.
+Shell commands run inside a macOS sandbox only when a project sets
+**Containment** to **Scoped**. See [Agent authority](/guides/authority/) before
+relying on either as a restriction.
 
 ## Optional network features
 

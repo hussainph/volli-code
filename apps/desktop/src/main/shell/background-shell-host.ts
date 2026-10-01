@@ -77,6 +77,12 @@ export interface BackgroundShellStartInput {
   title: string | null;
   /** The whole environment the child gets; nothing is added here. */
   env: Record<string, string>;
+  /**
+   * What to spawn in place of `/bin/bash -c <command>`: a Scoped Session's
+   * command already wrapped in its sandbox (VC-45). `command` stays the record
+   * of what the agent asked for.
+   */
+  argv?: readonly string[];
 }
 
 export interface BackgroundShellHostDependencies {
@@ -262,7 +268,8 @@ export class BackgroundShellHost {
       );
     }
     const shellId = this.createId();
-    const child = spawn("/bin/bash", ["-c", input.command], {
+    const [program, ...args] = input.argv ?? ["/bin/bash", "-c", input.command];
+    const child = spawn(program!, args, {
       cwd: input.cwd,
       env: input.env,
       detached: true,

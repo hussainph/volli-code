@@ -1,14 +1,15 @@
 /**
- * Manual host-boundary gate. It deliberately uses the real process-global SRT
- * manager, so it must be run alone on a macOS host rather than in CI.
+ * Host-boundary gate. It deliberately uses the real process-global SRT manager,
+ * so it must run alone, in a process of its own, on a macOS host. CI runs it
+ * that way in the macOS boot-tier job (VC-45); the Linux test lanes skip it.
  *
- *   VOLLI_SRT_INTEGRATION=1 vp test run packages/agent-runtime/src/pi/scoped-execution-env.srt.integration.test.ts
+ *   VOLLI_SRT_INTEGRATION=1 vp test run src/pi/scoped-execution-env.srt.integration.test.ts
  */
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { randomUUID, X509Certificate } from "node:crypto";
+import { existsSync, linkSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { promisify } from "node:util";
@@ -19,9 +20,44 @@ import {
   type ShellCaptureResult,
 } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { resolveCapabilityPolicy } from "../authority/capability";
+import { NO_HOST_GIT } from "./host-git";
+import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 
 const enabled = process.env.VOLLI_SRT_INTEGRATION === "1";
+
+/**
+ * The one unix socket every environment in this process names. SRT reads
+ * sockets only from its process-global configuration, which the first
+ * environment to prepare installs — so every environment here must ask for the
+ * same set, exactly as every Session in the app does.
+ */
+const SOCKET = join(realpathSync(tmpdir()), `volli-srt-it-${process.pid}.sock`);
+
+/** A unique, recognizable file body: if a wall failed open, this is what would print. */
+function canary(name: string): string {
+  return `canary-${name}-${randomUUID()}`;
+}
+
+/** Whether a write the matrix asked for actually landed. */
+function wrote(path: string): boolean {
+  try {
+    return readFileSync(path, "utf8") === "written";
+  } catch {
+    return false;
+  }
+}
+
+/** Put a path back the way the host found it, between one layer's write and the next. */
+function restore(path: string, before: string | null): void {
+  if (before === null) rmSync(path, { force: true });
+  else writeFileSync(path, before);
+}
+
+/** The options every environment in this file shares. */
+function scoped(extra: Partial<ScopedExecutionEnvOptions> = {}): ScopedExecutionEnvOptions {
+  return { sandbox: SandboxManager, unixSockets: [SOCKET], ...extra };
+}
 const credentialName = "VOLLI_SRT_INTEGRATION_CREDENTIAL";
 const hookName = "BASH_ENV";
 
@@ -61,6 +97,8 @@ function expectDenied(result: ShellCaptureResult, secret: string): void {
 
 describe.skipIf(!enabled)(
   "ScopedExecutionEnv SRT host integration (VOLLI_SRT_INTEGRATION=1)",
+  // Every command starts a sandboxed process; a matrix of them outlasts the default.
+  { timeout: 120_000 },
   () => {
     let parent = "";
     let scratchMarkers: string[] = [];
@@ -83,9 +121,11 @@ describe.skipIf(!enabled)(
       expect(process.platform).toBe("darwin");
       expect(SandboxManager.isSupportedPlatform()).toBe(true);
 
-      parent = await mkdtemp(join(homedir(), ".volli-srt-integration-"));
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
       const worktree = join(parent, "worktree");
-      const outside = join(parent, "outside-secret.txt");
+      // Host-private, as Volli's `userData` is: on the denylist.
+      const privateRoot = join(parent, "private");
+      const outside = join(privateRoot, "outside-secret.txt");
       const hook = join(worktree, "ambient-hook.sh");
       const hookMarker = join(worktree, "ambient-hook-ran.txt");
       const secret = `outside-secret-${randomUUID()}`;
@@ -95,15 +135,26 @@ describe.skipIf(!enabled)(
         join("/private/tmp/claude", `volli-srt-denied-${randomUUID()}`),
       ];
       await mkdir(worktree);
+      await mkdir(privateRoot);
       await writeFile(outside, secret);
       await writeFile(hook, "printf hook-ran > ambient-hook-ran.txt\n");
-      await symlink("../outside-secret.txt", join(worktree, "outside-link"));
+      await symlink("../private/outside-secret.txt", join(worktree, "outside-link"));
       originalCredential = process.env[credentialName];
       originalHook = process.env[hookName];
       process.env[credentialName] = credential;
       process.env[hookName] = hook;
 
-      const env = await ScopedExecutionEnv.create(worktree, { sandbox: SandboxManager });
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            privateRoots: [privateRoot],
+            sandboxCarveOuts: true,
+          }),
+          scratchDirectory: worktree,
+        }),
+      );
       try {
         await expect(env.prepareProcessExecution()).resolves.toEqual({
           ok: true,
@@ -128,19 +179,98 @@ describe.skipIf(!enabled)(
         expect(environment.output).not.toContain(credential);
         expect(existsSync(hookMarker)).toBe(false);
 
-        expectDenied(await ran(env, "/bin/cat ../outside-secret.txt"), secret);
-        expectDenied(await ran(env, "printf overwrite > ../outside-secret.txt"), secret);
+        // SRT normally opens both keychain Mach services. Volli's profile patch
+        // appends explicit denials after those built-in allows, while leaving
+        // ordinary certificate consumers alive: Node can construct a TLS
+        // context, git can initialize an HTTPS remote request and reach the
+        // expected network wall, and no `security` command reaches keychain.
+        const keychain = await ran(env, "/usr/bin/security list-keychains");
+        expect(keychain.exitCode).not.toBe(0);
+        const interactiveKeychain = await ran(
+          env,
+          "printf 'list-keychains\\n' | /usr/bin/security -i",
+        );
+        expect(interactiveKeychain.exitCode).not.toBe(0);
+        await expect(
+          ran(
+            env,
+            `${JSON.stringify(process.execPath)} -e ${JSON.stringify("require('node:tls').createSecureContext(); process.stdout.write('tls-ok')")}`,
+          ),
+        ).resolves.toMatchObject({ output: "tls-ok", exitCode: 0 });
+        await expect(
+          ran(
+            env,
+            "/usr/bin/security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain > public-certs.pem",
+          ),
+        ).resolves.toMatchObject({ exitCode: 0 });
+        // Export the public root on the host: certificate enumeration can
+        // return no entries without keychain IPC, but verifying a supplied
+        // certificate must still work behind the credential wall.
+        const publicCertificates = (
+          await promisify(execFile)("/usr/bin/security", [
+            "find-certificate",
+            "-a",
+            "-p",
+            "/System/Library/Keychains/SystemRootCertificates.keychain",
+          ])
+        ).stdout;
+        const publicRoot = publicCertificates
+          .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu)
+          ?.find((pem) => {
+            const cert = new X509Certificate(pem);
+            return Date.parse(cert.validFrom) < Date.now() && Date.parse(cert.validTo) > Date.now();
+          });
+        expect(publicRoot).toBeDefined();
+        await writeFile(join(worktree, "public-root.pem"), publicRoot!);
+        const verified = await ran(
+          env,
+          "/usr/bin/security verify-cert -c public-root.pem -r public-root.pem -p basic -L -l -N",
+        );
+        // macOS can report a successful evaluation while returning 1 when
+        // its optional keychain IPC is refused. Do not open that IPC door.
+        expect(verified.output).toContain("Cert Verify Result: No error.");
+        expect([0, 1]).toContain(verified.exitCode);
+        // Trust enumeration may report no settings without keychain IPC; the
+        // certificate subcommand itself must remain available, not refused by
+        // Volli's shell layer. Keychain-dependent enumeration is not reopened.
+        const trust = await ran(env, "/usr/bin/security dump-trust-settings -s");
+        expect(trust.executionError).toBeUndefined();
+        expect([0, 1]).toContain(trust.exitCode);
+        expect(trust.output).not.toMatch(/operation not permitted|SecurityServer|securityd/iu);
+        await writeFile(
+          join(worktree, "package.json"),
+          JSON.stringify({
+            name: "contained-workflow",
+            private: true,
+            scripts: { test: "node -e \"process.stdout.write('pnpm-ok')\"" },
+          }),
+        );
+        // SRT's shell wrapper sets a Claude TMPDIR; point package-manager
+        // scratch at a granted root rather than opening that default path.
+        const pnpm = await ran(env, 'TMPDIR="$PWD" pnpm test');
+        expect(pnpm.exitCode, pnpm.output).toBe(0);
+        expect(pnpm.output).toContain("pnpm-ok");
+        const gitHttps = await ran(env, "git ls-remote https://github.com/git/git.git HEAD");
+        expect(gitHttps.exitCode).not.toBe(0);
+        expect(gitHttps.output).not.toMatch(/SecurityServer|securityd|keychain/iu);
+
+        expectDenied(await ran(env, "/bin/cat ../private/outside-secret.txt"), secret);
+        expectDenied(await ran(env, "printf overwrite > ../private/outside-secret.txt"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
 
         expectDenied(await ran(env, "/bin/cat outside-link"), secret);
         expectDenied(await ran(env, "printf overwrite > outside-link"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
 
-        // `..` is an independent shell capability check, not merely the
-        // TypeScript file-API guard that rejects parent-relative paths.
-        expectDenied(await ran(env, "/bin/cat ../outside-secret.txt"), secret);
-        expectDenied(await ran(env, "printf traversal > ../outside-secret.txt"), secret);
-        expect(await readFile(outside, "utf8")).toBe(secret);
+        // Reads are machine-wide off the denylist (VC-45), writes are not.
+        await writeFile(join(parent, "sibling.txt"), "sibling");
+        await expect(ran(env, "/bin/cat ../sibling.txt")).resolves.toMatchObject({
+          output: "sibling",
+          exitCode: 0,
+        });
+        const traversal = await ran(env, "printf traversal > ../sibling.txt");
+        expect(traversal.exitCode).not.toBe(0);
+        expect(await readFile(join(parent, "sibling.txt"), "utf8")).toBe("sibling");
 
         // SRT's default Claude compatibility locations remain denied so an
         // agent cannot escape through its own scratch directories.
@@ -194,7 +324,7 @@ describe.skipIf(!enabled)(
       expect(process.platform).toBe("darwin");
       expect(SandboxManager.isSupportedPlatform()).toBe(true);
 
-      parent = await mkdtemp(join(homedir(), ".volli-srt-integration-"));
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
       const checkout = join(parent, "main-checkout");
       await mkdir(checkout);
       // Built on the host, as a Main checkout always is: the repository and its
@@ -204,7 +334,7 @@ describe.skipIf(!enabled)(
       await git(checkout, "config", "user.email", "session@volli.test");
       await git(checkout, "config", "user.name", "Volli Session");
 
-      const env = await ScopedExecutionEnv.create(checkout, { sandbox: SandboxManager });
+      const env = await ScopedExecutionEnv.create(checkout, scoped());
       try {
         await expect(env.prepareProcessExecution()).resolves.toEqual({
           ok: true,
@@ -217,16 +347,48 @@ describe.skipIf(!enabled)(
         for (const destination of [
           ".git/hooks/pre-commit",
           ".git/config",
+          ".git/config.lock",
           ".git/modules/sub/hooks/pre-commit",
           ".git/modules/sub/config",
+          ".gitmodules",
+          ".volli/state.json",
+          // A nested repository's `.git`, which git would run hooks from too (N3).
+          "vendor/lib/.git/hooks/pre-commit",
+          // Case variants of every entry (VC-45 review, S2). APFS is
+          // case-insensitive, so each names the protected path — and Seatbelt
+          // folds case on such a volume, a new name included: `.VOLLI` and
+          // `.GITMODULES` do not exist yet, and are refused anyway.
+          ".GIT/HOOKS/pre-push",
+          ".Git/config",
+          ".VOLLI/state.json",
+          ".GITMODULES",
         ]) {
-          const copied = await ran(env, `cp evil.sh ${destination}`);
+          const copied = await ran(
+            env,
+            `/bin/mkdir -p ${JSON.stringify(join(destination, ".."))} 2>/dev/null; cp evil.sh ${JSON.stringify(destination)}`,
+          );
           expect(copied.exitCode === 0, destination).toBe(false);
           // `.git/config` already exists, so the proof is that it was not
           // overwritten; the hooks must not have been created at all.
           const landed = join(checkout, destination);
           const contents = existsSync(landed) ? await readFile(landed, "utf8") : "";
           expect(contents, destination).not.toContain("pwned");
+        }
+        expect(existsSync(join(checkout, ".volli"))).toBe(false);
+        expect(existsSync(join(checkout, "vendor", "lib", ".git"))).toBe(false);
+
+        // Moving the protected directories aside, writing the hook, and moving
+        // them back (VC-45 review, B2): the literals' move-blocking refuses
+        // the rename of every ancestor, `.git` itself included.
+        for (const [from, to] of [
+          [".git", ".g"],
+          [".git/hooks", ".git/h"],
+          [".git/config", ".git/c"],
+        ]) {
+          const moved = await ran(env, `mv ${from} ${to}`);
+          expect(moved.exitCode === 0, from).toBe(false);
+          expect(existsSync(join(checkout, from)), from).toBe(true);
+          expect(existsSync(join(checkout, to)), to).toBe(false);
         }
 
         // The denial is four patterns, not the repository: committing writes the
@@ -251,18 +413,14 @@ describe.skipIf(!enabled)(
       expect(process.platform).toBe("darwin");
       expect(SandboxManager.isSupportedPlatform()).toBe(true);
 
-      parent = await mkdtemp(join(homedir(), ".volli-srt-integration-"));
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
       const secretA = `root-a-secret-${randomUUID()}`;
       const secretB = `root-b-secret-${randomUUID()}`;
       await mkdir(join(parent, "root-a"));
       await mkdir(join(parent, "root-b"));
 
-      const envA = await ScopedExecutionEnv.create(join(parent, "root-a"), {
-        sandbox: SandboxManager,
-      });
-      const envB = await ScopedExecutionEnv.create(join(parent, "root-b"), {
-        sandbox: SandboxManager,
-      });
+      const envA = await ScopedExecutionEnv.create(join(parent, "root-a"), scoped());
+      const envB = await ScopedExecutionEnv.create(join(parent, "root-b"), scoped());
       const fileInA = join(envA.cwd, "secret.txt");
       const fileInB = join(envB.cwd, "secret.txt");
       await writeFile(fileInA, secretA);
@@ -275,7 +433,10 @@ describe.skipIf(!enabled)(
           value: undefined,
         });
 
-        expectDenied(await ran(envB, `/bin/cat ${JSON.stringify(fileInA)}`), secretA);
+        // Reads are machine-wide off the denylist (VC-45), so B may read A's
+        // tree — a sibling repository is exactly the read the plan opened —
+        // and may not write it.
+        expectDenied(await ran(envB, `printf overwrite > ${JSON.stringify(fileInA)}`), secretA);
         await expect(ran(envB, "pwd")).resolves.toMatchObject({
           output: `${envB.cwd}\n`,
           exitCode: 0,
@@ -283,8 +444,8 @@ describe.skipIf(!enabled)(
         expect(await readFile(fileInA, "utf8")).toBe(secretA);
 
         // The same in the other direction, including for the env that installed
-        // the boundary: preparing it buys no reach into a root it does not own.
-        expectDenied(await ran(envA, `/bin/cat ${JSON.stringify(fileInB)}`), secretB);
+        // the boundary: preparing it buys no write into a root it does not own.
+        expectDenied(await ran(envA, `printf overwrite > ${JSON.stringify(fileInB)}`), secretB);
         await expect(ran(envA, "pwd")).resolves.toMatchObject({
           output: `${envA.cwd}\n`,
           exitCode: 0,
@@ -304,6 +465,447 @@ describe.skipIf(!enabled)(
       } finally {
         await envA.cleanup(BACKGROUND_CONTEXT);
         await envB.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+    /**
+     * The acceptance for VC-45 slices 1 and 2, at the kernel: one path, one
+     * answer, whichever tool asks. Every row is asked of the shell under
+     * Seatbelt AND of the file tools under the guard, and the two must agree
+     * with each other and with the policy's own verdict.
+     *
+     * The layout is Volli's own in miniature: a `userData` holding the database,
+     * `mcp-credentials.json`, and two Sessions' saved tool output, of which this
+     * Session may read only its own. A fake home stands in for the real one, so
+     * no row ever names a real credential — if the walls failed open, what
+     * would print is a canary.
+     */
+    it("gives the shell and the file tools the same verdict for every path (VC-45)", async () => {
+      expect(process.platform).toBe("darwin");
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const home = join(parent, "home");
+      const userData = join(parent, "userData");
+      const sessions = join(userData, "pi-sessions", "--ws--");
+      const own = join(sessions, "own.tool-output");
+      const other = join(sessions, "other.tool-output");
+      const worktree = join(parent, "worktree");
+      const sibling = join(parent, "sibling");
+      const declared = join(parent, "declared");
+      const scratchDir = join(parent, "scratch");
+      for (const directory of [
+        join(home, ".ssh"),
+        join(home, ".config", "café"),
+        own,
+        other,
+        join(worktree, ".git", "hooks"),
+        sibling,
+        declared,
+        scratchDir,
+      ]) {
+        await mkdir(directory, { recursive: true });
+      }
+      const files = {
+        key: [join(home, ".ssh", "id_ed25519"), canary("key")],
+        accented: [join(home, ".config", "café", "token"), canary("accented")],
+        rc: [join(home, ".zshrc"), canary("rc")],
+        db: [join(userData, "volli.db"), canary("db")],
+        credentials: [join(userData, "mcp-credentials.json"), canary("credentials")],
+        otherOutput: [join(other, "tc-1.txt"), canary("other")],
+        ownOutput: [join(own, "tc-1.txt"), canary("own")],
+        siblingFile: [join(sibling, "README.md"), canary("sibling")],
+        workspaceFile: [join(worktree, "README.md"), canary("workspace")],
+      } as const;
+      for (const [path, content] of Object.values(files)) await writeFile(path, content);
+      // A hard link planted before the Session, from inside the workspace to
+      // the key: the same file under a name no denylist entry matches.
+      linkSync(files.key[0], join(worktree, "innocent.txt"));
+
+      const policy = resolveCapabilityPolicy({
+        workspacePath: worktree,
+        home,
+        writableRoots: [declared],
+        runtimeRoots: [scratchDir],
+        privateRoots: [userData],
+        grants: [own],
+        sandboxCarveOuts: true,
+      });
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({ policy, homeDir: home, scratchDirectory: scratchDir, git: null }),
+      );
+      try {
+        const reads: [keyof typeof files, "allow" | "deny"][] = [
+          ["key", "deny"],
+          ["rc", "deny"],
+          ["db", "deny"],
+          ["credentials", "deny"],
+          ["otherOutput", "deny"],
+          ["ownOutput", "allow"],
+          ["siblingFile", "allow"],
+          ["workspaceFile", "allow"],
+        ];
+        for (const [name, expected] of reads) {
+          const [path, content] = files[name];
+          const shell = await ran(env, `/bin/cat ${JSON.stringify(path)}`);
+          const shellVerdict = shell.exitCode === 0 ? "allow" : "deny";
+          const tool = await env.readTextFile(path);
+          const toolVerdict = tool.ok ? "allow" : "deny";
+          expect({ name, shell: shellVerdict, tool: toolVerdict }).toEqual({
+            name,
+            shell: expected,
+            tool: expected,
+          });
+          if (expected === "deny") expect(shell.output, name).not.toContain(content);
+          else expect(shell.output, name).toBe(content);
+        }
+
+        // Other spellings of denied files (VC-45 review, B1): case, Unicode
+        // case (`ſ` folds to `s`), the decomposed form, and the Data volume's
+        // firmlinked path. Each names the same file on APFS; each is refused
+        // by both layers. Credential hard links in every granted root are
+        // indexed at attach and compiled into kernel read/write denials too.
+        const spellings: [string, string, string, "allow" | "deny"][] = [
+          ["upper case", join(home, ".SSH", "ID_ED25519"), files.key[1], "deny"],
+          ["long s", join(home, ".sſh", "id_ed25519"), files.key[1], "deny"],
+          ["decomposed", files.accented[0].normalize("NFD"), files.accented[1], "deny"],
+          ["firmlink", `/System/Volumes/Data${files.key[0]}`, files.key[1], "deny"],
+          ["hard link", join(worktree, "innocent.txt"), files.key[1], "deny"],
+        ];
+        for (const [name, path, content, shellExpected] of spellings) {
+          const shell = await ran(env, `/bin/cat ${JSON.stringify(path)}`);
+          const tool = await env.readTextFile(path);
+          expect({
+            name,
+            shell: shell.exitCode === 0 ? "allow" : "deny",
+            tool: tool.ok ? "allow" : "deny",
+          }).toEqual({ name, shell: shellExpected, tool: "deny" });
+          if (shellExpected === "deny") expect(shell.output, name).not.toContain(content);
+        }
+
+        const writes: [string, "allow" | "deny"][] = [
+          [join(worktree, "new.txt"), "allow"],
+          [join(declared, "new.txt"), "allow"],
+          [join(scratchDir, "new.txt"), "allow"],
+          [join(worktree, ".volli", "state.json"), "deny"],
+          [join(worktree, ".git", "hooks", "pre-commit"), "deny"],
+          [join(worktree, ".gitmodules"), "deny"],
+          [join(worktree, ".vscode", "tasks.json"), "deny"],
+          [join(sibling, "new.txt"), "deny"],
+          [join(userData, "new.txt"), "deny"],
+          [join(own, "new.txt"), "deny"],
+          [join(home, ".zshrc"), "deny"],
+        ];
+        // Each layer writes the exact path in turn, and the host puts the
+        // file back between them, so neither verdict leans on the other's.
+        for (const [path, expected] of writes) {
+          const before = existsSync(path) ? readFileSync(path, "utf8") : null;
+          await ran(
+            env,
+            `/bin/mkdir -p ${JSON.stringify(join(path, ".."))} 2>/dev/null; printf written > ${JSON.stringify(path)}`,
+          );
+          const shellVerdict = wrote(path) ? "allow" : "deny";
+          restore(path, before);
+          await env.writeFile(path, "written");
+          const toolVerdict = wrote(path) ? "allow" : "deny";
+          restore(path, before);
+          expect({ path, shell: shellVerdict, tool: toolVerdict }).toEqual({
+            path,
+            shell: expected,
+            tool: expected,
+          });
+        }
+        // The rc file the denied writes aimed at is untouched.
+        expect(await readFile(files.rc[0], "utf8")).toBe(files.rc[1]);
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    /**
+     * A Ticket worktree commits into the main repository's `.git`, which is
+     * outside the workspace — the old boundary's quiet breakage. It is a
+     * writable root now, with its hooks and config carved out like every root's.
+     */
+    it("lets a Ticket worktree commit, and keeps its main repository's hooks out of reach", async () => {
+      expect(process.platform).toBe("darwin");
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const main = join(parent, "main");
+      await mkdir(main);
+      await git(main, "init", "--quiet", "--initial-branch=main");
+      await git(
+        main,
+        "-c",
+        "user.name=h",
+        "-c",
+        "user.email=h@h",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "init",
+      );
+      const worktree = join(parent, "wt");
+      await git(main, "worktree", "add", "--quiet", worktree);
+
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({ workspacePath: worktree, sandboxCarveOuts: true }),
+          git: { ...NO_HOST_GIT, identity: { name: "Volli Session", email: "session@volli.test" } },
+        }),
+      );
+      try {
+        await writeFile(join(worktree, "a.txt"), "a");
+        await expect(
+          ran(env, "git add a.txt && git commit --quiet -m contained && git log -1 --format=%an"),
+        ).resolves.toMatchObject({ output: "Volli Session\n", exitCode: 0 });
+        const common = join(main, ".git");
+        // Only this worktree's slices of the common directory are writable
+        // (VC-45 review, S1 and B3): never the files that redirect git, never
+        // state the Main checkout or another worktree shares.
+        for (const target of [
+          join(common, "hooks", "post-checkout"),
+          join(common, "config"),
+          join(common, "HEAD"),
+          join(common, "index"),
+          join(common, "packed-refs"),
+          join(common, "refs", "heads", "main"),
+          join(common, "objects", "info", "alternates"),
+          join(common, "worktrees", "wt", "commondir"),
+          join(common, "worktrees", "wt", "gitdir"),
+          join(worktree, ".git"),
+          join(main, "x.txt"),
+        ]) {
+          const before = existsSync(target) ? readFileSync(target, "utf8") : null;
+          const write = await ran(env, `printf pwned > ${JSON.stringify(target)}`);
+          expect(write.exitCode === 0, target).toBe(false);
+          expect(existsSync(target) ? readFileSync(target, "utf8") : null, target).toBe(before);
+        }
+        // What a Ticket's own work needs still works: amend, and a rebase of
+        // the branch onto a base that moved on the host.
+        await git(
+          main,
+          "-c",
+          "user.name=h",
+          "-c",
+          "user.email=h@h",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "-m",
+          "base",
+        );
+        await expect(
+          ran(
+            env,
+            "git commit --quiet --amend --no-edit && git rebase --quiet main && git log --format=%s -2",
+          ),
+        ).resolves.toMatchObject({ output: "contained\nbase\n", exitCode: 0 });
+        // What legitimately breaks: a stash writes `refs/stash`, shared by
+        // every worktree of the repository.
+        await writeFile(join(worktree, "a.txt"), "changed");
+        expect((await ran(env, "git stash --quiet")).exitCode).not.toBe(0);
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    /**
+     * Volli's own data is never writable (VC-480): an approval that reached it
+     * could let a Session edit its own approvals or policy. Even a project
+     * that declared `userData` itself a writable root gets no write there, at
+     * the kernel or at the file tools.
+     */
+    it("refuses every write into the host's data, even under a root declared over it", async () => {
+      expect(process.platform).toBe("darwin");
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const userData = join(parent, "userData");
+      await mkdir(worktree);
+      await mkdir(join(userData, "pi-sessions"), { recursive: true });
+      const db = join(userData, "volli.db");
+      const dbAlias = join(worktree, "cache.db");
+      await writeFile(db, "db");
+      linkSync(db, dbAlias);
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [userData, join(userData, "pi-sessions")],
+            privateRoots: [userData],
+            criticalHostDataPaths: [db, `${db}-wal`, `${db}-shm`],
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+        }),
+      );
+      try {
+        for (const target of [db, `${db}-wal`, join(userData, "pi-sessions", "x.jsonl"), dbAlias]) {
+          const before = existsSync(target) ? readFileSync(target, "utf8") : null;
+          const shell = await ran(env, `printf written > ${JSON.stringify(target)}`);
+          expect(shell.exitCode === 0, target).toBe(false);
+          expect(await env.writeFile(target, "written"), target).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(existsSync(target) ? readFileSync(target, "utf8") : null, target).toBe(before);
+        }
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    it("protects critical-data aliases in additional writable and runtime roots", async () => {
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const declared = join(parent, "declared");
+      const scratch = join(parent, "scratch");
+      const userData = join(parent, "userData");
+      for (const root of [worktree, declared, scratch, userData]) await mkdir(root);
+      const db = join(userData, "volli.db");
+      const secret = canary("additional-root-db");
+      await writeFile(db, secret);
+      const aliases = [join(declared, "cache.db"), join(scratch, "cache.db")];
+      for (const alias of aliases) linkSync(db, alias);
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [declared],
+            runtimeRoots: [scratch],
+            privateRoots: [userData],
+            criticalHostDataPaths: [db],
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+        }),
+      );
+      try {
+        for (const alias of aliases) {
+          expectDenied(await ran(env, `printf written > ${JSON.stringify(alias)}`), secret);
+          expect(await env.writeFile(alias, "written")).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(await readFile(db, "utf8")).toBe(secret);
+        }
+        // Declaring a root must still allow its ordinary files.
+        await expect(
+          ran(env, `printf ok > ${JSON.stringify(join(declared, "ordinary.txt"))}`),
+        ).resolves.toMatchObject({ exitCode: 0 });
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    it("denies interpreter reads, writes, renames and relinks of credential aliases in every root", async () => {
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      const declared = join(parent, "declared");
+      const scratch = join(parent, "scratch");
+      const home = join(parent, "home");
+      const key = join(home, ".ssh", "id_ed25519");
+      for (const root of [worktree, declared, scratch, join(home, ".ssh")])
+        await mkdir(root, { recursive: true });
+      const secret = canary("linked-credential");
+      await writeFile(key, secret);
+      const aliases = [];
+      for (const root of [worktree, declared, scratch]) {
+        const directory = join(root, "nested");
+        await mkdir(directory);
+        const alias = join(directory, "innocent.txt");
+        linkSync(key, alias);
+        aliases.push(alias);
+      }
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            writableRoots: [declared],
+            runtimeRoots: [scratch],
+            home,
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+          homeDir: home,
+        }),
+      );
+      const node = (code: string) =>
+        ran(env, `${JSON.stringify(process.execPath)} -e ${JSON.stringify(code)}`);
+      try {
+        for (const alias of aliases) {
+          const path = JSON.stringify(alias);
+          const destination = JSON.stringify(`${alias}.moved`);
+          for (const code of [
+            `process.stdout.write(require('node:fs').readFileSync(${path}))`,
+            `require('node:fs').writeFileSync(${path}, 'written')`,
+            `require('node:fs').renameSync(${path}, ${destination})`,
+            `require('node:fs').linkSync(${path}, ${destination})`,
+            `require('node:fs').renameSync(${JSON.stringify(join(alias, ".."))}, ${JSON.stringify(join(alias, "..") + ".moved")})`,
+          ]) {
+            expectDenied(await node(code), secret);
+            expect(existsSync(alias)).toBe(true);
+            expect(existsSync(`${alias}.moved`)).toBe(false);
+            expect(await readFile(key, "utf8")).toBe(secret);
+          }
+          expect(await env.readTextFile(alias)).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+          expect(await env.writeFile(alias, "written")).toMatchObject({
+            ok: false,
+            error: { code: "permission_denied" },
+          });
+        }
+        // Move and relink ordinary files remain normal workflows.
+        await writeFile(join(worktree, "ordinary.txt"), "ordinary");
+        await expect(
+          node(
+            "const fs = require('node:fs'); fs.renameSync('ordinary.txt', 'moved.txt'); fs.linkSync('moved.txt', 'linked.txt'); process.stdout.write(fs.readFileSync('linked.txt'))",
+          ),
+        ).resolves.toMatchObject({ exitCode: 0, output: "ordinary" });
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    });
+
+    it("reaches the volli socket inside a denied directory", async () => {
+      expect(process.platform).toBe("darwin");
+      parent = await realpath(await mkdtemp(join(homedir(), ".volli-srt-integration-")));
+      const worktree = join(parent, "wt");
+      await mkdir(worktree);
+      let received = "";
+      const server = createServer((socket) => {
+        socket.on("data", (data) => {
+          received += String(data);
+          socket.end();
+        });
+      });
+      await rm(SOCKET, { force: true });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(SOCKET, () => resolve());
+      });
+      const env = await ScopedExecutionEnv.create(
+        worktree,
+        scoped({
+          policy: resolveCapabilityPolicy({
+            workspacePath: worktree,
+            privateRoots: [tmpdir()],
+            sandboxCarveOuts: true,
+          }),
+          git: null,
+        }),
+      );
+      try {
+        await ran(env, `printf hello | /usr/bin/nc -U ${JSON.stringify(SOCKET)}`, { timeout: 5 });
+        expect(received).toBe("hello");
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(SOCKET, { force: true });
       }
     });
   },

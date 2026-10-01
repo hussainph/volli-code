@@ -8,7 +8,7 @@
  * made directly.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
@@ -46,7 +46,8 @@ import {
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { McpServerBudget } from "../mcp/server-budget";
-import { createPiAgentRuntime } from "../pi/runtime";
+import { createPiAgentRuntime, type PiRuntimeHostOptions } from "../pi/runtime";
+import { ScopedExecutionEnv } from "../pi/scoped-execution-env";
 
 const PROVIDER = "anthropic";
 const MODEL = "claude-haiku-4-5";
@@ -141,6 +142,8 @@ function authority(tools: readonly SessionToolId[], consecutiveDenials = 3): Aut
     mode: "auto",
     location: "worktree",
     enforcement: "enforce",
+    containment: "off",
+    writableRoots: [],
     judgmentMode: "ask",
     tools: [...tools],
     rulePackId: BUILTIN_RULE_PACK_ID,
@@ -198,7 +201,13 @@ function specFor(
       }
     : base;
   return gated
-    ? { ...withCode, authority: authority(sessionToolIds(withCode), consecutiveDenials) }
+    ? {
+        ...withCode,
+        authority: {
+          ...authority(sessionToolIds(withCode), consecutiveDenials),
+          ...withCode.capability,
+        },
+      }
     : withCode;
 }
 
@@ -206,13 +215,24 @@ async function runTurn(
   h: Harness,
   spec: SessionRuntimeSpec,
   replies: Reply[],
-  options: { interruptWhen?: Promise<void>; parallelMcpReads?: boolean } = {},
+  options: {
+    interruptWhen?: Promise<void>;
+    parallelMcpReads?: boolean;
+    hostCredentialPaths?: PiRuntimeHostOptions["hostCredentialPaths"];
+    executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  } = {},
 ) {
   const runtime = createPiAgentRuntime({
     sessionDataDir: h.sessions,
     ...(options.parallelMcpReads === undefined
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
+    ...(options.hostCredentialPaths === undefined
+      ? {}
+      : { hostCredentialPaths: options.hostCredentialPaths }),
+    ...(options.executionEnvFactory === undefined
+      ? {}
+      : { executionEnvFactory: options.executionEnvFactory }),
     models: scripted(replies, h.seen),
     observability: { record: (event) => void h.observability.push(event) },
   });
@@ -429,6 +449,95 @@ describe("Code Mode through the real Session path", () => {
       ["cm-1:1", "consecutive"],
     ]);
   });
+
+  it.each([
+    { gated: true, seatbelt: false },
+    { gated: false, seatbelt: false },
+    ...(process.env.VOLLI_SRT_INTEGRATION === "1" ? [{ gated: false, seatbelt: true }] : []),
+  ])(
+    "contains nested bash like direct bash in a Scoped Session (gate: $gated, Seatbelt: $seatbelt)",
+    async ({ gated, seatbelt }) => {
+      const h = harness();
+      const credential = join(h.sessions, "fixture-credential.json");
+      const secret = "credential-canary-never-returned";
+      writeFileSync(credential, secret);
+      const command = `cat ${JSON.stringify(credential)}`;
+      const program = `
+        try { return await tools.bash({ command: ${JSON.stringify(command)} }); }
+        catch (error) { return error.message; }
+      `;
+      const profiles: unknown[] = [];
+      let config: unknown;
+      // SRT's process seam records the profiles and runs a refusing process.
+      // The real Seatbelt integration suite proves enforcement of these walls.
+      const sandbox = {
+        isSupportedPlatform: () => true,
+        isSandboxingEnabled: () => config !== undefined,
+        checkDependenciesAsync: async () => ({ errors: [], warnings: [] }),
+        initialize: async (next: unknown) => {
+          config = next;
+        },
+        getConfig: () => config,
+        wrapWithSandboxArgv: async (_command: string, _shell: string, profile: unknown) => {
+          profiles.push(profile);
+          return { argv: ["/usr/bin/false"], env: { PATH: "/usr/bin:/bin" } };
+        },
+        cleanupAfterCommand: () => undefined,
+      } as never;
+      let containment: Parameters<NonNullable<PiRuntimeHostOptions["executionEnvFactory"]>>[2];
+      await runTurn(
+        h,
+        specFor(h, { gated, capability: { containment: "scoped", writableRoots: [] } }),
+        [
+          { calls: [{ id: "d-1", name: "bash", args: { command } }] },
+          { calls: [{ id: "cm-1", name: "codemode", args: { code: program } }] },
+          { text: "done" },
+        ],
+        {
+          hostCredentialPaths: [credential],
+          executionEnvFactory: async (workspacePath, _identity, scoped) => {
+            containment = scoped;
+            return ScopedExecutionEnv.create(workspacePath, {
+              policy: scoped!.policy,
+              scratchDirectory: scoped!.scratchDirectory,
+              git: null,
+              ...(seatbelt ? {} : { sandbox }),
+            });
+          },
+        },
+      );
+      expect(containment).toBeDefined();
+      expect(JSON.stringify(toolResults(h))).not.toContain(secret);
+      if (gated) {
+        const denials = h.observations.flatMap((observation) =>
+          observation.kind === "authority" && observation.state === "denied" ? [observation] : [],
+        );
+        expect(denials.map((denial) => [short(denial.toolCallId ?? ""), denial.tool])).toEqual([
+          ["d-1", "bash"],
+          ["cm-1:1", "bash"],
+        ]);
+        expect(denials[1]!.reason).toBe(denials[0]!.reason);
+        expect(resultText(h, "d-1")).toContain(denials[0]!.reason);
+        expect(resultText(h, "cm-1")).toContain(denials[0]!.reason);
+        expect(profiles).toEqual([]);
+      } else if (seatbelt) {
+        // Real kernel enforcement, with no authority gate to mask a missing wall.
+        expect(process.platform).toBe("darwin");
+        expect(resultText(h, "d-1")).toMatch(/Operation not permitted|Permission denied/u);
+        expect(resultText(h, "cm-1")).toMatch(/Operation not permitted|Permission denied/u);
+        expect(resultText(h, "cm-1")).toContain('"exitCode":1');
+      } else {
+        // No judgment gate: both calls still reach the very same Scoped walls.
+        expect(profiles).toHaveLength(2);
+        expect(profiles[1]).toEqual(profiles[0]);
+        expect(profiles[0]).toMatchObject({
+          filesystem: { denyRead: expect.arrayContaining([realpathSync(credential)]) },
+          network: { deniedDomains: ["*"] },
+        });
+        expect(resultText(h, "cm-1")).toContain('Returned: {"output":"","exitCode":1');
+      }
+    },
+  );
 
   it("pauses the program on an approval, one prompt at a time, without spending its clock", async () => {
     const h = harness();

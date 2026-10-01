@@ -370,4 +370,33 @@ describe("normalizeToolCall, for execution", () => {
       { program: "", args: [], paths: [], writes: [], env: ["FOO=1"] },
     ]);
   });
+
+  it("resolves a later segment's operands where a cd or pushd left it (VC-45 review)", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "sub"));
+    const last = (command: string) => bash(command, raw).segments.at(-1)?.paths.at(-1);
+    expect(last("cd ~ && cat .ssh/id_rsa")).toBe(join(realpathSync(homedir()), ".ssh/id_rsa"));
+    expect(last("cd && cat .netrc")).toBe(join(realpathSync(homedir()), ".netrc"));
+    expect(last("pushd -q sub; cat x")).toBe(join(real, "sub/x"));
+    // A target the lexer cannot resolve leaves the directory where it was.
+    expect(last('cd "$DIR" && cat x')).toBe(join(real, "x"));
+    // The cd moves only what comes after it.
+    expect(bash("cat x && cd sub", raw).segments[0]?.paths.at(-1)).toBe(join(real, "x"));
+  });
+
+  it("resolves a tar or make operand under its -C directory", () => {
+    const { raw, real } = workspace();
+    mkdirSync(join(raw, "sub"));
+    const home = realpathSync(homedir());
+    const last = (command: string) => bash(command, raw).segments.at(-1)?.paths.at(-1);
+    expect(last("tar -C ~ -cf - .ssh")).toBe(join(home, ".ssh"));
+    expect(last("tar --directory sub -cf - x")).toBe(join(real, "sub/x"));
+    expect(last("make --directory=sub all")).toBe(join(real, "sub/all"));
+    // An unresolvable or missing directory leaves the segment in the cwd.
+    expect(last('gtar -C "$D" -cf - x')).toBe(join(real, "x"));
+    expect(last("tar -cf - x -C")).toBe(join(real, "x"));
+    expect(last("tar -cf out.tar x")).toBe(join(real, "x"));
+    // Other programs' -C is theirs, not a directory.
+    expect(last("grep -C 2 pat file")).toBe(join(real, "file"));
+  });
 });

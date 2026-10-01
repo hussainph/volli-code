@@ -833,6 +833,8 @@ describe("SessionRuntime native adapter contract", () => {
       rulePackHash: "dca89a93",
       classifierModel: null,
       fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+      containment: "off",
+      writableRoots: [],
     };
     adapter.authority = authority;
     const { runtime } = composition({ adapter });
@@ -866,6 +868,8 @@ describe("SessionRuntime native adapter contract", () => {
       rulePackHash: "dca89a93",
       classifierModel: null,
       fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+      containment: "off",
+      writableRoots: [],
     };
     first.adapter.authority = authority;
     const sessionId = await createAndAttach(first.runtime);

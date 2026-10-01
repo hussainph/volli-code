@@ -21,8 +21,11 @@
  * tightening of a built-in default would silently skip every project anyone had
  * ever opened this pane on.
  *
- * The scalar policy is here; the list-valued fields (`coordinationVerbs`,
- * `awaitable`) are NOT, and their absence is a decision. `awaitable` has no
+ * The scalar policy is here. The lists are NOT, and their absence is a
+ * decision: `writableRoots` (VC-45) is policy data a project document may
+ * state, with no row until VC-480 folds the Authority settings into one
+ * protection switch; the per-actor lists (`coordinationVerbs`, `awaitable`)
+ * likewise. `awaitable` has no
  * vocabulary until VC-85 ships something to wait on, and a picker offering await
  * kinds that do not exist would be a guess rendered as a control. Both are
  * PRESERVED across every write from this pane rather than dropped — see
@@ -61,6 +64,7 @@ import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import {
   AUTHORITY_ACTOR_KINDS,
   AUTHORITY_ENFORCEMENTS,
+  CONTAINMENT_MODES,
   DEFAULT_AUTHORITY_POLICY,
   JUDGMENT_MODES,
   PEEK_DISCLOSURES,
@@ -68,6 +72,7 @@ import {
   type AuthorityActorKind,
   type AuthorityEnforcement,
   type AuthorityPolicyOverride,
+  type ContainmentMode,
   type JudgmentMode,
   type PeekDisclosure,
   type Project,
@@ -112,6 +117,21 @@ const ENFORCEMENT_OUTCOMES: Record<AuthorityEnforcement, string> = {
   off: "Off \u2014 no authority checks.",
   observe: "Observe \u2014 save this attachment’s policy; allow calls.",
   enforce: "Enforce \u2014 block rule violations.",
+};
+
+const CONTAINMENT_LABELS: Record<ContainmentMode, string> = {
+  off: "Off",
+  scoped: "Scoped",
+};
+
+/**
+ * The two capability postures as OUTCOMES (VC-45). `scoped` names its cost —
+ * no network — because that is the price a person is paying for the walls
+ * until egress opens together with the classifier.
+ */
+const CONTAINMENT_OUTCOMES: Record<ContainmentMode, string> = {
+  off: "Off \u2014 commands run as you, with the network.",
+  scoped: "Scoped \u2014 sandboxed to the workspace, credentials unreadable, no network.",
 };
 
 const JUDGMENT_LABELS: Record<JudgmentMode, string> = {
@@ -305,6 +325,47 @@ export function AuthorityPane({ project }: { project: Project }) {
               {AUTHORITY_ENFORCEMENTS.map((value) => (
                 <SelectItem key={value} value={value}>
                   {ENFORCEMENT_LABELS[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </OverrideControl>
+      </PrefRow>
+
+      {/*
+       * The capability axis (VC-45): walls, a dial apart from the rule pack's
+       * judgement, and live whatever enforcement says — Off bypasses the
+       * rules, not the walls. One row on purpose; VC-480 folds it into a
+       * single protection switch, so nothing here may hold state of its own.
+       */}
+      <PrefRow
+        label="Containment"
+        htmlFor="authority-containment"
+        testId="authority-containment"
+        align="start"
+        description={
+          <span className="text-foreground">{CONTAINMENT_OUTCOMES[effective.containment]}</span>
+        }
+      >
+        <OverrideControl
+          label="Containment"
+          inheritedValue={CONTAINMENT_LABELS[defaults.containment]}
+          overridden={override?.containment !== undefined}
+          disabled={saving}
+          onRevert={() => void patch({ containment: undefined })}
+        >
+          <Select
+            value={effective.containment}
+            disabled={saving}
+            onValueChange={(next) => void patch({ containment: next as ContainmentMode })}
+          >
+            <SelectTrigger id="authority-containment" className={CONTROL_W.md}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CONTAINMENT_MODES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {CONTAINMENT_LABELS[value]}
                 </SelectItem>
               ))}
             </SelectContent>

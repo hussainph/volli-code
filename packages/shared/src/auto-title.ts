@@ -6,8 +6,9 @@
  * The sanitizer is defensive by design, not trusting. A strict prompt reduces
  * how often the model answers with anything but a title, and still everything
  * here treats the reply as untrusted text: whatever shape the model actually
- * returned is cut down to one line, six words, and the Session-title length
- * budget — and a reply that is plainly prose rather than a title is refused
+ * returned is cut down to one line, the word ceiling the prompt aims at — with
+ * the small overshoot it actually produces kept whole — and a whole-word
+ * length budget. A reply that is plainly prose rather than a title is refused
  * outright, because a mid-sentence fragment is a worse label than the
  * heuristic it would replace. The title is a label, not content.
  *
@@ -18,7 +19,6 @@
  * never to.
  */
 import { REASONING_LEVELS, type ModelSelection, type ReasoningLevel } from "./agent-runtime";
-import { truncateSessionTitle } from "./session-title";
 
 /**
  * The cheapest reasoning level a model actually offers, or `null` for a model
@@ -83,7 +83,7 @@ export function resolveAutoTitleModel(ladder: AutoTitleModelLadder): ModelSelect
 /**
  * The longest first-user-message this sends a model to derive a title from.
  *
- * A title is six words; the opening paragraph decides them. Everything past
+ * A title is a few words; the opening paragraph decides them. Everything past
  * this is a pasted stack trace or a whole file the caller happened to lead
  * with, and billing input tokens for it buys nothing — the model has long
  * since read enough to name the conversation.
@@ -95,7 +95,7 @@ export const AUTO_TITLE_MAX_SUBJECT_CHARS = 2000;
  *
  * Smaller than the message budget on purpose: a body can be a whole PRD, and
  * what a title needs from it is the opening statement of the work. Everything
- * after that is detail the six words will never reach.
+ * after that is detail the words will never reach.
  */
 export const AUTO_TITLE_MAX_TICKET_CHARS = 1200;
 
@@ -171,8 +171,35 @@ export function autoTitlePrompt(
   return `<ticket id="${ticket.displayId}">\n${brief}\n</ticket>\n${subject}`;
 }
 
-/** The word ceiling the prompt states and the sanitizer enforces. */
+/** The word count the prompt asks the model to aim for, and states as its target. */
 export const AUTO_TITLE_MAX_WORDS = 6;
+
+/**
+ * The most words a model answer is kept at whole.
+ *
+ * The prompt asks for {@link AUTO_TITLE_MAX_WORDS} and models answer seven —
+ * the phrase they wanted, with the ceiling read as a target rather than a
+ * knife. Trimming that seventh word is what cut stored names off mid-thought:
+ * "Polish MCP page for simplicity and clarity" was stored as "Polish MCP page
+ * for simplicity and", "Assess cloud sandbox design options for Volli" as
+ * "Assess cloud sandbox design options for". The sanitizer therefore keeps the
+ * overshoot the prompt actually produces, and only an answer past this ceiling
+ * is trimmed — at a phrase boundary, never mid-phrase.
+ */
+export const AUTO_TITLE_TOLERATED_WORDS = 8;
+
+/**
+ * The longest model title kept whole, in characters.
+ *
+ * The word ceiling bounds the shape of an answer; this bounds its size, and it
+ * drops whole trailing words rather than cutting one in half. An ellipsis is
+ * deliberately not part of a model title: the model chose a phrase, not a
+ * prefix of something longer, so "…" would say the title was cut when what a
+ * reader needs to know is simply the title. 64 holds a six-word answer of
+ * ordinary words — "Review classifier decision service implementation" is 49 —
+ * which is what keeps the budget from biting on real answers.
+ */
+export const AUTO_TITLE_MAX_LENGTH = 64;
 
 /**
  * The system prompt the titling call runs under. Aggressive on purpose (VC-81).
@@ -181,8 +208,10 @@ export const AUTO_TITLE_MAX_WORDS = 6;
  * version of this prompt actually failed:
  *
  * 1. A TARGET, not just a ceiling. "Six maximum" alone makes models write six;
- *    naming four as typical moves the whole distribution down. The ceiling is
- *    still stated, because the sanitizer enforces exactly it.
+ *    naming four as typical moves the whole distribution down. The limit is
+ *    still stated, because a model told only "six" answers seven — and while
+ *    the sanitizer now keeps that overshoot ({@link AUTO_TITLE_TOLERATED_WORDS}),
+ *    an answer written inside both numbers needs no repair at all.
  * 2. A LIST OF FILLER to cut. "How to", "help with", "question about" are the
  *    words a model spends its budget on, and they say nothing a tab needs.
  * 3. EXAMPLES. This call runs with reasoning off, so the model cannot work out
@@ -203,7 +232,7 @@ export const AUTO_TITLE_SYSTEM_PROMPT = [
   "You name developer chat sessions. You are given the first message of a conversation or a standing Automation's Instructions, and sometimes the ticket it is work on. You reply with a title for it.",
   "",
   "Rules:",
-  `- ${AUTO_TITLE_MAX_WORDS} words is the hard ceiling. Four is typical. Two is fine.`,
+  `- Aim for ${AUTO_TITLE_MAX_WORDS} words: four is typical, two is fine. Never go past ${AUTO_TITLE_TOLERATED_WORDS} words — if the subject needs more, name the most important part.`,
   "- Name the concrete subject, and the action if there is one.",
   '- Cut filler: no "how to", "help with", "question about", "discussion of", "issue with".',
   "- Sentence case. No quotes, no final punctuation, no emoji, no markdown.",
@@ -263,8 +292,8 @@ function isQuote(char: string | undefined): boolean {
   return char === '"' || char === "'" || char === "`";
 }
 
-/** Trailing sentence furniture a title never needs: `.`, `!`, `,`, `;`, `:`, `?`. */
-const TRAILING_PUNCTUATION = /[.!;,?:]+$/;
+/** Trailing sentence furniture a title never needs: `.`, `!`, `,`, `;`, `:`, `?`, `…`. */
+const TRAILING_PUNCTUATION = /[.!;,?:…]+$/;
 
 /**
  * A `Title:` / `Title -` prefix — the one non-title shape the prompt's "return
@@ -274,10 +303,10 @@ const TRAILING_PUNCTUATION = /[.!;,?:]+$/;
 const TITLE_PREFIX = /^title\b\s*[:—–-]\s*/i;
 
 /**
- * A reply this many times over the word ceiling is not an over-long title, it
- * is prose. Cutting prose at six words yields a mid-clause fragment, which is
- * a worse label than the heuristic it would replace — so the caller keeps the
- * heuristic instead.
+ * A reply this many times over the prompt's target is not an over-long title,
+ * it is prose. Cutting prose at the word ceiling yields a mid-clause fragment,
+ * which is a worse label than the heuristic it would replace — so the caller
+ * keeps the heuristic instead.
  */
 const PROSE_WORD_FACTOR = 2;
 
@@ -309,18 +338,117 @@ function withoutLeadIn(words: readonly string[]): readonly string[] {
 }
 
 /**
+ * The trailing words that can never end a title, and the only ones a trim removes.
+ *
+ * Each one needs a word after it — an article with no noun, a possessive with
+ * nothing possessed, a conjunction with no second clause, a preposition with
+ * no object — so a title that stops here was cut, and what a reader sees is
+ * the cut rather than the subject.
+ *
+ * A word a whole title may legitimately end on is deliberately absent, however
+ * tempting: "Fix this", "Do it all", "Wait a while", "Turn notifications
+ * off", "Nothing left behind" and "Implement bitwise AND" are whole titles,
+ * and dropping their last word would break them to fix nothing. That is also
+ * why this list is consulted ONLY for a cut this file made: a word alone is
+ * not proof that a phrase is incomplete, and an answer that fits is left
+ * exactly as the model wrote it.
+ */
+const DANGLING_TAIL = new Set([
+  // Articles and possessives: a noun is required next.
+  "a",
+  "an",
+  "the",
+  "its",
+  "their",
+  "our",
+  "your",
+  "my",
+  "his",
+  // Conjunctions: a second clause is required next.
+  "and",
+  "or",
+  "nor",
+  "but",
+  // Prepositions that cannot be an adverb either.
+  "against",
+  "among",
+  "at",
+  "beside",
+  "despite",
+  "during",
+  "except",
+  "for",
+  "from",
+  "into",
+  "of",
+  "onto",
+  "per",
+  "throughout",
+  "toward",
+  "towards",
+  "until",
+  "upon",
+  "via",
+  "with",
+]);
+
+/** The word a dangling check reads: lowercased, with its trailing punctuation gone. */
+function bareTail(word: string): string {
+  return word.toLowerCase().replace(TRAILING_PUNCTUATION, "");
+}
+
+/**
+ * Drops the trailing words a cut left hanging, so a title ends on its subject
+ * instead of on the cut. Called only after a cut this file made: see
+ * {@link DANGLING_TAIL} for why a word alone never earns a removal.
+ */
+function withoutDanglingTail(words: readonly string[]): readonly string[] {
+  let end = words.length;
+  while (end > 0 && DANGLING_TAIL.has(bareTail(words[end - 1]!))) end -= 1;
+  return end === words.length ? words : words.slice(0, end);
+}
+
+/**
+ * The words that fit {@link AUTO_TITLE_MAX_LENGTH}, dropping whole trailing
+ * words — never cutting one in half, and repairing the tail of every drop.
+ *
+ * `cut` says a word-ceiling trim already happened. An answer that fits is
+ * returned untouched, and every drop below repairs the tail it exposed: the
+ * only cuts worth repairing are this file's own.
+ *
+ * A single word that cannot fit on its own has nothing left to cut it to, and
+ * a title past the budget is not a title — the result is empty, and the
+ * caller keeps the heuristic.
+ */
+function fitWholeWords(words: readonly string[], max: number, cut: boolean): readonly string[] {
+  let kept = cut ? withoutDanglingTail(words) : words;
+  while (kept.length > 1 && kept.join(" ").length > max) {
+    kept = withoutDanglingTail(kept.slice(0, -1));
+  }
+  return kept.join(" ").length > max ? [] : kept;
+}
+
+/**
  * The model's reply, cut down to a title the label budget holds — or `null`
  * when nothing survives.
  *
  * Everything the prompt asked the model not to do is still corrected here:
  * quotes and trailing punctuation come off, an explanation line is dropped, a
- * conversational lead-in clause is cut, slightly over-long answers are trimmed
- * to {@link AUTO_TITLE_MAX_WORDS} words, and the whole string is truncated to
- * the same word-boundary budget the shipped heuristic uses, so a model title
- * never outgrows the tab it lands in.
+ * conversational lead-in clause is cut, and an answer past
+ * {@link AUTO_TITLE_TOLERATED_WORDS} words is trimmed to that ceiling. The
+ * model's own overshoot is KEPT: the prompt asks for
+ * {@link AUTO_TITLE_MAX_WORDS} words and models answer seven, and cutting that
+ * seventh word off is what produced names like "Polish MCP page for simplicity
+ * and" — a phrase that stopped at the cut rather than at a subject. Only a cut
+ * THIS function made is repaired: a trim never leaves a connector hanging, and
+ * a phrase past {@link AUTO_TITLE_MAX_LENGTH} gives up whole words rather than
+ * growing an ellipsis a model title never had. An answer that fits both budgets
+ * is returned exactly as the model wrote it — "Implement bitwise AND" and
+ * "Turn all notifications off" are whole answers a word-list repair would
+ * otherwise damage.
  *
  * The one thing it will NOT do is salvage prose. A reply several times over
- * the ceiling did not answer the question, and its first six words are a
+ * the ceiling did not answer the question, and its first eight words are a
  * fragment; `null` sends the caller back to its heuristic, which at least
  * reads as a whole thought.
  */
@@ -337,9 +465,22 @@ export function sanitizeAutoTitle(raw: string): string | null {
     title = title.slice(1, -1).trim();
   }
   title = title.replace(TITLE_PREFIX, "").trim();
-  const words = withoutLeadIn(title.length === 0 ? [] : title.split(" "));
+  // The lead-in decision runs on the words as the model wrote them — a
+  // trailing ":" is how "Here is the title:" is recognised. After it, the
+  // trailing punctuation comes off the STRING rather than off the joined
+  // result, so a lone "." cannot leave a trailing space behind or hide the
+  // connector it was hanging off.
+  const leadIn = withoutLeadIn(title.length === 0 ? [] : title.split(" "));
+  const normalized = leadIn.join(" ").replace(TRAILING_PUNCTUATION, "").trim();
+  const words = normalized.length === 0 ? [] : normalized.split(" ");
   if (words.length > AUTO_TITLE_MAX_WORDS * PROSE_WORD_FACTOR) return null;
-  const budgeted = words.slice(0, AUTO_TITLE_MAX_WORDS).join(" ").replace(TRAILING_PUNCTUATION, "");
-  const cut = truncateSessionTitle(budgeted);
-  return cut.length === 0 ? null : cut;
+  const overCeiling = words.length > AUTO_TITLE_TOLERATED_WORDS;
+  const ceilinged = overCeiling ? words.slice(0, AUTO_TITLE_TOLERATED_WORDS) : words;
+  // The strip runs again after the words: a trim can land on a word that
+  // carried internal punctuation ("…plans providers, more"), leaving a comma
+  // the pre-cut strip never saw.
+  const budgeted = fitWholeWords(ceilinged, AUTO_TITLE_MAX_LENGTH, overCeiling)
+    .join(" ")
+    .replace(TRAILING_PUNCTUATION, "");
+  return budgeted.length === 0 ? null : budgeted;
 }

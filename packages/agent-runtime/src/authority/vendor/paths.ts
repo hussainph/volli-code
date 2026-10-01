@@ -16,9 +16,10 @@
  * See `./README.md` for the upstream revision and the divergences.
  */
 
-import { readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import { policyFilesystem } from "../policy-filesystem";
 
 /** The invoking user's home directory, read once, as upstream reads it. */
 export const HOME = homedir();
@@ -86,7 +87,7 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   if (trimmed === "~" || trimmed === "$HOME" || trimmed === "${HOME}") {
     return { kind: "path", path: HOME };
   }
-  if (trimmed.startsWith("~/")) return { kind: "path", path: resolve(HOME, trimmed.slice(2)) };
+  if (trimmed.startsWith("~/")) return { kind: "path", path: `${HOME}/${trimmed.slice(2)}` };
   if (trimmed.startsWith("~")) {
     return {
       kind: "unresolvable",
@@ -100,49 +101,101 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
       reason: `"${trimmed}" expands through a variable only the shell can read; name the paths literally so they can be checked.`,
     };
   }
-  return { kind: "path", path: isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded) };
+  // Joined, never resolved: `s/..` is not `.` when `s` is a link, and only
+  // `resolvePathForPolicy` walks the components the way the kernel does.
+  return { kind: "path", path: isAbsolute(expanded) ? expanded : `${cwd}/${expanded}` };
 }
 
+/** How many symlinks one resolution follows before it calls the path unresolvable, as `MAXSYMLINKS`. */
+const MAX_LINKS = 32;
+
 /**
- * The absolute, symlink-free path an operand denotes, or undefined when no such
- * path can exist.
+ * The absolute, symlink-free path an operand denotes, spelled the way the
+ * filesystem stores it, or undefined when no such path can exist.
  *
  * Undefined is a refusal, not an absence: a symlink cycle, an over-long
  * component, or an unreadable ancestor all mean the resolver cannot say what
  * file this is, and a caller that cannot say must not allow.
+ *
+ * Resolved one REAL component at a time, the way the kernel walks a path, and
+ * that is the VC-45 fix. Upstream resolved a symlink's target lexically against
+ * the link's own directory, so `x -> s/../LaunchAgents/x.plist` with `s ->
+ * ~/Library/Caches` read as `<dir>/LaunchAgents/x.plist` — the `..` cancelled
+ * `s` — while the kernel resolves `s` first and lands in `~/Library`. Here a
+ * link's target is spliced back into the queue of components still to walk,
+ * so `s` is followed before `..` is applied to where it led.
+ *
+ * A component that does not exist yet suspends the filesystem walk; what
+ * follows is appended lexically, because nothing under a missing directory
+ * can be a link — until a `..` climbs back above it, where the walk resumes.
+ * Input is absolutized but never normalized first: `s/..` is not `.` when `s`
+ * is a link, and the callers hand over joined, unresolved paths for that
+ * reason.
+ *
+ * The existing prefix is then spelled through `realpath.native`, which returns
+ * the name as stored: case, Unicode case (`.sſh` is `.ssh` on APFS) and
+ * normalization form all collapse to one spelling, so a policy comparing
+ * components compares what the kernel compares.
  */
-export function resolvePathForPolicy(path: string): string | undefined {
-  return resolveThroughLinks(resolve(path), new Set());
+export function resolvePathForPolicy(
+  path: string,
+  options: { refuseOnError?: boolean } = {},
+): string | undefined {
+  try {
+    return resolveFilesystemPath(path);
+  } catch (error) {
+    // Tool operands are refused via undefined. Attachment must propagate the
+    // same failure, never fall back to a lexical denylist with unknown targets.
+    if (options.refuseOnError) throw error;
+    return undefined;
+  }
 }
 
-/**
- * Walk toward the root until something resolves, then rebuild what was missing.
- *
- * Termination does not rest on a root check: `readlinkSync("/")` reports
- * `EINVAL`, which is not one of the two codes that keep the walk going, so the
- * loop always stops at the filesystem root at the latest.
- */
-function resolveThroughLinks(path: string, visited: Set<string>): string | undefined {
-  let current = path;
-  const missing: string[] = [];
-  for (;;) {
-    try {
-      return resolve(realpathSync(current), ...missing);
-    } catch {
-      // Not canonicalizable as it stands; the next two branches say why.
-    }
-    let target: string;
-    try {
-      target = readlinkSync(current);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
-      missing.unshift(basename(current));
-      current = dirname(current);
+function resolveFilesystemPath(path: string): string | undefined {
+  // Absolutized but NOT normalized: a lexical `..` is exactly the bug the walk exists to avoid.
+  const queue = (isAbsolute(path) ? path : `${process.cwd()}/${path}`).split("/").filter(Boolean);
+  const resolved: string[] = [];
+  // How many leading components are known to exist; past it, nothing can be a link.
+  let existing: number | null = null;
+  let links = 0;
+  while (queue.length > 0) {
+    const component = queue.shift()!;
+    if (component === ".") continue;
+    if (component === "..") {
+      resolved.pop();
+      // Climbing back above the first missing component is back on real ground.
+      if (existing !== null && resolved.length <= existing) existing = null;
       continue;
     }
-    if (visited.has(current)) return undefined;
-    visited.add(current);
-    return resolveThroughLinks(resolve(dirname(current), target, ...missing), visited);
+    if (existing !== null) {
+      resolved.push(component);
+      continue;
+    }
+    const candidate = `/${[...resolved, component].join("/")}`;
+    const entry = policyFilesystem(candidate, "lstat", () => lstatSync(candidate));
+    if (entry === undefined) {
+      existing = resolved.length;
+      resolved.push(component);
+      continue;
+    }
+    if (!entry.isSymbolicLink()) {
+      resolved.push(component);
+      continue;
+    }
+    links += 1;
+    if (links > MAX_LINKS) {
+      throw new Error(
+        `Cannot resolve "${path}" because too many symbolic links were followed; refusing Scoped attachment.`,
+      );
+    }
+    const target = policyFilesystem(candidate, "readlink", () => readlinkSync(candidate));
+    if (target === undefined) return undefined;
+    if (isAbsolute(target)) resolved.length = 0;
+    queue.unshift(...target.split("/").filter(Boolean));
   }
+  const real = existing ?? resolved.length;
+  // The prefix the walk saw exist, spelled as stored; the rest as named.
+  const prefix = `/${resolved.slice(0, real).join("/")}`;
+  const stored = policyFilesystem(prefix, "realpath", () => realpathSync.native(prefix));
+  return stored === undefined ? undefined : resolve(stored, ...resolved.slice(real));
 }

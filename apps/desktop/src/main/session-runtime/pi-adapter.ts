@@ -202,21 +202,26 @@ function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
  * is read back months later to interpret a denial, and a tool list that was
  * never the Session's is a record that lies.
  *
- * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
- * with no Snapshot to pin, which is what every Session did before VC-44 and what
- * Codex and Claude Code both ship as an explicit bypass. It is a decision a
- * project makes, not a state the product falls into.
+ * `null` for `enforcement: "off"` with containment off — the Session then runs
+ * at Pi's own defaults with no Snapshot to pin, which is what every Session did
+ * before VC-44 and what Codex and Claude Code both ship as an explicit bypass.
+ * It is a decision a project makes, not a state the product falls into.
+ * Enforcement off with containment `scoped` still pins one (VC-45 review, N1):
+ * Off bypasses the rules, not the walls, and the walls ride the Snapshot. The
+ * gate still installs only under `enforce`.
  */
 function piAuthoritySnapshot(
   policy: AuthorityPolicy,
   location: WorkLocationKind,
   toolSurface: readonly SessionToolId[],
 ): AuthoritySnapshot | null {
-  if (policy.enforcement === "off") return null;
+  if (policy.enforcement === "off" && policy.containment === "off") return null;
   return {
     mode: "auto",
     location,
     enforcement: policy.enforcement,
+    containment: policy.containment,
+    writableRoots: [...policy.writableRoots],
     judgmentMode: policy.judgmentMode,
     tools: [...toolSurface],
     rulePackId: BUILTIN_RULE_PACK_ID,
@@ -419,6 +424,14 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /** See `PiRuntimeHostOptions.hostPrivateRoots`: main's `userData`, on every Session's denylist. */
+  hostPrivateRoots?: PiRuntimeHostOptions["hostPrivateRoots"];
+  /** See `PiRuntimeHostOptions.hostCredentialPaths`: the MCP token store, in the credential tier. */
+  hostCredentialPaths?: PiRuntimeHostOptions["hostCredentialPaths"];
+  /** See `PiRuntimeHostOptions.hostCriticalDataPaths`: live authority files protected through hard links. */
+  hostCriticalDataPaths?: PiRuntimeHostOptions["hostCriticalDataPaths"];
+  /** See `PiRuntimeHostOptions.hostExposedPaths`: the CLI's bin dir, readable inside the denylist. */
+  hostExposedPaths?: PiRuntimeHostOptions["hostExposedPaths"];
   /**
    * The machine's network and sleep, over Electron's `net` and `powerMonitor`
    * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
@@ -782,6 +795,18 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
+    ...(options.hostPrivateRoots === undefined
+      ? {}
+      : { hostPrivateRoots: options.hostPrivateRoots }),
+    ...(options.hostCredentialPaths === undefined
+      ? {}
+      : { hostCredentialPaths: options.hostCredentialPaths }),
+    ...(options.hostCriticalDataPaths === undefined
+      ? {}
+      : { hostCriticalDataPaths: options.hostCriticalDataPaths }),
+    ...(options.hostExposedPaths === undefined
+      ? {}
+      : { hostExposedPaths: options.hostExposedPaths }),
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
@@ -1187,9 +1212,9 @@ class PiBinding implements BindingHandle {
       // is what makes `enforcement` real rather than advisory (VC-44). Pi
       // installs `beforeToolCall` on this field's PRESENCE, so:
       //
-      //   off      → no Snapshot at all      → absent → no gate
-      //   observe  → Snapshot, recorded only → absent → no gate
-      //   enforce  → Snapshot, handed over   → present → gate installs
+      //   off      → no Snapshot (unless scoped) → absent → no gate
+      //   observe  → Snapshot, recorded only     → absent → no gate
+      //   enforce  → Snapshot, handed over       → present → gate installs
       //
       // `observe` is deliberately absent here rather than present-and-permissive.
       // A gate that installs and allows everything would still normalize every
@@ -1203,6 +1228,18 @@ class PiBinding implements BindingHandle {
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
       ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      // The capability axis rides every Snapshot, `observe` and `off`
+      // included (VC-45): walls do not wait for the rule pack to bind, and a
+      // pinned Snapshot replayed after a relaunch keeps the walls it opened
+      // under. No Snapshot means both dials are off, and so no walls.
+      ...(this.#authority === null
+        ? {}
+        : {
+            capability: {
+              containment: this.#authority.containment,
+              writableRoots: this.#authority.writableRoots,
+            },
+          }),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,

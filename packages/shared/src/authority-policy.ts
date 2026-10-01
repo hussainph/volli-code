@@ -1,5 +1,5 @@
 /**
- * The built-in rule pack: nine total predicates over one normalized call.
+ * The built-in rule pack: ten total predicates over one normalized call.
  *
  * Ordered evaluation is load-bearing rather than incidental. The rules overlap —
  * `git config http.sslVerify false` writes repository plumbing *and* weakens TLS
@@ -18,28 +18,31 @@
  * such a tool is judged, and the port that wires it is where the decision was
  * already made.
  *
- * Which fields a rule reads is where this layer's scope is really decided, and
- * it is narrower than it first looks. `path.outside-workspace` judges reads and
- * writes — `call.reads`, `call.writes`, and a command's redirects — and
- * deliberately does *not* judge command operands. The runtime resolves every
- * non-flag operand into `segment.paths`, the program included, so checking them
- * would refuse `ls /usr/bin`, `cat /etc/hosts` and `/opt/homebrew/bin/node
- * script.js`. The Seatbelt policy this pack was designed under denied the home
- * directory and left `/usr`, `/etc` and `/opt/homebrew` readable precisely so
- * that ordinary build and test commands work, and a rule stricter than the
- * boundary it sits under is not defence in depth but a second, worse boundary
- * re-litigating a decision the kernel already enforces. That boundary is no
- * longer installed — see the header of `./authority.ts` — which widens the
- * residual below rather than changing what this rule should judge.
+ * Which fields a rule reads is where this layer's scope is really decided. The
+ * capability rules read the call against the attachment's
+ * {@link CapabilityPolicy} (VC-45), the same data a Scoped Session's walls are
+ * compiled from:
+ *
+ * - `path.credentials` and `path.private` judge reads, writes, redirects AND
+ *   command operands against the two tiers of the denylist. Operands are judged
+ *   here, where the old read rule deliberately did not judge them, because the
+ *   list is narrow: `cat ~/.ssh/id_rsa` is refused like `read ~/.ssh/id_rsa`,
+ *   while `ls /usr/bin` names nothing on it. The operand check is BEST-EFFORT,
+ *   and the docs say so: it is glob-aware (`~/.ss?/id*`), follows `cd` and
+ *   `-C` as far as the lexer sees them, and refuses a recursive reader handed a
+ *   directory above a denied entry — but a path in a variable, `$(…)` or an
+ *   inline interpreter never reaches it. For the file tools the answer is the
+ *   walls' answer; for the shell, only a Scoped Session's kernel guarantees it.
+ * - `path.outside-workspace` judges writes — file-tool writes and a command's
+ *   redirects — against the writable roots. Reads are machine-wide now, so the
+ *   sibling repository, the pnpm store and `/usr/include` are ordinary reads.
  *
  * The residual is real and accepted: `cp <workspace>/secret /tmp/leak` is not
- * refused here. That was accepted while the network was denied outright, which
- * made a file written elsewhere on the user's own machine something other than
- * exfiltration; with the network reachable the argument no longer holds and the
- * residual is simply larger. What has not changed is why no rule closes it: a
- * known-writer list (`cp`, `mv`, `tee`, `dd`) would need per-program positional
- * parsing to tell a destination from a source — exactly the cleverness that puts
- * bugs in a security rule.
+ * refused here, because `cp`'s destination is an operand and only the
+ * denylist judges operands. A known-writer list (`cp`, `mv`, `tee`, `dd`) would
+ * need per-program positional parsing to tell a destination from a source —
+ * exactly the cleverness that puts bugs in a security rule. In a Scoped Session
+ * the kernel refuses that write; outside one, this pack was never a boundary.
  *
  * `command.destructive-removal` and `command.git-escapes-workspace` do read
  * operands, and should: `rm -rf /usr/local/lib` and a `-C` aimed at another tree
@@ -50,15 +53,18 @@
  * `path.git-internals` reads operands too, for two names only, and the reason is
  * a seam between two layers rather than anything about policy. The sandbox
  * denied writes to `.git/hooks` and `.git/config` by subpath literal, and those
- * literals are case-sensitive while APFS is not — so
+ * literals were found case-sensitive while APFS is not — so
  * `cp evil.sh .GIT/hooks/pre-commit` wrote the real hook the kernel meant to
- * protect, and enumerating case variants downstairs is 2^n hopeless. Folded
- * comparison up here collapses every spelling at once, and it reaches submodule
- * plumbing at `.git/modules/<name>/hooks`, which executes exactly like the
- * superproject's. It stays at those two names deliberately: `git` takes other
- * `.git`-relative operands in ordinary use, and the cost of this clause is that
- * `cat .git/config` is refused — which costs nothing, because `git config
- * --list` reads the same thing and is allowed.
+ * protect. (VC-45 measured Seatbelt folding case on macOS 26 for both reads and
+ * writes; the folded comparison here stays, because it costs nothing and does
+ * not depend on which kernel a person runs.) Folded comparison up here
+ * collapses every spelling at once, and it reaches submodule plumbing at
+ * `.git/modules/<name>/hooks`, which executes exactly like the superproject's.
+ * It applies inside every writable root, not only the workspace, since a Ticket
+ * worktree's common git directory is one. It stays at those two names
+ * deliberately: `git` takes other `.git`-relative operands in ordinary use, and
+ * the cost of this clause is that `cat .git/config` is refused — which costs
+ * nothing, because `git config --list` reads the same thing and is allowed.
  *
  * The same rule owns `-c`, which is not a path at all. It is the one global flag
  * whose value git always interprets, and the only one the subcommand scan skips
@@ -100,6 +106,22 @@ import {
   type PolicyDecision,
   type PolicyToolCall,
 } from "./authority";
+import {
+  containsPath,
+  denialReason,
+  foldSegment,
+  guardsPath,
+  hostDataReach,
+  isDeviceSink,
+  isGitPlumbingPath,
+  operandDenial,
+  pathSegments,
+  readDenial,
+  writeDenial,
+  type CapabilityPolicy,
+  type Denial,
+  type DenyTier,
+} from "./capability-policy";
 
 /**
  * Case folding, and the one class of comparison that must not fold.
@@ -129,33 +151,9 @@ function fold(value: string): string {
   return value.toLowerCase();
 }
 
-/** The non-empty path components, compared as written. */
-function pathSegments(path: string): string[] {
-  return path.split("/").filter((segment) => segment.length > 0);
-}
-
 /** The same components, case-folded, for the deny-list side of the split above. */
 function foldedSegments(path: string): string[] {
-  return pathSegments(path).map(fold);
-}
-
-function containsSegments(root: readonly string[], candidate: readonly string[]): boolean {
-  return candidate.length >= root.length && root.every((part, index) => candidate[index] === part);
-}
-
-/**
- * Literal containment, for every test whose *true* answer is "allowed".
- *
- * `/ws-evil` is not inside `/ws`, and on a case-sensitive volume neither is
- * `/WS/secret`.
- *
- * Exported for the one caller outside the pack that asks the same question
- * — the background shell port's `cwd` rule (VC-270) — so the workspace
- * containment rule has one spelling. Both paths must already be absolute
- * and lexically resolved; this compares components and probes nothing.
- */
-export function containsPath(root: string, candidate: string): boolean {
-  return containsSegments(pathSegments(root), pathSegments(candidate));
+  return pathSegments(path).map(foldSegment);
 }
 
 /** Literal containment excluding the root itself. */
@@ -163,16 +161,6 @@ function strictlyContainsPath(root: string, candidate: string): boolean {
   return (
     containsPath(root, candidate) && pathSegments(candidate).length > pathSegments(root).length
   );
-}
-
-/**
- * Folded containment, for every test whose *true* answer is "denied".
- *
- * `<workspace>/.GIT/hooks` names the real hook directory on APFS, so a guarded
- * location has to cover every spelling of itself.
- */
-function guardsPath(guarded: string, candidate: string): boolean {
-  return containsSegments(foldedSegments(guarded), foldedSegments(candidate));
 }
 
 /** The last path component, folded: `/usr/bin/SUDO` is `sudo`. A deny-list comparison. */
@@ -195,36 +183,65 @@ function segmentsOf(call: PolicyToolCall): readonly PolicyCommandSegment[] {
 }
 
 /**
- * The repository plumbing directory.
- *
- * Guarded whole rather than by named member: git's own writes go through the
- * `git` program, so a file tool or a redirect reaching anywhere inside `.git`
- * has no legitimate form worth carving out.
+ * The capability policy the path rules judge against: the attachment's own,
+ * or — for a caller that resolved none — the workspace as the only writable
+ * root and no secret known.
  */
-function gitDirOf(context: PolicyContext): string {
-  return `${context.workspacePath}/.git`;
-}
-
-/** Volli's own state inside the tree, guarded on the same terms as `.git`. */
-function volliDirOf(context: PolicyContext): string {
-  return `${context.workspacePath}/.volli`;
+function capabilityOf(context: PolicyContext): CapabilityPolicy {
+  return (
+    context.capability ?? {
+      credentialDeny: [],
+      privateDeny: [],
+      hostDataDeny: [],
+      readAllow: [],
+      writableRoots: [context.workspacePath],
+      protectedPaths: [],
+      sandboxCarveOuts: false,
+      hostDataAliases: [],
+      linkedFiles: {},
+    }
+  );
 }
 
 /**
- * True when `path` is the repository's `config` or anything under its `hooks`,
- * for the superproject or for any submodule.
+ * Whether a written path is repository plumbing.
  *
- * A submodule's plumbing lives at `.git/modules/<name>/` and its hooks execute
- * exactly like the superproject's, so the `modules/<name>` prefixes are stripped
- * — repeatedly, since submodules nest — and the same two names checked
- * underneath. Only those two: `git` names other `.git`-relative paths in
- * ordinary use, and this is the arm that reads command operands.
+ * Guarded whole rather than by named member: git's own writes go through the
+ * `git` program, so a file tool or a redirect reaching anywhere inside a `.git`
+ * has no legitimate form worth carving out. Any `.git` component counts — the
+ * workspace's, a nested repository's, and the common git directory a Ticket
+ * worktree commits into, which is a writable root of its own (VC-45). So does a
+ * `.gitmodules`, the plan's fourth carve-out: it decides what `git submodule
+ * update` clones and runs.
  */
-function isGitExecutablePath(gitDir: string, path: string): boolean {
-  if (!guardsPath(gitDir, path)) return false;
-  let below = foldedSegments(path).slice(foldedSegments(gitDir).length);
-  while (below[0] === "modules" && below.length >= 2) below = below.slice(2);
-  return below[0] === "config" || below[0] === "hooks";
+function isGitWrite(path: string): boolean {
+  const segments = foldedSegments(path);
+  return segments.includes(".git") || segments.at(-1) === ".gitmodules";
+}
+
+/** Volli's own state at the top of any writable root, guarded on the same terms as `.git`. */
+function volliDirs(context: PolicyContext): string[] {
+  return capabilityOf(context).writableRoots.map((root) => `${root}/.volli`);
+}
+
+/** Whether `path` lies inside one of the Session's writable roots. */
+function insideWritableRoot(context: PolicyContext, path: string): boolean {
+  return capabilityOf(context).writableRoots.some((root) => containsPath(root, path));
+}
+
+/**
+ * The directories `rm` may never name: every root's `.git` and `.volli`, and
+ * the git directory a root is a slice of — a Ticket worktree's common git
+ * directory, which holds every branch's objects.
+ */
+function removalInternals(context: PolicyContext): string[] {
+  return capabilityOf(context).writableRoots.flatMap((root) => {
+    const segments = root.split("/");
+    const gitIndex = segments.map(foldSegment).lastIndexOf(".git");
+    return gitIndex === -1
+      ? [`${root}/.git`, `${root}/.volli`]
+      : [segments.slice(0, gitIndex + 1).join("/")];
+  });
 }
 
 /** Every path the call would create, modify, or delete. */
@@ -232,40 +249,201 @@ function writtenPaths(call: PolicyToolCall): string[] {
   return [...call.writes, ...segmentsOf(call).flatMap((segment) => segment.writes)];
 }
 
-/**
- * Sinks a redirect may name that are not files at all.
- *
- * `2>/dev/null` turns up in ordinary build and test commands, so refusing it
- * would spend the Session's fallback budget on nothing.
- */
-const DEVICE_SINKS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero"]);
+/** Every path that must land inside a writable root: file-tool writes and redirects. */
+function rootedWrites(call: PolicyToolCall): string[] {
+  return writtenPaths(call).filter((path) => !isDeviceSink(path));
+}
 
-function isDeviceSink(path: string): boolean {
-  return DEVICE_SINKS.has(path) || containsPath("/dev/fd", path);
+/** Programs that read — or, for `ln`, link — everything under a directory they are handed. */
+const ALWAYS_RECURSIVE = new Set([
+  "rg",
+  "ag",
+  "ack",
+  "tar",
+  "bsdtar",
+  "gtar",
+  "rsync",
+  "ditto",
+  "ln",
+]);
+
+const GREP_PROGRAMS = new Set(["grep", "egrep", "fgrep", "ggrep"]);
+
+/**
+ * Whether a segment reads a directory operand's whole subtree, so an operand
+ * ABOVE a denied entry reaches it: `grep -r token ~` reads `~/.ssh`.
+ *
+ * The cheap, named cases only — `grep -r`, `rg`, `tar`, `cp -r`, `rsync`,
+ * `zip -r`, and `ln`, which can link a whole tree into the workspace for a
+ * later command to read through. A recursive reader this table does not name
+ * is one the gate does not see; the kernel is what refuses it, in a Session
+ * that has one.
+ */
+function readsRecursively(segment: PolicyCommandSegment): boolean {
+  const program = baseName(segment.program);
+  const { args } = segment;
+  if (ALWAYS_RECURSIVE.has(program)) return true;
+  if (GREP_PROGRAMS.has(program)) {
+    return (
+      hasShortFlag(args, "r") ||
+      hasShortFlag(args, "R") ||
+      args.some(
+        (arg) => arg.startsWith("--recursive") || arg.startsWith("--dereference-recursive"),
+      ) ||
+      args.includes("--directories=recurse")
+    );
+  }
+  if (program === "zip") return hasShortFlag(args, "r") || args.includes("--recurse-paths");
+  if (program === "cp") {
+    return (
+      hasShortFlag(args, "r") ||
+      hasShortFlag(args, "R") ||
+      hasShortFlag(args, "a") ||
+      args.includes("--recursive") ||
+      args.includes("--archive")
+    );
+  }
+  return false;
 }
 
 /**
- * Every path `path.outside-workspace` judges, and where each may be. Command
- * operands are not among them.
- *
- * A read may also land in one of the Session's own readable roots (VC-469);
- * a write never may.
+ * The only `security` commands a Session may run. Certificates and trust
+ * settings are public verification material; these commands inspect them and
+ * cannot return a password, private key, identity, or authorization right.
+ * Everything else is denied rather than trying to keep a complete blacklist
+ * of a tool whose interactive mode accepts commands on stdin.
  */
-function containedPaths(
-  call: PolicyToolCall,
-  context: PolicyContext,
-): { path: string; roots: readonly string[] }[] {
-  const writeRoots = [context.workspacePath];
-  const readRoots = [context.workspacePath, ...(context.readableRoots ?? [])];
-  return [
-    ...call.reads.map((path) => ({ path, roots: readRoots })),
-    ...[
-      ...call.writes,
-      ...segmentsOf(call).flatMap((segment) =>
-        segment.writes.filter((path) => !isDeviceSink(path)),
-      ),
-    ].map((path) => ({ path, roots: writeRoots })),
-  ];
+const SAFE_SECURITY_SUBCOMMANDS = new Set([
+  "find-certificate",
+  "verify-cert",
+  "dump-trust-settings",
+]);
+
+/**
+ * A safely recognizable `security` subcommand. Only verbosity flags may come
+ * first. `-i` and `-p` are intentionally not parsed: both enter interactive
+ * mode, so even a safe-looking later word could be a prompt or stdin command.
+ */
+function securitySubcommand(args: readonly string[]): string | null {
+  let index = 0;
+  while (/^-[qv]+$/u.test(args[index] ?? "")) index += 1;
+  const subcommand = args[index];
+  return subcommand === undefined || subcommand.startsWith("-") ? null : fold(subcommand);
+}
+
+function keychainAccess(segment: PolicyCommandSegment): string | null {
+  if (baseName(segment.program) !== "security") return null;
+  const subcommand = securitySubcommand(segment.args);
+  if (subcommand !== null && SAFE_SECURITY_SUBCOMMANDS.has(subcommand)) return null;
+  return subcommand === null ? "security interactive mode" : `security ${subcommand}`;
+}
+
+/**
+ * Programs that only read what they are handed, so naming the host's data is a
+ * read of it (`path.private`, approvable) rather than a possible change to it
+ * (`path.host-data`, never). Every program NOT here is assumed able to change
+ * an operand — `cp`, `mv`, `rm`, `sqlite3`, `sed`, an interpreter — because a
+ * shell operand carries no read/write mark and the cost of guessing wrong is a
+ * Session editing its own approvals.
+ */
+const READ_ONLY_PROGRAMS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "grep",
+  "egrep",
+  "fgrep",
+  "ggrep",
+  "rg",
+  "ag",
+  "ack",
+  "ls",
+  "stat",
+  "file",
+  "wc",
+  "du",
+  "od",
+  "hexdump",
+  "xxd",
+  "strings",
+  "md5",
+  "md5sum",
+  "shasum",
+  "sha1sum",
+  "sha256sum",
+  "diff",
+  "cmp",
+  "jq",
+  "cd",
+  "pushd",
+  "realpath",
+  "readlink",
+  "test",
+  "[",
+]);
+
+/** Programs whose change reaches everything under a directory they are handed. */
+function changesWholeTree(segment: PolicyCommandSegment): boolean {
+  const program = baseName(segment.program);
+  const { args } = segment;
+  if (program === "mv") return true;
+  if (program === "rm") {
+    return hasShortFlag(args, "r") || hasShortFlag(args, "R") || args.includes("--recursive");
+  }
+  if (["chmod", "chown", "chgrp", "chflags"].includes(program)) return hasShortFlag(args, "R");
+  return false;
+}
+
+/** One denylisted reach a call makes, and the sentence that refuses it. */
+interface NamedDenial {
+  tier: DenyTier;
+  reason: string;
+}
+
+/**
+ * Every denylisted path a call reaches, in the order a rule should cite them.
+ *
+ * What the call reads (file tools) is judged as a read, grants included; what
+ * it writes as a write, where grants do not count; every operand a command
+ * names through {@link operandDenial} — glob-aware, and recursive for the
+ * readers above — and, for a program that can change what it names, through
+ * {@link hostDataReach}. A keychain subcommand is a credential read with no
+ * path.
+ *
+ * Best-effort for a shell command, and said so in the docs: an operand hidden
+ * in a variable or `$(…)` never reaches here, nor does a path an inline
+ * interpreter (`python3 -c`, `osascript -e`) opens. The kernel refuses those in
+ * a Scoped Session; nothing does outside one.
+ */
+function namedDenials(call: PolicyToolCall, capability: CapabilityPolicy): NamedDenial[] {
+  const denials: NamedDenial[] = [];
+  for (const path of call.reads) pushNamed(denials, path, readDenial(capability, path));
+  for (const path of writtenPaths(call)) pushNamed(denials, path, writeDenial(capability, path));
+  for (const segment of segmentsOf(call)) {
+    const keychain = keychainAccess(segment);
+    if (keychain !== null) {
+      denials.push({
+        tier: "credential",
+        reason: `${keychain} can access the macOS keychain, which holds credentials, so it is not available to a Session. Only certificate and trust inspection commands are allowed. If the task needs a secret, ask the user to provide it.`,
+      });
+    }
+    const recursive = readsRecursively(segment);
+    const changes = !READ_ONLY_PROGRAMS.has(baseName(segment.program));
+    const wholeTree = changesWholeTree(segment);
+    for (const path of segment.paths) {
+      if (changes) pushNamed(denials, path, hostDataReach(capability, path, wholeTree));
+      pushNamed(denials, path, operandDenial(capability, path, recursive));
+    }
+  }
+  return denials;
+}
+
+/** One path's denial, named for the model, when there is one. */
+function pushNamed(denials: NamedDenial[], path: string, denial: Denial | undefined): void {
+  if (denial !== undefined) denials.push({ tier: denial.tier, reason: denialReason(path, denial) });
 }
 
 /** Everything git and npm read as "off"; matching only `false` would leave `0` a bypass. */
@@ -554,25 +732,37 @@ type RuleCheck = (
  * itself — the same list the recorded pack hash is computed over.
  */
 const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
+  "path.credentials": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "credential")
+      ?.reason ?? null,
+
+  "path.host-data": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "host-data")
+      ?.reason ?? null,
+
+  "path.private": (call, _snapshot, context) =>
+    namedDenials(call, capabilityOf(context)).find((denial) => denial.tier === "private")?.reason ??
+    null,
+
   "path.outside-workspace": (call, _snapshot, context) => {
-    for (const { path, roots } of containedPaths(call, context)) {
-      if (!roots.some((root) => containsPath(root, path))) {
-        return `${path} is outside the Session workspace ${context.workspacePath}; every read and write must stay inside it.`;
+    const roots = capabilityOf(context).writableRoots;
+    for (const path of rootedWrites(call)) {
+      if (!insideWritableRoot(context, path)) {
+        return `${path} is outside this Session's writable roots (${roots.join(", ")}); every write must land inside one of them. Reading anywhere else is fine.`;
       }
     }
     return null;
   },
 
   "path.git-internals": (call, _snapshot, context) => {
-    const gitDir = gitDirOf(context);
     for (const path of writtenPaths(call)) {
-      if (guardsPath(gitDir, path)) {
+      if (isGitWrite(path)) {
         return `Writing ${path} is not permitted; hand-editing the repository's plumbing changes what later commands do. Reading it is fine.`;
       }
     }
     for (const segment of segmentsOf(call)) {
       for (const path of segment.paths) {
-        if (isGitExecutablePath(gitDir, path)) {
+        if (insideWritableRoot(context, path) && isGitPlumbingPath(path)) {
           return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
         }
       }
@@ -592,7 +782,7 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
 
   "path.volli-internals": (call, _snapshot, context) => {
     for (const path of writtenPaths(call)) {
-      if (guardsPath(volliDirOf(context), path)) {
+      if (volliDirs(context).some((dir) => guardsPath(dir, path))) {
         return `Writing ${path} is not permitted; .volli holds Volli's own state, not the project's.`;
       }
     }
@@ -630,7 +820,7 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   },
 
   "command.destructive-removal": (call, _snapshot, context) => {
-    const internals = [gitDirOf(context), volliDirOf(context)];
+    const internals = removalInternals(context);
     for (const segment of segmentsOf(call)) {
       if (baseName(segment.program) !== "rm") continue;
       const recursive = isRecursiveRemoval(segment.args);
