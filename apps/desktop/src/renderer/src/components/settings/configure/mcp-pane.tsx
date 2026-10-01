@@ -816,9 +816,11 @@ export function McpPane({ project }: { project: Project }) {
 }
 
 /**
- * A row's one sign-in control: *Sign in* when the server needs it or has none,
- * *Cancel sign-in* while the browser is open, *Sign out* once signed in.
- * Nothing at all for a server that does not sign in.
+ * A row's one sign-in control: *Sign in* when the server has refused a
+ * connection for want of one, *Cancel sign-in* while the browser is open,
+ * *Sign out* once signed in. Nothing for a server that does not sign in, or
+ * that has not asked to — most remote servers need no sign-in at all, and a
+ * control on every one of them would be noise.
  */
 function SignInAction({
   server,
@@ -839,7 +841,8 @@ function SignInAction({
 }) {
   // An empty slot the size of the control, so every row's Edit, Refresh and
   // Remove stay in the same columns whether or not a server signs in.
-  if (!signsIn(server)) return <span aria-hidden className="size-5 shrink-0" />;
+  const placeholder = <span aria-hidden className="size-5 shrink-0" />;
+  if (!signsIn(server)) return placeholder;
   if (waiting) {
     return (
       <Button
@@ -852,7 +855,8 @@ function SignInAction({
       </Button>
     );
   }
-  return access?.signIn === "signed-in" ? (
+  if (access?.signIn !== "signed-in" && access?.signIn !== "needs-sign-in") return placeholder;
+  return access.signIn === "signed-in" ? (
     <Button
       size="icon-xs"
       variant="ghost"

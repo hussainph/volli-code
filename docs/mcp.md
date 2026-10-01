@@ -246,9 +246,12 @@ Two things the SDK negotiated are gone, and both are worth naming:
   recognises that refusal and says so, rather than reporting an opaque failure.
 - **`2024-10-07`**, a pre-release revision no current server negotiates.
 
-The bounds VC-8 set are unchanged: a 10-second limit on the handshake and on a
-catalog read, a 30-second limit on a tool call, at most 64 pages of `tools/list`
-(a repeated cursor is refused), and a 1 MB limit on one stdio message.
+The bounds VC-8 set are kept: a 10-second limit on the handshake and on a
+catalog read, a 30-second limit on a tool call, and at most 64 pages of
+`tools/list` (a repeated cursor is refused). One message may be at most 8 MiB
+plus framing on either transport — VC-469's outer bound on a tool result — on
+stdio per line, and over HTTP per JSON response body (refused on its declared
+length, or stopped mid-read) or per SSE event.
 
 ### Stopping a local server
 
@@ -277,7 +280,9 @@ told the outcome — signed in, declined, or still missing — and never the val
 
 A remote server without an `Authorization` header of its own can sign in with
 OAuth. When such a server refuses a connection, its row in Settings shows
-**Needs sign-in** with a *Sign in* control. *Sign in* opens the server's
+**Needs sign-in** with a *Sign in* control (a server that has never asked for one
+shows none; *Sign in* in the editor appears when *Test and discover* is refused
+for one). *Sign in* opens the server's
 authorization page in your browser and waits (up to five minutes, or until you
 press *Cancel sign-in*) for the browser to come back to a temporary server on
 `127.0.0.1`. Volli:
@@ -293,7 +298,12 @@ press *Cancel sign-in*) for the browser to come back to a temporary server on
   insufficient_scope`): the row shows *Needs sign-in* again, and signing in
   requests what was granted plus what was asked for (step-up).
 
-*Sign out* deletes the stored tokens and the client registration.
+*Sign out* deletes the stored tokens and the client registration. Every request
+Volli makes to an authorization server has a 10-second limit, so one that stops
+answering fails a call rather than holding every call to that server behind it.
+One sign-in runs per server at a time: Settings and an agent's question join the
+same one, an agent that stops waiting leaves it running for the person, and the
+person's *Cancel sign-in* stops it for everyone.
 
 **Pre-registered clients.** Under *OAuth client* in the editor: a client ID, an
 optional client secret (a stored secret or a `${NAME}` reference), and either a
@@ -326,13 +336,21 @@ cannot tell a key from an ordinary value any better than it can tell
 *Secret*; it simply lives where a secret would.
 
 Values are resolved **at connect time** — headers on every request — and go only
-to the server they belong to: a header to that server's endpoint, an environment
-value to that server's process. They are never logged, never put in an error
+to the server they belong to: a header to that server's endpoint URL and nowhere
+else (not to the authorization server it signs in with, and not across a
+redirect to another origin), an environment value to that server's process. They are never logged, never put in an error
 (an error names the slot, `header Authorization`, or the variable,
 `${GITHUB_TOKEN}`, never the value), and a server's stderr is never surfaced.
+Names may appear where an agent can read them; values never do.
 A value stored or replaced while a Session runs reaches it too: headers on the
 next request, and a local server's environment by restarting that Session's
 connection to it before the next call.
+
+A local server's environment values go to the command **as it resolves in the
+project root** — and an agent working in that project can change what `npx foo`
+or `node ./server.js` actually runs there (a `node_modules/.bin` entry, the
+script itself). Give a local server a secret only if you trust what the project
+can make that command run.
 
 A reference reads **Volli's** environment. A Volli started from Finder or the
 Dock has launchd's environment, not your shell's exports, so a variable your
@@ -380,17 +398,25 @@ credentials; re-adding it means storing them or signing in again.
   as `confirm.mcp-install`. *Allow* opens the browser; the call is retried once
   the person has signed in, and the agent receives the call's result, or *The
   person driving declined to sign in*, or why the sign-in did not complete.
-- **A missing key is asked for the same way.** `confirm.mcp-credential` names
-  the slot (`header Authorization`); the person adds the value in Settings and
-  allows the retry. If it is still missing, the agent is told that.
+- **A missing or rejected key is asked for the same way.** `confirm.mcp-credential`
+  names the slot (`header Authorization`); the person adds or replaces the value
+  in Settings and allows the retry. If it is still missing, or still rejected,
+  the agent is told that. Calls blocked on the same server at the same time share
+  one question.
+- **Each question names the endpoint** beside the server's name, because the
+  name is the agent's choice and allowing a sign-in opens whatever page that
+  endpoint's metadata names.
 - **Unattended, it is told plainly.** A Session with nobody to ask gets a
   result saying a person must sign in or add the value in Settings, and the
   server stays in *Needs sign-in*.
 - **An agent cannot redirect a person's credential.** Re-installing an existing
   server with the same command or endpoint keeps the person's credential
-  settings. Re-installing it at a *different* endpoint or command drops them, and
-  deletes the stored values once the new configuration saves — the preview and
-  the confirmation both say so.
+  settings. Re-installing a server that holds any — configured headers,
+  environment or OAuth settings, a stored secret, a sign-in — at a *different*
+  endpoint or command is **refused**, before anything is asked or connected:
+  carrying the credential along would send it where the agent chose, and
+  dropping it would destroy a person's sign-in on an agent's say-so. Install it
+  under a new id, or the person changes it in Settings.
 - `server_preview` never asks anyone: it reports that a sign-in is needed and that
   `server_install` will ask.
 

@@ -234,6 +234,12 @@ export class McpSettingsService {
   }): Promise<McpCatalogResult> {
     const prepared = this.#prepare(input.projectId, input.server);
     if (!prepared.ok) return prepared;
+    // An id is a key into stored credentials: another project's server id
+    // must not connect with that project's tokens, or record against them.
+    const owner = getMcpServer(this.#db, prepared.server.id);
+    if (owner !== undefined && owner.projectId !== input.projectId) {
+      return { ok: false, error: "That MCP server id belongs to another project." };
+    }
     const signal = input.signal ?? new AbortController().signal;
     const startedAt = this.#now();
     try {
@@ -252,6 +258,25 @@ export class McpSettingsService {
         error: this.#stopped(error, signal, prepared.server.name, startedAt),
         ...(blocked === undefined ? {} : { blocked }),
       };
+    } finally {
+      if (owner === undefined) this.#forgetRefusalOnly(prepared.server.id);
+    }
+  }
+
+  /**
+   * A test of an id nobody saved leaves no record behind whose only content
+   * is the refusal it met: that is not a credential, and an agent's preview
+   * would otherwise strew them through the credential file. Tokens or values
+   * gathered for an editor draft are kept, for the save that follows.
+   */
+  #forgetRefusalOnly(serverId: string): void {
+    const record = this.#store.read(serverId);
+    if (
+      record !== undefined &&
+      record.oauth === undefined &&
+      Object.keys(record.secrets ?? {}).length === 0
+    ) {
+      this.#store.delete(serverId);
     }
   }
 
@@ -412,17 +437,17 @@ export class McpSettingsService {
     });
   }
 
+  /** Stop a sign-in waiting on the browser, for everyone waiting on it. */
+  cancelSignIn(input: { projectId: string; serverId: string }): void {
+    this.#oauth.cancelSignIn(input.serverId);
+  }
+
   /** Delete a server's stored OAuth tokens and registration. Secrets stay. */
   signOut(input: { projectId: string; serverId: string }): McpMutationResult {
     const existing = this.#owned(input.projectId, input.serverId);
     if (!existing.ok) return existing;
     this.#oauth.signOut(input.serverId);
     return { ok: true };
-  }
-
-  /** Delete everything stored for one server: secrets, tokens, registration. */
-  forgetCredentials(serverId: string): void {
-    this.#store.delete(serverId);
   }
 
   /**

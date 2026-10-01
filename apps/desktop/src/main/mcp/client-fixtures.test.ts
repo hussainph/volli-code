@@ -2,9 +2,15 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createMcpProtocolClientOpener, openMcpProtocolClient } from "./client";
+import {
+  boundedFetch,
+  createMcpProtocolClientOpener,
+  MCP_HTTP_MESSAGE_MAX_BYTES,
+  MCP_STDIO_BUFFER_MAX_BYTES,
+  openMcpProtocolClient,
+} from "./client";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { McpCredentialRejectedError, McpProtocolEraError } from "./credentials";
 import type { McpProtocolClient } from "./discovery";
@@ -41,6 +47,7 @@ describe("real MCP transport fixtures", () => {
         description: "Echo from a real stdio fixture",
       }),
       expect.objectContaining({ name: "fixture_env" }),
+      expect.objectContaining({ name: "fixture_large" }),
     ]);
     await expect(
       client.callTool({
@@ -234,5 +241,124 @@ describe("refusals the client names (VC-470)", () => {
     controller.abort(new Error("stopped by caller"));
 
     await expect(opening).rejects.toThrow("stopped by caller");
+  });
+});
+
+describe("message size bounds (VC-469's 8 MiB outer bound, on pi-mcp)", () => {
+  it("accepts one stdio message of about 1.1 MB, past VC-8's old 1 MiB limit", async () => {
+    expect(MCP_STDIO_BUFFER_MAX_BYTES).toBeGreaterThanOrEqual(8 * 1_024 * 1_024);
+    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const client = await openMcpProtocolClient(
+      {
+        id: "large",
+        name: "Large",
+        enabled: true,
+        transport: { type: "stdio", command: process.execPath, args: [fixture] },
+      },
+      process.cwd(),
+      new AbortController().signal,
+    );
+    opened.push(client);
+
+    const result = await client.callTool({
+      name: "fixture_large",
+      arguments: {},
+      signal: new AbortController().signal,
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect((result.content[0] as { text: string }).text).toHaveLength(1_100_000);
+  });
+
+  it("caps a JSON response body, declared or not, and leaves an SSE stream to its per-event bound", async () => {
+    expect(MCP_HTTP_MESSAGE_MAX_BYTES).toBeGreaterThanOrEqual(8 * 1_024 * 1_024);
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text: "y".repeat(2_000) } });
+    const respond = (headers: Record<string, string>) =>
+      vi.fn(async () => new Response(body, { status: 200, headers }));
+
+    const declared = boundedFetch(
+      respond({ "content-type": "application/json", "content-length": String(body.length) }),
+      1_000,
+    );
+    await expect(declared("http://127.0.0.1/mcp")).rejects.toThrow("exceeds 1000 bytes");
+
+    const chunked = boundedFetch(
+      vi.fn(
+        async () =>
+          new Response(new Blob([body]).stream(), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+      1_000,
+    );
+    await expect((await chunked("http://127.0.0.1/mcp")).text()).rejects.toThrow(
+      "exceeds 1000 bytes",
+    );
+
+    const small = boundedFetch(respond({ "content-type": "application/json" }), 10_000);
+    await expect((await small("http://127.0.0.1/mcp")).json()).resolves.toMatchObject({ id: 1 });
+
+    const stream = boundedFetch(respond({ "content-type": "text/event-stream" }), 1_000);
+    await expect((await stream("http://127.0.0.1/mcp")).text()).resolves.toHaveLength(body.length);
+
+    const empty = boundedFetch(async () => new Response(null, { status: 202 }), 1);
+    expect((await empty("http://127.0.0.1/mcp")).status).toBe(202);
+  });
+
+  it("carries a tool's outputSchema through the catalog read for discovery to judge", async () => {
+    const outputSchema = { type: "object", properties: { count: { type: "number" } } };
+    const http = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        if (request.method !== "POST") {
+          response.writeHead(405).end();
+          return;
+        }
+        const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          id?: number;
+          method: string;
+        };
+        if (message.id === undefined) {
+          response.writeHead(202).end();
+          return;
+        }
+        const result =
+          message.method === "initialize"
+            ? {
+                protocolVersion: "2025-11-25",
+                capabilities: { tools: {} },
+                serverInfo: { name: "schema-fixture", version: "1" },
+              }
+            : { tools: [{ name: "typed", inputSchema: { type: "object" }, outputSchema }] };
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+      });
+    });
+    await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+    closing.push(
+      () =>
+        new Promise<void>((resolve) => {
+          http.closeAllConnections();
+          http.close(() => resolve());
+        }),
+    );
+    const address = http.address();
+    if (address === null || typeof address === "string") throw new Error("fixture did not listen");
+    const client = await openMcpProtocolClient(
+      {
+        id: "typed",
+        name: "Typed",
+        enabled: true,
+        transport: { type: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
+      },
+      process.cwd(),
+      new AbortController().signal,
+    );
+    opened.push(client);
+
+    const [tool] = await client.listTools(new AbortController().signal);
+    expect((tool as unknown as { outputSchema?: unknown }).outputSchema).toEqual(outputSchema);
   });
 });

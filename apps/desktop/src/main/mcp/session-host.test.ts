@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { mcpProviderToolName, type McpServerDraft, type McpToolDefinition } from "@volli/shared";
+import {
+  mcpProviderToolName,
+  type McpServerDraft,
+  type McpToolDefinition,
+  type RuntimeAskRequest,
+} from "@volli/shared";
 
-import { McpCredentialMissingError, McpSignInRequiredError } from "./credentials";
+import {
+  McpCredentialMissingError,
+  McpCredentialRejectedError,
+  McpSignInRequiredError,
+} from "./credentials";
 import { McpTransportFailure, type McpProtocolClient } from "./discovery";
 import { McpCallBlocked, McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
@@ -647,6 +656,75 @@ describe("McpSessionHost — calls blocked on a person (VC-470)", () => {
       noSignIn.port.call(call, new AbortController().signal, async () => "allow"),
     ).resolves.toMatchObject({ isError: true });
     await Promise.all([host.close(), noSignIn.close()]);
+  });
+
+  it("asks once for parallel calls blocked on the same server, and retries each", async () => {
+    let signedIn = false;
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open: async () =>
+        client(async ({ name }) => {
+          if (!signedIn) throw new McpSignInRequiredError("Fixture", false);
+          return { content: [{ type: "text", text: `${name} ok` }], isError: false };
+        }),
+      signIn: async () => {
+        signedIn = true;
+        return { ok: true as const, message: "Signed in to Fixture." };
+      },
+    });
+    const answer = Promise.withResolvers<"allow">();
+    const ask = vi.fn(() => answer.promise);
+
+    const one = host.port.call(
+      { ...call, toolName: "one", toolCallId: "c1" },
+      new AbortController().signal,
+      ask,
+    );
+    const two = host.port.call(
+      { ...call, toolName: "two", toolCallId: "c2" },
+      new AbortController().signal,
+      ask,
+    );
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledOnce());
+    answer.resolve("allow");
+
+    await expect(one).resolves.toMatchObject({ content: [{ text: "one ok" }] });
+    await expect(two).resolves.toMatchObject({ content: [{ text: "two ok" }] });
+    expect(ask).toHaveBeenCalledOnce();
+    await host.close();
+  });
+
+  it("names a rejected credential as rejected, and the endpoint of a server that asks to sign in", async () => {
+    const remote: McpServerDraft = {
+      id: "server-1",
+      name: "Fixture",
+      enabled: true,
+      transport: { type: "streamable-http", url: "https://mcp.example.com/mcp" },
+    };
+    const rejected = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [remote],
+      open: async () => {
+        throw new McpCredentialRejectedError("Fixture", ["header Authorization"]);
+      },
+    });
+    const asked: RuntimeAskRequest[] = [];
+    await expect(
+      rejected.port.call(call, new AbortController().signal, async (request) => {
+        asked.push(request);
+        return "allow";
+      }),
+    ).resolves.toMatchObject({
+      content: [{ text: expect.stringContaining("still rejects header Authorization") }],
+    });
+    expect(asked[0]?.reason).toContain(
+      "Fixture (https://mcp.example.com) rejected header Authorization",
+    );
+    await expect(rejected.port.call(call, new AbortController().signal)).resolves.toMatchObject({
+      content: [{ text: expect.stringContaining("only a person can replace it") }],
+    });
+    await rejected.close();
   });
 
   it("retires an idle client opened before a person replaced a stored value", async () => {

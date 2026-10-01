@@ -131,6 +131,9 @@ abstract class RecordStore implements McpCredentialStore {
     const current = records[serverId];
     const next = change(current === undefined ? undefined : structuredClone(current));
     const kept = next === undefined || emptyRecord(next) ? undefined : structuredClone(next);
+    // Nothing changed: no write. A save or refresh that touches no credential
+    // must not depend on the file being writable.
+    if (JSON.stringify(kept) === JSON.stringify(current)) return;
     const updated = { ...records };
     if (kept === undefined) delete updated[serverId];
     else updated[serverId] = kept;

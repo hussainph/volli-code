@@ -8,6 +8,7 @@ import {
   hashRulePack,
   isBudgetCause,
   isConfirmCause,
+  isCredentialConfirmCause,
   isOverridableAuthorityRule,
   NON_CODING_TOOL_IDS,
   OVERRIDABLE_AUTHORITY_RULES,
@@ -109,6 +110,14 @@ describe("isConfirmCause", () => {
     expect(isConfirmCause("budget.delegation-children")).toBe(false);
     expect(isConfirmCause("call.unreadable")).toBe(false);
     expect(isConfirmCause("command.persistence")).toBe(false);
+  });
+
+  it("tells the credential questions apart from the confirmations they can follow (VC-470)", () => {
+    expect(CONFIRM_CAUSE_IDS.filter(isCredentialConfirmCause)).toEqual([
+      "confirm.mcp-sign-in",
+      "confirm.mcp-credential",
+    ]);
+    expect(isCredentialConfirmCause("budget.delegation-children")).toBe(false);
   });
 });
 

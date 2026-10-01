@@ -48,4 +48,10 @@ server.registerTool(
   }),
 );
 
+// One result well past the 1 MiB stdio limit VC-8 had, and inside the 8 MiB
+// bound VC-469 set: the message must cross the pipe as one frame.
+server.registerTool("fixture_large", { description: "Returns about 1.1 MB of text" }, async () => ({
+  content: [{ type: "text", text: "x".repeat(1_100_000) }],
+}));
+
 await server.connect(new StdioServerTransport());

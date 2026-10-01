@@ -79,8 +79,10 @@ import {
   askUserInteractionId,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   isBudgetCause,
   isConfirmCause,
+  isCredentialConfirmCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -1538,11 +1540,16 @@ class PiBinding implements BindingHandle {
     // interaction id — under a shared prefix the second `opened` emit would
     // dedupe against the first and park a question nobody was shown. See
     // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
+    // A credential question (VC-470) has a fourth, because it can follow a
+    // confirmation on the same tool call: `mcp_install` confirms the install,
+    // then asks the person to sign in.
     const interactionId = isBudgetCause(request.cause)
       ? budgetAskInteractionId(request.toolCallId)
-      : isConfirmCause(request.cause)
-        ? confirmAskInteractionId(request.toolCallId)
-        : askInteractionId(request.toolCallId);
+      : isCredentialConfirmCause(request.cause)
+        ? credentialAskInteractionId(request.toolCallId)
+        : isConfirmCause(request.cause)
+          ? confirmAskInteractionId(request.toolCallId)
+          : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",

@@ -412,15 +412,6 @@ async function materializeSwitchedOnWorktree(
  * boundary either way — the shared envelope (`registerGuardedIpcHandlers`)
  * catches and converts every handler's throw/rejection.
  */
-/** Whether an IPC value is an object carrying a string `id` (an editor draft). */
-function isRecordWithId(value: unknown): value is { id: string } {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as Record<string, unknown>)["id"] === "string"
-  );
-}
-
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
@@ -515,8 +506,7 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
-  /** Sign-ins waiting on a browser, by server id, so the pane can cancel one. */
-  const mcpSignIns = new Map<string, AbortController>();
+
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
     // renderers do: coverage says whether an answer can be trusted at all, and
@@ -839,24 +829,17 @@ export function registerDataIpcHandlers(
     "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
     "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
     "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
-    // A sign-in waits on the person's browser for up to five minutes, so the
-    // pane can stop it: one controller per server, dropped when it settles.
+    // A sign-in waits on the person's browser for up to five minutes. It is
+    // not tied to this request: the pane's Cancel stops it for everyone
+    // waiting on it, an agent's question included.
     "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
-      const key = input.serverId ?? (isRecordWithId(input.server) ? input.server.id : "");
-      mcpSignIns.get(key)?.abort();
-      const controller = new AbortController();
-      mcpSignIns.set(key, controller);
-      try {
-        const outcome = await mcpSettings.signIn({ ...input, signal: controller.signal });
-        return outcome.ok
-          ? { ok: true, message: outcome.message }
-          : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
-      } finally {
-        if (mcpSignIns.get(key) === controller) mcpSignIns.delete(key);
-      }
+      const outcome = await mcpSettings.signIn(input);
+      return outcome.ok
+        ? { ok: true, message: outcome.message }
+        : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
     },
     "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => {
-      mcpSignIns.get(input.serverId)?.abort();
+      mcpSettings.cancelSignIn(input);
       return { ok: true as const };
     },
     "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),

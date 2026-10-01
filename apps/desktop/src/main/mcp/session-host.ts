@@ -83,6 +83,50 @@ function errorResult(text: string): RuntimeMcpCallResult {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+/** What the person decided about a blocked call, before it is said to the model. */
+type RouteDecision =
+  | { kind: "retry" }
+  | { kind: "nobody" }
+  | { kind: "unasked" }
+  | { kind: "declined" }
+  | { kind: "failed"; message: string };
+
+/** The result a call that was not retried reads as. Names slots, never values. */
+function decisionText(
+  decision: Exclude<RouteDecision, { kind: "retry" }>,
+  server: McpServerDraft,
+  block: McpConnectionBlock,
+  request: RuntimeMcpCall,
+): string {
+  const name = safeSummary(server.name, "The server");
+  const tool = request.toolName;
+  switch (decision.kind) {
+    case "failed":
+      return `${decision.message} ${tool} was not called.`;
+    case "unasked":
+      return `Volli could not put this in front of anyone, so ${tool} was not called.`;
+    case "declined":
+      return block.kind === "sign-in"
+        ? `The person driving declined to sign in to ${name}, so ${tool} was not called.`
+        : `The person driving declined to ${block.rejected === true ? "replace" : "add"} ${block.missing.join(", ")} for ${name}, so ${tool} was not called.`;
+    case "nobody":
+      return block.kind === "sign-in"
+        ? `${name} needs a person to sign in before ${tool} can run, and nobody could be asked from this Session. A person can sign in from Settings \u2192 Configure \u2192 MCP Servers. The call was not made.`
+        : `${name} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${tool} can run, and only a person can ${block.rejected === true ? "replace" : "add"} it, in Settings \u2192 Configure \u2192 MCP Servers. Nobody could be asked from this Session. The call was not made.`;
+  }
+}
+
+/** The result a retried call reads as when it was blocked again. */
+function stillBlockedText(server: McpServerDraft, block: McpConnectionBlock): string {
+  const name = safeSummary(server.name, "The server");
+  if (block.kind === "sign-in") {
+    return `${name} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 Configure \u2192 MCP Servers.`;
+  }
+  return block.rejected === true
+    ? `${name} still rejects ${block.missing.join(", ")}, so the call was not made. Only a person can replace it, in Settings \u2192 Configure \u2192 MCP Servers.`
+    : `${name} is still missing ${block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers.`;
+}
+
 /** Every live host, so an app quit can close the ones a Session teardown missed. */
 const LIVE_HOSTS = new Set<McpSessionHost>();
 
@@ -227,7 +271,8 @@ function convertResult(
   const converted: RuntimeMcpCallResult = {
     content,
     ...(structuredContent === undefined ? {} : { structuredContent }),
-    isError: result.isError ?? false,
+    // pi-mcp does not validate the flag; only a literal `true` is an error.
+    isError: result.isError === true,
   };
   if (JSON.stringify(converted).length > MCP_RESULT_MAX_CHARS) {
     throw new Error("MCP result exceeded the safe size limit");
@@ -283,6 +328,8 @@ export class McpSessionHost {
   readonly #revision: (serverId: string) => number;
   readonly #signIn: McpSessionHostOptions["signIn"];
   readonly #clients = new Map<string, ClientEntry>();
+  /** Questions in front of the person, by server and kind, shared by parallel calls. */
+  readonly #deciding = new Map<string, Promise<RouteDecision>>();
   /** Retired clients still draining or closing; owned here so `close()` can reach them. */
   readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
@@ -399,7 +446,7 @@ export class McpSessionHost {
    * Returns the retried call's own result when the person provided what was
    * missing; otherwise a result saying what happened — declined, still
    * missing, nobody to ask. Nothing here carries a value: the question names
-   * the server, the tool and the slot.
+   * the server, its endpoint, the tool and the slot.
    */
   routed(call: RuntimeMcpPort["call"]): McpHostPort {
     return {
@@ -414,43 +461,69 @@ export class McpSessionHost {
         const server = this.#servers.get(request.serverId);
         // Unreachable: a blocked call named a server this host bound.
         if (server === undefined) throw new Error(SAFE_UNAVAILABLE);
-        const routed = await this.#route(server, blocked, request, signal, ask);
-        if (routed !== "retry") return routed;
+        const decision = await this.#decide(server, blocked, request, signal, ask);
+        if (decision.kind !== "retry")
+          return errorResult(decisionText(decision, server, blocked, request));
         try {
           return await call(request, signal);
         } catch (error) {
           if (!(error instanceof McpCallBlocked)) throw error;
-          const name = safeSummary(server.name, "The server");
-          return errorResult(
-            error.block.kind === "sign-in"
-              ? `${name} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 Configure \u2192 MCP Servers.`
-              : `${name} is still missing ${error.block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers.`,
-          );
+          return errorResult(stillBlockedText(server, error.block));
         }
       },
     };
   }
 
   /**
-   * Put a blocked call in front of the person driving, and say what happened.
-   * Returns `"retry"` only when the person provided what was missing.
+   * What the person decided about one blocked server.
+   *
+   * Calls blocked on the same thing at the same time share one question: a
+   * person asked to sign in to one server once, not once per parallel call.
+   * The first call's question is the one shown; the others wait on its answer
+   * (each with its own signal) and then retry or report on their own.
    */
-  async #route(
+  #decide(
     server: McpServerDraft,
     block: McpConnectionBlock,
     request: RuntimeMcpCall,
     signal: AbortSignal,
     ask: McpHostAsk | undefined,
-  ): Promise<RuntimeMcpCallResult | "retry"> {
+  ): Promise<RouteDecision> {
+    const key = `${server.id}\u0000${block.kind}`;
+    let pending = this.#deciding.get(key);
+    if (pending === undefined) {
+      pending = this.#ask(server, block, request, signal, ask).finally(() => {
+        if (this.#deciding.get(key) === pending) this.#deciding.delete(key);
+      });
+      this.#deciding.set(key, pending);
+    }
+    // A joiner whose own signal is still live is not stopped by the first
+    // caller giving up: it reads as a question nobody could answer.
+    return untilAborted(pending, signal).catch((error: unknown) => {
+      if (signal.aborted) throw error;
+      return { kind: "unasked" } as const;
+    });
+  }
+
+  /** Put one blocked server in front of the person driving, and run the sign-in they allow. */
+  async #ask(
+    server: McpServerDraft,
+    block: McpConnectionBlock,
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    ask: McpHostAsk | undefined,
+  ): Promise<RouteDecision> {
     const name = safeSummary(server.name, "The server");
     const signIn = block.kind === "sign-in" ? this.#signIn : undefined;
     if (ask === undefined || (block.kind === "sign-in" && signIn === undefined)) {
-      return errorResult(
-        block.kind === "sign-in"
-          ? `${name} needs a person to sign in before ${request.toolName} can run, and nobody could be asked from this Session. A person can sign in from Settings \u2192 Configure \u2192 MCP Servers. The call was not made.`
-          : `${name} needs ${block.missing.join(", ")} before ${request.toolName} can run, and only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers. Nobody could be asked from this Session. The call was not made.`,
-      );
+      return { kind: "nobody" };
     }
+    // The endpoint is named beside the name the agent chose: allowing opens
+    // whatever authorization page that endpoint's metadata names.
+    const where =
+      server.transport.type === "streamable-http"
+        ? ` (${safeSummary(new URL(server.transport.url).origin, "remote")})`
+        : "";
     let choice: RuntimeAskChoice;
     try {
       choice = await ask(
@@ -460,7 +533,7 @@ export class McpSessionHost {
               tool: request.toolName,
               toolCallId: request.toolCallId,
               turnId: null,
-              reason: `${name} needs you to sign in before ${request.toolName} can run${block.insufficientScope ? ", with more access than it was granted" : ""}. Allowing opens ${name}'s sign-in page in your browser; the agent learns only whether the sign-in worked.`,
+              reason: `${name}${where} needs you to sign in before ${request.toolName} can run${block.insufficientScope ? ", with more access than it was granted" : ""}. Allowing opens its sign-in page in your browser; the agent learns only whether the sign-in worked.`,
               trip: "confirm",
               overridable: true,
             }
@@ -469,7 +542,7 @@ export class McpSessionHost {
               tool: request.toolName,
               toolCallId: request.toolCallId,
               turnId: null,
-              reason: `${name} needs ${block.missing.join(", ")} before ${request.toolName} can run. Add it in Settings \u2192 Configure \u2192 MCP Servers, then allow to retry the call. The agent never sees the value.`,
+              reason: `${name}${where} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${request.toolName} can run. ${block.rejected === true ? "Replace" : "Add"} it in Settings \u2192 Configure \u2192 MCP Servers, then allow to retry the call. The agent never sees the value.`,
               trip: "confirm",
               overridable: true,
             },
@@ -477,23 +550,15 @@ export class McpSessionHost {
       );
     } catch {
       if (signal.aborted) throw signal.reason;
-      return errorResult(
-        `Volli could not put this in front of anyone, so ${request.toolName} was not called.`,
-      );
+      return { kind: "unasked" };
     }
-    if (choice !== "allow") {
-      return errorResult(
-        block.kind === "sign-in"
-          ? `The person driving declined to sign in to ${name}, so ${request.toolName} was not called.`
-          : `The person driving declined to add ${block.missing.join(", ")} for ${name}, so ${request.toolName} was not called.`,
-      );
-    }
+    if (choice !== "allow") return { kind: "declined" };
     if (signIn !== undefined) {
       const outcome = await signIn(server, signal);
       if (signal.aborted) throw signal.reason;
-      if (!outcome.ok) return errorResult(`${outcome.message} ${request.toolName} was not called.`);
+      if (!outcome.ok) return { kind: "failed", message: outcome.message };
     }
-    return "retry";
+    return { kind: "retry" };
   }
 
   async close(): Promise<void> {

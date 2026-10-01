@@ -506,6 +506,17 @@ export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCau
 }
 
 /**
+ * Whether a confirmation is a credential question (VC-470): a sign-in, or a
+ * value only a person can supply. These can follow another confirmation on
+ * the same tool call, so they are asked under their own interaction id.
+ */
+export function isCredentialConfirmCause(
+  cause: AuthorityDenialCause,
+): cause is "confirm.mcp-sign-in" | "confirm.mcp-credential" {
+  return cause === "confirm.mcp-sign-in" || cause === "confirm.mcp-credential";
+}
+
+/**
  * Why a call was refused, once a refusal is a durable fact rather than a string.
  *
  * Wider than {@link AuthorityRuleId} by two families, because the gate can

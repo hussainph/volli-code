@@ -12,7 +12,7 @@
  *    driving (`confirm.mcp-sign-in` / `confirm.mcp-credential`), and the agent
  *    is told an outcome — signed in, declined, still missing — never a value.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +28,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { createAgentToolDoor, type VerbBudgetAsk } from "../agent-tool-door";
 import { listMcpOperations } from "../db/mcp-operations-repo";
 import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import { FileMcpCredentialStore, MemoryMcpCredentialStore } from "./credential-store";
 import {
   McpCredentialMissingError,
@@ -146,6 +147,29 @@ async function headerServer(expected: string) {
   return { url: `http://127.0.0.1:${address.port}/mcp`, received };
 }
 
+/** A bare HTTP server answering every request with `respond`, recording headers. */
+async function rawServer(
+  respond: (request: IncomingMessage, response: import("node:http").ServerResponse) => void,
+) {
+  const received: string[] = [];
+  const server: Server = createServer((request, response) => {
+    received.push(JSON.stringify(request.headers));
+    request.resume();
+    request.on("end", () => respond(request, response));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("no address");
+  closers.push(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  return { url: `http://127.0.0.1:${address.port}/mcp`, received };
+}
+
 function harness(environment: Record<string, string> = {}) {
   const store = new FileMcpCredentialStore(join(dir, "mcp-credentials.json"));
   const broker = new McpOAuthBroker({ store, openExternal: approveInBrowser });
@@ -177,10 +201,15 @@ function harness(environment: Record<string, string> = {}) {
     mcp: () => settings,
   });
   let calls = 0;
-  const verb = (name: string, input: Record<string, unknown>, ask?: VerbBudgetAsk) => {
+  const verb = (
+    name: string,
+    input: Record<string, unknown>,
+    ask?: VerbBudgetAsk,
+    caller: RuntimeSessionIdentity = CALLER,
+  ) => {
     calls += 1;
     return door(
-      CALLER,
+      caller,
       { verb: name as never, input, toolCallId: `tc-${calls}` },
       new AbortController().signal,
       ask,
@@ -269,12 +298,14 @@ describe("a header reference reaches its server and nothing else", () => {
       JSON.stringify([listed, refreshed, reinstalled, called]),
       JSON.stringify(seen),
       // A reference is stored as a reference: the value is not on disk at all.
-      readFileSync(join(dir, "mcp-credentials.json"), "utf8").toString(),
+      existsSync(join(dir, "mcp-credentials.json"))
+        ? readFileSync(join(dir, "mcp-credentials.json"), "utf8")
+        : "",
     ];
     for (const text of everywhere) expect(text).not.toContain(sentinel);
   });
 
-  it("does not follow an agent's re-install to a different endpoint: the person's header is dropped, not forwarded", async () => {
+  it("refuses an agent's re-install to a different endpoint while a person's credential is set: nothing moves, nothing is lost", async () => {
     const sentinel = `tok-${Math.random().toString(36).slice(2)}-SENTINEL`;
     const original = await headerServer(`Bearer ${sentinel}`);
     const elsewhere = await headerServer("Bearer none");
@@ -296,10 +327,7 @@ describe("a header reference reaches its server and nothing else", () => {
     });
     expect(h.store.read("api")?.secrets).toEqual({ "header:authorization": `Bearer ${sentinel}` });
 
-    const { ask, seen } = asking({
-      "confirm.mcp-install": "allow",
-      "confirm.mcp-credential": "refuse",
-    });
+    const { ask, seen } = asking({ "confirm.mcp-install": "allow" });
     const preview = await h.verb("mcp.install", {
       id: "api",
       name: "Header API",
@@ -311,13 +339,15 @@ describe("a header reference reaches its server and nothing else", () => {
       ask,
     );
 
-    expect(preview.text).toMatch(/do not follow it to a different endpoint/);
-    expect(seen[0]?.reason).toMatch(/would be deleted/);
-    // The new endpoint never saw the person's credential…
-    expect(elsewhere.received.every((header) => !header.includes(sentinel))).toBe(true);
-    // …which also means it refused the unauthenticated connection, so nothing
-    // was installed, and the person's original configuration and secret stand.
-    expect(result.text).toMatch(/Could not install Header API/);
+    for (const text of [preview.text, result.text]) {
+      expect(text).toMatch(
+        /cannot move them to a different endpoint or command\. Nothing was changed\./,
+      );
+    }
+    // Refused before anything was asked or connected: the new endpoint never
+    // heard from Volli, and the person was not asked to approve a move.
+    expect(seen).toEqual([]);
+    expect(elsewhere.received).toEqual([]);
     expect(h.settings.list("p1")[0]?.transport).toMatchObject({ url: original.url });
     expect(h.store.read("api")?.secrets).toEqual({ "header:authorization": `Bearer ${sentinel}` });
     expect(JSON.stringify([preview, result, seen, listMcpOperations(ctx.db, "p1")])).not.toContain(
@@ -383,6 +413,107 @@ function keyedServer(url: string): McpServerDraft {
     },
   };
 }
+
+/** A remote server keyed by an `X-Api-Key` header read from `${API_KEY}`. */
+function keyed(url: string): McpServerDraft {
+  return {
+    id: "keyed",
+    name: "Keyed",
+    enabled: true,
+    transport: {
+      type: "streamable-http",
+      url,
+      headers: [{ name: "X-Api-Key", source: { kind: "reference", template: "${API_KEY}" } }],
+    },
+  };
+}
+
+describe("where a header value can and cannot go", () => {
+  it("does not follow a redirect to another origin with it", async () => {
+    const sentinel = `redirect-${Date.now()}-SENTINEL`;
+    const elsewhere = await rawServer((_request, response) => response.writeHead(500).end());
+    const redirecting = await rawServer((_request, response) =>
+      response.writeHead(307, { location: elsewhere.url }).end(),
+    );
+    const h = harness({ API_KEY: sentinel });
+
+    const result = await h.settings.test({ projectId: "p1", server: keyed(redirecting.url) });
+
+    expect(result.ok).toBe(false);
+    expect(redirecting.received.join("\n")).toContain(sentinel);
+    expect(elsewhere.received).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(sentinel);
+  });
+
+  it("keeps it out of results, records and logs when the server echoes it back in an error", async () => {
+    const sentinel = `echo-${Date.now()}-SENTINEL`;
+    const echoing = await rawServer((request, response) =>
+      response.writeHead(500).end(`bad key: ${String(request.headers["x-api-key"])}`),
+    );
+    const h = harness({ API_KEY: sentinel });
+    insertTicket(ctx.db, testTicket("p1", { id: "ticket-1", ticketNumber: 1, title: "Work" }));
+    const ticketCaller: RuntimeSessionIdentity = {
+      ...CALLER,
+      role: "ticket",
+      sessionId: "ticket-session",
+      ticketId: "ticket-1",
+    };
+
+    const tested = await h.settings.test({ projectId: "p1", server: keyed(echoing.url) });
+    const installed = await h.verb(
+      "mcp.install",
+      { id: "keyed", name: "Keyed", url: echoing.url, confirm: "apply" },
+      undefined,
+      ticketCaller,
+    );
+    const called = await h
+      .host([keyed(echoing.url)])
+      .port.call(
+        { serverId: "keyed", toolName: "lookup", arguments: {}, toolCallId: "c1" },
+        new AbortController().signal,
+      );
+
+    expect(echoing.received.join("\n")).toContain(sentinel);
+    // The install failure was recorded — in mcp_operations and, for a Ticket
+    // caller, as a ticket comment — and none of it carries the echoed value.
+    expect(listMcpOperations(ctx.db, "p1")).toHaveLength(1);
+    expect(databaseText()).toContain("Could not install Keyed");
+    for (const text of [
+      JSON.stringify([tested, installed, called]),
+      databaseText(),
+      logged.join("\n"),
+    ]) {
+      expect(text).not.toContain(sentinel);
+    }
+  });
+
+  it("sends it to the MCP endpoint and never to the authorization server it signs in with", async () => {
+    const sentinel = `oauth-key-${Date.now()}-SENTINEL`;
+    const fixture = await startOAuthFixture();
+    closers.push(() => fixture.close());
+    const h = harness();
+    const server: McpServerDraft = {
+      id: "both",
+      name: "Both",
+      enabled: true,
+      transport: {
+        type: "streamable-http",
+        url: fixture.mcpUrl,
+        headers: [{ name: "X-Api-Key", source: { kind: "secret" } }],
+      },
+    };
+    const secrets = { "header:x-api-key": sentinel };
+
+    const signedIn = await h.settings.signIn({ projectId: "p1", server, secrets });
+    const saved = await h.settings.save({ projectId: "p1", server, secrets, enabledTools: [] });
+
+    expect(signedIn.ok).toBe(true);
+    expect(saved.ok).toBe(true);
+    expect(fixture.seen.apiKeys.mcp.length).toBeGreaterThan(0);
+    expect(new Set(fixture.seen.apiKeys.mcp)).toEqual(new Set([sentinel]));
+    expect(fixture.seen.apiKeys.elsewhere).toEqual([]);
+  });
+});
 
 describe("a missing credential is routed to the person", () => {
   const server = keyedServer;

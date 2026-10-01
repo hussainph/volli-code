@@ -114,7 +114,7 @@ export function mcpConnectionBlock(error: unknown): McpConnectionBlock | undefin
     return { kind: "credential", missing: problem.missing };
   }
   if (problem instanceof McpCredentialRejectedError) {
-    return { kind: "credential", missing: problem.rejected };
+    return { kind: "credential", missing: problem.rejected, rejected: true };
   }
   return undefined;
 }

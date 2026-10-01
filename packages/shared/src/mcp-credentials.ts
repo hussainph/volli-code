@@ -362,7 +362,12 @@ export function sanitizeMcpOAuthClient(raw: unknown): McpOAuthClientSanitization
         reason: "the OAuth callback URL must be http on localhost, 127.0.0.1 or [::1]",
       };
     }
-    if (url.search.length > 0 || url.hash.length > 0 || url.username.length > 0) {
+    if (
+      url.search.length > 0 ||
+      url.hash.length > 0 ||
+      url.username.length > 0 ||
+      url.password.length > 0
+    ) {
       return {
         ok: false,
         reason: "the OAuth callback URL must be a plain loopback address and path",
@@ -424,4 +429,9 @@ export interface McpServerAccess {
  */
 export type McpConnectionBlock =
   | { kind: "sign-in"; insufficientScope: boolean }
-  | { kind: "credential"; missing: readonly string[] };
+  | {
+      kind: "credential";
+      missing: readonly string[];
+      /** The server refused the value it was sent, rather than there being none. */
+      rejected?: true;
+    };

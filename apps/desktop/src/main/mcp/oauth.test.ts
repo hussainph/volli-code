@@ -43,15 +43,25 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function harness(options: { environment?: Record<string, string> } = {}) {
+function harness(
+  options: {
+    environment?: Record<string, string>;
+    requestTimeoutMs?: number;
+    /** Stand-in for the browser; approves at once unless replaced. */
+    browser?: (url: string) => Promise<void>;
+  } = {},
+) {
   const store = new FileMcpCredentialStore(join(dir, "mcp-credentials.json"));
   const opened: string[] = [];
   const broker = new McpOAuthBroker({
     store,
     openExternal: async (url) => {
       opened.push(url);
-      await approveInBrowser(url);
+      await (options.browser ?? approveInBrowser)(url);
     },
+    ...(options.requestTimeoutMs === undefined
+      ? {}
+      : { requestTimeoutMs: options.requestTimeoutMs }),
   });
   const settings = new McpSettingsService({
     db: ctx.db,
@@ -390,6 +400,83 @@ describe("signing in to a remote MCP server", () => {
       ok: false,
       message: expect.stringContaining("is not a server Volli signs in to"),
     });
+  });
+});
+
+describe("signing in — scope, time limits and who may stop it", () => {
+  it("asks for the scope a person configured instead of the scopes the server advertises", async () => {
+    fixture = await startOAuthFixture();
+    const h = harness();
+    const server = remote(fixture.mcpUrl, { scope: "read admin" });
+
+    await signedInServer(h, server);
+
+    expect(fixture.seen.authorizations[0]?.scope?.split(" ").toSorted()).toEqual(["admin", "read"]);
+    // With the scope granted up front, the admin tool needs no step-up.
+    const { ask } = asking("allow");
+    await expect(
+      h.host(server).port.call(call("admin_op"), new AbortController().signal, ask),
+    ).resolves.toMatchObject({ isError: false });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("gives up on a refresh the authorization server never answers, without calling it a sign-in", async () => {
+    fixture = await startOAuthFixture({ hangRefresh: true });
+    const h = harness({ requestTimeoutMs: 300 });
+    const server = await signedInServer(h, remote(fixture.mcpUrl));
+    fixture.expireAccessTokens();
+
+    const started = Date.now();
+    const result = await h.host(server).port.call(call("whoami"), new AbortController().signal);
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "MCP server Fixture OAuth call failed." }],
+      isError: true,
+    });
+    // A hung request says nothing about the grant: no sign-in is demanded.
+    expect(h.broker.signInState(server)).toBe("signed-in");
+  });
+
+  it("keeps a sign-in running for the person when the agent that asked stops waiting, and stops it on Cancel", async () => {
+    fixture = await startOAuthFixture();
+    const browserOpened = Promise.withResolvers<void>();
+    // The page opens; the person has not approved yet.
+    const h = harness({ browser: async () => browserOpened.resolve() });
+    const server = remote(fixture.mcpUrl);
+
+    const agent = new AbortController();
+    const agentWait = h.settings.signIn({ projectId: "p1", server, signal: agent.signal });
+    const personWait = h.settings.signIn({ projectId: "p1", server });
+    await browserOpened.promise;
+    agent.abort(new Error("turn interrupted"));
+
+    await expect(agentWait).resolves.toMatchObject({ ok: false, cancelled: true });
+    expect(h.broker.signingIn(server.id)).toBe(true);
+
+    h.settings.cancelSignIn({ projectId: "p1", serverId: server.id });
+    await expect(personWait).resolves.toEqual({
+      ok: false,
+      cancelled: true,
+      message: "The sign-in to Fixture OAuth was cancelled.",
+    });
+    await vi.waitFor(() => expect(h.broker.signingIn(server.id)).toBe(false));
+    expect(h.opened).toHaveLength(1);
+  });
+
+  it("stops a sign-in nobody is waiting on any more", async () => {
+    fixture = await startOAuthFixture();
+    const browserOpened = Promise.withResolvers<void>();
+    const h = harness({ browser: async () => browserOpened.resolve() });
+    const server = remote(fixture.mcpUrl);
+
+    const only = new AbortController();
+    const wait = h.settings.signIn({ projectId: "p1", server, signal: only.signal });
+    await browserOpened.promise;
+    only.abort(new Error("gone"));
+
+    await expect(wait).resolves.toMatchObject({ ok: false, cancelled: true });
+    await vi.waitFor(() => expect(h.broker.signingIn(server.id)).toBe(false));
   });
 });
 

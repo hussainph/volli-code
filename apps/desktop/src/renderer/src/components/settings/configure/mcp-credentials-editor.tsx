@@ -161,8 +161,9 @@ export function applyCredentials(
       secrets[MCP_OAUTH_CLIENT_SECRET_SLOT] = draft.secret;
     }
   }
-  const port = Number(draft.callbackPort);
-  if (draft.callbackPort.trim().length > 0 && Number.isInteger(port)) oauth.callbackPort = port;
+  // Passed through as typed, so a port that is not one is refused by main
+  // with its reason rather than silently dropped here.
+  if (draft.callbackPort.trim().length > 0) oauth.callbackPort = Number(draft.callbackPort.trim());
   if (draft.callbackUrl.trim().length > 0) oauth.callbackUrl = draft.callbackUrl.trim();
   if (draft.scope.trim().length > 0) oauth.scope = draft.scope.trim();
   return {

@@ -211,6 +211,7 @@ describe("sanitizeMcpOAuthClient", () => {
     [{ callbackUrl: "http://127.0.0.1/cb?x=1" }, "plain loopback"],
     [{ callbackUrl: "http://127.0.0.1/cb#x" }, "plain loopback"],
     [{ callbackUrl: "http://user@127.0.0.1/cb" }, "plain loopback"],
+    [{ callbackUrl: "http://:secret@127.0.0.1/cb" }, "plain loopback"],
   ])("refuses %j", (raw, reason) => {
     const result = sanitizeMcpOAuthClient(raw);
     expect(result.ok).toBe(false);

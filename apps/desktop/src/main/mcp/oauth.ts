@@ -32,7 +32,6 @@
  */
 import type { AuthProvider, McpFetch, UnauthorizedContext } from "@earendil-works/pi-mcp";
 import {
-  adaptOAuthProvider,
   authorizeMcp,
   discoverAuthorizationServerMetadata,
   McpOAuthAuthorizationRequiredError,
@@ -52,6 +51,7 @@ import {
   type OAuthTokens,
 } from "@earendil-works/pi-mcp/oauth";
 import {
+  MCP_CONNECTION_TIMEOUT_MS,
   mcpServerUsesOAuth,
   type McpOAuthClientConfig,
   type McpServerDraft,
@@ -209,6 +209,19 @@ export interface McpOAuthBrokerOptions {
   now?: () => number;
   /** How long a sign-in waits for the browser. */
   signInTimeoutMs?: number;
+  /**
+   * How long one request to an authorization server may take — discovery,
+   * registration, a token exchange or refresh. Defaults to the MCP connection
+   * limit: a refresh that hangs holds every call to that server behind it.
+   */
+  requestTimeoutMs?: number;
+}
+
+/** One sign-in in flight, and who is waiting on it. */
+interface SignInRun {
+  readonly outcome: Promise<McpSignInOutcome>;
+  readonly controller: AbortController;
+  waiters: number;
 }
 
 /**
@@ -220,16 +233,30 @@ export class McpOAuthBroker {
   readonly #openExternal: (url: string) => Promise<void>;
   readonly #now: () => number;
   readonly #timeoutMs: number;
+  /**
+   * Every request this broker makes to an authorization server: the global
+   * fetch, bounded. Never the transport's fetch, which is the one that may
+   * carry the person's headers to the MCP endpoint.
+   */
+  readonly #fetch: McpFetch;
   /** One refresh per server at a time, shared by every connection that was refused. */
   readonly #refreshing = new Map<string, Promise<void>>();
   /** One sign-in per server at a time: Settings and an agent's question join it. */
-  readonly #signingIn = new Map<string, Promise<McpSignInOutcome>>();
+  readonly #signingIn = new Map<string, SignInRun>();
 
   constructor(options: McpOAuthBrokerOptions) {
     this.#store = options.store;
     this.#openExternal = options.openExternal;
     this.#now = options.now ?? Date.now;
     this.#timeoutMs = options.signInTimeoutMs ?? MCP_SIGN_IN_TIMEOUT_MS;
+    const requestTimeoutMs = options.requestTimeoutMs ?? MCP_CONNECTION_TIMEOUT_MS;
+    this.#fetch = (input, init) => {
+      const deadline = AbortSignal.timeout(requestTimeoutMs);
+      return fetch(input, {
+        ...init,
+        signal: init?.signal == null ? deadline : AbortSignal.any([init.signal, deadline]),
+      });
+    };
   }
 
   /** Where one server stands, without disclosing anything stored. */
@@ -310,13 +337,58 @@ export class McpOAuthBroker {
       probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
     },
   ): Promise<McpSignInOutcome> {
-    const existing = this.#signingIn.get(server.id);
-    if (existing !== undefined) return existing;
-    const running = this.#signIn(server, options).finally(() => {
-      this.#signingIn.delete(server.id);
+    // One sign-in per server, whoever asked for it. Each caller waits on it
+    // with its own signal: a caller that stops waiting (an agent's turn
+    // interrupted, say) leaves it running for the others, and only when every
+    // waiter has gone — or a person presses Cancel (`cancelSignIn`) — does the
+    // sign-in itself stop.
+    let run = this.#signingIn.get(server.id);
+    if (run === undefined) {
+      const controller = new AbortController();
+      const created: SignInRun = {
+        controller,
+        waiters: 0,
+        outcome: this.#signIn(server, { ...options, signal: controller.signal }).finally(() => {
+          if (this.#signingIn.get(server.id) === created) this.#signingIn.delete(server.id);
+        }),
+      };
+      run = created;
+      this.#signingIn.set(server.id, run);
+    }
+    const joined = run;
+    joined.waiters += 1;
+    const cancelled: McpSignInOutcome = {
+      ok: false,
+      cancelled: true,
+      message: `The sign-in to ${server.name} was cancelled.`,
+    };
+    return new Promise<McpSignInOutcome>((resolve) => {
+      let settled = false;
+      const leave = (outcome: McpSignInOutcome): void => {
+        if (settled) return;
+        settled = true;
+        options.signal.removeEventListener("abort", abandon);
+        joined.waiters -= 1;
+        resolve(outcome);
+      };
+      function abandon(): void {
+        leave(cancelled);
+        if (joined.waiters === 0) {
+          joined.controller.abort(new Error("Nobody is waiting on the sign-in."));
+        }
+      }
+      if (options.signal.aborted) {
+        abandon();
+        return;
+      }
+      options.signal.addEventListener("abort", abandon, { once: true });
+      void joined.outcome.then(leave);
     });
-    this.#signingIn.set(server.id, running);
-    return running;
+  }
+
+  /** Stop a sign-in waiting on the browser, for everyone waiting on it — a person's Cancel. */
+  cancelSignIn(serverId: string): void {
+    this.#signingIn.get(serverId)?.controller.abort(new Error("The sign-in was cancelled."));
   }
 
   async #signIn(
@@ -371,6 +443,7 @@ export class McpOAuthBroker {
         )?.scopes_supported?.join(" ");
         outcome = await authorizeMcp(provider, {
           serverUrl: target.url,
+          fetch: this.#fetch,
           scope: scopeSet(
             target.oauth?.scope ?? advertised,
             stored?.tokens?.["scope"] as string | undefined,
@@ -383,7 +456,7 @@ export class McpOAuthBroker {
         });
       } else {
         try {
-          await options.probe(adaptOAuthProvider(provider), options.signal);
+          await options.probe(this.#probeAuth(provider, target.oauth?.scope), options.signal);
           outcome = "AUTHORIZED";
         } catch (error) {
           if (!authorizationRequired(error)) throw error;
@@ -416,7 +489,11 @@ export class McpOAuthBroker {
               : `The sign-in to ${server.name} was not completed in the browser.`,
           );
         });
-        await authorizeMcp(provider, { serverUrl: target.url, authorizationCode: code });
+        await authorizeMcp(provider, {
+          serverUrl: target.url,
+          authorizationCode: code,
+          fetch: this.#fetch,
+        });
       }
 
       // The tokens are in; the refusal they answer is not outstanding any more.
@@ -483,6 +560,48 @@ export class McpOAuthBroker {
     return OAuthCallbackServer.listen(options);
   }
 
+  /**
+   * The auth provider a sign-in's probe connects with: pi-mcp's
+   * `adaptOAuthProvider`, with two differences. It asks for the scope the
+   * person configured (plus whatever the challenge names) rather than letting
+   * the server's advertised scopes win, and every request it makes goes
+   * through this broker's bounded fetch, never the transport's.
+   */
+  #probeAuth(provider: McpOAuthProvider, configuredScope: string | undefined): AuthProvider {
+    let inFlight: Promise<void> | undefined;
+    return {
+      token: async () => (await provider.tokens())?.access_token,
+      onUnauthorized: async (context) => {
+        const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
+        const insufficientScope = challenge.error === "insufficient_scope";
+        if (!insufficientScope && inFlight === undefined && context.token !== undefined) {
+          const current = (await provider.tokens())?.access_token;
+          if (current !== undefined && current !== context.token) return;
+        }
+        const scope =
+          configuredScope === undefined
+            ? challenge.scope
+            : scopeSet(configuredScope, challenge.scope);
+        inFlight ??= authorizeMcp(provider, {
+          serverUrl: context.serverUrl,
+          fetch: this.#fetch,
+          skipRefresh: insufficientScope,
+          ...(scope === undefined ? {} : { scope }),
+          ...(challenge.resourceMetadataUrl === undefined
+            ? {}
+            : { resourceMetadataUrl: challenge.resourceMetadataUrl }),
+        })
+          .then((result) => {
+            if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+          })
+          .finally(() => {
+            inFlight = undefined;
+          });
+        await inFlight;
+      },
+    };
+  }
+
   #tokens(server: McpOAuthServer): McpStoredOAuthState["tokens"] {
     const oauth = this.#store.read(server.id)?.oauth;
     return oauth?.serverUrl === String(new URL(server.url)) ? oauth.tokens : undefined;
@@ -510,32 +629,30 @@ export class McpOAuthBroker {
     if (current !== undefined && current.access_token !== context.token) return;
     if (typeof current?.["refresh_token"] === "string") {
       try {
-        await this.#refresh(server, sources, context.fetch);
+        await this.#refresh(server, sources);
         return;
       } catch (error) {
-        // A network failure is not a refusal: the next call may simply work.
-        if (error instanceof TypeError) throw error;
+        // A network failure or a request that ran out its time is not a
+        // refusal: the next call may simply work.
+        if (transient(error)) throw error;
       }
     }
     this.markRefused(server, { insufficientScope: false, ...requirement });
     throw new McpSignInRequiredError(server.name, false);
   }
 
-  #refresh(server: McpOAuthServer, sources: McpCredentialSources, fetch: McpFetch): Promise<void> {
+  #refresh(server: McpOAuthServer, sources: McpCredentialSources): Promise<void> {
     const existing = this.#refreshing.get(server.id);
     if (existing !== undefined) return existing;
-    const running = this.#refreshOnce(server, sources, fetch).finally(() => {
+    const running = this.#refreshOnce(server, sources).finally(() => {
       this.#refreshing.delete(server.id);
     });
     this.#refreshing.set(server.id, running);
     return running;
   }
 
-  async #refreshOnce(
-    server: McpOAuthServer,
-    sources: McpCredentialSources,
-    fetch: McpFetch,
-  ): Promise<void> {
+  async #refreshOnce(server: McpOAuthServer, sources: McpCredentialSources): Promise<void> {
+    const fetch = this.#fetch;
     const stored = this.#store.read(server.id)?.oauth;
     const refreshToken = stored?.tokens?.["refresh_token"];
     const discovery = stored?.discovery;
@@ -575,9 +692,10 @@ export class McpOAuthBroker {
       });
     } catch (error) {
       if (error instanceof OAuthError && error.code === "invalid_grant") {
-        // The refresh token is dead; keep the registration, drop the grant.
+        // The refresh token is dead; keep the registration, drop the grant —
+        // unless a sign-in has replaced the grant meanwhile.
         this.#store.update(server.id, (current) =>
-          current?.oauth === undefined
+          current?.oauth === undefined || current.oauth.tokens?.["refresh_token"] !== refreshToken
             ? current
             : {
                 ...current,
@@ -589,8 +707,10 @@ export class McpOAuthBroker {
     }
     const expiresAt =
       tokens.expires_in === undefined ? undefined : this.#now() + tokens.expires_in * 1_000;
+    // Written only over the grant it refreshed: a sign-in or step-up that
+    // finished while this request was out has newer tokens, and keeps them.
     this.#store.update(server.id, (current) =>
-      current?.oauth === undefined
+      current?.oauth === undefined || current.oauth.tokens?.["refresh_token"] !== refreshToken
         ? current
         : {
             ...current,
@@ -602,6 +722,15 @@ export class McpOAuthBroker {
           },
     );
   }
+}
+
+/** A failure that says nothing about the grant: the network, or a request out of time. */
+function transient(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof DOMException &&
+      (error.name === "TimeoutError" || error.name === "AbortError"))
+  );
 }
 
 /** Whether an error means "a person has to authorize in the browser". */

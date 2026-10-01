@@ -71,8 +71,17 @@ import {
   type OpenMcpProtocolClient,
 } from "./discovery";
 
-/** The largest single stdio message a server may send. */
-export const MCP_STDIO_BUFFER_MAX_BYTES = 1 * 1_024 * 1_024;
+/**
+ * The largest single stdio message a server may send: VC-469's 8 MiB outer
+ * bound on one tool result, plus room for the JSON-RPC envelope around it.
+ */
+export const MCP_STDIO_BUFFER_MAX_BYTES = 8 * 1_024 * 1_024 + 64 * 1_024;
+/**
+ * The largest single message a Streamable HTTP server may send, on the same
+ * terms: one JSON response body, or one SSE event. pi-mcp bounds an SSE event
+ * itself but reads a JSON body whole, so {@link boundedFetch} bounds those.
+ */
+export const MCP_HTTP_MESSAGE_MAX_BYTES = MCP_STDIO_BUFFER_MAX_BYTES;
 /** The deepest a catalog read follows `nextCursor`. */
 export const MCP_LIST_MAX_PAGES = 64;
 
@@ -122,7 +131,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** One `tools/list` page, checked the way the SDK this replaced checked it. */
+/**
+ * One `tools/list` page, checked the way the SDK this replaced checked it.
+ *
+ * Each tool is passed on whole, `outputSchema` and annotations included, for
+ * discovery to judge; only its shape is checked here.
+ */
 function toolsPage(value: unknown): { tools: McpProtocolTool[]; nextCursor?: string } {
   if (!isRecord(value) || !Array.isArray(value["tools"])) {
     throw new McpError(-32600, "Invalid MCP tools/list result");
@@ -132,6 +146,7 @@ function toolsPage(value: unknown): { tools: McpProtocolTool[]; nextCursor?: str
       !isRecord(tool) ||
       typeof tool["name"] !== "string" ||
       !isRecord(tool["inputSchema"]) ||
+      (tool["outputSchema"] !== undefined && !isRecord(tool["outputSchema"])) ||
       (tool["description"] !== undefined && typeof tool["description"] !== "string")
     ) {
       throw new McpError(-32600, "Invalid entry in MCP tools/list result");
@@ -268,26 +283,100 @@ export interface McpConnectionCredentials {
 }
 
 /**
- * Fetch that sets the person's headers on EVERY request, resolved at the time
- * of the request.
+ * Fetch that sets the person's headers on every request TO THE SERVER'S OWN
+ * ENDPOINT, resolved at the time of the request.
  *
  * Per request rather than once at connect, for the same reason OAuth tokens are
  * read per request: a value a person stores or replaces while a Session is
  * running reaches that Session's next call, with no reattachment.
+ *
+ * Only to the endpoint, and never across a redirect. The transport hands this
+ * same fetch to the OAuth code as `context.fetch`, which uses it for discovery
+ * and token requests on hosts the server's metadata names; and an ordinary
+ * redirect would carry a custom header wherever the server pointed it. So a
+ * request for any other URL goes out bare, and a request that carries the
+ * headers follows only a method-preserving redirect (307/308) within the
+ * endpoint's own origin — any other redirect is returned to the transport,
+ * which fails the request, rather than followed with the person's values.
  */
-function credentialFetch(
+export function credentialFetch(
   server: McpServerDraft,
   sources: () => McpCredentialSources,
   base: McpFetch = (input, init) => fetch(input, init),
 ): McpFetch {
   const entries =
     server.transport.type === "streamable-http" ? server.transport.headers : undefined;
-  if (entries === undefined || entries.length === 0) return base;
-  return (input, init) => {
+  if (
+    server.transport.type !== "streamable-http" ||
+    entries === undefined ||
+    entries.length === 0
+  ) {
+    return base;
+  }
+  const endpoint = new URL(server.transport.url);
+  return async (input, init) => {
+    let target = new URL(String(input));
+    if (target.href !== endpoint.href) return base(input, init);
     const values = resolveMcpCredentialEntries(server, "header", entries, sources());
     const headers = new Headers(init?.headers);
     for (const [name, value] of Object.entries(values)) headers.set(name, value);
-    return base(input, { ...init, headers });
+    for (let hop = 0; ; hop += 1) {
+      const response = await base(target, { ...init, headers, redirect: "manual" });
+      if (response.status !== 307 && response.status !== 308) return response;
+      const location = response.headers.get("location");
+      if (location === null || hop >= 4) return response;
+      const next = new URL(location, target);
+      if (next.origin !== endpoint.origin) return response;
+      await response.body?.cancel().catch(() => undefined);
+      target = next;
+    }
+  };
+}
+
+/** Statuses whose responses carry no body, and which `new Response` refuses one for. */
+const BODILESS_STATUSES = new Set([101, 204, 205, 304]);
+
+/**
+ * Fetch whose response bodies cannot exceed `maxBytes` — except an SSE stream,
+ * which is long-lived by design and is bounded per event by the transport.
+ *
+ * pi-mcp reads a JSON response with `response.json()`, which has no limit of
+ * its own; nothing in the main process may read an unbounded body from a
+ * third party. A declared length over the bound is refused before reading, and
+ * an undeclared one stops the read at the bound.
+ */
+export function boundedFetch(base: McpFetch, maxBytes: number): McpFetch {
+  const tooLarge = (): Error => new Error(`MCP response exceeds ${maxBytes} bytes`);
+  return async (input, init) => {
+    const response = await base(input, init);
+    const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (
+      response.body === null ||
+      type === "text/event-stream" ||
+      BODILESS_STATUSES.has(response.status)
+    ) {
+      return response;
+    }
+    const declared = Number(response.headers.get("content-length") ?? NaN);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await response.body.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    let received = 0;
+    const limited = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          received += chunk.byteLength;
+          if (received > maxBytes) controller.error(tooLarge());
+          else controller.enqueue(chunk);
+        },
+      }),
+    );
+    return new Response(limited, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   };
 }
 
@@ -321,7 +410,8 @@ function transportFor(
   }
   return new StreamableHttpTransport({
     url: server.transport.url,
-    fetch: credentialFetch(server, credentials.sources),
+    fetch: boundedFetch(credentialFetch(server, credentials.sources), MCP_HTTP_MESSAGE_MAX_BYTES),
+    maxMessageBytes: MCP_HTTP_MESSAGE_MAX_BYTES,
     ...(auth === undefined ? {} : { authProvider: auth }),
   });
 }

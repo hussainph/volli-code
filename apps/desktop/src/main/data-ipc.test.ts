@@ -494,40 +494,33 @@ describe("MCP settings IPC", () => {
 });
 
 describe("MCP sign-in IPC (VC-470)", () => {
-  it("routes sign-in, sign-out and draft disposal to the service, and lets the pane cancel a waiting sign-in", async () => {
-    let seen: AbortSignal | null = null;
-    const signIn = vi.fn(
-      (input: { signal: AbortSignal }) =>
-        new Promise((resolve) => {
-          seen = input.signal;
-          input.signal.addEventListener("abort", () =>
-            resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." }),
-          );
-        }),
-    );
+  it("routes sign-in, cancel, sign-out and draft disposal to the service", async () => {
+    const finish = Promise.withResolvers<unknown>();
+    const signIn = vi.fn(() => finish.promise);
+    const cancelSignIn = vi.fn(() => {
+      finish.resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." });
+    });
     const signOut = vi.fn(() => ({ ok: true }));
     const discardDraft = vi.fn(() => ({ ok: true }));
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { mcpSettings: { signIn, signOut, discardDraft } as never },
+      { mcpSettings: { signIn, cancelSignIn, signOut, discardDraft } as never },
     );
 
     const waiting = invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
       projectId: "project-1",
       serverId: "server-1",
     });
-    expect(signIn).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: "project-1", serverId: "server-1" }),
-    );
+    expect(signIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
     expect(
       invoke("volli:mcp-cancel-sign-in" as never, { projectId: "project-1", serverId: "server-1" }),
     ).toEqual({ ok: true });
+    expect(cancelSignIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
     await expect(waiting).resolves.toEqual({
       ok: false,
       cancelled: true,
       error: "The sign-in to X was cancelled.",
     });
-    expect(seen!.aborted).toBe(true);
 
     expect(
       invoke("volli:mcp-sign-out" as never, { projectId: "project-1", serverId: "server-1" }),

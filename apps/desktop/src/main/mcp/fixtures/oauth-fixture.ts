@@ -21,6 +21,8 @@ export interface OAuthFixtureOptions {
   preRegistered?: { clientId: string; clientSecret: string; redirectUri?: string };
   /** Access-token lifetime in seconds. */
   expiresIn?: number;
+  /** Never answer a refresh-token request: an authorization server that hangs. */
+  hangRefresh?: boolean;
 }
 
 interface Grant {
@@ -44,6 +46,8 @@ export interface OAuthFixture {
     toolCalls: { name: string; token: string }[];
     /** Every Authorization header the MCP endpoint received. */
     authorizationHeaders: string[];
+    /** Every `x-api-key` header, by whether it reached `/mcp` or anywhere else. */
+    apiKeys: { mcp: string[]; elsewhere: string[] };
   };
   /** Every access token issued, so a test can look for it where it must not be. */
   readonly issuedTokens: string[];
@@ -104,6 +108,7 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
     tokenGrants: [],
     toolCalls: [],
     authorizationHeaders: [],
+    apiKeys: { mcp: [], elsewhere: [] },
   };
   let base = "";
 
@@ -197,6 +202,10 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
 
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const url = new URL(request.url ?? "/", base);
+    const apiKey = request.headers["x-api-key"];
+    if (typeof apiKey === "string") {
+      (url.pathname === "/mcp" ? seen.apiKeys.mcp : seen.apiKeys.elsewhere).push(apiKey);
+    }
     if (url.pathname === "/mcp") return handleMcp(request, response);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
       json(response, 200, {
@@ -284,6 +293,7 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
         json(response, 200, issue({ clientId, scope: stored.scope }));
         return;
       }
+      if (grantType === "refresh_token" && options.hangRefresh === true) return;
       if (grantType === "refresh_token") {
         const grant = refresh.get(form.get("refresh_token") ?? "");
         if (grant === undefined) {
