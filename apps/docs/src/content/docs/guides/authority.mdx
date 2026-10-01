@@ -27,6 +27,40 @@ in a row** or **20 denials total**. You can change either threshold. Only denial
 from rules that allow an override can be allowed; other rule violations stay
 blocked.
 
+The rules read files the same way a Scoped Session's sandbox does. A Session
+can read anywhere on your Mac except the secrets below, and writes only inside
+its workspace and the writable roots. Reading a secret is never allowed, even
+with your approval.
+
+## Contain a project’s Sessions
+
+**Containment** decides whether a Session’s tools run inside a sandbox:
+
+| Containment | Effect |
+| --- | --- |
+| **Off** | The default. Shell commands run as your macOS user, with network access. |
+| **Scoped** | Shell commands run in a macOS sandbox, and the file tools follow the same policy. Commands have no network access. |
+
+A Scoped Session can read any file except these secrets:
+
+- credential stores: `~/.ssh`, `~/.aws`, `~/.config`, `~/.pi`, `~/.gnupg`, `~/.docker`, `~/.kube`, and other agent tools’ sign-in files
+- your home folder’s top-level dotfiles, such as `~/.zshrc`, `~/.netrc` and `~/.gitconfig`
+- `~/Library/Keychains`, `~/Library/Application Support` and other app data folders
+- other users’ home folders
+- Volli’s own data: its database, MCP credentials, backups and other Sessions’ saved output. A Session can still read its own saved tool output.
+
+It can write only in its workspace, in the Git directory a ticket worktree
+commits to, and in the **Writable roots** you list. In every one of these
+locations, Git hooks, Git config, `.gitmodules` and `.volli/` stay read-only.
+In a Scoped Session, editor and agent configuration such as `.vscode/`, `.mcp.json`
+and shell profiles is read-only as well. Background shells run inside the same
+sandbox.
+
+A Scoped Session has no network access, so commands such as `pnpm install`,
+`git fetch` and `git push` fail inside it. Run those commands yourself, or
+keep containment **Off** for projects that need them. Containment needs a pinned policy, so it has no effect when
+**Rule enforcement** is **Off**.
+
 ## Understand the other controls
 
 **Decision mode — not active yet** stores whether the policy names **Ask me** or
@@ -45,10 +79,12 @@ caller can read. The inherited choices are:
 
 ## Know the enforcement boundary
 
-**Enforce** is a rule gate, not a sandbox. A Session’s tools still run with the
-authority of the account running Volli, and the built-in rules do not isolate
-commands from every possible side effect. Do not treat Authority as
-operating-system containment.
+**Enforce** is a rule gate, not a sandbox. With containment **Off**, a
+Session’s tools still run with the authority of the account running Volli, and
+the built-in rules do not isolate commands from every possible side effect. The
+rules can read a command’s file arguments, but not a path hidden in a variable or
+a script. Use **Scoped** containment when you need the operating system to
+enforce the boundary.
 
 See [Settings and configuration](/guides/settings/) for the difference between
 app-wide Settings and project Configure options.

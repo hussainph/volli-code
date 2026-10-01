@@ -194,9 +194,29 @@ _Avoid_: rule pack (that is the compiled rules the policy runs), settings
 **Enforcement posture**:
 What a project's Authority Policy does with the rule pack. `off` builds no
 Snapshot, so no gate is installed and the Session runs at the runtime's own
-defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
-hands the Snapshot to the runtime and the pack binds. `observe` is the default.
+defaults — no walls either, since walls ride the Snapshot. `observe` pins and
+records the Snapshot and installs no gate. `enforce` hands the Snapshot to the
+runtime and the pack binds. `observe` is the default.
 _Avoid_: auto mode (that is the judgment mode), permission mode
+
+**Containment**:
+The capability axis of a project's Authority Policy, set apart from the
+enforcement posture: whether a Session's tools run behind walls. `off` runs the
+shell as the user with the network reachable. `scoped` makes a **Scoped
+Session**: its shell runs behind Seatbelt and its file tools behind a guard, both
+compiled from one capability policy — reads anywhere except the secrets denylist
+(credential stores, keychains, home dotfiles, other users' homes, Volli's own
+data), writes only in the writable roots minus git hooks, git config,
+`.gitmodules` and `.volli/` — and its commands have no network until egress
+opens together with the classifier. The authority gate judges paths against the
+same policy, so a path gets one answer whichever tool asks. `off` is the default.
+_Avoid_: sandbox mode, full access (as a setting name)
+
+**Writable roots**:
+Where a Session may write: its workspace, the git directory a Ticket worktree
+commits into, and any directory the project's Authority Policy declares. The
+metadata carve-outs hold inside every root, and a root never makes a secret
+writable.
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
