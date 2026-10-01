@@ -1,3 +1,4 @@
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -15,7 +16,7 @@ import {
   verbTier,
   verbToolWireName,
 } from "./verb-registry";
-import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
+import type { VerbEntry, VerbKey, VerbResultDetailsSchema, VerbTier } from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 
 /**
@@ -1004,5 +1005,107 @@ describe("the MCP management verbs (VC-380)", () => {
     // `session.await` was the last tool before this family; nothing may be
     // inserted ahead of it, because declaration order IS the frozen tool order.
     expect(keys.at(-(MCP_VERBS.length + 2))).toBe("session.await");
+  });
+});
+
+/** One verb's declared result details, failing the test when it declares none. */
+function schemaOf(key: VerbKey): VerbResultDetailsSchema {
+  const schema = verbEntry(key)?.tool?.resultDetails;
+  expect(schema, key).toBeDefined();
+  return schema!;
+}
+
+/** Every key required, every key described, no undeclared key — at every level. */
+function expectClosedAndDescribed(
+  schema: Pick<VerbResultDetailsSchema, "properties" | "required" | "additionalProperties">,
+  path: string,
+): void {
+  expect(schema.additionalProperties, path).toBe(false);
+  expect([...schema.required].toSorted(), path).toEqual(Object.keys(schema.properties).toSorted());
+  for (const [name, field] of Object.entries(schema.properties)) {
+    expect(field.description.trim().length, `${path}.${name}`).toBeGreaterThan(0);
+    if (field.type === "object") expectClosedAndDescribed(field, `${path}.${name}`);
+  }
+}
+
+/**
+ * What a verb's result carries as data (VC-471). A Code Mode program reads
+ * these keys instead of the prose, so the schema is a promise: every key is
+ * there on a successful call, nothing else is, and each one says what it is.
+ */
+describe("verb result details (VC-471)", () => {
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+
+  it("is declared for the verbs a program fans out with, and no others yet", () => {
+    expect(
+      VERB_TOOLS.filter((entry) => entry.tool.resultDetails !== undefined).map(
+        (entry) => entry.key,
+      ),
+    ).toEqual(["session.start", "session.delegate", "watch"]);
+  });
+
+  it("is a strict JSON Schema whose every key is required, described, and closed", () => {
+    for (const entry of VERB_TOOLS) {
+      const schema = entry.tool.resultDetails;
+      if (schema === undefined) continue;
+      // Compiling under Ajv's strict mode refuses any keyword a standard
+      // validator would not recognise, so a renderer reads the same schema.
+      expect(() => ajv.compile(schema), entry.key).not.toThrow();
+      expect(schema.description.trim().length, entry.key).toBeGreaterThan(0);
+      expectClosedAndDescribed(schema, entry.key);
+    }
+  });
+
+  it("gives session_start the handle, Ticket and model a fan-out acts on", () => {
+    const validate = ajv.compile(schemaOf("session.start"));
+    const started = {
+      sessionId: "abcdef12-3456-7890-abcd-ef1234567890",
+      handle: "abcdef12",
+      ticket: "VC-12",
+      title: "Fix the flaky auth test",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+      state: "running",
+    };
+    expect(validate(started)).toBe(true);
+    const { handle: _handle, ...unhandled } = started;
+    expect(validate(unhandled)).toBe(false);
+    expect(validate({ ...started, state: "ready" })).toBe(false);
+    expect(validate({ ...started, extra: 1 })).toBe(false);
+    expect(validate({ ...started, model: { ...started.model, reasoningLevel: "turbo" } })).toBe(
+      false,
+    );
+    // The handle is the id the other doors accept, and its description is
+    // where a program's author learns that the full id is not.
+    expect(schemaOf("session.start").properties.handle?.description).toMatch(/watch/);
+    expect(schemaOf("session.start").properties.sessionId?.description).toMatch(/handle/);
+  });
+
+  it("keeps the two keys session_delegate's transcript row reads, beside the same fields", () => {
+    const delegate = schemaOf("session.delegate");
+    const start = schemaOf("session.start");
+    expect(delegate.required).toEqual(["sessionId", "handle", "title", "model", "state"]);
+    // One field set, so a program reads a start and a delegation alike.
+    for (const name of delegate.required) {
+      expect(delegate.properties[name], name).toBe(start.properties[name]);
+    }
+    expect(
+      ajv.compile(delegate)({
+        sessionId: "c0ffee00-0000-0000-0000-000000000000",
+        handle: "c0ffee00",
+        title: "Find the auth refresh",
+        model: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "off" },
+        state: "needs-recovery",
+      }),
+    ).toBe(true);
+  });
+
+  it("gives watch the targets it resolved, as lists a program can compare", () => {
+    const validate = ajv.compile(schemaOf("watch"));
+    expect(
+      validate({ action: "watch", sessions: ["abcdef12"], tickets: ["VC-1", "VC-2"], ended: 0 }),
+    ).toBe(true);
+    expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
+    expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
+    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
   });
 });

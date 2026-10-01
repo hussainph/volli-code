@@ -1,8 +1,11 @@
-# Code Mode for Pi Sessions: design, prototype and benchmark (VC-471, phase 1)
+# Code Mode for Pi Sessions: design, prototype and benchmark (VC-471)
 
-**Status:** phase 1. Prototype on this branch, off by default, developer opt-in
-only (`VOLLI_DEV_CODE_MODE`, unpackaged builds). Phase 2 (shipping it) waits on
-the owner's decision on the numbers below.
+**Status:** phase 2 ships it. Phase 1 (sections 1–4 and the first
+Recommendation) built the prototype behind a developer opt-in and measured it;
+the owner approved phase 2 on those numbers. [Phase 2](#phase-2-shipping-it)
+records what changed, the rerun benchmark with the system-prompt nudge as its
+own arm, and the per-model defaults it chose. Phase 1's text below is kept as
+it was written, so its numbers are phase 1's.
 
 **Inputs:** VC-245's note ([`docs/research/pi-parallel-tool-execution-vc-245.md`
 at `fa3f96cd`](https://github.com/hussainph/volli-code/blob/fa3f96cdacf9f83ce6f256cffdcd73d174feb031/docs/research/pi-parallel-tool-execution-vc-245.md),
@@ -157,8 +160,10 @@ frozen-surface rule forbids. A subagent is bounded by its parent's record: no
 parent's route for each tool it holds (`inheritCodeModeSurface`, from the
 parent's own `tool-surface` record read at the child's birth), with the parent's
 limits — so a tool the parent could call only directly is never callable from a
-child's program, whatever today's defaults say. A legacy backfill is never born
-into Code Mode.
+child's program, whatever today's defaults say. (Phase 2 changes the second
+half: the parent bounds which tools a child holds, and the child's own model
+decides how they are routed — see [Phase 2](#phase-2-shipping-it).) A legacy
+backfill is never born into Code Mode.
 
 ### Script interface
 
@@ -582,14 +587,175 @@ surface or the benchmark. When it lands it should be `both` — bulk
 classification in a loop is the shape that won here — and its result is already
 structured.
 
+## Phase 2: shipping it
+
+Phase 1's five changes, plus the owner's additions, in the order they matter.
+
+### What changed
+
+1. **One setting, a mode per model.** *Settings → Models → Code Mode* is one
+   switch, on by default, and an **Advanced** list that pins a mode (`off`,
+   `both`, `only`) for one model. Everything else is a built-in per-model
+   default (`CODE_MODE_MODEL_DEFAULTS` in `packages/shared/src/code-mode-policy.ts`),
+   read when a Session is born and frozen into its `tool-surface` record with
+   the routes — so a change reaches only new Sessions. Main stores the policy in
+   app state (`volli:code-mode-policy`); `VOLLI_DEV_CODE_MODE` still overrides
+   it in an unpackaged build, now with a `mode`. The decision is made **once**
+   per birth (`SessionToolSurfacePorts.codeModeAt`) and handed to both the
+   surface resolver and the record, so a flip between them cannot freeze a
+   `codemode` with every route `direct`; a launch that could not locate the
+   sandbox offers no `codemode` and defers nothing. A Subagent Session asks
+   with **its own** model: its parent's frozen surface bounds which tools it
+   holds (no `codemode` in the parent, none in the child), and the child's
+   mode and paragraph come from its own family and pins — a Sonnet child of a
+   GPT parent pinned to `both` gets no paragraph.
+2. **Whole capability groups.** Under `only`, a group leaves the declared array
+   only when every member this Session holds can be called from a program
+   (`toolGroupOf`: coding, web, each MCP server, …). A group with a direct-only
+   member — the Browser (screenshot, holds), the shells, the conversation tools,
+   a Board Session's agent-control verbs — stays declared whole. Phase 1's GLM
+   failure (calling `browser_screenshot`, the one Browser tool left declared,
+   over and over) cannot recur.
+3. **Large MCP servers.** A server past 20 tools or ~3,000 estimated declaration
+   tokens is routed `deferred` whatever the model's mode
+   (`largeMcpServerIds`); a Session whose mode is `off` gets `codemode` for
+   those servers alone. With the switch off, every tool is declared as before.
+   **`tool_search` was not built:** deferred routing needed a way to find and
+   call a tool without declaring it, and `codemode` with `searchTools()` is
+   that way, already judged and already bounded. A second door would be a
+   second surface to keep at parity.
+4. **A shorter description.** A tool the model can also call directly (`both`)
+   is named once — or, when that is shorter, the exceptions are — instead of
+   being declared again in TypeScript; only `code` tools are declared in full,
+   and the discovery helpers only when something is left to discover. With no
+   MCP tools, `both` now adds **500** o200k declaration tokens over direct
+   (2,099 against 1,599), down from **1,138**; live, the single-call control
+   pays +30–41% input tokens, down from +62–86%.
+5. **Typed verb results.** The Verb Registry declares `resultDetails` for
+   `session.start`, `session.delegate` and `watch`; the desktop door returns
+   them and the `codemode` description renders their type, so a program reads
+   `details.handle` instead of parsing a sentence. Phase 1's Haiku fan-out
+   failures under `only` (3/5) are gone: 6/6.
+6. **The nudge.** A six-line paragraph at the end of the Execution layer — use
+   `codemode` when one step needs several calls whose raw results you would
+   throw away; for one call, call the tool directly — rendered only when the
+   frozen record says `nudge` (mode `both`, on a family where it measured
+   helpful). It is a conditional layer like the MCP trust layer, priced as its
+   own delta (+97 estimated tokens, `prompt-baseline.test.ts`) and outside the
+   1,700-token base Board ceiling, which does not carry it.
+7. **Packaged.** pi-codemode's worker and `quickjs.wasm` ship unpacked from the
+   asar (`electron-builder.yml`), located by `codeModeSandboxAssets` in
+   `apps/desktop/src/main/codemode/sandbox-assets.ts`; `verify-packed-requires`
+   now fails a chunk that `require()`s a package main reaches only by path.
+   About 1.6 MB.
+8. **Docs.** `apps/docs/src/content/docs/guides/code-mode.mdx` (what it is, what
+   a program can and cannot do, modes, large servers, how to turn it off), the
+   Models and MCP guides, and `docs/mcp.md`.
+
+The PR #652 review's fixes (output cap including the return value and errors,
+untrusted marking for other agents' words and saved output, one run-wide
+question lock, the pinned `Date`, units and ids) landed on phase 1 first; see
+§3.
+
+### Benchmark, rerun
+
+Same four tasks and harness as §4, now with four arms — `direct`, `both`,
+`both` + nudge, `only` — and two changes to the harness: phase 2 writes to
+`bench/codemode/results/phase2/` and pools follow-up runs, and the fan-out task
+is graded from the host's evidence without requiring a separate `watch` call,
+because the real `session_start` watches what it opens and says so (two models
+relied on that; phase 1's stand-in did not model it). Six trials per cell for
+Haiku, Sonnet and GLM; GPT-5.5's `direct` and `only` and Opus 5.5 (reasoning
+`low`, the lowest it offers) have three. Medians of input tokens (cache
+included), change against `direct`:
+
+| model | arm | loop-filter | browser-tabs | session-fanout | single-call | correct | wrote a program |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Haiku 4.5 | direct | 19,766 | 13,126 | 9,534 | 4,025 | 24/24 | — |
+| | both | −17% | +10% | +32% | +31% | 24/24 | 6/24 |
+| | both + nudge | −25% | +11% | +35% | +35% | 24/24 | 6/24 |
+| | only | −39% | +8% | −23% | +27% | 24/24 | 18/24 |
+| Sonnet 4.6 | direct | 6,829 | 13,105 | 9,470 | 4,013 | 24/24 | — |
+| | both | −19% | +11% | −18% | +30% | 24/24 | 18/24 |
+| | both + nudge | −16% | +226% | +25% | +34% | 24/24 | 18/24 |
+| | only | −22% | +25% | −24% | +25% | 24/24 | 22/24 |
+| Opus 5.5 | direct | 5,205 | 16,507 | 7,569 | 4,909 | 12/12 | — |
+| | both | +29% | +9% | +31% | +31% | 12/12 | 3/12 |
+| | only | +25% | +67% | +29% | +26% | 11/12 | 12/12 |
+| GPT-5.5 | direct | 2,559 | 9,558 | 6,060 | 2,332 | 12/12 | — |
+| | both | +37% | +51% | +40% | +41% | 24/24 | 0/24 |
+| | both + nudge | +44% | +12% | +44% | +49% | 24/24 | 3/24 |
+| | only | +43% | +11% | −11% | +45% | 11/12 | 10/12 |
+| GLM-5.3 Flash | direct | 4,000 | 10,839 | 7,167 | 2,907 | 22/24 | — |
+| | both | +32% | +10% | +12% | +37% | 23/24 | 5/24 |
+| | both + nudge | +100% | +12% | +17% | +43% | 23/24 | 9/24 |
+| | only | +1% | +8% | −17% | +30% | 24/24 | 19/24 |
+
+`bench/codemode/report.ts phase2` prints every column (output tokens,
+tool-result tokens, model calls, nested calls, time, cost); the raw trials are
+in `results/phase2/`. Phase 2's live spend was **$5.35**.
+
+**The nudge arm.** It moved the two models that never wrote a program: GPT-5.5
+from 0/24 to 3/24, GLM-5.3 Flash from 5/24 to 9/24. It did not push a single
+call through code — no model wrote a program on the single-call control with
+it (0/24 across the four) — and correctness held. What it costs the control
+is the paragraph: +174–179 input tokens per request (+3–5% over `both`). It did
+not make Code Mode pay for either model: their programs were not cheaper than
+their direct calls on these tasks. And it hurt Sonnet, which already used
+`codemode` where it pays: on the Browser task it rewrote its program across six
+model calls (42,717 tokens against 14,527). So the nudge is on for no default:
+the GPT-5 and GLM rows carry it for a person who pins them to `both`, and the
+Claude rows do not.
+
+**What else moved since phase 1.** `only` is now correct for Haiku and Sonnet
+on every task (Haiku 24/24, from 16/20): typed results fixed the fan-out
+and whole-group routing the Browser. GLM-5.3 Flash under `only` went from
+10/12 to 24/24. Two GPT/Opus misses under `only` were a format slip (prose
+before the handles) and one empty answer.
+
+### Per-model defaults
+
+| family | default | why |
+| --- | --- | --- |
+| Claude Haiku | `both` | Writes a program on every loop task (6/6) and pays: −17% input tokens, 24/24. `only` measured cheaper still (−39% on the loop, −23% on the fan-out), but none of the four tasks edits files, and under `only` every edit is a string literal inside a program — a pin for now, not a default. |
+| Claude Sonnet | `both` | Uses it where it pays — the loop (−19%), the fan-out (−18%) and the Browser — at 24/24; `only` is no better on the Browser (+25%). |
+| Claude Opus | `off` | Opus 5.5 solved the loop with one shell pipeline and wrote a program only for the fan-out; `both` cost 9–31% more on every task. |
+| GPT-5 | `off` (nudge if pinned `both`) | 0/24 programs under `both`; the description is paid for nothing. |
+| GLM | `off` (nudge if pinned `both`) | Rare programs (5/24) that did not save tokens on these tasks. |
+| anything else | `off` | Unmeasured. |
+
+So the switch is on by default and changes nothing for a Session on Opus, GPT
+or GLM unless it holds a large MCP server; Haiku and Sonnet Sessions get
+`codemode` beside their tools. The defaults are four tasks' worth of evidence,
+which is why they are data in one table: the next step phase 1 named still
+stands — count `codemode` calls, nested calls and result tokens in
+`transcript-audit.ts` and set the defaults from real Sessions.
+
+**`classify` (VC-478)** had not merged when phase 2 ran, so it is not in the
+surface or the benchmark; when it lands it should be `both`-callable, as
+phase 1 said.
+
 ## Known gaps
 
 - The benchmark tasks are mine, built to exercise each shape; the audit says
   which shapes matter, not that these four are representative of them.
 - Elapsed time includes provider latency and varies run to run; read it as a
   direction. Token and call counts are stable across trials.
-- `tool_search` is designed, not built.
-- Packaged builds cannot run a sandbox in phase 1 (by design: they never offer
-  Code Mode).
+- `tool_search` is not built; phase 2 found `codemode` with `searchTools()` is
+  the deferred door (see Phase 2).
+- **Dropped on purpose, for simplicity:** the ticket's per-project Code Mode
+  setting, and per-server and per-tool MCP routes in Configure → MCP Servers.
+  The owner's direction during phase 2 was that settings pages are getting too
+  complicated and should be simple switches, so Code Mode is one app-wide
+  switch with per-model pins, and the automatic size threshold
+  (`LARGE_MCP_SERVER_TOOLS` / `LARGE_MCP_SERVER_TOKENS` in
+  `packages/shared/src/code-mode-policy.ts`) replaces per-server routing. If a
+  real need appears — a small server that should still be deferred, a project
+  that must never get Code Mode — the place to add it is `codeModeSurfaceAtBirth`'s
+  existing `mcpRoute` override (today fed only by `VOLLI_DEV_CODE_MODE`'s
+  `mcp` map) and a per-project read beside `readCodeModePolicy`; both reach a
+  Session only at birth, like everything else here.
+- The defaults rest on four tasks, none of which edits files; Opus was measured
+  at reasoning `low` only.
 - Nested calls do not stream partial output into activity; a long nested `bash`
   shows as started until it ends.

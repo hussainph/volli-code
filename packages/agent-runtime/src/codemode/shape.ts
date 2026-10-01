@@ -15,6 +15,12 @@
  * | schema-bearing Session tools | their native `structuredContent`                |
  * | everything else | its text                                                      |
  *
+ * A verb whose registry entry declares `resultDetails` has its `details` typed
+ * by that schema, so a program reads `started.details.handle` rather than
+ * parsing the sentence a direct caller reads. `details` stays optional even
+ * then: a verb that refused answers with `text` alone, and that absence is how
+ * a program tells a refusal from a result.
+ *
  * A call that failed rejects, with the same message a direct call would have
  * shown the model — except a non-zero `bash` exit and an MCP `isError`, which
  * are answers rather than failures and resolve, as Pi's own codemode does.
@@ -44,8 +50,19 @@ export function toolKind(name: string, isVerb: boolean, outputSchema?: unknown):
   return "text";
 }
 
-/** The declared result type of each kind, for the TypeScript the model reads. */
-export function outputSchemaFor(kind: ToolKind, mcpOutputSchema?: unknown): JsonSchema {
+/** What a typed verb's `details` says about the one case it is absent. */
+export const VERB_DETAILS_ABSENT = "Absent when the call was refused; `text` then says why.";
+
+function isSchema(value: unknown): value is JsonSchema {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * The declared result type of each kind, for the TypeScript the model reads.
+ * `schema` types the part of the result a tool declares for itself: an MCP
+ * tool's `structuredContent`, or a Volli verb's `details`.
+ */
+export function outputSchemaFor(kind: ToolKind, schema?: unknown): JsonSchema {
   switch (kind) {
     case "bash":
       return {
@@ -63,8 +80,7 @@ export function outputSchemaFor(kind: ToolKind, mcpOutputSchema?: unknown): Json
         type: "object",
         properties: {
           text: { type: "string" },
-          structuredContent:
-            typeof mcpOutputSchema === "object" && mcpOutputSchema !== null ? mcpOutputSchema : {},
+          structuredContent: isSchema(schema) ? schema : {},
           isError: { type: "boolean" },
           omittedImages: { type: "number" },
         },
@@ -75,12 +91,20 @@ export function outputSchemaFor(kind: ToolKind, mcpOutputSchema?: unknown): Json
         type: "object",
         properties: {
           text: { type: "string" },
-          details: { type: "object", additionalProperties: true },
+          details: isSchema(schema)
+            ? {
+                ...schema,
+                description:
+                  typeof schema.description === "string"
+                    ? `${schema.description} ${VERB_DETAILS_ABSENT}`
+                    : VERB_DETAILS_ABSENT,
+              }
+            : { type: "object", additionalProperties: true },
         },
         required: ["text"],
       };
     case "structured":
-      return mcpOutputSchema as JsonSchema;
+      return schema as JsonSchema;
     case "text":
       return { type: "string" };
   }

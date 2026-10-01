@@ -8,6 +8,7 @@ import {
   codeModeSurfaceFor,
   NON_CODING_TOOL_IDS,
   TODO_STATUSES,
+  verbEntry,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -25,6 +26,7 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   SAVED_TOOL_OUTPUT_WARNING,
+  verbDetailsSchema,
   WEB_FETCH_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
   type AskUserPort,
@@ -1587,5 +1589,39 @@ describe("createSessionTools with Code Mode (VC-471)", () => {
     });
     expect(declared.map((tool) => tool.name)).toEqual(["write", "codemode"]);
     expect(handed).toEqual(["read=read", "write=write"]);
+  });
+
+  it("hands Code Mode a verb's declared details schema beside it, and nothing for any other tool", () => {
+    const verbs = ["session.start", "session.stop"] as const;
+    const surface = codeModeSurfaceFor({ tools: ["read", ...verbs] });
+    const handed = new Map<string, Record<string, unknown> | undefined>();
+    createSessionTools(
+      {
+        tools: { tools: ["read"], verbs: [...verbs], codeMode: surface },
+        callVerb: async () => ({ text: "" }),
+      },
+      null as never,
+      undefined,
+      (_surface, tools) => {
+        for (const entry of tools) handed.set(entry.id, entry.detailsSchema);
+        return createTodoWriteTool();
+      },
+    );
+    expect([...handed.keys()]).toEqual(["read", "session.start", "session.stop"]);
+    // The registry's own declaration, read rather than restated.
+    expect(handed.get("session.start")).toBe(verbEntry("session.start")?.tool?.resultDetails);
+    expect(handed.get("session.stop")).toBeUndefined();
+    expect(handed.get("read")).toBeUndefined();
+  });
+});
+
+describe("verbDetailsSchema (VC-471)", () => {
+  it("is the registry's resultDetails for a verb that declares one, and empty otherwise", () => {
+    expect(verbDetailsSchema("watch")).toEqual({
+      detailsSchema: verbEntry("watch")?.tool?.resultDetails,
+    });
+    expect(verbDetailsSchema("session.stop")).toEqual({});
+    // A key this build does not project has nothing to declare either.
+    expect(verbDetailsSchema("ticket.list" as never)).toEqual({});
   });
 });

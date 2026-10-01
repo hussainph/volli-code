@@ -16,6 +16,8 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  CODE_MODE_MODES,
+  CODE_MODE_POLICY_MODELS_MAX,
   MODEL_PICKER_VIEWS,
   isolatePerformanceObserver,
   MODEL_PURPOSES,
@@ -27,6 +29,7 @@ import {
   scrubSessionAuthority,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type CodeModePolicy,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
@@ -164,6 +167,12 @@ export interface SessionRouterContext {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  /**
+   * Code Mode's switch and per-model pins (VC-471), profile-wide. Read when a
+   * Session is born, so a write reaches new Sessions only.
+   */
+  readCodeModePolicy?: () => CodeModePolicy;
+  writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
   /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
   readModelPickerView?: () => ModelPickerView;
   writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
@@ -413,6 +422,29 @@ const hiddenModelsSchema = z
  */
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
+});
+/**
+ * Code Mode's policy (VC-471), whole in both directions like compaction's:
+ * the switch and every per-model pin, never a delta.
+ *
+ * A pin is keyed `providerId/modelId` (`codeModeModelKey`). The key shape and
+ * the count cap are the ones main's tolerant reader holds a stored policy to,
+ * stated here so the edge REFUSES what storage would otherwise drop without a
+ * word — a pin the renderer saved and main silently discarded is a setting
+ * that lies about what is configured.
+ */
+const codeModeModelKeySchema = nonEmptyString.refine((key) => {
+  const slash = key.indexOf("/");
+  return slash > 0 && slash < key.length - 1;
+}, "Expected a providerId/modelId key");
+const codeModePolicySchema = z.object({
+  enabled: z.boolean(),
+  models: z
+    .record(codeModeModelKeySchema, z.enum(CODE_MODE_MODES))
+    .refine(
+      (models) => Object.keys(models).length <= CODE_MODE_POLICY_MODELS_MAX,
+      `At most ${CODE_MODE_POLICY_MODELS_MAX} models may have their own Code Mode`,
+    ),
 });
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
@@ -820,6 +852,20 @@ export function createSessionRouter() {
             unavailable("Model Access preferences are unavailable on this transport");
           }
           return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
+        }),
+      codeModePolicy: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readCodeModePolicy) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return codeModePolicySchema.parse(ctx.readCodeModePolicy());
+      }),
+      setCodeModePolicy: instrumentedProcedure
+        .input(codeModePolicySchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeCodeModePolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return codeModePolicySchema.parse(await ctx.writeCodeModePolicy(input));
         }),
       pickerView: instrumentedProcedure.query(({ ctx }) => {
         if (!ctx.readModelPickerView) {

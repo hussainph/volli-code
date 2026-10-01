@@ -233,6 +233,8 @@ const MODEL_ACCESS = {
   setHiddenModels: vi.fn(),
   compactionPolicy: vi.fn(),
   setCompactionPolicy: vi.fn(),
+  codeModePolicy: vi.fn(),
+  setCodeModePolicy: vi.fn(),
   pickerView: vi.fn(),
   setPickerView: vi.fn(),
   beginSignIn: vi.fn(),
