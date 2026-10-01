@@ -174,16 +174,11 @@ export function CodeModeSettings({
 
   return (
     <PrefSection title="Code Mode" icon={CodeIcon}>
-      <PrefRow
-        label="Code Mode"
-        testId="code-mode"
-        description={
-          <>
-            Lets the agent write a short program that calls its tools, so loops over files, pages or
-            Sessions return only what matters. Changes apply to new Sessions.
-          </>
-        }
-      >
+      {/* The control is the explanation (AGENTS.md, "let controls talk"):
+          what each mode does, which models get which, and that the switch
+          also governs large-server deferral are in Advanced's (i) and in
+          the Code Mode guide, not under the switch. */}
+      <PrefRow label="Code Mode" testId="code-mode">
         <Switch
           aria-label="Code Mode for new Sessions"
           data-testid="code-mode-switch"
@@ -399,6 +394,10 @@ function ModesHint() {
         call are reached only through Code Mode. Smallest prompt.
       </span>
       <span>{builtInDefaultsSentence()}</span>
+      <span>
+        Turning Code Mode off also declares every tool of a large MCP server again. Changes apply to
+        new Sessions.
+      </span>
     </span>
   );
 }

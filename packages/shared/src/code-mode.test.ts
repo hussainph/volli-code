@@ -6,7 +6,6 @@ import {
   codeModeSurfaceFor,
   DEFAULT_CODE_MODE_LIMITS,
   defaultToolRoute,
-  inheritCodeModeSurface,
   isCodeCallable,
   isCodeCallableRoute,
   isDeclaredRoute,
@@ -253,35 +252,19 @@ describe("parseCodeModeSurface", () => {
         ).toThrow(`codeMode.limits.${key} must be a whole number`);
       }
     }
-    expect(() =>
-      parseCodeModeSurface({ ...good, limits: { ...good.limits, maxImages: 3 } }, tools),
-    ).toThrow("codeMode.limits names a limit this build does not know");
+    expect(() => parseCodeModeSurface({ ...good, limits: { maxNestedCalls: 10 } }, tools)).toThrow(
+      "codeMode.limits.timeoutMs must be a whole number",
+    );
     expect(() => parseCodeModeSurface({ ...good, mode: "sometimes" }, tools)).toThrow(
       "codeMode.mode is not a Code Mode mode",
     );
     expect(() => parseCodeModeSurface({ ...good, nudge: false }, tools)).toThrow(
       "codeMode.nudge is true or absent",
     );
-    expect(() => parseCodeModeSurface({ ...good, extra: 1 }, tools)).toThrow(
-      "codeMode.extra is not part of a Code Mode record",
-    );
-  });
-});
-
-describe("inheritCodeModeSurface", () => {
-  it("bounds a child's routes and limits by its parent's record", () => {
-    const parent: CodeModeSurface = {
-      routes: { read: "both", write: "direct", web_fetch: "code" },
-      limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 9 },
-    };
-    expect(inheritCodeModeSurface(parent, ["read", "write", "execute", "codemode"])).toEqual({
-      routes: { read: "both", write: "direct", execute: "direct" },
-      limits: { ...DEFAULT_CODE_MODE_LIMITS, maxNestedCalls: 9 },
-    });
-    expect(inheritCodeModeSurface(parent, ["read"])).toBeUndefined();
+    // A key a newer build added is ignored, so a downgrade still decodes it.
     expect(
-      inheritCodeModeSurface({ ...parent, mode: "both", nudge: true }, ["read", "codemode"]),
-    ).toMatchObject({ mode: "both", nudge: true });
+      parseCodeModeSurface({ ...good, extra: 1, limits: { ...good.limits, maxImages: 3 } }, tools),
+    ).toEqual(good);
   });
 });
 

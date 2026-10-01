@@ -29,7 +29,11 @@
  * the same class of crash one layer down. A package main reaches by file path
  * instead of by require() (Code Mode's sandbox worker, VC-471) is named in
  * PATH_REACHED_PACKAGES below and seeds that same walk; a chunk requiring one
- * fails, because it is inlined on purpose.
+ * fails, because it is inlined on purpose. And because main starts such a
+ * package's files from the unpacked tree beside app.asar, (4) it and every
+ * production dependency it reaches must be named in electron-builder.yml's
+ * asarUnpack — dropping an entry there fails here rather than as a sandbox
+ * error that only the packaged app shows.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -151,12 +155,14 @@ const scopeKeeps = new Map(
 // that DOES require one fails: these are inlined on purpose (vite.config.ts),
 // and whitelisting a package for its files is what would otherwise let a
 // broken runtime require() of it pass this check.
-const PATH_REACHED_PACKAGES = new Map([
-  [
-    "@earendil-works/pi-codemode",
-    "Code Mode's sandbox worker (VC-471): main starts dist/runtime/worker.js from the unpacked tree, and the host half is bundled",
-  ],
-]);
+//
+// The list lives in path-reached-packages.json, read here and by the notices
+// generator, which records each one as both bundled and shipped as files.
+const PATH_REACHED_PACKAGES = new Map(
+  Object.entries(
+    JSON.parse(readFileSync(resolve(import.meta.dirname, "path-reached-packages.json"), "utf8")),
+  ),
+);
 
 // Strips // and /* */ comments while leaving string/template contents intact,
 // so a JSDoc example like `* const keys = require('/path/to/key.json');`
@@ -402,6 +408,42 @@ while (queue.length > 0) {
     // The dep resolves from ITS parent's directory, not from apps/desktop —
     // that chaining is what lets the walk cross pnpm's isolation boundary.
     queue.push({ name: depName, fromDir: packageDir });
+  }
+}
+
+// (4) Path-reached packages are read from app.asar.unpacked, never through the
+// archive: a worker thread's ES module import resolves on the real filesystem,
+// so the package AND every dependency its files import must be unpacked, each
+// under an `asarUnpack` glob of the `**/node_modules/<name>/**` shape (or its
+// whole scope's). Walked from each package the same way the whitelist walk is.
+const asarUnpack = Array.isArray(buildConfig.asarUnpack) ? buildConfig.asarUnpack : [];
+function isUnpacked(packageName) {
+  const scope = packageName.startsWith("@") ? packageName.split("/")[0] : null;
+  return asarUnpack.some(
+    (entry) =>
+      entry === `**/node_modules/${packageName}/**` ||
+      (scope !== null && entry === `**/node_modules/${scope}/**`),
+  );
+}
+for (const [packageName, reason] of PATH_REACHED_PACKAGES) {
+  const reached = new Set([packageName]);
+  const pending = [{ name: packageName, fromDir: DESKTOP_DIR }];
+  while (pending.length > 0) {
+    const { name, fromDir } = pending.shift();
+    const packageDir = resolvePackageDir(name, fromDir);
+    if (!packageDir) continue;
+    for (const depName of productionDependencyNames(packageDir)) {
+      if (IGNORED_PACKAGES.has(depName) || reached.has(depName)) continue;
+      reached.add(depName);
+      pending.push({ name: depName, fromDir: packageDir });
+    }
+  }
+  for (const name of reached) {
+    if (!isUnpacked(name)) {
+      violations.push(
+        `${name} → not in electron-builder.yml asarUnpack, but ${name === packageName ? "" : `${packageName} imports it and `}main reaches it by path from app.asar.unpacked: ${reason}`,
+      );
+    }
   }
 }
 

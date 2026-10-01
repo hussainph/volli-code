@@ -160,8 +160,10 @@ frozen-surface rule forbids. A subagent is bounded by its parent's record: no
 parent's route for each tool it holds (`inheritCodeModeSurface`, from the
 parent's own `tool-surface` record read at the child's birth), with the parent's
 limits — so a tool the parent could call only directly is never callable from a
-child's program, whatever today's defaults say. A legacy backfill is never born
-into Code Mode.
+child's program, whatever today's defaults say. (Phase 2 changes the second
+half: the parent bounds which tools a child holds, and the child's own model
+decides how they are routed — see [Phase 2](#phase-2-shipping-it).) A legacy
+backfill is never born into Code Mode.
 
 ### Script interface
 
@@ -598,8 +600,15 @@ Phase 1's five changes, plus the owner's additions, in the order they matter.
    read when a Session is born and frozen into its `tool-surface` record with
    the routes — so a change reaches only new Sessions. Main stores the policy in
    app state (`volli:code-mode-policy`); `VOLLI_DEV_CODE_MODE` still overrides
-   it in an unpackaged build, now with a `mode`. A subagent freezes its
-   parent's routes for the tools it holds (`inheritCodeModeSurface`).
+   it in an unpackaged build, now with a `mode`. The decision is made **once**
+   per birth (`SessionToolSurfacePorts.codeModeAt`) and handed to both the
+   surface resolver and the record, so a flip between them cannot freeze a
+   `codemode` with every route `direct`; a launch that could not locate the
+   sandbox offers no `codemode` and defers nothing. A Subagent Session asks
+   with **its own** model: its parent's frozen surface bounds which tools it
+   holds (no `codemode` in the parent, none in the child), and the child's
+   mode and paragraph come from its own family and pins — a Sonnet child of a
+   GPT parent pinned to `both` gets no paragraph.
 2. **Whole capability groups.** Under `only`, a group leaves the declared array
    only when every member this Session holds can be called from a program
    (`toolGroupOf`: coding, web, each MCP server, …). A group with a direct-only
@@ -734,6 +743,18 @@ phase 1 said.
   direction. Token and call counts are stable across trials.
 - `tool_search` is not built; phase 2 found `codemode` with `searchTools()` is
   the deferred door (see Phase 2).
+- **Dropped on purpose, for simplicity:** the ticket's per-project Code Mode
+  setting, and per-server and per-tool MCP routes in Configure → MCP Servers.
+  The owner's direction during phase 2 was that settings pages are getting too
+  complicated and should be simple switches, so Code Mode is one app-wide
+  switch with per-model pins, and the automatic size threshold
+  (`LARGE_MCP_SERVER_TOOLS` / `LARGE_MCP_SERVER_TOKENS` in
+  `packages/shared/src/code-mode-policy.ts`) replaces per-server routing. If a
+  real need appears — a small server that should still be deferred, a project
+  that must never get Code Mode — the place to add it is `codeModeSurfaceAtBirth`'s
+  existing `mcpRoute` override (today fed only by `VOLLI_DEV_CODE_MODE`'s
+  `mcp` map) and a per-project read beside `readCodeModePolicy`; both reach a
+  Session only at birth, like everything else here.
 - The defaults rest on four tasks, none of which edits files; Opus was measured
   at reasoning `low` only.
 - Nested calls do not stream partial output into activity; a long nested `bash`

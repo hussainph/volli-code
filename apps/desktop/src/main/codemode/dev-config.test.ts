@@ -87,6 +87,13 @@ describe("desktopCodeMode", () => {
   const tools: SessionToolId[] = ["read", "ask_user", "codemode", search.providerName];
   const sonnet = { providerId: "anthropic", modelId: "claude-sonnet-4-6" };
   const gpt = { providerId: "openai-codex", modelId: "gpt-5.5" };
+  /** A server past the size threshold, so it is deferred whatever the mode. */
+  const large: McpToolDefinition[] = Array.from({ length: 21 }, (_, index) => ({
+    ...search,
+    serverId: "big",
+    toolName: `t${index}`,
+    providerName: mcpProviderToolName("big", "Big", `t${index}`),
+  }));
 
   it("follows the stored setting, read at each birth", () => {
     const logged: string[] = [];
@@ -96,22 +103,86 @@ describe("desktopCodeMode", () => {
       packaged: false,
       log: (line) => logged.push(line),
       policy: () => policy,
+      sandboxAvailable: true,
     });
     // An unreadable variable is ignored, and said so, and the setting rules.
     expect(logged).toHaveLength(1);
-    expect(codeMode.birth(sonnet, [])).toMatchObject({ mode: "both", offered: true });
+    const born = codeMode.birth(sonnet, []);
+    expect(born).toMatchObject({ mode: "both", offered: true });
     expect(codeMode.birth(gpt, [])).toMatchObject({ mode: "off", offered: false });
     expect(codeMode.birth(undefined, [])).toMatchObject({ offered: false });
-    expect(codeMode.surfaceFor(tools, [search], sonnet)).toMatchObject({
+    expect(codeMode.surfaceFor(born, tools, [search])).toMatchObject({
       mode: "both",
       routes: { read: "both", ask_user: "direct", [search.providerName]: "both" },
       limits: DEFAULT_CODE_MODE_LIMITS,
     });
-    expect(codeMode.surfaceFor(["read"], [], sonnet)).toBeUndefined();
+    expect(codeMode.surfaceFor(born, ["read"], [])).toBeUndefined();
     policy = { enabled: true, models: { "openai-codex/gpt-5.5": "only" } };
     expect(codeMode.birth(gpt, [])).toMatchObject({ mode: "only", offered: true });
     policy = { enabled: false, models: {} };
     expect(codeMode.birth(sonnet, [])).toMatchObject({ offered: false });
+  });
+
+  it("freezes the routes from the decision it is handed, whatever the setting says by then", () => {
+    let policy: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
+    const codeMode = desktopCodeMode({
+      env: {},
+      packaged: false,
+      log: () => undefined,
+      policy: () => policy,
+      sandboxAvailable: true,
+    });
+    const born = codeMode.birth(sonnet, []);
+    // The switch flips between the surface and its record: the record still
+    // follows the one decision the surface was resolved from.
+    policy = { enabled: false, models: {} };
+    expect(codeMode.surfaceFor(born, tools, [search])?.routes["read"]).toBe("both");
+  });
+
+  it("offers nothing and defers nothing when this launch has no sandbox", () => {
+    const codeMode = desktopCodeMode({
+      env: env("1"),
+      packaged: false,
+      log: () => undefined,
+      policy: () => DEFAULT_CODE_MODE_POLICY,
+      sandboxAvailable: false,
+    });
+    const born = codeMode.birth(sonnet, large);
+    expect(born).toMatchObject({ mode: "off", nudge: false, offered: false });
+    expect(born.largeServers.size).toBe(0);
+    // With a sandbox the same large server would have been deferred.
+    const withSandbox = desktopCodeMode({
+      env: {},
+      packaged: false,
+      log: () => undefined,
+      policy: () => DEFAULT_CODE_MODE_POLICY,
+      sandboxAvailable: true,
+    }).birth(gpt, large);
+    expect(withSandbox).toMatchObject({ mode: "off", offered: true });
+    expect([...withSandbox.largeServers]).toEqual(["big"]);
+  });
+
+  it("gives a child its own model's mode and paragraph, inside the tools its parent froze", () => {
+    const pinned: CodeModePolicy = { enabled: true, models: { "openai-codex/gpt-5.5": "both" } };
+    const codeMode = desktopCodeMode({
+      env: {},
+      packaged: false,
+      log: () => undefined,
+      policy: () => pinned,
+      sandboxAvailable: true,
+    });
+    // A GPT parent pinned to `both` carries the paragraph its family gets.
+    const parent = codeMode.birth(gpt, []);
+    expect(codeMode.surfaceFor(parent, tools, [search])).toMatchObject({
+      mode: "both",
+      nudge: true,
+    });
+    // Its Sonnet child decides from Sonnet: `both`, and no paragraph.
+    const child = codeMode.birth(sonnet, []);
+    const childTools: SessionToolId[] = ["read", "codemode"];
+    const record = codeMode.surfaceFor(child, childTools, []);
+    expect(record).toMatchObject({ mode: "both", routes: { read: "both" } });
+    expect(record).not.toHaveProperty("nudge");
   });
 
   it("lets a developer's variable stand in for the setting, for every model", () => {
@@ -120,10 +191,12 @@ describe("desktopCodeMode", () => {
       packaged: false,
       log: () => undefined,
       policy: () => ({ enabled: false, models: {} }),
+      sandboxAvailable: true,
     });
-    expect(codeMode.birth(gpt, [])).toMatchObject({ mode: "only", offered: true });
+    const born = codeMode.birth(gpt, []);
+    expect(born).toMatchObject({ mode: "only", offered: true });
     expect(codeMode.birth(undefined, [])).toMatchObject({ mode: "off", offered: false });
-    expect(codeMode.surfaceFor(tools, [search], gpt)?.routes).toEqual({
+    expect(codeMode.surfaceFor(born, tools, [search])?.routes).toEqual({
       read: "code",
       ask_user: "direct",
       [search.providerName]: "deferred",

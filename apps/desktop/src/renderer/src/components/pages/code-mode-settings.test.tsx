@@ -199,10 +199,8 @@ describe("Code Mode in the Models pane", () => {
     expect(codeModePolicy).toHaveBeenCalled();
     expect(codeModeSwitch().getAttribute("aria-checked")).toBe("true");
     expect(codeModeSwitch().disabled).toBe(false);
-    // The two sentences the switch carries: what it is, and when it applies.
-    const row = the('[data-testid="code-mode"]').textContent ?? "";
-    expect(row).toContain("write a short program that calls its tools");
-    expect(row).toContain("Changes apply to new Sessions.");
+    // The switch carries no paragraph (AGENTS.md, "let controls talk").
+    expect(the('[data-testid="code-mode"]').textContent).toBe("Code Mode");
     // Collapsed by default, and the trigger says what it is hiding.
     expect(the('[data-testid="code-mode-advanced"]').textContent).toContain("1 pinned");
     expect(document.querySelector('[data-testid="code-mode-pin"]')).toBeNull();
