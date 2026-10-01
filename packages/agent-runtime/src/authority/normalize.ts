@@ -29,6 +29,7 @@
  * the operand is dropped.
  */
 
+import { lstatSync } from "node:fs";
 import type {
   CodingToolId,
   PolicyCommand,
@@ -85,6 +86,26 @@ export function resolveWorkspaceRoot(workspacePath: string): string {
     throw new Error(`The Session workspace ${workspacePath} has no resolvable real path.`);
   }
   return resolved;
+}
+
+/**
+ * A directory the Session may read outside its workspace, as the rules must
+ * compare against it, or `undefined` while it cannot be one (VC-469).
+ *
+ * Only a real directory qualifies. The root is a grant, and resolving a symlink
+ * in its place would hand the grant to wherever the link points — a link any
+ * process able to write beside the sidecar could plant. A directory that does
+ * not exist yet grants nothing, which costs nothing: nothing has been saved in
+ * it to read.
+ */
+export function resolveReadableRoot(directory: string): string | undefined {
+  try {
+    const entry = lstatSync(directory);
+    if (!entry.isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return resolvePathForPolicy(directory);
 }
 
 export function normalizeToolCall(input: {

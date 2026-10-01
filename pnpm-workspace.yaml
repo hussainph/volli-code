@@ -111,13 +111,15 @@ patchedDependencies:
   # Upstream still ships no such hook — 0.87.1's dist/harness/compaction/* is
   # byte-identical to 0.85.1's (the transcript-context work of 0.86/0.87 did
   # not touch the harness compaction module), so this patch rebased unchanged
-  # (VC-421).
+  # (VC-421), and again onto 0.99.2, whose compaction.{js,d.ts} and
+  # jsonl/storage.js are byte-identical to 0.87.1's (VC-469).
   #
   # Also (VC-462): `JsonlStorage.openV4` re-opens a sidecar in 8 ms slices that
   # yield to the event loop, instead of decoding, splitting and replaying the
   # whole file in one synchronous pass (~190 ms of blocked Electron main at
   # 47 MB). Same recovered state; see packages/agent-runtime/UPSTREAM.md.
-  "@earendil-works/pi-agent-core@0.87.1": patches/@earendil-works__pi-agent-core@0.87.1.patch
+  # 0.99.2 still reads the whole file in one pass, so the hunk stays.
+  "@earendil-works/pi-agent-core@0.99.2": patches/@earendil-works__pi-agent-core@0.99.2.patch
 
 peerDependencyRules:
   allowAny:

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  MCP_RESULT_HOST_MAX_BYTES,
   mcpProviderToolName,
   type McpServerDraft,
   type McpToolDefinition,
@@ -12,7 +13,12 @@ import {
   McpSignInRequiredError,
 } from "./credentials";
 import { McpTransportFailure, type McpProtocolClient } from "./discovery";
-import { McpCallBlocked, McpSessionHost, serversForFrozenMcpTools } from "./session-host";
+import {
+  exceedsHostBound,
+  McpCallBlocked,
+  McpSessionHost,
+  serversForFrozenMcpTools,
+} from "./session-host";
 
 const server: McpServerDraft = {
   id: "server-1",
@@ -114,8 +120,10 @@ describe("McpSessionHost", () => {
     expect(JSON.stringify(result)).not.toContain("secret-blob");
   });
 
-  it("rejects disabled or unknown servers and oversize results using safe errors", async () => {
-    const huge = "x".repeat(300_000);
+  it("rejects disabled or unknown servers, and passes a megabyte result through whole (VC-469)", async () => {
+    // Over the old 256 KiB refusal by four times: the runtime cuts what the
+    // model reads and saves the whole, so the host hands it over untouched.
+    const huge = "x".repeat(1_048_576);
     const open = vi.fn(async () =>
       client(async () => ({ content: [{ type: "text", text: huge }] })),
     );
@@ -138,7 +146,52 @@ describe("McpSessionHost", () => {
         { serverId: "server-1", toolName: "large", arguments: {}, toolCallId: "one" },
         new AbortController().signal,
       ),
-    ).rejects.toThrow("MCP result exceeded the safe size limit");
+    ).resolves.toEqual({ content: [{ type: "text", text: huge }], isError: false });
+  });
+
+  it("answers a result past the host bound as an error, before converting it, and keeps the connection", async () => {
+    const protocol = client(async () => ({
+      content: [{ type: "text", text: "x".repeat(MCP_RESULT_HOST_MAX_BYTES + 1) }],
+    }));
+    const open = vi.fn(async () => protocol);
+    const host = new McpSessionHost({ workspacePath: "/workspace", servers: [server], open });
+
+    await expect(
+      host.port.call(
+        { serverId: server.id, toolName: "huge", arguments: {}, toolCallId: "one" },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: "MCP server Fixture returned a result over the 32 MiB limit, and Volli did not read it.",
+        },
+      ],
+      isError: true,
+    });
+    expect(protocol.close).not.toHaveBeenCalled();
+  });
+
+  it("counts every string a result carries toward the host bound, and stops counting past it", () => {
+    expect(exceedsHostBound({ content: [{ type: "text", text: "abc" }] }, 20)).toBe(false);
+    // Text, image data, nested resources, structured values and their keys all count.
+    expect(exceedsHostBound({ content: [{ type: "image", data: "x".repeat(30) }] }, 20)).toBe(true);
+    expect(
+      exceedsHostBound(
+        { content: [{ type: "resource", resource: { uri: "u", blob: "y".repeat(30) } }] },
+        20,
+      ),
+    ).toBe(true);
+    expect(
+      exceedsHostBound({ content: [], structuredContent: { rows: [1, 2, true, null] } }, 20),
+    ).toBe(false);
+    expect(exceedsHostBound({ content: [], structuredContent: { ["k".repeat(25)]: 1 } }, 20)).toBe(
+      true,
+    );
+    expect(
+      exceedsHostBound({ content: [], structuredContent: Array.from({ length: 50 }, () => 0) }, 20),
+    ).toBe(true);
   });
 
   it("turns protocol failures into a safe failed result naming only the configured server", async () => {

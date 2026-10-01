@@ -364,6 +364,18 @@ export interface PolicyToolCall {
 export interface PolicyContext {
   /** Absolute, resolved Session workspace root. */
   workspacePath: string;
+  /**
+   * Absolute, resolved directories outside the workspace that hold output this
+   * Session's own tools saved, which `path.outside-workspace` lets it READ and
+   * never write (VC-469).
+   *
+   * Today that is one directory: where a tool result too long for the model
+   * was saved whole, beside the Session's recovery sidecar. The result names a
+   * path there and tells the model to `read` it, so refusing that read would
+   * refuse the instruction the runtime itself just gave. The runtime supplies
+   * it; nothing a model says can add to it.
+   */
+  readableRoots?: readonly string[];
 }
 
 /**

@@ -1,5 +1,5 @@
 import {
-  MCP_RESULT_MAX_CHARS,
+  MCP_RESULT_HOST_MAX_BYTES,
   type McpConnectionBlock,
   type McpJsonValue,
   type McpServerDraft,
@@ -263,6 +263,40 @@ function convertContent(block: unknown): RuntimeMcpContent {
   };
 }
 
+/**
+ * Whether a result is past {@link MCP_RESULT_HOST_MAX_BYTES}, decided before
+ * anything copies it (VC-469).
+ *
+ * A walk that adds up the strings in the result — text, image data, URIs,
+ * structured values — and stops the moment the total passes the bound, so a
+ * huge result costs no more to refuse than the bound itself. The transports
+ * bound what arrives (stdio by its read buffer); this bounds what the main
+ * process works on next, whichever transport delivered it.
+ */
+export function exceedsHostBound(
+  result: { content: readonly unknown[]; structuredContent?: unknown },
+  limit = MCP_RESULT_HOST_MAX_BYTES,
+): boolean {
+  let total = 0;
+  const pending: unknown[] = [result.content, result.structuredContent];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") total += value.length;
+    else if (Array.isArray(value)) {
+      total += 1;
+      // One at a time: spreading a very long array into `push` overflows.
+      for (const child of value) pending.push(child);
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        total += key.length;
+        pending.push(child);
+      }
+    } else total += 1;
+    if (total > limit) return true;
+  }
+  return false;
+}
+
 function convertResult(
   result: Awaited<ReturnType<McpProtocolClient["callTool"]>>,
 ): RuntimeMcpCallResult {
@@ -273,16 +307,15 @@ function convertResult(
     // any mutable prototype-bearing value before the runtime sees it.
     structuredContent = JSON.parse(JSON.stringify(result.structuredContent)) as McpJsonValue;
   }
-  const converted: RuntimeMcpCallResult = {
+  // No size refusal here (VC-469). A long result reaches the runtime whole,
+  // which cuts what the model reads and saves the rest beside the Session; the
+  // only bound left is the runtime's outer one on what it keeps and writes.
+  return {
     content,
     ...(structuredContent === undefined ? {} : { structuredContent }),
     // pi-mcp does not validate the flag; only a literal `true` is an error.
     isError: result.isError === true,
   };
-  if (JSON.stringify(converted).length > MCP_RESULT_MAX_CHARS) {
-    throw new Error("MCP result exceeded the safe size limit");
-  }
-  return converted;
 }
 
 /**
@@ -314,7 +347,7 @@ interface ClientEntry {
  * first; a caller that gives up stops waiting and the open carries on for the
  * rest. A client is retired only when a call on it fails with
  * {@link McpTransportFailure} — never for a call's own abort, a server's error
- * answer, a timeout or an oversized result — and a retired client is closed
+ * answer or a timeout — and a retired client is closed
  * only after the last call still running on it settles, so a sibling that
  * could still succeed is not cut off by someone else's failure.
  */
@@ -418,14 +451,23 @@ export class McpSessionHost {
         arguments: request.arguments,
         signal: combined.signal,
       });
+      if (exceedsHostBound(result)) {
+        // The server answered; it said too much. The connection stays.
+        return {
+          content: [
+            {
+              type: "text",
+              text: `MCP server ${safeSummary(server.name, "configured")} returned a result over the ${MCP_RESULT_HOST_MAX_BYTES / (1_024 * 1_024)} MiB limit, and Volli did not read it.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       return convertResult(result);
     } catch (error) {
       // This call was withdrawn, or the attachment closed under it. Either way
       // the connection did nothing wrong and stays for every other caller.
       if (combined.signal.aborted) throw combined.signal.reason;
-      if (error instanceof Error && error.message === "MCP result exceeded the safe size limit") {
-        throw error;
-      }
       if (error instanceof McpTransportFailure) this.#retire(server.id, entry);
       // Refused for want of a sign-in or a credential (VC-470). The connection
       // is fine — tokens and headers are read per request — so it is kept;

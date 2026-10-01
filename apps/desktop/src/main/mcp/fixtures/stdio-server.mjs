@@ -48,12 +48,6 @@ server.registerTool(
   }),
 );
 
-// One result well past the 1 MiB stdio limit VC-8 had, and inside the 8 MiB
-// bound VC-469 set: the message must cross the pipe as one frame.
-server.registerTool("fixture_large", { description: "Returns about 1.1 MB of text" }, async () => ({
-  content: [{ type: "text", text: "x".repeat(1_100_000) }],
-}));
-
 // Past the 8 MiB bound: the client must refuse it at once, not time out.
 server.registerTool(
   "fixture_too_large",
@@ -65,5 +59,22 @@ server.registerTool("fixture_exit", { description: "Exits after answering" }, as
   setTimeout(() => process.exit(0), 50);
   return { content: [{ type: "text", text: "exiting" }] };
 });
+
+// About 1.1 MB of text in one result: past the 1 MiB stdio read buffer Volli
+// used to set, so the transport bound cannot quietly shrink back (VC-469).
+server.registerTool(
+  "fixture_large",
+  { description: "A result over a megabyte from a real stdio fixture" },
+  async () => ({
+    content: [
+      {
+        type: "text",
+        text: Array.from({ length: 20_000 }, (_, index) => `row ${index} ${"-".repeat(45)}`).join(
+          "\n",
+        ),
+      },
+    ],
+  }),
+);
 
 await server.connect(new StdioServerTransport());

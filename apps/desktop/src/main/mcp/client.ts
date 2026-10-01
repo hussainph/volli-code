@@ -50,6 +50,7 @@ import {
   MCP_CALL_TIMEOUT_MS,
   MCP_CONNECTION_TIMEOUT_MS,
   MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL,
+  MCP_RESULT_MAX_BYTES,
   mcpEndpointMayCarryCredentials,
   mcpServerUsesOAuth,
   sanitizeMcpServerDraft,
@@ -76,10 +77,12 @@ import {
 } from "./discovery";
 
 /**
- * The largest single stdio message a server may send: VC-469's 8 MiB outer
- * bound on one tool result, plus room for the JSON-RPC envelope around it.
+ * The largest single stdio message a server may send: VC-469's
+ * {@link MCP_RESULT_MAX_BYTES} (8 MiB) outer bound on one tool result, plus
+ * room for the JSON-RPC envelope around it. The runtime cuts what the model
+ * reads and saves the rest; this only has to let a result that size arrive.
  */
-export const MCP_STDIO_BUFFER_MAX_BYTES = 8 * 1_024 * 1_024 + 64 * 1_024;
+export const MCP_STDIO_BUFFER_MAX_BYTES = MCP_RESULT_MAX_BYTES + 64 * 1_024;
 /**
  * The largest single message a Streamable HTTP server may send, on the same
  * terms: one JSON response body, or one SSE event. pi-mcp bounds an SSE event

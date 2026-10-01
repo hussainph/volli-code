@@ -34,8 +34,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.74",
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-agent-core": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2",
     "@mozilla/readability": "^0.6.0",
     "@volli/shared": "workspace:*",
     "gpt-tokenizer": "^4.0.0",

@@ -8,6 +8,7 @@ import type {
   Model,
   ModelsPublication,
   ModelsStore,
+  ModelsStoreEntry,
   Provider,
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
@@ -215,6 +216,57 @@ describe("withRefreshableCatalog", () => {
     );
 
     expect(wrapped.getModels().map((entry) => entry.id)).toEqual(["ox-alpha-free"]);
+  });
+
+  it("lists its own chat catalog through getAllModels beside the base's other model types (Pi 0.99)", async () => {
+    const image = {
+      ...model("acme", "acme-image"),
+      type: "image",
+      output: ["image"],
+    } as unknown as Model<Api>;
+    const base = {
+      ...baseProvider("acme", baseline),
+      getAllModels: () => [...baseline, image],
+    } as Provider;
+    const wrapped = withRefreshableCatalog(
+      base,
+      scriptedSource({ models: [model("acme", "acme-3")] }),
+    );
+    expect(wrapped.getAllModels?.().map((entry) => entry.id)).toEqual([
+      "acme-1",
+      "acme-2",
+      "acme-image",
+    ]);
+
+    await wrapped.refreshModels?.(refreshContext().context);
+    // The refreshed chat list, not the base's stale one, and the image entry kept.
+    expect(wrapped.getAllModels?.().map((entry) => entry.id)).toEqual(["acme-3", "acme-image"]);
+    // A base that lists only chat models has nothing else to add.
+    const chatOnly = withRefreshableCatalog(
+      baseProvider("acme", baseline),
+      scriptedSource({ models: [] }),
+    );
+    expect(chatOnly.getAllModels?.()).toEqual(baseline);
+  });
+
+  it("restores only chat models from a store entry that holds other types (Pi 0.99)", async () => {
+    const wrapped = withRefreshableCatalog(baseProvider("acme", baseline), failingSource());
+    const { context } = refreshContext({
+      allowNetwork: false,
+      stored: {
+        models: [
+          model("acme", "acme-2", { name: "Acme 2 cached" }),
+          { ...model("acme", "acme-1", { name: "not a chat model" }), type: "classifier" },
+        ],
+        checkedAt: 1,
+        __volliCatalogFormat: 2,
+      } as unknown as ModelsStoreEntry,
+    });
+    await wrapped.refreshModels?.(context);
+    expect(wrapped.getModels().map((entry) => [entry.id, entry.name])).toEqual([
+      ["acme-1", "acme-1"],
+      ["acme-2", "Acme 2 cached"],
+    ]);
   });
 
   it("hands the source its own provider id and static baseline", async () => {
