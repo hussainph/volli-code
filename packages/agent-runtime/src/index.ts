@@ -13,6 +13,7 @@ export {
   toSignInEvent,
   toSignInPrompt,
   type PiSignIn,
+  type PiSignInOptions,
   type PiSignInSteps,
 } from "./pi/sign-in";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
@@ -117,8 +118,10 @@ export {
   type ExaSearchOptions,
 } from "./web/exa";
 export {
+  listSavedOutput,
   TOOL_OUTPUT_DIRECTORY_MAX_BYTES,
   TOOL_OUTPUT_DIRECTORY_SUFFIX,
+  TOOL_OUTPUT_TOTAL_MAX_BYTES,
   toolOutputDirectoryFor,
   type ToolOutputCut,
 } from "./pi/tool-output";

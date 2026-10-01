@@ -275,9 +275,9 @@ normally.
 
 A tool's **output schema** is checked against the same schema limits, but a
 failing one does not make the tool unusable: the schema is left off and the
-tool works without it. An output schema only describes the structured half of a
-result (see [What a call returns](#what-a-call-returns)); the model never sees
-it.
+tool works without it, and the main-process log says why. An output schema only
+describes the structured half of a result (see
+[What a call returns](#what-a-call-returns)); the model never sees it.
 
 ### You removed a server and older Sessions now fail to reattach
 
@@ -395,8 +395,8 @@ reads the same shape.
 
 | Part | What it holds |
 | --- | --- |
-| `content` | What the model reads: Volli's trust notice, then the server's text and images in order. A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. When long text is cut, all of the text comes first as one block, followed by the images. |
-| `structuredContent` | The server's `structuredContent`, unchanged. The model does not see it. The exception is a result with no content blocks at all: the model is then shown the structured content as JSON, since that is all the server sent. It can be missing even when the tool declares an output schema: the server sent none, or it was over the limit below. |
+| `content` | What the model reads: Volli's trust notice, then the server's text and images in order, then the structured content as compact JSON (see the next row). A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. When long text is cut, all of the text comes first as one block, followed by the images. |
+| `structuredContent` | The server's `structuredContent`, unchanged. The model also reads it, as a `Structured content: {…}` line, unless one of the server's text blocks already holds the same JSON. Codex follows the same rule. It can be missing even when the tool declares an output schema: the server sent none, or it was over the limit below. |
 | `isError` | `true` when the server marked the result as an error. The model gets it as an error result, and `structuredContent` and `details` are still kept. |
 | `details` | Notes from Volli about the result: how the text was cut and where it was saved (`output`), or the size of structured content that was dropped (`structuredContentOmittedBytes`). Usually empty. |
 
@@ -405,49 +405,80 @@ A tool whose server publishes an output schema declares it as the tool's
 Session keeps the schema it was born with. Sessions created before VC-469 (the
 move to Pi 0.99) have no output schemas and keep running without them.
 
-An image larger than `read` allows (4.5 MiB of base64) is re-encoded to fit, the
-same way `read` handles an image file, or replaced by a one-line placeholder if
-it cannot be. A result stays in the Session's history and is resent with every
-later request, so its images are kept small.
+Images are bounded because a result stays in the Session's history and is
+resent with every later request. An image larger than `read` allows (4.5 MiB of
+base64) is re-encoded to fit, the same way `read` handles an image file, or
+replaced by a one-line placeholder if it cannot be. One result shows the model
+at most **8 images** (`MCP_RESULT_MAX_IMAGES`) and **16 MiB** of image data
+(`MCP_RESULT_IMAGE_MAX_BYTES`); a note names how many more were left out.
 
 A call that never got an answer from the server (the connection failed, or the
 call was stopped) is a failed call, not an error result, and carries nothing
 the server said.
 
+**What survives a restart.** Pi records what the model read (`content`, cut
+text and the structured-content line included), `details` and `isError` in the
+Session's sidecar, and that is what the model sees again after a relaunch. Pi's
+record of a tool result does not keep `structuredContent` itself. The Session's
+durable activity row keeps the whole result, `structuredContent` included, cut
+to 64 K characters.
+
 ### Long results
 
-A result is never refused for being long. If its text is over
-**20 KiB** (`MCP_RESULT_INLINE_MAX_BYTES`), the model gets the start and the end
-of the text, with a `…N chars truncated…` marker between them. Pi and Codex use
-the same format. The full text is saved to a file, and the result gives the
-file's path so the model can `read` the middle in parts with `offset` and
-`limit`. The output starts at line 3 of the file, after Volli's notice. `read`
-returns at most 50 KB of one line, so a result with longer lines (minified JSON,
-say) says so and suggests reading those lines in byte ranges from the shell.
+A result is not refused for being long, up to the host's outer bound below. If
+its text is over **20 KiB** (`MCP_RESULT_INLINE_MAX_BYTES`), the model gets the
+start and the end of the text, with a `…N chars truncated…` marker between
+them. Pi and Codex use the same format. The full text is saved to a file, and
+the result gives the file's path so the model can `read` the middle in parts
+with `offset` and `limit`. The output starts at line 3 of the file, after
+Volli's notice. Lines longer than **16 KiB** are split across several lines in
+the file (the header says so), because `read` refuses a line over 50 KB, and
+the model should never have to fall back on the shell, whose output carries no
+trust notice.
 
-- **Where the files are.** In the Session's own storage, next to the Pi sidecar
-  that holds its conversation:
+- **Where the files are.** Next to the Pi sidecar that holds the Session's
+  conversation:
   `<userData>/pi-sessions/<workspace folder>/<sidecar name without .jsonl>.tool-output/`.
-  Never in `/tmp`. Each file starts with a line saying what it is and that its content
-  is untrusted data. Files are readable by your user account only.
-- **How long they are kept.** As long as the sidecar. Cleaning up an orphaned
-  sidecar (Settings → Storage → *Pi session logs*) deletes its saved output too.
-  Like the sidecars, the files are not included in backups, because a tool
-  result can contain anything the server could see.
+  Never in `/tmp`. Each file starts with a line saying what it is and that its
+  content is untrusted data. Files are readable by your user account only, and
+  Volli refuses to write through a symlink standing where the directory goes.
+- **How long they are kept.** Saved output is a copy of something the model
+  already read the ends of, so it is a bounded cache, not a record:
+  - All saved output together is kept under **1 GiB**
+    (`TOOL_OUTPUT_TOTAL_MAX_BYTES`). When a new file needs the room, the oldest
+    files go first, whichever Session saved them.
+  - Archiving or deleting a ticket removes the saved output of its Sessions.
+    The Sessions, their transcripts and their sidecars stay.
+  - Cleaning up an orphaned sidecar (Settings → Storage → *Pi session logs*)
+    deletes its saved output too. The same section shows how much saved output
+    there is, against the 1 GiB bound, after a scan.
+
+  A file removed by any of these is reported as missing if the model asks for
+  it later. Calling the tool again gets the data back.
+- **Backups.** The files are left out of Volli's own backup bundle, like the
+  sidecars, because a tool result can contain anything the server could see.
+  Volli does not mark them for other backup tools such as Time Machine.
 - **Reading them back.** When `read` opens a saved file, its result starts with
   a notice that the file is untrusted data, so the warning is not lost when the
   model reads the rest of a result later. A Session whose authority is set to
-  `enforce` may read its own saved output, but never write to it, even though
-  the files are outside its workspace. That includes the output of an earlier
-  attachment whose conversation a new one carries forward. After a relaunch
-  resumes the newer attachment, reading the older attachment's files counts as
-  a read outside the workspace again, which the person can allow.
-- **Limits.** One file holds at most **8 MiB** of text (`MCP_RESULT_MAX_BYTES`).
-  If the text is longer, the file holds the first 8 MiB and the result says how
-  much of the total that is. One Session attachment saves at most **256 MiB**
-  (`TOOL_OUTPUT_DIRECTORY_MAX_BYTES`). After that, long results are still cut,
-  but not saved, and the result says why. Structured content over 8 MiB as JSON
-  is dropped from the result, and a note in the content gives its size.
+  `enforce` may read, but never write, the saved output its own history names:
+  its own, and that of every earlier attachment whose conversation it carries,
+  after a relaunch as well as on the first attach. It may not read another
+  Session's saved output, and a symlink inside the directory grants nothing.
+- **Limits.**
+  - One file holds at most **8 MiB** of text (`MCP_RESULT_MAX_BYTES`). If the
+    text is longer, the file holds the first 8 MiB and the result says how much
+    of the total that is.
+  - One Session attachment saves at most **256 MiB**
+    (`TOOL_OUTPUT_DIRECTORY_MAX_BYTES`). After that, long results are still cut,
+    but not saved, and the result says why.
+  - Structured content over 8 MiB as JSON is dropped from the result, and a
+    note in the content gives its size.
+  - The host reads at most **32 MiB** of one result
+    (`MCP_RESULT_HOST_MAX_BYTES`), counted over its text, image data and
+    structured content before anything copies it. A larger result comes back to
+    the model as an error naming the limit. A local (stdio) server's messages
+    can be up to 9 MiB, enough for an 8 MiB result and its framing.
 
 These rules apply to MCP results only. `web_fetch` already returns at most
 25,000 characters of an extracted article, and saving the rest of a web page
@@ -479,7 +510,7 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Client, transports, launch environment | `apps/desktop/src/main/mcp/client.ts` |
 | Per-attachment connection owner | `apps/desktop/src/main/mcp/session-host.ts` |
 | Result shape, cutting long results | `createMcpTool` in `packages/agent-runtime/src/pi/tools.ts` |
-| Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `apps/desktop/src/main/pi-session-orphans.ts` |
+| Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `apps/desktop/src/main/pi-tool-output.ts`, `apps/desktop/src/main/pi-session-orphans.ts` |
 | Shared per-server bound | `packages/agent-runtime/src/mcp/server-budget.ts` |
 | Parallel-read marks | `withParallelReadEligibility` in `packages/shared/src/mcp.ts` |
 | Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |

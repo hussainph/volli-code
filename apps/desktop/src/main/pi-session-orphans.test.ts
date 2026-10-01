@@ -6,6 +6,7 @@ import {
   openSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -13,6 +14,7 @@ import { mkdtemp, open as openFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TOOL_OUTPUT_TOTAL_MAX_BYTES } from "@volli/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "./db/projects-repo";
@@ -229,11 +231,24 @@ describe("PiSessionOrphanService explicit reclaim", () => {
     }
     const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
     const scan = await service.scan();
-    // The output directory is not a sidecar and is never inventoried as one.
+    // The output directory is not a sidecar and is never inventoried as one,
+    // but its bytes are part of what removing the sidecar frees.
     expect(scan.candidates.map((candidate) => candidate.sessionId)).toEqual(["orphan-with-output"]);
     expect(scan.skipped).toEqual([]);
+    expect(scan.candidates[0]!.sizeBytes).toBe(statSync(orphanPath).size + "saved".length);
+    expect(scan.candidateBytes).toBe(scan.candidates[0]!.sizeBytes);
+    // Every Session's saved output, against the bound the runtime keeps it under.
+    expect(scan.toolOutput).toEqual({
+      files: 2,
+      bytes: 2 * "saved".length,
+      limitBytes: TOOL_OUTPUT_TOTAL_MAX_BYTES,
+    });
 
-    await service.reclaim({ scanRevision: scan.revision, itemIds: [scan.candidates[0]!.itemId] });
+    const report = await service.reclaim({
+      scanRevision: scan.revision,
+      itemIds: [scan.candidates[0]!.itemId],
+    });
+    expect(report.removedBytes).toBe(scan.candidateBytes);
 
     expect(existsSync(orphanPath)).toBe(false);
     expect(existsSync(orphanOutput)).toBe(false);

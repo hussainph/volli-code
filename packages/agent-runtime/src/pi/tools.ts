@@ -50,8 +50,10 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import {
+  MCP_RESULT_IMAGE_MAX_BYTES,
   MCP_RESULT_INLINE_MAX_BYTES,
   MCP_RESULT_MAX_BYTES,
+  MCP_RESULT_MAX_IMAGES,
   parseTodoList,
   sessionToolBindings,
   todoListMarkdown,
@@ -75,6 +77,7 @@ import type {
   NonCodingToolId,
   McpJsonValue,
   McpToolDefinition,
+  RuntimeMcpContent,
   RuntimeMcpPort,
   RuntimeVerbResult,
   RuntimeWebDocument,
@@ -361,16 +364,65 @@ export interface McpToolResultDetails {
 
 type ResultBlock = AgentToolResult<McpToolResultDetails>["content"][number];
 
+/** Whether `text` is JSON that says exactly what `structured` says, whitespace aside. */
+function carries(text: string, structured: McpJsonValue): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    return stableJson(JSON.parse(trimmed) as McpJsonValue) === stableJson(structured);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * One MCP image, within `read`'s bound (VC-469).
+ * The server's blocks as the model reads them, images bounded (VC-469).
  *
- * The 256 KiB refusal this ticket removed was the only thing bounding an
- * image's bytes, and a tool result stays in the sidecar and in every later
- * request. An image already under the payload bound passes untouched, as it
- * always did (the send-time guard still fits its dimensions); a larger one goes
- * through the same pipeline `read` uses, which re-encodes it to fit or says it
- * could not.
+ * The 256 KiB refusal this ticket removed was the only thing bounding a
+ * result's images, and a tool result stays in the sidecar and in every later
+ * request. An image already under `read`'s payload bound passes untouched, as
+ * it always did (the send-time guard still fits its dimensions); a larger one
+ * goes through the same pipeline `read` uses, which re-encodes it to fit or
+ * says it could not. Past {@link MCP_RESULT_MAX_IMAGES} images, or
+ * {@link MCP_RESULT_IMAGE_MAX_BYTES} of them, the rest are named and left out.
  */
+async function modelBlocks(content: readonly RuntimeMcpContent[]): Promise<ResultBlock[]> {
+  const blocks: ResultBlock[] = [];
+  let images = 0;
+  let imageBytes = 0;
+  let omitted = 0;
+  for (const block of content) {
+    if (block.type !== "image") {
+      blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (images >= MCP_RESULT_MAX_IMAGES) {
+      omitted += 1;
+      continue;
+    }
+    const fitted = await boundedImage(block);
+    const bytes = fitted.reduce(
+      (sum, part) => sum + (part.type === "image" ? part.data.length : 0),
+      0,
+    );
+    if (imageBytes + bytes > MCP_RESULT_IMAGE_MAX_BYTES) {
+      omitted += 1;
+      continue;
+    }
+    images += bytes > 0 ? 1 : 0;
+    imageBytes += bytes;
+    blocks.push(...fitted);
+  }
+  if (omitted > 0) {
+    blocks.push({
+      type: "text",
+      text: `[${omitted} more image(s) left out: one result carries at most ${MCP_RESULT_MAX_IMAGES} images and ${formatBytes(MCP_RESULT_IMAGE_MAX_BYTES)} of them.]`,
+    });
+  }
+  return blocks;
+}
+
+/** One image within `read`'s bound, or the placeholder `read` would give. */
 async function boundedImage(block: { data: string; mimeType: string }): Promise<ResultBlock[]> {
   if (block.data.length <= MAX_READ_IMAGE_BASE64_BYTES) {
     return [{ type: "image", data: block.data, mimeType: block.mimeType }];
@@ -451,16 +503,19 @@ export function createMcpTool(
         }
         const details: McpToolResultDetails = {};
         let structuredContent: McpJsonValue | undefined = result.structuredContent;
-        let blocks: ResultBlock[] = (
-          await Promise.all(
-            result.content.map(async (block): Promise<ResultBlock[]> => {
-              if (block.type === "image") return boundedImage(block);
-              return [{ type: "text", text: block.text }];
-            }),
-          )
-        ).flat();
-        if (blocks.length === 0 && structuredContent !== undefined) {
-          blocks = [{ type: "text", text: stableJson(structuredContent) }];
+        let blocks = await modelBlocks(result.content);
+        // Codex's rule: the model reads the structured data too, unless a text
+        // block already says the same thing. A summary line beside a payload
+        // that only `structuredContent` carries would otherwise hide the payload
+        // from the one reader who asked for it.
+        if (
+          structuredContent !== undefined &&
+          !blocks.some((block) => isTextBlock(block) && carries(block.text, structuredContent!))
+        ) {
+          blocks.push({
+            type: "text",
+            text: `Structured content: ${stableJson(structuredContent)}`,
+          });
         }
         if (structuredContent !== undefined) {
           const bytes = Buffer.byteLength(JSON.stringify(structuredContent), "utf8");

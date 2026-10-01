@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { mcpProviderToolName, type McpServerDraft, type McpToolDefinition } from "@volli/shared";
+import {
+  MCP_RESULT_HOST_MAX_BYTES,
+  mcpProviderToolName,
+  type McpServerDraft,
+  type McpToolDefinition,
+} from "@volli/shared";
 
 import { McpTransportFailure, type McpProtocolClient } from "./discovery";
-import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
+import { exceedsHostBound, McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
 const server: McpServerDraft = {
   id: "server-1",
@@ -131,6 +136,51 @@ describe("McpSessionHost", () => {
         new AbortController().signal,
       ),
     ).resolves.toEqual({ content: [{ type: "text", text: huge }], isError: false });
+  });
+
+  it("answers a result past the host bound as an error, before converting it, and keeps the connection", async () => {
+    const protocol = client(async () => ({
+      content: [{ type: "text", text: "x".repeat(MCP_RESULT_HOST_MAX_BYTES + 1) }],
+    }));
+    const open = vi.fn(async () => protocol);
+    const host = new McpSessionHost({ workspacePath: "/workspace", servers: [server], open });
+
+    await expect(
+      host.port.call(
+        { serverId: server.id, toolName: "huge", arguments: {}, toolCallId: "one" },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: "MCP server Fixture returned a result over the 32 MiB limit, and Volli did not read it.",
+        },
+      ],
+      isError: true,
+    });
+    expect(protocol.close).not.toHaveBeenCalled();
+  });
+
+  it("counts every string a result carries toward the host bound, and stops counting past it", () => {
+    expect(exceedsHostBound({ content: [{ type: "text", text: "abc" }] }, 20)).toBe(false);
+    // Text, image data, nested resources, structured values and their keys all count.
+    expect(exceedsHostBound({ content: [{ type: "image", data: "x".repeat(30) }] }, 20)).toBe(true);
+    expect(
+      exceedsHostBound(
+        { content: [{ type: "resource", resource: { uri: "u", blob: "y".repeat(30) } }] },
+        20,
+      ),
+    ).toBe(true);
+    expect(
+      exceedsHostBound({ content: [], structuredContent: { rows: [1, 2, true, null] } }, 20),
+    ).toBe(false);
+    expect(exceedsHostBound({ content: [], structuredContent: { ["k".repeat(25)]: 1 } }, 20)).toBe(
+      true,
+    );
+    expect(
+      exceedsHostBound({ content: [], structuredContent: Array.from({ length: 50 }, () => 0) }, 20),
+    ).toBe(true);
   });
 
   it("turns protocol failures into a safe failed result naming only the configured server", async () => {

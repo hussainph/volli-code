@@ -102,6 +102,33 @@ describe("authorityVerdict", () => {
     expect(verdict(join(pointed, "secret.txt"), [pointed])).toBe("deny");
   });
 
+  it("follows no link out of a readable root, and grants no sibling attachment's output (VC-469)", () => {
+    const { raw, real } = workspace();
+    const sessions = join(real, "..", "sessions", "--ws--");
+    const own = join(sessions, "own.tool-output");
+    const sibling = join(sessions, "sibling.tool-output");
+    for (const directory of [own, sibling]) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "saved.txt"), "saved");
+    }
+    const secret = join(real, "..", "secret.txt");
+    writeFileSync(secret, "s");
+    // A link inside the root, pointing out of it: the read resolves to its target.
+    symlinkSync(secret, join(own, "link.txt"));
+    const verdict = (path: string) =>
+      authorityVerdict({
+        tool: "read",
+        args: { path },
+        authority: snapshot(),
+        workspacePath: raw,
+        readableRoots: [own],
+      }).outcome;
+
+    expect(verdict(join(own, "saved.txt"))).toBe("allow");
+    expect(verdict(join(own, "link.txt"))).toBe("deny");
+    expect(verdict(join(sibling, "saved.txt"))).toBe("deny");
+  });
+
   it("compares operands against the resolved root, not the symlink the caller passed", () => {
     const { raw, real } = workspace();
     expect(raw).not.toBe(real);

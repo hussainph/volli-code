@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   MCP_RESULT_INLINE_MAX_BYTES,
   MCP_RESULT_MAX_BYTES,
+  MCP_RESULT_MAX_IMAGES,
   mcpProviderToolName,
   type McpToolDefinition,
   type RuntimeMcpPort,
@@ -88,14 +89,15 @@ describe("MCP Pi tool wrapper", () => {
       },
       expect.any(AbortSignal),
     );
-    // The model reads the server's blocks behind the notice, and nothing else:
-    // the structured half travels natively instead of as a line of text.
+    // The model reads the server's blocks behind the notice, then the
+    // structured data no text block carried; the data also travels natively.
     expect(result).toEqual({
       content: [
         notice,
         { type: "text", text: "server text" },
         { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
         { type: "text", text: "[resource link: docs://guide]" },
+        { type: "text", text: 'Structured content: {"a":{"two":true},"z":1}' },
       ],
       details: {},
       structuredContent: { z: 1, a: { two: true } },
@@ -121,7 +123,11 @@ describe("MCP Pi tool wrapper", () => {
     });
 
     await expect(failed.execute("call-2", {}, new AbortController().signal)).resolves.toEqual({
-      content: [notice, { type: "text", text: "An issue with that title already exists." }],
+      content: [
+        notice,
+        { type: "text", text: "An issue with that title already exists." },
+        { type: "text", text: 'Structured content: {"code":"duplicate","existing":6}' },
+      ],
       details: {},
       structuredContent: { code: "duplicate", existing: 6 },
       isError: true,
@@ -157,7 +163,7 @@ describe("MCP Pi tool wrapper", () => {
     await expect(
       structuredOnly.execute("call-structured", {}, new AbortController().signal),
     ).resolves.toEqual({
-      content: [notice, { type: "text", text: '{"a":[true],"z":1}' }],
+      content: [notice, { type: "text", text: 'Structured content: {"a":[true],"z":1}' }],
       details: {},
       structuredContent: { z: 1, a: [true] },
     });
@@ -192,7 +198,7 @@ describe("MCP Pi tool wrapper", () => {
     expect(result.content[0]).toEqual(notice);
     expect(Buffer.byteLength(shown)).toBeLessThan(MCP_RESULT_INLINE_MAX_BYTES + 1_024);
     expect(shown).toMatch(
-      /^Warning: truncated output \(original token count: \d+\)\nTotal output lines: 16384\n\nline 0 /u,
+      /^Warning: truncated output \(original token count: \d+\)\nTotal output lines: 16385\n\nline 0 /u,
     );
     expect(shown).toMatch(/…\d+ chars truncated…/u);
     expect(shown).toContain("line 16383 ");
@@ -204,11 +210,11 @@ describe("MCP Pi tool wrapper", () => {
     expect(shown).not.toContain("Some lines");
     expect(result.details).toEqual({
       output: {
-        totalBytes: Buffer.byteLength(whole),
-        totalLines: 16_384,
+        totalBytes: Buffer.byteLength(`${whole}\nStructured content: {"rows":16384}`),
+        totalLines: 16_385,
         removedChars: expect.any(Number),
         fullOutputPath: path,
-        savedBytes: Buffer.byteLength(whole),
+        savedBytes: Buffer.byteLength(`${whole}\nStructured content: {"rows":16384}`),
       },
     });
     // The structured half is untouched by the cut.
@@ -218,7 +224,7 @@ describe("MCP Pi tool wrapper", () => {
     expect(
       saved.startsWith(`${SAVED_TOOL_OUTPUT_WARNING} Tool: ${definition().providerName}.`),
     ).toBe(true);
-    expect(saved.endsWith(`\n\n${whole}`)).toBe(true);
+    expect(saved.endsWith(`\n\n${whole}\nStructured content: {"rows":16384}`)).toBe(true);
   });
 
   it("still cuts when there is nowhere to save, and says so", async () => {
@@ -255,15 +261,77 @@ describe("MCP Pi tool wrapper", () => {
 
     const bytes = Buffer.byteLength(JSON.stringify(huge));
     expect("structuredContent" in result).toBe(false);
-    expect(result.details).toEqual({ structuredContentOmittedBytes: bytes });
-    expect(result.content).toEqual([
-      notice,
-      { type: "text", text: "ok" },
-      {
-        type: "text",
-        text: "[The structured content (8.0 MiB of JSON) is over the 8.0 MiB limit on one result and is not kept with it.]",
-      },
-    ]);
+    expect(result.details).toMatchObject({ structuredContentOmittedBytes: bytes });
+    // The model was still shown its ends, cut like any long text.
+    expect((result.content[1] as { text: string }).text).toContain(
+      'Structured content: {"blob":"xxx',
+    );
+    expect(result.content.at(-1)).toEqual({
+      type: "text",
+      text: "[The structured content (8.0 MiB of JSON) is over the 8.0 MiB limit on one result and is not kept with it.]",
+    });
+  });
+
+  it("shows the model structured data no text block already carries (Codex's rule)", async () => {
+    const data = { rows: [{ id: 1 }, { id: 2 }], next: null };
+    const answer = (text: string) =>
+      tool({
+        call: async () => ({
+          content: [{ type: "text", text }],
+          structuredContent: data,
+          isError: false,
+        }),
+      }).execute("call-summary", {}, new AbortController().signal);
+    const rendered = {
+      type: "text",
+      text: 'Structured content: {"next":null,"rows":[{"id":1},{"id":2}]}',
+    };
+
+    // A summary beside a payload only `structuredContent` holds: both reach the model.
+    await expect(answer("Found 2 rows.")).resolves.toMatchObject({
+      content: [notice, { type: "text", text: "Found 2 rows." }, rendered],
+      structuredContent: data,
+    });
+    // The same data already in a text block, however it is laid out: not twice.
+    for (const same of [
+      JSON.stringify(data),
+      JSON.stringify(data, null, 2),
+      ` ${JSON.stringify(data)}\n`,
+    ]) {
+      expect((await answer(same)).content).toEqual([notice, { type: "text", text: same }]);
+    }
+    // JSON that says something else, or text that only looks like JSON, does not count.
+    for (const other of ['{"rows":[]}', "[1, 2", "{not json}"]) {
+      expect((await answer(other)).content.at(-1)).toEqual(rendered);
+    }
+  });
+
+  it("bounds how many images, and how much image data, one result shows the model", async () => {
+    const small = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+    const many = await tool({
+      call: async () => ({ content: Array.from({ length: 10 }, () => small), isError: false }),
+    }).execute("call-many", {}, new AbortController().signal);
+    expect(many.content.filter((block) => block.type === "image")).toHaveLength(
+      MCP_RESULT_MAX_IMAGES,
+    );
+    expect(many.content.at(-1)).toEqual({
+      type: "text",
+      text: "[2 more image(s) left out: one result carries at most 8 images and 16.0 MiB of them.]",
+    });
+
+    // Images just under read's bound pass untouched; the fourth is over the total.
+    const heavy = {
+      type: "image" as const,
+      data: "A".repeat(MAX_READ_IMAGE_BASE64_BYTES),
+      mimeType: "image/png",
+    };
+    const weighty = await tool({
+      call: async () => ({ content: [heavy, heavy, heavy, heavy], isError: false }),
+    }).execute("call-heavy", {}, new AbortController().signal);
+    expect(weighty.content.filter((block) => block.type === "image")).toHaveLength(3);
+    expect(weighty.content.at(-1)).toMatchObject({
+      text: expect.stringMatching(/^\[1 more image\(s\) left out/u),
+    });
   });
 
   it("passes a small image untouched and fits one over read's bound the way read does", async () => {

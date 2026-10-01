@@ -1154,6 +1154,60 @@ describe("volli:ticket-create — ticket numbers never recycle across a hard del
   });
 });
 
+describe("archiving or deleting a ticket drops its Sessions' saved tool output (VC-469)", () => {
+  function piToolOutput(sessionsRoot: string, ticketId: string, name: string): string {
+    const directory = join(sessionsRoot, "--Users-test-project--");
+    mkdirSync(directory, { recursive: true });
+    const sidecar = join(directory, `${name}.jsonl`);
+    writeFileSync(sidecar, "{}\n");
+    const output = join(directory, `${name}.tool-output`);
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "tc-1.txt"), "saved");
+    const session = testSession(
+      ctx.db.prepare("SELECT project_id FROM tickets WHERE id = ?").pluck().get(ticketId) as string,
+      ticketId,
+    );
+    insertSession(ctx.db, session);
+    ctx.db
+      .prepare(
+        `UPDATE session_attachments SET adapter_id = 'pi', native_detail = ? WHERE session_id = ?`,
+      )
+      .run(
+        JSON.stringify({
+          kind: "volli.native-binding.v1",
+          locator: { runtime: "pi", sessionId: name, sessionFilePath: sidecar },
+        }),
+        session.id,
+      );
+    return output;
+  }
+
+  it("removes it on archive, and on deleting a ticket archived before this existed", () => {
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "volli-pi-sessions-"));
+    createdProjectDirs.push(sessionsRoot);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { detectBaseBranch: async () => null, piSessionsDirectory: sessionsRoot },
+    );
+    const projectId = createProject();
+    const archived = createTicket(projectId);
+    const archivedOutput = piToolOutput(sessionsRoot, archived.id, "archived");
+    archiveTicket(archived.id);
+    expect(existsSync(archivedOutput)).toBe(false);
+
+    // A live ticket keeps it, even when a delete is wrongly asked for.
+    const live = createTicket(projectId);
+    const liveOutput = piToolOutput(sessionsRoot, live.id, "live");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: live.id }).ok).toBe(false);
+    expect(existsSync(liveOutput)).toBe(true);
+
+    // Saved again after the archive (an older build, say), then deleted.
+    const again = piToolOutput(sessionsRoot, archived.id, "again");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: archived.id }).ok).toBe(true);
+    expect(existsSync(again)).toBe(false);
+  });
+});
+
 describe("volli:ticket-create — body, labels, usesWorktree", () => {
   it("persists and hydrates body, labels, and usesWorktree", () => {
     const projectId = createProject();

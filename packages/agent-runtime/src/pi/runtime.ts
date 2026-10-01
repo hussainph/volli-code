@@ -39,6 +39,7 @@ import {
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
+  isMcpToolId,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -125,7 +126,12 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
-import { ToolOutputStore, toolOutputDirectoryFor } from "./tool-output";
+import {
+  savedOutputDirectoriesIn,
+  ToolOutputLedger,
+  ToolOutputStore,
+  toolOutputDirectoryFor,
+} from "./tool-output";
 import { applyToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
@@ -329,6 +335,8 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  /** One bound across every attachment's saved tool output (VC-469). */
+  toolOutputLedger: ToolOutputLedger;
   parallelMcpReads: boolean;
   models: Models;
   credentials: CredentialStore | null;
@@ -384,6 +392,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
     parallelMcpReads: options.parallelMcpReads === true,
     models: access.models,
     credentials: access.credentials,
@@ -805,6 +814,25 @@ const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "compaction",
   "branch_summary",
 ]);
+
+/**
+ * Every saved-output path the MCP results in `entries` recorded, carried
+ * conversations included (VC-469). A result's `details.output` is Volli's own
+ * record of where its whole text went; anything else is ignored, and what is
+ * found is checked again against the data directory before it grants a read.
+ */
+function savedOutputPathsIn(entries: readonly Entry[]): unknown[] {
+  return entries.flatMap((entry): unknown[] => {
+    // A carried conversation holds messages and summaries, never another
+    // marker: a chain is flattened as it is carried, so one level is all there is.
+    if (entry.type === "custom") return savedOutputPathsIn(carriedEntriesOf(entry) ?? []);
+    if (entry.type !== "message" || entry.message.role !== "toolResult") return [];
+    if (!isMcpToolId(entry.message.toolName)) return [];
+    // `details` is JSON on a recorded result, and an MCP result's is an object.
+    const output = (entry.message.details as Record<string, unknown> | undefined)?.["output"];
+    return [isRecord(output) ? output["fullOutputPath"] : undefined];
+  });
+}
 
 /** The entries a `context-carried` marker holds, or undefined for any other entry. */
 function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
@@ -2051,14 +2079,19 @@ async function attachSession(
     // and schemas, the provider-visible half, never change.
     //
     // Long tool results are cut for the model and saved whole beside this
-    // attachment's sidecar, so they live exactly as long as the conversation
-    // that names them (VC-469). The gate below lets the Session read them, and
-    // the ones a carried conversation names: those were saved beside the
-    // earlier attachment's sidecar, which the carry has just proved is ours.
+    // attachment's sidecar (VC-469), under the runtime-wide bound. The gate
+    // below lets the Session read them, and every other saved-output directory
+    // its own history names: an earlier attachment's results reach this one
+    // through a carry, after a relaunch as much as on the first attach, and
+    // through every link of a chain of carries.
     const toolOutput = new ToolOutputStore({
       directory: toolOutputDirectoryFor(sidecarMetadata.path),
-      carriedDirectories: carried ? [toolOutputDirectoryFor(spec.carry!.sessionFilePath)] : [],
+      namedDirectories: savedOutputDirectoriesIn(
+        savedOutputPathsIn(recoveredEntries),
+        host.sessionDataDir,
+      ),
       dataDirectory: host.sessionDataDir,
+      ledger: host.toolOutputLedger,
       workspacePath: spec.workspacePath,
     });
     const { tools, toolExecution } = applyToolDispatch(

@@ -36,6 +36,19 @@ export const MCP_RESULT_INLINE_MAX_BYTES = 20 * 1_024;
  * dropped from the result, which says so.
  */
 export const MCP_RESULT_MAX_BYTES = 8 * 1_024 * 1_024;
+/**
+ * What the host reads of one result at all (VC-469): four times
+ * {@link MCP_RESULT_MAX_BYTES}, measured over the result's text, image data and
+ * structured content before anything copies, cuts or saves it. A result past
+ * it is answered as an error naming the bound, never handed on. The transports
+ * bound what arrives before this does; this bounds what the main process then
+ * works on, whichever transport delivered it.
+ */
+export const MCP_RESULT_HOST_MAX_BYTES = 4 * MCP_RESULT_MAX_BYTES;
+/** The most images one result shows the model (VC-469). */
+export const MCP_RESULT_MAX_IMAGES = 8;
+/** The most base64 image data one result shows the model, after each image is fitted (VC-469). */
+export const MCP_RESULT_IMAGE_MAX_BYTES = 16 * 1_024 * 1_024;
 
 export type McpJsonPrimitive = string | number | boolean | null;
 export type McpJsonValue = McpJsonPrimitive | McpJsonObject | readonly McpJsonValue[];

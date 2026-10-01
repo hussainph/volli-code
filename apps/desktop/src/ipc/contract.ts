@@ -3754,8 +3754,14 @@ export interface PiSessionOrphanInventory {
   scannedAt: number;
   candidates: PiSessionOrphanCandidate[];
   candidateCount: number;
+  /** What removing every candidate frees: the sidecars and the saved tool output beside them. */
   candidateBytes: number;
   skipped: PiSessionOrphanSkipped[];
+  /**
+   * Long tool results saved across every Session (VC-469): how much there is
+   * now, and the bound past which the oldest are removed first.
+   */
+  toolOutput: { files: number; bytes: number; limitBytes: number };
 }
 
 /** One reviewed candidate main kept after its mandatory pre-unlink re-check. */

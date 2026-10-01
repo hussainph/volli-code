@@ -137,9 +137,11 @@ section, on every version bump.
 character boundary, behind `Warning: truncated output (original token count:
 N)`). The coding-agent package is not a dependency, so nothing pins the two
 together; if Pi changes its format, this one stays as it is until someone
-decides otherwise. What differs on purpose is where the whole text goes: a
-directory beside the attachment's sidecar with a per-file and a per-directory
-bound, instead of an unbounded file in the OS temp directory.
+decides otherwise. What differs on purpose is where the whole text goes and how
+long it lives: a directory beside the attachment's sidecar, under a per-file,
+per-attachment and runtime-wide bound (oldest removed first), with lines over
+16 KiB split so `read` reaches all of it, instead of an unbounded file in the OS
+temp directory.
 
 ## Transcript-carried prompt and tools (0.86+)
 
@@ -206,7 +208,9 @@ tarballs:
   `ToolResultMessage` carries no `structuredContent`, so the sidecar and the
   token estimate are unchanged by them. `afterToolCall` drops a result's
   `structuredContent` when it replaces `content` without it. The MCP wrapper
-  uses all three; see `docs/mcp.md`, "What a call returns".
+  uses all three, and follows Codex in also showing the model the structured
+  data as compact JSON unless a text block already carries it; see
+  `docs/mcp.md`, "What a call returns".
 - **`runToolCall`** runs one call through argument preparation, validation and
   both hooks without emitting events. Not used yet; it is the seam a nested
   caller (VC-471's Code Mode) needs so authority still judges each call.
@@ -225,6 +229,17 @@ tarballs:
 - **Anthropic workload identity federation** (`ANTHROPIC_FEDERATION_RULE_ID`
   and friends) resolves Anthropic auth from an identity-token file; the test
   setup clears those variables like the other ambient credentials.
+- **Sign in with ChatGPT.** The `openai` provider gained an OAuth login that
+  sends OpenAI a stable installation UUID as the agent host id, read from
+  `LoginOptions.getDeviceId`, and throws before asking anything without one.
+  `piSignIn` takes a `deviceId` and passes it; main mints one per installation
+  (`installation-id.ts`, kept in `app_state`). `sign-in.integration.test.ts`
+  runs the real flow up to the browser step, with and without it.
+- **Classifier-only providers.** 0.99.2 ships `typesafe`, which lists a
+  classifier and no chat model. Model Access is a chat-model page, so it leaves
+  out any provider that lists models but no chat ones (a provider listing
+  nothing yet, such as a dynamic one before its first refresh, stays).
+  Classifier models get their own Settings slot in VC-478.
 - **Transitive:** `openai` 6.40 → 7.19 (pi-ai's OpenAI adapters; this runtime
   does not import it). Notices regenerated.
 - **Unchanged and re-checked:** the patched compaction and storage modules,

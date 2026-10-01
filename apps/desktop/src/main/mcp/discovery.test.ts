@@ -52,6 +52,7 @@ describe("discoverMcpServer", () => {
   });
 
   it("keeps a published output schema, and keeps a tool whose output schema it cannot accept (VC-469)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const outputSchema = { type: "object", properties: { echo: { type: "string" } } };
     const catalog = await discoverMcpServer({
       server,
@@ -72,6 +73,10 @@ describe("discoverMcpServer", () => {
       ["untyped", null, undefined],
     ]);
     expect(catalog[1]?.enabled).toBe(true);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      '[mcp] Fixture: left off the output schema of mistyped (output schema root type must be "object")',
+    );
+    warn.mockRestore();
   });
 
   it("shows a bounded reason for each invalid definition without weakening its schema", async () => {

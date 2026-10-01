@@ -192,7 +192,8 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     const handle = await runtime.startSession(spec);
     await handle.submitUserMessage("File the fixture issue.");
 
-    // The model meets an error result: Pi's own flag, the notice, the server's words.
+    // The model meets an error result: Pi's own flag, the notice, the server's
+    // words, and the structured data no text block carried.
     const [result] = toolResultsIn(sent[0]!);
     expect(result).toMatchObject({
       toolCallId: "tc-dup",
@@ -200,10 +201,9 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       content: [
         { type: "text", text: MCP_UNTRUSTED_DATA_WARNING },
         { type: "text", text: "An issue with that title already exists." },
+        { type: "text", text: 'Structured content: {"code":"duplicate","existing":6}' },
       ],
     });
-    // It is not shown the structured half, which no longer rides as text.
-    expect(JSON.stringify(result!.content)).not.toContain("duplicate");
 
     // The durable record keeps it: a failed activity whose output is the
     // native result, structured data included.
@@ -218,12 +218,18 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
         structuredContent: { code: "duplicate", existing: 6 },
       },
     });
-    // And replays it through the path a restart reads.
-    const replay = await handle.reconcile(null);
+    // And replays it after a relaunch: a fresh runtime reopening the sidecar.
+    const recovery = handle.recovery!;
+    await handle.close();
+    const relaunched = await createPiAgentRuntime({
+      sessionDataDir,
+      models: scriptedModels([]),
+    }).startSession({ ...spec, recovery });
+    const replay = await relaunched.reconcile(null);
     expect(replay.observations.filter((observation) => observation.kind === "activity")).toEqual(
       ended,
     );
-    await handle.close();
+    await relaunched.close();
   });
 
   it("cuts a 1 MB result for the model, saves it beside the sidecar, and lets the Session read it back", async () => {
@@ -278,7 +284,11 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     // Where the whole went: the attachment's own directory, beside its sidecar.
     const sidecar = handle.recovery!.sessionFilePath;
     expect(dirname(savedPath)).toBe(toolOutputDirectoryFor(sidecar));
-    expect(readFileSync(savedPath, "utf8").endsWith(`\n\n${whole}`)).toBe(true);
+    expect(
+      readFileSync(savedPath, "utf8").endsWith(
+        `\n\n${whole}\nStructured content: {"number":7,"url":"https://fixture/7"}`,
+      ),
+    ).toBe(true);
     // The sidecar holds the cut, never the megabyte.
     expect(statSync(sidecar).size).toBeLessThan(200_000);
 
@@ -292,7 +302,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     expect(existsSync(savedPath)).toBe(true);
   });
 
-  it("lets a fresh attachment that carries the conversation read the earlier one's saved output", async () => {
+  it("lets every attachment its history reaches read the saved output: a carry, a relaunch, a chain", async () => {
     const whole = Array.from(
       { length: 4_096 },
       (_, index) => `entry ${index} ${"-".repeat(40)}`,
@@ -302,7 +312,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       isError: false,
     }));
     let savedPath = "";
-    const first = createPiAgentRuntime({
+    const first = await createPiAgentRuntime({
       sessionDataDir,
       models: scriptedModels([
         callTool(MCP_TOOL.providerName, { title: "Long" }, "tc-long"),
@@ -312,40 +322,65 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
           say("Saved.")(reply, messages);
         },
       ]),
-    });
-    const earlier = await first.startSession(spec);
-    await earlier.submitUserMessage("File it.");
-    const recovery = earlier.recovery!;
-    await earlier.close();
+    }).startSession(spec);
+    await first.submitUserMessage("File it.");
+    const firstRecovery = first.recovery!;
+    await first.close();
 
-    const sent: (readonly Message[])[] = [];
-    const second = createPiAgentRuntime({
-      sessionDataDir,
-      models: scriptedModels([
-        callTool("read", { path: savedPath, offset: 2_000, limit: 1 }, "tc-carried-read"),
-        (reply, messages) => {
-          sent.push(messages);
-          say("Read it.")(reply, messages);
-        },
-      ]),
+    /** One attachment that reads the saved file once, and what it was sent back. */
+    const readOnce = async (overrides: Partial<SessionRuntimeSpec>, label: string) => {
+      const sent: (readonly Message[])[] = [];
+      const handle = await createPiAgentRuntime({
+        sessionDataDir,
+        models: scriptedModels([
+          callTool("read", { path: savedPath, offset: 2_000, limit: 1 }, `tc-${label}`),
+          (reply, messages) => {
+            sent.push(messages);
+            say("Read it.")(reply, messages);
+          },
+        ]),
+      }).startSession({ ...spec, ...overrides });
+      await handle.submitUserMessage(`Read the middle (${label}).`);
+      const recovery = handle.recovery!;
+      await handle.close();
+      const read = toolResultsIn(sent[0]!).find((message) => message.toolCallId === `tc-${label}`);
+      return { read, recovery };
+    };
+    const carryFrom = (recovery: typeof firstRecovery, attachmentId: string) => ({
+      ...recovery,
+      attachmentId,
+      workspacePath: spec.workspacePath,
     });
-    const later = await second.startSession({
-      ...spec,
-      identity: { ...spec.identity, attachmentId: "attachment-2" },
-      carry: { ...recovery, attachmentId: "attachment-1", workspacePath: spec.workspacePath },
-    });
-    await later.submitUserMessage("Read the middle of that.");
 
-    // Saved by the earlier attachment, outside this one's own directory, and
-    // still allowed by the enforcing gate and marked as untrusted.
-    expect(dirname(savedPath)).not.toBe(toolOutputDirectoryFor(later.recovery!.sessionFilePath));
-    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
-    const read = toolResultsIn(sent[0]!).find(
-      (message) => message.toolCallId === "tc-carried-read",
+    // B carries A: A's file is outside B's own directory, and readable.
+    const b = await readOnce(
+      {
+        identity: { ...spec.identity, attachmentId: "attachment-b" },
+        carry: carryFrom(firstRecovery, "attachment-1"),
+      },
+      "b",
     );
-    expect(read?.isError).toBe(false);
-    expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
-    expect(JSON.stringify(read?.content)).toContain("entry 1997 ");
-    await later.close();
+    // B relaunched: no carry any more, only its own sidecar, which names A's file.
+    const bAgain = await readOnce(
+      { identity: { ...spec.identity, attachmentId: "attachment-b" }, recovery: b.recovery },
+      "b-again",
+    );
+    // C carries B, which carried A.
+    const c = await readOnce(
+      {
+        identity: { ...spec.identity, attachmentId: "attachment-c" },
+        carry: carryFrom(b.recovery, "attachment-b"),
+      },
+      "c",
+    );
+
+    expect(dirname(savedPath)).not.toBe(toolOutputDirectoryFor(b.recovery.sessionFilePath));
+    // Every read passed the enforcing gate and came back marked as untrusted.
+    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    for (const { read } of [b, bAgain, c]) {
+      expect(read?.isError).toBe(false);
+      expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+      expect(JSON.stringify(read?.content)).toContain("entry 1997 ");
+    }
   });
 });

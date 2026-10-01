@@ -30,6 +30,7 @@ import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
+import { removeTicketToolOutput } from "./pi-tool-output";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
@@ -491,6 +492,12 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
+    /**
+     * Where Pi keeps its sidecars and the tool output saved beside them
+     * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
+     * output. Absent (tests, degraded boot) means nothing is removed.
+     */
+    piSessionsDirectory?: string;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -553,6 +560,21 @@ export function registerDataIpcHandlers(
   const busySeam = (): { busySites?: BusyWorktreeSites } =>
     options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
   const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
+
+  /**
+   * Drops a finished ticket's saved tool output (VC-469). Nobody asked for
+   * this and the archive or delete already happened, so a failure is logged
+   * rather than raised: the runtime's own bound still removes the files,
+   * oldest first, when room is needed.
+   */
+  const releaseTicketToolOutput = (ticketId: string): void => {
+    if (options.piSessionsDirectory === undefined) return;
+    try {
+      removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
+    } catch (error) {
+      console.warn(`[volli] Could not remove ticket ${ticketId}'s saved tool output:`, error);
+    }
+  };
 
   const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
     void trimFinishedWorktree(
@@ -1038,6 +1060,7 @@ export function registerDataIpcHandlers(
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      releaseTicketToolOutput(input.ticketId);
       // An archive KEEPS the checkout, which makes an archived ticket the
       // longest-lived carrier of a dead dependency tree in the app (VC-340).
       trimFinishedInBackground(input.ticketId, ticket?.project_id);
@@ -1055,6 +1078,11 @@ export function registerDataIpcHandlers(
     },
 
     "volli:ticket-delete": (input: TicketIdInput): Result => {
+      // Before the delete, which detaches the Sessions from the ticket; and
+      // only for an archived ticket, the one kind the delete accepts.
+      if (getTicketRow(db, input.ticketId)?.archived_at != null) {
+        releaseTicketToolOutput(input.ticketId);
+      }
       deleteTicketCommand(db, input.ticketId);
       return { ok: true };
     },
@@ -1991,6 +2019,7 @@ export function registerDataIpcHandlers(
         releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      releaseTicketToolOutput(input.ticketId);
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
       changeWatchManager.unwatchTicket(input.ticketId);

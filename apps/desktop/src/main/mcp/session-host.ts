@@ -1,4 +1,5 @@
 import {
+  MCP_RESULT_HOST_MAX_BYTES,
   type McpJsonValue,
   type McpServerDraft,
   type McpToolDefinition,
@@ -141,6 +142,40 @@ function convertContent(block: unknown): RuntimeMcpContent {
   };
 }
 
+/**
+ * Whether a result is past {@link MCP_RESULT_HOST_MAX_BYTES}, decided before
+ * anything copies it (VC-469).
+ *
+ * A walk that adds up the strings in the result — text, image data, URIs,
+ * structured values — and stops the moment the total passes the bound, so a
+ * huge result costs no more to refuse than the bound itself. The transports
+ * bound what arrives (stdio by its read buffer); this bounds what the main
+ * process works on next, whichever transport delivered it.
+ */
+export function exceedsHostBound(
+  result: { content: readonly unknown[]; structuredContent?: unknown },
+  limit = MCP_RESULT_HOST_MAX_BYTES,
+): boolean {
+  let total = 0;
+  const pending: unknown[] = [result.content, result.structuredContent];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") total += value.length;
+    else if (Array.isArray(value)) {
+      total += 1;
+      // One at a time: spreading a very long array into `push` overflows.
+      for (const child of value) pending.push(child);
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        total += key.length;
+        pending.push(child);
+      }
+    } else total += 1;
+    if (total > limit) return true;
+  }
+  return false;
+}
+
 function convertResult(
   result: Awaited<ReturnType<McpProtocolClient["callTool"]>>,
 ): RuntimeMcpCallResult {
@@ -258,6 +293,18 @@ export class McpSessionHost {
         arguments: request.arguments,
         signal: combined.signal,
       });
+      if (exceedsHostBound(result)) {
+        // The server answered; it said too much. The connection stays.
+        return {
+          content: [
+            {
+              type: "text",
+              text: `MCP server ${safeSummary(server.name, "configured")} returned a result over the ${MCP_RESULT_HOST_MAX_BYTES / (1_024 * 1_024)} MiB limit, and Volli did not read it.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       return convertResult(result);
     } catch (error) {
       // This call was withdrawn, or the attachment closed under it. Either way

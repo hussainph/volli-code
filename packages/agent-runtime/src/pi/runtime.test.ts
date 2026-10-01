@@ -3507,10 +3507,11 @@ describe("startSession", () => {
     // Nothing was denied, and no fallback budget was spent on a dynamic name.
     expect(kinds(observations)).not.toContain("authority");
 
-    // Every block reached the model: text as text, the image as an image and
-    // the unsupported block as its bounded text stand-in, each behind the
-    // Volli-owned trust notice. Structured content is not among them: since
-    // Pi 0.99 it travels as the result's own `structuredContent` (VC-469).
+    // Every block reached the model: text as text, the image as an image, the
+    // unsupported block as its bounded text stand-in, and the structured data
+    // no text block carried as compact JSON — each behind the Volli-owned
+    // trust notice. Since Pi 0.99 the data also travels as the result's own
+    // `structuredContent` (VC-469).
     const toolResult = (afterTool?.messages ?? []).find(
       (message): message is Extract<Message, { role: "toolResult" }> =>
         message.role === "toolResult",
@@ -3520,6 +3521,7 @@ describe("startSession", () => {
       { type: "text", text: "issue #7 created" },
       { type: "image", data: pixels, mimeType: "image/png" },
       { type: "text", text: "[resource link: issue — https://fixture/7]" },
+      { type: "text", text: 'Structured content: {"number":7,"url":"https://fixture/7"}' },
     ]);
 
     const activities = observations.filter((observation) => observation.kind === "activity");

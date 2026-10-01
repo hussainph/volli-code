@@ -104,6 +104,14 @@ export async function discoverMcpServer(
         // the tool stays usable: it only types the structured half of a result.
         ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
       });
+      // Not shown in Settings: the tool works without it, so there is nothing
+      // to ask a person to do, but someone wondering why a tool is untyped
+      // finds the reason in the main-process log.
+      if (sanitized.ok && sanitized.outputSchemaRejected !== undefined) {
+        console.warn(
+          `[mcp] ${input.server.name}: left off the output schema of ${bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS)} (${sanitized.outputSchemaRejected})`,
+        );
+      }
       if (!sanitized.ok) {
         return {
           name: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),

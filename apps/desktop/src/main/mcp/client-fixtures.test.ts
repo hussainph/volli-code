@@ -5,6 +5,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { openMcpProtocolClient } from "./client";
+import { McpSessionHost } from "./session-host";
 import type { McpProtocolClient } from "./discovery";
 
 const opened: McpProtocolClient[] = [];
@@ -35,6 +36,7 @@ describe("real MCP transport fixtures", () => {
         name: "fixture_echo",
         description: "Echo from a real stdio fixture",
       }),
+      expect.objectContaining({ name: "fixture_large" }),
     ]);
     await expect(
       client.callTool({
@@ -51,6 +53,28 @@ describe("real MCP transport fixtures", () => {
 
     await client.close();
     opened.pop();
+  });
+
+  it("carries a result over a megabyte through the real stdio transport and session host (VC-469)", async () => {
+    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const server = {
+      id: "stdio-fixture",
+      name: "stdio fixture",
+      enabled: true,
+      transport: { type: "stdio" as const, command: process.execPath, args: [fixture] },
+    };
+    const host = new McpSessionHost({ workspacePath: process.cwd(), servers: [server] });
+    closing.push(() => host.close());
+
+    const result = await host.port.call(
+      { serverId: server.id, toolName: "fixture_large", arguments: {}, toolCallId: "large" },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBe(false);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(Buffer.byteLength(text)).toBeGreaterThan(1_100_000);
+    expect(text.endsWith(`row 19999 ${"-".repeat(45)}`)).toBe(true);
   });
 
   it("discovers and calls a local unauthenticated Streamable HTTP server", async () => {
