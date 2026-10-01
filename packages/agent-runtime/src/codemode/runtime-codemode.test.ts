@@ -448,7 +448,7 @@ describe("Code Mode through the real Session path", () => {
     expect(targets.every((path) => existsSync(path))).toBe(true);
     const text = resultText(h, "cm-1");
     expect(text).toContain("Returned: 3");
-    expect(text).toMatch(/waiting on approval/u);
+    expect(text).toMatch(/paused on approvals/u);
   }, 20_000);
 
   it("reaches active nested calls when the turn is interrupted, and never starts queued ones", async () => {
