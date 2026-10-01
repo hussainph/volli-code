@@ -4,6 +4,8 @@
  * compaction entry. History stays on disk and only provider context is elided.
  */
 
+import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
+
 import {
   compact,
   createBranchSummaryMessage,
@@ -37,7 +39,7 @@ import { estimateContextTokens, projectedContextTokens } from "./token-counting"
 import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
-import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
+import { sessionUsageFrom } from "./transcript";
 import { systemHead, withSystemHead } from "./transcript-context";
 
 /**
@@ -412,6 +414,7 @@ export type CompactionOutcome =
   | { kind: "failed"; message: string; usage?: SessionUsage | null };
 
 export interface CompactionInput {
+  credentialRedaction?: DiagnosticRedactionPort;
   /** The Pi session this attachment owns; the entry is appended to its main lane. */
   sidecar: Session;
   /** The durable branch, already read through {@link conversationPath}. */
@@ -553,6 +556,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     prefix.length === 0
       ? { kind: "unsupported" as const }
       : await compactProviderNative({
+          credentialRedaction: input.credentialRedaction,
           model: input.model,
           models: sessionModels,
           messages: prefix,
@@ -616,7 +620,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   if (!result.ok)
     return {
       kind: "failed",
-      message: sanitizeDiagnostic(result.error.message),
+      message: safeStopMessage(result.error.message, input.credentialRedaction),
       ...(nativeUsage
         ? {
             usage: sessionUsageFrom(
@@ -633,7 +637,10 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   // summary that replaced it. Sanitized, and additive to whatever Pi put in
   // `details` — Pi reads its own file lists out of that object and ignores
   // keys it did not write.
-  const nativeFailure = native.kind === "failed" ? native.message : undefined;
+  const nativeFailure =
+    native.kind === "failed"
+      ? safeStopMessage(native.message, input.credentialRedaction)
+      : undefined;
   const provisioned: NewEntry<CompactionEntry> = {
     type: "compaction",
     id: input.sidecar.idGenerator.next(),

@@ -68,7 +68,11 @@ headers, or stack is copied into the interruption record. Before any sidecar or
 Session event is written, error text passes through the shared secret redactor
 and the credential owner's exact-value filter. Ambiguous echoed request material
 is withheld; raw provider diagnostics are not saved. Only the structural facts
-needed for reasoning recovery survive the diagnostic whitelist.
+needed for reasoning recovery survive the diagnostic whitelist. The same policy
+covers automatic compaction, overflow recovery, manual `/compact`, and native
+compaction fallback diagnostics before they reach JSONL, replay, Session events
+or the compaction failure row. Oversized native error bodies are withheld rather
+than truncating through a credential.
 
 The terminal provider failure wins over recovered transport diagnostics. A
 WebSocket-to-SSE fallback followed by a usage limit is `rate-limited`, not

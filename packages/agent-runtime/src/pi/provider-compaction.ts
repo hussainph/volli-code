@@ -8,6 +8,8 @@
  * Contracts: developers.openai.com/api/docs/guides/compaction and
  * platform.claude.com/docs/en/build-with-claude/compaction.
  */
+
+import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
 import {
   convertToLlm,
   COMPACTION_SUMMARY_PREFIX,
@@ -28,7 +30,7 @@ import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode
 import type { SessionUsage } from "@volli/shared";
 import { Buffer } from "node:buffer";
 import { providerImageGuard } from "./provider-images";
-import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
+import { costBasisForApi } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
 
 export const ANTHROPIC_COMPACT_BETA = "compact-2026-01-12";
@@ -136,6 +138,7 @@ export type ProviderCompactionOutcome =
   | { kind: "failed"; message: string; rawUsage?: Usage };
 
 export interface ProviderCompactionInput {
+  credentialRedaction?: DiagnosticRedactionPort;
   model: Model<Api>;
   models: Models;
   messages: readonly AgentMessage[];
@@ -302,7 +305,10 @@ export async function compactProviderNative(
       kind: "failed",
       message: input.signal?.aborted
         ? "provider-native compaction aborted"
-        : sanitizeDiagnostic(error instanceof Error ? error.message : String(error)),
+        : safeStopMessage(
+            error instanceof Error ? error.message : String(error),
+            input.credentialRedaction,
+          ),
     };
   }
 }
@@ -350,7 +356,8 @@ async function compactOpenAI(
     headers,
     request,
   );
-  if (!response.ok) return failure(response, "OpenAI /responses/compact");
+  if (!response.ok)
+    return failure(response, "OpenAI /responses/compact", input.credentialRedaction);
   const parsed: unknown = await boundedJson(response);
   input.signal?.throwIfAborted();
   const rawUsage = record(parsed)
@@ -453,7 +460,7 @@ async function compactAnthropic(
     headers,
     request,
   );
-  if (!counted.ok) return failure(counted, "Anthropic token counting");
+  if (!counted.ok) return failure(counted, "Anthropic token counting", input.credentialRedaction);
   const countResult: unknown = await boundedJson(counted);
   if (
     !record(countResult) ||
@@ -490,7 +497,7 @@ async function compactAnthropic(
       },
     },
   );
-  if (!response.ok) return failure(response, "Anthropic compaction");
+  if (!response.ok) return failure(response, "Anthropic compaction", input.credentialRedaction);
   const parsed: unknown = await boundedJson(response);
   input.signal?.throwIfAborted();
   const rawUsage = record(parsed)
@@ -786,11 +793,22 @@ async function boundedJson(response: Response): Promise<unknown> {
 async function failure(
   response: Response,
   endpointName: string,
+  credentialRedaction: DiagnosticRedactionPort,
 ): Promise<ProviderCompactionOutcome> {
-  const body = await boundedText(response, MAX_ERROR_BODY_BYTES, "truncate");
+  let body: string;
+  try {
+    // A partial body can end inside a stored credential. Withhold it rather
+    // than presenting a prefix that exact-value matching cannot recognize.
+    body = await boundedText(response, MAX_ERROR_BODY_BYTES, "fail");
+  } catch {
+    return {
+      kind: "failed",
+      message: `${endpointName} failed with ${response.status}: Provider error body withheld.`,
+    };
+  }
   return {
     kind: "failed",
-    message: `${endpointName} failed with ${response.status}: ${sanitizeDiagnostic(body.slice(0, 500))}`,
+    message: `${endpointName} failed with ${response.status}: ${safeStopMessage(body, credentialRedaction)}`,
   };
 }
 

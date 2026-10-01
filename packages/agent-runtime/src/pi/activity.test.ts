@@ -409,7 +409,7 @@ describe("mapPiActivity", () => {
     expect(activity.output).toEqual({ content: [{ type: "text", text: safeCommand }] });
     expect(activity.descriptor.subject.label).toBe(safeCommand);
     expect(activity.descriptor.outcome?.summary).toBe(safeCommand);
-    expect(activity.error).toBe(safeCommand);
+    expect(activity.error).toBe(safeCommand.replace("https://example.com;", "[redacted URL]"));
     expect(JSON.stringify(activity)).not.toContain("private-pw");
   });
 

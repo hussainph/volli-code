@@ -90,6 +90,7 @@ import {
   createPiAgentRuntime,
   type PiRuntimeHostOptions,
 } from "./runtime";
+import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
 import { McpServerBudget } from "../mcp/server-budget";
 import type { ConnectivityPort } from "./connectivity";
 import {
@@ -13335,3 +13336,218 @@ it("keeps Anthropic context recovery beside its truthful bad-request stop catego
     await handle.close();
   }
 });
+
+describe("compaction failure privacy (VC-482 verification blocker)", () => {
+  for (const reason of ["threshold", "overflow", "manual"] as const) {
+    it.each(DIAGNOSTIC_SECRET_CASES)(
+      `${reason} redacts %s before all durable and visible surfaces`,
+      async (_label, raw, secrets) => {
+        const { spec, observations, sessionDataDir } = fixture();
+        const telemetry: ObservabilityEvent[] = [];
+        const logs = [
+          vi.spyOn(console, "error"),
+          vi.spyOn(console, "warn"),
+          vi.spyOn(console, "log"),
+        ];
+        const steps: ScriptStep[] =
+          reason === "manual"
+            ? [settles("first answer"), settles("second answer"), (emit) => emit.fail(raw)]
+            : reason === "overflow"
+              ? [
+                  settles("first answer"),
+                  (emit) =>
+                    emit.fail(
+                      '400 {"error":{"type":"invalid_request_error","message":"prompt is too long"}}',
+                    ),
+                  (emit) => emit.fail(raw),
+                ]
+              : [
+                  settles("first answer"),
+                  settlesHolding("second answer", 200_000),
+                  (emit) => emit.fail(raw),
+                  settles("third answer"),
+                ];
+        const runtime = createPiAgentRuntime({
+          sessionDataDir,
+          models: modelsWithStream(scriptedStream(steps)),
+          observability: {
+            record: (event) => {
+              telemetry.push(event);
+            },
+          },
+        });
+        const handle = await runtime.startSession({
+          ...spec,
+          credentialRedaction: diagnosticCredentialRedaction,
+        });
+        try {
+          await handle.submitUserMessage("go");
+          await handle.submitUserMessage("carry on");
+          const receipt = reason === "manual" ? await handle.compact() : null;
+          if (reason === "threshold") await handle.submitUserMessage("continue");
+          if (reason === "manual")
+            expect(receipt).toMatchObject({ kind: "rejected", reason: "summary-failed" });
+          const failures = observations.filter(
+            (o): o is Extract<RuntimeObservation, { kind: "compaction"; state: "failed" }> =>
+              o.kind === "compaction" && o.state === "failed",
+          );
+          expect(failures).toHaveLength(1);
+          expect(failures[0]).toMatchObject({ reason });
+          // Drive the actual event/ledger/UI projection, not a second sanitizer in the test.
+          const { RuntimeObservationTranslator } =
+            await import("../../../session-engine/src/observation-translation");
+          const { createInMemorySessionLedger } =
+            await import("../../../session-engine/src/in-memory-ledger");
+          const { observationPayload, projectSession } = await import("@volli/shared");
+          const { compactionBoundaryCopy } =
+            await import("../../../session-presentation/src/compaction-boundary");
+          const row: import("@volli/shared").Session = {
+            id: spec.identity.sessionId,
+            projectId: "p",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: "Fixture",
+            createdAt: 0,
+          };
+          const translator = new RuntimeObservationTranslator({
+            namespace: "pi",
+            sessionId: row.id,
+            attachmentId: spec.identity.attachmentId,
+            now: () => 0,
+          });
+          const events: import("@volli/shared").SessionEvent[] = failures
+            .flatMap((o) => translator.replay(o))
+            .filter((fact) => fact.kind === "context.compaction_failed")
+            .map((fact, i) => ({
+              id: `event-${i}`,
+              sessionId: row.id,
+              sequence: i + 1,
+              occurredAt: 0,
+              recordedAt: 0,
+              provenance: {
+                source: { kind: "system", id: "fixture", detail: null },
+                venue: { id: "fixture", kind: "local" },
+              },
+              payload: observationPayload(
+                {
+                  ...fact,
+                  sessionId: row.id,
+                  provenance: {
+                    source: { kind: "system", id: "fixture", detail: null },
+                    venue: { id: "fixture", kind: "local" },
+                  },
+                  attachmentId: spec.identity.attachmentId,
+                },
+                { projectId: "p", ticketId: null },
+              ),
+            }));
+          const ledger = createInMemorySessionLedger();
+          const ledgerEvents = await ledger.transaction((tx) => {
+            tx.insertSession(row);
+            for (const event of events) tx.appendEvent(event);
+            return tx.listEvents({ sessionId: row.id });
+          });
+          const ui = compactionBoundaryCopy({
+            outcome: "failed",
+            reason,
+            sequence: 1,
+            afterMessageId: null,
+            detail: failures[0]!.message,
+          });
+          const artifacts = {
+            sidecar: readFileSync(handle.recovery!.sessionFilePath, "utf8"),
+            observations,
+            replay: await handle.reconcile(null),
+            receipt,
+            telemetry,
+            logs: logs.map((log) => log.mock.calls),
+            events,
+            ledgerEvents,
+            projection: projectSession(row, ledgerEvents),
+            ui,
+          };
+          for (const [surface, value] of Object.entries(artifacts)) {
+            for (const secret of secrets)
+              expect(JSON.stringify(value), `${surface} leaks ${secret}`).not.toContain(secret);
+          }
+        } finally {
+          await handle.close();
+          for (const log of logs) log.mockRestore();
+        }
+      },
+    );
+  }
+
+  it.each(DIAGNOSTIC_SECRET_CASES)(
+    "threshold exception redacts %s before persistence",
+    async (_label, raw, secrets) => {
+      const { spec, observations, sessionDataDir } = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir,
+        models: modelsWithStream(scriptedStream([settles("answer")])),
+        compactionPolicy: () => {
+          throw new Error(raw);
+        },
+      });
+      const handle = await runtime.startSession({
+        ...spec,
+        credentialRedaction: diagnosticCredentialRedaction,
+      });
+      try {
+        await handle.submitUserMessage("go");
+        expect(observations).toContainEqual(
+          expect.objectContaining({ kind: "compaction", state: "failed", reason: "threshold" }),
+        );
+        const artifacts =
+          JSON.stringify({ observations, replay: await handle.reconcile(null) }) +
+          readFileSync(handle.recovery!.sessionFilePath, "utf8");
+        for (const secret of secrets) expect(artifacts).not.toContain(secret);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+});
+
+it.each(DIAGNOSTIC_SECRET_CASES)(
+  "manual compaction exception redacts %s before reaching its caller",
+  async (_label, raw, secrets) => {
+    const { spec, observations, sessionDataDir } = fixture();
+    let failPolicy = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("first answer"), settles("second answer")])),
+      compactionPolicy: () => {
+        if (failPolicy)
+          throw Object.assign(new Error(raw), { cause: raw, request: { password: raw } });
+        return { autoCompaction: false };
+      },
+    });
+    const handle = await runtime.startSession({
+      ...spec,
+      credentialRedaction: diagnosticCredentialRedaction,
+    });
+    try {
+      await handle.submitUserMessage("go");
+      await handle.submitUserMessage("carry on");
+      failPolicy = true;
+      let rejected: unknown;
+      try {
+        await handle.compact();
+      } catch (error) {
+        rejected = error;
+      }
+      expect(rejected).toBeInstanceOf(Error);
+      expect(rejected).not.toHaveProperty("cause");
+      expect(rejected).not.toHaveProperty("request");
+      const artifacts =
+        JSON.stringify({ observations, replay: await handle.reconcile(null) }) +
+        readFileSync(handle.recovery!.sessionFilePath, "utf8") +
+        String(rejected);
+      for (const secret of secrets) expect(artifacts).not.toContain(secret);
+    } finally {
+      await handle.close();
+    }
+  },
+);

@@ -1,13 +1,12 @@
 /** Read only provider-returned fields, never classify prose (VC-482). */
 import type { AssistantMessage, JsonObject, ProviderResponse } from "@earendil-works/pi-ai";
 import {
-  redactPayloadSecrets,
   type SessionRuntimeSpec,
   type SessionStopCategory,
   type SessionStopDetail,
 } from "@volli/shared";
-import { redactCredentialText } from "./secrets";
-import { sanitizeDiagnostic } from "./transcript";
+import { safeStopMessage } from "./safe-diagnostic";
+export { safeStopMessage } from "./safe-diagnostic";
 
 type RedactionPort = SessionRuntimeSpec["credentialRedaction"];
 
@@ -67,37 +66,6 @@ function text(value: unknown): string | null {
 function instant(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
-/** Extract only the error sentence; never retain envelopes or echoed request bodies.
- * Credential matching runs before bounding, through the VC-481 owner and the
- * shared redactor. Ambiguous structured/request material is withheld, not guessed.
- */
-export function safeStopMessage(raw: string, port?: RedactionPort): string {
-  const start = raw.indexOf("{");
-  if (start >= 0) {
-    try {
-      const body = record(JSON.parse(raw.slice(start)));
-      raw =
-        text(record(body["error"])["message"]) ??
-        text(body["message"]) ??
-        "Provider error (no message stated).";
-    } catch {
-      return "[Provider text withheld: possible request content.]";
-    }
-  }
-  if (
-    /[{}]|\b(?:request|body|prompt|input|messages|headers)\s*(?:body\s*)?[:=]|\b(?:echoed|received|submitted|supplied)\s+(?:request|prompt|input|body)\b/i.test(
-      raw,
-    )
-  )
-    return "[Provider text withheld: possible request content.]";
-  return sanitizeDiagnostic(
-    redactPayloadSecrets(port === undefined ? raw : redactCredentialText(raw, port)).replace(
-      /https?:\/\/\S+/gi,
-      "[redacted URL]",
-    ),
-  );
-}
-
 /** The sidecar needs only the diagnostic facts used by reasoning recovery.
  * All other diagnostics (errors, stacks, payloads, headers) are withheld after
  * stop capture. Even a known diagnostic's arbitrary extension fields stay out.
