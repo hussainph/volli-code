@@ -44,6 +44,7 @@ import { createPortal } from "react-dom";
 import {
   displayTicketId,
   peekSummaryOf,
+  SESSION_PEEK_REFRESH_MS,
   type ModelSelection,
   type SessionPeekContent,
   type SessionProvenance,
@@ -219,8 +220,8 @@ function peekScrollerOf(list: HTMLElement | null, row: HTMLElement): HTMLElement
  *
  * A folder card is the one surface that needs several folds at once, and it is
  * also the one where a row's own title says least ("Chat", three times). Each is
- * one pull, cached for the life of the mount, and started only once a folder's
- * card is actually on screen.
+ * one pull, cached until the summary cooldown, and started only once a folder's
+ * card is actually on screen. A later hover may retry, never a timer.
  */
 function useFolderSummaries(
   rowIds: readonly string[],
@@ -228,18 +229,23 @@ function useFolderSummaries(
   summarise: (content: SessionPeekContent) => string | null,
 ): ReadonlyMap<string, string | null> {
   const [summaries, setSummaries] = React.useState<ReadonlyMap<string, string | null>>(new Map());
-  const asked = React.useRef(new Set<string>());
+  const cache = React.useRef(new Map<string, { line: string | null; readAt: number }>());
   const key = rowIds.join("|");
   React.useEffect(() => {
     let live = true;
     for (const rowId of key === "" ? [] : key.split("|")) {
       const sessionId = peekSessionId(rowId);
-      if (sessionId === null || asked.current.has(rowId)) continue;
-      asked.current.add(rowId);
+      if (sessionId === null) continue;
+      const cached = cache.current.get(rowId);
+      if (cached !== undefined && Date.now() - cached.readAt < SESSION_PEEK_REFRESH_MS) {
+        setSummaries((previous) => new Map(previous).set(rowId, cached.line));
+        continue;
+      }
       void read(sessionId).then(
         (content) => {
-          if (!live) return;
           const line = content === null ? null : summarise(content);
+          cache.current.set(rowId, { line, readAt: Date.now() });
+          if (!live) return;
           setSummaries((previous) => new Map(previous).set(rowId, line));
         },
         () => {
@@ -856,5 +862,5 @@ const EMPTY_ROWS: readonly string[] = [];
 
 /** The folder card's one line per Session — the same fold the big card leads with. */
 function peekSummaryLine(content: SessionPeekContent): string | null {
-  return peekSummaryOf(content.entries);
+  return content.summary ?? peekSummaryOf(content.entries);
 }

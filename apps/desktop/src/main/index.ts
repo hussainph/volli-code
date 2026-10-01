@@ -181,6 +181,7 @@ import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
+import { createPeekSummarizer } from "./session-control/peek-summary";
 import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
@@ -2049,6 +2050,31 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  // One owner for every window: hovers share cache, cooldown and concurrency.
+  // No runtime event or timer invokes this; only the peek IPC below does.
+  const peekSummarizer =
+    sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
+      ? createPeekSummarizer({
+          readModelDefaults: () => readModelAccessDefaults(sessionDb),
+          inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
+          completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          recordUsage: async (sessionId, usage) => {
+            await sessionEngine.observe({
+              id: `usage:peek-summary:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "peek-summary", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
+        })
+      : null;
   /**
    * The kickoff turn's delivery seam, shared by both `session.start` doors.
    *
@@ -2664,6 +2690,7 @@ app.whenReady().then(async () => {
     blobsRoot: blobsRoot(app.getPath("userData")),
     // The renderer door of auto-titling (VC-81); absent with the runtime.
     autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
+    summarizePeek: peekSummarizer?.summarize,
     // The peek card's fold reads the same transcript artifacts `volli session
     // peek` does, from the same store (VC-30).
     readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),

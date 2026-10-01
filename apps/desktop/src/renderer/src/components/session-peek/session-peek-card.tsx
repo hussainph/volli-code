@@ -20,9 +20,9 @@
  *     file: it says `Unread` and leaves the dot alone. Only opening, replying,
  *     viewing the conversation, `U` or the row's menu clears it.
  *
- * The summary is never prose we invented: it is `peekSummaryOf` over the
- * durable tail (plan §3.1), `Summary unavailable` when the fold gave nothing
- * readable, and a count when some of the tail could not be read at all.
+ * Main supplies the generated summary when available; `peekSummaryOf` over the
+ * durable tail is the fallback. The renderer generates no prose. It shows
+ * `Summary unavailable` when neither is readable, and flags unreadable messages.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -105,7 +105,7 @@ export function CardBlock({
   ...rest
 }: React.HTMLAttributes<HTMLDivElement> & { icon: React.ReactNode }) {
   return (
-    <div className={cn("flex items-start gap-2 px-3", className)} {...rest}>
+    <div className={cn("flex shrink-0 items-start gap-2 px-3", className)} {...rest}>
       <span aria-hidden className="flex h-5 w-6 shrink-0 items-center justify-center">
         {icon}
       </span>
@@ -269,7 +269,7 @@ function Summary({
   loading: boolean;
   failed: boolean;
 }) {
-  const summary = content === null ? null : peekSummaryOf(content.entries);
+  const summary = content === null ? null : (content.summary ?? peekSummaryOf(content.entries));
   const state = loading ? "loading" : summary === null || failed ? "unavailable" : "ready";
   return (
     <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
@@ -283,7 +283,7 @@ function Summary({
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (
-          <p data-peek-summary="" className="line-clamp-5 [overflow-wrap:anywhere]">
+          <p data-peek-summary="" className="whitespace-pre-wrap [overflow-wrap:anywhere]">
             {summary}
           </p>
         )}
@@ -483,7 +483,7 @@ export function SessionPeekCard({
               </form>
             </CardBlock>
           ) : (
-            <div className="px-3">
+            <div className="shrink-0 px-3">
               <InteractionCard interaction={question} onResolve={answer} />
             </div>
           )

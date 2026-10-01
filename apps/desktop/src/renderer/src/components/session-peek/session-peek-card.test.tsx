@@ -255,6 +255,52 @@ describe("identity", () => {
 });
 
 describe("the summary", () => {
+  it("shows the full generated summary in non-shrinking blocks inside the scroller", () => {
+    const summary = Array.from(
+      { length: 12 },
+      (_, index) => `Step ${index + 1}: the gutter now tracks the viewport without lag.`,
+    ).join("\n");
+    render({
+      content: content({ summary, entries: [] }),
+      position: { left: 288, top: 120, maxHeight: 240 },
+    });
+    const prose = container.querySelector("[data-peek-summary]");
+    expect(prose?.textContent).toBe(summary);
+    expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+    expect(prose?.classList.contains("whitespace-pre-wrap")).toBe(true);
+    const body = prose?.closest(".overflow-y-auto");
+    expect(body).not.toBeNull();
+    expect(body?.classList.contains("min-h-0")).toBe(true);
+    for (const block of body?.children ?? []) {
+      expect(block.classList.contains("shrink-0")).toBe(true);
+    }
+    expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
+  });
+
+  it.each([undefined, null])(
+    "shows the full durable-tail fallback when summary is %s",
+    (summary) => {
+      const text = "The gutter tracks the viewport. ".repeat(80);
+      render({
+        content: content({
+          summary,
+          entries: [{ at: NOW, role: "assistant", text, tools: [] }],
+        }),
+      });
+      const prose = container.querySelector("[data-peek-summary]");
+      expect(prose?.textContent).toBe(text);
+      expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+      expect(prose?.closest(".overflow-y-auto")).not.toBeNull();
+    },
+  );
+
+  it("prefers the generated summary over the transcript fallback", () => {
+    render({ content: content({ summary: "The gutter fix is ready for review." }) });
+    expect(container.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "The gutter fix is ready for review.",
+    );
+  });
+
   it("is the newest assistant words from the durable tail", () => {
     render();
     expect(container.querySelector("[data-peek-summary]")?.textContent).toBe(

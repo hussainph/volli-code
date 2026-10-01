@@ -2675,6 +2675,31 @@ describe("volli:session-read-set (VC-30)", () => {
 });
 
 describe("volli:session-peek-content (VC-30)", () => {
+  it("runs utility refinement only when the peek content is requested", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const created = await sessionEngine.createSession({
+      commandId: "create-summary-peek",
+      projectId: createProject(),
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const summarizePeek = vi.fn(async () => "Combined summary");
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine, summarizePeek });
+    expect(summarizePeek).not.toHaveBeenCalled();
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+    });
+    expect(summarizePeek).toHaveBeenCalledExactlyOnceWith(created.session.id, []);
+    expect(result).toMatchObject({ ok: true, content: { summary: "Combined summary" } });
+  });
+
   it("answers the Session's tail and the question it is asking", async () => {
     const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
     const created = await sessionEngine.createSession({

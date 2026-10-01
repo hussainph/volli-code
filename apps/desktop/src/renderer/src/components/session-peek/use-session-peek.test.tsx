@@ -371,6 +371,48 @@ describe("J and K", () => {
 });
 
 describe("Space into a folder's card", () => {
+  it("requests no content before a peek opens and uses generated folder summaries", async () => {
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockResolvedValue({
+      sessionId: SESSION_ROW.replace(/^chat:/, ""),
+      entries: [{ at: 1, role: "assistant", text: "Raw progress", tools: [] }],
+      summary: "Combined user request and agent progress",
+      question: null,
+      turns: 1,
+      turnDepth: 1,
+      unreadable: 0,
+      lastActivityAt: NOW,
+    });
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    expect(readContent).not.toHaveBeenCalled();
+    await pressSpace(rowButton(FOLDER_ROW));
+    expect(readContent).toHaveBeenCalledTimes(1);
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Combined user request and agent progress",
+    );
+  });
+
+  it("retries folder reads on a later peek instead of retaining a refused summary forever", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+      await render({ rowIds: [FOLDER_ROW], folders });
+      await pressSpace(rowButton(FOLDER_ROW));
+      expect(PORTS.readContent).toHaveBeenCalledTimes(1);
+      await pressKey(card()!, "Escape");
+      clock.mockReturnValue(NOW + 1_001);
+      await pressSpace(rowButton(FOLDER_ROW));
+      expect(PORTS.readContent).toHaveBeenCalledTimes(1);
+      await pressKey(card()!, "Escape");
+      clock.mockReturnValue(NOW + 60_000);
+      await pressSpace(rowButton(FOLDER_ROW));
+      expect(PORTS.readContent).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("moves focus onto the card, which has to be focusable to receive it", async () => {
     const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
     await render({ rowIds: [FOLDER_ROW], folders });

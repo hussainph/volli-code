@@ -468,6 +468,8 @@ export function registerDataIpcHandlers(
      * boot) means the rename succeeds and nothing is refined.
      */
     autoTitle?: (input: AutoTitleRequest) => void;
+    /** Budgeted utility refinement, invoked only by the hover-peek content door. */
+    summarizePeek?: SessionPeekContentPorts["summarize"];
     /**
      * The live Session runtime's command door, for the person's stop
      * (VC-269): the interrupt and the release a stop performs after its
@@ -1327,6 +1329,7 @@ export function registerDataIpcHandlers(
             ? {}
             : { readArtifact: options.readTranscriptArtifact }),
           getSession: (query) => sessionEngine.getSession(query),
+          ...(options.summarizePeek === undefined ? {} : { summarize: options.summarizePeek }),
         },
         input,
       );
