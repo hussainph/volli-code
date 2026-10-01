@@ -1,32 +1,12 @@
 /**
- * Configure → MCP Servers: app-owned, per-project transport and tool settings.
+ * Configure → MCP Servers: a fixed-column server table and bounded audit log.
  *
- * THE SHAPE (VC-470's redesign, after a survey of how Claude, ChatGPT, Codex,
- * Cursor, VS Code, Zed, Goose, Warp, Cline and others do it). The pane is a
- * list of servers and an audit log. Everything about one server — its
- * connection, its sign-in, its tools — opens as one dialog
- * (`mcp-server-dialog.tsx`), and its tools are chosen in one picker
- * (`mcp-tool-picker.tsx`) with search, select all and read-only grouping.
- *
- * A SERVER ROW says what a person scans for: the server, where it lives,
- * how many tools are on, whether it works — and, when it does not, the one
- * action that fixes it (Sign in, Add credential, Retry). Refresh age and
- * detailed provenance live in the dialog, not in the default scan path. The switch and a menu of the rest (tools, connection,
- * refresh, sign out, remove) close the row. A row is `ui/list-row.tsx`'s
- * two-line row rather than a `DataTable` line: a server's status carries an
- * action and its detail a sentence, which a 36px table cell cannot hold
- * without clipping exactly the part that says what is wrong.
- *
- * TWO LAWS THIS PANE LEARNED THE HARD WAY (VC-397), still kept:
- *
- *  1. **A pane whose sections FOLLOW a collection does not `fill`.** Every
- *     section sits in ordinary block flow and each unbounded list owns a
- *     bounded scroll box, so nothing can overlap at any viewport size or
- *     catalog length.
- *  2. **Detail is asked for, not broadcast.** A 34-tool catalog with a
- *     paragraph per tool is never drawn on the page: the row carries the
- *     counts, and the descriptions live in the dialog, one line each until a
- *     person opens a tool.
+ * Identity, tool counts, health and enablement each own a column. Recovery is
+ * one action beside a menu, never a wrapping strip. Narrow panes scroll the
+ * table horizontally rather than collapsing columns or reshuffling controls.
+ * Long connection/error/provenance details live in the server dialog. Tool
+ * catalogs never render on the page, and each collection owns a height cap so
+ * neither it nor the history can bury the other (VC-397).
  */
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
@@ -66,9 +46,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { ListRow } from "@renderer/components/ui/list-row";
 import { Switch } from "@renderer/components/ui/switch";
-import { Empty, Health, PrefSection, SectionAction } from "@renderer/components/settings/kit";
+import {
+  DataTable,
+  Empty,
+  Health,
+  PrefSection,
+  SectionAction,
+} from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
@@ -84,12 +69,6 @@ import { endpointLabel, enabledToolNames, isSelectable, serverHealth } from "./m
 const SCROLL_BOX = "max-h-96 overflow-y-auto";
 
 /**
- * The server list's own cap: about eight two-line rows. A project rarely has
- * more, and a box that scrolls at five is a list a person scrolls for nothing.
- */
-const SERVER_BOX = "max-h-[40rem] overflow-y-auto";
-
-/**
  * Who asked for one recorded operation. A Session id is not a name a person
  * recognises, but "an agent Session" versus "someone here" is the distinction
  * that decides what to do about a row.
@@ -100,8 +79,8 @@ function operationActor(entry: McpOperationRecord): string {
 
 function toolCountLabel(server: McpServerRecord): string {
   const total = server.catalog.filter(isSelectable).length;
-  if (server.catalog.length === 0) return "No tools discovered";
-  return `${enabledToolNames(server.catalog).length} of ${total} tools on`;
+  if (server.catalog.length === 0) return "—";
+  return `${enabledToolNames(server.catalog).length} of ${total}`;
 }
 
 function replaceServer(
@@ -296,34 +275,137 @@ export function McpPane({ project }: { project: Project }) {
         {servers.length === 0 ? (
           <Empty>{loading ? "Loading MCP servers…" : "No MCP servers yet."}</Empty>
         ) : (
-          <ul
-            aria-label="MCP servers"
-            className={cn("@container/mcp-servers -mx-2 flex flex-col", SERVER_BOX)}
+          <div
+            role="region"
+            aria-label="MCP server table"
+            tabIndex={0}
+            className="overflow-x-auto outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {servers.map((server) => (
-              <li key={server.id}>
-                <ServerRow
-                  server={server}
-                  access={access[server.id]}
-                  busy={busy.has(server.id)}
-                  signingIn={signingIn}
-                  onOpen={(section) => {
-                    setError(null);
-                    setDialog({ kind: "edit", server, section });
-                  }}
-                  onToggle={(enabled) => void toggleServer(server, enabled)}
-                  onSignIn={() => void signIn(server.id).then(setError)}
-                  onCancelSignIn={() => void cancelSignIn(server.id).then(setError)}
-                  onSignOut={() => void signOut(server.id).then(setError)}
-                  onRefresh={() => void refresh(server)}
-                  onRemove={() => {
-                    setRemoving(server);
-                    setConfirming(true);
-                  }}
-                />
-              </li>
-            ))}
-          </ul>
+            <div className="min-w-[44rem]">
+              <DataTable
+                label="MCP servers"
+                items={servers}
+                keyOf={(server) => server.id}
+                rows={12}
+                empty="No MCP servers yet."
+                columns={[
+                  {
+                    key: "server",
+                    header: "Server",
+                    cell: (server) => (
+                      <button
+                        type="button"
+                        aria-label={`Open ${server.name}`}
+                        className="flex min-w-0 w-full items-center gap-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => {
+                          setError(null);
+                          const health = serverHealth(
+                            server,
+                            access[server.id],
+                            signingIn === server.id,
+                          );
+                          setDialog({
+                            kind: "edit",
+                            server,
+                            section: health.fix === "credentials" ? "connection" : "tools",
+                          });
+                        }}
+                      >
+                        <span className="shrink-0 text-muted-foreground [&_svg]:size-4">
+                          <TransportIcon type={server.transport.type} />
+                        </span>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate text-ui font-medium">{server.name}</span>
+                          <span
+                            className="truncate text-ui text-muted-foreground"
+                            title={endpointLabel(server.transport)}
+                          >
+                            {endpointLabel(server.transport)}
+                          </span>
+                        </span>
+                      </button>
+                    ),
+                  },
+                  {
+                    key: "tools",
+                    header: "Tools",
+                    width: "6rem",
+                    cell: (server) => (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="-ml-2 tabular-nums"
+                        aria-label={`Choose ${server.name} tools`}
+                        onClick={() => {
+                          setError(null);
+                          setDialog({ kind: "edit", server, section: "tools" });
+                        }}
+                      >
+                        {toolCountLabel(server)}
+                      </Button>
+                    ),
+                  },
+                  {
+                    key: "status",
+                    header: "Status",
+                    width: "10rem",
+                    cell: (server) => {
+                      const health = serverHealth(
+                        server,
+                        access[server.id],
+                        signingIn === server.id,
+                      );
+                      return (
+                        <span className="whitespace-nowrap" title={health.detail ?? undefined}>
+                          <Health state={health.state}>{health.label}</Health>
+                        </span>
+                      );
+                    },
+                  },
+                  {
+                    key: "enabled",
+                    header: "Enabled",
+                    width: "5rem",
+                    cell: (server) => (
+                      <Switch
+                        aria-label={`${server.name} enabled`}
+                        checked={server.enabled}
+                        disabled={busy.has(server.id)}
+                        onCheckedChange={(enabled) => void toggleServer(server, enabled)}
+                      />
+                    ),
+                  },
+                  {
+                    key: "actions",
+                    header: "Actions",
+                    headerHidden: true,
+                    align: "end",
+                    width: "9rem",
+                    cell: (server) => (
+                      <ServerActions
+                        server={server}
+                        access={access[server.id]}
+                        busy={busy.has(server.id)}
+                        signingIn={signingIn}
+                        onOpen={(section) => {
+                          setError(null);
+                          setDialog({ kind: "edit", server, section });
+                        }}
+                        onSignIn={() => void signIn(server.id).then(setError)}
+                        onCancelSignIn={() => void cancelSignIn(server.id).then(setError)}
+                        onSignOut={() => void signOut(server.id).then(setError)}
+                        onRefresh={() => void refresh(server)}
+                        onRemove={() => {
+                          setRemoving(server);
+                          setConfirming(true);
+                        }}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          </div>
         )}
       </PrefSection>
 
@@ -392,17 +474,13 @@ export function McpPane({ project }: { project: Project }) {
   );
 }
 
-/**
- * One server: what it is and whether it works on the left, its fix, switch
- * and menu on the right. Clicking the row opens its tools.
- */
-function ServerRow({
+/** Recovery is one button; everything else lives in the row's menu. */
+function ServerActions({
   server,
   access,
   busy,
   signingIn,
   onOpen,
-  onToggle,
   onSignIn,
   onCancelSignIn,
   onSignOut,
@@ -414,117 +492,69 @@ function ServerRow({
   busy: boolean;
   signingIn: string | null;
   onOpen: (section: "tools" | "connection") => void;
-  onToggle: (enabled: boolean) => void;
   onSignIn: () => void;
   onCancelSignIn: () => void;
   onSignOut: () => void;
   onRefresh: () => void;
   onRemove: () => void;
 }) {
-  const described = React.useId();
   const health = serverHealth(server, access, signingIn === server.id);
   const otherSignIn = signingIn !== null && signingIn !== server.id;
   return (
-    <ListRow
-      density="two-line"
-      className="@max-[40rem]/mcp-servers:flex-wrap"
-      // The name is what the row opens; its status, counts and anything wrong
-      // are read after it rather than hidden by the label.
-      aria-label={`Open ${server.name}`}
-      aria-describedby={`${described}-status ${described}-detail`}
-      onActivate={() => onOpen(health.fix === "credentials" ? "connection" : "tools")}
-      leading={
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground [&_svg]:size-4">
-          <TransportIcon type={server.transport.type} />
-        </span>
-      }
-      primary={<span className="min-w-0 truncate text-ui font-medium">{server.name}</span>}
-      primaryTrailing={
-        <span id={`${described}-status`} className="ml-auto shrink-0">
-          <Health state={health.state}>{health.label}</Health>
-        </span>
-      }
-      secondary={
-        <span id={`${described}-detail`} className="block min-w-0 text-ui text-muted-foreground">
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="min-w-0 truncate" title={endpointLabel(server.transport)}>
-              {endpointLabel(server.transport)}
-            </span>
-            <span className="shrink-0 tabular-nums">{toolCountLabel(server)}</span>
-          </span>
-          {health.detail === null ? null : (
-            <span className="block break-words text-destructive">{health.detail}</span>
-          )}
-        </span>
-      }
-      actions={
-        <div className="flex shrink-0 items-center gap-2 @max-[40rem]/mcp-servers:w-full @max-[40rem]/mcp-servers:justify-end">
-          {health.fix === "sign-in" ? (
-            <Button size="xs" variant="outline" disabled={busy || otherSignIn} onClick={onSignIn}>
-              <SignInIcon />
-              Sign in
-            </Button>
-          ) : health.fix === "cancel-sign-in" ? (
-            <Button size="xs" variant="outline" onClick={onCancelSignIn}>
-              <XIcon />
-              Cancel
-            </Button>
-          ) : health.fix === "credentials" ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={busy}
-              onClick={() => onOpen("connection")}
-            >
-              Add credential
-            </Button>
-          ) : health.fix === "retry" ? (
-            <Button size="xs" variant="outline" disabled={busy} onClick={onRefresh}>
-              <ArrowClockwiseIcon />
-              Retry
-            </Button>
+    <div className="flex w-full items-center justify-end gap-2 whitespace-nowrap">
+      {health.fix === "sign-in" ? (
+        <Button size="xs" variant="outline" disabled={busy || otherSignIn} onClick={onSignIn}>
+          <SignInIcon />
+          Sign in
+        </Button>
+      ) : health.fix === "cancel-sign-in" ? (
+        <Button size="xs" variant="outline" onClick={onCancelSignIn}>
+          <XIcon />
+          Cancel
+        </Button>
+      ) : health.fix === "credentials" ? (
+        <Button size="xs" variant="outline" disabled={busy} onClick={() => onOpen("connection")}>
+          Add credential
+        </Button>
+      ) : health.fix === "retry" ? (
+        <Button size="xs" variant="outline" disabled={busy} onClick={onRefresh}>
+          <ArrowClockwiseIcon />
+          Retry
+        </Button>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon-xs" variant="ghost" aria-label={`More for ${server.name}`}>
+            <DotsThreeIcon weight="bold" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => onOpen("tools")}>
+            <ListChecksIcon />
+            Choose tools
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onOpen("connection")}>
+            <GearSixIcon />
+            Edit connection
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={busy} onSelect={onRefresh}>
+            <ArrowClockwiseIcon />
+            Refresh tools
+          </DropdownMenuItem>
+          {signsIn(server) && access?.signIn === "signed-in" ? (
+            <DropdownMenuItem disabled={busy} onSelect={onSignOut}>
+              <SignOutIcon />
+              Sign out
+            </DropdownMenuItem>
           ) : null}
-          <Switch
-            aria-label={`${server.name} enabled`}
-            checked={server.enabled}
-            disabled={busy}
-            onCheckedChange={onToggle}
-          />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="icon-xs" variant="ghost" aria-label={`More for ${server.name}`}>
-                <DotsThreeIcon weight="bold" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => onOpen("tools")}>
-                <ListChecksIcon />
-                Choose tools
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onOpen("connection")}>
-                <GearSixIcon />
-                Edit connection
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={busy} onSelect={onRefresh}>
-                <ArrowClockwiseIcon />
-                Refresh tools
-              </DropdownMenuItem>
-              {signsIn(server) && access?.signIn === "signed-in" ? (
-                <DropdownMenuItem disabled={busy} onSelect={onSignOut}>
-                  <SignOutIcon />
-                  Sign out
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onRemove}>
-                <TrashIcon />
-                Remove
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      }
-    />
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onRemove}>
+            <TrashIcon />
+            Remove
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
