@@ -1,0 +1,42 @@
+# Workspace icons — VC-489 lab proposal
+
+Open `pnpm lab`, then `/lab/#workspace-icons` (“Workspace icons · identity & attention”).
+This is a fixture-only prototype. It changes neither the shipped workspace rail nor real read receipts.
+
+## The questions the rail should answer
+
+1. **Where am I going?** A stable monogram (or the optional fixture glyph study) identifies the workspace. The destination's resolved canvas provides context, not state.
+2. **Where am I now?** A short selection bar outside the tile; not a colored outline competing with notifications.
+3. **Has something arrived that I have not read?** A blue upper-corner dot, using the sidebar's existing `--info` meaning. It remains even while a Session works or asks for input.
+4. **Does work here need me, or is it running?** A lower-corner `StatusDot`, with the existing Session roster priority: input, recovery, active. Idle and stopped Sessions do not light a state mark.
+
+A single priority-colored notification dot cannot answer both questions 3 and 4: reading a result would appear to resolve a wait, or a running turn would hide unread. Two positions preserve both facts. Counts belong on hover and in the accessible name, not in tiny number badges. The tile selects the workspace; the Session row opens the conversation. Selecting a workspace does not mean reading everything in it, and reading never resolves input or recovery.
+
+## Designs to compare
+
+- **Canvas tile:** a miniature destination canvas with generated contrast-safe ink, retaining the familiar 36px monogram. Workspace canvas and appearance overrides resolve independently; inherited choices follow the lab editor live.
+- **Quiet stamp:** current-window card and ink, with a narrow strip of the destination canvas. Less colorful chrome, but less workspace distinction, especially in dark mode.
+- **Today:** fixed project palette and selection ring, included as a static reference. Those colors remain confined to the reference.
+
+**Starting recommendation:** the canvas tile with initials. It makes the new theming system visible without introducing a separate icon-color setting. Retain the quiet stamp as the alternative if a larger set of customized workspaces feels too colorful. The glyph study is deliberately not a proposal to add icon storage or a picker yet.
+
+Do not rely on color alone for identity: inherited workspaces can have identical canvases and initials can collide. The fixture pair “Volli Code” / “Volli Companion” tests the latter. Full names remain available on hover and keyboard focus. A future custom mark can address collisions without making color a status vocabulary.
+
+## Review in the lab
+
+- Compare Mixed, Quiet, All working, and Input + unread, using both initials and glyphs.
+- Select Paper Trail: its unread stays. Open its Session: only that receipt clears, in both comparison panes.
+- Read Permission policy: its input mark stays lit; the other unread conversation remains unread.
+- Switch Light / Dark / Auto and edit the lab canvas. Paper Trail is pinned light; Archive inherits both. Notification marks keep the current window's tokens, not the thumbnail's local palette.
+- Use App and Reading stage widths, inspect matching initials, long names, the empty workspace, and the input/recovery collision on Cinder.
+
+## Before production adoption
+
+- Establish a confirmed activity/read baseline for **all** workspaces. Current project listings are fetched on arrival; an unvisited workspace must not falsely read as quiet. Pending/failed baseline presentation is not implemented by this fixture scratch.
+- Aggregate project-level and Ticket Sessions using the existing attention/read projections. Helper work is represented by its parent; a helper wait must not direct a person to a nonexistent sidebar row. This scratch filters helper rows and assumes the parent's activity has already been projected.
+- Keep rail order and ⌘1–9 stable. No activity-driven reorder.
+- Preserve dnd-kit click/drag separation, context menus, hidden-rail inertness, and window drag regions. This scratch does not simulate those behaviors.
+- Derive thumbnails only on authored-theme/appearance changes; use one shared activity subscription and boundary timer, not per-tile PTY subscriptions or polling.
+- Review marks over the actual transparent canvas rail. This comparison uses the semantic `--rail` bed, so its opaque badge backing is not yet evidence that the production gradient seam is solved.
+
+The recommendation is provisional pending visual review, not a shipped design decision.
