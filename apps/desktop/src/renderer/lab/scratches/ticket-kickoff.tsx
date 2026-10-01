@@ -13,8 +13,8 @@
  * **The bottom rail carries the run.** Model and effort — the chat composer's
  * own controls, imported rather than re-drawn — sit beside the paperclip,
  * because they belong to the ACT of creating rather than to the ticket, and
- * because pressing Create & start lands you in a chat pane showing these exact
- * two values. Seeded from Model Access's TICKET default: the fake catalog below
+ * because Create & start starts a chat showing these exact two values when
+ * explicitly opened. Seeded from Model Access's TICKET default: the fake catalog below
  * sets the Board default to `haiku-4.5` and the ticket default to
  * `sonnet-4.5`, so the pill naming sonnet is the row proving which purpose it
  * read. At the dialog's own width they are ONE control naming both values, and

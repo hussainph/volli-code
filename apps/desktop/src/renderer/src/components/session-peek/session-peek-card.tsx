@@ -49,6 +49,7 @@ import type { RendererSessionInteraction } from "@volli/shared";
 
 import { InteractionCard } from "@renderer/components/chat/interaction-ui";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Textarea } from "@renderer/components/ui/textarea";
@@ -243,19 +244,22 @@ function TicketContext({ row, ticketPrefix }: { row: SessionPeekRow; ticketPrefi
  * peek possible, so the card owes the reader both facts.
  */
 function IdentityLine({ row }: { row: SessionPeekRow }) {
-  // `ModelSelection` carries ids and a reasoning level, never a display label
-  // (`@volli/shared/agent-runtime.ts`), so the model is said by its id beside
-  // the vendor the mark already draws.
-  const runs =
-    row.model === null ? row.providerLabel : `${row.providerLabel} · ${row.model.modelId}`;
   const started = sessionProvenanceHoverLine(row.provenance);
-  const line = [runs, started].filter((part) => part !== null && part !== "").join(" · ");
-  if (line === "") return null;
+  if (row.model === null && row.providerLabel === "" && !started) return null;
   return (
     <CardBlock icon={<InfoIcon className="size-4 text-muted-foreground" />}>
-      <p data-peek-identity="" className="text-muted-foreground [overflow-wrap:anywhere]">
-        {line}
-      </p>
+      <div data-peek-identity="" className="text-muted-foreground [overflow-wrap:anywhere]">
+        {row.model === null ? (
+          [row.providerLabel, started].filter(Boolean).join(" · ")
+        ) : (
+          <ResolvedModelName
+            selection={row.model}
+            providerLabel={row.providerLabel}
+            alwaysProvider
+            trailing={started ?? undefined}
+          />
+        )}
+      </div>
     </CardBlock>
   );
 }

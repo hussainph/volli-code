@@ -9,6 +9,7 @@ import {
   scrubSessionEventPayload,
   scrubSessionEventProvenance,
   scrubSessionInteraction,
+  sanitizeSessionInteraction,
   decodeCommandReceipt,
   decodeSessionCommand,
   decodeSessionCommandIntent,
@@ -20,7 +21,7 @@ import {
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
-import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
+import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
@@ -519,6 +520,100 @@ type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
 
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
+  it("round-trips credential presentation metadata but never extra fields or values", () => {
+    const credential = {
+      id: "credential-1",
+      name: "DEPLOY_TOKEN",
+      sessionId: "session-1",
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const opened = {
+      kind: "interaction.opened" as const,
+      interaction: {
+        ...interaction,
+        kind: "question" as const,
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    };
+    expect(roundTrip(opened)).toEqual(opened);
+    expect(sanitizeSessionInteraction(opened.interaction)).toEqual(opened.interaction);
+    expect(readInteractionPrompts(opened.interaction)).toMatchObject([
+      { options: [], custom: false },
+    ]);
+    expect(
+      roundTrip({
+        ...opened,
+        interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+      }),
+    ).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+    });
+    expect(scrubSessionEventPayload(opened)).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, native: { id: null, detail: null } },
+    });
+    const contaminated = {
+      ...opened,
+      interaction: {
+        ...opened.interaction,
+        value: "outside-secret",
+        unknown: "outside-extra",
+        credential: { ...credential, value: "inside-secret", unknown: "inside-extra" },
+      },
+    };
+    const encoded = encodeSessionJson(contaminated);
+    expect(encoded).not.toMatch(/inside-secret|outside-secret|inside-extra|outside-extra/);
+    expect(roundTrip(contaminated)).toEqual(opened);
+    expect(decodeSessionEventPayload(contaminated, "payload")).toEqual(opened);
+    expect(sanitizeSessionInteraction(contaminated.interaction)).toEqual(opened.interaction);
+    // Checkpoints also serialize interactions, without an event envelope.
+    expect(JSON.parse(encodeSessionJson({ active: [contaminated.interaction] }))).toEqual({
+      active: [opened.interaction],
+    });
+    expect(
+      JSON.parse(encodeSessionJson({ ...contaminated.interaction, kind: "permission" })),
+    ).toEqual({
+      ...opened.interaction,
+      kind: "permission",
+    });
+    expect(encodeSessionJson({ credential: "not-an-interaction" })).toBe(
+      '{"credential":"not-an-interaction"}',
+    );
+    expect(encodeSessionJson({ credential: "not-an-interaction", kind: "diagnostic" })).toBe(
+      '{"credential":"not-an-interaction","kind":"diagnostic"}',
+    );
+    for (const key of Object.keys(credential)) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            ...opened,
+            interaction: { ...opened.interaction, credential: { ...credential, [key]: 123 } },
+          },
+          "payload",
+        ),
+      ).toThrow(`payload.interaction.credential.${key}`);
+    }
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          ...opened,
+          interaction: { ...opened.interaction, credential: null },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.interaction.credential must be an object");
+    expect(scrubSessionInteraction(contaminated.interaction)).toEqual({
+      ...opened.interaction,
+      native: { id: null, detail: null },
+    });
+  });
+
   for (const payload of payloads) {
     it(`round-trips ${payload.kind}${"attention" in payload ? ` (${payload.attention.kind})` : ""}${"receipt" in payload ? ` (${payload.receipt.status})` : ""}`, () => {
       expect(roundTrip(payload)).toEqual(payload);

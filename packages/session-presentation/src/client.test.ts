@@ -704,19 +704,21 @@ describe("connect", () => {
     expect(rpc.streams).toHaveLength(1);
   });
 
-  it("says so when the snapshot never answered", async () => {
-    const { slice } = await adopted((fake) => {
+  it("reports a failed snapshot even when no chat view is mounted", async () => {
+    const { slice, notifications, notificationTones } = await adopted((fake) => {
       fake.snapshotError = new Error("socket hang up");
     });
 
     expect(slice()!.lifecycle).toBe("error");
     expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up");
+    expect(notifications).toEqual(["Lost the Session stream: socket hang up"]);
+    expect(notificationTones).toEqual(["error"]);
   });
 
   it("lets only the open that still owns the stream report a failed snapshot", async () => {
     // Both attempts fail; two error rows for one fault would be the surface
     // reporting its own retry as a second thing that went wrong.
-    const { client, rpc, store, sessionId, slice } = await adopted();
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted();
     const gate = deferred();
     rpc.snapshotGate = gate.promise;
     rpc.snapshotError = new Error("socket hang up");
@@ -729,6 +731,7 @@ describe("connect", () => {
 
     expect(writes).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up");
+    expect(notifications).toEqual(["Lost the Session stream: socket hang up"]);
   });
 
   it("subscribes from the start for a Session this surface no longer holds", async () => {
@@ -851,7 +854,7 @@ describe("stream folding", () => {
 
 describe("reconnect", () => {
   it("resumes from the last cursor after a stream that had started drops", async () => {
-    const { rpc, stream } = await adopted();
+    const { rpc, stream, notifications } = await adopted();
     const dropped = stream();
     dropped.start();
     dropped.send("7", frameOf(7, "turn.started"));
@@ -862,6 +865,7 @@ describe("reconnect", () => {
     expect(dropped.unsubscribed).toBe(true);
     expect(rpc.streams).toHaveLength(2);
     expect(rpc.streams[1]!.input.lastEventId).toBe("7");
+    expect(notifications).toEqual([]);
   });
 
   it("falls back to a fresh snapshot when the dropped stream delivered no cursor", async () => {
@@ -907,13 +911,15 @@ describe("reconnect", () => {
   it("surfaces a stream that failed before it ever started rather than retrying", async () => {
     // One retry per healthy stream is what bounds this: a subscription that
     // never started is reporting a fault a retry would only repeat.
-    const { rpc, stream, slice } = await adopted();
+    const { rpc, stream, slice, notifications, notificationTones } = await adopted();
 
     stream().fail(new Error("Session subscription fell behind"));
     await settle();
 
     expect(rpc.streams).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: Session subscription fell behind");
+    expect(notifications).toEqual(["Lost the Session stream: Session subscription fell behind"]);
+    expect(notificationTones).toEqual(["error"]);
   });
 
   it("surfaces a subscription that failed inside the subscribe call", async () => {
@@ -926,6 +932,69 @@ describe("reconnect", () => {
 
     expect(rpc.streams).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: bridge is gone");
+  });
+});
+
+describe("background connection recovery", () => {
+  it("re-arms notification when explicit recovery cannot reopen a live executor's stream", async () => {
+    const { client, rpc, stream, notifications, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+    stream().fail(new Error("snapshot unavailable"));
+    expect(notifications).toEqual(["Lost the Session stream: snapshot unavailable"]);
+    rpc.snapshotError = new Error("snapshot unavailable");
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(notifications).toEqual([
+      "Lost the Session stream: snapshot unavailable",
+      "Lost the Session stream: snapshot unavailable",
+    ]);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(rpc.reconciles).toEqual([]);
+  });
+
+  it("announces a repeated stream fault once until an explicit reconnect", async () => {
+    const { client, stream, notifications } = await adopted();
+
+    stream().fail(new Error("bridge unavailable"));
+    stream().fail(new Error("bridge unavailable"));
+    expect(notifications).toEqual(["Lost the Session stream: bridge unavailable"]);
+
+    await client.connect();
+    stream().fail(new Error("bridge unavailable"));
+    expect(notifications).toEqual([
+      "Lost the Session stream: bridge unavailable",
+      "Lost the Session stream: bridge unavailable",
+    ]);
+  });
+
+  it("announces a failed reconnect only after the automatic attempt fails", async () => {
+    const { stream, rpc, slice, notifications, notificationTones } = await adopted();
+    stream().start();
+    rpc.snapshotError = new Error("bridge unavailable");
+
+    stream().fail(new Error("temporary drop"));
+    await settle();
+
+    expect(slice()!.sessionError).toBe("Lost the Session stream: bridge unavailable");
+    expect(notifications).toEqual(["Lost the Session stream: bridge unavailable"]);
+    expect(notificationTones).toEqual(["error"]);
+  });
+
+  it("does not announce a projection failure after the surface let go", async () => {
+    const gate = deferred();
+    const { stream, rpc, close, slice, notifications } = await adopted();
+    rpc.projectionGate = gate.promise;
+    rpc.projectionError = new Error("bridge unavailable");
+
+    stream().send("1", frameOf(1, "turn.started"));
+    close();
+    gate.release();
+    await settle();
+
+    expect(slice()).toBeUndefined();
+    expect(notifications).toEqual([]);
   });
 });
 
@@ -988,7 +1057,7 @@ describe("startAttach", () => {
     // A Ticket Session's attach: a worktree that cannot be materialized is
     // recorded as Ticket Attention, which is the surface a person acts on.
     // Saying it here too would be one problem with two dismissals.
-    const { client, slice } = await adopted((fake) => {
+    const { client, slice, notifications } = await adopted((fake) => {
       fake.answerAttach = () => ({
         sessionId: SESSION.id,
         state: "needs-recovery",
@@ -999,6 +1068,7 @@ describe("startAttach", () => {
 
     await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
     expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
   });
 
   it("waits for nothing when the surface dropped the Session mid-attach", async () => {
@@ -1023,17 +1093,163 @@ describe("startAttach", () => {
     expect(slice()).toBeUndefined();
   });
 
-  it("always settles a THROWN attach onto the slice, whatever the Role", async () => {
-    // Nothing reached the host, so there is no receipt and no Attention
-    // anywhere — the slice is the only surface that can carry it.
-    const { client, slice } = await adopted((fake) => {
+  it.each([false, true])(
+    "reports a thrown attach outside the chat even with durable refusal reporting=%s",
+    async (refusalIsReportedElsewhere) => {
+      const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+        fake.answerAttach = () => {
+          throw new Error("socket hang up");
+        };
+      });
+
+      await expect(client.startAttach({ refusalIsReportedElsewhere })).resolves.toBe(false);
+      expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
+      expect(notifications).toEqual(["Could not start Session: socket hang up"]);
+      expect(notificationTones).toEqual(["error"]);
+    },
+  );
+
+  it("announces repeated automatic attach failures once, but re-arms for an explicit Retry", async () => {
+    const { client, rpc, notifications } = await adopted((fake) => {
       fake.answerAttach = () => {
         throw new Error("socket hang up");
       };
     });
 
-    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
+    await client.startAttach();
+    await client.startAttach();
+    expect(notifications).toEqual(["Could not start Session: socket hang up"]);
+
+    await client.retryAttach();
+    expect(notifications).toEqual([
+      "Could not start Session: socket hang up",
+      "Could not start Session: socket hang up",
+    ]);
+
+    rpc.answerAttach = () => ACCEPTED;
+    await expect(client.startAttach()).resolves.toBe(true);
+    rpc.answerAttach = () => {
+      throw new Error("socket hang up");
+    };
+    await client.startAttach();
+    expect(notifications).toHaveLength(3);
+  });
+
+  it("does not announce an attach failure after its client retired, even with a retained slice", async () => {
+    const gate = deferred();
+    const { client, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("socket hang up");
+      };
+    });
+
+    const attaching = client.startAttach();
+    client.dispose();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it("does not reconstruct a slice removed while attach was in flight", async () => {
+    const gate = deferred();
+    const { client, store, sessionId, slice } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        return ACCEPTED;
+      };
+    });
+
+    const attaching = client.startAttach();
+    store.getState().remove(sessionId);
+    gate.release();
+
+    await expect(attaching).resolves.toBe(true);
+    expect(slice()).toBeUndefined();
+  });
+
+  it("does not let an old attach failure overwrite a reopened Session", async () => {
+    const gate = deferred();
+    const { client, close, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("old attach failed");
+      };
+    });
+
+    const attaching = client.startAttach();
+    close();
+    store.getState().seed(sessionId, "ready");
+    const replacement = slice();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()).toBe(replacement);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it.each([ACCEPTED, REFUSED])(
+    "does not let an old attach result settle a reopened Session (%j)",
+    async (answer) => {
+      const gate = deferred();
+      const { client, close, store, sessionId, slice } = await adopted((fake) => {
+        fake.answerAttach = async () => {
+          await gate.promise;
+          return answer;
+        };
+      });
+
+      const attaching = client.startAttach();
+      close();
+      store.getState().seed(sessionId, "starting");
+      const replacement = slice();
+      gate.release();
+
+      await expect(attaching).resolves.toBe(answer === ACCEPTED);
+      expect(slice()).toBe(replacement);
+      expect(slice()!.lifecycle).toBe("starting");
+    },
+  );
+
+  it("keeps a failed-stream recovery band after an independent attach succeeds", async () => {
+    const gate = deferred();
+    const { client, rpc, slice, notifications } = await adopted();
+    rpc.snapshotError = new Error("snapshot unavailable");
+    rpc.answerAttach = async () => {
+      await gate.promise;
+      return ACCEPTED;
+    };
+
+    const attaching = client.startAttach();
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    gate.release();
+
+    await expect(attaching).resolves.toBe(true);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(notifications).toEqual(["Lost the Session stream: snapshot unavailable"]);
+  });
+
+  it("does not announce an attach failure after its surface let go", async () => {
+    const gate = deferred();
+    const { client, close, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("socket hang up");
+      };
+    });
+
+    const attaching = client.startAttach();
+    close();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()).toBeUndefined();
+    expect(notifications).toEqual([]);
   });
 });
 

@@ -317,6 +317,8 @@ export interface ToolOutputStoreOptions {
   ledger?: ToolOutputLedger;
   /** The Session workspace, which a relative `read` path resolves against. */
   workspacePath: string;
+  /** Scrub before writing any output cache; throw means no file is saved. */
+  redact?: (text: string) => string;
   /** Most text bytes in one file. */
   fileMaxBytes?: number;
   /** Most bytes in the whole directory. */
@@ -346,6 +348,7 @@ export class ToolOutputStore {
   readonly #dataDirectory: string | undefined;
   readonly #ledger: ToolOutputLedger | undefined;
   readonly #workspacePath: string;
+  readonly #redact: ToolOutputStoreOptions["redact"];
   readonly #fileMaxBytes: number;
   readonly #directoryMaxBytes: number;
   #used: number | undefined;
@@ -360,6 +363,7 @@ export class ToolOutputStore {
     this.#dataDirectory = options.dataDirectory;
     this.#ledger = options.ledger;
     this.#workspacePath = options.workspacePath;
+    this.#redact = options.redact;
     this.#fileMaxBytes = options.fileMaxBytes ?? MCP_RESULT_MAX_BYTES;
     this.#directoryMaxBytes = options.directoryMaxBytes ?? TOOL_OUTPUT_DIRECTORY_MAX_BYTES;
   }
@@ -370,7 +374,25 @@ export class ToolOutputStore {
    * result, and the reason goes to the model in place of a path.
    */
   save(input: { callId: string; header: string; text: string }): Promise<ToolOutputSave> {
-    const run = this.#chain.then(() => this.#save(input));
+    const run = this.#chain.then(() => {
+      try {
+        return this.#save(
+          this.#redact === undefined
+            ? input
+            : {
+                ...input,
+                header: this.#redact(input.header),
+                text: this.#redact(input.text),
+              },
+        );
+      } catch {
+        return {
+          saved: false,
+          reason: "credential redaction failed",
+          totalBytes: Buffer.byteLength(input.text),
+        } as ToolOutputSave;
+      }
+    });
     this.#chain = run;
     return run;
   }

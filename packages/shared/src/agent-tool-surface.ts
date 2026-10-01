@@ -209,7 +209,12 @@ const ROLE_CAPABILITY_POLICY: Readonly<
   project: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
   ticket: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
   subagent: Object.freeze({
-    withheld: Object.freeze(["ask_user", "todo_write"]) as readonly NonCodingToolId[],
+    // A child has nobody in front of it to answer a secure credential request either (VC-481).
+    withheld: Object.freeze([
+      "ask_user",
+      "todo_write",
+      "request_secret",
+    ]) as readonly NonCodingToolId[],
   }),
 });
 

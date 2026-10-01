@@ -528,6 +528,11 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "MCP secrets a person stored and OAuth tokens (VC-470). Credentials never travel in a backup; a restored profile signs in again.",
   },
   {
+    area: "session-secrets.enc*",
+    decision: "exclude",
+    reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
+  },
+  {
     area: "browser-pictures",
     decision: "exclude",
     reason: "Bounded capture cache for browser tabs; re-captured, never recovered.",

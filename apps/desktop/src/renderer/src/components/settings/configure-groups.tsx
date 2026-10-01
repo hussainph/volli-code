@@ -1,5 +1,5 @@
 /**
- * The Configure rail: two groups, seven categories, this project always.
+ * The Configure rail: two groups, eight categories, this project always.
  *
  * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
  * skills a repo's agents can reach and which commands it defines. Putting it
@@ -14,6 +14,7 @@
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
@@ -26,6 +27,7 @@ import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
 import { ProtectionPane } from "./configure/protection-pane";
 import { SessionsPane } from "./configure/sessions-pane";
+import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
 
@@ -127,6 +129,22 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "edit server",
           ],
           content: <McpPane project={project} />,
+        },
+        {
+          key: "secrets",
+          label: "Secrets",
+          icon: KeyIcon,
+          keywords: [
+            "secret",
+            "credential",
+            "scope",
+            "last used",
+            "replacement credential",
+            "replace",
+            "revoke",
+            "refresh",
+          ],
+          content: <SecretsPane project={project} />,
         },
         {
           // Agent, not Project: this is what this repo's agents are ALLOWED to
