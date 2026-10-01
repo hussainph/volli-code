@@ -213,8 +213,11 @@ describe("Configure → Authority", () => {
   it("says that a change reaches new attachments, where the change is made", () => {
     for (const policy of [null, { enforcement: "off" as const }]) {
       const html = render(policy);
-      expect(html).toContain("Applies to new attachments");
+      expect(html).toContain("Enforcement and decision mode apply to new attachments");
       expect(html).toContain("the live connection a Session runs on");
+      expect(html).toContain("not one already running.");
+      expect(html.match(/apply to new attachments/g)).toHaveLength(1);
+      expect(html).not.toContain("Applies to the next attachment, not one already running.");
     }
   });
 
@@ -283,7 +286,7 @@ describe("Configure → Authority", () => {
       // enforcement and peek rows use — not a second chooser vocabulary.
       const trigger = html.match(/<button[^>]*id="authority-judgment"[^>]*>/)?.[0];
       expect(trigger).toContain('data-slot="select-trigger"');
-      expect(html).toContain("Applies to the next attachment, not one already running.");
+      expect(html).toContain("not one already running.");
       // And the obsolete classifier slot is gone entirely: no control, and no
       // prose pointing at one.
       expect(/classifier/i.test(html)).toBe(false);

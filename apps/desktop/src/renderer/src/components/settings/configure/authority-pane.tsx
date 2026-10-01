@@ -262,7 +262,8 @@ export function AuthorityPane({ project }: { project: Project }) {
             <span className="text-foreground">{ENFORCEMENT_OUTCOMES[effective.enforcement]}</span>
             {enforcing ? " Ask after the limits below." : null}
             <span className="mt-1 block">
-              Applies to new attachments — the live connection a Session runs on.
+              Enforcement and decision mode apply to new attachments — the live connection a Session
+              runs on — not one already running.
             </span>
           </>
         }
@@ -306,7 +307,6 @@ export function AuthorityPane({ project }: { project: Project }) {
         label="Decision mode"
         htmlFor="authority-judgment"
         testId="authority-judgment"
-        description="Applies to the next attachment, not one already running."
         hint={
           <>
             Ask me brings you in for calls the rules cannot settle. Automatic review uses the
