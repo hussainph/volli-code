@@ -549,7 +549,7 @@ they are listed so the index accounts for every module in the bundle.
   protobufjs@7.6.5  BSD-3-Clause  [bundled into a chunk]
   proxy-agent-negotiate@1.1.0  MIT  [bundled into a chunk]
   punycode@2.3.1  MIT  [node_modules tree]
-  quickjs-wasi@3.6.2  MIT  [bundled into a chunk]
+  quickjs-wasi@3.6.2  MIT  [node_modules tree]
   radix-ui@1.6.7  MIT  [bundled into a chunk]
   react@19.2.8  MIT  [bundled into a chunk]
   react-dom@19.2.8  MIT  [bundled into a chunk]

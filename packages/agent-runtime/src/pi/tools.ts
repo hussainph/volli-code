@@ -266,6 +266,7 @@ export function createSessionTools(
           id: binding.tool,
           tool: createBoundTool(binding, spec, env, output),
           verb: "verb" in binding,
+          ...("verb" in binding ? verbDetailsSchema(binding.verb) : {}),
           ...("definition" in binding ? { mcp: binding.definition } : {}),
         },
   );
@@ -702,6 +703,24 @@ function managementNamesIn(text: string, prefix: "mcp" | "server"): string {
   return prefix === "mcp"
     ? text.replace(SERVER_MANAGEMENT_NAMES, "mcp_$1")
     : text.replace(LEGACY_MANAGEMENT_NAMES, "server_$1");
+}
+
+/**
+ * The schema a verb's registry entry declares for its result's `details`
+ * (VC-471), as Code Mode's `SurfaceTool.detailsSchema` carries it — or
+ * nothing, for a verb that declares none.
+ *
+ * Read from the same entry {@link createVerbTool} builds the tool from, and
+ * handed beside the tool rather than on it: a direct call's model never sees
+ * `details`, so the schema is a fact about what a program receives and lives
+ * only where programs are typed. The tool's own bytes — name, description,
+ * parameters — stay exactly what a Session was frozen with.
+ */
+export function verbDetailsSchema(verb: VerbToolKey): Pick<SurfaceTool, "detailsSchema"> {
+  const schema = verbEntry(verb)?.tool?.resultDetails;
+  return schema === undefined
+    ? {}
+    : { detailsSchema: schema as unknown as Record<string, unknown> };
 }
 
 export function createVerbTool(

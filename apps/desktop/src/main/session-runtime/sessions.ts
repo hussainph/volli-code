@@ -162,6 +162,12 @@ export interface SessionToolSurfacePorts {
     grants: readonly string[],
     within?: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
+    /**
+     * The model the Session is born on, when it has one: Code Mode's mode is
+     * chosen per model (VC-471). Absent for a legacy backfill, which is never
+     * born into Code Mode.
+     */
+    model?: ModelSelection,
     classify?: boolean,
   ): readonly SessionToolId[];
   /** Selected sanitized definitions for a newly born root Session. */
@@ -187,11 +193,12 @@ export interface SessionToolSurfacePorts {
     tools: readonly SessionToolId[],
     mcpTools?: readonly McpToolDefinition[],
     /**
-     * A Subagent Session's parent, so what the child freezes beside its names
-     * — Code Mode's routes (VC-471) — is bounded by the parent's record the
-     * way the names are. Absent for a root Session.
+     * What else the record is frozen from (VC-471): the model the Session is
+     * born on, which chooses Code Mode's mode, and a Subagent Session's
+     * parent, whose own record bounds the child's routes the way its names
+     * bound the child's names.
      */
-    parentSessionId?: string,
+    birth?: { model?: ModelSelection; parentSessionId?: string },
   ): Promise<void>;
 }
 
@@ -701,6 +708,7 @@ export function createSessions(options: SessionsOptions): Sessions {
       grants.grants,
       within === null ? undefined : within,
       mcpTools,
+      model,
       classify,
     );
     const created = await options.runtime.command({
@@ -750,12 +758,10 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(
-      created.sessionId,
-      toolSurface,
-      mcpTools,
-      ...(input.parentSessionId === undefined ? [] : [input.parentSessionId]),
-    );
+    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools, {
+      model,
+      ...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
+    });
     return { sessionId: created.sessionId, model };
   }
 

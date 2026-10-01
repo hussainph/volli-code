@@ -12,6 +12,7 @@ import type {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  CODE_MODE_POLICY_MODELS_MAX,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
@@ -1339,6 +1340,83 @@ describe("Session tRPC router", () => {
     );
     await expect(caller.modelAccess.pickerView()).rejects.toThrow("unavailable");
     await expect(caller.modelAccess.setPickerView("defaults")).rejects.toThrow("unavailable");
+    await expect(caller.modelAccess.codeModePolicy()).rejects.toThrow("unavailable");
+    await expect(
+      caller.modelAccess.setCodeModePolicy({ enabled: true, models: {} }),
+    ).rejects.toThrow("unavailable");
+  });
+
+  it("round-trips the Code Mode policy whole — the switch and every pin", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readCodeModePolicy: () => ({
+        enabled: true,
+        models: { "anthropic/claude-sonnet-4-5": "only" },
+      }),
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.codeModePolicy()).resolves.toEqual({
+      enabled: true,
+      models: { "anthropic/claude-sonnet-4-5": "only" },
+    });
+
+    // A routed model id carries its own slash; the key splits at the first.
+    const saved = {
+      enabled: false,
+      models: {
+        "openai-codex/gpt-5.5": "both" as const,
+        "openrouter/z-ai/glm-4.6": "off" as const,
+      },
+    };
+    await expect(caller.modelAccess.setCodeModePolicy(saved)).resolves.toEqual(saved);
+    expect(writes).toEqual([saved]);
+  });
+
+  it("refuses a Code Mode policy storage would quietly drop part of", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // A mode the shared vocabulary does not name.
+    await expect(
+      caller.modelAccess.setCodeModePolicy({
+        enabled: true,
+        models: { "anthropic/claude-opus-4-5": "sometimes" as never },
+      }),
+    ).rejects.toThrow();
+    // Keys that are not `providerId/modelId`.
+    for (const key of ["claude-opus-4-5", "/claude-opus-4-5", "anthropic/", ""]) {
+      await expect(
+        caller.modelAccess.setCodeModePolicy({ enabled: true, models: { [key]: "both" } }),
+      ).rejects.toThrow();
+    }
+    // More pins than a stored policy may hold.
+    const tooMany = Object.fromEntries(
+      Array.from({ length: CODE_MODE_POLICY_MODELS_MAX + 1 }, (_, index) => [
+        `acme/model-${index}`,
+        "both" as const,
+      ]),
+    );
+    await expect(
+      caller.modelAccess.setCodeModePolicy({ enabled: true, models: tooMany }),
+    ).rejects.toThrow("At most");
+    // A missing switch is not "off": the policy crosses whole or not at all.
+    await expect(caller.modelAccess.setCodeModePolicy({ models: {} } as never)).rejects.toThrow();
+    expect(writes).toEqual([]);
   });
 
   it("round-trips the picker view as one word", async () => {
@@ -1735,6 +1813,8 @@ describe("Session tRPC router", () => {
         }),
       () => caller.modelAccess.hiddenModels(),
       () => caller.modelAccess.setHiddenModels([]),
+      () => caller.modelAccess.codeModePolicy(),
+      () => caller.modelAccess.setCodeModePolicy({ enabled: true, models: {} }),
     ];
 
     for (const call of calls) {

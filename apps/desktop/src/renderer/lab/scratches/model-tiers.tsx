@@ -27,6 +27,7 @@
  */
 import * as React from "react";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   visualModelProblem,
@@ -34,6 +35,7 @@ import {
 import type {
   DecisionModelCatalogEntry,
   DecisionModelSetting,
+  CodeModePolicy,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
@@ -43,6 +45,7 @@ import type {
 
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { Button } from "@renderer/components/ui/button";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
 import { appApi, seedApp } from "../seed";
@@ -263,6 +266,7 @@ const SEEDED_DEFAULTS: ModelAccessDefaults = {
 function labModelAccess(): ModelAccessClient {
   let defaults: ModelAccessDefaults = SEEDED_DEFAULTS;
   let hidden: readonly HiddenModelRef[] = [];
+  let codeMode: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
   return {
     inspect: () =>
       Promise.resolve({ observedAt: Date.now(), providers: PROVIDERS, models: MODELS }),
@@ -282,6 +286,13 @@ function labModelAccess(): ModelAccessClient {
     },
     compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
     setCompactionPolicy: (policy) => Promise.resolve(policy),
+    // Held like `hidden`, so the pane's Code Mode section keeps its pins
+    // across a toggle the way it would against main.
+    codeModePolicy: () => Promise.resolve(codeMode),
+    setCodeModePolicy: (policy) => {
+      codeMode = policy;
+      return Promise.resolve(codeMode);
+    },
     pickerView: () => Promise.resolve("all" as const),
     setPickerView: (view) => Promise.resolve(view),
     beginSignIn: () => Promise.reject(new Error("Sign-in needs the main process")),
@@ -308,9 +319,13 @@ export default function ModelTiersScratch() {
         </div>
         <section className="flex flex-col gap-4">
           <h2 className="text-ui font-medium text-muted-foreground">Settings → Model Access</h2>
-          <div className="flex max-w-4xl flex-col gap-4">
-            <ModelAccessSettings />
-          </div>
+          {/* The provider `PrefShell` mounts around every real pane: the
+              Code Mode pins' row actions are glyphs with tooltips. */}
+          <TooltipProvider>
+            <div className="flex max-w-4xl flex-col gap-4">
+              <ModelAccessSettings />
+            </div>
+          </TooltipProvider>
         </section>
       </div>
     </ModelAccessProvider>

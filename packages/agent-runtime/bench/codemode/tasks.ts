@@ -317,19 +317,39 @@ function sessionFanout(): TaskRun {
           `Kickoff: ${String(request.input.message ?? "(default)")}`,
           "A notice arrives here when its first turn ends, when it signals done or blocked, or if it is stopped.",
         ].join("\n"),
-        details: { sessionId: handle, ticket },
+        // The real door's typed details (VC-471 phase 2), shaped as the
+        // Verb Registry declares them to programs.
+        details: {
+          sessionId: `00000000-0000-4000-8000-${handle.padStart(12, "0")}`,
+          handle,
+          ticket,
+          title: `Run tests on ${ticket}`,
+          model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "off" },
+          state: "running",
+        },
       };
     }
     if (request.verb === "watch") {
+      const sessions: string[] = [];
+      const ticketsWatched: string[] = [];
       for (const handle of String(request.input.sessions ?? "").split(/[\s,]+/u)) {
-        if (handle) watched.add(handle);
+        if (handle) {
+          watched.add(handle);
+          sessions.push(handle);
+        }
       }
       // Watching a Session's Ticket is told the same facts about it.
       for (const ticket of String(request.input.tickets ?? "").split(/[\s,]+/u)) {
         const handle = started.get(ticket);
-        if (handle !== undefined) watched.add(handle);
+        if (handle !== undefined) {
+          watched.add(handle);
+          ticketsWatched.push(ticket);
+        }
       }
-      return { text: `Watching ${[...watched].join(", ")}. Notices arrive as new turns.` };
+      return {
+        text: `Watching ${[...watched].join(", ")}. Notices arrive as new turns.`,
+        details: { action: "watch", sessions, tickets: ticketsWatched, ended: 0 },
+      };
     }
     return { text: `${request.verb} is not part of this fixture.` };
   };

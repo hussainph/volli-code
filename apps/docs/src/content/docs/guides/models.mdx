@@ -6,7 +6,8 @@ sidebar:
 ---
 
 Use **Settings → Models** to connect provider accounts, choose default models,
-control which models appear in pickers, and set automatic compaction. When
+control which models appear in pickers, set automatic compaction, and choose
+how models use Code Mode. When
 Volli creates a Session, it records the model for that Session. Changing a
 default does not change the model already recorded for an existing Session.
 
@@ -114,6 +115,14 @@ Decision calls are counted in each Session's usage and in `volli cost`.
 its context limit, Volli shortens it automatically. Turn the setting off if
 you don't want that. Turning it off does not disable `/compact` or recovery
 after a provider rejects a turn because the context is too large.
+
+## Code Mode
+
+**Code Mode** is on by default. It lets a Session write a short program that
+calls its tools, so a loop over files, pages or Sessions returns only what
+matters. Each model gets its own mode, and you can pin a different one under
+**Advanced**. See [Code Mode](/guides/code-mode/) for what programs can do and
+how to turn it off.
 
 ## Usage readings
 
