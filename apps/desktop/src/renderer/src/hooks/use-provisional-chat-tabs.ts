@@ -27,6 +27,14 @@
  */
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  activateTab,
+  focusPane as focusSplitPane,
+  primaryPaneId,
+  SPLIT_VIEW_ROOT_PANE_ID,
+  splitViewPanes,
+  type SplitViewState,
+} from "@volli/shared";
 
 import type { SplitSurfaceWrites } from "@renderer/components/split/split-surface-drop";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -37,9 +45,22 @@ import {
 } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 
+// Like the active overlay itself, its destination outlives a mounted Ticket
+// view but never reaches app_state. Keep at most one placement per owner and
+// retire it with the overlay, including closes and owner teardown off-screen.
+const provisionalPlacements = new Map<string, { sessionId: string; paneId: string }>();
+useChatSessionsStore.subscribe((state, previous) => {
+  if (state.provisionalActive === previous.provisionalActive) return;
+  for (const [owner, placement] of provisionalPlacements) {
+    if (state.provisionalActive[owner] !== placement.sessionId) {
+      provisionalPlacements.delete(owner);
+    }
+  }
+});
+
 export interface ProvisionalChatTabs {
   /**
-   * The Draft this surface is showing without having recorded it, or `null`.
+   * The focused pane's unrecorded Draft, or `null` when another pane is focused.
    *
    * Already checked against the surface's open tabs, so a stale overlay left by
    * a closed tab never names something that is not on screen.
@@ -47,6 +68,10 @@ export interface ProvisionalChatTabs {
   activeOverride: string | null;
   /** That id as a tab id, or `null` — the form every layout reader wants. */
   activeOverrideTabId: string | null;
+  /** The Draft's drop destination, independent of later pane focus. */
+  activeOverridePaneId: string;
+  /** Apply the renderer-only assignment without changing durable pane focus. */
+  overlaySplitView: (split: SplitViewState) => SplitViewState;
   /** Tab ids no layout writer may persist: the Drafts nobody has typed into. */
   emptyTabIds: ReadonlySet<string>;
   /** Whether `activeOverride` has earned its place in the persisted layout. */
@@ -85,6 +110,8 @@ export interface ProvisionalChatTabs {
 export function useProvisionalChatTabs(
   ownerId: string | null,
   openChatIds: readonly string[],
+  /** Read at gesture time too: a split mints and focuses its pane synchronously. */
+  readSplitView: () => SplitViewState | null,
 ): ProvisionalChatTabs {
   const overrideId = useChatSessionsStore((state) =>
     ownerId === null ? null : (state.provisionalActive[ownerId] ?? null),
@@ -103,8 +130,41 @@ export function useProvisionalChatTabs(
     ),
   );
 
-  const activeOverride =
+  const visibleOverride =
     overrideId !== null && openChatIds.includes(overrideId) ? overrideId : null;
+  // An empty Draft has no durable pane claim. Remember its destination for the
+  // lifetime of the focus overlay instead of activating it in whichever pane
+  // happens to be focused on every render. In particular, pointer-down on an
+  // empty pane must not replace its Close pane row before click can reach it.
+  const [, refreshPlacement] = React.useReducer((version: number) => version + 1, 0);
+  const split = readSplitView();
+  let placement = ownerId === null ? undefined : provisionalPlacements.get(ownerId);
+  if (ownerId !== null && visibleOverride !== null && placement?.sessionId !== visibleOverride) {
+    placement = {
+      sessionId: visibleOverride,
+      paneId: split?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID,
+    };
+    provisionalPlacements.set(ownerId, placement);
+  }
+  const assignedPaneId = placement?.paneId ?? SPLIT_VIEW_ROOT_PANE_ID;
+  // A pane that really closed relinquishes its tab to the primary, just like
+  // durable layout does. Closing a different pane never changes this claim.
+  const activeOverridePaneId =
+    split === null
+      ? SPLIT_VIEW_ROOT_PANE_ID
+      : splitViewPanes(split).some((pane) => pane.id === assignedPaneId)
+        ? assignedPaneId
+        : primaryPaneId(split);
+  const activeOverride =
+    split === null || split.focusedPaneId === activeOverridePaneId ? visibleOverride : null;
+  const overlaySplitView = (state: SplitViewState): SplitViewState => {
+    if (visibleOverride === null) return state;
+    const overlaid = activateTab(
+      focusSplitPane(state, activeOverridePaneId),
+      chatTabId(visibleOverride),
+    );
+    return { ...overlaid, focusedPaneId: state.focusedPaneId };
+  };
   const emptyTabIds = React.useMemo(
     () => new Set(emptyChatIds.map((sessionId) => chatTabId(sessionId))),
     [emptyChatIds],
@@ -114,10 +174,16 @@ export function useProvisionalChatTabs(
   }, [ownerId]);
   const takeActive = React.useCallback(
     (sessionId: string) => {
-      if (ownerId !== null)
-        useChatSessionsStore.getState().setProvisionalActive(ownerId, sessionId);
+      if (ownerId === null) return;
+      const previous = provisionalPlacements.get(ownerId);
+      const paneId = readSplitView()?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID;
+      provisionalPlacements.set(ownerId, { sessionId, paneId });
+      useChatSessionsStore.getState().setProvisionalActive(ownerId, sessionId);
+      // Moving the same Draft to an already-focused pane changes neither
+      // store's focus. Its renderer-only placement still needs a repaint.
+      if (previous?.sessionId !== sessionId || previous.paneId !== paneId) refreshPlacement();
     },
-    [ownerId],
+    [ownerId, readSplitView],
   );
 
   const guardLayoutWrites = React.useCallback(
@@ -171,6 +237,8 @@ export function useProvisionalChatTabs(
   return {
     activeOverride,
     activeOverrideTabId: activeOverride === null ? null : chatTabId(activeOverride),
+    activeOverridePaneId,
+    overlaySplitView,
     emptyTabIds,
     guardLayoutWrites,
     // Two ways an overlaid Draft earns its place: it gained content, or it was

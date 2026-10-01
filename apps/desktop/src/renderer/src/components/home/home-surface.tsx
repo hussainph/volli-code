@@ -59,7 +59,6 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
-  activateTab as activateSplitTab,
   arrangeTabs,
   EMPTY_TAB_ORDER,
   errorMessage,
@@ -199,10 +198,19 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   );
   // Everything this surface needs to know about its Chat Drafts, and the rule
   // about them, in one place shared with the Ticket workspace (VC-358).
-  const provisionalTabs = useProvisionalChatTabs(selectedId, openChatIds);
+  const readSplitView = React.useCallback(
+    () =>
+      selectedId === null
+        ? null
+        : (useWorkspaceStore.getState().byProject[selectedId]?.homeSplitView ?? null),
+    [selectedId],
+  );
+  const provisionalTabs = useProvisionalChatTabs(selectedId, openChatIds, readSplitView);
   const {
     activeOverride: provisionalActive,
     activeOverrideTabId: provisionalTabId,
+    activeOverridePaneId,
+    overlaySplitView,
     emptyTabIds: emptyProvisionalTabIds,
     guardLayoutWrites,
     releaseActive,
@@ -355,11 +363,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     if (splitView !== null) {
       useWorkspaceStore
         .getState()
-        .moveHomeTabToPane(selectedId, provisionalTabId, splitView.focusedPaneId);
+        .moveHomeTabToPane(selectedId, provisionalTabId, activeOverridePaneId);
     }
     setHomeActiveTab(selectedId, provisionalTabId);
     releaseActive();
   }, [
+    activeOverridePaneId,
     provisionalTabId,
     releaseActive,
     shouldCommitActive,
@@ -418,9 +427,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const split = resolveSplitView(
     splitView === null
       ? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID)
-      : provisionalTabId === null
-        ? splitView
-        : activateSplitTab(splitView, provisionalTabId),
+      : overlaySplitView(splitView),
     orderedTabIds,
     HOME_BOARD_TAB_ID,
   );
@@ -838,6 +845,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         <PaneEmptyState
           onNewChat={() => void startProjectChat(selectedId)}
           onNewTerminal={() => void startProjectTerminal(selectedId)}
+          onNewBrowser={() => void createBrowser()}
           onOpenFile={openQuickOpen}
           onClosePane={() => closeHomePane(selectedId, pane.id)}
         />

@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
-  activateTab as activateSplitTab,
   arrangeTabs,
   baseNameOf,
   displayTicketId,
@@ -296,18 +295,24 @@ export function TicketDetail({
       ),
     ),
   );
+  const readSplitView = React.useCallback(
+    () =>
+      useWorkspaceStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView ?? null,
+    [projectId, ticket.id],
+  );
   // Everything this workspace needs to know about its Chat Drafts, and the
   // rule about them, in one place shared with Home (VC-358).
   const {
-    activeOverride: provisionalActive,
     activeOverrideTabId: provisionalTabId,
+    activeOverridePaneId,
+    overlaySplitView,
     emptyTabIds: emptyProvisionalTabIds,
     guardLayoutWrites,
     releaseActive,
     shouldCommitActive,
     takeActive,
     titles: draftChatTitles,
-  } = useProvisionalChatTabs(ticket.id, openChatIds);
+  } = useProvisionalChatTabs(ticket.id, openChatIds, readSplitView);
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
@@ -764,11 +769,12 @@ export function TicketDetail({
     // Preserve the focused pane the renderer-only overlay used before this tab
     // crossed into persisted workspace layout.
     if (splitView !== null) {
-      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, splitView.focusedPaneId);
+      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, activeOverridePaneId);
     }
     setTicketActiveTab(projectId, ticket.id, provisionalTabId);
     releaseActive();
   }, [
+    activeOverridePaneId,
     projectId,
     provisionalTabId,
     releaseActive,
@@ -1016,9 +1022,7 @@ export function TicketDetail({
   const split = resolveSplitView(
     splitView === null
       ? singlePaneSplitView([], activeTab.id, SPLIT_VIEW_ROOT_PANE_ID)
-      : provisionalActive === null
-        ? splitView
-        : activateSplitTab(splitView, chatTabId(provisionalActive)),
+      : overlaySplitView(splitView),
     tabs.map((tab) => tab.id),
     BODY_TAB_ID,
   );
@@ -1419,6 +1423,7 @@ export function TicketDetail({
         <PaneEmptyState
           onNewChat={() => void createChat()}
           onNewTerminal={() => void createSession()}
+          onNewBrowser={() => void createBrowser()}
           onOpenFile={openQuickOpen}
           onClosePane={() => closeTicketPane(projectId, ticket.id, pane.id)}
         />
