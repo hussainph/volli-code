@@ -822,6 +822,14 @@ describe("results", () => {
     expect(one.text).toContain("1 image was left out");
   });
 
+  it("tells a program that reached for Node what to use instead", async () => {
+    const f = fixture({ tools: [textTool("echo", () => "hi")] });
+    const { text } = await run(f, 'const fs = require("fs");');
+    expect(text).toContain("ReferenceError: require is not defined");
+    expect(text).toContain("A program has no Node APIs, network or timers");
+    expect((await run(f, 'throw new Error("plain");')).text).not.toContain("no Node APIs");
+  });
+
   it("reports a script error with its stack, and output printed before it", async () => {
     const f = fixture({ tools: [textTool("echo", () => "hi")] });
     const { text, isError, details } = await run(f, 'text("before");\nthrow new Error("boom");');
