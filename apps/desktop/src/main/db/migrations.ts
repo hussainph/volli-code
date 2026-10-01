@@ -2248,6 +2248,12 @@ ALTER TABLE projects ADD COLUMN decision_model TEXT
   CHECK (decision_model IS NULL OR json_valid(decision_model));
 `;
 
+/** Creation-time workspace identity. NULL preserves the legacy monogram. */
+const MIGRATION_054_WORKSPACE_IDENTITY = `
+ALTER TABLE projects ADD COLUMN workspace_identity TEXT
+  CHECK (workspace_identity IS NULL OR json_valid(workspace_identity));
+`;
+
 /**
  * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
  *
@@ -2557,7 +2563,20 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_053_PROJECT_DECISION_MODEL,
     apply: applyMigration053ProjectDecisionModel,
   },
+  {
+    version: 54,
+    name: "projects.workspace_identity — creation-time authored mark (VC-489)",
+    sql: MIGRATION_054_WORKSPACE_IDENTITY,
+    apply: applyMigration054WorkspaceIdentity,
+  },
 ];
+
+/** Probe-gated like 053: re-offering a lineage must not overwrite its identity. */
+function applyMigration054WorkspaceIdentity(db: Database.Database): void {
+  const columns = db.pragma("table_info(projects)") as { name: string }[];
+  if (columns.some((column) => column.name === "workspace_identity")) return;
+  db.exec(MIGRATION_054_WORKSPACE_IDENTITY);
+}
 
 /**
  * Migration 053's column addition, probe-gated like 051's: `ADD COLUMN` throws

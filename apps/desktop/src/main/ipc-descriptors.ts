@@ -23,6 +23,7 @@ import {
   isValidOverlayValue,
   parseCanvas,
   parseHarnessId,
+  parseWorkspaceIdentity,
 } from "@volli/shared";
 
 import { isExternalAppId } from "./external-apps";
@@ -450,7 +451,14 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       return (
-        isRecord(input) && typeof input["path"] === "string" && typeof input["name"] === "string"
+        isRecord(input) &&
+        typeof input["path"] === "string" &&
+        typeof input["name"] === "string" &&
+        (input["workspaceIdentity"] === undefined ||
+          parseWorkspaceIdentity(input["workspaceIdentity"]) !== null) &&
+        (input["themeCanvas"] === undefined ||
+          input["themeCanvas"] === null ||
+          parseCanvas(input["themeCanvas"]) !== null)
       );
     },
     invalidError: "Invalid project",

@@ -3815,3 +3815,43 @@ describe("migrate — 052, the durable read receipt (VC-30)", () => {
     db.close();
   });
 });
+
+describe("migration 054 — creation-time workspace identity", () => {
+  it("adds nullable JSON identity without rewriting an existing project or its canvas", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    try {
+      migrate(db, dbPath, { toVersion: 53 });
+      db.prepare(`INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at, theme_canvas)
+        VALUES ('p1', 'Existing', '/repo', 'EX', 0, 0, 1, 1, 2, '{"old":"canvas"}')`).run();
+      const before = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as Record<
+        string,
+        unknown
+      >;
+      expect(columnNames(db, "projects")).not.toContain("workspace_identity");
+      expect(migrate(db, dbPath)).toBe(true);
+      expect(db.prepare("SELECT * FROM projects WHERE id = 'p1'").get()).toEqual({
+        ...before,
+        workspace_identity: null,
+      });
+      expect(() =>
+        db.prepare("UPDATE projects SET workspace_identity = 'not JSON'").run(),
+      ).toThrow();
+      db.prepare("UPDATE projects SET workspace_identity = ?").run(
+        JSON.stringify({
+          choice: { kind: "initials" },
+          surface: "etched",
+          monogramStyle: "editorial",
+        }),
+      );
+      expect(db.pragma("foreign_key_check")).toEqual([]);
+      expect(migrate(db, dbPath)).toBe(false);
+      const saved = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get();
+      db.pragma("user_version = 53");
+      expect(migrate(db, dbPath)).toBe(true);
+      expect(db.prepare("SELECT * FROM projects WHERE id = 'p1'").get()).toEqual(saved);
+    } finally {
+      db.close();
+    }
+  });
+});

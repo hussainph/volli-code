@@ -14,6 +14,7 @@ import {
   parseDecisionModelSetting,
   parseSessionModel,
   parseSkillModes,
+  parseWorkspaceIdentity,
   resolveAuthorityPolicy,
 } from "@volli/shared";
 import type {
@@ -44,6 +45,8 @@ interface ProjectRow {
   /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
   theme_canvas: string | null;
   theme_appearance: string | null;
+  /** Migration 054 — creation-time identity as JSON; NULL = legacy monogram. */
+  workspace_identity: string | null;
   /** Migration 023 — active project agent configuration; NULL = inherit. */
   skill_modes: string | null;
   /** Retired setting, retained for append-only schema and export compatibility. */
@@ -141,6 +144,7 @@ function mapProject(row: ProjectRow): Project {
     setupCommand: row.setup_command,
     themeOverride: mapThemeOverride(row),
     themeCanvas: mapCanvas(row),
+    workspaceIdentity: parseWorkspaceIdentity(parseJsonColumn(row.workspace_identity)),
     // The CHECK on the column already limits this to the three words, so a
     // value that fails the guard means a db edited around it — inherit.
     themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
@@ -498,12 +502,33 @@ export function nextSortOrder(db: Database.Database): number {
   return (row?.max ?? -1) + 1;
 }
 
-/** Inserts a brand-new project row (`row_version` starts at `1`). */
+/** Inserts the whole authored project atomically (`row_version` starts at `1`). */
 export function insertProject(db: Database.Database, project: Project): void {
+  const canvas = project.themeCanvas == null ? null : parseCanvas(project.themeCanvas);
+  if (project.themeCanvas != null && canvas === null) {
+    throw new Error("Refusing to store a canvas that cannot be painted");
+  }
+  const identity =
+    project.workspaceIdentity == null ? null : parseWorkspaceIdentity(project.workspaceIdentity);
+  if (project.workspaceIdentity != null && identity === null) {
+    throw new Error("Refusing to store an invalid workspace identity");
+  }
+  const skillModes = parseSkillModes(project.skillModes);
+  const authority = parseAuthorityPolicyOverride(project.authorityPolicy);
+  const model = parseSessionModel(project.sessionModel);
+  const decisionModel = parseDecisionModelSetting(project.decisionModel);
   prepared(
     db,
-    `INSERT INTO projects (id, name, path, ticket_prefix, base_branch, setup_command, color_index, sort_order, row_version, created_at, updated_at)
-     VALUES (@id, @name, @path, @ticketPrefix, @baseBranch, @setupCommand, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
+    `INSERT INTO projects (
+       id, name, path, ticket_prefix, base_branch, setup_command,
+       theme_terminal_name, theme_canvas, theme_appearance, workspace_identity,
+       skill_modes, authority_policy, session_model, decision_model,
+       color_index, sort_order, row_version, created_at, updated_at)
+     VALUES (
+       @id, @name, @path, @ticketPrefix, @baseBranch, @setupCommand,
+       @terminalThemeName, @themeCanvas, @themeAppearance, @workspaceIdentity,
+       @skillModes, @authorityPolicy, @sessionModel, @decisionModel,
+       @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
   ).run({
     id: project.id,
     name: project.name,
@@ -511,6 +536,17 @@ export function insertProject(db: Database.Database, project: Project): void {
     ticketPrefix: project.ticketPrefix,
     baseBranch: project.baseBranch ?? null,
     setupCommand: project.setupCommand ?? null,
+    terminalThemeName: project.themeOverride?.terminalThemeName ?? null,
+    themeCanvas: canvas === null ? null : JSON.stringify(canvas),
+    themeAppearance: project.themeAppearance ?? null,
+    workspaceIdentity: identity === null ? null : JSON.stringify(identity),
+    skillModes: Object.keys(skillModes).length === 0 ? null : JSON.stringify(skillModes),
+    authorityPolicy:
+      authority === null || isEmptyAuthorityPolicyOverride(authority)
+        ? null
+        : JSON.stringify(authority),
+    sessionModel: model === null ? null : JSON.stringify(model),
+    decisionModel: decisionModel === null ? null : JSON.stringify(decisionModel),
     colorIndex: project.colorIndex,
     sortOrder: project.sortOrder,
     createdAt: project.createdAt,

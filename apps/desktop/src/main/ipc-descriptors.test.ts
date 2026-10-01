@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { DEFAULT_CANVAS } from "@volli/shared";
 import {
   AUTOMATION_CHANNELS,
   AUTOMATION_IPC,
@@ -371,6 +372,37 @@ describe("DATA_IPC descriptor table", () => {
 
     it("accepts a valid payload", () => {
       expect(guard([valid])).toBe(true);
+    });
+
+    it("accepts creation-time identity and canvas, including canvas inheritance", () => {
+      const workspaceIdentity = {
+        choice: { kind: "stamp", seed: "onboarding-seed", variant: 0 },
+        surface: "porcelain",
+        monogramStyle: "woven",
+      };
+      expect(guard([{ ...valid, workspaceIdentity, themeCanvas: DEFAULT_CANVAS }])).toBe(true);
+      expect(guard([{ ...valid, themeCanvas: null }])).toBe(true);
+      expect(guard([{ ...valid, workspaceIdentity: undefined, themeCanvas: undefined }])).toBe(
+        true,
+      );
+    });
+
+    it("refuses malformed or unsafe identities and malformed canvases", () => {
+      for (const workspaceIdentity of [
+        null,
+        {},
+        {
+          choice: { kind: "custom", dataUrl: "https://example.com/icon.png" },
+          surface: "etched",
+          monogramStyle: "editorial",
+        },
+        { choice: { kind: "glyph", name: "Code" }, surface: "etched", monogramStyle: "editorial" },
+      ]) {
+        expect(guard([{ ...valid, workspaceIdentity }])).toBe(false);
+      }
+      for (const themeCanvas of [false, {}, "canvas", { ...DEFAULT_CANVAS, stops: [] }]) {
+        expect(guard([{ ...valid, themeCanvas }])).toBe(false);
+      }
     });
 
     it("rejects a non-object payload", () => {

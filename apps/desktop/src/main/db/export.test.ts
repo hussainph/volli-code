@@ -282,6 +282,7 @@ describe("buildExportDocument — populated db", () => {
         // default (migration 025).
         authorityPolicy: null,
         decisionModel: null,
+        workspaceIdentity: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.
@@ -525,6 +526,21 @@ describe("buildExportDocument — populated db", () => {
    * A column is exempt because it is dead, never because someone forgot it.
    */
   const UNEXPORTED_DEAD_COLUMNS: ReadonlySet<string> = new Set(["runtime_preferences"]);
+
+  it("preserves an authored workspace mark as raw JSON in rescue exports", async () => {
+    ctx = openTestDb();
+    const identity = {
+      choice: { kind: "glyph", name: "tree" },
+      surface: "etched",
+      monogramStyle: "editorial",
+    } as const;
+    insertProject(ctx.db, {
+      ...testProject({ id: "marked-project" }),
+      workspaceIdentity: identity,
+    });
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    expect(document.projects[0]?.workspaceIdentity).toBe(JSON.stringify(identity));
+  });
 
   it("carries every live projects column, so a migration cannot silently drop one", async () => {
     ctx = openTestDb();

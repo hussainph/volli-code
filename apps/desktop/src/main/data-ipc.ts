@@ -6,6 +6,8 @@ import type Database from "better-sqlite3";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
+  parseCanvas,
+  parseWorkspaceIdentity,
   derivePrefix,
   errorMessage,
   validateAuthorityPolicyOverride,
@@ -710,13 +712,16 @@ export function registerDataIpcHandlers(
         path: input.path,
         ticketPrefix,
         baseBranch,
+        workspaceIdentity: parseWorkspaceIdentity(input.workspaceIdentity),
+        themeCanvas: input.themeCanvas == null ? null : parseCanvas(input.themeCanvas),
         colorIndex: countProjects(db) % PROJECT_COLORS.length,
         sortOrder: nextSortOrder(db),
         createdAt: now,
         updatedAt: now,
       };
       insertProject(db, project);
-      return { ok: true, project, created: true };
+      // Read the normal row mapping back, matching bootstrap/reload/relink.
+      return { ok: true, project: getProjectById(db, project.id)!, created: true };
     },
 
     /**

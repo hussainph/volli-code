@@ -3,11 +3,20 @@ import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
 import { testProject, testSession, testTicket, openTestDb } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
-import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
+import {
+  DEFAULT_AUTHORITY_POLICY,
+  DEFAULT_CANVAS,
+  type Project,
+  type WorkspaceIdentity,
+} from "@volli/shared";
+import { openRawDb } from "./test-helpers";
 import {
   deleteProject,
   getProjectAuthorityPolicy,
   getProjectById,
+  findProjectByPath,
+  listProjects,
+  updateProjectPath,
   insertProject,
   updateProjectAuthorityPolicy,
   updateProjectSkillModes,
@@ -307,5 +316,109 @@ describe("updateProjectAuthorityPolicy", () => {
     ctx = openTestDb();
 
     expect(updateProjectAuthorityPolicy(ctx.db, "missing", {}, 1000)).toBeUndefined();
+  });
+});
+
+describe("creation-time workspace identity and canvas", () => {
+  const workspaceIdentity: WorkspaceIdentity = {
+    choice: { kind: "stamp", seed: "allocated-before-project", variant: 7 },
+    surface: "letterpress",
+    monogramStyle: "architect",
+  };
+
+  it("stores both fields in the insert and reads them after reopening and relinking", () => {
+    ctx = openTestDb();
+    const project: Project = { ...testProject(), workspaceIdentity, themeCanvas: DEFAULT_CANVAS };
+    insertProject(ctx.db, project);
+    expect(getProjectById(ctx.db, project.id)).toMatchObject(project);
+    expect(findProjectByPath(ctx.db, project.path)).toMatchObject(project);
+    expect(listProjects(ctx.db)).toMatchObject([project]);
+    const reloaded = openRawDb(ctx.dbPath);
+    try {
+      expect(getProjectById(reloaded, project.id)).toMatchObject(project);
+    } finally {
+      reloaded.close();
+    }
+    expect(updateProjectPath(ctx.db, project.id, "/repo/renamed", 9)).toMatchObject({
+      workspaceIdentity,
+      themeCanvas: DEFAULT_CANVAS,
+    });
+    expect(getProjectById(ctx.db, project.id)?.workspaceIdentity?.choice).toEqual(
+      workspaceIdentity.choice,
+    );
+  });
+
+  it("keeps legacy inserts null and persists existing authored columns too", () => {
+    ctx = openTestDb();
+    const legacy = testProject();
+    insertProject(ctx.db, legacy);
+    expect(getProjectById(ctx.db, legacy.id)).toMatchObject({
+      workspaceIdentity: null,
+      themeCanvas: null,
+      themeAppearance: null,
+    });
+    const project: Project = {
+      ...testProject(),
+      baseBranch: "trunk",
+      setupCommand: "pnpm install",
+      themeOverride: { terminalThemeName: "user-theme" },
+      themeAppearance: "light",
+      skillModes: { tdd: "manual" },
+      sessionModel: { providerId: "anthropic", modelId: "claude", reasoningLevel: "high" },
+      authorityPolicy: { enforcement: "enforce" },
+      decisionModel: { kind: "none" },
+    };
+    insertProject(ctx.db, project);
+    expect(getProjectById(ctx.db, project.id)).toMatchObject(project);
+  });
+
+  it("refuses invalid identity/canvas before inserting any project row", () => {
+    ctx = openTestDb();
+    const badIdentity = {
+      ...workspaceIdentity,
+      choice: { kind: "stamp", seed: "", variant: 0 },
+    } as WorkspaceIdentity;
+    expect(() =>
+      insertProject(ctx.db, {
+        ...testProject(),
+        workspaceIdentity: badIdentity,
+        themeCanvas: DEFAULT_CANVAS,
+      }),
+    ).toThrow("invalid workspace identity");
+    expect(() =>
+      insertProject(ctx.db, {
+        ...testProject(),
+        workspaceIdentity,
+        themeCanvas: { ...DEFAULT_CANVAS, stops: [] },
+      }),
+    ).toThrow("cannot be painted");
+    expect(listProjects(ctx.db)).toEqual([]);
+  });
+
+  it("degrades unreadable persisted identity to null without taking project reads down", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    ctx.db.pragma("ignore_check_constraints = ON");
+    for (const raw of [
+      "",
+      "not JSON",
+      "null",
+      "[]",
+      "{}",
+      JSON.stringify({
+        ...workspaceIdentity,
+        choice: { kind: "custom", dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
+      }),
+    ]) {
+      ctx.db
+        .prepare("UPDATE projects SET workspace_identity = ? WHERE id = ?")
+        .run(raw, project.id);
+      expect(getProjectById(ctx.db, project.id)).toMatchObject({
+        id: project.id,
+        workspaceIdentity: null,
+      });
+      expect(listProjects(ctx.db)).toMatchObject([{ id: project.id, workspaceIdentity: null }]);
+    }
   });
 });
