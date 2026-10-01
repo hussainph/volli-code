@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -4163,10 +4164,12 @@ describe("startSession", () => {
     "Protection remembers true %s keys, isolates scope, and applies live revocation",
     async (remember) => {
       const attachment = fixture({ tools: { tools: ["write"] } });
-      const folder = join(attachment.worktreePath, "..", "docs");
+      // /tmp is shallower on Linux than macOS. Use a genuinely deep folder on
+      // both: shallow paths intentionally receive exact-file grants, not prefixes.
+      const folder = join(attachment.worktreePath, "..", "actions", "docs");
       const firstPath = join(folder, "a.txt");
       const repeatPath = join(folder, "b.txt");
-      const unrelatedPath = join(attachment.worktreePath, "..", "docs-evil", "x.txt");
+      const unrelatedPath = join(attachment.worktreePath, "..", "actions", "docs-evil", "x.txt");
       const ledger = approvalLedger();
       const asks: RuntimeAskRequest[] = [];
       attachment.spec.approvals = ledger.bind(attachment.spec.identity);
@@ -4203,7 +4206,7 @@ describe("startSession", () => {
       expect(ledger.rows).toHaveLength(1);
       expect(ledger.rows[0]).toMatchObject({
         operation: "write",
-        key: asks[0].approval?.scopes[0]?.key,
+        key: realpathSync(folder),
         sessionId: remember === "session" ? attachment.spec.identity.sessionId : null,
       });
       expect(calls[0]?.context.find((message) => message.role === "toolResult")).toMatchObject({

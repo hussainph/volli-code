@@ -143,6 +143,24 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Remembered approvals (VC-480) authorize actions on THIS machine's paths and repositories; a restore re-asks rather than silently granting them on another one.",
   },
   {
+    table: "authority_approval_commands",
+    decision: "exclude",
+    reason:
+      "Approval mutation receipts embed machine-local grants; like the excluded approvals, a restored machine must re-ask instead of replaying source-machine authority.",
+  },
+  {
+    table: "authority_approval_events",
+    decision: "exclude",
+    reason:
+      "Approval mutation history embeds source-machine grant snapshots and references the excluded local commands; it cannot authorize a restored machine.",
+  },
+  {
+    table: "authority_approval_completions",
+    decision: "exclude",
+    reason:
+      "Successful uses count source-machine approvals that are excluded; restored approvals start empty and their local completion accounting starts empty too.",
+  },
+  {
     table: "authority_decisions",
     decision: "include",
     reason:

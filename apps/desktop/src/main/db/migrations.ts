@@ -2331,7 +2331,7 @@ CREATE INDEX IF NOT EXISTS authority_decisions_session
 
 /** Successful calls and user mutation history are separate from per-grant counters. */
 const MIGRATION_055_APPROVAL_HISTORY = `
-CREATE TABLE authority_approval_completions (
+CREATE TABLE IF NOT EXISTS authority_approval_completions (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   tool_call_id TEXT NOT NULL,
@@ -2339,12 +2339,12 @@ CREATE TABLE authority_approval_completions (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, tool_call_id)
 );
-CREATE TABLE authority_approval_commands (
+CREATE TABLE IF NOT EXISTS authority_approval_commands (
   command_id TEXT PRIMARY KEY,
   command TEXT NOT NULL,
   receipt TEXT NOT NULL
 );
-CREATE TABLE authority_approval_events (
+CREATE TABLE IF NOT EXISTS authority_approval_events (
   id TEXT PRIMARY KEY,
   command_id TEXT NOT NULL UNIQUE REFERENCES authority_approval_commands(command_id),
   payload TEXT NOT NULL,

@@ -182,6 +182,29 @@ describe("053 collision: decision models and remembered authority approvals", ()
     },
   );
 
+  it("reoffers approval history without losing completed requests or mutation receipts", () => {
+    const dbPath = fixture();
+    base52(dbPath);
+    migrate(db, dbPath);
+    db.exec(`
+      INSERT INTO authority_approval_commands VALUES ('cmd', '{"kind":"approval.revoke"}', '{"status":"accepted"}');
+      INSERT INTO authority_approval_events VALUES ('event', 'cmd', '{"kind":"approval.revoked"}', 5);
+      INSERT INTO authority_approval_completions VALUES ('p1', 's1', 'call', '["grant"]', 6);
+    `);
+    const tables = [
+      "authority_approval_commands",
+      "authority_approval_events",
+      "authority_approval_completions",
+    ];
+    const rows = tables.map((table) => db.prepare(`SELECT * FROM ${table}`).all());
+    const schemas = tables.map(schema);
+    db.pragma("user_version = 54");
+    expect(migrate(db, dbPath)).toBe(true);
+    expect(tables.map((table) => db.prepare(`SELECT * FROM ${table}`).all())).toEqual(rows);
+    expect(tables.map(schema)).toEqual(schemas);
+    expectConverged();
+  });
+
   it("never rewinds a stamped version when asked for an older ceiling or seeing a future database", () => {
     const dbPath = fixture();
     base52(dbPath);
