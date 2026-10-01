@@ -12,6 +12,7 @@
 // is knowledge of Electron, and that package is pure domain code.
 
 import type { ExternalAppId } from "../external-app-ids";
+import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
 
 import type {
   BrowserTrace,
@@ -2728,10 +2729,22 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
+/** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */
+export interface VolliSecretIpcContract {
+  "volli:secrets-list": { args: [projectId?: string]; result: SecretsResult };
+  "volli:secret-submit": { args: [input: SecretSubmitInput]; result: Result };
+  "volli:secret-decline": { args: [id: string]; result: Result };
+  "volli:secret-revoke": { args: [id: string]; result: Result };
+  "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
+}
+
+export type SecretIpcChannel = keyof VolliSecretIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
+    VolliSecretIpcContract,
     VolliPiSessionOrphanIpcContract,
     VolliOrphanProcessIpcContract,
     VolliFileIpcContract,

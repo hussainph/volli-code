@@ -1214,6 +1214,21 @@ export interface SessionRuntimeSpec {
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
   /**
+   * Request a credential outside the conversation. The host owns its value and
+   * subprocess injection; the runtime receives only an outcome. Redaction is
+   * best-effort exact text matching, not protection against encoded output or
+   * a command deliberately sending a credential elsewhere.
+   */
+  secret?: {
+    request(
+      input: { name: string; purpose?: string; toolCallId: string },
+      signal: AbortSignal,
+    ): Promise<"signed in" | "declined" | "still missing">;
+    redact(text: string): string;
+    /** Whether images may carry a credential; absent means fail closed. */
+    hasValues?(): boolean;
+  };
+  /**
    * Read one public web document, through a boundary this Session does not own.
    *
    * Optional on the same terms as {@link askUser}, and for the same reason: its
@@ -1419,6 +1434,7 @@ export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
   | "tools"
   | "askUser"
+  | "secret"
   | "webFetch"
   | "webSearch"
   | "browser"
@@ -1442,6 +1458,7 @@ export type SessionToolSpec = Pick<
 export type SessionToolBinding =
   | { tool: CodingToolId }
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
+  | { tool: "request_secret"; port: NonNullable<SessionRuntimeSpec["secret"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
   // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
@@ -1518,6 +1535,8 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
+    request_secret:
+      spec.secret === undefined ? null : { tool: "request_secret", port: spec.secret },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
     browser_tabs: browser === undefined ? null : { tool: "browser_tabs", port: browser },

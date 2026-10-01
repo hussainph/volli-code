@@ -116,16 +116,17 @@ describe("Configure rail", () => {
     const html = renderConfigure("skills");
 
     // The count is in the module header of `configure-groups.tsx` ("two
-    // groups, seven categories"), and that line spent a ticket being wrong
+    // groups, eight categories"), and that line spent a ticket being wrong
     // while nothing failed. Pin it here: a category added or removed should
     // make someone reread the sentence that describes the rail.
-    expect(allCategories()).toHaveLength(7);
+    expect(allCategories()).toHaveLength(8);
     expect(html).toContain("Agent");
     expect(html).toContain("Project");
     for (const category of [
       "Skills",
       "Commands",
       "MCP Servers",
+      "Secrets",
       "Sessions",
       "Appearance",
       "Worktrees",

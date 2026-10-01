@@ -496,6 +496,10 @@ export interface PiAdapterOptions {
    * cannot attach — the record promised a tool this launch cannot answer.
    */
   resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
+  resolveSecretPort?: (scope: {
+    sessionId: string;
+    projectId: string;
+  }) => NonNullable<SessionRuntimeSpec["secret"]>;
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -866,6 +870,9 @@ function piNativeAdapter(
           sessionId: spec.sessionId,
           projectId: context.projectId,
         }),
+        secret: context.toolSurface.includes("request_secret")
+          ? options.resolveSecretPort?.({ sessionId: spec.sessionId, projectId: context.projectId })
+          : undefined,
         mcp:
           (context.mcpTools?.length ?? 0) === 0
             ? undefined
@@ -966,6 +973,7 @@ interface PiBindingOptions {
   shell: DesktopShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
+  secret: SessionRuntimeSpec["secret"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -985,6 +993,7 @@ class PiBinding implements BindingHandle {
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
+  readonly #secret: SessionRuntimeSpec["secret"];
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1022,6 +1031,7 @@ class PiBinding implements BindingHandle {
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
+    this.#secret = options.secret;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1256,6 +1266,7 @@ class PiBinding implements BindingHandle {
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       ...(wantsClassify && this.#classify !== undefined ? { classify: this.#classify } : {}),
+      ...(this.#secret === undefined ? {} : { secret: this.#secret }),
       // The attachment's ask rides into MCP calls (VC-470). Code Mode lends
       // its question scope (VC-471), serializing asks and pausing its clock.
       ...(mcpTools.length === 0
