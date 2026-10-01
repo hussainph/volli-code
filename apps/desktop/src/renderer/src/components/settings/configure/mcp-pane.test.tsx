@@ -582,3 +582,210 @@ describe("McpPane activity (VC-380)", () => {
     expect(container!.textContent ?? "").not.toContain("Recent activity");
   });
 });
+
+describe("McpPane — sign-in and credentials (VC-470)", () => {
+  const remote = (overrides: Partial<McpServerRecord> = {}): McpServerRecord =>
+    record({
+      id: "remote-1",
+      name: "Sentry",
+      transport: { type: "streamable-http", url: "https://mcp.sentry.dev/mcp" },
+      stale: false,
+      error: null,
+      ...overrides,
+    });
+
+  it("shows a server that needs sign-in, signs in from the row, then offers sign out", async () => {
+    let state: "needs-sign-in" | "signed-in" = "needs-sign-in";
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [remote()],
+      operations: [],
+      access: { "remote-1": { signIn: state, missingSecrets: [] } },
+    }));
+    const signIn = vi.fn(async () => {
+      state = "signed-in";
+      return { ok: true as const, message: "Signed in to Sentry." };
+    });
+    const signOut = vi.fn(async () => {
+      state = "needs-sign-in";
+      return { ok: true as const };
+    });
+    await render({ list, signIn, signOut });
+    await act(async () => undefined);
+
+    expect(container!.textContent).toContain("Needs sign-in");
+    await click(labelled("Sign in to Sentry"));
+    expect(signIn).toHaveBeenCalledWith({ projectId: project.id, serverId: "remote-1" });
+    expect(container!.textContent).toContain("Signed in");
+
+    await click(labelled("Sign out of Sentry"));
+    expect(signOut).toHaveBeenCalledWith({ projectId: project.id, serverId: "remote-1" });
+    expect(container!.querySelector('button[aria-label="Sign in to Sentry"]')).not.toBeNull();
+  });
+
+  it("offers no sign-in for a local server, or for a remote one carrying its own Authorization header", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [
+        record({ stale: false, error: null }),
+        remote({
+          transport: {
+            type: "streamable-http",
+            url: "https://api.example.com/mcp",
+            headers: [{ name: "Authorization", source: { kind: "secret" } }],
+          },
+        }),
+      ],
+      operations: [],
+      access: {
+        "server-1": { signIn: "not-applicable", missingSecrets: [] },
+        "remote-1": { signIn: "not-applicable", missingSecrets: ["header Authorization"] },
+      },
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    expect(container!.querySelector('button[aria-label^="Sign in to"]')).toBeNull();
+    expect(container!.textContent).toContain("Missing credential");
+    expect(container!.textContent).toContain("Missing header Authorization");
+  });
+
+  it("sends a typed header secret once, as a secret, and never shows a stored one back", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [
+        remote({
+          transport: {
+            type: "streamable-http",
+            url: "https://api.example.com/mcp",
+            headers: [
+              { name: "Authorization", source: { kind: "secret" } },
+              { name: "X-Org", source: { kind: "reference", template: "${ORG}" } },
+            ],
+          },
+        }),
+      ],
+      operations: [],
+      access: { "remote-1": { signIn: "not-applicable", missingSecrets: [] } },
+    }));
+    const test = vi.fn(async () => ({ ok: true as const, catalog }));
+    await render({ list, test });
+    await act(async () => undefined);
+
+    await click(labelled("Edit Sentry"));
+    const secret = container!.querySelector(
+      'input[aria-label="Authorization value"]',
+    ) as HTMLInputElement;
+    expect(secret.type).toBe("password");
+    expect(secret.value).toBe("");
+    expect(secret.placeholder).toBe("Stored");
+    expect(
+      (container!.querySelector('input[aria-label="X-Org reference"]') as HTMLInputElement).value,
+    ).toBe("${ORG}");
+
+    await setValue('input[aria-label="Authorization value"]', "Bearer replaced");
+    await click(button("Test and discover"));
+
+    expect(test).toHaveBeenCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({
+        transport: {
+          type: "streamable-http",
+          url: "https://api.example.com/mcp",
+          headers: [
+            { name: "Authorization", source: { kind: "secret" } },
+            { name: "X-Org", source: { kind: "reference", template: "${ORG}" } },
+          ],
+        },
+      }),
+      secrets: { "header:authorization": "Bearer replaced" },
+    });
+  });
+
+  it("adds an environment reference to a local server", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [],
+      operations: [],
+      access: {},
+    }));
+    const test = vi.fn(async () => ({ ok: true as const, catalog }));
+    await render({ list, test });
+    await act(async () => undefined);
+
+    await openEditor();
+    await setValue("#mcp-server-name", "Tools");
+    await setValue("#mcp-command", "uvx");
+    await setValue("#mcp-args", "tools-mcp");
+    await click(button("Add variable"));
+    await setValue('input[aria-label="variable 1 name"]', "API_KEY");
+    await act(async () => {
+      const select = container!.querySelector(
+        'select[aria-label="API_KEY kind"]',
+      ) as HTMLSelectElement;
+      select.value = "reference";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    await setValue('input[aria-label="API_KEY reference"]', "${TOOLS_KEY}");
+    await click(button("Test and discover"));
+
+    expect(test).toHaveBeenCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["tools-mcp"],
+          env: [{ name: "API_KEY", source: { kind: "reference", template: "${TOOLS_KEY}" } }],
+        },
+      }),
+    });
+  });
+
+  it("offers Sign in when a new server's test is blocked on it, then discovers, and forgets the draft on Cancel", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [],
+      operations: [],
+      access: {},
+    }));
+    const test = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "Sentry needs a person to sign in, in Settings → Configure → MCP Servers.",
+        blocked: { kind: "sign-in", insufficientScope: false },
+      })
+      .mockResolvedValueOnce({ ok: true, catalog });
+    const signIn = vi.fn(async () => ({ ok: true as const, message: "Signed in to Sentry." }));
+    const discardDraft = vi.fn(async () => ({ ok: true as const }));
+    await render({ list, test, signIn, discardDraft });
+    await act(async () => undefined);
+
+    await openEditor();
+    await setValue("#mcp-server-name", "Sentry");
+    await act(async () => {
+      const select = container!.querySelector("#mcp-transport") as HTMLSelectElement;
+      select.value = "streamable-http";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    await setValue("#mcp-url", "https://mcp.sentry.dev/mcp");
+    await click(button("Test and discover"));
+    expect(container!.textContent).toContain("needs a person to sign in");
+
+    await click(button("Sign in"));
+    expect(signIn).toHaveBeenCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({
+        name: "Sentry",
+        transport: { type: "streamable-http", url: "https://mcp.sentry.dev/mcp" },
+      }),
+    });
+    const draftId = (signIn.mock.calls[0] as unknown as [{ server: { id: string } }])[0].server.id;
+    expect(test).toHaveBeenCalledTimes(2);
+    expect(container!.querySelector("fieldset")).not.toBeNull();
+
+    await click(button("Cancel"));
+    expect(discardDraft).toHaveBeenCalledWith({ projectId: project.id, serverId: draftId });
+  });
+});

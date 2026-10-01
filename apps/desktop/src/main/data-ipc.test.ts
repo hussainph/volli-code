@@ -404,15 +404,20 @@ describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);
     const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
+    const accessFor = vi.fn(() => ({ "server-1": { signIn: "signed-in", missingSecrets: [] } }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list, save, accessFor } as never },
+    );
 
-    // One read carries both halves of what the pane shows: the servers, and
-    // the management history beside them (VC-380). Empty here because no
-    // operation has been recorded against this project.
+    // One read carries what the pane shows: the servers, the management
+    // history beside them (VC-380), and where each stands on credentials
+    // (VC-470). History is empty here because no operation was recorded.
     expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
       ok: true,
       servers: [{ id: "server-1" }],
       operations: [],
+      access: { "server-1": { signIn: "signed-in", missingSecrets: [] } },
     });
     await expect(
       invoke<Promise<unknown>>("volli:mcp-save" as never, {
@@ -452,7 +457,10 @@ describe("MCP settings IPC", () => {
       { ...entry, id: "session-1:b", projectId: "project-2", summary: "Elsewhere." },
       200,
     );
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list: () => [] } as never });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list: () => [], accessFor: () => ({}) } as never },
+    );
 
     const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
       projectId: "project-1",
@@ -461,6 +469,66 @@ describe("MCP settings IPC", () => {
     // The pane reads one project. Another project's history appearing here
     // would be a leak between projects, not merely untidy.
     expect(result.operations.map((row) => row.summary)).toEqual(["Installed Fixture."]);
+  });
+});
+
+describe("MCP sign-in IPC (VC-470)", () => {
+  it("routes sign-in, sign-out and draft disposal to the service, and lets the pane cancel a waiting sign-in", async () => {
+    let seen: AbortSignal | null = null;
+    const signIn = vi.fn(
+      (input: { signal: AbortSignal }) =>
+        new Promise((resolve) => {
+          seen = input.signal;
+          input.signal.addEventListener("abort", () =>
+            resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." }),
+          );
+        }),
+    );
+    const signOut = vi.fn(() => ({ ok: true }));
+    const discardDraft = vi.fn(() => ({ ok: true }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { signIn, signOut, discardDraft } as never },
+    );
+
+    const waiting = invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+      projectId: "project-1",
+      serverId: "server-1",
+    });
+    expect(signIn).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-1", serverId: "server-1" }),
+    );
+    expect(
+      invoke("volli:mcp-cancel-sign-in" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    await expect(waiting).resolves.toEqual({
+      ok: false,
+      cancelled: true,
+      error: "The sign-in to X was cancelled.",
+    });
+    expect(seen!.aborted).toBe(true);
+
+    expect(
+      invoke("volli:mcp-sign-out" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    expect(signOut).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    expect(
+      invoke("volli:mcp-discard-draft" as never, { projectId: "project-1", serverId: "draft-1" }),
+    ).toEqual({ ok: true });
+    expect(discardDraft).toHaveBeenCalledWith({ projectId: "project-1", serverId: "draft-1" });
+  });
+
+  it("answers a completed sign-in with its message, keyed by the draft's own id", async () => {
+    const signIn = vi.fn(async () => ({ ok: true, message: "Signed in to Draft." }));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { signIn } as never });
+
+    await expect(
+      invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+        projectId: "project-1",
+        server: { id: "draft-1" },
+        secrets: { "header:authorization": "typed" },
+      }),
+    ).resolves.toEqual({ ok: true, message: "Signed in to Draft." });
   });
 });
 

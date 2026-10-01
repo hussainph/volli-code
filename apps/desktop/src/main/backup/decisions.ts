@@ -26,6 +26,8 @@
  * for the app to fill when it next creates the resource.
  */
 
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";
 
@@ -259,7 +261,7 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     table: "mcp_servers",
     decision: "include",
     reason:
-      "Per-project MCP server configuration and selected tool catalogs; transport settings contain no credentials.",
+      "Per-project MCP server configuration and selected tool catalogs. Transport settings hold credential REFERENCES (`${NAME}`, or a marker that a secret is stored) and never a value (VC-470); the values and OAuth tokens live in the excluded MCP credential file.",
   },
   {
     table: "mcp_operations",
@@ -495,6 +497,13 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     area: "pi-sessions",
     decision: "exclude",
     reason: "Agent runtime scratch for live sessions; a runtime handle, not durable history.",
+  },
+  {
+    // Bound to the store's own name, as the included areas are bound to theirs.
+    area: `${MCP_CREDENTIAL_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "MCP secrets a person stored and OAuth tokens (VC-470). Credentials never travel in a backup; a restored profile signs in again.",
   },
   {
     area: "browser-pictures",

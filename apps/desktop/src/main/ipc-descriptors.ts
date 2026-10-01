@@ -512,7 +512,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 &&
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
-      isRecord(args[0]["server"]),
+      isRecord(args[0]["server"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server test",
   },
   "volli:mcp-save": {
@@ -521,7 +522,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
       isRecord(args[0]["server"]) &&
-      isStringArray(args[0]["enabledTools"]),
+      isStringArray(args[0]["enabledTools"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server save",
   },
   "volli:mcp-refresh": {
@@ -557,6 +559,39 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       typeof args[0]["projectId"] === "string" &&
       typeof args[0]["serverId"] === "string",
     invalidError: "Invalid MCP server removal",
+  },
+  "volli:mcp-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      (typeof args[0]["serverId"] === "string" || isRecord(args[0]["server"])) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
+    invalidError: "Invalid MCP sign-in",
+  },
+  "volli:mcp-cancel-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-cancel-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-in cancellation",
+  },
+  "volli:mcp-sign-out": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-out"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-out",
+  },
+  "volli:mcp-discard-draft": {
+    guard: (args): args is IpcArgs<"volli:mcp-discard-draft"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP draft",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {

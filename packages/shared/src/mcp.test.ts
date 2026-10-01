@@ -276,6 +276,122 @@ describe("sanitizeMcpServerDraft", () => {
     },
   );
 
+  it("keeps person-configured credential references and omits empty credential fields (VC-470)", () => {
+    expect(
+      sanitizeMcpServerDraft({
+        id: "local",
+        name: "Local",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["tools-mcp"],
+          env: [
+            { name: "API_KEY", source: { kind: "reference", template: "${TOOLS_KEY}" } },
+            { name: "OTHER", source: { kind: "secret" } },
+          ],
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "local",
+        name: "Local",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["tools-mcp"],
+          env: [
+            { name: "API_KEY", source: { kind: "reference", template: "${TOOLS_KEY}" } },
+            { name: "OTHER", source: { kind: "secret" } },
+          ],
+        },
+      },
+    });
+    expect(
+      sanitizeMcpServerDraft({
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [
+            { name: "Authorization", source: { kind: "reference", template: "Bearer ${TOKEN}" } },
+          ],
+          oauth: { clientId: "volli", callbackPort: 8765 },
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [
+            { name: "Authorization", source: { kind: "reference", template: "Bearer ${TOKEN}" } },
+          ],
+          oauth: { clientId: "volli", callbackPort: 8765 },
+        },
+      },
+    });
+    // Empty lists and an empty OAuth object store exactly what a server
+    // without credentials always stored.
+    expect(
+      sanitizeMcpServerDraft({
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+          headers: [],
+          oauth: {},
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        id: "remote",
+        name: "Remote",
+        enabled: true,
+        transport: { type: "streamable-http", url: "https://mcp.example.test/mcp" },
+      },
+    });
+  });
+
+  it.each([
+    [
+      {
+        type: "stdio",
+        command: "node",
+        args: [],
+        env: [{ name: "1BAD", source: { kind: "secret" } }],
+      },
+      "environment variable name",
+    ],
+    [
+      {
+        type: "streamable-http",
+        url: "https://example.test/mcp",
+        headers: [{ name: "X", source: { kind: "plain", value: "sk-1" } }],
+      },
+      "reference or a stored secret",
+    ],
+    [
+      { type: "streamable-http", url: "https://example.test/mcp", oauth: { callbackPort: 0 } },
+      "port",
+    ],
+  ])("rejects malformed credential configuration %#", (transport, reason) => {
+    const result = sanitizeMcpServerDraft(serverCandidate({ transport }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain(reason);
+  });
+
   it.each([
     [{ id: 1 }, "server id"],
     [{ id: "bad id" }, "server id"],
@@ -436,10 +552,11 @@ describe("mcpInstallWarning", () => {
     // The origin, never the query string: a path or parameter can carry a token.
     expect(warning).not.toContain("k=1");
     expect(warning).not.toContain("runs on this machine as you");
-    // Volli adds none of its own AND supports none, which is the whole truth
-    // now that a query-string credential is refused rather than tolerated.
-    expect(warning).toContain("Volli adds no credentials of its own");
-    expect(warning).toMatch(/supports no authentication/i);
+    // Volli adds none of its own, and a credential the server needs is the
+    // person's to provide (VC-470) — never the agent's.
+    expect(warning).toContain("Volli sends it no credential of its own");
+    expect(warning).toMatch(/only a person can provide one/i);
+    expect(warning).toMatch(/an agent never supplies, sees or stores it/i);
   });
 });
 
@@ -454,6 +571,7 @@ describe("mcpEndpointSecretRefusal", () => {
     expect(refusal).toMatch(/plain text/i);
     // A refusal with no way forward is a dead end, and the person path is real.
     expect(refusal).toContain("Settings");
+    expect(refusal).not.toMatch(/not supported yet/i);
   });
 });
 

@@ -476,6 +476,16 @@ export const CONFIRM_CAUSE_IDS = [
   "confirm.mcp-install",
   /** Deleting an MCP server, which breaks reattachment for older Sessions using it. */
   "confirm.mcp-remove",
+  /**
+   * Signing in to an MCP server (VC-470): allowing it opens the server's OAuth
+   * page in the person's browser, and the agent learns only whether it worked.
+   */
+  "confirm.mcp-sign-in",
+  /**
+   * An MCP server missing a credential only a person can supply (VC-470): the
+   * person adds it in Settings and allows the retry; the agent never sees it.
+   */
+  "confirm.mcp-credential",
 ] as const;
 
 export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];

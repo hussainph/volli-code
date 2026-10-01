@@ -5,6 +5,13 @@
 
 import Ajv2020 from "ajv/dist/2020.js";
 
+import {
+  sanitizeMcpCredentialEntries,
+  sanitizeMcpOAuthClient,
+  type McpCredentialEntry,
+  type McpOAuthClientConfig,
+} from "./mcp-credentials";
+
 export const MCP_PROVIDER_NAME_MAX_CHARS = 64;
 export const MCP_SERVER_ID_MAX_CHARS = 64;
 export const MCP_SERVER_NAME_MAX_CHARS = 100;
@@ -46,9 +53,27 @@ export interface McpToolCandidate {
   inputSchema: unknown;
 }
 
+/**
+ * How Volli reaches one server.
+ *
+ * `env`, `headers` and `oauth` are VC-470's, each absent when empty so a
+ * configuration without credentials stores exactly what it always did. Every
+ * credential in them is a reference or a stored-secret marker, never a value —
+ * see `mcp-credentials.ts`.
+ */
 export type McpTransportConfig =
-  | { type: "stdio"; command: string; args: readonly string[] }
-  | { type: "streamable-http"; url: string };
+  | {
+      type: "stdio";
+      command: string;
+      args: readonly string[];
+      env?: readonly McpCredentialEntry[];
+    }
+  | {
+      type: "streamable-http";
+      url: string;
+      headers?: readonly McpCredentialEntry[];
+      oauth?: McpOAuthClientConfig;
+    };
 
 export interface McpServerDraft {
   id: string;
@@ -364,13 +389,20 @@ export function sanitizeMcpServerDraft(input: {
     ) {
       return { ok: false, reason: "stdio argument array is invalid" };
     }
+    const env = sanitizeMcpCredentialEntries("env", transport["env"]);
+    if (!env.ok) return env;
     return {
       ok: true,
       server: {
         id: input.id,
         name: input.name.trim(),
         enabled: input.enabled,
-        transport: { type: "stdio", command, args: [...(args as string[])] },
+        transport: {
+          type: "stdio",
+          command,
+          args: [...(args as string[])],
+          ...(env.entries.length === 0 ? {} : { env: env.entries }),
+        },
       },
     };
   }
@@ -396,13 +428,22 @@ export function sanitizeMcpServerDraft(input: {
     if (url.hash.length > 0) {
       return { ok: false, reason: "streamable HTTP endpoint must not contain a fragment" };
     }
+    const headers = sanitizeMcpCredentialEntries("header", transport["headers"]);
+    if (!headers.ok) return headers;
+    const oauth = sanitizeMcpOAuthClient(transport["oauth"]);
+    if (!oauth.ok) return oauth;
     return {
       ok: true,
       server: {
         id: input.id,
         name: input.name.trim(),
         enabled: input.enabled,
-        transport: { type: "streamable-http", url: url.toString() },
+        transport: {
+          type: "streamable-http",
+          url: url.toString(),
+          ...(headers.entries.length === 0 ? {} : { headers: headers.entries }),
+          ...(oauth.oauth === undefined ? {} : { oauth: oauth.oauth }),
+        },
       },
     };
   }
@@ -506,7 +547,7 @@ export function mcpInstallWarning(server: McpServerDraft): string {
   return [
     `${server.name} is a remote MCP server at ${origin}: it receives whatever arguments its tools are given,`,
     "including file contents, paths and anything a model puts in a tool call, and Volli cannot see what it does with them.",
-    "Volli adds no credentials of its own and supports no authentication, so this endpoint must be one that needs none.",
+    "Volli sends it no credential of its own. If it needs a sign-in or a key, only a person can provide one, in Settings \u2192 Configure \u2192 MCP Servers; an agent never supplies, sees or stores it.",
   ].join(" ");
 }
 
@@ -516,7 +557,8 @@ export function mcpInstallWarning(server: McpServerDraft): string {
  * Acceptance 12 is absolute: no secret reaches a server process, a verb
  * argument, or a stored record. A query string is the one place in a URL a
  * token can still sit once userinfo and fragments are already refused, and an
- * agent has no secret store to put one anywhere better. Volli cannot tell
+ * agent may not hold a credential at all (VC-470: credentials are routed to the
+ * person, who stores them as a header, a secret or a sign-in). Volli cannot tell
  * `?token=…` from `?version=2`, so it refuses the shape rather than guessing at
  * the meaning — the alternative is storing an unknown value in plain text, in
  * the database and in every backup bundle, and calling that support.
@@ -529,8 +571,8 @@ export function mcpInstallWarning(server: McpServerDraft): string {
 export function mcpEndpointSecretRefusal(): string {
   return [
     "That endpoint carries a query string, and the MCP verbs refuse one.",
-    "Volli has no secret storage for MCP servers and cannot tell a token from an ordinary parameter, so a query string would be stored in plain text and sent to the server as given.",
-    "Authenticated servers are not supported yet. Use an endpoint that needs no credentials, or add this server by hand in Settings \u2192 Configure \u2192 MCP Servers.",
+    "Volli cannot tell a token from an ordinary parameter, so a query string would be stored in plain text and sent to the server as given.",
+    "Credentials are a person's to add: use the endpoint without its query string, or ask the person driving to add this server in Settings \u2192 Configure \u2192 MCP Servers, where a header, a stored secret or an OAuth sign-in can carry the credential instead.",
   ].join(" ");
 }
 

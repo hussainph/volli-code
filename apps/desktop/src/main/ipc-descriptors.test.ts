@@ -2024,6 +2024,34 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: "server-1" }])).toBe(true);
     });
 
+    it("accepts sign-in for a saved server or a draft, with typed secrets as strings only (VC-470)", () => {
+      const secrets = { "header:authorization": "typed" };
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, serverId: "server-1" }])).toBe(
+        true,
+      );
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets: { slot: 1 } }]),
+      ).toBe(false);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets: "x" }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets }]),
+      ).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets: [1] }]),
+      ).toBe(false);
+      for (const channel of [
+        "volli:mcp-cancel-sign-in",
+        "volli:mcp-sign-out",
+        "volli:mcp-discard-draft",
+      ] as const) {
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: "server-1" }])).toBe(true);
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: 1 }])).toBe(false);
+      }
+    });
+
     it("rejects malformed operation-specific fields", () => {
       expect(DATA_IPC["volli:mcp-list"].guard([])).toBe(false);
       expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server: null }])).toBe(false);
@@ -2050,8 +2078,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 76 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(76);
+    it("covers all 80 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(80);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The steady-state refresh pair (VC-387): one project's board without
       // bodies, and one ticket's body for the ticket that is open.
@@ -2065,6 +2093,11 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:mcp-list");
       expect(DATA_CHANNELS).toContain("volli:mcp-save");
       expect(DATA_CHANNELS).toContain("volli:mcp-remove");
+      // Sign-in is a person's act (VC-470), and lives only on this app door.
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-cancel-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-out");
+      expect(DATA_CHANNELS).toContain("volli:mcp-discard-draft");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");

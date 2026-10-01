@@ -943,8 +943,11 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
     mcpPreviewTool(mcpPorts(options), session, request, signal),
   "mcp.install": (options, session, request, signal, budgetAsk) =>
     mcpInstallTool(mcpPorts(options), session, request, signal, budgetAsk),
-  "mcp.refresh": (options, session, request, signal) =>
-    mcpRefreshTool(mcpPorts(options), session, request, signal),
+  // Refresh starts a server the project already holds, so it confirms nothing
+  // — but a server that now needs a sign-in asks the person driving through
+  // the same machinery (VC-470).
+  "mcp.refresh": (options, session, request, signal, budgetAsk) =>
+    mcpRefreshTool(mcpPorts(options), session, request, signal, budgetAsk),
   "mcp.enable": (options, session, request) => mcpEnableTool(mcpPorts(options), session, request),
   "mcp.disable": (options, session, request) => mcpDisableTool(mcpPorts(options), session, request),
   "mcp.tools": (options, session, request) => mcpToolsTool(mcpPorts(options), session, request),

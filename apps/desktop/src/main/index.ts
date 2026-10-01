@@ -67,7 +67,13 @@ import type {
   VolliIpcEvent,
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
-import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
+import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
+import { McpOAuthBroker } from "./mcp/oauth";
+import {
+  closeAllMcpSessionHosts,
+  McpSessionHost,
+  serversForFrozenMcpTools,
+} from "./mcp/session-host";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -1015,7 +1021,25 @@ app.whenReady().then(async () => {
   // store is intentionally constructed before any Session surface: it resolves
   // birth grants and the door later consumes the exact durable record.
   const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
-  const mcpSettings = dbHandle.ok ? new McpSettingsService({ db: dbHandle.db }) : null;
+  // MCP credentials (VC-470): one user-only file beside the database, never
+  // the database itself, and never the keychain — see `mcp/credential-store.ts`.
+  // Beside `dbPath` rather than under `userData` so a smoke run on its own
+  // VOLLI_DB_PATH cannot read or write a real profile's tokens.
+  const mcpCredentials = new FileMcpCredentialStore(
+    join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
+  );
+  const mcpSettings = dbHandle.ok
+    ? new McpSettingsService({
+        db: dbHandle.db,
+        credentials: mcpCredentials,
+        oauth: new McpOAuthBroker({
+          store: mcpCredentials,
+          // Only ever an authorization page the server's own metadata named,
+          // already checked to be https (or loopback) by the broker.
+          openExternal: (url) => shell.openExternal(url),
+        }),
+      })
+    : null;
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1325,6 +1349,17 @@ app.whenReady().then(async () => {
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
                     ),
+                    // Credentials are resolved per connection and tokens per
+                    // request, so this attachment sees a sign-in or a stored
+                    // value a person adds while it runs (VC-470).
+                    open: mcpSettings.opener(),
+                    credentialsRevision: (serverId) => mcpSettings.credentials.revision(serverId),
+                    signIn: (server, signal) =>
+                      mcpSettings.signIn({
+                        projectId: scope.projectId,
+                        serverId: server.id,
+                        signal,
+                      }),
                   });
                   return { call: host.port.call, dispose: () => host.close() };
                 },
@@ -2124,6 +2159,10 @@ app.whenReady().then(async () => {
           console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
         }
       }
+      // Every Session has closed, and with it every MCP host it owned. This is
+      // the backstop for one whose own close never ran: a stdio server's whole
+      // process group goes with it, so a quit leaves no `npx`/`uvx` child.
+      await closeAllMcpSessionHosts();
       // The one flush, and it is here rather than anywhere else because this is
       // the only point at which every Session has stopped producing events.
       // Bounded inside the owner, so a collector that has stopped answering

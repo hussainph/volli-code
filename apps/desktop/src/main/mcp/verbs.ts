@@ -44,6 +44,8 @@ import {
   sanitizeMcpServerDraft,
   uniqueTokenList,
   type McpCatalogTool,
+  type McpConnectionBlock,
+  type McpServerAccess,
   type McpServerDraft,
   type McpServerProvenance,
   type McpServerRecord,
@@ -321,6 +323,165 @@ function serverStatus(server: McpServerRecord): string {
 }
 
 /**
+ * A server's credentials as an agent may see them: which slots exist, how each
+ * is kept, whether one is missing, and whether a sign-in is needed. Names and
+ * states only — never a value, and never a reference's text either, because
+ * this travels into a model's context and that is no place to rehearse which
+ * of Volli's environment variables a header reads (VC-470).
+ */
+function credentialSummary(server: McpServerDraft, access: McpServerAccess | null): string | null {
+  const transport = server.transport;
+  const slots = (
+    transport.type === "stdio"
+      ? (transport.env ?? []).map((entry) => ({ family: "env", entry }))
+      : (transport.headers ?? []).map((entry) => ({ family: "header", entry }))
+  ).map(
+    ({ family, entry }) =>
+      `${family} ${entry.name} (${entry.source.kind === "secret" ? "stored secret" : "reference"})`,
+  );
+  if (transport.type === "streamable-http" && transport.oauth?.clientId !== undefined) {
+    slots.push("pre-registered OAuth client");
+  }
+  const parts: string[] = [];
+  if (slots.length > 0) parts.push(`credentials set by a person: ${slots.join(", ")}`);
+  if (access !== null && access.missingSecrets.length > 0) {
+    parts.push(`MISSING: ${access.missingSecrets.join(", ")} (a person must add it in Settings)`);
+  }
+  if (access !== null && access.signIn !== "not-applicable") {
+    parts.push(
+      access.signIn === "needs-sign-in"
+        ? "NEEDS SIGN-IN (a person must sign in)"
+        : access.signIn === "signed-in"
+          ? "signed in"
+          : "not signed in",
+    );
+  }
+  return parts.length === 0 ? null : parts.join("; ");
+}
+
+/** The same server, as far as its credentials go: one command line, or one endpoint. */
+function sameTarget(left: McpServerDraft, right: McpServerDraft): boolean {
+  if (left.transport.type === "stdio" && right.transport.type === "stdio") {
+    return (
+      left.transport.command === right.transport.command &&
+      JSON.stringify(left.transport.args) === JSON.stringify(right.transport.args)
+    );
+  }
+  return (
+    left.transport.type === "streamable-http" &&
+    right.transport.type === "streamable-http" &&
+    left.transport.url === right.transport.url
+  );
+}
+
+/** Whether a configuration carries anything a person set for its credentials. */
+function hasPersonCredentials(server: McpServerDraft): boolean {
+  const transport = server.transport;
+  return transport.type === "stdio"
+    ? (transport.env ?? []).length > 0
+    : (transport.headers ?? []).length > 0 || transport.oauth !== undefined;
+}
+
+/**
+ * An agent's install of a server that already exists, with the person's
+ * credential settings handled (VC-470).
+ *
+ * The agent cannot state headers, environment or OAuth settings, so its draft
+ * has none. Re-installing the SAME target keeps the person's: an agent
+ * refreshing the tool selection must not quietly unplug a key. A DIFFERENT
+ * target drops them, and the stored values with them once the save succeeds —
+ * otherwise an agent could point a person's `Authorization` header at an
+ * endpoint of its own choosing by re-installing under the same id.
+ */
+function withPersonCredentials(
+  draft: McpServerDraft,
+  existing: McpServerRecord | undefined,
+): { server: McpServerDraft; dropped: boolean } {
+  if (existing === undefined || !hasPersonCredentials(existing)) {
+    return { server: draft, dropped: false };
+  }
+  if (!sameTarget(draft, existing)) return { server: draft, dropped: true };
+  return { server: { ...draft, transport: existing.transport }, dropped: false };
+}
+
+/** What the person driving can be asked for, and what the agent is told either way. */
+type Routed = { provided: true; note: string } | { provided: false; text: string };
+
+/**
+ * Put a connection blocked on a person in front of that person (VC-470).
+ *
+ * The owner's rule, applied: an agent never supplies, sees or stores a
+ * credential. A sign-in is offered as a `confirm.mcp-sign-in` question; when
+ * the person allows it, Volli opens the server's page in their browser and the
+ * agent is told only that it worked or why not. A missing key is a
+ * `confirm.mcp-credential` question: the person adds it in Settings and allows
+ * the retry. With nobody to ask, the agent is told in plain words that a
+ * person must do it.
+ */
+async function routeToPerson(
+  ask: VerbAsk | undefined,
+  mcp: McpSettingsService,
+  session: RuntimeSessionIdentity,
+  server: McpServerDraft,
+  blocked: McpConnectionBlock,
+  request: RuntimeVerbCall,
+  tool: string,
+  signal: AbortSignal,
+): Promise<Routed> {
+  if (ask === undefined) {
+    return {
+      provided: false,
+      text:
+        blocked.kind === "sign-in"
+          ? `${server.name} needs a person to sign in before Volli can read its tools, and nobody could be asked from this Session. A person can sign in from Settings \u2192 Configure \u2192 MCP Servers.`
+          : `${server.name} needs ${blocked.missing.join(", ")}, which only a person can add, in Settings \u2192 Configure \u2192 MCP Servers. Nobody could be asked from this Session.`,
+    };
+  }
+  let choice: RuntimeAskChoice;
+  try {
+    choice = await ask(
+      {
+        cause: blocked.kind === "sign-in" ? "confirm.mcp-sign-in" : "confirm.mcp-credential",
+        tool,
+        toolCallId: request.toolCallId,
+        turnId: null,
+        reason:
+          blocked.kind === "sign-in"
+            ? `${server.name} needs you to sign in before Volli can read its tools. Allowing opens its sign-in page in your browser; the agent learns only whether the sign-in worked.`
+            : `${server.name} needs ${blocked.missing.join(", ")}. Add it in Settings \u2192 Configure \u2192 MCP Servers, then allow to retry. The agent never sees the value.`,
+        trip: "confirm",
+        overridable: true,
+      },
+      signal,
+    );
+  } catch {
+    return {
+      provided: false,
+      text: "Volli could not put this in front of anyone, so nothing was changed.",
+    };
+  }
+  if (choice !== "allow") {
+    return {
+      provided: false,
+      text:
+        blocked.kind === "sign-in"
+          ? `The person driving declined to sign in to ${server.name}, so nothing was changed.`
+          : `The person driving declined to add ${blocked.missing.join(", ")} for ${server.name}, so nothing was changed.`,
+    };
+  }
+  if (blocked.kind === "credential") {
+    return {
+      provided: true,
+      note: `The person driving was asked for ${blocked.missing.join(", ")}.`,
+    };
+  }
+  const outcome = await mcp.signIn({ projectId: session.projectId, server, signal });
+  return outcome.ok
+    ? { provided: true, note: `The person driving signed in to ${server.name}.` }
+    : { provided: false, text: `The sign-in did not complete: ${outcome.message}` };
+}
+
+/**
  * Write the durable record of one management operation.
  *
  * Two homes on purpose. The `mcp_operations` row is canonical and always
@@ -499,12 +660,14 @@ export async function mcpListTool(
     lines.push(`${servers.length} MCP server${servers.length === 1 ? "" : "s"} in this project:`);
     for (const server of servers) {
       const on = server.catalog.filter((tool) => tool.enabled).map((tool) => tool.name);
+      const credentials = credentialSummary(server, found.mcp.access(server));
       lines.push(
         "",
         `${server.name} (id ${server.id}) — ${serverStatus(server)}`,
         `  ${transportSummary(server)}`,
         `  tools on (${on.length}/${server.catalog.length}): ${on.length === 0 ? "none" : on.join(", ")}`,
         `  ${provenanceSummary(server.provenance)}`,
+        ...(credentials === null ? [] : [`  ${credentials}`]),
       );
     }
   }
@@ -535,6 +698,11 @@ export async function mcpPreviewTool(
     signal,
   });
   if (!result.ok) {
+    if (result.blocked?.kind === "sign-in") {
+      return refusal(
+        `${draft.server.name} needs a person to sign in before its tools can be read, so nothing was read and nothing was saved. mcp_install with confirm="apply" asks the person driving to sign in; only a person can.`,
+      );
+    }
     return refusal(
       `Could not read ${draft.server.name}'s tools: ${result.error} Nothing was saved.`,
     );
@@ -572,10 +740,21 @@ export async function mcpInstallTool(
   if (!provenance.ok) {
     return refusal(`That provenance was refused, so nothing was done: ${provenance.reason}.`);
   }
-  const warning = mcpInstallWarning(draft.server);
   const existing = found.mcp
     .list(session.projectId)
     .find((server) => server.id === draft.server.id);
+  const carried = withPersonCredentials(draft.server, existing);
+  const target = carried.server;
+  const credentialNote =
+    existing === undefined || !hasPersonCredentials(existing)
+      ? null
+      : carried.dropped
+        ? `${existing.name}'s credentials (set by a person) do not follow it to a different endpoint or command: they would be deleted, and a person would have to add them again.`
+        : `${existing.name}'s credentials (set by a person) are kept, because the endpoint or command is unchanged.`;
+  const warning = [
+    mcpInstallWarning(target),
+    ...(credentialNote === null ? [] : [credentialNote]),
+  ].join(" ");
 
   if (!isApply(request.input)) {
     // The preview connects to NOTHING. A local MCP server is a process started
@@ -611,13 +790,44 @@ export async function mcpInstallTool(
   );
   if (!confirmed.granted) return refusal(confirmed.text);
 
-  const saved = await found.mcp.save({
-    projectId: session.projectId,
-    server: draft.server,
-    enabledTools: tools,
-    provenance: provenanceFromInput(request.input),
-    signal,
-  });
+  const install = () =>
+    found.mcp.save({
+      projectId: session.projectId,
+      server: target,
+      enabledTools: tools,
+      provenance: provenanceFromInput(request.input),
+      signal,
+    });
+  let saved = await install();
+  let personNote: string | null = null;
+  if (!saved.ok && saved.blocked !== undefined) {
+    // Blocked on something only a person can give. Ask them; the agent gets
+    // the outcome, never the credential.
+    const routed = await routeToPerson(
+      ask,
+      found.mcp,
+      session,
+      target,
+      saved.blocked,
+      request,
+      "mcp_install",
+      signal,
+    );
+    if (routed.provided) {
+      personNote = routed.note;
+      saved = await install();
+    } else {
+      saved = { ...saved, error: `${saved.error} ${routed.text}` };
+    }
+  }
+  if (saved.ok && carried.dropped) {
+    // The new target is saved; the old one's values must not outlive it.
+    found.mcp.forgetCredentials(saved.server.id);
+  }
+  if (!saved.ok && existing === undefined) {
+    // A first install that did not land keeps nothing a sign-in gathered.
+    found.mcp.discardDraft({ projectId: session.projectId, serverId: target.id });
+  }
   const recorded = saved.ok ? saved.server.provenance : provenance.provenance;
 
   if (!saved.ok) {
@@ -670,6 +880,12 @@ export async function mcpInstallTool(
       confirmed.asked
         ? "The person driving confirmed this install."
         : 'Nobody was asked to confirm: this Session had no way to put a question in front of a person, so the explicit confirm="apply" was the confirmation.',
+      ...(personNote === null ? [] : [personNote]),
+      ...(carried.dropped
+        ? [
+            "The credentials a person had set for the previous endpoint or command were deleted; a person must add any this one needs in Settings \u2192 Configure \u2192 MCP Servers.",
+          ]
+        : []),
     ].join("\n"),
   };
 }
@@ -679,16 +895,38 @@ export async function mcpRefreshTool(
   session: RuntimeSessionIdentity,
   request: RuntimeVerbCall,
   signal: AbortSignal,
+  ask?: VerbAsk,
 ): Promise<RuntimeVerbResult> {
   const found = owner(options, "nothing was refreshed");
   if (!found.ok) return refusal(found.text);
   const id = requiredVerbText(request.input, "server", "the server's id, as mcp_list prints it.");
   if (!id.ok) return refusal(id.text);
-  const result = await found.mcp.refresh({
-    projectId: session.projectId,
-    serverId: id.value,
-    signal,
-  });
+  const refresh = () =>
+    found.mcp.refresh({
+      projectId: session.projectId,
+      serverId: id.value,
+      signal,
+    });
+  let result = await refresh();
+  let personNote: string | null = null;
+  if (!result.ok && result.blocked !== undefined && result.server !== undefined) {
+    const routed = await routeToPerson(
+      ask,
+      found.mcp,
+      session,
+      result.server,
+      result.blocked,
+      request,
+      "mcp_refresh",
+      signal,
+    );
+    if (routed.provided) {
+      personNote = routed.note;
+      result = await refresh();
+    } else {
+      result = { ...result, error: `${result.error} ${routed.text}` };
+    }
+  }
   if (!result.ok) {
     return refusal(
       result.server === undefined
@@ -703,6 +941,7 @@ export async function mcpRefreshTool(
       `  tools on: ${on.length === 0 ? "none" : on.join(", ")}`,
       "",
       FROZEN_SURFACE_NOTE,
+      ...(personNote === null ? [] : [personNote]),
     ].join("\n"),
   };
 }

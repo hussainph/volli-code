@@ -94,7 +94,12 @@ describe("isBudgetCause", () => {
 
 describe("isConfirmCause", () => {
   it("recognises the confirmation namespace, apart from rules and budgets", () => {
-    expect(CONFIRM_CAUSE_IDS).toEqual(["confirm.mcp-install", "confirm.mcp-remove"]);
+    expect(CONFIRM_CAUSE_IDS).toEqual([
+      "confirm.mcp-install",
+      "confirm.mcp-remove",
+      "confirm.mcp-sign-in",
+      "confirm.mcp-credential",
+    ]);
     for (const cause of CONFIRM_CAUSE_IDS) {
       expect(isConfirmCause(cause), cause).toBe(true);
       // A confirmation is not a budget: nothing was spent, and no allowance is

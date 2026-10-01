@@ -104,7 +104,8 @@ import {
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
-  type RuntimeMcpPort,
+  type RuntimeMcpCall,
+  type RuntimeMcpCallResult,
   type RuntimeObservation,
   type RuntimeShellPort,
   type RuntimeRecoveryRef,
@@ -331,7 +332,20 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
 
 /** Main-owned MCP port with attachment cleanup for its clients/transports. */
-export type DesktopMcpPort = RuntimeMcpPort & { dispose: () => Promise<void> | void };
+/**
+ * The attachment's MCP host. `call` takes the attachment's ask as an optional
+ * third argument (VC-470): a call blocked on a sign-in or a credential puts
+ * the question to the person driving through the same parked-question
+ * machinery a verb's confirmation uses.
+ */
+export type DesktopMcpPort = {
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
+  ): Promise<RuntimeMcpCallResult>;
+  dispose: () => Promise<void> | void;
+};
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -1092,7 +1106,16 @@ class PiBinding implements BindingHandle {
         ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
-      ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),
+      // The attachment's own ask rides into every MCP call, so a server that
+      // needs a sign-in asks the person driving rather than failing (VC-470).
+      ...(mcpTools.length === 0
+        ? {}
+        : {
+            mcp: {
+              call: (request: RuntimeMcpCall, signal: AbortSignal) =>
+                this.#mcp!.call(request, signal, (ask, askSignal) => this.#ask(ask, askSignal)),
+            },
+          }),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
