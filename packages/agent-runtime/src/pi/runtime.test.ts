@@ -13226,3 +13226,112 @@ it("keeps unsupported-fetch routes unchanged and records a refusal without a mes
   });
   await handle.close();
 });
+
+it("redacts provider failures before sidecar, replay and observations (review items 1–2)", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const stored = "stored-dummy-482";
+  const request = "request-dummy-482";
+  const diagnostic = "diagnostic-dummy-482";
+  const telemetry: ObservabilityEvent[] = [];
+  const logs = [vi.spyOn(console, "error"), vi.spyOn(console, "warn"), vi.spyOn(console, "log")];
+  const runtime = createPiAgentRuntime({
+    sessionDataDir,
+    observability: {
+      record: (event) => {
+        telemetry.push(event);
+      },
+    },
+    models: modelsWithStream((model) => {
+      const output = createAssistantMessageEventStream();
+      const message = baseMessage(model);
+      message.stopReason = "error";
+      message.content = [{ type: "text", text: `Request body: ${request}` }];
+      Object.assign(message, { echoedRequest: { password: request } });
+      message.errorMessage = JSON.stringify({
+        error: { type: "invalid_request_error", message: `Wrong value ${stored}` },
+        request: { password: request },
+      });
+      message.diagnostics = [
+        {
+          type: "provider_transport_failure",
+          timestamp: 1,
+          error: { name: "Error", message: `password=${diagnostic}`, stack: `request=${request}` },
+          details: { request: { password: request }, headers: { cookie: diagnostic } },
+        },
+        {
+          type: "anthropic_input_transformations",
+          timestamp: 1,
+          details: {
+            transformations: [
+              {
+                type: "prefix_binding_mismatch",
+                path: "messages.1.content.0",
+                reason: `password=${diagnostic}`,
+                request,
+              },
+            ],
+          },
+        },
+      ];
+      queueMicrotask(() => {
+        output.push({ type: "error", reason: "error", error: message });
+        output.end(message);
+      });
+      return output;
+    }),
+    retryBackoffMs: instantBackoff,
+  });
+  const handle = await runtime.startSession({
+    ...spec,
+    credentialRedaction: { redact: (text) => text.replaceAll(stored, "[redacted]") },
+  });
+  try {
+    await handle.submitUserMessage("go");
+    const artifacts =
+      JSON.stringify({
+        observations,
+        telemetry,
+        logs: logs.map((log) => log.mock.calls),
+        replay: await handle.reconcile(null),
+      }) + readFileSync(handle.recovery!.sessionFilePath, "utf8");
+    for (const secret of [stored, request, diagnostic]) expect(artifacts).not.toContain(secret);
+    expect(artifacts).not.toContain('"password"');
+    expect(artifacts).not.toContain('"headers"');
+    expect(artifacts).not.toContain('"stack"');
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      stopDetail: { category: "bad-request", message: "Wrong value [redacted]" },
+    });
+  } finally {
+    await handle.close();
+    for (const log of logs) log.mockRestore();
+  }
+});
+
+it("keeps Anthropic context recovery beside its truthful bad-request stop category (review item 5)", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const runtime = createPiAgentRuntime({
+    sessionDataDir,
+    models: modelsWithStream(
+      scriptedStream([
+        (emit) =>
+          emit.fail(
+            '400 {"error":{"type":"invalid_request_error","message":"prompt is too long"}}',
+          ),
+      ]),
+    ),
+  });
+  const handle = await runtime.startSession(spec);
+  try {
+    await handle.submitUserMessage("go");
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      reason: "context",
+      stopDetail: {
+        category: "bad-request",
+        providerType: "invalid_request_error",
+        httpStatus: 400,
+      },
+    });
+  } finally {
+    await handle.close();
+  }
+});

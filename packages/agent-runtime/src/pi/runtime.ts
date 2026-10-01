@@ -1,6 +1,11 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
-import { ProviderStopCapture, finalStopDetail, safeStopMessage } from "./provider-stop";
+import {
+  ProviderStopCapture,
+  finalStopDetail,
+  safeStopMessage,
+  safeProviderMessage,
+} from "./provider-stop";
 import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
 
 import { randomUUID } from "node:crypto";
@@ -2700,9 +2705,9 @@ async function attachSession(
       );
     };
 
-    let providerStop = new ProviderStopCapture();
+    let providerStop = new ProviderStopCapture(credentialRedaction);
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
-      const capture = new ProviderStopCapture();
+      const capture = new ProviderStopCapture(credentialRedaction);
       providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
       return models.streamSimple(requestModel, context, {
@@ -3535,11 +3540,25 @@ async function attachSession(
             }
           }
         }
-        const acceptedUserMessage =
-          event.message.role === "user" && acceptedUserMessages.has(event.message);
+        // Capture raw facts privately, then scrub BEFORE any message append or
+        // observation. Downstream ledger, UI and notice consumers see only this
+        // filtered projection, never the SDK's diagnostics/envelope.
+        const providerDetail =
+          event.message.role === "assistant"
+            ? providerStop.detail(event.message as AssistantMessage)
+            : undefined;
+        const message =
+          event.message.role === "assistant"
+            ? safeProviderMessage(
+                event.message as AssistantMessage,
+                credentialRedaction,
+                providerDetail?.category === "provider-refused",
+              )
+            : event.message;
+        const acceptedUserMessage = message.role === "user" && acceptedUserMessages.has(message);
         const entryId = acceptedUserMessage
           ? null
-          : await mainBranch.appendMessage(durableMessage(event.message), piContext());
+          : await mainBranch.appendMessage(durableMessage(message), piContext());
         if (event.message.role !== "assistant") {
           return;
         }
@@ -3563,19 +3582,20 @@ async function attachSession(
         // A tool round can make several provider requests. Hold every drop and
         // publish one complete Turn fact at `agent_end`, after the reply that
         // anchors its transcript notice has settled.
-        const dropped = providerReasoningDropped(event.message as AssistantMessage, turnId);
+        const dropped = providerReasoningDropped(message as AssistantMessage, turnId);
         if (dropped !== undefined) {
           pendingReasoningDrop = mergeProviderReasoningDrop(pendingReasoningDrop, dropped);
         }
         const classified = classifyAssistantMessage(entryId, event.message as AssistantMessage);
-        const providerDetail = providerStop.detail(event.message as AssistantMessage);
+        // Recovery heuristics may inspect the raw sentence in memory; their
+        // output text is scrubbed before it leaves this local branch.
         const outcome =
-          providerDetail.category === "provider-refused"
+          providerDetail!.category === "provider-refused"
             ? {
                 kind: "failed" as const,
                 failure: {
                   reason: "model" as const,
-                  message: providerDetail.message ?? "The provider refused this turn.",
+                  message: providerDetail!.message ?? "The provider refused this turn.",
                 },
               }
             : classified;
@@ -3584,8 +3604,13 @@ async function attachSession(
             await persistObservation({ kind: "message-settled", turnId, message: outcome.message }),
           );
         } else if (outcome.kind === "failed") {
-          const stopDetail = providerDetail;
-          failure = { ...outcome.failure, stopDetail };
+          const stopDetail = providerDetail!;
+          failure = {
+            ...outcome.failure,
+            message:
+              stopDetail.message ?? safeStopMessage(outcome.failure.message, credentialRedaction),
+            stopDetail,
+          };
           // Structured provider facts outrank recovery heuristics over prose.
           if (stopDetail.category === "auth-failed") failure.reason = "auth";
           if (stopDetail.category === "context-overflow") failure.reason = "context";
@@ -3681,8 +3706,8 @@ async function attachSession(
             stopDetail,
             message:
               spent.length === 0
-                ? safeStopMessage(failure.message)
-                : `${safeStopMessage(failure.message)} (${spent.join("; ")})`,
+                ? safeStopMessage(failure.message, credentialRedaction)
+                : `${safeStopMessage(failure.message, credentialRedaction)} (${spent.join("; ")})`,
             ...(stopDetail.resetsAt === null ? {} : { resetsAt: stopDetail.resetsAt }),
           });
           activeAttentionReasons.add(reason);

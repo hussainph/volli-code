@@ -1073,9 +1073,7 @@ function attentionBlocker(
     case "context_limit_reached":
       return errorBlocker(
         {
-          message: attention.stopDetail
-            ? sessionStopSummary(attention.stopDetail)
-            : "Context limit reached",
+          message: "Context limit reached",
           detail,
           action: null,
         },

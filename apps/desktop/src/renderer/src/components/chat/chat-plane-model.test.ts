@@ -2182,7 +2182,7 @@ it("shows the provider's typed interruption cause in the blocker instead of gene
     ["rate-limited", "adapter_unrecoverable", "usage or rate limit"],
     ["provider-refused", "adapter_unrecoverable", "declined"],
     ["auth-failed", "auth_required", "sign-in failed"],
-    ["context-overflow", "context_limit_reached", "context limit"],
+    ["context-overflow", "context_limit_reached", "Context limit"],
   ] as const) {
     const blocker = sessionBlocker(
       raised({
@@ -2202,4 +2202,24 @@ it("shows the provider's typed interruption cause in the blocker instead of gene
     expect(blocker?.message).toContain(wording);
     expect(blocker?.detail).toBe("Provider sentence");
   }
+});
+
+it("keeps context recovery headline beside Anthropic invalid_request_error (review item 5)", () => {
+  const blocker = sessionBlocker(
+    raised({
+      ...attention("context_limit_reached", "prompt is too long"),
+      stopDetail: {
+        category: "bad-request",
+        providerType: "invalid_request_error",
+        message: "prompt is too long",
+        httpStatus: 400,
+        retry: "not-retried",
+        resetsAt: null,
+      },
+    }),
+    ACTS,
+    false,
+  );
+  expect(blocker?.message).toBe("Context limit reached");
+  expect(blocker?.detail).toBe("prompt is too long");
 });

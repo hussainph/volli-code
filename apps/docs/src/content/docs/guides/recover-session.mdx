@@ -64,7 +64,20 @@ Volli's turn recovery, not retry attempts hidden inside a provider SDK.
 Provider messages and types are untrusted data, not instructions; agent-facing
 text encloses them in an explicit untrusted-prose block. Messages are redacted
 and bounded to 401 characters, identifiers to 80. No request, credentials, raw
-headers, or stack is copied into the interruption record.
+headers, or stack is copied into the interruption record. Before any sidecar or
+Session event is written, error text passes through the shared secret redactor
+and the credential owner's exact-value filter. Ambiguous echoed request material
+is withheld; raw provider diagnostics are not saved. Only the structural facts
+needed for reasoning recovery survive the diagnostic whitelist.
+
+The terminal provider failure wins over recovered transport diagnostics. A
+WebSocket-to-SSE fallback followed by a usage limit is `rate-limited`, not
+`network`, and Volli does not automatically retry it. Abnormal WebSocket closure
+and Node fetch socket errors are recognized from their structured error fields.
+
+A context recovery failure keeps the **Context limit reached** headline, even
+when Anthropic's truthful provider category is `bad-request`
+(`invalid_request_error`). Use the context handoff recovery in that case.
 
 The category comes from provider fields/statuses, never English-message
 matching. If an SDK discards a field, Volli reports `unknown` rather than

@@ -1,7 +1,15 @@
 /** Read only provider-returned fields, never classify prose (VC-482). */
-import type { AssistantMessage, ProviderResponse } from "@earendil-works/pi-ai";
-import type { SessionStopCategory, SessionStopDetail } from "@volli/shared";
+import type { AssistantMessage, JsonObject, ProviderResponse } from "@earendil-works/pi-ai";
+import {
+  redactPayloadSecrets,
+  type SessionRuntimeSpec,
+  type SessionStopCategory,
+  type SessionStopDetail,
+} from "@volli/shared";
+import { redactCredentialText } from "./secrets";
 import { sanitizeDiagnostic } from "./transcript";
+
+type RedactionPort = SessionRuntimeSpec["credentialRedaction"];
 
 const TYPES: Readonly<Record<string, SessionStopCategory>> = {
   refusal: "provider-refused",
@@ -36,6 +44,10 @@ const TYPES: Readonly<Record<string, SessionStopCategory>> = {
   ENOTFOUND: "network",
   EPIPE: "network",
   EAI_AGAIN: "network",
+  UND_ERR_SOCKET: "network",
+  UND_ERR_CONNECT_TIMEOUT: "network",
+  UND_ERR_HEADERS_TIMEOUT: "network",
+  UND_ERR_BODY_TIMEOUT: "network",
   APIConnectionError: "network",
   APIConnectionTimeoutError: "network",
   "volli.stream-stalled": "runtime-stopped",
@@ -55,8 +67,11 @@ function text(value: unknown): string | null {
 function instant(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
-/** Labels, URLs and opaque credentials are scrubbed before a message can be stored. */
-export function safeStopMessage(raw: string): string {
+/** Extract only the error sentence; never retain envelopes or echoed request bodies.
+ * Credential matching runs before bounding, through the VC-481 owner and the
+ * shared redactor. Ambiguous structured/request material is withheld, not guessed.
+ */
+export function safeStopMessage(raw: string, port?: RedactionPort): string {
   const start = raw.indexOf("{");
   if (start >= 0) {
     try {
@@ -66,21 +81,95 @@ export function safeStopMessage(raw: string): string {
         text(body["message"]) ??
         "Provider error (no message stated).";
     } catch {
-      /* A plain provider sentence may contain a brace. */
+      return "[Provider text withheld: possible request content.]";
     }
   }
+  if (
+    /[{}]|\b(?:request|body|prompt|input|messages|headers)\s*(?:body\s*)?[:=]|\b(?:echoed|received|submitted|supplied)\s+(?:request|prompt|input|body)\b/i.test(
+      raw,
+    )
+  )
+    return "[Provider text withheld: possible request content.]";
   return sanitizeDiagnostic(
-    raw
-      .replace(/https?:\/\/\S+/gi, "[redacted URL]")
-      .replace(
-        /\b(?:authorization|cookie|api[_ -]?key|(?:access[_ -]?|refresh[_ -]?)?token|password|secret)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|(?:Bearer|Basic)\s+[^\s,;]+|[^\s,;]+)/gi,
-        "[redacted]",
-      ),
+    redactPayloadSecrets(port === undefined ? raw : redactCredentialText(raw, port)).replace(
+      /https?:\/\/\S+/gi,
+      "[redacted URL]",
+    ),
   );
+}
+
+/** The sidecar needs only the diagnostic facts used by reasoning recovery.
+ * All other diagnostics (errors, stacks, payloads, headers) are withheld after
+ * stop capture. Even a known diagnostic's arbitrary extension fields stay out.
+ */
+export function safeProviderMessage(
+  message: AssistantMessage,
+  port?: RedactionPort,
+  refused = false,
+): AssistantMessage {
+  const { diagnostics, errorMessage, rawStopReason } = message;
+  // Failed replies are not replayable protocol state. Keep billing and identity,
+  // but withhold content and arbitrary SDK extensions that can echo a request.
+  const safe: AssistantMessage =
+    refused || message.stopReason === "error" || message.stopReason === "aborted"
+      ? {
+          role: "assistant",
+          content: [],
+          api: message.api,
+          provider: message.provider,
+          model: message.model,
+          usage: message.usage,
+          stopReason: message.stopReason,
+          timestamp: message.timestamp,
+        }
+      : { ...message };
+  delete safe.diagnostics;
+  delete safe.errorMessage;
+  delete safe.rawStopReason;
+  if (errorMessage !== undefined) safe.errorMessage = safeStopMessage(errorMessage, port);
+  if (rawStopReason !== undefined)
+    safe.rawStopReason = safeStopMessage(rawStopReason, port).slice(0, 80);
+  const selected = diagnostics?.flatMap((diagnostic) => {
+    if (diagnostic.type !== "anthropic_input_transformations") return [];
+    const values = diagnostic.details?.["transformations"];
+    if (!Array.isArray(values)) return [];
+    return [
+      {
+        type: "anthropic_input_transformations",
+        timestamp: instant(diagnostic.timestamp) ?? 0,
+        details: {
+          transformations: values
+            .filter((value) => value !== null && typeof value === "object" && !Array.isArray(value))
+            .map((value) => {
+              const entry = record(value);
+              const type =
+                entry["type"] === "prefix_binding_mismatch" ||
+                entry["type"] === "model_binding_mismatch"
+                  ? entry["type"]
+                  : "unknown";
+              const path = text(entry["path"]);
+              const transformation: JsonObject = { type };
+              if (
+                path !== null &&
+                path.length <= 160 &&
+                /^messages\.\d+\.content\.\d+$/.test(path)
+              ) {
+                transformation["path"] = safeStopMessage(path, port);
+              }
+              return transformation;
+            }),
+        },
+      },
+    ];
+  });
+  if (selected !== undefined && selected.length > 0) safe.diagnostics = selected;
+  return safe;
 }
 
 /** One request's small accumulator. Raw events and headers are never retained. */
 export class ProviderStopCapture {
+  constructor(private readonly redaction?: RedactionPort) {}
+
   #type: string | null = null;
   #message: string | null = null;
   #status: number | null = null;
@@ -189,7 +278,7 @@ export class ProviderStopCapture {
         : null) ??
       text(record(delta["stop_details"])["explanation"]) ??
       (event["type"] === "response.refusal.done" ? text(event["refusal"]) : null);
-    if (message !== null) this.#message = safeStopMessage(message);
+    if (message !== null) this.#message = safeStopMessage(message, this.redaction);
     // Codex usage_limit_reached gives resets_at in epoch seconds.
     const reset = instant(error["resets_at"] ?? event["resets_at"]);
     if (reset !== null) this.#bodyResetsAt = instant(reset * 1000);
@@ -213,11 +302,26 @@ export class ProviderStopCapture {
       message.rawStopReason === "volli.runtime-error"
         ? message.rawStopReason
         : (this.#type ?? message.rawStopReason ?? null);
-    for (const diagnostic of message.diagnostics ?? []) {
-      const code = text(diagnostic.error?.code) ?? text(diagnostic.error?.name);
-      if (code !== null && categoryFor(code) !== undefined) type = code;
+    // A diagnostic is historical unless Pi explicitly attributes it to the
+    // failed stream (after its first event, without an SSE fallback). Even then
+    // it cannot override a terminal response/status/stop reason.
+    if (type === null && (this.#status === null || this.#status < 400)) {
+      for (const diagnostic of message.diagnostics ?? []) {
+        if (
+          diagnostic.type !== "provider_transport_failure" ||
+          diagnostic.details?.["eventsEmitted"] !== true ||
+          diagnostic.details?.["fallbackTransport"] !== undefined
+        )
+          continue;
+        const code = text(diagnostic.error?.code);
+        const name = text(diagnostic.error?.name);
+        if (code !== null && categoryFor(code) !== undefined) type = code;
+        else if (name === "WebSocketCloseError" && diagnostic.error?.code === 1006) type = name;
+        else if (name !== null && categoryFor(name) !== undefined) type = name;
+      }
     }
-    const typedCategory = type === null ? undefined : categoryFor(type);
+    const typedCategory =
+      type === "WebSocketCloseError" ? "network" : type === null ? undefined : categoryFor(type);
     const statusCategory =
       this.#status === 401 || this.#status === 403
         ? "auth-failed"
@@ -236,8 +340,8 @@ export class ProviderStopCapture {
         : typedCategory;
     return {
       category,
-      providerType: type === null ? null : safeStopMessage(type).slice(0, 80),
-      message: this.#message ?? (raw.length === 0 ? null : safeStopMessage(raw)),
+      providerType: type === null ? null : safeStopMessage(type, this.redaction).slice(0, 80),
+      message: this.#message ?? (raw.length === 0 ? null : safeStopMessage(raw, this.redaction)),
       httpStatus: this.#status,
       retry: "not-retried",
       resetsAt: this.#bodyResetsAt ?? this.#resetsAt,

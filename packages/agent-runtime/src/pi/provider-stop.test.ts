@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { ProviderStopCapture, finalStopDetail, safeStopMessage } from "./provider-stop";
+import type { AssistantMessage, JsonObject } from "@earendil-works/pi-ai";
+import {
+  ProviderStopCapture,
+  finalStopDetail,
+  safeStopMessage,
+  safeProviderMessage,
+} from "./provider-stop";
 import { isTransientTransportFailure } from "./transcript";
 
 const message = (extra: Partial<AssistantMessage> = {}): AssistantMessage => ({
@@ -144,6 +149,7 @@ describe("provider stop facts", () => {
             type: "provider_transport_failure",
             timestamp: 0,
             error: { code: "ECONNRESET", message: "reset", stack: "private" },
+            details: { eventsEmitted: true },
           },
         ],
       }),
@@ -165,7 +171,7 @@ describe("provider stop facts", () => {
     expect(detail.providerType!.length).toBeLessThanOrEqual(80);
     for (const secret of ["short", "secret123", "tiny", "abc", "private", "sk-credential"])
       expect(detail.message).not.toContain(secret);
-    expect(safeStopMessage("a plain brace { in text")).toBe("a plain brace { in text");
+    expect(safeStopMessage("a plain brace { in text")).toContain("withheld");
   });
 
   it("keeps only provider-stated retry instants and current-request facts", () => {
@@ -352,11 +358,192 @@ it("honors cancellation while inspecting an error body, even if reader cancellat
 it("uses diagnostic names only when recognized, ignoring diagnostic prose and unknown codes", () => {
   for (const diagnostic of [
     { type: "hint", timestamp: 0 },
-    { type: "hint", timestamp: 0, error: { name: "APIConnectionError", message: "neutral" } },
+    {
+      type: "provider_transport_failure",
+      timestamp: 0,
+      error: { name: "APIConnectionError", message: "neutral" },
+      details: { eventsEmitted: true },
+    },
     { type: "hint", timestamp: 0, error: { code: "new-code", message: "auth overload" } },
   ]) {
     expect(new ProviderStopCapture().detail(message({ diagnostics: [diagnostic] })).category).toBe(
       diagnostic.error?.name === "APIConnectionError" ? "network" : "unknown",
     );
   }
+});
+
+it.each([
+  ["Authorization Bearer dummy-short-secret", "dummy-short-secret"],
+  ["Basic ZHVtbXk6c2VjcmV0", "ZHVtbXk6c2VjcmV0"],
+  ["Cookie: session=dummy-cookie; csrf=dummy-csrf", "dummy-csrf"],
+  [
+    'Rejected request: {"messages":[{"content":"private-request-sentinel"}]}',
+    "private-request-sentinel",
+  ],
+  ["Request body: private-request-sentinel", "private-request-sentinel"],
+])("withholds secrets and echoed request material in %s (review item 2)", (raw, secret) => {
+  expect(safeStopMessage(raw)).not.toContain(secret);
+});
+
+it("terminal quota facts beat a recovered WebSocket diagnostic (review item 3)", () => {
+  const capture = new ProviderStopCapture();
+  capture.event({ error: { code: "usage_limit_reached", message: "Limit used" } });
+  const detail = capture.detail(
+    message({
+      diagnostics: [
+        {
+          type: "provider_transport_failure",
+          timestamp: 0,
+          error: { code: "ECONNRESET", name: "Error", message: "reset" },
+          details: { fallbackTransport: "sse", eventsEmitted: false },
+        },
+      ],
+    }),
+  );
+  expect(detail.category).toBe("rate-limited");
+  expect(
+    isTransientTransportFailure({
+      reason: "model",
+      message: "retry your request",
+      stopDetail: detail,
+    }),
+  ).toBe(false);
+});
+
+it("fails closed when credential-owner redaction fails, including before bounding", () => {
+  const stored = "dummy-owner-value";
+  const owner = { redact: (text: string) => text.replaceAll(stored, "[redacted]") };
+  const capture = new ProviderStopCapture(owner);
+  capture.event({ error: { type: stored, message: `${stored} ${"x".repeat(500)}` } });
+  expect(JSON.stringify(capture.detail(message()))).not.toContain(stored);
+  const broken = {
+    redact: () => {
+      throw new Error(`owner failure ${stored}`);
+    },
+  };
+  expect(safeStopMessage(stored, broken)).toContain("withheld");
+  expect(safeStopMessage(stored, broken)).not.toContain(stored);
+});
+
+it("whitelists diagnostic transformations and withholds all other payloads", () => {
+  const raw = message({
+    errorMessage: "token=dummy-token",
+    rawStopReason: "refusal",
+    diagnostics: [
+      { type: "unknown", timestamp: 0, details: { request: "private" } },
+      {
+        type: "anthropic_input_transformations",
+        timestamp: -1,
+        details: {
+          transformations: [
+            null,
+            [],
+            1,
+            { type: "model_binding_mismatch", path: "messages.2.content.1", reason: "private" },
+            { type: "private", path: "Request: private" },
+            { path: "x".repeat(161) },
+            {},
+          ],
+        },
+      },
+    ],
+  });
+  const safe = safeProviderMessage(raw);
+  expect(safe.diagnostics).toEqual([
+    {
+      type: "anthropic_input_transformations",
+      timestamp: 0,
+      details: {
+        transformations: [
+          { type: "model_binding_mismatch", path: "messages.2.content.1" },
+          { type: "unknown" },
+          { type: "unknown" },
+          { type: "unknown" },
+        ],
+      },
+    },
+  ]);
+  expect(JSON.stringify(safe)).not.toContain("private");
+  expect(JSON.stringify(safe)).not.toContain("dummy-token");
+  expect(raw.diagnostics?.[1]?.details).toHaveProperty("transformations");
+  expect(safeProviderMessage(message({ stopReason: "stop" })).diagnostics).toBeUndefined();
+  expect(
+    safeProviderMessage(
+      message({ diagnostics: [{ type: "anthropic_input_transformations", timestamp: 0 }] }),
+    ).diagnostics,
+  ).toBeUndefined();
+  expect(
+    safeProviderMessage(
+      message({
+        diagnostics: [
+          {
+            type: "anthropic_input_transformations",
+            timestamp: 0,
+            details: { transformations: [{ type: "prefix_binding_mismatch", path: null }] },
+          },
+        ],
+      }),
+    ).diagnostics,
+  ).toBeDefined();
+});
+
+it("uses only terminal-attributed transport diagnostics, never historical fallback hints", () => {
+  const historical: JsonObject[] = [
+    { eventsEmitted: false, fallbackTransport: "sse" },
+    {},
+    { eventsEmitted: true, fallbackTransport: "sse" },
+  ];
+  for (const details of historical) {
+    expect(
+      new ProviderStopCapture().detail(
+        message({
+          diagnostics: [
+            {
+              type: "provider_transport_failure",
+              timestamp: 0,
+              details,
+              error: { code: "ECONNRESET", message: "reset" },
+            },
+          ],
+        }),
+      ).category,
+    ).toBe("unknown");
+  }
+  const diagnostic = {
+    type: "provider_transport_failure",
+    timestamp: 0,
+    details: { eventsEmitted: true },
+    error: { code: "ECONNRESET", message: "reset" },
+  };
+  const capture = new ProviderStopCapture();
+  capture.response({ status: 429, headers: {} }, 0);
+  expect(capture.detail(message({ diagnostics: [diagnostic] })).category).toBe("rate-limited");
+  const successfulResponse = new ProviderStopCapture();
+  successfulResponse.response({ status: 200, headers: {} }, 0);
+  expect(successfulResponse.detail(message({ diagnostics: [diagnostic] })).category).toBe(
+    "network",
+  );
+  expect(
+    new ProviderStopCapture().detail(
+      message({
+        diagnostics: [
+          {
+            ...diagnostic,
+            error: { code: "future-code", name: "future-name", message: "irrelevant" },
+          },
+        ],
+      }),
+    ).category,
+  ).toBe("unknown");
+});
+
+it("withholds refused SDK-success content and keeps normal successful protocol fields", () => {
+  const raw = message({
+    stopReason: "stop",
+    content: [{ type: "text", text: "Request: dummy-request" }],
+    responseId: "opaque-response",
+  });
+  expect(safeProviderMessage(raw, undefined, true).content).toEqual([]);
+  expect(safeProviderMessage(raw).responseId).toBe("opaque-response");
+  expect(raw.content).toHaveLength(1);
 });
