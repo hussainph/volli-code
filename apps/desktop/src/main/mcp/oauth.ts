@@ -612,9 +612,10 @@ export class McpOAuthBroker {
           iss !== undefined ||
           discovered?.authorization_response_iss_parameter_supported === true
         ) {
-          const trim = (value: unknown): string =>
-            typeof value === "string" ? value.replace(/\/$/, "") : "";
-          if (iss === undefined || trim(iss) !== trim(discovered?.issuer)) {
+          if (
+            iss === undefined ||
+            withoutTrailingSlash(iss) !== withoutTrailingSlash(discovered?.issuer)
+          ) {
             return {
               ok: false,
               cancelled: false,
@@ -873,6 +874,11 @@ export class McpOAuthBroker {
           },
     );
   }
+}
+
+/** An issuer as compared: a string without its trailing slash, or nothing. */
+function withoutTrailingSlash(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\/$/, "") : "";
 }
 
 /** A failure that says nothing about the grant: the network, or a request out of time. */
