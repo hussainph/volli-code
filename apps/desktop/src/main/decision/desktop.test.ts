@@ -378,16 +378,19 @@ describe("the connection test", () => {
     });
   });
 
-  it("reports a test that throws as one that did not answer in time", async () => {
+  it("says a test that threw could not run, rather than that the model was slow", async () => {
     const throwing = {
       ...fakeModels(true),
       getModelOfType: () => {
         throw new Error(SECRET);
       },
     } as unknown as PiModelAccess["models"];
-    const { built } = decisions({ models: throwing });
+    const logged: unknown[] = [];
+    const { built } = decisions({ models: throwing, log: (_message, error) => logged.push(error) });
     const result = await built.test(CLOUD);
-    expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/in time/) });
+    expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/could not run/) });
+    expect(result.ok === false && result.message).not.toMatch(/in time/);
+    expect(logged).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 });

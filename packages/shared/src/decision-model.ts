@@ -491,7 +491,7 @@ export const DECISION_LIMITS = Object.freeze({
   criterionMaxChars: 500,
 });
 
-/** Calls in flight at once across every purpose; the rest queue inside their own timeout. */
+/** Calls in flight at once, per purpose; the rest queue inside their own timeout. */
 export const DECISION_MAX_CONCURRENT = 4;
 
 const QUESTION_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;

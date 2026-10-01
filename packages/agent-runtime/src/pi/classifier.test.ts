@@ -1,3 +1,6 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { createModels, type Models } from "@earendil-works/pi-ai";
 import type { DecisionRequest, DecisionTarget } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -55,6 +58,30 @@ const REQUEST: DecisionRequest = {
 };
 
 const signal = (): AbortSignal => new AbortController().signal;
+
+/** A real loopback HTTP server, for the one behaviour a scripted `fetch` cannot show. */
+async function listen(
+  handler: (
+    request: import("node:http").IncomingMessage,
+    response: import("node:http").ServerResponse,
+    hit: () => void,
+  ) => void,
+): Promise<{ port: number; hits(): number; close(): Promise<void> }> {
+  let hits = 0;
+  const server: Server = createServer((request, response) =>
+    handler(request, response, () => (hits += 1)),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    hits: () => hits,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
 
 describe("the cloud path, through Pi's own provider dispatch", () => {
   it("classifies with the provider's own credential and bills the catalog estimate", async () => {
@@ -141,6 +168,32 @@ describe("the cloud path, through Pi's own provider dispatch", () => {
     });
   });
 
+  it("still meters a billed call whose answers were malformed", async () => {
+    // Pi sets `usage` before it parses the answers, so this request was billed.
+    const billed = (await confidentAnswer({ state: {}, questions: {} }, undefined)).usage;
+    const result = await piDecisionClassifier(
+      fixtureModels({
+        answer: () => ({ stopReason: "error", errorMessage: "malformed answers", usage: billed }),
+      }),
+    ).classify(CLOUD, REQUEST, { signal: signal() });
+    expect(result).toMatchObject({
+      ok: false,
+      miss: { status: "error", reason: "provider-error" },
+      usage: {
+        cause: "decision",
+        providerId: FIXTURE_PROVIDER,
+        modelId: FIXTURE_MODEL,
+        inputTokens: 420,
+        costUsd: 0.0000176,
+        costBasis: "catalog-estimate",
+      },
+    });
+    const aborted = await piDecisionClassifier(
+      fixtureModels({ answer: () => ({ stopReason: "aborted", usage: billed }) }),
+    ).classify(CLOUD, REQUEST, { signal: signal() });
+    expect(aborted).toMatchObject({ ok: false, usage: { inputTokens: 420 } });
+  });
+
   it("reports an aborted call as withdrawn", async () => {
     const result = await piDecisionClassifier(
       fixtureModels({ answer: () => ({ stopReason: "aborted" }) }),
@@ -187,6 +240,52 @@ describe("the local path, through Pi's llama.cpp classifier", () => {
       expect(seen.length).toBeGreaterThan(0);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a redirect from the server and never re-sends the state to where it points", async () => {
+    for (const status of [307, 308]) {
+      const elsewhere = await listen((_request, response, hit) => {
+        hit();
+        response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      });
+      const server = await listen((_request, response) => {
+        response
+          .writeHead(status, { location: `http://127.0.0.1:${elsewhere.port}/tokenize` })
+          .end();
+      });
+      try {
+        const result = await piDecisionClassifier(createModels()).classify(
+          { ...LOCAL, baseUrl: `http://127.0.0.1:${server.port}` },
+          REQUEST,
+          { signal: signal() },
+        );
+        expect(result).toMatchObject({ ok: false, miss: { reason: "provider-error" } });
+        expect(elsewhere.hits()).toBe(0);
+      } finally {
+        await Promise.all([server.close(), elsewhere.close()]);
+      }
+    }
+  });
+
+  it("refuses a redirect on the connection test too", async () => {
+    const elsewhere = await listen((_request, response, hit) => {
+      hit();
+      response.writeHead(200).end("{}");
+    });
+    const server = await listen((_request, response) => {
+      response.writeHead(307, { location: `http://127.0.0.1:${elsewhere.port}/` }).end();
+    });
+    try {
+      const result = await testDecisionConnection(
+        createModels(),
+        { ...LOCAL, baseUrl: `http://127.0.0.1:${server.port}` },
+        { signal: signal() },
+      );
+      expect(result.ok).toBe(false);
+      expect(elsewhere.hits()).toBe(0);
+    } finally {
+      await Promise.all([server.close(), elsewhere.close()]);
     }
   });
 

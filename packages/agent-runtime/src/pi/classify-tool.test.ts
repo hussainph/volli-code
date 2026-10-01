@@ -113,9 +113,9 @@ describe("classify, as the model meets it", () => {
     );
     const result = await tool.execute("call-2", ARGS);
     expect(result.isError).toBe(true);
-    expect(result.structuredContent).toEqual({
-      miss: { status: "unavailable", reason: "unset", message: "No decision model is configured." },
-    });
+    // An error result carries no structured content: it would not match the
+    // declared `outputSchema`, which describes an answer.
+    expect(result.structuredContent).toBeUndefined();
     expect(result.content).toEqual([
       {
         type: "text",

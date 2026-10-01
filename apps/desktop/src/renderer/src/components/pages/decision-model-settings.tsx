@@ -425,8 +425,10 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
           {global.kind === "cloud" && draftMode === null ? (
             // The one-line trust boundary, kept on screen for as long as the
             // choice stands.
+            // Only what this person opted into: a purpose added later is not
+            // sent anything until they allow it.
             <p className="px-1 text-ui text-muted-foreground" data-testid="decision-model-sends">
-              {decisionCloudDisclosure(settingLabel(global, view.catalog))}
+              {decisionCloudDisclosure(settingLabel(global, view.catalog), global.optIn.purposes)}
             </p>
           ) : null}
         </>
@@ -519,7 +521,23 @@ export function ProjectDecisionModelRow({
   }
 
   return (
-    <PrefRow label="Decision model" testId="project-decision-model">
+    <PrefRow
+      label="Decision model"
+      testId="project-decision-model"
+      // The same trust boundary the app-wide page keeps on screen, for the
+      // opt-in that applies here (this project's own, or the one it inherits)
+      // and only for the purposes that opt-in covers.
+      description={
+        effective.kind === "cloud" ? (
+          <span data-testid="project-decision-model-sends">
+            {decisionCloudDisclosure(
+              settingLabel(effective, view.catalog),
+              effective.optIn.purposes,
+            )}
+          </span>
+        ) : undefined
+      }
+    >
       <OverrideControl
         label="Decision model"
         inheritedValue={settingLabel(view.global, view.catalog)}

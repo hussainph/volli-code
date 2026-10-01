@@ -16,7 +16,7 @@ is how Volli uses them.
 | Choice | What it is | What leaves the Mac |
 | --- | --- | --- |
 | **None** (default) | No decision model. Every caller falls back; agents get no `classify` tool. | Nothing. |
-| **Local** | A chat model served by llama.cpp's `llama-server`, turned into a classifier by pi's `llama-cpp-classify` (next-token log-probabilities over single-token labels). Base URL plus an optional model id (router mode needs it; a single-model server ignores it). | Nothing. The URL must be loopback (`localhost`, `127.0.0.0/8`, `[::1]`); a LAN address is refused, because "local" promises the state stays on this Mac. |
+| **Local** | A chat model served by llama.cpp's `llama-server`, turned into a classifier by pi's `llama-cpp-classify` (next-token log-probabilities over single-token labels). Base URL plus an optional model id (router mode needs it; a single-model server ignores it). | Nothing. The URL must be loopback (`localhost`, `127.0.0.0/8`, `[::1]`); a LAN address is refused, because "local" promises the state stays on this Mac. A server that answers with a redirect is refused too, never followed: a 307 or 308 would otherwise re-send the state wherever it points. |
 | **Cloud** | A classifier from Pi's catalog — TypeSafe's Jev on `typesafe`, `openrouter`, `cloudflare-workers-ai`, `vercel-ai-gateway` or `opencode`, plus whatever else the catalog lists. | Whatever each enabled purpose sends (below). Requires an explicit opt-in, recorded with the setting. |
 
 Storage: the app-wide setting is `app_state["volli:decision-model"]`; a
@@ -110,8 +110,12 @@ fact per decision, through `recordDecision`: the answer the caller acted on,
 or the miss it fell back on (an answer whose `use` threw is recorded as that
 miss). Misses before any model was chosen — unset, not opted in — have no
 target and leave no fact; VC-28 may record those itself. With no recorder
-wired, an audited purpose is refused as `unaudited`. `agent.classify` is not
-audited: routine agent calls get usage records, not per-call ledger facts.
+wired, an audited purpose is refused as `unaudited`. The verdict **waits for
+the audit write**: the caller gets its answer only once the fact has landed,
+and gets its fallback as `unaudited` if the write fails or is still pending
+after five seconds. (A decision that timed out is still recorded; the audit
+wait is not part of the call's own deadline.) `agent.classify` is not audited:
+routine agent calls get usage records, not per-call ledger facts.
 
 ### Adding a purpose (VC-28, VC-432)
 
@@ -125,7 +129,9 @@ audited: routine agent calls get usage records, not per-call ledger facts.
 2. For an audited purpose, wire `recordDecision` in `desktop.ts` to a durable
    Session fact.
 3. Call `port.decide({ purpose, … })` with a fallback. Existing cloud opt-ins
-   do not cover the new purpose; Settings asks again.
+   do not cover the new purpose, so it is refused as `not-opted-in` until the
+   person opts in again. Settings does not yet ask for that on its own; it
+   moves to the ticket that adds the purpose (VC-28).
 
 ## The `classify` tool
 
@@ -147,8 +153,9 @@ call answers that no model is configured.
   else; the host rebuilds both from their own fields.
 - **Output:** Pi 0.99's native `structuredContent` (`{ answers, model,
   elapsedMs }`) with a declared `outputSchema`, plus one text line per answer.
-  A miss is an `isError` result whose structured content is `{ miss }` and
-  whose text tells the model to decide for itself.
+  A miss is an `isError` result with no structured content (it would not
+  match the `outputSchema`, which describes an answer) whose text tells the
+  model to decide for itself.
 - **Batches:** outside Code Mode, several `classify` calls in one reply run one
   after another — Pi's parallel dispatch is opt-in per Session and today only
   for marked MCP reads (VC-454). Bulk decisions belong in a Code Mode loop.

@@ -240,8 +240,9 @@ export function createClassifyTool(
         if (outcome.kind === "miss") {
           const { miss } = outcome;
           return {
+            // No `structuredContent`: it would have to match `outputSchema`,
+            // which describes an answer. The miss is in the text and details.
             content: [{ type: "text", text: missText(miss) }],
-            structuredContent: json({ miss }),
             isError: true,
             details: { questions, outcome: miss.reason, model: null, elapsedMs: null },
           };

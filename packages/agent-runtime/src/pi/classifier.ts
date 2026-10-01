@@ -173,9 +173,10 @@ async function resolveClassifierModel(
  * Whether a target could be asked now without a person doing anything first:
  * a local server is assumed reachable (it may simply not be started yet, and
  * its call will say so), a cloud model needs to be in the catalog with its
- * provider signed in. Read at Session birth to decide whether `classify` is
- * offered at all, so a Session is never handed a tool that can only answer
- * "needs setup".
+ * provider signed in. A check a caller may make before offering a feature
+ * that could only answer "needs setup" (the live decision benchmark does);
+ * it is not what freezes `classify` into a Session — that is the setting's
+ * `offersClassifyTool`, read at Session birth.
  */
 export async function decisionTargetReady(
   models: Models,
@@ -204,16 +205,31 @@ function runClassifier(
     Models["classify"]
   >[1];
   return target.where === "local"
-    ? llamaCppClassify(model, context, {
-        signal,
-        ...(local.fetch === undefined ? {} : { fetch: local.fetch }),
-      })
+    ? llamaCppClassify(model, context, { signal, fetch: refusingRedirects(local.fetch) })
     : models.classify(model, context, { signal });
+}
+
+/**
+ * A `fetch` that never follows a redirect.
+ *
+ * A local decision model is promised to keep its data on this Mac, and the
+ * default `fetch` follows a 307 or 308 by re-POSTing the body — the whole
+ * state — to wherever the server points. `redirect: "error"` makes a redirect
+ * a failed call instead. Resolved per call so a test (or the process) that
+ * replaces `globalThis.fetch` is honoured.
+ */
+export function refusingRedirects(base?: typeof globalThis.fetch): typeof globalThis.fetch {
+  return (input, init) => (base ?? globalThis.fetch)(input, { ...init, redirect: "error" });
 }
 
 /** How a local server is reached. `fetch` is injectable so a test needs no server. */
 export interface LocalClassifierOptions {
   fetch?: typeof globalThis.fetch;
+}
+
+/** What a call that did not answer was still billed, when the provider said. */
+function meteredUsage(result: ClassifierResult, target: DecisionTarget): SessionUsage | null {
+  return result.usage === undefined ? null : classifierUsage(result, target.where);
 }
 
 /** Pi's decision models, as a {@link DecisionClassifier}. */
@@ -229,16 +245,18 @@ export function piDecisionClassifier(
       if (result.stopReason === "aborted") {
         return {
           ok: false,
-          usage: null,
+          usage: meteredUsage(result, target),
           miss: decisionMiss("aborted", "The decision was withdrawn."),
         };
       }
       if (result.stopReason === "error") {
         return {
           ok: false,
-          // A failed cloud call reports no tokens and was not billed for an
-          // answer; a failed local one cost nothing. Neither is worth a row.
-          usage: null,
+          // Pi sets `usage` before it parses the answers, so a response with
+          // malformed answers was still billed and `volli cost` must see it.
+          // A transport failure reports none (and a local server never does),
+          // which stays unmetered.
+          usage: meteredUsage(result, target),
           miss: decisionMiss("provider-error", `${describe(target)} could not answer.`),
         };
       }

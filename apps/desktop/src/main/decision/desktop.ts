@@ -252,16 +252,24 @@ export function createDesktopDecisions(options: DesktopDecisionsOptions): Deskto
             }
           : { where: "cloud" as const, providerId: setting.providerId, modelId: setting.modelId };
       if (target.where === "cloud") await catalog();
+      const signal = deadline(TEST_TIMEOUT_MS);
       try {
-        return await testDecisionConnection(models, target, {
-          signal: deadline(TEST_TIMEOUT_MS),
-          now,
-        });
-      } catch {
+        return await testDecisionConnection(models, target, { signal, now });
+      } catch (error) {
+        // The test reports its own failures as a result; a throw is either
+        // the deadline or something unexpected, and the person is told which.
+        if (signal.aborted) {
+          return {
+            ok: false,
+            elapsedMs: TEST_TIMEOUT_MS,
+            message: "The decision model did not answer in time.",
+          };
+        }
+        log("[decision] the connection test failed unexpectedly", error);
         return {
           ok: false,
-          elapsedMs: TEST_TIMEOUT_MS,
-          message: "The decision model did not answer in time.",
+          elapsedMs: 0,
+          message: "The connection test could not run. Try again, and check the log if it repeats.",
         };
       }
     },

@@ -2237,7 +2237,8 @@ END;
  * a project that turned decision models off for itself — a choice, not an
  * absence. The document is variable-shaped (none, a local server, a cloud
  * model with its opt-in), so `json_valid` guards it and the reader re-checks
- * it through `parseDecisionModelSetting`; a row that fails reads as inherit.
+ * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
+ * inherit; see `readDecisionModelColumn`).
  *
  * No credential is or can be stored here: a cloud setting names a provider and
  * a model, and the key stays in Pi's own `auth.json`.

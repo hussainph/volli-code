@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/shared";
 
 import type { DecisionModelSettingsView } from "../../../../ipc/contract";
-import { CloudOptInDialog, DecisionModelSettings } from "./decision-model-settings";
+import type { Project } from "@volli/shared";
+
+import {
+  CloudOptInDialog,
+  DecisionModelSettings,
+  ProjectDecisionModelRow,
+} from "./decision-model-settings";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
@@ -44,8 +50,12 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function stubApi(global: DecisionModelSetting) {
-  let view: DecisionModelSettingsView = { global, catalog: [ZEN] };
+function stubApi(global: DecisionModelSetting, project?: DecisionModelSetting) {
+  let view: DecisionModelSettingsView = {
+    global,
+    ...(project === undefined ? {} : { project }),
+    catalog: [ZEN],
+  };
   const set = vi.fn(async (_scope: unknown, setting: DecisionModelSetting | null) => {
     view = { ...view, global: setting ?? view.global };
     return { ok: true as const, settings: view };
@@ -127,6 +137,55 @@ describe("Settings → Models → Decision model", () => {
     expect(document.body.textContent).toContain("Needs setup");
     await act(async () => button("Sign in to OpenCode Zen").click());
     expect(onSignIn).toHaveBeenCalledWith("opencode");
+  });
+
+  // This build has one purpose, so an opt-in that covers it is indistinguishable
+  // from "every purpose". An opt-in that covers none of this build's purposes
+  // (the shape a purpose added later leaves a stored one in) tells the two
+  // apart: the line must say what was agreed to, not what the build could send.
+  const NARROW_OPT_IN = { acceptedAt: 1, purposes: [] } as never;
+
+  it("names only the purposes the person opted into on the app-wide page", async () => {
+    stubApi({
+      kind: "cloud",
+      providerId: "opencode",
+      modelId: "jev-1.13-free",
+      optIn: NARROW_OPT_IN,
+    });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    const line = document.querySelector('[data-testid="decision-model-sends"]')?.textContent ?? "";
+    expect(line).toMatch(/runs off this Mac/);
+    expect(line).not.toMatch(/page content|Session text/);
+  });
+
+  it("names only the opted-in purposes in a project, own or inherited, and nothing for local", async () => {
+    const project = { id: "project-1" } as Project;
+    const cloud = { kind: "cloud", providerId: "opencode", modelId: "jev-1.13-free" } as const;
+    // A project's own opt-in wins over the inherited one.
+    stubApi(
+      { ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify"] } },
+      { ...cloud, optIn: NARROW_OPT_IN },
+    );
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    const own =
+      document.querySelector('[data-testid="project-decision-model-sends"]')?.textContent ?? "";
+    expect(own).toMatch(/runs off this Mac/);
+    expect(own).not.toMatch(/page content|Session text/);
+    await act(async () => root?.unmount());
+    container?.remove();
+
+    // Inheriting: the app-wide opt-in applies, and says what it covers.
+    stubApi({ ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify"] } });
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(
+      document.querySelector('[data-testid="project-decision-model-sends"]')?.textContent,
+    ).toMatch(/Using it sends .*page content/);
+    await act(async () => root?.unmount());
+    container?.remove();
+
+    stubApi({ kind: "local", server: "llama-cpp", baseUrl: "http://127.0.0.1:8080", modelId: "m" });
+    await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
+    expect(document.querySelector('[data-testid="project-decision-model-sends"]')).toBeNull();
   });
 
   it("asks nothing and saves nothing when Cloud is pressed until a model is chosen", async () => {

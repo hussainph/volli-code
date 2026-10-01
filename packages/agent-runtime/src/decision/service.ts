@@ -81,11 +81,24 @@ export interface DecisionServiceOptions {
    * for is worse than none.
    */
   recordDecision?(fact: DecisionAuditFact): void | Promise<void>;
-  /** Where a failure to record goes. The decision itself never waits on it. */
+  /**
+   * Where a failure to record goes. Usage is metered in the background and a
+   * decision never waits on it; an audited purpose's decision does wait on
+   * its audit write (and falls back as `unaudited` if it fails), and the
+   * failure is reported here as well.
+   */
   onRecordFailure?(error: unknown): void;
   now?(): number;
   /** Calls in flight at once, per purpose. Defaults to {@link DECISION_MAX_CONCURRENT}. */
   maxConcurrent?: number;
+  /**
+   * How long past its purpose's deadline a slot is held for a classifier that
+   * has not settled, before it is freed regardless. Defaults to
+   * {@link SLOT_GRACE_MS}.
+   */
+  slotGraceMs?: number;
+  /** How long an audited decision waits for its audit write. Defaults to {@link AUDIT_WAIT_MS}. */
+  auditWaitMs?: number;
   /**
    * The policy each purpose runs under. Defaults to
    * {@link DECISION_PURPOSE_POLICY}; a test overrides a deadline it cannot
@@ -144,6 +157,17 @@ class Slots {
     next();
   }
 }
+
+/**
+ * A slot stays held while its call is in flight, even once the caller has
+ * given up, so a burst of abandoned calls cannot pile up on a slow server. A
+ * classifier that ignores its abort signal is let go of this long after the
+ * deadline, so it cannot hold a slot forever.
+ */
+const SLOT_GRACE_MS = 5_000;
+
+/** The longest an audited decision waits for its audit write before it is `unaudited`. */
+const AUDIT_WAIT_MS = 5_000;
 
 function describeTarget(target: DecisionTarget): DecisionAnswered["model"] {
   return target.where === "local"
@@ -242,44 +266,79 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
             decisionMiss("unaudited", "This decision needs an audit trail, and none is recorded."),
           );
         }
-        const audit = (outcome: DecisionAuditFact["outcome"]): void => {
+        /**
+         * What an audited purpose's verdict waits on: the audit write has
+         * landed. A write that fails, or is still pending after
+         * {@link AUDIT_WAIT_MS}, leaves a verdict nobody can account for, so
+         * the caller gets its fallback as `unaudited` instead. It is not
+         * raced against the call's own deadline: a decision that timed out or
+         * was withdrawn is exactly one the trail must still record. An
+         * unaudited purpose writes nothing and is never held up.
+         */
+        const audit = async (outcome: DecisionAuditFact["outcome"]): Promise<boolean> => {
           const record = options.recordDecision;
-          if (!policy.audit || record === undefined) return;
-          recordSafely(() => record({ purpose, sessionId, target, request, outcome }));
+          if (!policy.audit || record === undefined) return true;
+          let waitTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const written = await Promise.race([
+              Promise.resolve().then(async () => {
+                await record({ purpose, sessionId, target, request, outcome });
+                return true;
+              }),
+              new Promise<false>((resolve) => {
+                waitTimer = setTimeout(() => resolve(false), options.auditWaitMs ?? AUDIT_WAIT_MS);
+              }),
+            ]);
+            return written;
+          } catch (error) {
+            options.onRecordFailure?.(error);
+            return false;
+          } finally {
+            clearTimeout(waitTimer);
+          }
         };
-        const audited = (value: DecisionMiss): T => {
-          audit({ kind: "miss", miss: value });
-          return miss(value);
-        };
+        const unaudited = (): T =>
+          miss(
+            decisionMiss("unaudited", "This decision could not be recorded in its audit trail."),
+          );
+        const audited = async (value: DecisionMiss): Promise<T> =>
+          (await audit({ kind: "miss", miss: value })) ? miss(value) : unaudited();
 
         const slots = slotsFor(purpose);
         if (!(await slots.acquire(withdraw.signal))) return audited(late());
-        let result;
-        try {
-          // Through `then`, so a classifier that throws instead of rejecting
-          // is a provider error like any other, never a rejected `decide`.
-          const asked = Promise.resolve()
-            .then(() => options.classifier.classify(target, request, { signal: withdraw.signal }))
-            .catch((): ClassifierCallResult => ({
-              ok: false,
-              usage: null,
-              miss: decisionMiss("provider-error", "The decision model could not answer."),
-            }));
-          // Billed whenever the answer lands — after a timeout or an abort
-          // too: a provider that answered late still charged for it, and
-          // `volli cost` must see what was spent.
-          void asked.then((settled) => {
-            const record = options.recordUsage;
-            const usage = settled.usage;
-            if (usage === null || sessionId === null || record === undefined) return;
-            recordSafely(() => record({ sessionId, purpose, usage }));
-          });
-          // Raced against the deadline as well as signalled: a classifier
-          // that ignores its signal still cannot hold the caller past it.
-          result = await Promise.race([asked, gaveUp]);
-        } finally {
+        // Freed when the call settles, not when the caller stops waiting: a
+        // call still in flight is still load on the model. The cap frees it
+        // regardless if the classifier never settles.
+        let held = true;
+        const release = (): void => {
+          if (!held) return;
+          held = false;
+          clearTimeout(cap);
           slots.release();
-        }
+        };
+        const cap = setTimeout(release, timeoutMs + (options.slotGraceMs ?? SLOT_GRACE_MS));
+        // Through `then`, so a classifier that throws instead of rejecting
+        // is a provider error like any other, never a rejected `decide`.
+        const asked = Promise.resolve()
+          .then(() => options.classifier.classify(target, request, { signal: withdraw.signal }))
+          .catch((): ClassifierCallResult => ({
+            ok: false,
+            usage: null,
+            miss: decisionMiss("provider-error", "The decision model could not answer."),
+          }));
+        void asked.finally(release);
+        // Billed whenever the answer lands — after a timeout or an abort
+        // too: a provider that answered late still charged for it, and
+        // `volli cost` must see what was spent.
+        void asked.then((settled) => {
+          const record = options.recordUsage;
+          const usage = settled.usage;
+          if (usage === null || sessionId === null || record === undefined) return;
+          recordSafely(() => record({ sessionId, purpose, usage }));
+        });
+        // Raced against the deadline as well as signalled: a classifier
+        // that ignores its signal still cannot hold the caller past it.
+        const result = await Promise.race([asked, gaveUp]);
         if (result === null) return audited(late());
         if (!result.ok) return audited(result.miss);
         const answers = readDecisionAnswers(request.questions, result.answers);
@@ -305,8 +364,7 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
             decisionMiss("malformed-answer", "The caller could not act on the decision's answer."),
           );
         }
-        audit({ kind: "answered", answered });
-        return value;
+        return (await audit({ kind: "answered", answered })) ? value : unaudited();
       } finally {
         clearTimeout(timer);
         call.signal?.removeEventListener("abort", onCallerAbort);

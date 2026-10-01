@@ -501,6 +501,69 @@ describe("bounds", () => {
     ).toEqual(["answered", "answered", "timeout", "timeout"]);
   });
 
+  it("keeps a slot held while a call the caller gave up on is still in flight, up to a hard cap", async () => {
+    vi.useFakeTimers();
+    const started: string[] = [];
+    // Ignores its signal: only the cap can free the slot it holds.
+    const stuck: DecisionClassifier = {
+      classify: (_target, _request, _options) => {
+        started.push("call");
+        return new Promise(() => undefined);
+      },
+    };
+    const { decisions } = service({
+      classifier: stuck,
+      maxConcurrent: 1,
+      slotGraceMs: 500,
+      policyFor: withPolicy({ timeoutMs: 1_000 }),
+    });
+    const first = ask(decisions);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await first).toMatchObject({ miss: { reason: "timeout" } });
+    // The first caller has its fallback, but its call is still running.
+    const second = ask(decisions);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(started).toHaveLength(1);
+    // The cap (deadline + grace) frees the slot; the second call is let in.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await second).toMatchObject({ miss: { reason: "timeout" } });
+  });
+
+  it("frees the slot when a call the caller gave up on finally settles", async () => {
+    vi.useFakeTimers();
+    const settle: Array<() => void> = [];
+    const started: string[] = [];
+    const slow: DecisionClassifier = {
+      classify: (target, request, options) => {
+        started.push("call");
+        return new Promise((resolve) =>
+          settle.push(() =>
+            resolve(piDecisionClassifier(fixtureModels()).classify(target, request, options)),
+          ),
+        );
+      },
+    };
+    const { decisions } = service({
+      classifier: slow,
+      maxConcurrent: 1,
+      policyFor: withPolicy({ timeoutMs: 1_000 }),
+    });
+    const first = ask(decisions);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await first).toMatchObject({ miss: { reason: "timeout" } });
+    const second = ask(decisions);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(started).toHaveLength(1);
+    settle.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toHaveLength(2);
+    settle.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect("answered" in (await second)).toBe(true);
+  });
+
   it("lets a queued caller leave on its own abort", async () => {
     const releases: Array<() => void> = [];
     const gated: DecisionClassifier = {
@@ -606,6 +669,76 @@ describe("audit", () => {
     });
     await flush();
     expect(facts.map((fact) => fact.outcome.kind)).toEqual(["miss"]);
+  });
+
+  it("holds an audited verdict until its audit write has landed", async () => {
+    let finishWrite!: () => void;
+    const order: string[] = [];
+    const { decisions } = service({
+      policyFor: audited,
+      recordDecision: async () => {
+        order.push("write started");
+        await new Promise<void>((resolve) => (finishWrite = resolve));
+        order.push("write landed");
+      },
+    });
+    const pending = ask(decisions).then((outcome) => {
+      order.push("verdict");
+      return outcome;
+    });
+    await flush();
+    await flush();
+    // The decision is made, but nobody has it yet: its record is not written.
+    expect(order).toEqual(["write started"]);
+    finishWrite();
+    expect("answered" in (await pending)).toBe(true);
+    expect(order).toEqual(["write started", "write landed", "verdict"]);
+  });
+
+  it("falls back as unaudited, and says why, when the audit write fails", async () => {
+    const boom = new Error("disk full");
+    const { decisions, failures } = service({
+      policyFor: audited,
+      recordDecision: () => Promise.reject(boom),
+    });
+    expect(await ask(decisions)).toEqual({
+      miss: { status: "unavailable", reason: "unaudited", message: expect.any(String) },
+    });
+    expect(failures).toEqual([boom]);
+    // A synchronous throw is the same failure.
+    const sync = service({
+      policyFor: audited,
+      recordDecision: () => {
+        throw boom;
+      },
+    });
+    expect(await ask(sync.decisions)).toMatchObject({ miss: { reason: "unaudited" } });
+  });
+
+  it("does not let a hung audit write hold the caller", async () => {
+    vi.useFakeTimers();
+    const { decisions } = service({
+      policyFor: audited,
+      auditWaitMs: 250,
+      recordDecision: () => new Promise<void>(() => undefined),
+    });
+    const pending = ask(decisions);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await pending).toMatchObject({ miss: { reason: "unaudited" } });
+  });
+
+  it("still records a decision that timed out, and returns its own miss", async () => {
+    vi.useFakeTimers();
+    const facts: Array<{ outcome: { kind: string; miss?: { reason: string } } }> = [];
+    const { decisions } = service({
+      policyFor: (purpose) => ({ ...audited(purpose), timeoutMs: 100 }),
+      classifier: { classify: () => new Promise(() => undefined) },
+      recordDecision: (fact) => void facts.push(fact),
+    });
+    const pending = ask(decisions);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await pending).toMatchObject({ miss: { reason: "timeout" } });
+    expect(facts.map((fact) => fact.outcome.miss?.reason)).toEqual(["timeout"]);
   });
 
   it("records nothing for an unaudited purpose, even with a recorder wired", async () => {
