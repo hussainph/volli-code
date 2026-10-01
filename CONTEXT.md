@@ -216,8 +216,15 @@ credential hard links in all granted roots (workspace, project, runtime scratch
 and worktree git slices) are indexed at attach and denied for kernel reads,
 writes, rename and relink too. Indexing is bounded: 65,536 source entries,
 250,000 writable-root entries, and a combined five-second deadline. Exceeding
-any bound refuses attachment, never returns a partial policy. Walks stream
+any bound or encountering an unreadable source or granted folder refuses
+attachment, never returns a partial policy; missing folders are fine. Walks stream
 directory entries, deduplicate overlapping roots and never follow symlinks.
+Containment covers what the sandboxed agent does, not hostile changes by
+unsandboxed host processes after the attachment scan: hard-link aliases created
+on the host afterward are not in the frozen policy. The sandbox itself cannot
+create links from protected paths. Host-side execution an agent can trigger
+(such as stdio MCP servers and socket verbs) is VC-484's confirmation boundary
+for Scoped Sessions, not a guarantee supplied by these walls.
 Non-credential private-tree aliases remain incompletely indexed; file-tool
 parent-directory swap races remain slice 8's seam. The authority gate judges paths against the same
 policy, but its reading of a shell command's operands is best-effort: the
