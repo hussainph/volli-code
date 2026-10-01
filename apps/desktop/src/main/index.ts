@@ -186,6 +186,9 @@ import { createDesktopDecisions } from "./decision/desktop";
 import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { createProtection } from "./protection/host";
+import { registerProtectionIpcHandlers } from "./protection/ipc";
+import { migrateProtectionPolicies } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -904,7 +907,14 @@ app.whenReady().then(async () => {
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    dbHandle = { ok: true, db: openVolliDb(dbPath) };
+    const db = openVolliDb(dbPath);
+    try {
+      migrateProtectionPolicies(db, Date.now());
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
     // is classified here, once: a native-ABI failure names the Node
@@ -1801,6 +1811,7 @@ app.whenReady().then(async () => {
               // settings; the newly recorded backfill is deliberately empty.
               mcpTools = [];
             }
+            const authorityPolicy = getProjectAuthorityPolicy(dbHandle.db, project.id);
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
@@ -1816,7 +1827,32 @@ app.whenReady().then(async () => {
               // never lands mid-turn. A rehydrated attachment ignores this and
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
-              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              authorityPolicy,
+              // Main always supplies the host. The adapter activates it from
+              // the pinned Snapshot: fresh enforcing attachments use Protection;
+              // an off switch never adds a gate to a running/recovered attachment.
+              protection: createProtection({
+                db: dbHandle.db,
+                now: () => Date.now(),
+                projectId: project.id,
+                sessionId,
+                // A delegated subagent reads its parent's live "this
+                // Session" approvals; nothing it adds ever flows back.
+                inheritedFrom:
+                  attaching.role === "subagent" && attaching.parentSessionId !== null
+                    ? [attaching.parentSessionId]
+                    : [],
+                sessionTitle: attaching.title ?? null,
+                ticketDisplayId: (() => {
+                  const owned =
+                    attaching.ticketId === null
+                      ? undefined
+                      : getTicket(dbHandle.db, attaching.ticketId);
+                  return owned === undefined
+                    ? null
+                    : displayTicketId(project.ticketPrefix, owned.ticketNumber);
+                })(),
+              }),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
               // this one attachment.
@@ -2600,6 +2636,12 @@ app.whenReady().then(async () => {
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing
   // instrumentation belongs.
+  registerProtectionIpcHandlers(
+    dbHandle.ok ? dbHandle.db : null,
+    dbHandle.ok
+      ? undefined
+      : `Protection settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   registerAgentObservabilityIpcHandlers(
     agentObservability,
     dbHandle.ok

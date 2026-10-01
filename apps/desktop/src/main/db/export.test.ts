@@ -526,6 +526,21 @@ describe("buildExportDocument — populated db", () => {
    */
   const UNEXPORTED_DEAD_COLUMNS: ReadonlySet<string> = new Set(["runtime_preferences"]);
 
+  it.each([null, '{ "providerId": "local", "modelId": "classifier" }'])(
+    "preserves the stored decision model override %s without parsing",
+    async (decisionModel) => {
+      ctx = openTestDb();
+      insertProject(ctx.db, testProject({ id: "proj-1" }));
+      ctx.db
+        .prepare("UPDATE projects SET decision_model = ? WHERE id = ?")
+        .run(decisionModel, "proj-1");
+
+      const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+
+      expect(document.projects[0]).toHaveProperty("decisionModel", decisionModel);
+    },
+  );
+
   it("carries every live projects column, so a migration cannot silently drop one", async () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "proj-1" }));

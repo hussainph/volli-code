@@ -46,7 +46,7 @@ import type {
   TranscriptDeltaObservation,
   UsageObservation,
 } from "@volli/shared";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, sessionHostNoticeMetadata } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { TranscriptDelta } from "./transcript-overlay";
 
@@ -410,6 +410,8 @@ export class RuntimeObservationTranslator {
       }
       case "attention":
         return emit(this.#attentionObservation(observation));
+      case "approval-used":
+        return emit(this.#approvalUsedObservation(observation));
       case "interaction":
         return emit(this.#interactionObservation(observation));
     }
@@ -458,6 +460,8 @@ export class RuntimeObservationTranslator {
           : [this.#activityObservation(observation)];
       case "attention":
         return [this.#attentionObservation(observation)];
+      case "approval-used":
+        return [this.#approvalUsedObservation(observation)];
       case "interaction":
         return [this.#interactionObservation(observation)];
       case "attachment":
@@ -768,6 +772,32 @@ export class RuntimeObservationTranslator {
         role: "assistant",
         parts,
         ...messageMetadata(observation.message),
+      },
+    };
+  }
+
+  #approvalUsedObservation(
+    observation: Extract<RuntimeObservation, { kind: "approval-used" }>,
+  ): Extract<TranslatedObservation, { kind: "transcript.message" }> {
+    const id = `${this.#namespace}:approval-used:${this.#attachmentId}:${observation.toolCallId}:${observation.approvalId}`;
+    return {
+      id,
+      kind: "transcript.message",
+      occurredAt: observation.occurredAt,
+      threadId: this.#threadId,
+      branchId: this.#branchId,
+      attemptId: `attempt:${id}`,
+      turnId: null,
+      message: {
+        id,
+        role: "user",
+        parts: [{ type: "text", text: `Allowed by your earlier approval: ${observation.summary}` }],
+        metadata: sessionHostNoticeMetadata({
+          kind: "approval-used",
+          approvalId: observation.approvalId,
+          summary: observation.summary,
+          asked: observation.asked,
+        }),
       },
     };
   }

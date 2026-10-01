@@ -1381,6 +1381,24 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
   });
 
+  it.each([true, false])("round-trips pinned Protection mode (%s)", (protection) => {
+    const authority = { ...recordedAuthority, protection };
+    const decoded = openedAttachment({ ...attachment, authority });
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("leaves legacy Snapshots without a Protection mode instead of opting them in", () => {
+    const decoded = openedAttachment({ ...attachment, authority: recordedAuthority });
+    if (decoded.kind !== "attachment.opened") throw new Error("not opened");
+    expect(decoded.attachment.authority).not.toHaveProperty("protection");
+  });
+
+  it("rejects a corrupt pinned Protection mode", () => {
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, protection: "true" } }),
+    ).toThrow("payload.attachment.authority.protection must be a boolean");
+  });
+
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
     // Every attachment in history predates VC-44 and carries no `authority` key.
     // Refusing to decode without one would make those Sessions unopenable rather
@@ -2272,5 +2290,66 @@ describe("the renderer-side parse", () => {
       reason: "malformed",
       message: "event.payload.attachment is not a valid Session attachment",
     });
+  });
+});
+
+describe("typed approval metadata", () => {
+  const approval = {
+    asked: "printf 'a\u241eb'",
+    because: "why\u241enow",
+    reason: "rule\u241etext",
+    stages: ["echo 'a\u241eb'", "tee /x"],
+    held: 1,
+    heldStages: [0, 1],
+  };
+
+  it.each([null, 1])("round-trips metadata without splitting any field (held=%s)", (held) => {
+    const original = { ...interaction, approval: { ...approval, held } };
+    const payload = { kind: "interaction.opened" as const, interaction: original };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionInteraction(original).approval).toEqual(original.approval);
+    expect(scrubSessionEventPayload(payload)).toMatchObject({
+      interaction: { approval: original.approval },
+    });
+  });
+
+  it("keeps older typed cards with only a single held-stage field", () => {
+    const { heldStages, ...olderApproval } = approval;
+    expect(heldStages).toEqual([0, 1]);
+    const payload = {
+      kind: "interaction.opened" as const,
+      interaction: { ...interaction, approval: olderApproval },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+  });
+
+  it("keeps historical and model questions without approval metadata", () => {
+    const opened = roundTrip({ kind: "interaction.opened", interaction });
+    expect(opened.kind === "interaction.opened" && "approval" in opened.interaction).toBe(false);
+  });
+
+  it.each([
+    null,
+    "forged",
+    { ...approval, asked: 1 },
+    { ...approval, because: null },
+    { ...approval, reason: false },
+    { ...approval, stages: "echo" },
+    { ...approval, stages: [1] },
+    { ...approval, held: "1" },
+    { ...approval, held: -1 },
+    { ...approval, held: 2 },
+    { ...approval, held: 0.5 },
+    { ...approval, heldStages: "0,1" },
+    { ...approval, heldStages: ["0"] },
+    { ...approval, heldStages: [-1] },
+    { ...approval, heldStages: [2] },
+  ])("rejects malformed approval metadata: %j", (invalid) => {
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "interaction.opened", interaction: { ...interaction, approval: invalid } },
+        "payload",
+      ),
+    ).toThrow(/approval/u);
   });
 });

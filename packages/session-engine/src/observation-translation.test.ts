@@ -1425,3 +1425,36 @@ it("preserves stop facts on live and replayed interruption and Attention without
     expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
   }
 });
+
+describe("ledger-hit historical facts", () => {
+  it("translates one fact to one transcript artifact, with identical cold replay and no interaction", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const observation = {
+      kind: "approval-used",
+      toolCallId: "call",
+      approvalId: "approval",
+      asked: "write /outside/docs",
+      summary: "Write to /outside/docs",
+      occurredAt: 42,
+    } as const;
+    await translator.translate(observation, sink.emit);
+    expect(sink.kinds()).toEqual(["transcript.message"]);
+    expect(translator.replay(observation)).toEqual(sink.observations);
+    expect(sink.observations[0]).toMatchObject({
+      message: {
+        role: "user",
+        metadata: {
+          kind: "session-host-notice",
+          notice: { kind: "approval-used", approvalId: "approval" },
+        },
+        parts: [{ type: "text", text: "Allowed by your earlier approval: Write to /outside/docs" }],
+      },
+    });
+    sink.failNext();
+    await expect(
+      translator.translate({ ...observation, toolCallId: "second" }, sink.emit),
+    ).rejects.toThrow("sink unavailable");
+    expect(sink.kinds()).toEqual(["transcript.message"]);
+  });
+});

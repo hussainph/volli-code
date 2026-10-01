@@ -7,6 +7,9 @@
  * appeared on both pages with no way to tell which one won.
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
+ *
+ * Protection replaces Authority (VC-480). The category keeps its existing key
+ * so stored selections and deep links still reach this project's policy.
  */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
@@ -20,13 +23,41 @@ import type { Project } from "@volli/shared";
 
 import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
-import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
+import { ProtectionPane } from "./configure/protection-pane";
 import { SessionsPane } from "./configure/sessions-pane";
 import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
+
+/** The rail matches a lowercased substring, including every label the page draws. */
+const PROTECTION_KEYWORDS: readonly string[] = [
+  "authority",
+  "permission",
+  "permissions",
+  "policy",
+  "enforce",
+  "observe",
+  "sandbox",
+  "guardrail",
+  "approval",
+  "escalation",
+  "denial",
+  "transcript",
+  "peek",
+
+  "protection",
+  "protect",
+  "protection is on",
+  "protection is off",
+  "approved actions",
+  "approvals",
+  "ledger",
+  "revoke",
+  "advanced",
+  "transcripts a session can read",
+];
 
 export function configureGroups(project: Project): readonly PrefGroup[] {
   return [
@@ -122,42 +153,10 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           // that writes authority policy — no agent verb projects it, by
           // design (VC-172).
           key: "authority",
-          label: "Authority",
+          label: "Protection",
           icon: ShieldCheckIcon,
-          keywords: [
-            "authority",
-            "permission",
-            "permissions",
-            "policy",
-            "enforce",
-            "observe",
-            "sandbox",
-            "guardrail",
-            "approval",
-            "escalation",
-            "denial",
-            "transcript",
-            "peek",
-            "auto mode",
-            // The row labels, so rail search finds the page from what is on
-            // it — `settings-search-smoke.mjs` walks every visible label and
-            // holds this list to that contract.
-            "rule enforcement",
-            // The whole label, em dash included, because the rail matches a
-            // lowercased SUBSTRING of a stored term: "decision mode" alone
-            // could not be found by someone typing what the row says. VC-285
-            // renamed this row from "Who judges the rest" and the old term
-            // went with it — a keyword for a label nobody can see finds
-            // nothing and hides the one that is missing.
-            "decision mode",
-            "automatic review",
-            "ask me after",
-            "or after, in total",
-            "you can read",
-            "an authenticated session can read",
-            "an unauthenticated caller can read",
-          ],
-          content: <AuthorityPane project={project} />,
+          keywords: PROTECTION_KEYWORDS,
+          content: <ProtectionPane key={project.id} project={project} />,
         },
       ],
     },

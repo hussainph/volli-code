@@ -2213,7 +2213,8 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   it("dispatches interrupts and resolves durable interactions against their owning attachment", async () => {
-    const { runtime, adapter } = composition();
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const { runtime, adapter, engine } = composition({ artifacts });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await adapter.emit({
@@ -2277,8 +2278,40 @@ describe("SessionRuntime native adapter contract", () => {
       active: [],
       resolved: [{ interaction: { id: "permission-1", attachmentId } }],
     });
+    const request = {
+      commandId: "resolve-1",
+      sessionId,
+      command: {
+        kind: "interaction.resolve" as const,
+        interactionId: "permission-1",
+        resolution: { optionIds: ["allow"], response: null },
+      },
+    };
+    const repeats = await Promise.all([runtime.command(request), runtime.command(request)]);
+    expect(repeats[0].receipt).toEqual(resolved.receipt);
+    expect(repeats[1]).toEqual(repeats[0]);
+    await runtime.close();
+    const cold = composition({ engine, artifacts });
+    expect((await cold.runtime.command(request)).receipt).toEqual(resolved.receipt);
+    expect(cold.adapter.dispatches).toBe(0);
     await expect(
-      runtime.command({
+      cold.runtime.command({
+        ...request,
+        command: { ...request.command, resolution: { optionIds: ["reject"], response: null } },
+      }),
+    ).rejects.toThrow(/different intent/u);
+    await expect(
+      cold.runtime.command({
+        ...request,
+        commandId: "interrupt-1",
+        command: {
+          ...request.command,
+          interactionId: "missing",
+        },
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+    await expect(
+      cold.runtime.command({
         commandId: "resolve-missing",
         sessionId,
         command: {

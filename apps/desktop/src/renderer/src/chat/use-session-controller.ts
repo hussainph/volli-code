@@ -25,8 +25,10 @@ import { useStore, type StoreApi } from "zustand";
 
 import {
   getChatClient,
+  approvalAnswerFailures,
   isDeliverable,
   type ChatMessageDelivery,
+  type ChatSessionFrame,
   type LiveTranscriptCompaction,
   type MessageDelivery,
   type QueuedMessage,
@@ -39,6 +41,7 @@ import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/c
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
+const NO_FRAMES: readonly ChatSessionFrame[] = [];
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
 const NO_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
@@ -77,6 +80,8 @@ export interface SessionView {
   durableMessages: readonly UIMessage[];
   /** Every interaction opened this Session, for the receipts they left behind. */
   openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
+  /** Failed remembered grants are displayed as their effective allow-once outcome. */
+  approvalFailures: ReadonlyMap<string, "once" | "not-delivered">;
   /** The Session's lifecycle is `working` — a turn is live. */
   working: boolean;
   /** A message typed now could actually leave — see {@link isDeliverable}. */
@@ -174,6 +179,11 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.openedInteractions ?? NO_OPENED,
   );
+  const frames = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.frames ?? NO_FRAMES,
+  );
+  const approvalFailures = React.useMemo(() => approvalAnswerFailures(frames), [frames]);
   const working = useStore(store, (state) => state.sessions[sessionId]?.lifecycle === "working");
   const deliverable = useStore(store, (state) => {
     const slice = state.sessions[sessionId];
@@ -209,6 +219,7 @@ export function useSessionController(
       turnActive,
       durableMessages,
       openedInteractions,
+      approvalFailures,
       working,
       deliverable,
       sessionError,
@@ -220,6 +231,7 @@ export function useSessionController(
       liveCompaction,
     }),
     [
+      approvalFailures,
       authorityReviews,
       compactions,
       deliverable,

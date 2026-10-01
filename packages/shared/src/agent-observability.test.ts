@@ -608,6 +608,14 @@ describe("ObservabilityReducer content carriers", () => {
   it("reduces every content-bearing observation kind to null", () => {
     const reducer = new ObservabilityReducer(() => 0);
     const carriers: RuntimeObservation[] = [
+      {
+        kind: "approval-used",
+        toolCallId: "call",
+        approvalId: "row",
+        summary: SENSITIVE,
+        asked: SENSITIVE,
+        occurredAt: 0,
+      },
       { kind: "delta", turnId: "t1", channel: "text", text: SENSITIVE },
       {
         kind: "authority-review",

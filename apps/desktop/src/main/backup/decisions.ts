@@ -137,6 +137,36 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Which Sessions the person has not yet seen (VC-30): their own record, with no path or live handle in it, so a restore brings the unread dots back rather than silently marking everything read.",
   },
   {
+    table: "authority_approvals",
+    decision: "exclude",
+    reason:
+      "Remembered approvals (VC-480) authorize actions on THIS machine's paths and repositories; a restore re-asks rather than silently granting them on another one.",
+  },
+  {
+    table: "authority_approval_commands",
+    decision: "exclude",
+    reason:
+      "Approval mutation receipts embed machine-local grants; like the excluded approvals, a restored machine must re-ask instead of replaying source-machine authority.",
+  },
+  {
+    table: "authority_approval_events",
+    decision: "exclude",
+    reason:
+      "Approval mutation history embeds source-machine grant snapshots and references the excluded local commands; it cannot authorize a restored machine.",
+  },
+  {
+    table: "authority_approval_completions",
+    decision: "exclude",
+    reason:
+      "Successful uses count source-machine approvals that are excluded; restored approvals start empty and their local completion accounting starts empty too.",
+  },
+  {
+    table: "authority_decisions",
+    decision: "include",
+    reason:
+      "Who authorised each gated call, as it was recorded (VC-480): the person's own activity log, with no credential or live handle in it.",
+  },
+  {
     table: "session_event_sequence",
     decision: "include",
     reason:
@@ -371,6 +401,8 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "session_events",
   // After `sessions`, which it references and cascades with.
   "session_read_receipts",
+  // After `projects` and `sessions`, which it references and cascades with.
+  "authority_decisions",
   "session_event_sequence",
   "session_command_receipts",
   "ticket_comments",
