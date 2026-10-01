@@ -159,6 +159,8 @@ import type {
   McpServersResult,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   PickFolderResult,
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimResult,
@@ -528,6 +530,12 @@ const api = {
     setTools: (input: McpSetToolsInput): Promise<McpServerResult> =>
       invoke("volli:mcp-set-tools", input),
     remove: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-remove", input),
+    signIn: (input: McpSignInInput): Promise<McpSignInResult> => invoke("volli:mcp-sign-in", input),
+    cancelSignIn: (input: McpServerIdInput): Promise<Result> =>
+      invoke("volli:mcp-cancel-sign-in", input),
+    signOut: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-sign-out", input),
+    discardDraft: (input: McpServerIdInput): Promise<Result> =>
+      invoke("volli:mcp-discard-draft", input),
   },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),

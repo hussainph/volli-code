@@ -31,15 +31,23 @@ import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockC
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
+import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import type {
-  McpCatalogTool,
-  McpOperationRecord,
-  McpServerDraft,
-  McpServerProvenance,
-  McpServerRecord,
-  McpTransportConfig,
-  Project,
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  MCP_OAUTH_CLIENT_SECRET_SLOT,
+  mcpCredentialSlot,
+  mcpServerUsesOAuth,
+  type McpCatalogTool,
+  type McpConnectionBlock,
+  type McpOperationRecord,
+  type McpServerAccess,
+  type McpServerDraft,
+  type McpServerProvenance,
+  type McpServerRecord,
+  type McpTransportConfig,
+  type Project,
 } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -53,6 +61,14 @@ import { Textarea } from "@renderer/components/ui/textarea";
 import { Cell, DataTable, PrefSection, SectionAction } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
+
+import {
+  applyCredentials,
+  credentialsFromTransport,
+  EMPTY_CREDENTIALS,
+  McpCredentialsEditor,
+  type EditorCredentials,
+} from "./mcp-credentials-editor";
 
 const EMPTY_DRAFT: McpServerDraft = {
   id: "",
@@ -76,10 +92,46 @@ function freshId(): string {
   return `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function serverStatus(server: McpServerRecord): string {
+function serverStatus(server: McpServerRecord, access: McpServerAccess | undefined): string {
+  if (access?.signIn === "needs-sign-in") return "Needs sign-in";
+  if ((access?.missingSecrets.length ?? 0) > 0) return "Missing credential";
   if (server.stale) return "Stale catalog";
   if (server.error !== null) return "Needs attention";
   return server.enabled ? "Enabled" : "Disabled";
+}
+
+/** Whether a server signs in with OAuth at all: remote, and no Authorization header of its own. */
+function signsIn(server: McpServerDraft): boolean {
+  return (
+    server.transport.type === "streamable-http" && mcpServerUsesOAuth(server.transport.headers)
+  );
+}
+
+/**
+ * The secret slots a saved server already holds a value for, read off what is
+ * MISSING — main reports labels of absent values, never the values present.
+ */
+function storedSlots(server: McpServerDraft, access: McpServerAccess | undefined): Set<string> {
+  const missing = new Set(access?.missingSecrets ?? []);
+  const stored = new Set<string>();
+  const transport = server.transport;
+  const entries =
+    transport.type === "stdio"
+      ? (transport.env ?? []).map((entry) => ["env", entry] as const)
+      : (transport.headers ?? []).map((entry) => ["header", entry] as const);
+  for (const [family, entry] of entries) {
+    if (entry.source.kind === "secret" && !missing.has(`${family} ${entry.name}`)) {
+      stored.add(mcpCredentialSlot(family, entry.name));
+    }
+  }
+  if (
+    transport.type === "streamable-http" &&
+    transport.oauth?.clientSecret?.kind === "secret" &&
+    !missing.has("OAuth client secret")
+  ) {
+    stored.add(MCP_OAUTH_CLIENT_SECRET_SLOT);
+  }
+  return stored;
 }
 
 /**
@@ -174,6 +226,12 @@ export function McpPane({ project }: { project: Project }) {
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [access, setAccess] = React.useState<Readonly<Record<string, McpServerAccess>>>({});
+  const [credentials, setCredentials] = React.useState<EditorCredentials>(EMPTY_CREDENTIALS);
+  /** What the editor's last connection was blocked on, so it can offer the one fix. */
+  const [blocked, setBlocked] = React.useState<McpConnectionBlock | null>(null);
+  /** The server a sign-in is waiting on the browser for. */
+  const [signingIn, setSigningIn] = React.useState<string | null>(null);
 
   const editingId = editor?.serverId ?? null;
   const opened = editor?.opened ?? null;
@@ -189,11 +247,26 @@ export function McpPane({ project }: { project: Project }) {
     setError(null);
     setServers(result.servers);
     setOperations(result.operations);
+    setAccess(result.access ?? {});
   }, [project.id]);
 
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Re-read only where each server stands on credentials, after an act that
+   * can change it (a save, a sign-in, a sign-out). The server rows themselves
+   * come back from those acts directly.
+   */
+  const refreshAccess = React.useCallback(async () => {
+    const result = await window.api.mcp.list({ projectId: project.id });
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setAccess(result.access ?? {});
+  }, [project.id]);
 
   // The editor mounts when it is summoned, so the focus the old always-open
   // form took synchronously has to wait for that mount.
@@ -204,6 +277,8 @@ export function McpPane({ project }: { project: Project }) {
 
   function startAdding(): void {
     setDraft(EMPTY_DRAFT);
+    setCredentials(EMPTY_CREDENTIALS);
+    setBlocked(null);
     setCatalog([]);
     setSelected(new Set());
     setError(null);
@@ -218,6 +293,8 @@ export function McpPane({ project }: { project: Project }) {
       enabled: server.enabled,
       transport: server.transport,
     });
+    setCredentials(credentialsFromTransport(server.transport));
+    setBlocked(null);
     setCatalog(server.catalog);
     setSelected(new Set(enabledToolNames(server.catalog)));
     setError(null);
@@ -225,17 +302,32 @@ export function McpPane({ project }: { project: Project }) {
     setEditor({ serverId: server.id, opened: opens.current });
   }
 
-  function closeEditor(): void {
+  function resetEditor(): void {
     setEditor(null);
     setDraft(EMPTY_DRAFT);
+    setCredentials(EMPTY_CREDENTIALS);
+    setBlocked(null);
     setCatalog([]);
     setSelected(new Set());
     setError(null);
   }
 
+  /**
+   * Cancel. A draft that was never saved may have been signed in to; whatever
+   * that stored is forgotten with it.
+   */
+  async function closeEditor(): Promise<void> {
+    const unsaved = editingId === null && draft.id.length > 0 ? draft.id : null;
+    resetEditor();
+    if (unsaved === null) return;
+    const result = await window.api.mcp.discardDraft({ projectId: project.id, serverId: unsaved });
+    if (!result.ok) setError(result.error);
+  }
+
   function setTransport(type: McpTransportConfig["type"]): void {
     setCatalog([]);
     setSelected(new Set());
+    setBlocked(null);
     setDraft((current) => ({
       ...current,
       transport:
@@ -245,17 +337,33 @@ export function McpPane({ project }: { project: Project }) {
     }));
   }
 
+  /** The draft as main should see it: an id, its credentials applied, and typed secrets. */
+  function prepared(): { server: McpServerDraft; secrets: Record<string, string> } {
+    const applied = applyCredentials(draft.transport, credentials);
+    return {
+      server: { ...draft, id: draft.id || freshId(), transport: applied.transport },
+      secrets: applied.secrets,
+    };
+  }
+
   async function testDraft(): Promise<void> {
     setBusy("test");
-    const server = { ...draft, id: draft.id || freshId() };
-    const result = await window.api.mcp.test({ projectId: project.id, server });
+    const { server, secrets } = prepared();
+    const result = await window.api.mcp.test({
+      projectId: project.id,
+      server,
+      ...(Object.keys(secrets).length === 0 ? {} : { secrets }),
+    });
     setBusy(null);
+    // The id is kept either way: a sign-in for this draft is filed under it.
+    setDraft((current) => ({ ...current, id: server.id }));
     if (!result.ok) {
       setError(result.error);
+      setBlocked(result.blocked ?? null);
       return;
     }
     // New discoveries are opt-in. A person chooses every tool explicitly.
-    setDraft(server);
+    setBlocked(null);
     setCatalog(result.catalog);
     setSelected(new Set());
     setError(null);
@@ -263,21 +371,79 @@ export function McpPane({ project }: { project: Project }) {
 
   async function saveDraft(): Promise<void> {
     setBusy("save");
-    const server = { ...draft, id: draft.id || freshId() };
+    const { server, secrets } = prepared();
     const result = await window.api.mcp.save({
       projectId: project.id,
       server,
       enabledTools: [...selected],
+      ...(Object.keys(secrets).length === 0 ? {} : { secrets }),
     });
     setBusy(null);
     if (!result.ok) {
       setError(result.error);
+      setBlocked(result.blocked ?? null);
       if (result.server !== undefined)
         setServers((current) => replaceServer(current, result.server!));
       return;
     }
     setServers((current) => replaceServer(current, result.server));
-    closeEditor();
+    resetEditor();
+    await refreshAccess();
+  }
+
+  /**
+   * Sign in in the browser: a saved server by id, or the editor's draft. The
+   * pane waits for the redirect; *Cancel sign-in* stops the wait.
+   */
+  async function signIn(target: { serverId: string } | { draft: true }): Promise<void> {
+    // Prepared once: an unsaved draft is given its id here, and the sign-in,
+    // its cancel control and the discovery that follows must all use that one.
+    const draftRequest = "serverId" in target ? null : prepared();
+    const id =
+      draftRequest === null ? (target as { serverId: string }).serverId : draftRequest.server.id;
+    setSigningIn(id);
+    setBusy(`sign-in:${id}`);
+    let result: Awaited<ReturnType<typeof window.api.mcp.signIn>>;
+    if (draftRequest === null) {
+      result = await window.api.mcp.signIn({ projectId: project.id, serverId: id });
+    } else {
+      setDraft((current) => ({ ...current, id }));
+      result = await window.api.mcp.signIn({
+        projectId: project.id,
+        server: draftRequest.server,
+        ...(Object.keys(draftRequest.secrets).length === 0
+          ? {}
+          : { secrets: draftRequest.secrets }),
+      });
+    }
+    setSigningIn(null);
+    setBusy(null);
+    await refreshAccess();
+    if (!result.ok) {
+      if (!result.cancelled) setError(result.error);
+      return;
+    }
+    setError(null);
+    setBlocked(null);
+    // A draft that was blocked on the sign-in goes straight on to discovery.
+    if (draftRequest !== null) await testDraft();
+  }
+
+  async function cancelSignIn(serverId: string): Promise<void> {
+    const result = await window.api.mcp.cancelSignIn({ projectId: project.id, serverId });
+    if (!result.ok) setError(result.error);
+  }
+
+  async function signOut(server: McpServerRecord): Promise<void> {
+    setBusy(`sign-out:${server.id}`);
+    const result = await window.api.mcp.signOut({ projectId: project.id, serverId: server.id });
+    setBusy(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setError(null);
+    await refreshAccess();
   }
 
   async function refresh(server: McpServerRecord): Promise<void> {
@@ -391,7 +557,7 @@ export function McpPane({ project }: { project: Project }) {
               key: "status",
               header: "Status",
               width: "9rem",
-              cell: (server) => <Cell muted>{serverStatus(server)}</Cell>,
+              cell: (server) => <Cell muted>{serverStatus(server, access[server.id])}</Cell>,
             },
             {
               key: "enabled",
@@ -410,9 +576,18 @@ export function McpPane({ project }: { project: Project }) {
             {
               key: "actions",
               header: "Actions",
-              width: "10rem",
+              width: "12rem",
               cell: (server) => (
                 <div className="flex gap-1">
+                  <SignInAction
+                    server={server}
+                    access={access[server.id]}
+                    busy={busy !== null}
+                    waiting={signingIn === server.id}
+                    onSignIn={() => void signIn({ serverId: server.id })}
+                    onCancel={() => void cancelSignIn(server.id)}
+                    onSignOut={() => void signOut(server)}
+                  />
                   <Button
                     size="icon-xs"
                     variant="ghost"
@@ -451,6 +626,7 @@ export function McpPane({ project }: { project: Project }) {
               <ServerCatalog
                 key={`tools:${server.id}`}
                 server={server}
+                access={access[server.id]}
                 busy={busy !== null}
                 onToggleTool={(name, enabled) => void toggleTool(server, name, enabled)}
               />
@@ -540,6 +716,20 @@ export function McpPane({ project }: { project: Project }) {
                 />
               </div>
             )}
+            <McpCredentialsEditor
+              transport={transport.type}
+              {...(transport.type === "streamable-http" ? { url: transport.url } : {})}
+              credentials={credentials}
+              stored={
+                editingId === null
+                  ? new Set<string>()
+                  : storedSlots(
+                      servers.find((server) => server.id === editingId) ?? draft,
+                      access[editingId],
+                    )
+              }
+              onChange={setCredentials}
+            />
           </div>
           {catalog.length === 0 ? null : (
             <fieldset className="mt-3 rounded-md border border-border/60 p-3">
@@ -571,10 +761,25 @@ export function McpPane({ project }: { project: Project }) {
             </fieldset>
           )}
           <div className="mt-3 flex justify-end gap-2">
+            {blocked?.kind !== "sign-in" ? null : signingIn !== null ? (
+              <Button variant="outline" onClick={() => void cancelSignIn(signingIn)}>
+                <XIcon />
+                Cancel sign-in
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                disabled={busy !== null}
+                onClick={() => void signIn({ draft: true })}
+              >
+                <SignInIcon />
+                Sign in
+              </Button>
+            )}
             <Button variant="outline" disabled={busy !== null} onClick={() => void testDraft()}>
               Test and discover
             </Button>
-            <Button variant="ghost" disabled={busy !== null} onClick={closeEditor}>
+            <Button variant="ghost" disabled={busy !== null} onClick={() => void closeEditor()}>
               Cancel
             </Button>
             <Button
@@ -611,6 +816,70 @@ export function McpPane({ project }: { project: Project }) {
   );
 }
 
+/**
+ * A row's one sign-in control: *Sign in* when the server has refused a
+ * connection for want of one, *Cancel sign-in* while the browser is open,
+ * *Sign out* once signed in. Nothing for a server that does not sign in, or
+ * that has not asked to — most remote servers need no sign-in at all, and a
+ * control on every one of them would be noise.
+ */
+function SignInAction({
+  server,
+  access,
+  busy,
+  waiting,
+  onSignIn,
+  onCancel,
+  onSignOut,
+}: {
+  server: McpServerRecord;
+  access: McpServerAccess | undefined;
+  busy: boolean;
+  waiting: boolean;
+  onSignIn: () => void;
+  onCancel: () => void;
+  onSignOut: () => void;
+}) {
+  // An empty slot the size of the control, so every row's Edit, Refresh and
+  // Remove stay in the same columns whether or not a server signs in.
+  const placeholder = <span aria-hidden className="size-5 shrink-0" />;
+  if (!signsIn(server)) return placeholder;
+  if (waiting) {
+    return (
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={`Cancel sign-in to ${server.name}`}
+        onClick={onCancel}
+      >
+        <XIcon />
+      </Button>
+    );
+  }
+  if (access?.signIn !== "signed-in" && access?.signIn !== "needs-sign-in") return placeholder;
+  return access.signIn === "signed-in" ? (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      aria-label={`Sign out of ${server.name}`}
+      disabled={busy}
+      onClick={onSignOut}
+    >
+      <SignOutIcon />
+    </Button>
+  ) : (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      aria-label={`Sign in to ${server.name}`}
+      disabled={busy}
+      onClick={onSignIn}
+    >
+      <SignInIcon />
+    </Button>
+  );
+}
+
 /** The caret every disclosure on this pane turns. */
 function DisclosureCaret({ open }: { open: boolean }) {
   return <CaretDownIcon aria-hidden className={cn("transition-transform", open && "rotate-180")} />;
@@ -626,10 +895,12 @@ function DisclosureCaret({ open }: { open: boolean }) {
  */
 function ServerCatalog({
   server,
+  access,
   busy,
   onToggleTool,
 }: {
   server: McpServerRecord;
+  access: McpServerAccess | undefined;
   busy: boolean;
   onToggleTool: (name: string, enabled: boolean) => void;
 }) {
@@ -647,6 +918,16 @@ function ServerCatalog({
             </p>
             {provenance === null ? null : (
               <p className="text-ui text-muted-foreground">{provenance}</p>
+            )}
+            {access?.signIn === "needs-sign-in" ? (
+              <p className="text-ui text-destructive">Needs sign-in</p>
+            ) : access?.signIn === "signed-in" ? (
+              <p className="text-ui text-muted-foreground">Signed in</p>
+            ) : null}
+            {(access?.missingSecrets.length ?? 0) === 0 ? null : (
+              <p className="text-ui text-destructive">
+                Missing {access!.missingSecrets.join(", ")}
+              </p>
             )}
             {server.error === null ? null : (
               <p className="text-ui text-destructive">Stale catalog: {server.error}</p>

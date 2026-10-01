@@ -294,6 +294,22 @@ export function confirmAskInteractionId(toolCallId: string): string {
 }
 
 /**
+ * The interaction id a credential question is asked under (VC-470):
+ * `confirm.mcp-sign-in` and `confirm.mcp-credential`.
+ *
+ * A fifth frozen segment, for {@link confirmAskInteractionId}'s own reason one
+ * level down: an `mcp_install` apply first raises `confirm.mcp-install` and
+ * then, when the server turns out to need a sign-in, raises the sign-in
+ * question on the SAME tool call. Under one `confirm-ask:` id the second
+ * `opened` would dedupe against the first and park a question nobody was
+ * shown. One call asks at most one credential question, so the tool call id
+ * is still enough within this segment.
+ */
+export function credentialAskInteractionId(toolCallId: string): string {
+  return `credential-ask:${toolCallId}`;
+}
+
+/**
  * The interaction id one `ask_user` call is asked under.
  *
  * Durable on the same terms as {@link askInteractionId}, and a second derivation

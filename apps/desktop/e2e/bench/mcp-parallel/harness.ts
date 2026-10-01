@@ -294,7 +294,9 @@ export async function composeSession(scenario: {
   const hostTrace: ComposedSession["hostTrace"] = [];
   const sessionTrace: ComposedSession["sessionTrace"] = [];
   const attachment = dispatch.bind({
-    port: traced(host.port, hostTrace),
+    // The host's third argument is its own ask (VC-470), not a runtime call
+    // scope (VC-471); this harness asks nobody, so it passes neither.
+    port: traced({ call: (request, signal) => host.port.call(request, signal) }, hostTrace),
     close: () => host.close(),
   });
   return {

@@ -8,6 +8,8 @@ import {
   type McpServerDraft,
 } from "@volli/shared";
 
+import { connectionProblemIn } from "./credentials";
+
 export interface McpProtocolTool {
   name: string;
   description?: string;
@@ -16,7 +18,7 @@ export interface McpProtocolTool {
   outputSchema?: unknown;
 }
 
-/** SDK-free client seam used by discovery and live attachment hosts. */
+/** Client-library-free seam used by discovery and live attachment hosts. */
 export interface McpProtocolCallResult {
   content: readonly unknown[];
   structuredContent?: unknown;
@@ -135,6 +137,12 @@ export async function discoverMcpServer(
   } catch (error) {
     if (input.signal.aborted) throw input.signal.reason;
     if (error instanceof Error && /duplicate tool|tool limit/i.test(error.message)) throw error;
+    // Volli's own sentences — a sign-in, a missing credential, an unsupported
+    // revision — say what to do, so they are passed through rather than
+    // flattened into the generic one below, which exists to keep a third
+    // party's error text out of view.
+    const problem = connectionProblemIn(error);
+    if (problem !== null) throw problem;
     throw new Error(`Could not discover tools from ${input.server.name}.`, { cause: error });
   } finally {
     await client?.close().catch(() => undefined);

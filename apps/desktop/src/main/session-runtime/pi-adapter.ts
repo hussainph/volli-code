@@ -79,8 +79,10 @@ import {
   askUserInteractionId,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   isBudgetCause,
   isConfirmCause,
+  isCredentialConfirmCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -106,7 +108,8 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
   type RuntimeCallScope,
-  type RuntimeMcpPort,
+  type RuntimeMcpCall,
+  type RuntimeMcpCallResult,
   type RuntimeObservation,
   type RuntimeShellPort,
   type RuntimeContextCarry,
@@ -338,7 +341,20 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
 
 /** Main-owned MCP port with attachment cleanup for its clients/transports. */
-export type DesktopMcpPort = RuntimeMcpPort & { dispose: () => Promise<void> | void };
+/**
+ * The attachment's MCP host. `call` takes the attachment's ask as an optional
+ * third argument (VC-470): a call blocked on a sign-in or a credential puts
+ * the question to the person driving through the same parked-question
+ * machinery a verb's confirmation uses.
+ */
+export type DesktopMcpPort = {
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
+  ): Promise<RuntimeMcpCallResult>;
+  dispose: () => Promise<void> | void;
+};
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -1214,7 +1230,24 @@ class PiBinding implements BindingHandle {
           }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
-      ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),
+      // The attachment's own ask rides into every MCP call, so a server that
+      // needs a sign-in asks the person driving rather than failing (VC-470).
+      ...(mcpTools.length === 0
+        ? {}
+        : {
+            mcp: {
+              // A Code Mode program's call lends its scope (VC-471): a
+              // sign-in or credential question then waits its turn among the
+              // program's questions — one open at a time — and stops the
+              // program's clock while a person answers.
+              call: (request: RuntimeMcpCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
+                this.#mcp!.call(request, signal, (ask, askSignal) =>
+                  scope === undefined
+                    ? this.#ask(ask, askSignal)
+                    : scope.question(() => this.#ask(ask, askSignal)),
+                ),
+            },
+          }),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1539,11 +1572,16 @@ class PiBinding implements BindingHandle {
     // interaction id — under a shared prefix the second `opened` emit would
     // dedupe against the first and park a question nobody was shown. See
     // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
+    // A credential question (VC-470) has a fourth, because it can follow a
+    // confirmation on the same tool call: `mcp_install` confirms the install,
+    // then asks the person to sign in.
     const interactionId = isBudgetCause(request.cause)
       ? budgetAskInteractionId(request.toolCallId)
-      : isConfirmCause(request.cause)
-        ? confirmAskInteractionId(request.toolCallId)
-        : askInteractionId(request.toolCallId);
+      : isCredentialConfirmCause(request.cause)
+        ? credentialAskInteractionId(request.toolCallId)
+        : isConfirmCause(request.cause)
+          ? confirmAskInteractionId(request.toolCallId)
+          : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",
