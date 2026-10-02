@@ -86,6 +86,13 @@ beforeEach(() => {
 });
 
 describe("createSidebarPeekPorts · readContent", () => {
+  it("keeps the pull identity when a surface's action ports are rebuilt", () => {
+    const first = createSidebarPeekPorts(surface());
+    const next = createSidebarPeekPorts(surface());
+    expect(next.readContent).toBe(first.readContent);
+    expect(next.openSession).not.toBe(first.openSession);
+  });
+
   it("pulls one fold, adopting nothing and reading nothing", async () => {
     const ports = createSidebarPeekPorts(surface());
     const surfaces = surface();

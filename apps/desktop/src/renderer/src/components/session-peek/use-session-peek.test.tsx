@@ -488,7 +488,9 @@ describe("Space into a folder's card", () => {
     expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
   });
 
-  it("folder activity invalidates local reads and drops late old refinements", async () => {
+  it("folder activity holds the current snapshot and refreshes only on reopening", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     const old = Promise.withResolvers<SessionPeekContent | null>();
     const readContent = vi.mocked(PORTS.readContent);
     readContent.mockResolvedValueOnce(LOCAL).mockReturnValueOnce(old.promise);
@@ -498,7 +500,15 @@ describe("Space into a folder's card", () => {
     const fresh = { ...GENERATED, lastActivityAt: NOW + 1, summary: "Fresh activity" };
     readContent.mockResolvedValue(fresh);
     await render({ rowIds: [FOLDER_ROW], folders, activityToken: 2 });
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(
+      "Readable local progress",
+    );
+    expect(readContent).toHaveBeenCalledTimes(2);
     await act(async () => old.resolve(GENERATED));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+    await pressKey(card()!, "Escape");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    await pressSpace(rowButton(FOLDER_ROW));
     expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe("Fresh activity");
     expect(readContent).toHaveBeenCalledTimes(4);
   });
@@ -537,12 +547,51 @@ describe("Space into a folder's card", () => {
       ["chat-a1", false],
       ["chat-a1", true],
     ]);
-    expect(readContent.mock.calls.at(-1)).toEqual(["chat-b2", false]);
-    await act(async () =>
-      fresh.resolve({ ...GENERATED, sessionId: "chat-b2", lastActivityAt: NOW + 1 }),
-    );
-    expect(readContent.mock.calls.filter(([id]) => id === "chat-a1")).toHaveLength(2);
+    expect(readContent).toHaveBeenCalledTimes(4);
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SECOND_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe("Summary for chat-b2");
+  });
+
+  it("changing folder membership keeps existing summaries and reads only the added Session", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const added = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation(async (_id, refine) => (refine ? GENERATED : LOCAL));
+    await render({
+      rowIds: [FOLDER_ROW],
+      folders: new Map([[TICKET.id, [SESSION_ROW]]]),
+      activityToken: 1,
+    });
+    await pressSpace(rowButton(FOLDER_ROW));
+    await act(async () => vi.advanceTimersByTime(60_000));
+    readContent.mockImplementation((id, refine) => {
+      if (id === "chat-b2") {
+        return refine
+          ? Promise.resolve({ ...GENERATED, sessionId: id, summary: "Added Session summary" })
+          : added.promise;
+      }
+      return Promise.resolve(LOCAL);
+    });
+    await render({
+      rowIds: [FOLDER_ROW],
+      folders: new Map([[TICKET.id, [SESSION_ROW, SECOND_ROW]]]),
+      activityToken: 2,
+    });
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SESSION_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe(GENERATED.summary);
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+      ["chat-b2", false],
+    ]);
+    await act(async () => added.resolve({ ...LOCAL, sessionId: "chat-b2" }));
     expect(readContent.mock.calls.at(-1)).toEqual(["chat-b2", true]);
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SECOND_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe("Added Session summary");
   });
 
   it("a closed folder never refines a local read that settles after dismissal", async () => {
@@ -651,6 +700,31 @@ describe("the pinned card's question (§3.3)", () => {
       }
     },
   );
+
+  it("keeps an open Session summary through activity and action-port rebuilds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation(async (_id, refine) => (refine ? GENERATED : LOCAL));
+    await render({ rowIds: [SESSION_ROW], activityToken: 1 });
+    await pressSpace(rowButton(SESSION_ROW));
+    expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+    readContent.mockImplementation(() => new Promise(() => {}));
+    await act(async () => vi.advanceTimersByTime(60_000));
+    for (const activityToken of [2, 3, 4]) {
+      PORTS = { ...ports(), readContent };
+      await render({ rowIds: [SESSION_ROW], activityToken });
+      expect(card()?.querySelector("[data-peek-summary]")?.textContent).toBe(GENERATED.summary);
+      expect(
+        card()?.querySelector("[data-summary-state]")?.getAttribute("data-summary-state"),
+      ).toBe("ready");
+    }
+    expect(readContent).toHaveBeenCalledTimes(2);
+    await pressKey(card()!, "Escape");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    await pressSpace(rowButton(SESSION_ROW));
+    expect(readContent.mock.calls.at(-1)).toEqual(["chat-a1", false]);
+  });
 
   it("a keyboard-open unpinned card shows local text and its question while refinement is pending", async () => {
     const local = Promise.withResolvers<SessionPeekContent | null>();
