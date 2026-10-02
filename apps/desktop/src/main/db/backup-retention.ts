@@ -1,6 +1,8 @@
 /** Deletes stale migration safety copies through an exact-name, single-directory allowlist. */
-import { lstatSync, readdirSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { lstatSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { verifyMigrationBackup } from "./backup-integrity";
 
 export const BACKUP_RETENTION_LOG_PREFIX = "[migration backup retention]";
 
@@ -12,13 +14,14 @@ export interface BackupRetentionEntry {
 }
 
 export interface BackupRetentionFailure extends BackupRetentionEntry {
-  operation: "list" | "verify" | "remove";
+  operation: "list" | "verify" | "quarantine" | "remove";
   error: string;
 }
 
 export interface BackupRetentionReport {
   kept: BackupRetentionEntry[];
   removed: BackupRetentionEntry[];
+  quarantined: BackupRetentionEntry[];
   failed: BackupRetentionFailure[];
 }
 
@@ -31,6 +34,8 @@ export interface BackupRetentionFs {
   readDirectory(directory: string): string[];
   readFileInfo(path: string): BackupRetentionFileInfo;
   removeFile(path: string): void;
+  verifyIntegrity(path: string): void;
+  quarantineFile(path: string, destination: string): void;
 }
 
 const nodeFs: BackupRetentionFs = {
@@ -40,6 +45,8 @@ const nodeFs: BackupRetentionFs = {
     return { sizeBytes: stats.size, isFile: stats.isFile() };
   },
   removeFile: (path) => unlinkSync(path),
+  verifyIntegrity: verifyMigrationBackup,
+  quarantineFile: (path, destination) => renameSync(path, destination),
 };
 
 interface MigrationBackupCandidate {
@@ -81,16 +88,24 @@ export function pruneMigrationBackups(
   currentVersion: number,
   fs: BackupRetentionFs = nodeFs,
 ): BackupRetentionReport {
-  const report: BackupRetentionReport = { kept: [], removed: [], failed: [] };
+  const report: BackupRetentionReport = { kept: [], removed: [], quarantined: [], failed: [] };
   const directory = dirname(dbPath);
   const dbBasename = basename(dbPath);
   const currentBackupName = `${dbBasename}.backup-v${currentVersion}`;
   const candidatePattern = migrationBackupCandidatePattern(dbPath);
 
   let candidates: MigrationBackupCandidate[];
+  const quarantinedBaseNames = new Set<string>();
   try {
-    candidates = fs
-      .readDirectory(directory)
+    const names = fs.readDirectory(directory);
+    const quarantinePattern = new RegExp(
+      `^${escapeRegExp(dbBasename)}\\.backup-v\\d+\\.corrupt-[\\da-f-]+$`,
+    );
+    for (const name of names) {
+      if (quarantinePattern.test(name))
+        quarantinedBaseNames.add(name.replace(/\.corrupt-[\da-f-]+$/, ""));
+    }
+    candidates = names
       .flatMap((name) => {
         const match = candidatePattern.exec(name);
         if (match === null) return [];
@@ -128,33 +143,84 @@ export function pruneMigrationBackups(
     return report;
   }
 
-  let currentBackupInfo: BackupRetentionFileInfo;
-  try {
-    currentBackupInfo = fs.readFileInfo(currentBackup.path);
-  } catch (error) {
-    report.kept = candidates.map((candidate) => reportEntry(candidate, fs));
-    report.failed.push({
-      operation: "verify",
-      name: currentBackupName,
-      sizeBytes: "unknown",
-      error: describeError(error),
-    });
-    return report;
-  }
-  if (!currentBackupInfo.isFile) {
-    report.kept = candidates.map((candidate) => reportEntry(candidate, fs));
-    report.failed.push({
-      operation: "verify",
-      name: currentBackupName,
-      sizeBytes: currentBackupInfo.sizeBytes,
-      error: "this run's safety copy is not a regular file",
-    });
-    return report;
-  }
+  const unsafeNames = new Set<string>();
+  const verify = (candidate: MigrationBackupCandidate): boolean => {
+    try {
+      const info = fs.readFileInfo(candidate.path);
+      if (!info.isFile) throw new Error("safety copy is not a regular file");
+      fs.verifyIntegrity(candidate.path);
+      return true;
+    } catch (error) {
+      report.failed.push({
+        operation: "verify",
+        ...reportEntry(candidate, fs),
+        error: describeError(error),
+      });
+      // Keep failed checks out of the rollback allowlist. One suffix preserves
+      // the base/sidecar relationship; quarantined files are never pruned.
+      const suffix = `.corrupt-${randomUUID()}`;
+      const family = [
+        candidate,
+        ...candidates.filter(
+          (item) => item.name === `${candidate.name}-wal` || item.name === `${candidate.name}-shm`,
+        ),
+      ];
+      for (const member of family) unsafeNames.add(member.name);
+      const moved: {
+        member: MigrationBackupCandidate;
+        destination: string;
+        entry: BackupRetentionEntry;
+      }[] = [];
+      for (const member of family) {
+        const entry = reportEntry(member, fs);
+        const destination = `${candidate.path}${suffix}${member.sidecar ?? ""}`;
+        try {
+          // Move the base first; never detach its WAL if that move fails.
+          if (!fs.readFileInfo(member.path).isFile) {
+            throw new Error("not a regular file", { cause: error });
+          }
+          fs.quarantineFile(member.path, destination);
+          moved.push({ member, destination, entry });
+        } catch (quarantineError) {
+          report.failed.push({
+            operation: "quarantine",
+            ...entry,
+            error: describeError(quarantineError),
+          });
+          // Restore sidecars before restoring the base. If rollback fails,
+          // leave the base quarantined, never an incomplete rollback point.
+          while (moved.length > 0) {
+            const last = moved.at(-1)!;
+            try {
+              fs.quarantineFile(last.destination, last.member.path);
+              moved.pop();
+            } catch (rollbackError) {
+              report.failed.push({
+                operation: "quarantine",
+                ...last.entry,
+                error: `quarantine rollback failed: ${describeError(rollbackError)}`,
+              });
+              break;
+            }
+          }
+          break;
+        }
+      }
+      for (const { destination, entry } of moved) {
+        report.quarantined.push({ ...entry, name: basename(destination) });
+      }
+      return false;
+    }
+  };
+
+  // An unreadable or corrupt new copy must never authorize deletion. Still
+  // check the older copies so failed checks are not logged as rollback points.
+  const currentIsClean = verify(currentBackup);
 
   let newestOtherBase: MigrationBackupCandidate | undefined;
   for (const candidate of candidates) {
     if (candidate.sidecar !== undefined || candidate.name === currentBackupName) continue;
+    if (!verify(candidate)) continue;
     if (
       newestOtherBase === undefined ||
       candidate.version > newestOtherBase.version ||
@@ -162,6 +228,13 @@ export function pruneMigrationBackups(
     ) {
       newestOtherBase = candidate;
     }
+  }
+
+  if (!currentIsClean) {
+    report.kept = candidates
+      .filter((candidate) => !unsafeNames.has(candidate.name))
+      .map((candidate) => reportEntry(candidate, fs));
+    return report;
   }
 
   const keptBaseNames = new Set([currentBackupName]);
@@ -173,10 +246,14 @@ export function pruneMigrationBackups(
   );
 
   for (const candidate of candidates) {
+    if (unsafeNames.has(candidate.name)) continue;
     const keep =
       candidate.sidecar === undefined
         ? keptBaseNames.has(candidate.name)
-        : keptVersions.has(candidate.version.toString());
+        : keptVersions.has(candidate.version.toString()) ||
+          // A partial quarantine/rollback may leave a sidecar at its original
+          // name. Preserve it for recovery alongside the quarantined base.
+          quarantinedBaseNames.has(candidate.name.slice(0, -candidate.sidecar.length));
     if (keep) {
       report.kept.push(reportEntry(candidate, fs));
       continue;
@@ -207,6 +284,9 @@ export function logMigrationBackupRetention(
   }
   for (const entry of report.removed) {
     logger.info(BACKUP_RETENTION_LOG_PREFIX, { action: "removed", ...entry });
+  }
+  for (const entry of report.quarantined) {
+    logger.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", ...entry });
   }
   for (const failure of report.failed) {
     logger.error(BACKUP_RETENTION_LOG_PREFIX, { action: "failed", ...failure });
