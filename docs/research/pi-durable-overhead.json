@@ -1,0 +1,79 @@
+{
+  "node": "v24.18.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M1",
+  "concurrencyHint": "1",
+  "warmups": 2,
+  "pairedSamples": 20,
+  "arms": {
+    "current": {
+      "openMs": {
+        "n": 20,
+        "min": 0.703,
+        "p50": 0.962,
+        "p95": 1.646,
+        "max": 2.947,
+        "mean": 1.124
+      },
+      "turnMs": {
+        "n": 20,
+        "min": 1.68,
+        "p50": 2.139,
+        "p95": 4.453,
+        "max": 4.599,
+        "mean": 2.49
+      },
+      "closedExecutionBytes": {
+        "n": 20,
+        "min": 7154,
+        "p50": 7157,
+        "p95": 7158,
+        "max": 7158,
+        "mean": 7156.8
+      },
+      "observerCalls": {
+        "n": 20,
+        "min": 11,
+        "p50": 12,
+        "p95": 12,
+        "max": 12,
+        "mean": 11.8
+      }
+    },
+    "durable": {
+      "openMs": {
+        "n": 20,
+        "min": 2.055,
+        "p50": 2.27,
+        "p95": 2.901,
+        "max": 3.882,
+        "mean": 2.388
+      },
+      "turnMs": {
+        "n": 20,
+        "min": 4.74,
+        "p50": 5.668,
+        "p95": 7.01,
+        "max": 7.751,
+        "mean": 5.861
+      },
+      "closedExecutionBytes": {
+        "n": 20,
+        "min": 126976,
+        "p50": 126976,
+        "p95": 126976,
+        "max": 126976,
+        "mean": 126976
+      },
+      "observerCalls": {
+        "n": 20,
+        "min": 4,
+        "p50": 4,
+        "p95": 4,
+        "max": 4,
+        "mean": 4
+      }
+    }
+  }
+}

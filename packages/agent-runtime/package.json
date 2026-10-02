@@ -47,11 +47,15 @@
     "turndown": "^7.2.4"
   },
   "devDependencies": {
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "catalog:",
     "@types/proper-lockfile": "4.1.4",
     "@types/turndown": "^5.0.6",
+    "@volli/session-engine": "workspace:*",
     "esbuild": "0.28.2",
+    "pi-durable-ai": "npm:@earendil-works/pi-ai@1.0.0",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },

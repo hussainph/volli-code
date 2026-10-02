@@ -1,0 +1,38 @@
+{
+  "none": {
+    "turnMs": {
+      "n": 20,
+      "min": 1.344,
+      "p50": 1.567,
+      "p95": 2.093,
+      "max": 2.272,
+      "mean": 1.626
+    },
+    "callbacks": 0,
+    "structuralOpJsonChars": 0
+  },
+  "events": {
+    "turnMs": {
+      "n": 20,
+      "min": 1.312,
+      "p50": 1.518,
+      "p95": 2.84,
+      "max": 18.52,
+      "mean": 2.55
+    },
+    "callbacks": 40,
+    "structuralOpJsonChars": 0
+  },
+  "two-structural-clients": {
+    "turnMs": {
+      "n": 20,
+      "min": 1.181,
+      "p50": 1.393,
+      "p95": 1.922,
+      "max": 2.269,
+      "mean": 1.446
+    },
+    "callbacks": 120,
+    "structuralOpJsonChars": 37666
+  }
+}
