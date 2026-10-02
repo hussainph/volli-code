@@ -81,7 +81,7 @@ const CARDS = [
     section: null,
     beats: ["Build like", "a team of twenty."],
     speed: true,
-    lede: "A Mac app for building ambitious software with many coding agents at once.",
+    lede: "A Mac app for building ambitious software with many coding agents, all at once.",
     host: "volli.app",
     note: "Free and open source · For Apple silicon Macs",
   },
