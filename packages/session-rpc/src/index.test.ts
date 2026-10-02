@@ -2444,6 +2444,40 @@ describe("Session tRPC router", () => {
     expect(JSON.stringify(failures)).toContain("[HOME]");
   });
 
+  it("rejects non-JSON opaque UIMessage payloads before runtime submission", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const invalidMessages = [
+      {
+        id: "date-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: new Date("2025-01-01T00:00:00.000Z") } }],
+      },
+      {
+        id: "map-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: new Map([["key", "value"]]) } }],
+      },
+    ];
+
+    for (const [index, message] of invalidMessages.entries()) {
+      await expect(
+        Reflect.apply(caller.session.command, caller.session, [
+          {
+            commandId: `invalid-json-message-${index}`,
+            sessionId: "session-1",
+            command: { kind: "message.submit", message },
+          },
+        ]),
+      ).rejects.toThrow("UIMessage payloads must contain only JSON-safe values");
+    }
+
+    expect(fixture.calls.command).toEqual([]);
+  });
+
   it("rejects whitespace identifiers and unsafe SSE resume cursors", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
