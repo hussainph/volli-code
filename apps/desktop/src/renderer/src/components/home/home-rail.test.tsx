@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { Project, SessionHarnessState, SessionRecord } from "@volli/shared";
+import type { ChatSessionRecord, Project, SessionHarnessState, SessionRecord } from "@volli/shared";
 
 import { seedSlice } from "@volli/session-presentation";
 import { HomeRail } from "./home-rail";
@@ -273,6 +274,60 @@ describe("HomeRail", () => {
     expect(markup).not.toContain("haiku-4.5");
     expect(markup).not.toContain("Low effort");
     expect(markup).not.toContain("No session in front");
+  });
+
+  it("marks Home Run Sessions without printing another title at normal or narrow widths", () => {
+    const chat: ChatSessionRecord = {
+      sessionId: "chat-run",
+      title: "Review the runtime migration",
+      projectId: "p1",
+      ticketId: null,
+      createdAt: 1,
+      adapterId: "pi",
+      live: true,
+      activity: "working",
+      waitingOn: null,
+      outcome: null,
+      lastActivityAt: 2,
+      bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
+      model: null,
+    };
+    useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+    useProjectSessionsStore.getInitialState().byProject = {
+      p1: {
+        terminal: [
+          terminal("terminal-run", "Review the shell migration"),
+          terminal("manual", "My shell"),
+        ],
+        chat: [chat],
+        provenance: {
+          "chat-run": {
+            kind: "automation",
+            automationRunId: null,
+            automationName: "BE Code Review",
+          },
+          "terminal-run": { kind: "automation", automationRunId: null, automationName: null },
+        },
+      },
+    };
+    // The live chat and the recorded terminal both keep their origin mark.
+    useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, sessionsRecord: true };
+
+    for (const width of [RAIL_DEFAULT_WIDTH, RAIL_MIN_WIDTH]) {
+      useUiStore.getInitialState().railWidth = width;
+      const markup = draw(HOME_BOARD_TAB_ID);
+      expect(markup).toContain('aria-label="Started by the Automation BE Code Review"');
+      expect(markup).toContain('aria-label="Started by an Automation"');
+      expect(markup.match(/aria-label="Started by/g)).toHaveLength(2);
+      expect(markup).toContain("Review the runtime migration\nAutomation · BE Code Review");
+      expect(new DOMParser().parseFromString(markup, "text/html").body.textContent).not.toContain(
+        "BE Code Review",
+      );
+      expect(markup).not.toContain('title="My shell"');
+      expect(markup).toContain("My shell");
+    }
   });
 
   it("pins the Main checkout under EVERY page, and cost under Now alone", () => {

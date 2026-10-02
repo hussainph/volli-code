@@ -490,9 +490,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // The provenance mark qualifies WHOSE Session this is, so it rides
           // the title's own line — and draws nothing at all on a row no
           // Automation started (VC-131).
-          primaryTrailing={
-            <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
-          }
+          primaryTrailing={<SessionProvenanceMark provenance={row.provenance} />}
           // The same line `ListRow` typesets for a string secondary, in the
           // row's own span so it can carry the promotion hook — and at the
           // SOLVED mute rather than at an alpha of it: a percentage of ink
@@ -632,7 +630,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
           {/* Same slot as the Active row's — beside the title — so a Session
               keeps its mark in the same place as it ages out of one band and
               into the other. */}
-          <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
+          <SessionProvenanceMark provenance={row.provenance} />
           {/* Unread outranks by WEIGHT alone, as it does on the Active row.
               There is no trailing slot to put the dot in here: this row's right
               edge is the age, and one trailing mark is the whole of its
