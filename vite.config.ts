@@ -117,6 +117,9 @@ export default defineConfig({
     // fail the hook. Filter the staged set down to what Oxfmt actually formats
     // and skip the command entirely when nothing's left. `vp check` in CI is
     // the full-tree format gate, so nothing slips through unformatted.
+    // `--no-error-on-unmatched-pattern` covers what this list misses (dotfiles
+    // like `.gitignore`, which Oxfmt has no formatter for) without growing an
+    // extension blocklist.
     "*": (files) => {
       const targets = files.filter(
         (f) =>
@@ -125,7 +128,9 @@ export default defineConfig({
           !f.endsWith("pnpm-lock.yaml") &&
           !/(^|\/)(docs|dist|dist-electron|node_modules)\//.test(f),
       );
-      return targets.length ? `vp fmt ${targets.map((f) => JSON.stringify(f)).join(" ")}` : [];
+      return targets.length
+        ? `vp fmt --no-error-on-unmatched-pattern ${targets.map((f) => JSON.stringify(f)).join(" ")}`
+        : [];
     },
   },
 });
