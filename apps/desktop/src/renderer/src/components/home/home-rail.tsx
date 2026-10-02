@@ -518,7 +518,7 @@ function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessi
         }
         primary={row.title}
         primaryTrailing={<SessionProvenanceMark provenance={provenance} />}
-        title={provenanceLine === null ? row.title : `${row.title}\n${provenanceLine}`}
+        title={provenanceLine === null ? undefined : `${row.title}\n${provenanceLine}`}
         secondary={
           <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
             <StatusDot state={row.state} />

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ChatSessionRecord, Project, SessionHarnessState, SessionRecord } from "@volli/shared";
@@ -311,7 +312,7 @@ describe("HomeRail", () => {
         },
       },
     };
-    // The live chat and the ended terminal both keep their origin mark.
+    // The live chat and the recorded terminal both keep their origin mark.
     useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, sessionsRecord: true };
 
     for (const width of [RAIL_DEFAULT_WIDTH, RAIL_MIN_WIDTH]) {
@@ -321,7 +322,10 @@ describe("HomeRail", () => {
       expect(markup).toContain('aria-label="Started by an Automation"');
       expect(markup.match(/aria-label="Started by/g)).toHaveLength(2);
       expect(markup).toContain("Review the runtime migration\nAutomation · BE Code Review");
-      expect(markup.replace(/<[^>]*>/g, "")).not.toContain("BE Code Review");
+      expect(new DOMParser().parseFromString(markup, "text/html").body.textContent).not.toContain(
+        "BE Code Review",
+      );
+      expect(markup).not.toContain('title="My shell"');
       expect(markup).toContain("My shell");
     }
   });

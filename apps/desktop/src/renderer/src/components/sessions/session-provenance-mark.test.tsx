@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { SessionProvenance } from "@volli/shared";
@@ -21,8 +22,11 @@ describe("compact Session provenance", () => {
       expect(markup).toContain("size-3 shrink-0");
       // Phosphor's bold path is the only visible content. No glyph title or
       // extra name span can consume the Session title's width.
-      expect(markup.replace(/<[^>]*>/g, "")).toBe("");
-      expect(markup.match(/<span\b/g)).toHaveLength(1);
+      const content = new DOMParser().parseFromString(markup, "text/html").body;
+      expect(content.textContent).toBe("");
+      expect(content.querySelectorAll("span")).toHaveLength(1);
+      expect(content.querySelectorAll("svg")).toHaveLength(1);
+      expect(content.querySelector("svg path")).not.toBeNull();
     },
   );
 

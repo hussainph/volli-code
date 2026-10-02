@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The rail's session rows, with a roster that has something in it.
  *
@@ -334,7 +335,9 @@ describe("TicketSessionsPanel rows", () => {
       const html = panel();
 
       expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
-      expect(html.replace(/<[^>]*>/g, "")).not.toContain("Nightly sweep");
+      expect(new DOMParser().parseFromString(html, "text/html").body.textContent).not.toContain(
+        "Nightly sweep",
+      );
     });
 
     it("drops the native tooltip on a peekable row, where the card now says it", () => {

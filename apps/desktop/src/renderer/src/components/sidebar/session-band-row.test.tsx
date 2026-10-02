@@ -255,7 +255,9 @@ describe("the Active row's marks", () => {
       }),
     );
     expect(marked).toContain('aria-label="Started by the Automation Nightly sweep"');
-    expect(marked.replace(/<[^>]*>/g, "")).not.toContain("Nightly sweep");
+    expect(new DOMParser().parseFromString(marked, "text/html").body.textContent).not.toContain(
+      "Nightly sweep",
+    );
     expect(render(row())).not.toContain("Started by the Automation");
   });
 });
@@ -335,7 +337,9 @@ describe("the Previous row", () => {
     );
     expect(markup).toContain('aria-label="Started by the Automation BE Code Review"');
     expect(markup).toContain("inline-flex size-3 shrink-0");
-    expect(markup.replace(/<[^>]*>/g, "")).not.toContain("BE Code Review");
+    expect(new DOMParser().parseFromString(markup, "text/html").body.textContent).not.toContain(
+      "BE Code Review",
+    );
     expect(markup).toContain("Review fixes");
     expect(markup).toContain("1m");
   });
