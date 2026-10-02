@@ -10,11 +10,6 @@ on:
   schedule:
     - cron: "31 4 * * *"
   workflow_dispatch:
-    inputs:
-      observe_picker:
-        description: "Observe the restored automations picker with four concurrent fresh profiles"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -52,46 +47,6 @@ jobs:
         env:
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier quarantine --jobs 4
-
-      # VC-530's return proof must still execute the picker after its quarantine
-      # entry is removed. Opt-in only; this does not change nightly membership.
-      - name: Observe restored picker under concurrent startup (non-gating)
-        if: ${{ inputs.observe_picker }}
-        continue-on-error: true
-        env:
-          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results/picker-observation
-        run: |
-          node --test --test-concurrency="${VOLLI_CONCURRENCY_HINT:-1}" apps/desktop/e2e/automations-picker-observation.test.mjs
-          node --input-type=module <<'NODE'
-          import { join } from 'node:path';
-          import { runOne } from './apps/desktop/scripts/run-smokes.mjs';
-          import { createSmokeReporter, runWithRetry } from './apps/desktop/scripts/smoke-results.mjs';
-          const name = 'automations-picker-smoke.mjs';
-          const results = await Promise.all(Array.from({ length: 4 }, async (_, index) => {
-            const reporter = createSmokeReporter({
-              reportDir: join(process.env.VOLLI_SMOKE_REPORT_DIR, String(index + 1)),
-              summaryPath: process.env.GITHUB_STEP_SUMMARY,
-              names: [name],
-              metadata: {
-                tier: `picker-observation-${index + 1}`,
-                runId: process.env.GITHUB_RUN_ID,
-                runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-                sha: process.env.GITHUB_SHA,
-                event: process.env.GITHUB_EVENT_NAME,
-              },
-            });
-            try {
-              const result = await runWithRetry(name, (name, number) => runOne(name, number, { reporter }));
-              reporter.recordResult(result);
-              console.log(`${result.status} ${name} profile ${index + 1}`);
-              return result;
-            } finally {
-              reporter.finish();
-            }
-          }));
-          // Retry-green is evidence of a remaining race, not a successful return proof.
-          if (results.some(result => result.status !== 'PASS')) process.exitCode = 1;
-          NODE
 
       - name: Mark non-gating observation outcome
         if: always()

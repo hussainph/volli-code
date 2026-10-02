@@ -197,7 +197,17 @@ The smoke no longer compensates with repeated pointer nudges while awaiting the 
 
 Local verification on the final candidate: **10/10 serial fresh-profile opportunities passed**, all checks 0–8, with `VOLLI_CONCURRENCY_HINT=1`, no tracing and no retries; the ten scratch paths were distinct. Focused board/drop/measure-loop/picker tests passed **50/50**, smoke-selection/observation tests **17/17**, plus `vp check`, desktop typecheck and a built app. An intermediate candidate failed check 6 after removing the teardown sleep before adding preview-detached readiness; that failed candidate and diagnostic runs are not pooled into the final proof.
 
-For this probe only, the owner waived the original 50-opportunity/3-SHA return bar in favour of **10 serial local fresh-profile passes and three branch dispatches with no picker FAIL/FLAKY**. The manual `observe_picker=true` input runs four concurrent fresh picker profiles per dispatch even after the entry leaves `SMOKE_QUARANTINE`, with distinct both-attempt artifacts; it is off by default and changes no nightly membership. The VC-530 PR/ticket records the completed proof counts and run links. No other quarantine entry or return condition changes.
+For this probe only, the owner waived the original 50-opportunity/3-SHA return bar in favour of **10 serial local fresh-profile passes and three branch dispatches with no picker FAIL/FLAKY**. On proof SHA `5971634bc05287ba867c95d7ef995c0e71e7ffb0`, a temporary manual observation input executed four concurrent fresh picker profiles per dispatch after the entry left `SMOKE_QUARANTINE`. The durable reports and each attempt log were downloaded and verified:
+
+| Executed quarantine run | Picker first-attempt outcomes | Retained assertions |
+|---|---:|---:|
+| [37071911800](https://github.com/hussainph/volli-code/actions/runs/37071911800) | 4/4 PASS | 36/36 |
+| [37071918083](https://github.com/hussainph/volli-code/actions/runs/37071918083) | 4/4 PASS | 36/36 |
+| [37073013835](https://github.com/hussainph/volli-code/actions/runs/37073013835) | 4/4 PASS | 36/36 |
+
+**12/12 concurrent CI picker opportunities, no FAIL/FLAKY and no retries**, plus the 10/10 serial local opportunities: **22/22 fresh profiles and 198/198 smoke assertions**. Run [37071914864](https://github.com/hussainph/volli-code/actions/runs/37071914864) was cancelled by GitHub's same-ref pending-concurrency replacement before any job executed; it is censored, not a pass. Its replacement was dispatched sequentially. The proof head's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37071882911/job/111057503222) also passed.
+
+After recording these results on [PR #693](https://github.com/hussainph/volli-code/pull/693#issuecomment-5962555600), the owner directed removal of the temporary observation input/step and its sole helper test in a final push. The shared workflow is restored unchanged; the proven product/smoke/runner files remain byte-identical. Ongoing proof is the restored gating smoke shard on every desktop PR. The final-head gate result is recorded on the PR/ticket. No other quarantine entry or return condition changes.
 
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
