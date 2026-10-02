@@ -1,3 +1,4 @@
+import { safeStopMessage } from "./safe-diagnostic";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { RuntimeFailure } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
@@ -9,8 +10,9 @@ import {
   classifyDiagnostic,
   errorText,
   isTransientTransportFailure,
+  isUnreachedAuthFailure,
   recoveryRefFor,
-  sanitizeDiagnostic,
+  retryHintMs,
   sessionUsageFrom,
 } from "./transcript";
 
@@ -57,9 +59,9 @@ const SIGNATURE_REFUSED_ENVELOPE = `400 ${JSON.stringify({
 const BLOCK_MODIFIED =
   "messages.3.content.0: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.";
 
-describe("sanitizeDiagnostic", () => {
+describe("safeStopMessage", () => {
   it("collapses whitespace", () => {
-    expect(sanitizeDiagnostic("  request\n  failed  ")).toBe("request failed");
+    expect(safeStopMessage("  request\n  failed  ")).toBe("request failed");
   });
 
   it("keeps the provider's own vocabulary out of the redactor (VC-242)", () => {
@@ -67,7 +69,7 @@ describe("sanitizeDiagnostic", () => {
     // and 36 characters of word characters, which is exactly the shape the
     // opaque-run rule redacts. A person reading `set [redacted] to "drop_block"`
     // has been told to fix something they cannot see.
-    const sanitized = sanitizeDiagnostic(SIGNATURE_REFUSED);
+    const sanitized = safeStopMessage(SIGNATURE_REFUSED);
     expect(sanitized).toBe(SIGNATURE_REFUSED);
     expect(sanitized).toContain("prefix_mismatch_behavior");
     expect(sanitized).toContain("thinking-binding-controls-2026-08-01");
@@ -80,16 +82,16 @@ describe("sanitizeDiagnostic", () => {
   it("still redacts everything that only looks like words by accident", () => {
     // What separates vocabulary from a credential, one property at a time: a
     // key is one long segment, or mixed case, or has no plain word in it.
-    expect(sanitizeDiagnostic("key a3f9c2e17b4d8a6f0e5c3b2a19d7f4e6 refused")).toBe(
+    expect(safeStopMessage("key a3f9c2e17b4d8a6f0e5c3b2a19d7f4e6 refused")).toBe(
       "key [redacted] refused",
     );
-    expect(sanitizeDiagnostic("key AIzaSyD-example_key-with_mixed-case1 refused")).toBe(
+    expect(safeStopMessage("key AIzaSyD-example_key-with_mixed-case1 refused")).toBe(
       "key [redacted] refused",
     );
-    expect(sanitizeDiagnostic("id 123e4567-e89b-12d3-a456-426614174000 refused")).toBe(
+    expect(safeStopMessage("id 123e4567-e89b-12d3-a456-426614174000 refused")).toBe(
       "id [redacted] refused",
     );
-    expect(sanitizeDiagnostic("token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 refused")).toBe(
+    expect(safeStopMessage("token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 refused")).toBe(
       "token [redacted] refused",
     );
   });
@@ -99,46 +101,42 @@ describe("sanitizeDiagnostic", () => {
     // whole JSON body. The envelope is a log's business; the request id inside
     // it is redacted like any other opaque run and the sentence is what is
     // kept. The status stays in front because the auth classifier reads it.
-    expect(sanitizeDiagnostic(SIGNATURE_REFUSED_ENVELOPE)).toBe(`400 ${SIGNATURE_REFUSED}`);
+    expect(safeStopMessage(SIGNATURE_REFUSED_ENVELOPE)).toBe(`400 ${SIGNATURE_REFUSED}`);
     expect(
-      sanitizeDiagnostic(
+      safeStopMessage(
         '401 {"error":{"message":"Incorrect API key provided.","type":"invalid_request_error"}}',
       ),
     ).toBe("401 Incorrect API key provided.");
-    expect(sanitizeDiagnostic('{"message":"upstream timeout"}')).toBe("upstream timeout");
+    expect(safeStopMessage('{"message":"upstream timeout"}')).toBe("upstream timeout");
   });
 
-  it("leaves text that is not an envelope alone, braces and all", () => {
-    expect(sanitizeDiagnostic("expected { but found }")).toBe("expected { but found }");
-    expect(sanitizeDiagnostic('{"code":400}')).toBe('{"code":400}');
-    expect(sanitizeDiagnostic("not json {")).toBe("not json {");
+  it("withholds ambiguous braces and envelopes without request material", () => {
+    expect(safeStopMessage("expected { but found }")).toContain("withheld");
+    expect(safeStopMessage('{"code":400}')).toBe("Provider error (no message stated).");
+    expect(safeStopMessage("not json {")).toContain("withheld");
     // An `error` that is not an object, or one with nothing to say, yields to
     // the top-level sentence; an envelope with neither is not an envelope.
-    expect(sanitizeDiagnostic('{"error":null,"message":"top-level sentence"}')).toBe(
+    expect(safeStopMessage('{"error":null,"message":"top-level sentence"}')).toBe(
       "top-level sentence",
     );
-    expect(sanitizeDiagnostic('{"error":{"message":""},"message":"the other one"}')).toBe(
+    expect(safeStopMessage('{"error":{"message":""},"message":"the other one"}')).toBe(
       "the other one",
     );
-    expect(sanitizeDiagnostic('{"error":{"message":""},"message":""}')).toBe(
-      '{"error":{"message":""},"message":""}',
+    expect(safeStopMessage('{"error":{"message":""},"message":""}')).toBe(
+      "Provider error (no message stated).",
     );
   });
 
   it("redacts prefixed provider keys", () => {
-    expect(sanitizeDiagnostic("bad key sk-ant-abc123 rejected")).toBe(
-      "bad key [redacted] rejected",
-    );
+    expect(safeStopMessage("bad key sk-ant-abc123 rejected")).toBe("bad key [redacted] rejected");
   });
 
   it("redacts long opaque tokens", () => {
-    expect(sanitizeDiagnostic(`token ${"a".repeat(40)} rejected`)).toBe(
-      "token [redacted] rejected",
-    );
+    expect(safeStopMessage(`token ${"a".repeat(40)} rejected`)).toBe("token [redacted] rejected");
   });
 
   it("bounds the length", () => {
-    const long = sanitizeDiagnostic("word ".repeat(200));
+    const long = safeStopMessage("word ".repeat(200));
     expect(long).toHaveLength(401);
     expect(long.endsWith("…")).toBe(true);
   });
@@ -180,9 +178,9 @@ describe("classifyDiagnostic", () => {
     // — drop the reasoning, send the turn again — and neither is a `model`
     // failure, which is the arm that would have handed them a Retry that
     // re-sends the identical array forever.
-    expect(classifyDiagnostic(sanitizeDiagnostic(SIGNATURE_REFUSED))).toBe("reasoning");
-    expect(classifyDiagnostic(sanitizeDiagnostic(SIGNATURE_REFUSED_ENVELOPE))).toBe("reasoning");
-    expect(classifyDiagnostic(sanitizeDiagnostic(BLOCK_MODIFIED))).toBe("reasoning");
+    expect(classifyDiagnostic(safeStopMessage(SIGNATURE_REFUSED))).toBe("reasoning");
+    expect(classifyDiagnostic(safeStopMessage(SIGNATURE_REFUSED_ENVELOPE))).toBe("reasoning");
+    expect(classifyDiagnostic(safeStopMessage(BLOCK_MODIFIED))).toBe("reasoning");
     // Ahead of the broader signals: the sentence names a header and a setting,
     // and neither the auth nor the context pattern may claim it.
     expect(classifyDiagnostic("Invalid `signature` in `thinking` block; check your api key")).toBe(
@@ -211,7 +209,7 @@ describe("classifyDiagnostic", () => {
 
 /** Classified the way a live failure reaches it, so the reason gate is real. */
 function failureFor(message: string): RuntimeFailure {
-  const sanitized = sanitizeDiagnostic(message);
+  const sanitized = safeStopMessage(message);
   return { reason: classifyDiagnostic(sanitized), message: sanitized };
 }
 
@@ -232,10 +230,123 @@ describe("isTransientTransportFailure", () => {
     expect(isTransientTransportFailure(failureFor(message))).toBe(true);
   });
 
+  /**
+   * Every sentence the owner's ledger recorded dead-ending a turn as
+   * `adapter_unrecoverable` after 2026-09-15, verbatim as the provider SDK
+   * handed it to pi-ai — envelope, status and all — so what is pinned is the
+   * path from raw text through the sanitizer and the classifier (VC-443).
+   */
+  it.each([
+    // The SDKs' own words for a socket that went away.
+    ["Request timed out.", "timeout"],
+    ["Connection error.", "connection"],
+    ["terminated", "body cut mid-read"],
+    ["getaddrinfo ENOTFOUND api.anthropic.com", "DNS with no network"],
+    ["getaddrinfo EAI_AGAIN chatgpt.com", "DNS with no network"],
+    ["other side closed", "undici"],
+    // A stream that ended without its closing event.
+    ["Stream ended without finish_reason", "OpenAI-compatible"],
+    ["Anthropic stream ended before message_stop", "Anthropic"],
+    ["Provider stream stalled.", "this runtime's idle cut"],
+    ["Provider stream stalled after sleep.", "this runtime's wake cut"],
+    // Overload and "send it again".
+    [
+      `${JSON.stringify({
+        type: "error",
+        error: { details: null, type: "overloaded_error", message: "Overloaded" },
+        request_id: "req_011CWz7qgV2Gkq3n3x9dP4bY",
+      })}`,
+      "Anthropic overloaded envelope",
+    ],
+    ["529 Overloaded", "Anthropic 529"],
+    ["Codex error: Our servers are currently overloaded. Please try again later.", "Codex"],
+    [
+      "Codex error: An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 4013a1f2-9c1e-4c1b-8d2a-7f2b1e3c4d5e in your message.",
+      "Codex, with a request id containing 401",
+    ],
+    // Gateways.
+    [
+      "502 <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n",
+      "Cloudflare HTML",
+    ],
+    [
+      '502 {"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502/","title":"Error 502: Bad gateway","status":502,"detail":"The origin returned an invalid response. Ray ID: 8f4013ab2c9d7e01"}',
+      "Cloudflare JSON, Ray ID containing 4013",
+    ],
+    ["500 status code (no body)", "bare 500"],
+    ["503 Service Unavailable", "503"],
+    ["504 Gateway Timeout", "504"],
+    // Throttling: slow down, and the next window answers.
+    [
+      `429 ${JSON.stringify({
+        type: "error",
+        error: {
+          type: "rate_limit_error",
+          message: "This request would exceed your account's rate limit. Please try again later.",
+        },
+      })}`,
+      "Anthropic rate limit envelope",
+    ],
+    ["429: Rate limit reached for requests", "OpenAI-compatible"],
+    ["429 This request would exceed your account's rate limit. Please try again later.", "bare"],
+    ["429 Too Many Requests", "status alone"],
+  ])("retries what the ledger dead-ended: %s (%s)", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(true);
+  });
+
+  /**
+   * The quota and credential sentences from the same ledger, which must stay
+   * the person's to answer: waiting minutes refills no allowance and repairs
+   * no token.
+   */
+  it.each([
+    ["Codex error: The usage limit has been reached", "Codex quota"],
+    [
+      "429: Usage limit reached for 5 hour. Your limit will reset at 2026-09-20 18:04:11",
+      "quota wearing a 429",
+    ],
+    ["400 You're out of extra usage. Add more at claude.ai/settings/usage", "extra usage"],
+    [
+      `429: ${JSON.stringify({ code: "1308", message: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-21 02:00:00" })}`,
+      "quota envelope",
+    ],
+    ["You exceeded your current quota, please check your plan and billing details.", "OpenAI"],
+    ["429 Insufficient credits. Add more at openrouter.ai/settings/credits", "spent credit"],
+    ["429 You are out of credits", "out of credits"],
+    ["402 Payment Required", "payment required"],
+    [
+      `401 ${JSON.stringify({
+        type: "error",
+        error: {
+          type: "authentication_error",
+          message: "OAuth token has been revoked. Please obtain a new token.",
+        },
+      })}`,
+      "revoked token",
+    ],
+    [
+      "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed",
+      "OAuth refresh that never left the machine",
+    ],
+    ["OpenAI Codex token refresh error: invalid_grant", "OAuth refresh refused"],
+    ["501 Not Implemented", "a status that is not a transient one"],
+    [
+      `400 Invalid JSON payload received. Unknown name "timeout" at 'tools[3]': Cannot find field.`,
+      "a request error quoting a transport word",
+    ],
+  ])("leaves a quota or a credential to the user: %s (%s)", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(false);
+  });
+
+  it("reads a gateway status ahead of whatever its page happens to say", () => {
+    // A 502 page that mentions signing in is still a gateway, not a refusal.
+    expect(failureFor("502 <html>Sign in to Cloudflare</html>").reason).toBe("model");
+    expect(failureFor("403 Forbidden").reason).toBe("auth");
+  });
+
   it.each([
     "malformed provider payload",
     "The model run failed.",
-    "429 Too Many Requests",
     "You exceeded your current quota",
     "maximum context length exceeded",
     "No API key found for anthropic",
@@ -256,6 +367,46 @@ describe("isTransientTransportFailure", () => {
     expect(isTransientTransportFailure({ reason: "aborted", message: "WebSocket closed" })).toBe(
       false,
     );
+  });
+});
+
+describe("isUnreachedAuthFailure", () => {
+  it("recognises a credential refresh that never reached its server", () => {
+    expect(
+      isUnreachedAuthFailure(
+        failureFor(
+          "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    // Reached, and refused.
+    "401 OAuth token has been revoked. Please obtain a new token.",
+    // Not an auth failure at all; the transient predicate owns these.
+    "fetch failed",
+  ])("leaves anything else alone: %s", (message) => {
+    expect(isUnreachedAuthFailure(failureFor(message))).toBe(false);
+  });
+});
+
+describe("retryHintMs", () => {
+  it.each([
+    ["Server requested 120s retry delay (max: 60s). Rate limited", 120_000],
+    ["Rate limit reached. Please try again in 20s.", 20_000],
+    ["Please try again in 1.5 seconds", 1_500],
+    ["retry after 250ms", 250],
+    ["retry after 250 milliseconds", 250],
+    ["Please try again in 2 minutes", 120_000],
+    ["try again after 1 min", 60_000],
+    ["try again in 3 secs", 3_000],
+  ])("reads the wait out of %s", (message, expected) => {
+    expect(retryHintMs(message)).toBe(expected);
+  });
+
+  it("finds nothing in a sentence that states no wait", () => {
+    expect(retryHintMs("429 This request would exceed your account's rate limit.")).toBe(undefined);
   });
 });
 

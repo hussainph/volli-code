@@ -11,6 +11,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { copyFileSync, lstatSync, renameSync, rmSync } from "node:fs";
+import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import {
@@ -47,7 +48,7 @@ export interface Migration {
 }
 
 /**
- * Migration 001: the v1 schema — see docs/CONCEPT.md decisions #28–#30. A
+ * Migration 001: the v1 schema. A
  * SNAPSHOT, not the current schema: applied migrations are immutable, so later
  * evolution lives in the migrations below it (002 adds `tickets.archived_at`
  * and replaces `tickets_project_status` with the two partial indexes).
@@ -138,8 +139,8 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
 `;
 
 /**
- * Migration 003: the ticket-detail MVP (docs/plans/ticket-detail-mvp.md,
- * decisions #14/#18/#22). Three additions, all additive/nullable — no
+ * Migration 003: the ticket-detail MVP (decisions #14/#18/#22). Three
+ * additions, all additive/nullable — no
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
@@ -361,7 +362,7 @@ ALTER TABLE projects ADD COLUMN theme_seed TEXT;
 `;
 
 /**
- * Migration 014: per-project canvas + appearance (docs/plans/arc-theming-migration.md).
+ * Migration 014: per-project canvas + appearance (the arc theming migration).
  * Two nullable columns, replacing what 013's four columns meant rather than
  * what they held: a project now overrides the CANVAS (the authored gradient)
  * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
@@ -645,7 +646,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
 `;
 
 /**
- * Migration 020: Blobs (VC-50, `docs/plans/attachments.md`) — the bytes behind
+ * Migration 020: Blobs (VC-50) — the bytes behind
  * every user-supplied file, and the links naming where each one is attached.
  * Replaces migration 011's `ticket_attachments`, which owned both at once:
  * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
@@ -963,8 +964,8 @@ CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, oc
 `;
 
 /**
- * Migration 025: the durable authority policy store (VC-44, slice 7 of
- * `docs/plans/authority-two-axis-rearchitecture.md`).
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of the
+ * two-axis authority rearchitecture).
  *
  * One nullable JSON column, `NULL` = inherit every built-in default, taking
  * 019's shape for 019's reason: the payload is a variable-shaped document, no
@@ -2235,6 +2236,129 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 053: a project's own decision model (VC-478).
+ *
+ * One nullable JSON column beside `session_model`, on 024's terms: `NULL` is
+ * "inherit the app-wide decision model", and a stored `{ "kind": "none" }` is
+ * a project that turned decision models off for itself — a choice, not an
+ * absence. The document is variable-shaped (none, a local server, a cloud
+ * model with its opt-in), so `json_valid` guards it and the reader re-checks
+ * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
+ * inherit; see `readDecisionModelColumn`).
+ *
+ * No credential is or can be stored here: a cloud setting names a provider and
+ * a model, and the key stays in Pi's own `auth.json`.
+ */
+const MIGRATION_053_PROJECT_DECISION_MODEL = `
+ALTER TABLE projects ADD COLUMN decision_model TEXT
+  CHECK (decision_model IS NULL OR json_valid(decision_model));
+`;
+
+/**
+ * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
+ *
+ * A read receipt is not work, so it is deliberately NOT a Session ledger fact.
+ * Marking a Session read would otherwise append to `session_events`, churn the
+ * projection checkpoints beside it, and move `lastActivityAt` — a Session would
+ * climb its own listing because somebody LOOKED at it. So the receipt is a
+ * per-Session row of its own, on the shape `session_provenances` already
+ * established for a fact about a Session that the ledger does not own.
+ *
+ * One nullable column carries the whole state: a stamp is "unread since then"
+ * and `NULL` is read. A Session with no row at all is read too, which is what
+ * makes the resting case cost nothing — a machine where nobody has ever left an
+ * agent running unattended stores nothing here.
+ *
+ * The partial index holds only the unread rows, for `session_attachments`'
+ * reason one migration up: the unread set is a handful while the table grows
+ * with every Session, so the index is the size of the answer.
+ *
+ * Losing this table costs one wrong dot and nothing else, which is why it has
+ * no backfill: there is no durable evidence of what somebody had already read.
+ */
+const MIGRATION_052_SESSION_READ_RECEIPTS = `
+CREATE TABLE IF NOT EXISTS session_read_receipts (
+  session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  unread_since INTEGER
+);
+CREATE INDEX IF NOT EXISTS session_read_receipts_unread
+  ON session_read_receipts(unread_since)
+  WHERE unread_since IS NOT NULL;
+`;
+
+/**
+ * Migration 054: `authority_approvals` — the remembered approvals of VC-480.
+ *
+ * One row per "allow for this Session" or "always allow in this project", with
+ * where it came from. App-owned like `projects.authority_policy` and for the
+ * same reason: no verb or tool exposes it, so the Session it governs cannot
+ * write it. Revoking is a soft delete (`revoked_at`), so Undo restores the same
+ * row with the same provenance. A Session row dies with its Session.
+ */
+const MIGRATION_054_AUTHORITY_APPROVALS = `
+CREATE TABLE IF NOT EXISTS authority_approvals (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope                TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+  session_id           TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  operation            TEXT NOT NULL,
+  key                  TEXT NOT NULL,
+  rule                 TEXT NOT NULL,
+  provenance           TEXT NOT NULL CHECK (json_valid(provenance)),
+  created_at           INTEGER NOT NULL,
+  use_count            INTEGER NOT NULL DEFAULT 0,
+  last_used_at         INTEGER,
+  last_used_session_id TEXT,
+  revoked_at           INTEGER,
+  CHECK ((scope = 'session') = (session_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS authority_approvals_project
+  ON authority_approvals(project_id)
+  WHERE revoked_at IS NULL;
+
+-- Who authorised every gated call, written before the call ran (VC-480). The
+-- activity log's raw material: append-only, one row per decision.
+CREATE TABLE IF NOT EXISTS authority_decisions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  tool         TEXT NOT NULL,
+  authoriser   TEXT NOT NULL,
+  rule         TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  asked        TEXT NOT NULL,
+  approval_id  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS authority_decisions_session
+  ON authority_decisions(session_id, created_at);
+`;
+
+/** Successful calls and user mutation history are separate from per-grant counters. */
+const MIGRATION_055_APPROVAL_HISTORY = `
+CREATE TABLE IF NOT EXISTS authority_approval_completions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  approval_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, tool_call_id)
+);
+CREATE TABLE IF NOT EXISTS authority_approval_commands (
+  command_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  receipt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS authority_approval_events (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL UNIQUE REFERENCES authority_approval_commands(command_id),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2501,7 +2625,59 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
     apply: applyMigration051AttachmentClosure,
   },
+  {
+    version: 52,
+    name: "session_read_receipts — unread is its own axis, durable across relaunch (VC-30 × VC-108)",
+    sql: MIGRATION_052_SESSION_READ_RECEIPTS,
+  },
+  {
+    version: 53,
+    name: "projects.decision_model — a project's own decision model, NULL = inherit (VC-478)",
+    sql: MIGRATION_053_PROJECT_DECISION_MODEL,
+    apply: applyMigration053ProjectDecisionModel,
+  },
+  {
+    version: 54,
+    name: "authority_approvals — remembered approvals, app-owned (VC-480)",
+    sql: MIGRATION_054_AUTHORITY_APPROVALS,
+    apply: applyMigration054AuthorityApprovals,
+  },
+  {
+    version: 55,
+    name: "approval completion and command history (VC-480)",
+    sql: MIGRATION_055_APPROVAL_HISTORY,
+  },
+  {
+    version: 56,
+    name: "host notice outbox — persist sanitized delivery before submission (VC-495)",
+    sql: HOST_NOTICE_OUTBOX_MIGRATION,
+  },
 ];
+
+/**
+ * Migration 053's column addition, probe-gated like 051's: `ADD COLUMN` throws
+ * on a column that is already there, and a lineage can be re-offered a version
+ * it already ran.
+ */
+function applyMigration053ProjectDecisionModel(db: Database.Database): void {
+  const columns = db.pragma("table_info(projects)") as { name: string }[];
+  if (columns.some(({ name }) => name === "decision_model")) return;
+  db.exec(MIGRATION_053_PROJECT_DECISION_MODEL);
+}
+
+/**
+ * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
+ * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * Repair the skipped decision-model column before creating any missing ledger
+ * tables, without rewinding user_version or rebuilding populated tables.
+ */
+function applyMigration054AuthorityApprovals(db: Database.Database): void {
+  applyMigration053ProjectDecisionModel(db);
+  const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  const hasApprovals = tableExists.get("authority_approvals") !== undefined;
+  const hasDecisions = tableExists.get("authority_decisions") !== undefined;
+  if (!hasApprovals || !hasDecisions) db.exec(MIGRATION_054_AUTHORITY_APPROVALS);
+}
 
 /**
  * Migration 050's column additions, probe-gated like 040's and 041's.

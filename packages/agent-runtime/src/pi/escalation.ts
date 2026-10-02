@@ -16,9 +16,18 @@
  */
 
 import {
+  DENIED_BY_PERSON,
+  hardRefusalCopy,
+  hardRefusalMessage,
   isOverridableAuthorityRule,
+  steerMessage,
+  type ApprovalDecision,
+  type ApprovalScope,
   type AuthorityDenialCause,
   type AuthorityFallback,
+  type PolicyViolation,
+  type RuntimeApprovalHit,
+  type RuntimeApprovals,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
   type RuntimeAskTrip,
@@ -66,7 +75,7 @@ export type AuthorityDisposition =
        * a threshold that never arrives.
        */
       record: boolean;
-      /** Set only by an explicit `stop`, and never without {@link record}. */
+      /** Explicit stop, or auto-mode's unattended hand-back; never without record. */
       interrupt: boolean;
     };
 
@@ -81,6 +90,8 @@ export interface AuthorityEscalationInput {
   ask?: AskPort;
   /** The attachment's own cancellation, distinct from any one call's. */
   signal?: AbortSignal;
+  /** Protection mode (VC-480): see {@link AuthorityEscalation.resolveProtected}. */
+  approvals?: RuntimeApprovals;
   /** Clock for an approval wait measurement; a broken clock costs only that measurement. */
   now?: () => number;
 }
@@ -88,15 +99,23 @@ export interface AuthorityEscalationInput {
 /** One call offered for judgement, named well enough to put a question about it. */
 export interface AuthorityCall {
   verdict: AuthorityVerdict;
+  /** Optional labelled model explanation for the person only, never a tool result. */
+  personReason?: string;
   tool: string;
   /** The runtime's own id for this call, so a question can be shown against it. */
   toolCallId: string;
+  /** The call as a card would show it (VC-480). Display only. */
+  asked?: string;
   turnId: string | null;
   /**
    * Pi's cancellation for the run this call belongs to, handed to
    * `beforeToolCall` as its second argument.
    */
   signal?: AbortSignal;
+  /** An unavailable automatic judge must ask now, never silently pass the call. */
+  askImmediately?: boolean;
+  /** Automatic review pauses at hand-back even when a host has no ask surface. */
+  pauseIfUnattended?: boolean;
 }
 
 const ALLOW: AuthorityDisposition = { outcome: "allow" };
@@ -146,6 +165,7 @@ export class AuthorityEscalation {
   readonly #ask: AskPort | undefined;
   readonly #signal: AbortSignal | undefined;
   readonly #now: () => number;
+  readonly #approvals: RuntimeApprovals | undefined;
   /** Local tool-call correlation; consumed immediately by the runtime's side channel. */
   #waitDurationByToolCallId = new Map<string, number>();
 
@@ -208,6 +228,7 @@ export class AuthorityEscalation {
     this.#ask = input.ask;
     this.#signal = input.signal;
     this.#now = input.now ?? Date.now;
+    this.#approvals = input.approvals;
     this.#sessionDenials = denialCount(input.priorDenials);
     this.#sessionTrip = this.#sessionInterval;
   }
@@ -225,8 +246,167 @@ export class AuthorityEscalation {
     return duration;
   }
 
+  /**
+   * Decide one call in protection mode (VC-480): no counters, no thresholds.
+   *
+   * The funnel, in order:
+   *  1. A refusal no person may clear — or one whose violations were not enumerated — is explained and never
+   *     asked about. It is checked across EVERY violation first, so a "yes" to
+   *     one rule can never carry a never-allowed one through with it.
+   *  2. Each approvable violation is looked up in the remembered approvals,
+   *     live. Covered is cleared, deterministically, with nobody asked.
+   *  3. All uncovered objections are put to a person in ONE card. An answer
+   *     clears exactly those objections or ends the call. After any wait, all
+   *     ledger-backed scopes are read again: a revoke while parked requires a
+   *     fresh card, never execution on a stale approval. An unattended Run parks
+   *     here like an attended one, with no timeout or answer invented for it.
+   *
+   * Nothing allows silently: a host with no one to ask refuses.
+   */
+  async resolveProtected(call: AuthorityCall): Promise<AuthorityDisposition> {
+    const verdict = call.verdict;
+    if (verdict.outcome === "allow") return ALLOW;
+    const approvals = this.#approvals;
+    const found = verdict.violations;
+    const hard = found?.find((violation) => !isOverridableAuthorityRule(violation.rule));
+    const asked = call.asked ?? call.tool;
+    // Written BEFORE the call runs or is refused, so history can say who
+    // authorised every gated call. A host that cannot write it is told to say
+    // so by throwing. An audit failure must propagate before execution.
+    const decided = (
+      authoriser: ApprovalDecision["authoriser"],
+      rule: string,
+      summary: string,
+      approvalId: string | null = null,
+    ): void => {
+      approvals?.decided({
+        toolCallId: call.toolCallId,
+        tool: call.tool,
+        authoriser,
+        rule,
+        summary,
+        asked,
+        approvalId,
+      });
+    };
+    if (found === undefined || approvals === undefined || hard !== undefined) {
+      const cause = hard?.rule ?? verdict.cause;
+      decided("rule:hard", cause, hardRefusalCopy(cause).heading);
+      return {
+        outcome: "deny",
+        reason: hardRefusalMessage(cause, hard?.reason ?? verdict.reason),
+        cause,
+        record: true,
+        interrupt: false,
+      };
+    }
+    // Explicit answers grant just the objections shown, including once-only
+    // ones. They do not implicitly grant scopes covered by the ledger when the
+    // card opened: those remain dependent on LIVE coverage after every wait.
+    const grantedScopes = new Set<ApprovalScope>();
+    const grantedUnscoped = new Set<PolicyViolation>();
+    for (;;) {
+      const hits: RuntimeApprovalHit[] = [];
+      const uncovered: ApprovalScope[] = [];
+      const unscoped: PolicyViolation[] = [];
+      const reasons: string[] = [];
+      const objections: { cause: PolicyViolation["rule"]; reason: string }[] = [];
+      let first: PolicyViolation | undefined;
+      for (const violation of found) {
+        let needsAnswer = false;
+        if (violation.scopes === null) {
+          if (!grantedUnscoped.has(violation)) {
+            unscoped.push(violation);
+            needsAnswer = true;
+          }
+        } else {
+          for (const scope of violation.scopes) {
+            if (grantedScopes.has(scope)) continue;
+            const hit = approvals.covers(scope);
+            if (hit === null) {
+              uncovered.push(scope);
+              needsAnswer = true;
+            } else hits.push(hit);
+          }
+        }
+        if (needsAnswer) {
+          first ??= violation;
+          reasons.push(violation.reason);
+          objections.push({ cause: violation.rule, reason: violation.reason });
+        }
+      }
+      if (first === undefined) {
+        // No await between this live ledger read, its audit, and permission to
+        // execute. Earlier snapshots never authorise the call or its receipt.
+        for (const hit of new Map(
+          hits.map((candidate) => [candidate.approvalId, candidate]),
+        ).values()) {
+          decided("policy:ledger", found[0].rule, hit.summary, hit.approvalId);
+        }
+        return ALLOW;
+      }
+      const reason = reasons.join("; ");
+      const refused = { outcome: "deny", cause: first.rule, reason } as const;
+      if (this.#ask === undefined) {
+        decided("user:deny", first.rule, "Nobody was available to ask");
+        return { ...refused, record: true, interrupt: false };
+      }
+      const waitStartedAt = this.#measurementStartedAt();
+      const answer = await this.#askUntilAnsweredOrAbandoned(
+        this.#ask,
+        {
+          cause: first.rule,
+          tool: call.tool,
+          // The real call ID remains the correlation key. The host must assign
+          // a distinct interaction ID to each card, including revocation retries.
+          toolCallId: call.toolCallId,
+          turnId: call.turnId,
+          reason,
+          trip: "approval",
+          overridable: true,
+          approval: {
+            asked,
+            ...(verdict.stages === undefined ? {} : { stages: verdict.stages }),
+            reason,
+            objections,
+            scopes: uncovered,
+          },
+        },
+        call.signal,
+      );
+      this.#recordWaitDuration(call.toolCallId, waitStartedAt);
+      if (answer.kind === "abandoned") return { ...refused, record: false, interrupt: false };
+      if (answer.kind === "unavailable") return { ...refused, record: true, interrupt: false };
+      const choice = answer.choice;
+      const what = [
+        ...uncovered.map((scope) => scope.summary),
+        ...unscoped.map((violation) => violation.reason),
+      ].join("; ");
+      if (choice === "allow" || choice === "allow-session" || choice === "allow-project") {
+        decided(
+          choice === "allow"
+            ? "user:once"
+            : choice === "allow-session"
+              ? "user:session"
+              : "user:project",
+          first.rule,
+          what,
+        );
+        for (const scope of uncovered) grantedScopes.add(scope);
+        for (const violation of unscoped) grantedUnscoped.add(violation);
+        continue;
+      }
+      decided("user:deny", first.rule, what);
+      if (typeof choice === "object") {
+        return { ...refused, reason: steerMessage(choice.message), record: true, interrupt: false };
+      }
+      return { ...refused, reason: DENIED_BY_PERSON, record: true, interrupt: choice === "stop" };
+    }
+  }
+
   /** Decide one call, parking on a person when the counters say it is time. */
   async resolve(call: AuthorityCall): Promise<AuthorityDisposition> {
+    if (this.#approvals !== undefined) return this.resolveProtected(call);
     const verdict = call.verdict;
     if (verdict.outcome === "allow") {
       this.#consecutiveDenials = 0;
@@ -245,17 +425,23 @@ export class AuthorityEscalation {
     // rather than the second. Consecutive wins ties because it is the more
     // specific complaint: it names one line of work rather than the Session.
     const trip: RuntimeAskTrip | null =
-      nextConsecutive >= this.#consecutiveThreshold
-        ? "consecutive"
-        : nextSession >= this.#sessionTrip
-          ? "session"
-          : null;
+      call.askImmediately === true
+        ? "classifier"
+        : nextConsecutive >= this.#consecutiveThreshold
+          ? "consecutive"
+          : nextSession >= this.#sessionTrip
+            ? "session"
+            : null;
 
     const ask = this.#ask;
     if (ask === undefined || trip === null) {
       this.#consecutiveDenials = nextConsecutive;
       this.#sessionDenials = nextSession;
-      return { ...refused, record: true, interrupt: false };
+      return {
+        ...refused,
+        record: true,
+        interrupt: ask === undefined && trip !== null && call.pauseIfUnattended === true,
+      };
     }
 
     // Read once and used twice — to describe the question and to bound what its
@@ -272,7 +458,10 @@ export class AuthorityEscalation {
         tool: call.tool,
         toolCallId: call.toolCallId,
         turnId: call.turnId,
-        reason: verdict.reason,
+        reason:
+          call.personReason === undefined
+            ? verdict.reason
+            : `${verdict.reason} ${call.personReason}`,
         trip,
         overridable,
       },

@@ -21,7 +21,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { autoTitleFromKickoff, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
-import type { Project, Ticket, TicketEventActor } from "@volli/shared";
+import type { Project, SessionOrigin, Ticket, TicketEventActor } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../../ipc/contract";
 import { getTicket, insertTicket } from "../db/tickets-repo";
@@ -125,6 +125,7 @@ async function start(
     title?: string;
     modelOverride?: ReturnType<typeof startSessionModelOverride>;
     actor?: TicketEventActor;
+    origin?: SessionOrigin;
   } = {},
 ) {
   return startSessionOperation(
@@ -137,12 +138,38 @@ async function start(
       ...(input.title === undefined ? {} : { title: input.title }),
       ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
       actor: input.actor ?? { kind: "session", sessionId: "caller", ticketId: null },
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
     },
     COMPOSE,
   );
 }
 
 describe("startSessionOperation", () => {
+  it.each([
+    { actor: { kind: "user" } as TicketEventActor, expected: { kind: "user" } },
+    { actor: { kind: "automation" } as TicketEventActor, expected: undefined },
+    { actor: { kind: "unauthenticated" } as TicketEventActor, expected: undefined },
+  ])(
+    "uses Actor attribution consistently for birth and kickoff: $actor.kind",
+    async ({ actor, expected }) => {
+      const fixture = harness();
+      await start(fixture, { actor });
+      expect(fixture.startInputs[0]?.origin).toEqual(expected);
+      expect(fixture.kickoffs[0]).toHaveProperty("origin", expected);
+    },
+  );
+
+  it("keeps explicit Run origin for both birth and kickoff over legacy automation attribution", async () => {
+    const fixture = harness();
+    const origin: SessionOrigin = {
+      kind: "automation",
+      automationRunId: "run",
+      automationName: "Review",
+    };
+    await start(fixture, { actor: { kind: "automation" }, origin });
+    expect(fixture.startInputs[0]?.origin).toEqual(origin);
+    expect(fixture.kickoffs[0]).toHaveProperty("origin", origin);
+  });
   it("starts through the product facade and answers with the Session it opened", async () => {
     const fixture = harness();
 
@@ -163,8 +190,19 @@ describe("startSessionOperation", () => {
         role: "ticket",
         title: "Work on VC-1",
         actor: { kind: "session", sessionId: "caller", ticketId: null },
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
+  });
+
+  it("offers the caller's own message to an automatic model choice, and the stock kickoff nothing (VC-432)", async () => {
+    const fixture = harness();
+
+    await start(fixture, { message: "Fix the flaky login test" });
+    await start(fixture, { operationId: "generated-2" });
+
+    expect(fixture.startInputs[0]?.autoSelect).toEqual({ request: "Fix the flaky login test" });
+    expect(fixture.startInputs[1]).not.toHaveProperty("autoSelect");
   });
 
   it("submits the default kickoff turn once the attach is ready", async () => {
@@ -182,6 +220,7 @@ describe("startSessionOperation", () => {
         text: DEFAULT_KICKOFF_MESSAGE,
         commandId: "generated-1:kickoff",
         messageId: "generated-1:kickoff-message",
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
   });
@@ -203,6 +242,7 @@ describe("startSessionOperation", () => {
         text: "Validate VC-52 before release",
         commandId: "generated-1:kickoff",
         messageId: "generated-1:kickoff-message",
+        origin: { kind: "session", sessionId: "caller" },
       },
     ]);
     expect(fixture.startInputs[0]).toMatchObject({

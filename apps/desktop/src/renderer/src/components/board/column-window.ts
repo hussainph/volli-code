@@ -196,15 +196,16 @@ export function scrollOffsetForRow({
 }
 
 /**
- * The measured stride for a column, or `null` when there is nothing to learn.
+ * The average stride over a set of card heights, or `null` when there is
+ * nothing to learn.
  *
- * Averaged over the mounted rows rather than taken from the first one: cards
- * are one or two title lines tall and may or may not carry a label row, so any
- * single card is the wrong estimate for its neighbours. The spacers this feeds
- * decide the column's scroll range, and a range that disagrees with the
- * content is what makes a windowed list feel like it is sliding under the
- * hand — so it is re-derived from whatever is mounted on every commit, and
- * adopted only when it has actually moved (below).
+ * Averaged rather than taken from the first card: cards are one or two title
+ * lines tall and may or may not carry a label row, so any single card is the
+ * wrong estimate for its neighbours. The spacers this feeds decide the
+ * column's scroll range, and a range that disagrees with the content is what
+ * makes a windowed list feel like it is sliding under the hand. Which heights
+ * to average is {@link learnRowStride}'s decision, not this one's — and it is
+ * NOT the mounted slice alone.
  */
 export function measuredRowStride(heights: readonly number[], gap: number): number | null {
   const usable = heights.filter((height) => Number.isFinite(height) && height > 0);
@@ -223,4 +224,100 @@ export function measuredRowStride(heights: readonly number[], gap: number): numb
  */
 export function shouldAdoptRowStride(current: number, next: number): boolean {
   return Math.abs(next - current) > 1;
+}
+
+/**
+ * Record what the mounted cards measure in `ledger`, forget tickets the column
+ * no longer holds, and answer the stride over every card the column has EVER
+ * measured — never over the mounted slice alone (VC-451).
+ *
+ * The stride chooses the window, and the window chooses which cards are
+ * mounted. An average over the mounted slice therefore made the stride a
+ * function of the window it chose: with cards of mixed height one slice
+ * measured 70.5 and its neighbour 68, and at a scroll offset where those two
+ * strides named different windows, each measurement moved the window to the
+ * other. Every hop was a layout-effect state write, so React nested them until
+ * it threw #185 (`Maximum update depth exceeded`). A ledger answers the same
+ * for a window it has already seen, so revisiting a window adopts nothing and
+ * the chain stops.
+ *
+ * A height that is not a positive number is a card not laid out yet; it is
+ * skipped rather than allowed to overwrite a real measurement. Mutates
+ * `ledger`, which the caller owns for the life of the column; pruning to
+ * `held` keeps it bounded by what the column holds.
+ */
+export function learnRowStride(
+  ledger: Map<string, number>,
+  measured: Iterable<readonly [id: string, height: number]>,
+  held: { has(id: string): boolean },
+  gap: number,
+): number | null {
+  for (const [id, height] of measured) {
+    if (Number.isFinite(height) && height > 0) ledger.set(id, height);
+  }
+  for (const id of ledger.keys()) if (!held.has(id)) ledger.delete(id);
+  return measuredRowStride([...ledger.values()], gap);
+}
+
+/** How {@link scrollOffsetInRows} reads the mounted cards, in DOM order. */
+export interface MountedRows {
+  /** How many cards are mounted. */
+  count: number;
+  /** Card `i`'s top and bottom edges, in the same coordinates as `fold`. */
+  edgesAt(i: number): { top: number; bottom: number };
+  /** Card `i`'s index in the column's FULL list, or `undefined` if it has none. */
+  indexAt(i: number): number | undefined;
+}
+
+/**
+ * Where the column is scrolled, in {@link columnWindow}'s own coordinates
+ * (row × stride), read from the card actually at the top of the viewport
+ * rather than divided out of `scrollTop` (VC-451).
+ *
+ * The two disagree whenever the spacers' estimate and the real cards do, and
+ * the browser is what makes that matter. When a window change swaps a spacer
+ * for real cards above the fold, Chromium's scroll anchoring moves `scrollTop`
+ * to keep the card in view exactly where it was, and fires `scroll`. Divided
+ * by the stride, that moved offset names a DIFFERENT row, so the window moved
+ * again, anchoring moved `scrollTop` back, and the column re-rendered every
+ * frame at rest with its top cards remounting too often to be picked up.
+ * Anchoring holds the card in view still by definition, so reading THAT card
+ * is a reading anchoring cannot move.
+ *
+ * Falls back to `rawScrollTop` when no mounted card is at the fold — a jump
+ * that landed inside a spacer, or a column not laid out yet — the one case
+ * where the estimate is all there is. A binary search, so a scroll event costs
+ * a handful of edge reads; it relies on mounted cards being laid out top to
+ * bottom in DOM order, which the column's slots are (the sortable transform
+ * sits on each slot's child, never on the slot).
+ */
+export function scrollOffsetInRows({
+  rawScrollTop,
+  fold,
+  rows,
+  rowStride,
+}: {
+  rawScrollTop: number;
+  /** The top edge of the column's viewport. */
+  fold: number;
+  rows: MountedRows;
+  rowStride: number;
+}): number {
+  let low = 0;
+  let high = rows.count;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (rows.edgesAt(middle).bottom > fold) high = middle;
+    else low = middle + 1;
+  }
+  // Every mounted card is above the fold: the fold is in the trailing spacer.
+  if (low === rows.count) return rawScrollTop;
+  const { top } = rows.edgesAt(low);
+  // The first mounted card is below the fold: the fold is in the leading spacer.
+  if (low === 0 && top > fold) return rawScrollTop;
+  const index = rows.indexAt(low);
+  if (index === undefined) return rawScrollTop;
+  // Kept strictly inside the card's own row: a card taller than the stride,
+  // scrolled most of the way past, must not read as the row after it.
+  return index * rowStride + clamp(fold - top, 0, Math.max(0, rowStride - 1));
 }

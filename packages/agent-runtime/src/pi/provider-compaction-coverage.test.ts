@@ -1135,9 +1135,8 @@ describe("compactProviderNative — Anthropic request shaping", () => {
     expect(outcome.message).toContain("exceeded the size");
   });
 
-  it("quotes a long provider error instead of losing it to the bound", async () => {
-    // The opposite call: an error body is only ever read for its first few
-    // hundred characters, so an oversized one truncates rather than failing.
+  it("withholds an oversized error body rather than leaking a partial credential", async () => {
+    // Preserve the HTTP fact, but never publish a partially read error body.
     const outcome = await compactProviderNative({
       model: ANTHROPIC_MODEL,
       models: modelsReturningAuth({ apiKey: "sk-ant" }),
@@ -1150,8 +1149,28 @@ describe("compactProviderNative — Anthropic request shaping", () => {
     expect(outcome).toMatchObject({ kind: "failed" });
     if (outcome.kind !== "failed") return;
     expect(outcome.message).toContain("529");
-    expect(outcome.message).toContain("overloaded");
+    expect(outcome.message).toContain("body withheld");
+    expect(outcome.message).not.toContain("overloaded");
     expect(outcome.message.length).toBeLessThan(700);
+  });
+
+  it("withholds an oversized text fallback without a readable body stream", async () => {
+    const response = new Response(null, { status: 400 });
+    vi.spyOn(response, "text").mockResolvedValue(
+      `Bearer dummy-bodyless-482 ${"word ".repeat(2_000)}`,
+    );
+    const outcome = await compactProviderNative({
+      model: OPENAI_MODEL,
+      models: modelsReturningAuth({ apiKey: "dummy-api-key" }),
+      messages: [user("hello")],
+      enabled: true,
+      fetch: async () => response,
+    });
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: "OpenAI /responses/compact failed with 400: Provider error body withheld.",
+    });
+    expect(JSON.stringify(outcome)).not.toContain("dummy-bodyless-482");
   });
 
   it("reads a body-less response without pretending it was JSON", async () => {

@@ -39,6 +39,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: false,
+  scheduledResume: null,
 };
 
 const slice: ChatSessionSlice = {
@@ -67,6 +68,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       bornTicketless: false,
       role: "ticket",
       parentSessionId: null,
+      model: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,

@@ -1,3 +1,4 @@
+import type { ApprovalUsedObservation } from "./approval-observation";
 /**
  * Product-owned Session and model policy consumed by the Agent Runtime, and the
  * Agent Runtime contracts themselves.
@@ -14,17 +15,29 @@
  * facts; an executor states what happened and never what to record.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
   AuthorityDenialCause,
+  AuthorityJudgeDenialCause,
   AuthoritySnapshot,
   CodingToolId,
   NonCodingToolId,
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import type {
+  DecisionAnswer,
+  DecisionAnswered,
+  DecisionMiss,
+  DecisionMissReason,
+  DecisionPort,
+} from "./decision-model";
+import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import { projectRememberable, type ApprovalDecision, type ApprovalScope } from "./approvals";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -300,6 +313,17 @@ export interface RuntimeToolBundle {
   todoWrite?: boolean;
   /** Sanitized dynamic MCP definitions, frozen in provider order. */
   mcp?: readonly McpToolDefinition[];
+  /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
+  mcpManagementNames?: "server";
+  /**
+   * Whether this Session's surface names `codemode`, and if so the route of
+   * every other tool and the limits each script run is held to (VC-471).
+   *
+   * `todo_write`'s reasoning: no port answers Code Mode — the runtime builds
+   * it over the Session's own tools — so the bundle is what decides it. Absent
+   * on every Session born without it, which keeps their surface unchanged.
+   */
+  codeMode?: CodeModeSurface;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -325,6 +349,25 @@ export interface RuntimeRecoveryRef {
 }
 
 /**
+ * An earlier, closed attachment whose conversation a fresh one continues
+ * (VC-457, `context_replay` continuity).
+ *
+ * A stopped Session that a person sends a message to gets a new attachment,
+ * and a new attachment gets a new Pi sidecar — which, until this existed,
+ * meant a model that had never heard of the work it was doing. This names
+ * the sidecar the previous attachment wrote, so the new one can seed its
+ * context from it. Read, never reopened: the new attachment keeps its own
+ * sidecar and its own identity, and the earlier one's durable Session facts
+ * are already in the ledger and are not replayed.
+ */
+export interface RuntimeContextCarry extends RuntimeRecoveryRef {
+  /** The attachment that wrote that sidecar, which its identity must name. */
+  attachmentId: string;
+  /** The directory that attachment ran in; sidecars are listed per workspace. */
+  workspacePath: string;
+}
+
+/**
  * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
  * `budget`, the fact that no denial accrued at all.
  *
@@ -347,7 +390,64 @@ export interface RuntimeRecoveryRef {
  * allowance and escalate a Session that was never refused anything. The same
  * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export type RuntimeAskTrip =
+  | "consecutive"
+  | "session"
+  | "budget"
+  | "confirm"
+  | "approval"
+  | "classifier";
+
+/** What an approval card is about (VC-480). */
+export interface RuntimeApprovalAsk {
+  /** The call as the card shows it: the command, or the tool and its path. */
+  asked: string;
+  /**
+   * A compound shell command's stages, in order, when it has more than one
+   * (`a && b && rm x`). The card shows the whole line with the held stage —
+   * `scopes[].stage` — highlighted.
+   */
+  stages?: readonly string[];
+  /** The rule that stopped it, in its own words, for the card's details. */
+  reason?: string;
+  /** Every uncovered rule, so an aggregate card explains all the consent it asks for. */
+  objections?: readonly { cause: AuthorityDenialCause; reason: string }[];
+  /**
+   * What "allow for this Session" and "always allow" would remember, one scope
+   * each. Empty when the refusal cannot be narrowed, so only "allow once" is
+   * offered beside the denials.
+   */
+  scopes: readonly ApprovalScope[];
+}
+
+/**
+ * The remembered approvals a Session reads (VC-480).
+ *
+ * A read port and nothing more, which is the point: rows are written by main,
+ * from the person's answer, and the runtime has no way to author one.
+ */
+export interface RuntimeApprovals {
+  /**
+   * The approval that covers this scope right now, or null. Read live on every
+   * call, never cached, so a revoke applies from the very next call. Lookup
+   * alone is not a use: the call may still be denied or abandoned.
+   */
+  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
+  /**
+   * Records who authorised one gated call. Called BEFORE the call runs, once
+   * per decision. A host that cannot persist it must throw: execution fails
+   * closed without a pre-execution decision record.
+   */
+  decided(decision: ApprovalDecision): void;
+  /** Counts ledger use only after successful execution, never during lookup. */
+  completed?(toolCallId: string): void;
+}
+
+/** A remembered approval that allowed a scope. */
+export interface RuntimeApprovalHit {
+  approvalId: string;
+  summary: string;
+}
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -374,9 +474,14 @@ export interface RuntimeAskRequest {
   toolCallId: string;
   /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** The refusing rule's own words, as the model would otherwise have received them. */
+  /** Person-facing refusal explanation; may include labelled model prose, never an agent result. */
   reason: string;
   trip: RuntimeAskTrip;
+  /**
+   * Present on a protection ask (VC-480): what the call wants to do and what
+   * a "remember this" answer would store. Absent on every other ask.
+   */
+  approval?: RuntimeApprovalAsk;
   /**
    * Whether a person may overrule this refusal.
    *
@@ -405,7 +510,16 @@ export interface RuntimeAskRequest {
  * reserves both of those for the durable Session Interaction vocabulary, and
  * this is the runtime's private reading of a decision that is recorded there.
  */
-export type RuntimeAskChoice = "allow" | "refuse" | "stop";
+export type RuntimeAskChoice =
+  | "allow"
+  | "refuse"
+  | "stop"
+  /** Allow, and the host has already remembered it for this Session (VC-480). */
+  | "allow-session"
+  /** Allow, and the host has already remembered it for the project (VC-480). */
+  | "allow-project"
+  /** Deny, and tell the agent what to do instead (VC-480). */
+  | { kind: "steer"; message: string };
 
 /** What one escalation puts in front of a person. */
 export interface RuntimeAskOffer {
@@ -438,6 +552,7 @@ const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
   if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
+  if (request.approval !== undefined) return approvalOffer(request.approval);
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
     kind: "permission",
@@ -457,7 +572,13 @@ export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
 export function askChoice(
   request: RuntimeAskRequest,
   optionIds: readonly string[],
+  response: string | null = null,
 ): RuntimeAskChoice {
+  if (request.approval !== undefined) {
+    const choice = decodeApprovalConsent(askOffer(request).options, optionIds, response);
+    /* v8 ignore next -- askOffer never declares ledger; it is only a host-authored historical receipt. */
+    return choice === "ledger" ? "refuse" : choice;
+  }
   // Refusal is read first, so an answer carrying both a grant and a refusal
   // resolves toward the state the call was already in. A multi-select that
   // accumulated `once` and `reject` together is incoherent, and resolving an
@@ -468,6 +589,92 @@ export function askChoice(
     return chosen.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
   }
   return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
+}
+
+/** The ids an approval card's rows answer with. */
+export const APPROVAL_OPTION_IDS = {
+  once: "once",
+  session: "session",
+  project: "project",
+  deny: "reject",
+  steer: "steer",
+} as const;
+
+/** The five choices of the approval card, fewer when nothing can be remembered. */
+function approvalOffer(approval: RuntimeApprovalAsk): RuntimeAskOffer {
+  const what = approval.scopes.map((scope) => scope.summary).join("; ");
+  const remembers = approval.scopes.length > 0;
+  return {
+    kind: "permission",
+    options: [
+      { id: APPROVAL_OPTION_IDS.once, label: "Allow once", description: "Just this call" },
+      ...(remembers
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.session,
+              label: "Allow for this Session",
+              description: `${what} for the rest of this Session`,
+            },
+          ]
+        : []),
+      // Only where a safe scope exists: a path, or a git shape. A command Volli
+      // cannot read inside is never remembered project-wide.
+      ...(projectRememberable(approval.scopes)
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.project,
+              label: "Always allow in this project",
+              description: `${what} for every Session`,
+            },
+          ]
+        : []),
+      {
+        id: APPROVAL_OPTION_IDS.deny,
+        label: "Deny",
+        description: "The agent is told no and carries on",
+      },
+      {
+        id: APPROVAL_OPTION_IDS.steer,
+        label: "Deny and steer\u2026",
+        description: "Tell the agent what to do instead",
+      },
+    ],
+  };
+}
+
+/**
+ * The shared consent decoder for execution and scrollback. Consent is exactly
+ * one declared choice, never an inferred meaning of an undeclared/stale id.
+ * Denial wins over consent; declared steering carries the person's words.
+ * `ledger` is a host-authored historical answer, never a runtime grant.
+ */
+export function decodeApprovalConsent(
+  options: readonly { id: string }[],
+  optionIds: readonly string[],
+  response: string | null = null,
+): RuntimeAskChoice | "ledger" {
+  const offered = new Set(options.map((option) => option.id.toLowerCase()));
+  const chosen = optionIds.map((id) => id.toLowerCase());
+  if (offered.has(APPROVAL_OPTION_IDS.steer) && chosen.includes(APPROVAL_OPTION_IDS.steer)) {
+    const message = (response ?? "").trim();
+    return message === "" ? "refuse" : { kind: "steer", message };
+  }
+  if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
+  if (chosen.length !== 1 || !offered.has(chosen[0]!)) return "refuse";
+  switch (chosen[0]) {
+    case APPROVAL_OPTION_IDS.once:
+      return "allow";
+    case APPROVAL_OPTION_IDS.session:
+      return "allow-session";
+    case APPROVAL_OPTION_IDS.project:
+      return "allow-project";
+    case "ledger":
+      return "ledger";
+    case SESSION_ESCALATION_STOP_ID:
+      return "stop";
+    default:
+      return "refuse";
+  }
 }
 
 /** One answer the model thought worth offering. */
@@ -547,6 +754,14 @@ export interface RuntimeWebDocument {
   text: string;
   /** Whether the boundary cut the text short of the document's end. */
   truncated: boolean;
+  /**
+   * How a GitHub page URL was read instead of as a page, when it was: a `blob`
+   * URL as the raw file it shows, a `tree` URL as the listing GitHub's git
+   * trees API gives for that directory. Set only when the answer came from the
+   * host the rewrite expected; absent for every other read. A fixed vocabulary
+   * rather than prose, so the runtime states it in its own words.
+   */
+  via?: "github-raw-file" | "github-directory-listing";
 }
 
 /**
@@ -729,9 +944,40 @@ export interface RuntimeBrowserActRequest {
   waitMs?: number;
 }
 
-/** A captured Browser Tab image, bounded by the host before it reaches anyone. */
+/**
+ * One bounded search of a Browser Tab's accessibility tree (VC-364): the
+ * subtrees whose accessible names or text contain a literal query, each under
+ * its path from the root, printed in the snapshot's dialect with refs that are
+ * as actionable — and as strictly judged — as a snapshot's.
+ *
+ * Everything in {@link findText} is page-derived and untrusted, exactly as a
+ * snapshot's text is. The counts beside it are Volli's: how many matches the
+ * search found and showed, and whether the tree had anything in it at all —
+ * so "no match" and "an empty page" never read the same.
+ */
+export interface RuntimeBrowserFind extends RuntimeBrowserPage {
+  /** The query as the model gave it; its own words, never the page's. */
+  query: string;
+  /** The matching subtrees, already bounded by the host; empty when nothing matched. */
+  findText: string;
+  /** The generation the refs belong to, as for a snapshot. */
+  generation: number;
+  /** Every match in the tree the host searched. */
+  matches: number;
+  /** The matches {@link findText} shows. */
+  shown: number;
+  /** Whether the host cut the search or its answer at its own bound. */
+  truncated: boolean;
+  /** Whether the tree exposed nothing at all — distinct from matching nothing. */
+  empty: boolean;
+}
+
+/** A captured Browser Tab image. */
 export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
-  /** PNG bytes, base64. The host owns scale and size bounds. */
+  /**
+   * PNG bytes, base64, at the capture's own resolution. The runtime bounds the
+   * copy it hands a model; this one is what the host keeps for the person.
+   */
   base64Png: string;
   /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
   picture: string | null;
@@ -755,7 +1001,7 @@ export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
  * The one Browser port: everything a Session can do to a Browser Tab, answered
  * by the host that owns the native surface.
  *
- * One port for six tools, deliberately. Looking and acting are one capability
+ * One port for every browser tool, deliberately. Looking and acting are one capability
  * with one answerer — the desktop's BrowserTabHost — and splitting the port
  * would invent a grant model this slice does not have; when per-tab grants
  * arrive they arrive as policy inside the host, not as port shape. Like
@@ -788,6 +1034,14 @@ export interface RuntimeBrowserPort {
   acquire?(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
   /** Give a hold back early. Releasing a tab this Session does not hold is a no-op. */
   release?(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
+  /**
+   * Search a fresh read of the tab's accessibility tree for literal text
+   * (VC-364). Optional for the hold pair's reason: a Session whose frozen
+   * surface predates `browser_find` is handed a port without it, and the
+   * surface offers the tool exactly when the port carries it. A read, so it
+   * never takes a hold; its refs replace the latest snapshot's.
+   */
+  find?(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
   /** Releases host-private debugger/controller resources when an attachment ends. */
   dispose?(): void;
 }
@@ -817,6 +1071,19 @@ export function browserHoldPort(
   // narrowing is a fact about `port` rather than a copy that could lose a
   // `this`-bound method.
   return port as RuntimeBrowserHoldPort;
+}
+
+/** A Browser port that carries `find` — what `browser_find` binds to (VC-364). */
+export type RuntimeBrowserFindPort = RuntimeBrowserPort &
+  Required<Pick<RuntimeBrowserPort, "find">>;
+
+/** The port narrowed to `find`, or `undefined` when it does not carry it. */
+export function browserFindPort(
+  port: RuntimeBrowserPort | undefined,
+): RuntimeBrowserFindPort | undefined {
+  if (port?.find === undefined) return undefined;
+  // The same object, proven, for `browserHoldPort`'s reason.
+  return port as RuntimeBrowserFindPort;
 }
 
 /** How a background shell stands: still running, or exited with what it exited with. */
@@ -865,6 +1132,24 @@ export function shellStanding(
 }
 
 /**
+ * How long a shell ran, in the two units that matter: `45s`, `2m 5s`, `1h 1m`
+ * (VC-495). Here beside {@link shellStanding} because the notice the model
+ * reads and the transcript row a person reads must say the same duration.
+ */
+export function formatShellRuntime(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const rest = seconds % 60;
+    return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/**
  * The one line a shell is named by: the first non-blank line of its command,
  * trimmed. Deliberately NOT truncated — how short a name must be is the
  * caller's business (the model's listing bounds it to fit a result; the
@@ -910,6 +1195,13 @@ export interface RuntimeShellKillOutcome {
   shells: readonly RuntimeShellRecord[];
 }
 
+/** A shell output notice's portable pattern; the host owns syntax and work bounds. */
+export interface ShellNotifyPattern {
+  pattern: string;
+  /** True for the host's bounded regular-expression subset, false for literal text. */
+  regex: boolean;
+}
+
 /**
  * The one background shell port (VC-270): everything a Session can do to a
  * command that runs beside the turn, answered by the host that owns the
@@ -932,6 +1224,12 @@ export interface RuntimeShellPort {
     /** Defaults to the Session workspace, and must stay inside it. */
     cwd?: string;
     title?: string;
+    /**
+     * Send the Session ONE notice the first time this appears in a line of the
+     * shell's output (VC-495). A literal, or a regular expression when `regex`;
+     * the host bounds it and refuses what it will not run as `shell.pattern`.
+     */
+    notifyOn?: ShellNotifyPattern;
     signal: AbortSignal;
   }): Promise<RuntimeShellStartOutcome>;
   output(input: {
@@ -943,6 +1241,33 @@ export interface RuntimeShellPort {
   kill(input: { shellId: string; signal: AbortSignal }): Promise<RuntimeShellKillOutcome>;
   /** Kills every shell this Session started and forgets them; the attachment's end. */
   dispose?(): void;
+}
+
+/**
+ * What one `classify` call came to (VC-478): the decision, or the miss that
+ * says why there is none. Never a rejection for a decision not made — the
+ * host's decision port turns every such outcome into a miss, which the tool
+ * shows the model as an error result it can recover from by deciding itself.
+ */
+export type RuntimeClassifyOutcome =
+  | { kind: "answered"; answered: DecisionAnswered }
+  | { kind: "miss"; miss: DecisionMiss };
+
+/**
+ * Ask the Session's decision model typed questions about a JSON state
+ * (VC-478).
+ *
+ * The arguments are what the model said, unchecked: the host holds the
+ * bounds, and its answer for a request that breaks one is a miss naming the
+ * bound. The port is bound to its Session at attach, so the call carries no
+ * Session, no project and no purpose — those are the host's to state.
+ */
+export interface RuntimeClassifyPort {
+  classify(input: {
+    state: unknown;
+    questions: unknown;
+    signal: AbortSignal;
+  }): Promise<RuntimeClassifyOutcome>;
 }
 
 /**
@@ -987,24 +1312,22 @@ export interface SessionRuntimeSpec {
    * one at all.
    *
    * Optional, and the optionality carries meaning that a value could not.
-   * Absence is not a Snapshot that allows everything: with no Snapshot the
-   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
-   * thresholds and {@link ask} are structurally unreachable rather than merely
-   * permissive. A Snapshot that meant "do not consult me" would still have to
-   * carry a pack id, a pack hash and two thresholds describing rules nobody will
-   * ever run, and the one path that must not reach the gate would depend on
-   * every caller remembering to check.
-   *
-   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
-   * (VC-44), and fills it only when that policy says `enforce`. The two other
-   * postures both arrive here as absence, for different reasons: `off` builds no
-   * Snapshot at all, and `observe` builds one, records it on the attachment, and
-   * deliberately does not hand it over. So a Session whose policy is `observe`
-   * has a durable Snapshot and an unreachable gate at the same time — which is
-   * the state slice 7 wanted, and the reason this field is the seam rather than
-   * a flag inside the Snapshot.
+   * Absence means off: no gate is installed. An observe Snapshot installs
+   * reasoning-blind shadow review but never changes what executes. Enforce
+   * binds the rule pack; judgmentMode chooses ask or automatic review.
+   * The desktop pins this Snapshot on the attachment so replay keeps its
+   * original posture rather than picking up a project edit mid-attachment.
    */
   authority?: AuthoritySnapshot;
+  /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
+  decisions?: DecisionPort;
+  /** Optional person-facing wording only. Never insert its output into agent context. */
+  authorityReason?: (input: {
+    sessionId: string;
+    tool: string;
+    cause: AuthorityJudgeDenialCause;
+    signal?: AbortSignal;
+  }) => Promise<string>;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -1017,6 +1340,20 @@ export interface SessionRuntimeSpec {
   tools: RuntimeToolBundle;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
+  /**
+   * The earlier attachment a fresh one continues (VC-457). Ignored when
+   * {@link recovery} is present: a resumed attachment already holds its own
+   * conversation, carried context included.
+   */
+  carry?: RuntimeContextCarry;
+  /**
+   * Why an earlier attachment's conversation exists but cannot be carried —
+   * its recorded binding is not one this build can read (VC-457). The
+   * attachment opens fresh and raises the same Attention a carry that failed
+   * to read does, so "there was nothing to carry" and "there was, and it was
+   * lost" never look alike. Ignored beside {@link recovery} or {@link carry}.
+   */
+  carryUnreadable?: string;
   signal?: AbortSignal;
   /**
    * Refusals this Session already accrued, before this attachment existed.
@@ -1057,6 +1394,14 @@ export interface SessionRuntimeSpec {
    */
   ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
   /**
+   * Protection mode (VC-480). Present, and the gate changes shape: a refusal a
+   * person may clear is looked up here first and, when no approval covers it,
+   * put to a person on the first hit; a refusal no one may clear is explained
+   * and never asked about. Absent, every ask follows the fallback thresholds
+   * exactly as before.
+   */
+  approvals?: RuntimeApprovals;
+  /**
    * Let the model ask a person, and block its call until they answer.
    *
    * Beside {@link ask} rather than inside it, because the two are different acts
@@ -1080,6 +1425,26 @@ export interface SessionRuntimeSpec {
     request: RuntimeAskUserRequest,
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
+  /**
+   * Request a credential outside the conversation. The host owns its value and
+   * subprocess injection; the runtime receives only an outcome. Redaction is
+   * best-effort exact text matching, not protection against encoded output or
+   * a command deliberately sending a credential elsewhere.
+   */
+  /** Universal output filter, independent of request_secret tool membership. */
+  credentialRedaction?: {
+    redact(text: string): string;
+    hasValues?(): boolean;
+  };
+  secret?: {
+    request(
+      input: { name: string; purpose?: string; toolCallId: string },
+      signal: AbortSignal,
+    ): Promise<"signed in" | "declined" | "still missing">;
+    redact(text: string): string;
+    /** Whether images may carry a credential; absent means fail closed. */
+    hasValues?(): boolean;
+  };
   /**
    * Read one public web document, through a boundary this Session does not own.
    *
@@ -1144,6 +1509,13 @@ export interface SessionRuntimeSpec {
    */
   shell?: RuntimeShellPort;
   /**
+   * Ask the decision model, through the host's decision service (VC-478).
+   * Optional on {@link webFetch}'s terms: absence is what decides whether the
+   * model is offered `classify`, and the host wires it only for a Session
+   * whose frozen surface names the tool.
+   */
+  classify?: RuntimeClassifyPort;
+  /**
    * Call the exact server/tool identity behind this Session's frozen MCP
    * definitions. Main owns clients and transports; this typed port owns no
    * configuration and lets the model change none of it.
@@ -1176,7 +1548,11 @@ export interface SessionRuntimeSpec {
    * can act on rather than as thrown errors — the line {@link webFetch} draws
    * between a refusal and a host that could not answer at all.
    */
-  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
+  callVerb?: (
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
@@ -1199,8 +1575,26 @@ export interface RuntimeMcpCall {
   toolCallId: string;
 }
 
+/**
+ * What the runtime lends one tool call while it runs (VC-471).
+ *
+ * A Code Mode program can have several calls in flight, and a host may put a
+ * question to the person driving from inside a call — a verb's spent budget,
+ * an MCP server's sign-in. `question` is the program's own door for that: the
+ * host runs its ask through it, and the program holds every question to one
+ * at a time and stops its own clock while a person answers. Absent for a call
+ * the model made directly: the host then asks exactly as it always has.
+ */
+export interface RuntimeCallScope {
+  question<T>(ask: () => Promise<T>): Promise<T>;
+}
+
 export interface RuntimeMcpPort {
-  call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult>;
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ): Promise<RuntimeMcpCallResult>;
 }
 
 /** One product verb call, as the runtime hands it to the host. */
@@ -1220,25 +1614,52 @@ export interface RuntimeVerbCall {
   toolCallId: string;
 }
 
+/** One JSON scalar a verb result's `details` may carry. */
+export type RuntimeVerbDetailScalar = string | number | boolean | null;
+
+/**
+ * One value of a verb result's `details`: a scalar, a list of strings, or a
+ * flat object of scalars — the shapes `VerbResultFieldSchema` can declare.
+ */
+export type RuntimeVerbDetailValue =
+  | RuntimeVerbDetailScalar
+  | readonly string[]
+  | Readonly<Record<string, RuntimeVerbDetailScalar>>;
+
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
   /**
-   * Structured facts for the transcript row, never for the model (VC-9).
+   * Structured facts beside the text, never shown to a model calling the verb
+   * directly (VC-9).
    *
    * Rides the tool result's `details` slot, which the activity mapper reads
-   * and the model does not see. Exists for one row today: a `delegate` row
-   * links to the child Session by id and names it by title, and parsing
-   * either out of {@link text} would tie the transcript to the door's prose.
-   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   * and the model does not see. Two readers today. A `delegate` row links to
+   * the child Session by id and names it by title, and parsing either out of
+   * {@link text} would tie the transcript to the door's prose. And a Code Mode
+   * program receives it as `details` (VC-471), typed by the verb's
+   * `resultDetails` schema in the Verb Registry when it declares one.
+   *
+   * One level deep at most — scalars, string lists, flat objects of scalars —
+   * so the durable activity marker stays small and bounded.
    */
-  details?: Readonly<Record<string, string | number | boolean | null>>;
+  details?: Readonly<Record<string, RuntimeVerbDetailValue>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "mcp" | "callVerb"
+  | "tools"
+  | "askUser"
+  | "secret"
+  | "credentialRedaction"
+  | "webFetch"
+  | "webSearch"
+  | "browser"
+  | "shell"
+  | "classify"
+  | "mcp"
+  | "callVerb"
 >;
 
 /**
@@ -1255,6 +1676,7 @@ export type SessionToolSpec = Pick<
 export type SessionToolBinding =
   | { tool: CodingToolId }
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
+  | { tool: "request_secret"; port: NonNullable<SessionRuntimeSpec["secret"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
   // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
@@ -1269,6 +1691,11 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // The search (VC-364) carries the port with its optional `find` proven.
+  | { tool: "browser_find"; port: RuntimeBrowserFindPort }
+  // Code Mode (VC-471) carries its frozen record: the runtime builds the tool
+  // over the Session's other tools, so there is no port to carry.
+  | { tool: "codemode"; codeMode: CodeModeSurface }
   // A name and nothing else, like a coding tool — but for the opposite reason.
   // A coding tool carries nothing because the runtime holds the environment
   // this package cannot see; `todo_write` carries nothing because there is
@@ -1278,6 +1705,8 @@ export type SessionToolBinding =
   | { tool: "shell_start"; port: RuntimeShellPort }
   | { tool: "shell_output"; port: RuntimeShellPort }
   | { tool: "shell_kill"; port: RuntimeShellPort }
+  // The decision model (VC-478), one name and one port, on the web tools' terms.
+  | { tool: "classify"; port: RuntimeClassifyPort }
   | {
       tool: McpToolId;
       definition: McpToolDefinition;
@@ -1320,9 +1749,12 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // smaller surface, and it is caught here where the cost is a thrown error
   // rather than a Session that can take a hold it cannot give back.
   const hold = browserHoldPort(browser);
+  const find = browserFindPort(browser);
   const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
+    request_secret:
+      spec.secret === undefined ? null : { tool: "request_secret", port: spec.secret },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
     browser_tabs: browser === undefined ? null : { tool: "browser_tabs", port: browser },
@@ -1341,6 +1773,12 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_start: shell === undefined ? null : { tool: "shell_start", port: shell },
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
+    browser_find: find === undefined ? null : { tool: "browser_find", port: find },
+    classify: spec.classify === undefined ? null : { tool: "classify", port: spec.classify },
+    codemode:
+      spec.tools.codeMode === undefined
+        ? null
+        : { tool: "codemode", codeMode: spec.tools.codeMode },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -1360,7 +1798,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       "This Session's bundle names MCP tools, but no MCP port is wired to answer them.",
     );
   }
-  return [
+  const bindings: SessionToolBinding[] = [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
     ...verbs.map((verb): SessionToolBinding => ({
@@ -1374,6 +1812,17 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       port: mcp as RuntimeMcpPort,
     })),
   ];
+  // Held to the surface it routes, at the boundary that builds the surface: a
+  // record routing a tool the Session does not hold, or leaving one out, is
+  // a Session whose provider tool array would differ from the one it was
+  // born with (VC-471).
+  if (spec.tools.codeMode !== undefined) {
+    parseCodeModeSurface(
+      spec.tools.codeMode,
+      bindings.map((binding) => binding.tool),
+    );
+  }
+  return bindings;
 }
 
 /**
@@ -1395,6 +1844,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  * it, so it must not be mistaken for a transport fault worth retrying as is.
  */
 export interface RuntimeFailure {
+  stopDetail?: SessionStopDetail;
   reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
@@ -1424,7 +1874,24 @@ export interface SettledAssistantMessage {
   usage?: SanitizedUsage;
 }
 
+export interface AuthorityReviewObservation {
+  kind: "authority-review";
+  turnId: string | null;
+  toolCallId: string;
+  tool: string;
+  mode: "shadow" | "auto";
+  authoriser: "classifier";
+  wouldFlag: boolean | null;
+  reason: string;
+  category: string | null;
+  answers: Readonly<Record<string, DecisionAnswer>> | null;
+  missReason: DecisionMissReason | null;
+  thresholds: { allow: number; flag: number };
+}
+
 export type RuntimeObservation =
+  | ApprovalUsedObservation
+  | AuthorityReviewObservation
   | AttachmentObservation
   | TurnObservation
   | CompactionProgressObservation
@@ -1533,6 +2000,7 @@ export interface AttachmentObservation {
 }
 
 export interface TurnObservation {
+  stopDetail?: SessionStopDetail;
   kind: "turn";
   state: "started" | "completed" | "interrupted";
   turnId: string;
@@ -1715,22 +2183,37 @@ export type RuntimeActivityObservation =
     });
 
 /**
- * Attention's `reason` is frozen, unlike the arms of this union.
+ * Attention's `reason` may be widened, never narrowed or renamed.
  *
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
- * then whitelisting this exact set — and it throws rather than skipping what it
- * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar holds none of them, so no marker already on disk changes how it
- * validates — {@link CompactionObservation} was added exactly that way.
- * Adding a `reason` is not: every attention marker written by an older build is
- * re-validated against the new list on the next recovery, and a Session whose
- * marker no longer matches fails to attach outright.
+ * then whitelisting this exact set, so every attention marker already on disk
+ * is re-read against the current list on the next recovery. Adding a reason
+ * leaves each older marker valid. Removing or renaming one does not: a marker
+ * that stops validating is quarantined (skipped and counted, never thrown on),
+ * which costs the Session the attention state that marker held. A build OLDER
+ * than a reason quarantines that reason's markers the same way — the one price
+ * of widening, and a bounded one.
+ *
+ * `transport` is the widening (VC-443): the runtime is waiting out a network
+ * or provider failure on its own and the turn is still live. It projects to
+ * the ledger's existing `transport_retrying`, which is deliberately neither a
+ * failure nor a question — it clears itself when the provider answers, and
+ * nobody is notified about it.
  */
 export interface AttentionObservation {
+  stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   message: string;
+  /**
+   * On a raised `runtime-failure` only: the instant, epoch ms, at which the
+   * spent provider allowance that stopped the run comes back, when the failure
+   * stated it unambiguously (`quotaResetInstant`). A FIELD rather than a new
+   * `reason`, and optional, for the reason above: the sidecar ignores a field
+   * it does not validate, so markers already on disk still recover.
+   */
+  resetsAt?: number;
   occurredAt?: number;
   recoveryCursor?: string;
 }
@@ -1918,6 +2401,8 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /** A small output budget for latency-sensitive utility explanations. */
+  maxOutputTokens?: number;
   /**
    * The caller's deadline. Background work has no one waiting on it, so a
    * provider that never answers must not leave a promise pending for the life

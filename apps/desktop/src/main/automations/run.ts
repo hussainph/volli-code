@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 /**
  * The one Automation Run door (VC-112, tracer VC-126).
  *
@@ -120,6 +121,7 @@ export interface AutomationRunnerDeps {
     messageId: string;
     text: string;
     resources: readonly PromptResource[];
+    origin: SessionOrigin;
   }): Promise<InstructionDeliveryResult>;
   /**
    * Records a post-attach first-message failure as Session Attention. The Run
@@ -432,6 +434,11 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         messageId: delivery.messageId,
         text: delivery.text,
         resources: delivery.resources,
+        origin: {
+          kind: "automation",
+          automationRunId: delivery.runId,
+          automationName: deps.findRun(delivery.runId)?.automationName ?? null,
+        },
       });
       // Match the chat client's first-message rule: once delivery starts, the
       // subject is known and titling need not wait for the whole model turn to
@@ -483,6 +490,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       const attached = await deps.sessions.attach({
         operationId: randomUUID(),
         sessionId: run.sessionId,
+        origin: { kind: "automation", automationRunId: run.id, automationName: run.automationName },
       });
       if (attached.state !== "ready") {
         // VC-220. This early return used to be wordless, and it is the whole of
@@ -528,7 +536,16 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // prints, rather than a second spelling of "nothing named this".
         title: plan.automationName ?? UNBOUND_RUN_LABEL,
         actor: { kind: "automation" },
-        ...(plan.runtime === null ? {} : { modelOverride: runtimeOverride(plan.runtime) }),
+        origin: {
+          kind: "automation",
+          automationRunId: plan.runId,
+          automationName: plan.automationName,
+        },
+        // A definition that pins no Runtime lets a decision model choose from
+        // the Instructions (VC-432); a pinned one never does.
+        ...(plan.runtime === null
+          ? { autoSelect: { request: plan.text } }
+          : { modelOverride: runtimeOverride(plan.runtime) }),
       });
     } catch (error) {
       const mapped = mapSessionStartFailure(error);
@@ -875,7 +892,11 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       for (const sessionId of new Set(pending.map((delivery) => delivery.sessionId))) {
         if (attachedInPlanRecovery.has(sessionId)) continue;
         try {
-          const attached = await deps.sessions.attach({ operationId: randomUUID(), sessionId });
+          const attached = await deps.sessions.attach({
+            operationId: randomUUID(),
+            sessionId,
+            origin: { kind: "volli", reason: "relaunch-recovery" },
+          });
           if (attached.state === "ready") await resumeDeliveryForSession(sessionId);
         } catch (error) {
           log(

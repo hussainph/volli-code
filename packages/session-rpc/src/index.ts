@@ -16,9 +16,12 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  CODE_MODE_MODES,
+  CODE_MODE_POLICY_MODELS_MAX,
   MODEL_PICKER_VIEWS,
   isolatePerformanceObserver,
   MODEL_PURPOSES,
+  presentedScheduledResume,
   readOptionalPerformanceClock,
   REASONING_LEVELS,
   SESSION_ROLES,
@@ -26,6 +29,7 @@ import {
   scrubSessionAuthority,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type CodeModePolicy,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
@@ -49,6 +53,8 @@ export type RendererSessionCommand =
       | { kind: "executor.retry" }
       | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
+      | { kind: "resume.schedule" }
+      | { kind: "resume.cancel" }
     >;
 
 export interface RendererSessionCommandRequest {
@@ -119,6 +125,13 @@ export interface SessionCreateInput {
     model?: { providerId: string; modelId: string };
     reasoningLevel?: ReasoningLevel;
   };
+  /**
+   * The first message this chat is being born to carry (VC-432), offered to
+   * the decision model that may choose its model. Used only when the create
+   * names no `modelOverride` and a decision model is configured and permitted;
+   * otherwise ignored. Never stored.
+   */
+  autoSelect?: { request: string };
 }
 
 export interface SessionAttachInput {
@@ -161,6 +174,12 @@ export interface SessionRouterContext {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  /**
+   * Code Mode's switch and per-model pins (VC-471), profile-wide. Read when a
+   * Session is born, so a write reaches new Sessions only.
+   */
+  readCodeModePolicy?: () => CodeModePolicy;
+  writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
   /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
   readModelPickerView?: () => ModelPickerView;
   writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
@@ -411,6 +430,29 @@ const hiddenModelsSchema = z
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
+/**
+ * Code Mode's policy (VC-471), whole in both directions like compaction's:
+ * the switch and every per-model pin, never a delta.
+ *
+ * A pin is keyed `providerId/modelId` (`codeModeModelKey`). The key shape and
+ * the count cap are the ones main's tolerant reader holds a stored policy to,
+ * stated here so the edge REFUSES what storage would otherwise drop without a
+ * word — a pin the renderer saved and main silently discarded is a setting
+ * that lies about what is configured.
+ */
+const codeModeModelKeySchema = nonEmptyString.refine((key) => {
+  const slash = key.indexOf("/");
+  return slash > 0 && slash < key.length - 1;
+}, "Expected a providerId/modelId key");
+const codeModePolicySchema = z.object({
+  enabled: z.boolean(),
+  models: z
+    .record(codeModeModelKeySchema, z.enum(CODE_MODE_MODES))
+    .refine(
+      (models) => Object.keys(models).length <= CODE_MODE_POLICY_MODELS_MAX,
+      `At most ${CODE_MODE_POLICY_MODELS_MAX} models may have their own Code Mode`,
+    ),
+});
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 /**
@@ -577,6 +619,15 @@ const commandSchema = z.discriminatedUnion("kind", [
     resolution: interactionResolutionSchema,
   }),
   z.object({ kind: z.literal("adapter.release"), attachmentId: nonEmptyString }),
+  // A person's schedule and its withdrawal. `resume.settle` is deliberately
+  // absent: what became of a schedule is the host's to record, never a client's.
+  z.object({
+    kind: z.literal("resume.schedule"),
+    attentionId: nonEmptyString,
+    attachmentId: nonEmptyString,
+    resumeAt: positiveSafeInteger,
+  }),
+  z.object({ kind: z.literal("resume.cancel"), scheduleId: nonEmptyString }),
 ]);
 
 const commandRequestSchema = z
@@ -728,6 +779,9 @@ export function createSessionRouter() {
             // Same reason, for the same door: a Session's model policy is
             // recorded by the create and never revisited by the attach.
             modelOverride: modelOverrideSchema,
+            // The first message, for automatic model choice (VC-432). The
+            // decision clips what it reads; this bounds what crosses the edge.
+            autoSelect: z.object({ request: z.string().max(200_000) }).optional(),
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -808,6 +862,20 @@ export function createSessionRouter() {
             unavailable("Model Access preferences are unavailable on this transport");
           }
           return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
+        }),
+      codeModePolicy: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readCodeModePolicy) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return codeModePolicySchema.parse(ctx.readCodeModePolicy());
+      }),
+      setCodeModePolicy: instrumentedProcedure
+        .input(codeModePolicySchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeCodeModePolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return codeModePolicySchema.parse(await ctx.writeCodeModePolicy(input));
         }),
       pickerView: instrumentedProcedure.query(({ ctx }) => {
         if (!ctx.readModelPickerView) {
@@ -945,7 +1013,11 @@ export function createSessionRouter() {
       cancelInteraction: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }))
         .mutation(({ ctx, input }) =>
-          ctx.runtime.cancelInteraction({ ...input, reason: "abandoned" }),
+          ctx.runtime.cancelInteraction({
+            ...input,
+            reason: "abandoned",
+            origin: { kind: "user" },
+          }),
         ),
       reconcile: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
@@ -1054,6 +1126,7 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.signal !== undefined) projection.signal = source.signal;
   if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
   if (source.modelTier !== undefined) projection.modelTier = source.modelTier;
+  if (source.modelAuto !== undefined) projection.modelAuto = source.modelAuto;
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
@@ -1064,6 +1137,11 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
     // different attachments (VC-285). The codec owns what may cross; this edge
     // only composes it, as it does for every other scrubbed field here.
     projection.authority = scrubSessionAuthority(source.liveExecutor);
+  }
+  // Derived from the Session's own commands and receipts, which never cross
+  // this edge themselves: the surface gets the one schedule it may draw.
+  if (source.commands !== undefined && source.receipts !== undefined) {
+    projection.scheduledResume = presentedScheduledResume(source);
   }
   return {
     projection: projection as SessionPresentationProjection,
@@ -1163,9 +1241,10 @@ function toSessionRuntimeCommandRequest(
   input: z.infer<typeof commandRequestSchema>,
 ): SessionRuntimeCommandRequest {
   if (input.command.kind === "session.create") {
-    return { commandId: input.commandId, command: input.command };
+    return { origin: { kind: "user" }, commandId: input.commandId, command: input.command };
   }
   return {
+    origin: { kind: "user" },
     commandId: input.commandId,
     sessionId: input.sessionId!,
     command: input.command,

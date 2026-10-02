@@ -148,8 +148,7 @@ function harness(options: HarnessOptions = {}) {
     },
     automations: () => null,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-    subscribeTicketWake: () => () => undefined,
-    subscribeSessionWake: () => () => undefined,
+    watches: () => null,
     supervise: () => null,
     delegate: () => null,
     mcp: () => (options.mcp === "absent" ? null : settings),
@@ -633,7 +632,7 @@ describe("mcp_remove refuses to act without confirmation (acceptance 8)", () => 
 
     expect(result.text).toContain("PREVIEW");
     expect(result.text).toContain("fail to reattach");
-    expect(result.text).toContain("mcp_disable");
+    expect(result.text).toContain("server_disable");
     expect(listMcpServers(h.db, "project-one")).toHaveLength(1);
   });
 

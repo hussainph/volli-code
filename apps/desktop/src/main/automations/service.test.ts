@@ -15,8 +15,10 @@ import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
   getAutomation,
   listAutomationsForProject,
+  listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "../db/automations-repo";
 import { insertProject } from "../db/projects-repo";
@@ -67,6 +69,8 @@ function setup(overrides: { inspectModelAccess?: () => Promise<ModelAccessSnapsh
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
     skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
+    runsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
+    skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(ctx.db, input),
     ...(overrides.inspectModelAccess === undefined
       ? {}
       : { inspectModelAccess: overrides.inspectModelAccess }),

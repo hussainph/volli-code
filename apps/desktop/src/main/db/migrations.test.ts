@@ -4018,3 +4018,56 @@ describe("migrate — 051, the attachment closure mark (VC-403)", () => {
     db.close();
   });
 });
+
+describe("migrate — 052, the durable read receipt (VC-30)", () => {
+  it("applies to a populated database and leaves the foreign keys clean", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 51 });
+    // A database with Sessions already in it: the receipt table references
+    // them, so the upgrade has to land beside real rows rather than on an
+    // empty schema.
+    seedAttachment(db, "already-here", false);
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "session_read_receipts")).toBe(true);
+    expect(indexExists(db, "session_read_receipts_unread")).toBe(true);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("drops a Session's receipt with the Session", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedAttachment(db, "doomed", false);
+    db.prepare("INSERT INTO session_read_receipts (session_id, unread_since) VALUES (?, ?)").run(
+      "s-doomed",
+      1_000,
+    );
+
+    db.prepare("DELETE FROM sessions WHERE id = ?").run("s-doomed");
+
+    expect(db.prepare("SELECT COUNT(*) AS n FROM session_read_receipts").get()).toEqual({ n: 0 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims 052", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.pragma("user_version = 51");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(tableExists(db, "session_read_receipts")).toBe(true);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

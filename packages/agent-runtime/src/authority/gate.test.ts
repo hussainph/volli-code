@@ -1,14 +1,25 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  approvalCovers,
+  projectRememberable,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   type AuthoritySnapshot,
   type CodingToolId,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { authorityVerdict } from "./gate";
+import { authorityClassifierEligible, authorityVerdict, describeCall } from "./gate";
 
 function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot {
   return {
@@ -42,7 +53,71 @@ function workspace(): { raw: string; real: string } {
   return { raw, real };
 }
 
+describe("classifier routing order", () => {
+  it("checks hard denial before read and workspace edit skips", () => {
+    const { raw } = workspace();
+    for (const tool of ["read", "edit", "write", "bash"]) {
+      expect(
+        authorityClassifierEligible({
+          tool,
+          args: { path: "MARKER.txt" },
+          workspacePath: raw,
+          verdict: { outcome: "deny", cause: "command.persistence", reason: "hard" },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("skips only reads and edits whose real paths are within the workspace", () => {
+    const { raw, real } = workspace();
+    const eligible = (tool: string, args: unknown, verdict = { outcome: "allow" as const }) =>
+      authorityClassifierEligible({ tool, args, workspacePath: raw, verdict });
+    expect(eligible("read", { path: "/outside/file" })).toBe(false);
+    expect(eligible("edit", { path: "MARKER.txt" })).toBe(false);
+    expect(eligible("write", { path: real })).toBe(false);
+    expect(eligible("write", { path: "/outside/file" })).toBe(true);
+    expect(eligible("bash", { command: "a && b" })).toBe(true);
+    expect(eligible("web_fetch", { url: "https://example.com" })).toBe(true);
+    expect(eligible("edit", {})).toBe(true);
+    const link = join(real, "outside");
+    symlinkSync(tmpdir(), link);
+    expect(eligible("edit", { path: join(link, "external.txt") })).toBe(true);
+    expect(
+      authorityClassifierEligible({
+        tool: "bash",
+        args: { command: "git reset --hard" },
+        workspacePath: raw,
+        verdict: { outcome: "deny", cause: "command.git-discards-work", reason: "soft" },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("authorityVerdict", () => {
+  it("does not allow a soft redirect denial to mask a hard command rule under per-call review", () => {
+    const { raw } = workspace();
+    for (const command of [
+      "curl -k https://example.com > /tmp/review-output.txt",
+      "sudo whoami > /tmp/review-output.txt",
+    ]) {
+      const verdict = authorityVerdict({
+        tool: "bash",
+        args: { command },
+        authority: snapshot(),
+        workspacePath: raw,
+        hardDeniesFirst: true,
+      });
+      expect(verdict).toMatchObject({ outcome: "deny" });
+      expect(
+        authorityClassifierEligible({
+          tool: "bash",
+          args: { command },
+          workspacePath: raw,
+          verdict,
+        }),
+      ).toBe(false);
+    }
+  });
   it("stands aside for work the Session's authority permits", () => {
     const { raw } = workspace();
     expect(
@@ -61,6 +136,72 @@ describe("authorityVerdict", () => {
         workspacePath: raw,
       }),
     ).toEqual({ outcome: "allow" });
+  });
+
+  it("lets the Session read its own saved tool output, and only while that is a real directory (VC-469)", () => {
+    const { raw, real } = workspace();
+    const base = join(real, "..");
+    const saved = join(base, "sessions", "s.tool-output");
+    const file = join(saved, "tc-1.0a1b2c3d.txt");
+    const verdict = (path: string, readableRoots?: readonly string[]) =>
+      authorityVerdict({
+        tool: "read",
+        args: { path },
+        authority: snapshot(),
+        workspacePath: raw,
+        ...(readableRoots === undefined ? {} : { readableRoots }),
+      }).outcome;
+
+    // Not made yet: there is nothing in it to read, and it grants nothing.
+    expect(verdict(file, [saved])).toBe("deny");
+    mkdirSync(saved, { recursive: true });
+    writeFileSync(file, "saved");
+    expect(verdict(file, [saved])).toBe("allow");
+    expect(verdict(file)).toBe("deny");
+    // Never a write, even inside it.
+    expect(
+      authorityVerdict({
+        tool: "write",
+        args: { path: file, content: "x" },
+        authority: snapshot(),
+        workspacePath: raw,
+        readableRoots: [saved],
+      }).outcome,
+    ).toBe("deny");
+    // A link planted where the directory goes grants nothing, wherever it points.
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, "secret.txt"), "s");
+    const pointed = join(base, "sessions", "pointed.tool-output");
+    symlinkSync(elsewhere, pointed);
+    expect(verdict(join(pointed, "secret.txt"), [pointed])).toBe("deny");
+  });
+
+  it("follows no link out of a readable root, and grants no sibling attachment's output (VC-469)", () => {
+    const { raw, real } = workspace();
+    const sessions = join(real, "..", "sessions", "--ws--");
+    const own = join(sessions, "own.tool-output");
+    const sibling = join(sessions, "sibling.tool-output");
+    for (const directory of [own, sibling]) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "saved.txt"), "saved");
+    }
+    const secret = join(real, "..", "secret.txt");
+    writeFileSync(secret, "s");
+    // A link inside the root, pointing out of it: the read resolves to its target.
+    symlinkSync(secret, join(own, "link.txt"));
+    const verdict = (path: string) =>
+      authorityVerdict({
+        tool: "read",
+        args: { path },
+        authority: snapshot(),
+        workspacePath: raw,
+        readableRoots: [own],
+      }).outcome;
+
+    expect(verdict(join(own, "saved.txt"))).toBe("allow");
+    expect(verdict(join(own, "link.txt"))).toBe("deny");
+    expect(verdict(join(sibling, "saved.txt"))).toBe("deny");
   });
 
   it("compares operands against the resolved root, not the symlink the caller passed", () => {
@@ -263,5 +404,203 @@ describe("authorityVerdict", () => {
         "could not be checked against the Session's authority",
       );
     }
+  });
+});
+
+describe("protection mode (VC-480)", () => {
+  it("carries every violation and the command's stages only when asked to", () => {
+    const { raw } = workspace();
+    const args = { command: "true && echo x > /tmp/volli-protect/out && launchctl list" };
+    const plain = authorityVerdict({
+      tool: "bash",
+      args,
+      authority: snapshot(),
+      workspacePath: raw,
+    });
+    expect(plain.outcome === "deny" && plain.violations).toBeUndefined();
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args,
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.violations?.map((violation) => violation.rule)).toEqual([
+      "path.outside-workspace",
+      "command.persistence",
+    ]);
+    expect(verdict.stages).toEqual(["true", "echo x > /tmp/volli-protect/out", "launchctl list"]);
+  });
+
+  it("keeps main's readable tool-output exception in Protection without granting writes", () => {
+    const { raw, real } = workspace();
+    const saved = join(real, "..", "s.tool-output");
+    mkdirSync(saved);
+    const file = join(saved, "output.txt");
+    writeFileSync(file, "output");
+    for (const protection of [false, true]) {
+      expect(
+        authorityVerdict({
+          tool: "read",
+          args: { path: file },
+          authority: snapshot(),
+          workspacePath: raw,
+          readableRoots: [saved],
+          protection,
+        }),
+      ).toEqual({ outcome: "allow" });
+    }
+    const write = authorityVerdict({
+      tool: "write",
+      args: { path: file, content: "x" },
+      authority: snapshot(),
+      workspacePath: raw,
+      readableRoots: [saved],
+      protection: true,
+    });
+    expect(write).toMatchObject({
+      outcome: "deny",
+      violations: [
+        { rule: "path.outside-workspace", scopes: [{ operation: "write", target: file }] },
+      ],
+    });
+  });
+
+  it("leaves a single command's stages off", () => {
+    const { raw } = workspace();
+    const verdict = authorityVerdict({
+      tool: "write",
+      args: { path: "/tmp/volli-protect/out", content: "x" },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.stages).toBeUndefined();
+    expect(verdict.violations?.[0].rule).toBe("path.outside-workspace");
+  });
+});
+
+describe("describeCall", () => {
+  it("shows a command as typed and a file tool as its path", () => {
+    expect(describeCall("execute", { command: "git push" })).toBe("git push");
+    expect(describeCall("write", { path: "/a/b" })).toBe("write  /a/b");
+    expect(describeCall("edit", { file_path: "/a/c" })).toBe("edit  /a/c");
+    expect(describeCall("read", { filePath: "/a/d" })).toBe("read  /a/d");
+    expect(describeCall("read", {})).toBe("read");
+    expect(describeCall("read", null)).toBe("read");
+  });
+});
+
+describe("review security regressions", () => {
+  it.each(["--git-dir=", "--git-dir ", "--work-tree=", "--work-tree ", "-C "])(
+    "binds %s grants to the real target, not a retargetable symlink",
+    (flag) => {
+      const { raw, real } = workspace();
+      const first = join(real, "..", "first-repo");
+      const second = join(real, "..", "second-repo");
+      const link = join(real, "..", "repo-link");
+      mkdirSync(first);
+      mkdirSync(second);
+      for (const repo of [real, first, second]) execFileSync("git", ["init", "-q", repo]);
+      const target = (repo: string) => (flag.startsWith("--git-dir") ? join(repo, ".git") : repo);
+      symlinkSync(target(first), link);
+      const command = `git ${flag}${link} status`;
+      const currentScope = () => {
+        const verdict = authorityVerdict({
+          tool: "bash",
+          args: { command },
+          authority: snapshot(),
+          workspacePath: raw,
+          protection: true,
+        });
+        if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+        const scope = verdict.violations?.find((v) => v.rule === "command.git-escapes-workspace")
+          ?.scopes?.[0];
+        if (!scope || scope.key === null) throw new Error("expected a rememberable git scope");
+        return scope;
+      };
+      try {
+        const approved = currentScope();
+        expect(
+          approvalCovers({ operation: approved.operation, key: approved.key! }, currentScope()),
+        ).toBe(true);
+        unlinkSync(link);
+        symlinkSync(target(second), link);
+        expect(
+          approvalCovers({ operation: approved.operation, key: approved.key! }, currentScope()),
+        ).toBe(false);
+        expect(currentScope().key).toContain(second);
+      } finally {
+        rmSync(join(real, ".."), { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("shows original stage text and holds both writers, not the earlier reader", () => {
+    const { raw } = workspace();
+    const target = "/tmp/volli-card-data/out.txt";
+    const stages = [
+      `cat "${target}"`,
+      `MARKER='two words' printf 'hello world' > "${target}"`,
+      `printf 'again' >> "${target}"`,
+    ];
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args: { command: stages.join(" && ") },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    expect(verdict.stages).toEqual(stages);
+    expect(verdict.violations?.[0].scopes?.map((scope) => scope.stage)).toEqual([1, 2]);
+  });
+
+  it.each([
+    "python3.12 -c 'print(1)'",
+    "python -c'print(1)'",
+    "node --eval 'console.log(1)'",
+    "node22 --eval='console.log(1)'",
+    "perl -we 'print 1'",
+    "perl5.40 -we'print 1'",
+    "ruby3.3 -e'puts 1'",
+  ])("remembers %s only as the exact command, never a project/path grant", (program) => {
+    const { raw } = workspace();
+    const command = `${program} > /tmp/volli-interpreter/out.txt`;
+    const verdict = authorityVerdict({
+      tool: "bash",
+      args: { command },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (verdict.outcome !== "deny") throw new Error("expected a refusal");
+    const scopes = verdict.violations?.[0].scopes;
+    if (!scopes) throw new Error("expected rememberable command scopes");
+    expect(scopes).toEqual([
+      { operation: "command", key: command, target: command, summary: `Run exactly: ${command}` },
+    ]);
+    expect(projectRememberable(scopes)).toBe(false);
+    const row = { operation: "command" as const, key: command };
+    expect(approvalCovers(row, scopes[0])).toBe(true);
+    const changedCommand = command
+      .replace("(1)", "(2)")
+      .replace("print 1", "print 2")
+      .replace("puts 1", "puts 2");
+    const changedVerdict = authorityVerdict({
+      tool: "bash",
+      args: { command: changedCommand },
+      authority: snapshot(),
+      workspacePath: raw,
+      protection: true,
+    });
+    if (changedVerdict.outcome !== "deny")
+      throw new Error("expected changed code to need approval");
+    const changedScope = changedVerdict.violations?.[0].scopes?.[0];
+    if (!changedScope) throw new Error("expected changed command scope");
+    expect(changedScope.operation).toBe("command");
+    expect(approvalCovers(row, changedScope)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Transient worktree-ensure phase tracking (docs/plans/worktree-support.md).
+ * Transient worktree-ensure phase tracking.
  * Mirrors main's `volli:worktree-phase` pushes into a small per-ticket record so
  * the ticket-detail UI (the session status chip, the pre-boot "starting"
  * affordance, and the rail repository card's failed-notice + retry) can render the live

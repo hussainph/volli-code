@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type Database from "better-sqlite3";
+import type { SessionEvent } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
 import { deleteTicket, insertTicket } from "../db/tickets-repo";
@@ -523,7 +524,131 @@ describe("Subagent Session ancestry (VC-9)", () => {
   });
 });
 
+function bearSubagent(h: ReturnType<typeof harness>, id: string, toolCallId: string): void {
+  insertSession(h.db, testSession("project-1", h.ticket.id, { id, title: `Helper ${id}` }));
+  h.db
+    .prepare("UPDATE sessions SET role = 'subagent', parent_session_id = ? WHERE id = ?")
+    .run(h.root.id, id);
+  landCreateCommand(h.db, id, createCommandFor(h.root.id, toolCallId));
+}
+
+function landEvent(
+  h: ReturnType<typeof harness>,
+  childSessionId: string,
+  sequence: number,
+  payload: SessionEvent["payload"],
+): void {
+  h.db
+    .prepare(
+      `INSERT INTO session_events
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+       VALUES (?, ?, ?, 0, 0, (SELECT provenance_id FROM session_events WHERE session_id = ? LIMIT 1), ?)`,
+    )
+    .run(
+      `${childSessionId}:${sequence}`,
+      childSessionId,
+      sequence,
+      childSessionId,
+      JSON.stringify(payload),
+    );
+}
+
 describe("listUnansweredSubagents — what a relaunch left for recovery (VC-9)", () => {
+  it("settles a parent's own stop after restart without fabricating an answer message", () => {
+    const h = harness();
+    bearSubagent(h, "helper-stopped", "tc-stop");
+    landEvent(h, "helper-stopped", 10, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: h.root.id },
+    });
+    // The executor's interruption is a consequence of the committed stop.
+    landEvent(h, "helper-stopped", 11, {
+      kind: "turn.interrupted",
+      attachmentId: "a",
+      turnId: "t",
+    });
+    const nextProcess = createTicketSessionDelegationStore(h.db);
+    expect(nextProcess.subagentDelegation("helper-stopped")).toMatchObject({ answered: true });
+    expect(nextProcess.listUnansweredSubagents()).toEqual([]);
+    expect(
+      h.db.prepare("SELECT id FROM session_commands WHERE session_id = ?").all(h.root.id),
+    ).toEqual([]);
+    // The original delegation stays settled when a person later resumes it;
+    // rearm must use resumed notice ids rather than the missing :answer id.
+    landEvent(h, "helper-stopped", 12, {
+      kind: "turn.started",
+      attachmentId: "a",
+      turnId: "resumed",
+    });
+    expect(nextProcess.subagentDelegation("helper-stopped")).toMatchObject({ answered: true });
+    expect(nextProcess.listUnansweredSubagents()).toEqual([]);
+  });
+
+  it.each([
+    { kind: "user" as const },
+    { kind: "watchdog" as const },
+    { kind: "session" as const, sessionId: "other-session" },
+  ])("leaves stops by $kind unanswered until their notice lands", (by) => {
+    const h = harness();
+    bearSubagent(h, "helper-stopped", "tc-stop");
+    landEvent(h, "helper-stopped", 10, { kind: "session.stopped", reason: null, by });
+    const nextProcess = createTicketSessionDelegationStore(h.db);
+    expect(nextProcess.subagentDelegation("helper-stopped")).toMatchObject({ answered: false });
+    expect(nextProcess.listUnansweredSubagents()).toHaveLength(1);
+  });
+
+  it.each([true, false])(
+    "counts only this delegation's rejected kickoff before an own stop (matching: %s)",
+    (matching) => {
+      const h = harness();
+      bearSubagent(h, "helper-stopped", "tc-stop");
+      landEvent(h, "helper-stopped", 10, {
+        kind: "command.receipt.recorded",
+        receipt: {
+          id: "rejected-kickoff",
+          commandId: `${h.root.id}:${matching ? "tc-stop" : "other"}:kickoff`,
+          sequence: 10,
+          recordedAt: 10,
+          status: "rejected",
+          code: "no_live_executor",
+          detail: "No live executor",
+        },
+      });
+      landEvent(h, "helper-stopped", 11, {
+        kind: "session.stopped",
+        reason: null,
+        by: { kind: "session", sessionId: h.root.id },
+      });
+      const nextProcess = createTicketSessionDelegationStore(h.db);
+      expect(nextProcess.subagentDelegation("helper-stopped")).toMatchObject({
+        answered: !matching,
+      });
+      expect(nextProcess.listUnansweredSubagents()).toHaveLength(matching ? 1 : 0);
+      expect(
+        h.db.prepare("SELECT id FROM session_commands WHERE session_id = ?").all(h.root.id),
+      ).toEqual([]);
+    },
+  );
+
+  it("does not attribute an earlier independent interruption to a later parent stop", () => {
+    const h = harness();
+    bearSubagent(h, "helper-stopped", "tc-stop");
+    landEvent(h, "helper-stopped", 10, {
+      kind: "turn.interrupted",
+      attachmentId: "a",
+      turnId: "t",
+    });
+    landEvent(h, "helper-stopped", 11, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: h.root.id },
+    });
+    const nextProcess = createTicketSessionDelegationStore(h.db);
+    expect(nextProcess.subagentDelegation("helper-stopped")).toMatchObject({ answered: false });
+    expect(nextProcess.listUnansweredSubagents()).toHaveLength(1);
+  });
+
   it("names each subagent whose answer never reached its parent, by its operation id", () => {
     const h = harness();
     const parentBirth = h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id });

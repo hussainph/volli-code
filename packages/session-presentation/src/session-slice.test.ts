@@ -46,6 +46,7 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
+    scheduledResume: null,
   };
 }
 

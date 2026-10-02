@@ -290,6 +290,7 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
     cost: { project: "/repo/volli" },
     "session.list": { project: "/repo/volli" },
     "session.peek": { id: "not-a-real-session" },
+    "session.show": { id: "not-a-real-session" },
     "session.answer": { id: "not-a-real-session" },
     "session.done": { reason: "Tests pass" },
     "session.blocked": { reason: "Needs a decision" },
@@ -313,7 +314,7 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
    * `cost` is absent on purpose: it reads the roster only for `--session`,
    * which the second test below drives separately.
    */
-  const READS_THE_ROSTER = ["session.list", "session.peek", "session.answer"];
+  const READS_THE_ROSTER = ["session.list", "session.peek", "session.show", "session.answer"];
 
   it("folds the roster for exactly the verbs whose answer holds a Session", async () => {
     const folded: string[] = [];

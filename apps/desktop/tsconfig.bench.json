@@ -1,0 +1,16 @@
+{
+  // The off-by-default node-side benches that compose src/main modules: VC-444's
+  // MCP parallel bench (the MCP host against local fixture servers) and VC-456's
+  // real-path turn bench (Session runtime, Pi adapter, SQLite ledger). Checked
+  // on their own so the main-process config never carries bench files.
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "composite": false
+  },
+  "include": [
+    "e2e/bench/mcp-parallel/**/*.ts",
+    "vite.mcp-parallel-bench.config.ts",
+    "e2e/bench/turn-real-path/**/*.ts",
+    "vite.turn-real-path-bench.config.ts"
+  ]
+}

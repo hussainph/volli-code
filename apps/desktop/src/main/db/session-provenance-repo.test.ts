@@ -65,6 +65,7 @@ describe("readSessionProvenance", () => {
     expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
       {
         kind: "automation",
+        automationRunId: expect.any(String),
         automationName: "Nightly sweep",
       },
     );
@@ -89,7 +90,7 @@ describe("readSessionProvenance", () => {
 
     expect(
       readSessionProvenance(f.db, { sessionId: "session-unbound", ticketId: f.ticketId }),
-    ).toEqual({ kind: "automation", automationName: null });
+    ).toEqual({ kind: "automation", automationRunId: expect.any(String), automationName: null });
   });
 
   // The Run is asked FIRST because it is the only record that can carry a name:
@@ -119,6 +120,7 @@ describe("readSessionProvenance", () => {
     expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
       {
         kind: "automation",
+        automationRunId: expect.any(String),
         automationName: "Nightly sweep",
       },
     );
@@ -229,7 +231,7 @@ describe("readSessionProvenance", () => {
     });
 
     expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
-      { kind: "automation", automationName: null },
+      { kind: "automation", automationRunId: null, automationName: null },
     );
   });
 
@@ -289,7 +291,7 @@ describe("readSessionProvenance", () => {
     expect(f.db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
     expect(
       readSessionProvenance(f.db, { sessionId: "session-project-run", ticketId: null }),
-    ).toEqual({ kind: "automation", automationName: null });
+    ).toEqual({ kind: "automation", automationRunId: null, automationName: null });
   });
 
   // The other spelling of the same actor: a session-driven Automation stores
@@ -307,7 +309,7 @@ describe("readSessionProvenance", () => {
     });
 
     expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
-      { kind: "automation", automationName: null },
+      { kind: "automation", automationRunId: null, automationName: null },
     );
   });
 
@@ -573,10 +575,19 @@ describe("readSessionProvenances", () => {
     // readers of the same mistake.
     expect(batched("session-run")).toEqual({
       kind: "automation",
+      automationRunId: expect.any(String),
       automationName: "Nightly sweep",
     });
-    expect(batched("session-premint")).toEqual({ kind: "automation", automationName: null });
-    expect(batched("session-launched")).toEqual({ kind: "automation", automationName: null });
+    expect(batched("session-premint")).toEqual({
+      kind: "automation",
+      automationRunId: null,
+      automationName: null,
+    });
+    expect(batched("session-launched")).toEqual({
+      kind: "automation",
+      automationRunId: null,
+      automationName: null,
+    });
     expect(batched("session-child")).toEqual({
       kind: "session",
       parentSessionId: "session-parent",
@@ -709,6 +720,7 @@ describe("readSessionProvenances", () => {
 
     expect(readSessionProvenances(f.db, [query])("session-run")).toEqual({
       kind: "automation",
+      automationRunId: expect.any(String),
       automationName: "Nightly sweep",
     });
     expect(readSessionProvenances(f.db, [query])("session-run")).toEqual(
@@ -804,9 +816,9 @@ describe("readSessionProvenances", () => {
       for (const query of large) readSessionProvenance(f.db, query);
     });
 
-    // Five sources, five statements — and 49 Sessions cost exactly what 9 do.
+    // Six sources, six statements — and 49 Sessions cost exactly what 9 do.
     expect(batchedLarge).toBe(batchedSmall);
-    expect(batchedLarge).toBeLessThanOrEqual(5);
+    expect(batchedLarge).toBeLessThanOrEqual(6);
     // Where a per-row listing pays per row. Asserted against the roster size
     // rather than a constant, so the gap cannot be closed by shrinking the
     // fixture.
@@ -816,5 +828,57 @@ describe("readSessionProvenances", () => {
     for (const query of large) {
       expect(batched(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
     }
+  });
+});
+
+describe("durable launch origins", () => {
+  it("reads the Automation name and Run id from a launch before the Run row lands", () => {
+    const f = fixture();
+    f.session("new-run", "Review");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "new-run",
+      now: 1,
+      actor: { kind: "automation" },
+      origin: { kind: "automation", automationRunId: "run-exact", automationName: "Review" },
+    });
+    expect(readSessionProvenance(f.db, { sessionId: "new-run", ticketId: f.ticketId })).toEqual({
+      kind: "automation",
+      automationRunId: "run-exact",
+      automationName: "Review",
+    });
+  });
+  it("reads a Board subagent's parent from the immutable Session row without Ticket history", () => {
+    const f = fixture();
+    f.session("parent", "Parent", null);
+    f.session("child", "Child", null);
+    f.db
+      .prepare("UPDATE sessions SET parent_session_id = ?, role = 'subagent' WHERE id = ?")
+      .run("parent", "child");
+    expect(readSessionProvenance(f.db, { sessionId: "child", ticketId: null })).toEqual({
+      kind: "session",
+      parentSessionId: "parent",
+      parentTitle: "Parent",
+    });
+  });
+});
+
+describe("legacy origin tolerance", () => {
+  it("does not mistake malformed launch-origin scalars for attribution", () => {
+    const f = fixture();
+    f.session("bad-origin", "Review");
+    recordTicketEvent(f.db, f.ticketId, { kind: "session_started", sessionId: "bad-origin" }, 1, {
+      kind: "automation",
+    });
+    f.db
+      .prepare(
+        "UPDATE ticket_events SET payload = json_set(payload, '$.origin', 'not-json') WHERE ticket_id = ? AND kind = 'session_started'",
+      )
+      .run(f.ticketId);
+    expect(readSessionProvenance(f.db, { sessionId: "bad-origin", ticketId: f.ticketId })).toEqual({
+      kind: "automation",
+      automationRunId: null,
+      automationName: null,
+    });
   });
 });

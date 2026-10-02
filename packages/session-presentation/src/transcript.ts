@@ -21,6 +21,7 @@ import type {
   RendererSessionEvent,
   RendererSessionEventPayload,
   RendererSessionInteraction,
+  SessionToolCallScope,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -87,6 +88,18 @@ export interface TranscriptReasoningDrop {
   afterMessageId: string | null;
   count: number;
   causes: readonly ReasoningDropCause[];
+}
+
+/** A flagged classifier verdict, quietly anchored beside the call's Turn. */
+export interface TranscriptAuthorityReview {
+  sequence: number;
+  afterMessageId: string | null;
+  toolCallId: string;
+  /** Null is an uncorrelatable fact; absent is a legacy caller without scope. */
+  scope?: SessionToolCallScope | null;
+  tool: string;
+  mode: "shadow" | "auto";
+  reason: string;
 }
 
 /**
@@ -182,6 +195,7 @@ export interface ChatTranscriptState {
   compactions: readonly TranscriptCompaction[];
   /** Provider reasoning drops, oldest first, anchored in the transcript. */
   reasoningDrops: readonly TranscriptReasoningDrop[];
+  authorityReviews: readonly TranscriptAuthorityReview[];
 }
 
 const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
@@ -190,6 +204,7 @@ const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 const EMPTY_PROMPT_RESOURCES: readonly string[] = [];
 const EMPTY_COMPACTIONS: readonly TranscriptCompaction[] = [];
 const EMPTY_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
+const EMPTY_AUTHORITY_REVIEWS: readonly TranscriptAuthorityReview[] = [];
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
@@ -205,6 +220,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   promptResources: EMPTY_PROMPT_RESOURCES,
   compactions: EMPTY_COMPACTIONS,
   reasoningDrops: EMPTY_REASONING_DROPS,
+  authorityReviews: EMPTY_AUTHORITY_REVIEWS,
 };
 
 /**
@@ -247,6 +263,7 @@ export function appendFrames(
   // a fact that did not move.
   let landed: TranscriptCompaction[] | null = null;
   let landedReasoningDrops: TranscriptReasoningDrop[] | null = null;
+  let landedAuthorityReviews: TranscriptAuthorityReview[] | null = null;
   // What the transcript had said when the next context notice lands. The batch
   // starts wherever the last one left off — the durable list only ever grows at
   // its end, so its last entry IS the newest thing on screen — and moves inside
@@ -287,6 +304,20 @@ export function appendFrames(
         afterMessageId: anchorId,
         count: payload.count,
         causes: payload.causes,
+      });
+    }
+    if (payload?.kind === "authority.reviewed" && payload.wouldFlag === true) {
+      (landedAuthorityReviews ??= []).push({
+        sequence: frame.sequence,
+        afterMessageId: anchorId,
+        toolCallId: payload.toolCallId,
+        scope:
+          payload.turnId === null
+            ? null
+            : { attachmentId: payload.attachmentId, turnId: payload.turnId },
+        tool: payload.tool,
+        mode: payload.mode,
+        reason: payload.reason,
       });
     }
     if (payload?.kind === "attachment.closed") liveCompaction = null;
@@ -374,6 +405,10 @@ export function appendFrames(
       landedReasoningDrops === null
         ? state.reasoningDrops
         : [...state.reasoningDrops, ...landedReasoningDrops],
+    authorityReviews:
+      landedAuthorityReviews === null
+        ? state.authorityReviews
+        : [...state.authorityReviews, ...landedAuthorityReviews],
   };
 }
 

@@ -21,6 +21,7 @@ import {
   DEFAULT_AUTHORITY_POLICY,
   defaultModelRequiredForTier,
   NO_AUTOMATION_TRIGGER,
+  verbEntry,
 } from "@volli/shared";
 import type {
   AuthorityPolicy,
@@ -29,6 +30,9 @@ import type {
   ModelSelection,
   RuntimeAskRequest,
   RuntimeSessionIdentity,
+  VerbResultDetailsSchema,
+  VerbResultFieldSchema,
+  VerbToolKey,
 } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
@@ -47,12 +51,15 @@ import {
 } from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
-import { insertProject, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, insertProject, listProjects } from "./db/projects-repo";
+import { setAppState } from "./db/app-state-repo";
+import { migrateProtectionPolicies, PROTECTION_POLICY_MIGRATION_KEY } from "./protection/settings";
 import { getTicket, insertTicket } from "./db/tickets-repo";
 import { DelegateSessionError } from "./session-runtime/delegate-session";
 import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
 import type { SessionStartInput } from "./session-runtime/sessions";
 import { StructuredSessionsError } from "./session-runtime/sessions";
+import type { Watches, WatchSessionInput } from "./watches";
 
 let ctx: TestDb | undefined;
 
@@ -139,11 +146,27 @@ function cappedDelegation(
   };
 }
 
+/** A watch registry that records what the doors arm (VC-457). */
+function recordingWatches(): Watches & { sessions: WatchSessionInput[] } {
+  const sessions: WatchSessionInput[] = [];
+  return {
+    sessions,
+    watchSession: (input) => {
+      sessions.push(input);
+    },
+    watchTicket: () => undefined,
+    unwatch: () => 0,
+    watching: () => ({ sessions: [], tickets: [] }),
+    dispose: () => undefined,
+  };
+}
+
 function harness(
   overrides: {
     startError?: unknown;
     delegation?: TicketSessionDelegationClaims;
     authorityPolicy?: () => AuthorityPolicy;
+    watches?: Watches;
   } = {},
 ) {
   ctx = openTestDb();
@@ -198,14 +221,12 @@ function harness(
     actorTicketDisplay: () => null,
     now: () => 1_000,
     delegation: overrides.delegation ?? grantingDelegation(),
-    // `ticket.await`'s ports, inert for the start-tool suite: its own suite
-    // (`agent-await.test.ts`) drives them with real fakes. `automation.run`'s
-    // host is inert here for the same reason — its suite below wires the real
-    // engine and the real Run door.
+    // `automation.run`'s host is inert here — its suite below wires the real
+    // engine and the real Run door. The watch registry is a recording fake so
+    // the start receipt's automatic watch can be read back (VC-457).
     automations: () => null,
     authorityPolicy: overrides.authorityPolicy ?? (() => DEFAULT_AUTHORITY_POLICY),
-    subscribeTicketWake: () => () => undefined,
-    subscribeSessionWake: () => () => undefined,
+    watches: () => overrides.watches ?? null,
     // Supervision's ports likewise: `supervise-session.test.ts` drives the
     // operations; this suite proves only the door — identity binding, wording,
     // and the no-runtime refusal (which is what `null` exercises).
@@ -234,13 +255,27 @@ function harness(
 
 describe("session_start through the Agent Tool Surface", () => {
   it("starts a Ticket Session on the caller's project without touching the socket", async () => {
-    const h = harness();
+    const watches = recordingWatches();
+    const h = harness({ watches });
 
     const result = await h.call({ ticket: "VC-1", message: "Fix the flaky auth test" });
 
     expect(result.text).toContain("Started Session abcdef12 on VC-1");
     expect(result.text).toContain("openai-codex/gpt-5.6-sol");
-    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
+    // No cursor and no await (VC-457): the caller watches what it started,
+    // and the receipt says what will arrive.
+    expect(result.text).not.toMatch(/cursor|session_await/);
+    expect(result.text).toMatch(
+      /A notice from Volli will arrive in this Session when its next turn ends/,
+    );
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({
+        watcherSessionId: "caller-session",
+        targetSessionId: STARTED_SESSION,
+        armTurn: true,
+        kinds: ["turn", "verdict", "stopped"],
+      }),
+    ]);
     // The public short handle, never a full UUID: no other Volli surface takes
     // one back, so handing a model one would be handing it an unusable id.
     expect(result.text).not.toContain(STARTED_SESSION);
@@ -397,6 +432,56 @@ describe("session_start through the Agent Tool Surface", () => {
     expect(delegation.extensions).toEqual([]);
     expect(h.startInputs).toEqual([]);
   });
+
+  it.each([null, "off", "observe"] as const)(
+    "restores main's delegation path with Protection Off (%s), an old dogfood marker and a stored restriction",
+    async (enforcement) => {
+      const delegation = cappedDelegation([]);
+      const h = harness({
+        delegation,
+        authorityPolicy: () => getProjectAuthorityPolicy(ctx!.db, "project-one"),
+      });
+      const db = ctx!.db;
+      const store = (policy: Record<string, unknown>) =>
+        db
+          .prepare("UPDATE projects SET authority_policy = ? WHERE id = ?")
+          .run(JSON.stringify(policy), "project-one");
+      const visible = enforcement === null ? {} : { enforcement };
+      store(visible);
+      // Today's main: the spent allowance asks, records one extension and starts.
+      const askOnMain = vi.fn<VerbBudgetAsk>(async () => "allow");
+      const mainResult = await h.call({ ticket: "VC-1" }, "main-start", TICKET_CALLER, askOnMain);
+      expect(askOnMain).toHaveBeenCalledOnce();
+      expect(mainResult.text).toContain("Started Session");
+      delegation.extensions.length = 0;
+      h.startInputs.length = 0;
+
+      setAppState(db, PROTECTION_POLICY_MIGRATION_KEY, '{ "completedAt": 1, "policies": [] }', 1);
+      store({ ...visible, budgets: { delegationExceeded: "refuse" } });
+      expect(getProjectAuthorityPolicy(db, "project-one").enforcement).not.toBe("enforce");
+      expect(getProjectAuthorityPolicy(db, "project-one").budgets.delegationExceeded).toBe(
+        "refuse",
+      );
+      migrateProtectionPolicies(db, 2);
+
+      const askAfterUpgrade = vi.fn<VerbBudgetAsk>(async () => "allow");
+      const result = await h.call(
+        { ticket: "VC-1" },
+        "upgraded-start",
+        TICKET_CALLER,
+        askAfterUpgrade,
+      );
+      expect(result).toEqual(mainResult);
+      expect(askAfterUpgrade).toHaveBeenCalledExactlyOnceWith(
+        { ...askOnMain.mock.calls[0]![0], toolCallId: "upgraded-start" },
+        expect.any(AbortSignal),
+      );
+      expect(delegation.extensions).toEqual([
+        { parentSessionId: TICKET_CALLER.sessionId, toolCallId: "upgraded-start" },
+      ]);
+      expect(h.startInputs).toHaveLength(1);
+    },
+  );
 
   it("does not ask at all under a refuse posture", async () => {
     const delegation = cappedDelegation([]);
@@ -762,8 +847,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     actorTicketDisplay: () => null,
     now: () => 1_000,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-    subscribeTicketWake: () => () => undefined,
-    subscribeSessionWake: () => () => undefined,
+    watches: () => null,
     // Supervision's ports are inert here for the same reason `sessions` is:
     // this suite drives `automation.run` alone.
     supervise: () => null,
@@ -1093,8 +1177,12 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       delivery?: Promise<unknown>;
       landed?: "prompt" | "queue" | "steer" | "retry";
       turnOpened?: boolean;
+      watches?: Watches;
+      /** Session reads after this many succeed reject — the watch lookup's failure. */
+      failLookupsAfter?: number;
     } = {},
   ) {
+    let lookups = 0;
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1114,66 +1202,71 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       actorTicketDisplay: () => null,
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-      subscribeTicketWake: () => () => undefined,
-      subscribeSessionWake: () => () => undefined,
+      watches: () => options.watches ?? null,
       delegate: () => null,
       mcp: () => null,
       supervise: () =>
         ({
           sessionEngine: {
-            listSessions: async () => [
-              {
-                session: {
-                  id: TARGET_SESSION,
-                  projectId: "project-one",
-                  ticketId: null,
-                  title: "Implementer",
-                  createdAt: 1,
-                },
-                status: "open",
-                commands: [],
-                receipts: [],
-                pendingExecutorStart: null,
-                attachments: [
-                  {
-                    id: "attachment-1",
-                    sessionId: TARGET_SESSION,
-                    adapterId: "pi",
-                    venue: { id: "local", kind: "local" },
-                    continuity: "fresh",
-                    native: null,
-                    authority: null,
-                    status: "open",
-                    openedAt: 1,
-                    closedAt: null,
-                    outcome: null,
-                    failure: null,
+            listSessions: async () => {
+              lookups += 1;
+              if (options.failLookupsAfter !== undefined && lookups > options.failLookupsAfter) {
+                throw new Error("session store unavailable");
+              }
+              return [
+                {
+                  session: {
+                    id: TARGET_SESSION,
+                    projectId: "project-one",
+                    ticketId: null,
+                    title: "Implementer",
+                    createdAt: 1,
                   },
-                ],
-                liveExecutor: null,
-                attention: { active: [], primary: null },
-                interactions: { active: [], resolved: [] },
-                signal: null,
-                stopped: null,
-                modelSelection: null,
-                turnActive: true,
-                lastTurnOutcome: null,
-                authorityDenials: 0,
-                usage: {
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cacheReadTokens: 0,
-                  cacheWriteTokens: 0,
-                  meteredOperations: 0,
-                  unreportedOperations: 0,
-                  knownCostUsd: null,
-                  costBasis: "unavailable",
-                  costCoverage: "unavailable",
+                  status: "open",
+                  commands: [],
+                  receipts: [],
+                  pendingExecutorStart: null,
+                  attachments: [
+                    {
+                      id: "attachment-1",
+                      sessionId: TARGET_SESSION,
+                      adapterId: "pi",
+                      venue: { id: "local", kind: "local" },
+                      continuity: "fresh",
+                      native: null,
+                      authority: null,
+                      status: "open",
+                      openedAt: 1,
+                      closedAt: null,
+                      outcome: null,
+                      failure: null,
+                    },
+                  ],
+                  liveExecutor: null,
+                  attention: { active: [], primary: null },
+                  interactions: { active: [], resolved: [] },
+                  signal: null,
+                  stopped: null,
+                  modelSelection: null,
+                  turnActive: true,
+                  lastTurnOutcome: null,
+                  authorityDenials: 0,
+                  usage: {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheReadTokens: 0,
+                    cacheWriteTokens: 0,
+                    meteredOperations: 0,
+                    unreportedOperations: 0,
+                    knownCostUsd: null,
+                    costBasis: "unavailable",
+                    costCoverage: "unavailable",
+                  },
+                  lastActivityAt: 1,
+                  bornTicketless: true,
                 },
-                lastActivityAt: 1,
-                bornTicketless: true,
-              },
-            ],
+              ];
+            },
             submit: async (request: unknown) => {
               stops.push(request);
               return { receipt: { status: "completed" } };
@@ -1201,6 +1294,36 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
     ) => door(CALLER, { verb, input, toolCallId: "tc-9" }, signal);
     return { call, stops, sends };
   }
+
+  it("confirms a delivered send even when arming its watch cannot read the target (VC-457 review)", async () => {
+    const watches = recordingWatches();
+    // The send resolves its target on the first read; the watch's own
+    // authorization read, after delivery, fails.
+    const h = superviseHarness({ watches, failLookupsAfter: 1 });
+
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Use the thinking-orbs library",
+    });
+
+    expect(h.sends).toHaveLength(1);
+    expect(result.text).toContain("Delivered into Session bbbbbbbb");
+    expect(result.text).toMatch(/could not arm a watch on it \(session store unavailable\)/);
+    expect(watches.sessions).toEqual([]);
+  });
+
+  it("watches a Session a Board Session steered (VC-457)", async () => {
+    const watches = recordingWatches();
+    const h = superviseHarness({ watches });
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Carry on",
+    });
+    expect(result.text).toMatch(/A notice from Volli will arrive in this Session/);
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: TARGET_SESSION, armTurn: true }),
+    ]);
+  });
 
   it("binds the caller as the stop's actor and derives the operation id", async () => {
     const h = superviseHarness();
@@ -1236,7 +1359,9 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
 
     expect(result.text).toContain("Delivered into Session bbbbbbbb");
     expect(result.text).toContain("mid-stream");
-    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
+    expect(result.text).not.toMatch(/cursor|session_await/);
+    // No registry in this composition: the receipt says nothing reports back.
+    expect(result.text).toContain("Nothing reports back into this Session");
     const submitted = h.sends.find(
       (request) => (request as { command?: { kind?: string } }).command?.kind === "message.submit",
     ) as { commandId: string; command: { delivery: string; message: { parts: unknown[] } } };
@@ -1324,13 +1449,14 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       actorTicketDisplay: () => null,
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-      subscribeTicketWake: () => () => undefined,
-      subscribeSessionWake: () => () => undefined,
+      watches: () => null,
       supervise: () => null,
       mcp: () => null,
       // The operation is proved in `delegate-session.test.ts`; this suite
       // proves the door — identity binding, wording, and the refusals.
       delegate: () => ({
+        watching: () => false,
+        rearm: async () => undefined,
         delegate: async (input) => {
           delegated.push(input);
           if (input.task.includes("overflow")) {
@@ -1380,14 +1506,22 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     ]);
     expect(result.text).toContain(`Delegated to subagent Session ${CHILD_SESSION.slice(0, 8)}`);
     expect(result.text).toContain('"Token refresh hunt"');
-    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
+    expect(result.text).not.toMatch(/cursor|session_await/);
+    expect(result.text).toContain("no time limit");
     // The two facts the model must act on: keep working, and the answer
     // arrives as a message.
     expect(result.text).toMatch(/arrive|delivered/);
     expect(result.text).toMatch(/keep working|continue/i);
     expect(result.text).not.toContain(CHILD_SESSION);
-    // The row's structured aside: the child's id to open and its name.
-    expect(result.details).toEqual({ sessionId: CHILD_SESSION, title: "Token refresh hunt" });
+    // The row's structured aside: the child's id to open and its name — and,
+    // for a program (VC-471), the handle, model and state the prose states.
+    expect(result.details).toEqual({
+      sessionId: CHILD_SESSION,
+      handle: CHILD_SESSION.slice(0, 8),
+      title: "Token refresh hunt",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
+      state: "running",
+    });
   });
 
   it("a Ticket Session delegates within its own Ticket", async () => {
@@ -1396,6 +1530,56 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     await h.call({ task: "Run the flaky test ten times and report" }, TICKET_CALLER);
 
     expect(h.delegated[0]).toMatchObject({ parent: TICKET_CALLER });
+  });
+
+  /**
+   * VC-431. The delegate door offers the same tier list `session_start` does,
+   * and the same refusals — one `readModelOverride`, so a tier means the same
+   * thing at both doors.
+   *
+   * The door already READ `tier` before the schema advertised it, so what
+   * these pin is the agreement rather than a new code path: the word the
+   * registry now publishes is the word this door accepts, and the row it
+   * refuses is the row no Session may run on. What makes the schema itself
+   * honest is `verb-registry.test.ts` and the CLI reference snapshot.
+   *
+   * The last assertion is the load-bearing one for this ticket: a delegation
+   * that names NEITHER carries no override at all from here, because
+   * anchoring a child to its parent is the facade's job (`anchoredOnParent`),
+   * beside the tool surface and MCP a child already inherits there.
+   */
+  describe("tier", () => {
+    it("hands a named tier to the operation", async () => {
+      const h = delegateHarness();
+
+      await h.call({ task: "Quick check", tier: "fast" });
+
+      expect(h.delegated[0]).toMatchObject({ modelOverride: { tier: "fast" } });
+    });
+
+    it("refuses the Utility row, naming the tiers a Session may run on", async () => {
+      const h = delegateHarness();
+
+      const result = await h.call({ task: "Quick check", tier: "utility" });
+
+      expect(result.text).toBe("`tier` must be one of: fast, deep, visual, ticket, global.");
+      expect(h.delegated).toEqual([]);
+    });
+
+    it("refuses a tier beside an exact model, and passes no override when neither is named", async () => {
+      const h = delegateHarness();
+
+      const both = await h.call({
+        task: "Quick check",
+        tier: "deep",
+        model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" },
+      });
+      expect(both.text).toBe("`tier` and `model` are alternatives; pass one.");
+
+      await h.call({ task: "Quick check" }, CALLER, "tc-bare");
+      expect(h.delegated).toHaveLength(1);
+      expect(h.delegated[0]).not.toHaveProperty("modelOverride");
+    });
   });
 
   it("refuses a missing task, an operation refusal, and a host without a runtime in words", async () => {
@@ -1415,5 +1599,241 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       new AbortController().signal,
     );
     expect(result.text).toContain("not available this launch");
+  });
+});
+
+/**
+ * Where a verb result's `details` part from the schema its registry entry
+ * declares, one line per difference — empty when it conforms (VC-471).
+ *
+ * Total over `VerbResultDetailsSchema`'s closed vocabulary, which is why it
+ * needs no validator: required keys, no undeclared keys, primitive types,
+ * enums, string lists, and one level of nested object.
+ */
+function detailsProblems(
+  value: unknown,
+  schema: VerbResultDetailsSchema | VerbResultFieldSchema,
+  path = "details",
+): string[] {
+  switch (schema.type) {
+    case "string":
+      if (typeof value !== "string") return [`${path} is not a string`];
+      return schema.enum === undefined || schema.enum.includes(value)
+        ? []
+        : [`${path} is not one of ${schema.enum.join(", ")}`];
+    case "number":
+      return typeof value === "number" && Number.isFinite(value) ? [] : [`${path} is not a number`];
+    case "boolean":
+      return typeof value === "boolean" ? [] : [`${path} is not a boolean`];
+    case "array":
+      return Array.isArray(value) && value.every((item) => typeof item === "string")
+        ? []
+        : [`${path} is not a list of strings`];
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return [`${path} is not an object`];
+      }
+      const record = value as Record<string, unknown>;
+      return [
+        ...schema.required
+          .filter((key) => !(key in record))
+          .map((key) => `${path}.${key} is missing`),
+        ...Object.keys(record)
+          .filter((key) => !(key in schema.properties))
+          .map((key) => `${path}.${key} is not declared`),
+        ...Object.entries(schema.properties).flatMap(([key, field]) =>
+          key in record ? detailsProblems(record[key], field, `${path}.${key}`) : [],
+        ),
+      ];
+    }
+  }
+}
+
+/** One verb's declared result details, from the registry entry the tool is built from. */
+function schemaOf(verb: VerbToolKey): VerbResultDetailsSchema {
+  const schema = verbEntry(verb)?.tool?.resultDetails;
+  if (schema === undefined) throw new Error(`${verb} declares no resultDetails`);
+  return schema;
+}
+
+describe("verb result details match the registry (VC-471)", () => {
+  const CHILD = "cccccccc-0000-0000-0000-000000000000";
+  const WATCHED = "dddddddd-0000-0000-0000-000000000000";
+
+  /**
+   * One door holding every host a fan-out reaches: the Sessions facade for a
+   * start, the delegation host, and a Session engine plus watch registry for
+   * `watch`. `state` is what the start and the delegation report back.
+   */
+  function fanOutDoor(state: "ready" | "needs-recovery" = "ready") {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", name: "Volli", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
+    );
+    const db = ctx.db;
+    const model: ModelSelection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high",
+    };
+    const door = createAgentToolDoor({
+      db,
+      projects: () => listProjects(db),
+      sessions: () => ({
+        start: async () => ({
+          sessionId: STARTED_SESSION,
+          state,
+          receipt: null,
+          throughSequence: 2,
+          model,
+        }),
+      }),
+      submitSessionMessage: async () => undefined,
+      actorTicketDisplay: () => null,
+      now: () => 1_000,
+      delegation: grantingDelegation(),
+      automations: () => null,
+      authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+      watches: () => recordingWatches(),
+      supervise: () =>
+        ({
+          sessionEngine: {
+            listSessions: async () => [
+              {
+                session: {
+                  id: WATCHED,
+                  projectId: "project-one",
+                  ticketId: null,
+                  parentSessionId: null,
+                  title: "Implementer",
+                  createdAt: 1,
+                },
+                attachments: [],
+              },
+            ],
+          },
+        }) as never,
+      delegate: () => ({
+        watching: () => false,
+        rearm: async () => undefined,
+        delegate: async (input) => ({
+          childSessionId: CHILD,
+          handle: CHILD.slice(0, 8),
+          title: input.title ?? "Delegated task",
+          model,
+          state: state === "ready" ? "running" : "needs-recovery",
+        }),
+        liveChildren: () => [],
+        recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
+      }),
+      mcp: () => null,
+    });
+    return (verb: VerbToolKey, input: Record<string, unknown>) =>
+      door(CALLER, { verb, input, toolCallId: `tc-${verb}` }, new AbortController().signal);
+  }
+
+  it.each(["ready", "needs-recovery"] as const)(
+    "returns details that conform to each verb's declared schema (%s)",
+    async (state) => {
+      const call = fanOutDoor(state);
+      const calls: readonly [VerbToolKey, Record<string, unknown>][] = [
+        ["session.start", { ticket: "VC-1", message: "Fix the flaky auth test" }],
+        ["session.delegate", { task: "Find where the auth token is refreshed" }],
+        ["watch", { sessions: "dddddddd", tickets: "VC-1" }],
+        ["watch", { tickets: "VC-1", action: "unwatch" }],
+      ];
+      for (const [verb, input] of calls) {
+        const result = await call(verb, input);
+        expect(result.details, verb).toBeDefined();
+        expect(detailsProblems(result.details, schemaOf(verb)), verb).toEqual([]);
+      }
+    },
+  );
+
+  it("carries the facts the prose states, so a program never parses the prose", async () => {
+    const call = fanOutDoor();
+
+    const started = await call("session.start", { ticket: "VC-1", title: "Auth fix" });
+    expect(started.details).toEqual({
+      sessionId: STARTED_SESSION,
+      handle: "abcdef12",
+      ticket: "VC-1",
+      title: "Auth fix",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+      state: "running",
+    });
+    // The prose a direct caller reads is unchanged by the data beside it.
+    expect(started.text).toContain('Started Session abcdef12 on VC-1, titled "Auth fix".');
+    expect(started.text).not.toContain(STARTED_SESSION);
+
+    const watched = await call("watch", { sessions: "dddddddd" });
+    expect(watched.details).toEqual({
+      action: "watch",
+      sessions: ["dddddddd"],
+      tickets: [],
+      ended: 0,
+    });
+  });
+
+  it("names a start that needs recovery in the same word a delegation uses", async () => {
+    const recovering = await fanOutDoor("needs-recovery")("session.start", { ticket: "VC-1" });
+    expect(recovering.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
+    expect(recovering.text).toContain("its attachment needs recovery");
+  });
+
+  it("sends no details with a refusal, so a program can tell the two apart", async () => {
+    const call = fanOutDoor();
+    for (const [verb, input] of [
+      ["session.start", { ticket: "VC-404" }],
+      ["session.delegate", {}],
+      ["watch", {}],
+    ] as const) {
+      expect((await call(verb, input)).details, verb).toBeUndefined();
+    }
+  });
+
+  it("catches a host drifting from its schema", () => {
+    // The helper is what the tests above lean on, so it is shown failing too.
+    expect(
+      detailsProblems(
+        {
+          sessionId: 7,
+          ticket: "VC-1",
+          title: "t",
+          model: { providerId: "p", modelId: "m", reasoningLevel: "turbo" },
+          state: "ready",
+          cursor: "c-1",
+        },
+        schemaOf("session.start"),
+      ),
+    ).toEqual([
+      "details.handle is missing",
+      "details.cursor is not declared",
+      "details.sessionId is not a string",
+      "details.model.reasoningLevel is not one of off, minimal, low, medium, high, xhigh, max",
+      "details.state is not one of running, needs-recovery",
+    ]);
+    expect(
+      detailsProblems(
+        { action: "watch", sessions: "a", tickets: [1], ended: "0" },
+        schemaOf("watch"),
+      ),
+    ).toEqual([
+      "details.sessions is not a list of strings",
+      "details.tickets is not a list of strings",
+      "details.ended is not a number",
+    ]);
+    expect(detailsProblems(null, schemaOf("watch"))).toEqual(["details is not an object"]);
+    expect(
+      detailsProblems(true, { type: "boolean", description: "A flag." }, "details.flag"),
+    ).toEqual([]);
+    expect(
+      detailsProblems("yes", { type: "boolean", description: "A flag." }, "details.flag"),
+    ).toEqual(["details.flag is not a boolean"]);
   });
 });

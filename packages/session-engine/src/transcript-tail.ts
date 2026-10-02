@@ -25,8 +25,8 @@ export interface SessionTranscriptTailEntry {
   role: UIMessage["role"];
   /**
    * The message's own words: whitespace collapsed to single spaces and cut at
-   * {@link TRANSCRIPT_TAIL_TEXT_LIMIT} with a trailing ellipsis. Empty when the
-   * message was nothing but tool calls.
+   * the requested text limit (default {@link TRANSCRIPT_TAIL_TEXT_LIMIT}) with
+   * a trailing ellipsis. Empty when the message was nothing but tool calls.
    *
    * Reasoning is deliberately left out. It is the longest part of a message and
    * the least useful for "what is it doing right now" — the words it said and
@@ -82,9 +82,23 @@ export const TRANSCRIPT_TAIL_TEXT_LIMIT = 120;
  */
 export async function readSessionTranscriptTail(
   ports: SessionTranscriptTailPorts,
-  input: { sessionId: string; limit: number },
+  input: {
+    sessionId: string;
+    limit: number;
+    /**
+     * Maximum text characters per message, excluding a trailing ellipsis.
+     * UI summaries may request longer bounded excerpts; the CLI keeps the
+     * default 120-character line. Fractions truncate, negatives clamp to zero,
+     * and non-finite values fall back to the default.
+     */
+    textLimit?: number;
+  },
 ): Promise<SessionTranscriptTail> {
   const limit = Math.max(0, Math.trunc(input.limit));
+  const requestedTextLimit = input.textLimit ?? TRANSCRIPT_TAIL_TEXT_LIMIT;
+  const textLimit = Number.isFinite(requestedTextLimit)
+    ? Math.max(0, Math.trunc(requestedTextLimit))
+    : TRANSCRIPT_TAIL_TEXT_LIMIT;
   const events = await ports.listEvents({ sessionId: input.sessionId });
   const tail: { at: number; reference: TranscriptReference }[] = [];
   let messages = 0;
@@ -111,7 +125,7 @@ export async function readSessionTranscriptTail(
     // whole peek: the reason to run this command at all is that something is
     // wrong, and the activity counts beside it are still true.
     try {
-      entries.push(tailEntry(at, (await readArtifact(reference)).message));
+      entries.push(tailEntry(at, (await readArtifact(reference)).message, textLimit));
     } catch {
       unreadable += 1;
     }
@@ -137,7 +151,7 @@ export function transcriptReferenceFor(event: SessionEvent): TranscriptReference
   return null;
 }
 
-function tailEntry(at: number, message: UIMessage): SessionTranscriptTailEntry {
+function tailEntry(at: number, message: UIMessage, textLimit: number): SessionTranscriptTailEntry {
   const words: string[] = [];
   const tools: string[] = [];
   for (const part of message.parts) {
@@ -149,12 +163,10 @@ function tailEntry(at: number, message: UIMessage): SessionTranscriptTailEntry {
       tools.push(readActivityDescriptor(part.toolMetadata)?.nativeToolName ?? part.toolName);
     }
   }
-  return { at, role: message.role, text: compactText(words.join(" ")), tools };
+  return { at, role: message.role, text: compactText(words.join(" "), textLimit), tools };
 }
 
-function compactText(text: string): string {
+function compactText(text: string, textLimit: number): string {
   const collapsed = text.replaceAll(/\s+/gu, " ").trim();
-  return collapsed.length > TRANSCRIPT_TAIL_TEXT_LIMIT
-    ? `${collapsed.slice(0, TRANSCRIPT_TAIL_TEXT_LIMIT)}…`
-    : collapsed;
+  return collapsed.length > textLimit ? `${collapsed.slice(0, textLimit)}…` : collapsed;
 }

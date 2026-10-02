@@ -121,6 +121,8 @@ export interface ExportProject {
   sessionModel: string | null;
   /** This project's authority departures (migration 025); NULL = inherit every default. */
   authorityPolicy: string | null;
+  /** This project's decision model (migration 053); NULL = inherit the app-wide one. */
+  decisionModel: string | null;
   /** Per-project skills auto-disclosure consent (migration 020), as the row's 0/1. */
   colorIndex: number;
   sortOrder: number;
@@ -413,6 +415,7 @@ interface ProjectRow {
   session_harness: string | null;
   session_model: string | null;
   authority_policy: string | null;
+  decision_model: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -453,6 +456,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     sessionHarness: row.session_harness,
     sessionModel: row.session_model,
     authorityPolicy: row.authority_policy,
+    decisionModel: row.decision_model,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

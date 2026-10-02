@@ -1,48 +1,47 @@
 ---
 title: Troubleshooting
-description: Resolve source-build, Model Access, worktree, and local CLI connection problems in Volli Code.
+description: Resolve source-build, Model Access, worktree, and local CLI connection problems in Volli.
 sidebar:
   label: Troubleshooting
 ---
 
-## I cannot start a structured Session
+## A chat cannot start or has stopped
 
-Choose a default model in **Settings → Models**. If no model is selected,
-Volli refuses to start the Session rather than selecting one for you.
+In **Settings → Models**, connect a provider and choose an available default.
+See [Models and usage](/guides/models/) for account and tier setup.
 
-If a provider is unavailable, open **Models** and use its recovery action to
-sign in again or refresh availability. The page lists only the models Volli can
-use without exposing credentials.
+If an existing Session has stopped, its conversation is kept. Follow
+[Recover a Session](/guides/recover-session/). The status determines whether to
+retry, repair provider access, wait for a reset, or answer a question.
 
 ## An Automation does not start automatically
 
 Check all of the conditions for the Trigger:
 
-- For a ticket-enter Trigger, the Automation must be **Enabled** on this Mac.
+- For a ticket-enter Trigger, **Automatic triggers** must be on for the Automation on this Mac.
 - The destination column must offer the Automation and have it armed, not
   **No Automation**.
 - The ticket must make a new **Deliberate move** into the column. Enabling or
   arming a column does not process tickets already there.
-- A different Automation can be armed in the column; only one can fire on its
-  own.
+- Another Automation may be the armed one in the column; only one Automation
+  can fire on its own.
 
-A switched-off Automation is still available for a manual Run. Use the Ticket
-workspace's **Automations** menu or the board card's **Automations** submenu to
-run it deliberately.
+A switched-off Automation is still available for a manual Run. See
+[Run an Automation](/guides/automations/run/) and
+[column triggers](/guides/automations/columns/) for the steps.
 
 ## A scheduled Automation was skipped
 
-Volli must be open and awake enough to observe the due time. Open the
+Volli must be open and awake when the scheduled time arrives. Open the
 Automation's **Runs** history and read the **Skipped** reason. **Run now**
 starts one current Run; it does not replay every missed occurrence.
 
 ## A Run cannot use its Runtime
 
-An exact model pin can become unavailable after it was saved. Repair the
-Automation's Runtime in its editor or choose another model. Volli does not
-silently fall back to a different model. A Run already in flight can also
-block another Run on the same ticket; wait for it to finish or inspect the
-existing Session.
+A saved exact model pin can become unavailable. Repair the Automation's Runtime
+in its editor, or choose another model. Volli never silently falls back to a
+different model. A Run already in flight can also block another Run on the same
+ticket; wait for it to finish, or inspect the existing Session.
 
 ## `volli` exits with code 3
 
@@ -57,35 +56,24 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Open **Settings → About** for the install's CLI checks; they run when the pane
-opens, and a fault offers **Fix** to regenerate the parts Volli owns, with
-**Re-check** to run them again. To see the detected executable and shell
-integration, copy the support report from that pane. Terminal companions opened
-by the app already receive `volli` on `PATH`.
+Open **Settings → About**. Its CLI checks run when the pane opens; a fault
+offers **Fix**, which regenerates the parts Volli owns, and **Re-check** to run
+the checks again. To see the detected executable and shell integration, copy
+the support report from that pane. Terminal companions opened by the app
+already have `volli` on `PATH`.
 
-## `pnpm install` fails on a native module
+## A source build cannot load the terminal module
 
-The development build uses native modules that must match Electron's ABI. Run:
-
-```sh
-pnpm -C apps/desktop run rebuild:native
-```
-
-Then run `pnpm install` again if needed.
+`node-pty` must match Electron's ABI after a dependency install. Follow
+[Build from source](/reference/build-from-source/#rebuild-the-terminal-module)
+to rebuild it. An install error needs the fix its own output names.
 
 ## My ticket worktree is still on disk
 
-Archiving a ticket retains its worktree, and Volli refuses to remove a worktree
-with uncommitted work. Use **Remove worktree…** from the ticket context menu
-after the branch is landed, or remove it yourself:
-
-```sh
-git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
-```
-
-For tickets in Done, use **Retention** in **Settings → Storage** to control when
-Volli can reclaim a clean folder automatically. **Keep worktree** exempts a ticket
-from that cleanup.
+Archiving and worktree removal are separate actions. A pinned, dirty, active,
+or otherwise ineligible worktree can remain on disk. Follow
+[Clean up worktrees](/guides/clean-up-worktrees/) to inspect the reason and
+choose a safe removal path.
 
 ## A shortcut does nothing
 
@@ -102,14 +90,18 @@ generated colors. Remove the `theme` key from Ghostty and Volli terminal
 settings if you want the terminal to follow the app theme. See
 [Theming](/guides/theming/).
 
+## MCP tools do not appear in a chat
+
+A Session keeps the tools it received when it was created. After adding or
+enabling tools, create a new Session. Follow [MCP servers](/guides/mcp-servers/)
+for discovery failures, unsupported authentication, and deletion limits.
+
 ## Where Volli keeps things
 
-- **Database:** projects, tickets, labels, and local history in a SQLite file
-  in Electron's `userData` directory.
-- **Worktrees:** `~/.volli/worktrees/`.
-- **Session transcripts:** files on disk, indexed locally.
-
-Removing a project from Volli does not remove its folder from disk.
+See [Local data and network access](/reference/data-and-privacy/) for storage
+locations. Removing a project from Volli does not delete its repository folder.
+The JSON export is not a restorable backup; see
+[Manage local storage](/guides/storage/).
 
 ## Report a bug
 

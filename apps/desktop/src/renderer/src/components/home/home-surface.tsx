@@ -59,7 +59,6 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
-  activateTab as activateSplitTab,
   arrangeTabs,
   EMPTY_TAB_ORDER,
   errorMessage,
@@ -69,7 +68,6 @@ import {
   type FileWorkspaceTab,
   type ResolvedSplitViewPane,
 } from "@volli/shared";
-import { BROWSER_START_URL } from "../../../../browser-start-page";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -86,6 +84,7 @@ import {
   parseBrowserTabId,
   resolveHomeTabs,
 } from "./home-tabs";
+import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -133,6 +132,7 @@ import {
 import { isEmptyProvisionalChatDraft, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProvisionalChatTabs } from "@renderer/hooks/use-provisional-chat-tabs";
+import { useHomeTabReceipt } from "@renderer/hooks/use-home-tab-receipt";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
@@ -199,14 +199,38 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   );
   // Everything this surface needs to know about its Chat Drafts, and the rule
   // about them, in one place shared with the Ticket workspace (VC-358).
-  const provisionalTabs = useProvisionalChatTabs(selectedId, openChatIds);
+  const readSplitView = React.useCallback(
+    () =>
+      selectedId === null
+        ? null
+        : (useWorkspaceStore.getState().byProject[selectedId]?.homeSplitView ?? null),
+    [selectedId],
+  );
+  const claimProvisionalTab = React.useCallback(
+    (tabId: string, paneId: string, front: boolean) => {
+      if (selectedId !== null)
+        useWorkspaceStore.getState().claimHomeTabInPane(selectedId, tabId, paneId, front);
+    },
+    [selectedId],
+  );
+  const activateClaimedDraft = React.useCallback(
+    (tabId: string) => {
+      if (selectedId !== null) useWorkspaceStore.getState().setHomeActiveTab(selectedId, tabId);
+    },
+    [selectedId],
+  );
+  const provisionalTabs = useProvisionalChatTabs(selectedId, openChatIds, {
+    readSplitView,
+    claimTab: claimProvisionalTab,
+    activateTab: activateClaimedDraft,
+  });
   const {
     activeOverride: provisionalActive,
     activeOverrideTabId: provisionalTabId,
+    overlaySplitView,
     emptyTabIds: emptyProvisionalTabIds,
     guardLayoutWrites,
     releaseActive,
-    shouldCommitActive,
     takeActive,
   } = provisionalTabs;
   const recordedTab = useWorkspaceStore((state) =>
@@ -331,42 +355,16 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // closed under the recorded id is answered by re-deriving, never by repairing
   // what was stored. Held back while a restore is pending or in flight —
   // writing then would overwrite the very id the restore is about to use.
-  React.useEffect(() => {
-    if (
-      selectedId === null ||
-      provisionalActive !== null ||
-      restoreKind !== "settled" ||
-      activeTabId === recordedTab
-    ) {
-      return;
-    }
-    setHomeActiveTab(selectedId, activeTabId);
-  }, [selectedId, provisionalActive, restoreKind, activeTabId, recordedTab, setHomeActiveTab]);
-
-  // Typing or attaching turns the invisible empty Draft into persisted work.
-  // Commit its already-stable tab id to workspace layout at that boundary,
-  // then retire the renderer-only focus overlay.
-  React.useEffect(() => {
-    if (selectedId === null || provisionalTabId === null || !shouldCommitActive) return;
-    // The renderer-only overlay activated this tab in the focused pane. Claim
-    // that same pane in persisted layout before removing the overlay, or split
-    // resolution would treat the newly durable tab as unassigned and move it
-    // to the primary pane.
-    if (splitView !== null) {
-      useWorkspaceStore
-        .getState()
-        .moveHomeTabToPane(selectedId, provisionalTabId, splitView.focusedPaneId);
-    }
-    setHomeActiveTab(selectedId, provisionalTabId);
-    releaseActive();
-  }, [
-    provisionalTabId,
-    releaseActive,
-    shouldCommitActive,
-    selectedId,
-    setHomeActiveTab,
-    splitView,
-  ]);
+  const recordResolvedHomeTab = useWorkspaceStore((state) => state.recordResolvedHomeTab);
+  useHomeTabReceipt({
+    projectId: selectedId,
+    provisionalActive,
+    emptyTabIds: emptyProvisionalTabIds,
+    restoreKind,
+    activeTabId,
+    recordedTab,
+    recordResolvedTab: recordResolvedHomeTab,
+  });
 
   // ── What is on screen ────────────────────────────────────────────────────
   const boardTabActive = isHomeBoardTab(activeTabId);
@@ -418,9 +416,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const split = resolveSplitView(
     splitView === null
       ? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID)
-      : provisionalTabId === null
-        ? splitView
-        : activateSplitTab(splitView, provisionalTabId),
+      : overlaySplitView(splitView),
     orderedTabIds,
     HOME_BOARD_TAB_ID,
   );
@@ -489,18 +485,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
-    try {
-      const result = await browserApi.open({ projectId: selectedId, url: BROWSER_START_URL });
-      if (!result.ok) {
-        toastError(`Could not open Browser Tab: ${result.error}`);
-        return;
-      }
-      useBrowserTabsStore.getState().receive(result.tab);
-      setHomeActiveTab(selectedId, browserTabId(result.tab.tabId));
-    } catch (reason) {
-      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
-    }
-  }, [browserApi, selectedId, setHomeActiveTab]);
+    await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
+      releaseActive();
+      setHomeActiveTab(selectedId, tabId);
+    });
+  }, [browserApi, releaseActive, selectedId, setHomeActiveTab]);
 
   // The guard for closing a TAB. `SessionsLayer` keeps its own for closing a
   // PANE: the two surfaces own different closes now that the strip lives here,
@@ -838,6 +827,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         <PaneEmptyState
           onNewChat={() => void startProjectChat(selectedId)}
           onNewTerminal={() => void startProjectTerminal(selectedId)}
+          onNewBrowser={() => void createBrowser()}
           onOpenFile={openQuickOpen}
           onClosePane={() => closeHomePane(selectedId, pane.id)}
         />

@@ -54,7 +54,7 @@ const ACCENT_TEXT_LC = 60;
 /** Every foreground the two paths solve, and nothing else. */
 type CopyTokens = Pick<
   ThemeTokens,
-  "--foreground" | "--muted-foreground" | "--sidebar-foreground" | "--primary-text"
+  "--foreground" | "--muted-foreground" | "--sidebar-foreground" | "--primary-text" | "--ring"
 >;
 
 /**
@@ -88,15 +88,20 @@ function solveCopy(
   const at = (targetLc: number, surface: string) =>
     oklchToHex(solveLightnessOrCeiling(targetLc, ink.C, ink.h, surface), ink.C, ink.h);
 
+  const accentInk = oklchToHex(
+    solveLightnessOrCeiling(ACCENT_TEXT_LC, accent.C, accent.h, ladder["--card"]),
+    accent.C,
+    accent.h,
+  );
   return {
     "--foreground": at(floors.body, ladder["--background"]),
     "--muted-foreground": at(floors.secondary, ladder["--card"]),
     "--sidebar-foreground": at(floors.sidebar, ladder["--sidebar"]),
-    "--primary-text": oklchToHex(
-      solveLightnessOrCeiling(ACCENT_TEXT_LC, accent.C, accent.h, ladder["--card"]),
-      accent.C,
-      accent.h,
-    ),
+    "--primary-text": accentInk,
+    // Focus marks the surrounding surface, not the button's label. The opaque
+    // accent ink clears 3:1 on the control surfaces in both appearances; unlike
+    // the fill it must be re-solved when the surface changes.
+    "--ring": accentInk,
   };
 }
 

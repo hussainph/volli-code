@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance smoke for Volli's kanban board — reworked for the
- * SQLite persistence migration (docs/CONCEPT.md decision #29). Drives the REAL
+ * SQLite persistence migration. Drives the REAL
  * packaged renderer through Playwright against a scratch SQLite database
  * (`VOLLI_DB_PATH`, passed via the Electron process env), exercising the whole
  * new boot/import/durability path a user would hit:

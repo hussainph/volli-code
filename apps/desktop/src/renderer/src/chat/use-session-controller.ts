@@ -25,11 +25,14 @@ import { useStore, type StoreApi } from "zustand";
 
 import {
   getChatClient,
+  approvalAnswerFailures,
   isDeliverable,
   type ChatMessageDelivery,
+  type ChatSessionFrame,
   type LiveTranscriptCompaction,
   type MessageDelivery,
   type QueuedMessage,
+  type TranscriptAuthorityReview,
   type TranscriptCompaction,
   type TranscriptReasoningDrop,
 } from "@volli/session-presentation";
@@ -38,9 +41,11 @@ import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/c
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
+const NO_FRAMES: readonly ChatSessionFrame[] = [];
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
 const NO_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
+const NO_AUTHORITY_REVIEWS: readonly TranscriptAuthorityReview[] = [];
 const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
 
 /**
@@ -75,6 +80,8 @@ export interface SessionView {
   durableMessages: readonly UIMessage[];
   /** Every interaction opened this Session, for the receipts they left behind. */
   openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
+  /** Failed remembered grants are displayed as their effective allow-once outcome. */
+  approvalFailures: ReadonlyMap<string, "once" | "not-delivered">;
   /** The Session's lifecycle is `working` — a turn is live. */
   working: boolean;
   /** A message typed now could actually leave — see {@link isDeliverable}. */
@@ -98,6 +105,7 @@ export interface SessionView {
   compactions: readonly TranscriptCompaction[];
   /** Every provider recovery notice, anchored beside the Turn it affected. */
   reasoningDrops: readonly TranscriptReasoningDrop[];
+  authorityReviews: readonly TranscriptAuthorityReview[];
   /** The summary currently being generated, absent once its durable result lands. */
   liveCompaction: LiveTranscriptCompaction | null;
 }
@@ -128,6 +136,13 @@ export interface SessionController {
   dismissError(): void;
   /** Summarize the context now, on explicit request. False means it did not. */
   compactContext(instructions: string | null): Promise<boolean>;
+  /** Resume a quota-stopped run at its stated reset — see {@link ChatSessionClient.scheduleResume}. */
+  scheduleResume(input: {
+    attentionId: string;
+    attachmentId: string;
+    resumeAt: number;
+  }): Promise<boolean>;
+  cancelScheduledResume(scheduleId: string): Promise<boolean>;
   close(): void;
 }
 
@@ -164,6 +179,11 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.openedInteractions ?? NO_OPENED,
   );
+  const frames = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.frames ?? NO_FRAMES,
+  );
+  const approvalFailures = React.useMemo(() => approvalAnswerFailures(frames), [frames]);
   const working = useStore(store, (state) => state.sessions[sessionId]?.lifecycle === "working");
   const deliverable = useStore(store, (state) => {
     const slice = state.sessions[sessionId];
@@ -183,6 +203,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.reasoningDrops ?? NO_REASONING_DROPS,
   );
+  const authorityReviews = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.authorityReviews ?? NO_AUTHORITY_REVIEWS,
+  );
   const liveCompaction = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
@@ -195,6 +219,7 @@ export function useSessionController(
       turnActive,
       durableMessages,
       openedInteractions,
+      approvalFailures,
       working,
       deliverable,
       sessionError,
@@ -202,9 +227,12 @@ export function useSessionController(
       promptResources,
       compactions,
       reasoningDrops,
+      authorityReviews,
       liveCompaction,
     }),
     [
+      approvalFailures,
+      authorityReviews,
       compactions,
       deliverable,
       durableMessages,
@@ -256,6 +284,9 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     },
     compactContext: (instructions) =>
       getChatClient(sessionId)?.compactContext(instructions) ?? refused,
+    scheduleResume: (input) => getChatClient(sessionId)?.scheduleResume(input) ?? refused,
+    cancelScheduledResume: (scheduleId) =>
+      getChatClient(sessionId)?.cancelScheduledResume(scheduleId) ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

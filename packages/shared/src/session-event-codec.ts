@@ -21,8 +21,9 @@
  * The payload graph's other roots live here too: `command.recorded` carries a
  * whole `SessionCommand` and `command.receipt.recorded` a `CommandReceipt`,
  * so intent, route, receipt and provenance decoding are this module's as well.
- * Encode stays a plain canonical `JSON.stringify` behind a strict JSON-safety
- * assertion — the codec never re-orders or rewrites what is already on disk.
+ * Encode stays canonical JSON behind a strict JSON-safety assertion. Ordinary
+ * records are not rewritten; credential-bearing interactions are allowlisted
+ * at every boundary so unknown fields cannot become stored credential values.
  *
  * The renderer-safe form is the same table's other column. Each entry's
  * `scrub` maps a durable payload onto what may cross the product edge to the
@@ -35,6 +36,8 @@
  * this table exists to make impossible.
  */
 
+import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "./session-stop";
+
 import {
   COMPACTION_REASONS,
   COMPACTION_WORK_REASONS,
@@ -44,14 +47,21 @@ import {
 } from "./agent-runtime";
 import type { ModelSelection, PromptResource, SessionRole } from "./agent-runtime";
 import { MODEL_TIERS } from "./model-access-policy";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import type { ApprovalDetail } from "./approvals";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
+import type { DecisionAnswer, DecisionMissReason } from "./decision-model";
 import { errorMessage } from "./errors";
+import type { PresentedScheduledResume } from "./scheduled-resume";
+import type { SecretRequestMetadata } from "./secrets";
 import {
+  SCHEDULED_RESUME_SKIP_REASONS,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
@@ -62,6 +72,7 @@ import type { SessionUsage } from "./session-usage";
 import type {
   CommandReceipt,
   CommandReceiptResult,
+  ScheduledResumeOutcome,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -174,6 +185,7 @@ const codecs = {
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
       ...decodeModelTier(record.tier, `${context}.tier`),
+      ...decodeModelAuto(record.auto, `${context}.auto`),
     }),
     scrub: (payload) => payload,
   },
@@ -315,6 +327,7 @@ const codecs = {
       kind: "turn.interrupted",
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
+      ...optionalStopDetail(record.stopDetail, `${context}.stopDetail`),
     }),
     scrub: (payload) => payload,
   },
@@ -456,6 +469,12 @@ const codecs = {
     // `authority.denied` crosses untouched — `tool`, `cause` and `reason` are
     // Volli's own vocabulary already, not a harness's.
     scrub: (payload) => payload,
+  },
+  "authority.reviewed": {
+    decode: decodeAuthorityReview,
+    // Project only named verdict fields, including typed answers. Never carry
+    // an accidental request/state/args property over the renderer boundary.
+    scrub: (payload) => decodeAuthorityReview(payload, "authority.reviewed"),
   },
   "adapter.observed": {
     decode: (record, context) => ({
@@ -708,7 +727,20 @@ export function scrubSessionAttention(attention: SessionAttention): RendererSess
 export function scrubSessionInteraction(
   interaction: SessionInteraction,
 ): RendererSessionInteraction {
-  return { ...interaction, native: scrubbedNativeReference() };
+  // Decode the presentation rather than spreading it: unknown fields, including
+  // an accidental credential value, are never renderer data.
+  return {
+    ...decodeInteraction(
+      { ...interaction, native: scrubbedNativeReference() },
+      "Session interaction",
+    ),
+    native: scrubbedNativeReference(),
+  };
+}
+
+/** Write-side allowlist, also used before runtime observations become facts. */
+export function sanitizeSessionInteraction(interaction: SessionInteraction): SessionInteraction {
+  return decodeInteraction(interaction, "Session interaction");
 }
 
 export function scrubSessionCommand(command: SessionCommand): RendererSessionCommand {
@@ -896,6 +928,7 @@ export interface SessionPresentationProjection extends Pick<
   | "signal"
   | "modelSelection"
   | "modelTier"
+  | "modelAuto"
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
@@ -914,6 +947,12 @@ export interface SessionPresentationProjection extends Pick<
    * about which one is live.
    */
   authority: RendererSessionAuthority | null;
+  /**
+   * The resume this Session is waiting to run at a quota reset, or `null`.
+   * Derived from its commands by `presentedScheduledResume` — only one that
+   * is still going to run is drawn, never one the Session already overtook.
+   */
+  scheduledResume: PresentedScheduledResume | null;
 }
 
 /**
@@ -1001,6 +1040,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         kind,
         selection: decodeModelSelection(row.selection, `${context}.selection`),
         ...decodeModelTier(row.tier, `${context}.tier`),
+        ...decodeModelAuto(row.auto, `${context}.auto`),
       };
     case "executor.start":
       return {
@@ -1034,6 +1074,21 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         interactionId: readString(row.interactionId, `${context}.interactionId`),
         resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
         reference: decodeTranscriptReference(row.reference, `${context}.reference`),
+      };
+    case "resume.schedule":
+      return {
+        kind,
+        attentionId: readString(row.attentionId, `${context}.attentionId`),
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        resumeAt: readInteger(row.resumeAt, `${context}.resumeAt`),
+      };
+    case "resume.cancel":
+      return { kind, scheduleId: readString(row.scheduleId, `${context}.scheduleId`) };
+    case "resume.settle":
+      return {
+        kind,
+        scheduleId: readString(row.scheduleId, `${context}.scheduleId`),
+        outcome: decodeScheduledResumeOutcome(row.outcome, `${context}.outcome`),
       };
     default:
       throw new Error(`${context}.kind is not a known Session command`);
@@ -1124,15 +1179,26 @@ export function assertSession(value: Session, context: string): void {
 }
 
 /**
- * Canonical persisted form: a plain `JSON.stringify` behind a strict
- * JSON-safety assertion. No re-ordering — what is already on disk stays
- * byte-identical when re-encoded from the same value.
+ * Canonical persisted form behind a strict JSON-safety assertion. Ordinary
+ * records retain key order. Credential-bearing interactions (including those
+ * in checkpoints) are explicitly allowlisted, never serialized by a spread.
  */
 export function encodeSessionJson(value: unknown): string {
   assertJsonValue(value, "JSON value");
   // `JSON.stringify` returns `undefined` only for values `assertJsonValue`
   // already refused (undefined, functions, symbols), so the result is a string.
-  return JSON.stringify(value);
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (
+      item !== null &&
+      typeof item === "object" &&
+      "credential" in item &&
+      "kind" in item &&
+      (item.kind === "question" || item.kind === "permission")
+    ) {
+      return decodeInteraction(item, "Credential interaction");
+    }
+    return item;
+  });
 }
 
 /* ------------------------------------------------------------ entity decoders */
@@ -1193,6 +1259,18 @@ function decodeSessionStopActor(value: unknown, context: string): SessionStopAct
     : { kind };
 }
 
+function decodeScheduledResumeOutcome(value: unknown, context: string): ScheduledResumeOutcome {
+  const row = asRecord(value, context);
+  const kind = enumValue(row.kind, ["resumed", "skipped"], `${context}.kind`);
+  return kind === "resumed"
+    ? { kind, retryCommandId: readString(row.retryCommandId, `${context}.retryCommandId`) }
+    : {
+        kind,
+        reason: enumValue(row.reason, SCHEDULED_RESUME_SKIP_REASONS, `${context}.reason`),
+        detail: readNullableString(row.detail, `${context}.detail`),
+      };
+}
+
 function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
   const row = asRecord(value, context);
   const kind = enumValue(
@@ -1211,6 +1289,9 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "context.compacted",
       "message.submitted",
       "interaction.resolved",
+      "resume.scheduled",
+      "resume.cancelled",
+      "resume.settled",
     ],
     `${context}.kind`,
   );
@@ -1248,12 +1329,28 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
       toolName,
       description,
       inputSchema: row.inputSchema,
+      // Absent on every definition frozen before VC-469, which replays as it
+      // was written: without one.
+      ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
     });
     if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`${context}[${index}] ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(providerName)) {
       throw new Error(`${context}[${index}].providerName is invalid`);
     }
-    return { ...sanitized.definition, providerName };
+    // Host-authored parallel-read eligibility (VC-454): read back exactly as
+    // written, and only as `true`. Anything else is a damaged record, not a
+    // tool that quietly runs one call at a time.
+    if (row.parallelRead !== undefined && row.parallelRead !== true) {
+      throw new Error(`${context}[${index}].parallelRead must be true when present`);
+    }
+    return {
+      ...sanitized.definition,
+      providerName,
+      ...(row.parallelRead === true ? { parallelRead: true as const } : {}),
+    };
   });
   return validateMcpToolDefinitions(definitions);
 }
@@ -1265,9 +1362,15 @@ function decodeToolSurfaceInput(
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
+  mcpManagementNames?: "server";
   mcpTools?: readonly McpToolDefinition[];
+  codeMode?: CodeModeSurface;
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  const mcpManagementNames =
+    input.mcpManagementNames === undefined
+      ? undefined
+      : enumValue(input.mcpManagementNames, ["server"], `${context}.mcpManagementNames`);
   const mcpTools =
     input.mcpTools === undefined
       ? undefined
@@ -1277,7 +1380,23 @@ function decodeToolSurfaceInput(
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
-  return mcpTools === undefined ? { kind, tools } : { kind, tools, mcpTools };
+  // Code Mode's record and its name travel together (VC-471): a surface that
+  // names `codemode` with no routes, or routes with no `codemode`, is damaged
+  // rather than a smaller surface, and its routes must cover it exactly.
+  const codeMode =
+    input.codeMode === undefined
+      ? undefined
+      : parseCodeModeSurface(input.codeMode, tools, `${context}.codeMode`);
+  if (codeMode === undefined && tools.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context} names ${CODE_MODE_TOOL_ID} without its routes`);
+  }
+  return {
+    kind,
+    tools,
+    ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(codeMode === undefined ? {} : { codeMode }),
+  };
 }
 
 /**
@@ -1325,6 +1444,35 @@ function decodeModelSelection(value: unknown, context: string): ModelSelection {
  */
 function decodeModelTier(value: unknown, context: string): { tier?: ModelTier } {
   return value === undefined ? {} : { tier: enumValue(value, MODEL_TIERS, context) };
+}
+
+/**
+ * The optional automatic-choice provenance beside a model selection (VC-432),
+ * as a spreadable fragment: absent stays absent, so every record written
+ * before it decodes to the object it always did.
+ */
+function readProbability(item: unknown, at: string): number {
+  if (typeof item !== "number" || !Number.isFinite(item) || item < 0 || item > 1) {
+    throw new Error(`${at} must be a number between 0 and 1`);
+  }
+  return item;
+}
+
+function decodeModelAuto(value: unknown, context: string): { auto?: ModelAutoPick } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  return {
+    auto: {
+      confidence: readProbability(row.confidence, `${context}.confidence`),
+      alternatives: readArray(row.alternatives, `${context}.alternatives`, (item, at) => {
+        const alternative = asRecord(item, at);
+        return {
+          selection: decodeModelSelection(alternative.selection, `${at}.selection`),
+          probability: readProbability(alternative.probability, `${at}.probability`),
+        };
+      }),
+    },
+  };
 }
 
 function decodeAttachment(value: unknown, context: string): SessionAttachment {
@@ -1384,6 +1532,10 @@ function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnap
       ["observe", "enforce"] as const,
       `${context}.enforcement`,
     ),
+    // Absence is legacy data, not permission to resolve current settings.
+    ...(row.protection === undefined
+      ? {}
+      : { protection: readBoolean(row.protection, `${context}.protection`) }),
     judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
     tools: readToolIds(row.tools, `${context}.tools`),
     rulePackId: readString(row.rulePackId, `${context}.rulePackId`),
@@ -1448,12 +1600,22 @@ function decodeAttention(value: unknown, context: string): SessionAttention {
     attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
     detail: readNullableString(row.detail, `${context}.detail`),
     diagnostic: decodeNativeDetail(row.diagnostic, `${context}.diagnostic`),
+    ...optionalStopDetail(row.stopDetail, `${context}.stopDetail`),
   };
   if (kind === "rate_limited") {
     return { ...base, kind, retryAt: readNullableInteger(row.retryAt, `${context}.retryAt`) };
   }
   if (kind === "quota_exhausted") {
     return { ...base, kind, resetAt: readNullableInteger(row.resetAt, `${context}.resetAt`) };
+  }
+  if (kind === "adapter_unrecoverable") {
+    // Absent is an Attention written before the field existed, and reads as
+    // "no reset stated" — the same thing the explicit null says.
+    return {
+      ...base,
+      kind,
+      resetsAt: readAbsentableInteger(row.resetsAt, `${context}.resetsAt`),
+    };
   }
   return { ...base, kind };
 }
@@ -1536,6 +1698,12 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
     multiple: readBoolean(row.multiple, `${context}.multiple`),
     native: decodeNative(row.native, `${context}.native`),
   };
+  if (row.approval !== undefined) {
+    interaction.approval = decodeApprovalMetadata(row.approval, `${context}.approval`);
+  }
+  if (row.credential !== undefined) {
+    interaction.credential = decodeSecretRequestMetadata(row.credential, `${context}.credential`);
+  }
   // `prompts` is optional in both directions. A record written before an
   // interaction could carry per-question detail must decode back without the
   // key — not with an empty array, and not with one synthesised from the flat
@@ -1543,6 +1711,48 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
   // doing it here would persist a derived value on the next write.
   if (row.prompts === undefined) return interaction;
   return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
+}
+
+function decodeApprovalMetadata(value: unknown, context: string): ApprovalDetail {
+  const row = asRecord(value, context);
+  if (!Array.isArray(row.stages)) throw new Error(`${context}.stages must be an array`);
+  const stages = row.stages.map((stage, index) => readString(stage, `${context}.stages[${index}]`));
+  const held = readNullableInteger(row.held, `${context}.held`);
+  if (held !== null && (held < 0 || held >= stages.length)) {
+    throw new Error(`${context}.held must index a command stage`);
+  }
+  let heldStages: number[] | undefined;
+  if (row.heldStages !== undefined) {
+    if (!Array.isArray(row.heldStages)) throw new Error(`${context}.heldStages must be an array`);
+    heldStages = row.heldStages.map((entry, index) => {
+      const stage = readInteger(entry, `${context}.heldStages[${index}]`);
+      if (stage < 0 || stage >= stages.length)
+        throw new Error(`${context}.heldStages must index command stages`);
+      return stage;
+    });
+  }
+  return {
+    asked: readString(row.asked, `${context}.asked`),
+    because: readString(row.because, `${context}.because`),
+    reason: readString(row.reason, `${context}.reason`),
+    stages,
+    held,
+    ...(heldStages === undefined ? {} : { heldStages }),
+  };
+}
+
+/** Deliberately enumerate every metadata field; never spread a credential object. */
+function decodeSecretRequestMetadata(value: unknown, context: string): SecretRequestMetadata {
+  const row = asRecord(value, context);
+  return {
+    id: readString(row.id, `${context}.id`),
+    name: readString(row.name, `${context}.name`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    sessionLabel: readString(row.sessionLabel, `${context}.sessionLabel`),
+    projectId: readString(row.projectId, `${context}.projectId`),
+    projectLabel: readString(row.projectLabel, `${context}.projectLabel`),
+    agentSays: readNullableString(row.agentSays, `${context}.agentSays`),
+  };
 }
 
 function decodeInteractionResolution(
@@ -1674,11 +1884,117 @@ function readNullableInteger(value: unknown, context: string): number | null {
   return value === null ? null : readInteger(value, context);
 }
 
+/** Absent either way — an explicit `null` or a key an older event never wrote. */
+function readAbsentableInteger(value: unknown, context: string): number | null {
+  return value === undefined ? null : readNullableInteger(value, context);
+}
+
+/** A metadata-only verdict. Never decode the request or classifier state here. */
+function decodeAuthorityReview(
+  record: JsonRecord,
+  context: string,
+): PayloadOf<"authority.reviewed"> {
+  const thresholds = asRecord(record.thresholds, `${context}.thresholds`);
+  return {
+    kind: "authority.reviewed",
+    attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+    turnId: readNullableString(record.turnId, `${context}.turnId`),
+    toolCallId: readString(record.toolCallId, `${context}.toolCallId`),
+    tool: readString(record.tool, `${context}.tool`),
+    mode: enumValue(record.mode, ["shadow", "auto"], `${context}.mode`),
+    authoriser: enumValue(record.authoriser, ["classifier"], `${context}.authoriser`),
+    wouldFlag:
+      record.wouldFlag === null ? null : readBoolean(record.wouldFlag, `${context}.wouldFlag`),
+    reason: readString(record.reason, `${context}.reason`),
+    category: readNullableString(record.category, `${context}.category`),
+    answers: readReviewAnswers(record.answers, `${context}.answers`),
+    missReason:
+      record.missReason === null
+        ? null
+        : enumValue(record.missReason, REVIEW_MISS_REASONS, `${context}.missReason`),
+    thresholds: {
+      allow: readProbability(thresholds.allow, `${context}.thresholds.allow`),
+      flag: readProbability(thresholds.flag, `${context}.thresholds.flag`),
+    },
+  };
+}
+
+const REVIEW_MISS_REASONS = [
+  "unset",
+  "not-opted-in",
+  "needs-setup",
+  "unaudited",
+  "invalid-request",
+  "timeout",
+  "aborted",
+  "provider-error",
+  "malformed-answer",
+] as const satisfies readonly DecisionMissReason[];
+
+function readReviewAnswers(
+  value: unknown,
+  context: string,
+): Readonly<Record<string, DecisionAnswer>> | null {
+  if (value === null) return null;
+  const answers = asRecord(value, context);
+  return Object.fromEntries(
+    Object.entries(answers).map(([key, raw]) => {
+      const at = `${context}.${key}`;
+      const answer = asRecord(raw, at);
+      const confidence = readProbability(answer.confidence, `${at}.confidence`);
+      switch (enumValue(answer.type, ["bool", "choice", "score"], `${at}.type`)) {
+        case "bool":
+          return [
+            key,
+            {
+              type: "bool",
+              value: readBoolean(answer.value, `${at}.value`),
+              probability: readProbability(answer.probability, `${at}.probability`),
+              confidence,
+            },
+          ];
+        case "choice": {
+          const probabilities = asRecord(answer.probabilities, `${at}.probabilities`);
+          return [
+            key,
+            {
+              type: "choice",
+              choice: readString(answer.choice, `${at}.choice`),
+              probabilities: Object.fromEntries(
+                Object.entries(probabilities).map(([option, p]) => [
+                  option,
+                  readProbability(p, `${at}.probabilities.${option}`),
+                ]),
+              ),
+              confidence,
+            },
+          ];
+        }
+        case "score": {
+          const score = readNullableFiniteNumber(answer.score, `${at}.score`);
+          const level = readInteger(answer.level, `${at}.level`);
+          if (score === null || score < 0 || level < 0) {
+            throw new Error(`${at} must have a nonnegative score and level`);
+          }
+          return [
+            key,
+            {
+              type: "score",
+              score,
+              level,
+              label: readString(answer.label, `${at}.label`),
+              confidence,
+            },
+          ];
+        }
+      }
+    }),
+  );
+}
+
 /**
- * A money amount, which is the one durable number here that is not whole.
- * NaN and the infinities are refused rather than carried: JSON writes NaN as
- * `null`, so a poisoned cost would come back looking exactly like an honest
- * absent one, and every total it entered afterwards would be NaN.
+ * A finite durable measurement. NaN and infinities cannot survive JSON intact:
+ * they become null and would masquerade as an honestly absent value.
  */
 function readNullableFiniteNumber(value: unknown, context: string): number | null {
   if (value === null) return null;
@@ -1697,4 +2013,27 @@ function enumValue<const T extends readonly string[]>(
     throw new Error(`${context} has an unsupported value`);
   }
   return value as T[number];
+}
+
+/** Optional rather than defaulted: legacy event identity must not change on replay. */
+function optionalStopDetail(value: unknown, context: string): { stopDetail?: SessionStopDetail } {
+  return value === undefined ? {} : { stopDetail: decodeSessionStopDetail(value, context) };
+}
+
+export function decodeSessionStopDetail(value: unknown, context: string): SessionStopDetail {
+  const row = asRecord(value, context);
+  const bounded = (field: unknown, key: string, max: number): string | null => {
+    const text = readNullableString(field, `${context}.${key}`);
+    if (text !== null && text.length > max)
+      throw new Error(`${context}.${key} exceeds ${max} characters`);
+    return text;
+  };
+  return {
+    category: enumValue(row.category, SESSION_STOP_CATEGORIES, `${context}.category`),
+    message: bounded(row.message, "message", 401),
+    providerType: bounded(row.providerType, "providerType", 80),
+    httpStatus: readNullableInteger(row.httpStatus, `${context}.httpStatus`),
+    retry: enumValue(row.retry, ["not-retried", "exhausted"], `${context}.retry`),
+    resetsAt: readNullableInteger(row.resetsAt, `${context}.resetsAt`),
+  };
 }

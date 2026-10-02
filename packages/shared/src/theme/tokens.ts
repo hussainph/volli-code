@@ -57,17 +57,10 @@ export const THEME_TOKEN_NAMES = [
   // Accent family.
   "--primary",
   "--primary-foreground",
-  // The accent again, at the lightness body copy needs. --primary is pinned at
-  // the accent's fill lightness, where it reads as text at only Lc 41; this is
-  // the same hue and chroma solved to Lc 60 on --background.
+  // Accent ink solved on the content surface, independently of the fill.
   "--primary-text",
-  // Equal to `--primary` today and NOT collapsed into it, unlike the aliases
-  // above. Those were one value under several names with nothing to tell them
-  // apart; this is one value under two names that answer different questions —
-  // "what colour is the brand" and "what colour says the keyboard is here". The
-  // focus recipe (`ui/field-classes.ts`) names the second job explicitly, and it
-  // is the one that would move first if a canvas ever made ember unreadable as a
-  // ring. A collapse here would have to be undone to have that argument at all.
+  // Opaque keyboard indicator, solved per surface/appearance. Today it shares
+  // accent ink's answer, not the fill's: the jobs have different contrast pairs.
   "--ring",
   // Hue-locked semantics (never follow the seed).
   "--destructive",

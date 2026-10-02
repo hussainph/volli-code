@@ -7,7 +7,9 @@ import {
   ipcMain,
   nativeTheme,
   net,
+  powerMonitor,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -21,6 +23,7 @@ import { pathToFileURL } from "node:url";
 import {
   acceptsImageInputIn,
   applySkillModes,
+  authorityJudgeDenialReason,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -36,6 +39,7 @@ import {
   makeAgentError,
   memoizedPathExists,
   resolveAgentToolSurface,
+  DEFAULT_CODE_MODE_POLICY,
   resolveDefaultModel,
   resolveShell,
   roleImpliedByTicket,
@@ -50,6 +54,7 @@ import {
   workspaceInstallCommand,
 } from "@volli/shared";
 import type {
+  CodeModeSurface,
   McpToolDefinition,
   PromptResource,
   RuntimeVerbResult,
@@ -67,7 +72,16 @@ import type {
   VolliIpcEvent,
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
-import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
+import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
+import { desktopMcpDispatch } from "./mcp/dispatch-policy";
+import { McpOAuthBroker } from "./mcp/oauth";
+import {
+  closeAllMcpSessionHosts,
+  McpSessionHost,
+  serversForFrozenMcpTools,
+} from "./mcp/session-host";
+import { desktopCodeMode } from "./codemode/dev-config";
+import { codeModeSandboxAssets } from "./codemode/sandbox-assets";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -104,6 +118,7 @@ import {
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
 import {
@@ -115,6 +130,11 @@ import {
 } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
+import {
+  catchUpSessionResumptions,
+  observeSessionResumptions,
+} from "./session-runtime/session-resumptions";
+import type { SessionOrigin } from "@volli/shared";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { readAutomationRunAttendance } from "./db/automations-repo";
 import {
@@ -139,10 +159,18 @@ import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
-  createDesktopSessionEngine,
+  createCheckpointFailureReporter,
+  createSqliteSessionLedger,
+  createScheduledResumeHost,
+  createSessionReadWatch,
   createSessionWatchdog,
+  createSuspendClock,
+  publishSessionListingRow,
   watchSessionActivity,
+  type ScheduledResumeHost,
 } from "./session-control";
+import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
+import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
@@ -151,14 +179,24 @@ import {
 } from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
-import { sessionRootThreadId } from "@volli/session-engine";
+import { createSessionEngine, sessionRootThreadId } from "@volli/session-engine";
+import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
+import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
+import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { createModelAutoSelect } from "./decision/auto-select";
+import { createDesktopDecisions } from "./decision/desktop";
+import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
+import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { createProtection } from "./protection/host";
+import { registerProtectionIpcHandlers } from "./protection/ipc";
+import { migrateProtectionPolicies } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -169,7 +207,16 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { readAuthorityShadowReviewEnabled } from "./session-runtime/authority-shadow-review";
+import { SecretStore } from "./secrets/store";
+import { keychainSecretCodec } from "./secrets/codec";
+import { SecretService } from "./secrets/service";
+import { retiresSessionSecrets } from "./secrets/lifetime";
+import { registerSecretIpc } from "./secrets/ipc";
+import { refusingCredentialReads } from "@volli/agent-runtime";
+import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
+import { createPeekSummarizer } from "./session-control/peek-summary";
 import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
@@ -194,11 +241,13 @@ import {
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
+  readCodeModePolicy,
   readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
   readModelPickerView,
   reconcileModelAccessPreferences,
+  writeCodeModePolicy,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
@@ -240,6 +289,9 @@ import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
+import { createWatches } from "./watches";
+import type { Watches } from "./watches";
+import { getComment } from "./db/comments-repo";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -323,8 +375,9 @@ import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { OrphanProcessService } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
-import { BackgroundShellHost } from "./shell/background-shell-host";
+import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
+import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -337,7 +390,10 @@ import {
 } from "./browser/cursor-overlay";
 import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
 import { BrowserPictureStore } from "./browser/picture-store";
+import { browserTraceDisk, browserTracesRoot } from "./browser/trace-disk";
+import { BrowserTraceStore } from "./browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -495,6 +551,32 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
   return null;
 }
 
+/** The MCP-management wire spelling frozen beside the canonical verb keys. */
+function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
+}
+
+/** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
+function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.codeMode;
+    }
+  }
+  return undefined;
+}
+
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
 function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
   for (const event of events) {
@@ -527,6 +609,10 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
   }
   return input.tools;
+}
+
+async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
+  return authorityJudgeDenialReason(input.cause);
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -831,7 +917,14 @@ app.whenReady().then(async () => {
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    dbHandle = { ok: true, db: openVolliDb(dbPath) };
+    const db = openVolliDb(dbPath);
+    try {
+      migrateProtectionPolicies(db, Date.now());
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
     // is classified here, once: a native-ABI failure names the Node
@@ -854,6 +947,13 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // One transaction queue for Session facts AND host notices. put() must
+  // commit before submission, never ride inside another writer's transaction.
+  const sessionLedger = watchedDb === null ? null : createSqliteSessionLedger(watchedDb);
+  const hostNoticeOutbox =
+    watchedDb === null || sessionLedger === null
+      ? null
+      : createSqliteHostNoticeOutbox(watchedDb, sessionLedger);
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
@@ -883,16 +983,85 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
+  // The scheduled-resume host needs the runtime, which is composed from the
+  // watched engine below — so the watch closes over this indirection and the
+  // host is installed once the runtime exists.
+  let scheduledResumeHost: ScheduledResumeHost | null = null;
   // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
   // watch: a write returns from the engine, the bus fans the committed event
-  // out to whichever `session_await` is parked on it, and only then does the
+  // out to its listeners (the Watch registry, the resumed-subagent re-arm —
+  // VC-457), and only then does the
   // watch mark the row dirty. Same construction-site rule as the watch — this
   // is the only place the engine is made, so no caller can hold an unwatched
   // one. See `session-wake.ts`.
   const sessionWakeBus =
-    watchedDb !== null
-      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+    watchedDb !== null && sessionLedger !== null
+      ? createSessionWakeBus(
+          createSessionEngine({
+            ledger: sessionLedger,
+            clock: { now: Date.now },
+            ids: { next: () => randomUUID() },
+            onProjectionCheckpointFailure: createCheckpointFailureReporter(),
+            yieldToHost: () => new Promise<void>((resolve) => setImmediate(resolve)),
+          }),
+          { db: watchedDb },
+        )
       : null;
+  // Unread, decided here because main is the only process that sees every turn
+  // boundary AND honestly knows which window is focused and what it is showing
+  // (VC-30). Both edges live in one watch: a turn that ended with nobody
+  // looking becomes unread, and a Session that comes into view becomes read.
+  //
+  // `publishSessionRow` is what makes the second edge visible. Marking read
+  // moves no ledger fact, so the activity watch below has nothing to notice —
+  // the row has to be re-published by hand, through the same broadcast and the
+  // same builder, or one window's dot would outlive the other's.
+  const publishSessionRow = (sessionId: string): void => {
+    if (watchedDb === null || sessionEngine === null) return;
+    void publishSessionListingRow(
+      {
+        db: watchedDb,
+        getSession: (query) => sessionEngine.getSession(query),
+        liveAttachmentIds: () =>
+          new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
+        publish: broadcastSessionActivity,
+      },
+      sessionId,
+    ).catch((error: unknown) => {
+      console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
+    });
+  };
+  const sessionReadWatch =
+    watchedDb !== null
+      ? createSessionReadWatch({
+          // The same registry the alert suppression asks, so a turn can never
+          // be both loud and unread.
+          focusedSessionIds: () => notifications.focusedSessionIds(),
+          markUnread: (sessionId, at) => {
+            markSessionUnread(watchedDb, sessionId, at);
+            // No publish here: the activity watch is already mid-fold for this
+            // Session and reads the receipt below, so the row it is about to
+            // publish carries the mark this write just made.
+          },
+          markRead: (sessionId) => {
+            // A Session that is already read must not cost a broadcast: this
+            // fires for everything in front of a focused window, which on an
+            // ordinary switch is a Session nobody has left work in.
+            if (readSessionUnread(watchedDb, sessionId).unreadSince === null) return;
+            writeSessionUnread(watchedDb, sessionId, null);
+            publishSessionRow(sessionId);
+          },
+        })
+      : null;
+  // A1: a Session that BECOMES in front of a focused window is read — the
+  // renderer's active target changed to it, or its window took focus while
+  // already showing it. Without this, returning to a window that has a finished
+  // chat on screen keeps its dot until the person navigates away and back.
+  if (sessionReadWatch !== null) {
+    notifications.onFocusedSessionsChanged((sessionIds) =>
+      sessionReadWatch.observeFocused(sessionIds),
+    );
+  }
   const sessionActivityWatch =
     watchedDb !== null && sessionWakeBus !== null
       ? watchSessionActivity(sessionWakeBus.engine, {
@@ -901,12 +1070,30 @@ app.whenReady().then(async () => {
           // survives its Session's first turn (VC-131): the renderer upserts
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          // Read AFTER `observe` below has run for this fold, so the row a turn
+          // boundary publishes already carries the mark that boundary earned
+          // (VC-30).
+          readOf: (sessionId) => readSessionUnread(watchedDb, sessionId),
           listOpenNativeBindings: () => listOpenNativeBindings(),
-          observe: (projection) => runAttention?.observe(projection),
+          observe: (projection) => {
+            observeSessionResumptions(watchedDb, projection, {
+              publish: broadcastDataChanged,
+              report: (error) =>
+                console.error("[volli] failed to record Session resumption:", errorMessage(error)),
+            });
+            runAttention?.observe(projection);
+            // A schedule made (or settled) anywhere reaches the timer here.
+            scheduledResumeHost?.observe(projection);
+            // Did a turn just end with nobody looking? (VC-30)
+            sessionReadWatch?.observe(projection);
+          },
           // The baseline for the rule above: a Session minted in this process
           // began with no need, which is what makes its first fold an edge
           // rather than a first sighting (VC-133).
-          observeBirth: (sessionId) => runAttention?.observeBirth(sessionId),
+          observeBirth: (sessionId) => {
+            runAttention?.observeBirth(sessionId);
+            sessionReadWatch?.observeBirth(sessionId);
+          },
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;
@@ -995,6 +1182,62 @@ app.whenReady().then(async () => {
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  // Decision models (VC-478): the host decision service every feature that
+  // asks a classifier goes through, the `classify` tool's per-Session port,
+  // and the Settings owner. Built over the same Pi collection as chat, so a
+  // cloud classifier's key is the one a person signed in with under Model
+  // Access. Its usage is billed into the Session it was asked for, as
+  // `usage.recorded` with cause `decision` and the purpose in the provenance.
+  const desktopDecisions =
+    dbHandle.ok && piModelAccess !== null
+      ? createDesktopDecisions({
+          db: dbHandle.db,
+          models: piModelAccess.models,
+          catalogReady: piModelAccess.catalogReady,
+          recordDecision: async (fact) => {
+            if (sessionEngine === null || fact.sessionId === null) {
+              throw new Error("Authority review has no durable Session ledger.");
+            }
+            // authority.judge's caller redacts the reasoning-blind state BEFORE
+            // decide, so neither cloud transport nor this full-state audit sees
+            // secrets. Renderer scrubbing drops the native audit copy entirely.
+            await sessionEngine.observe({
+              id: `audit:decision:${randomUUID()}`,
+              kind: "adapter.observed",
+              sessionId: fact.sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: {
+                  kind: "system",
+                  id: "authority-classifier",
+                  detail: { purpose: fact.purpose, authoriser: "classifier" },
+                },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              name: "authority.judge.audit",
+              native: JSON.parse(JSON.stringify(fact)),
+            });
+          },
+          recordUsage: async (sessionId, usage, purpose) => {
+            if (sessionEngine === null) return;
+            await sessionEngine.observe({
+              // A fresh id per call: every decision is its own bill.
+              id: `usage:decision:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "decision-service", detail: { purpose } },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
+        })
+      : null;
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -1015,7 +1258,72 @@ app.whenReady().then(async () => {
   // store is intentionally constructed before any Session surface: it resolves
   // birth grants and the door later consumes the exact durable record.
   const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
-  const mcpSettings = dbHandle.ok ? new McpSettingsService({ db: dbHandle.db }) : null;
+  // MCP credentials (VC-470): one user-only file beside the database, never
+  // the database itself, and never the keychain — see `mcp/credential-store.ts`.
+  // Beside `dbPath` rather than under `userData` so a smoke run on its own
+  // VOLLI_DB_PATH cannot read or write a real profile's tokens.
+  // Lazy: no keychain access until a stored secret is used or a person saves one.
+  // Session-only storage never needs the keychain. No plaintext fallback.
+  const secrets = new SecretService(
+    new SecretStore(join(dirname(dbPath), "session-secrets.enc"), keychainSecretCodec(safeStorage)),
+  );
+  sessionWakeBus?.subscribe(({ event }) => {
+    if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
+  });
+  registerSecretIpc(secrets, (sender) => {
+    const url = sender.getURL();
+    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
+    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
+    const actual = new URL(url);
+    const expected = new URL(renderer);
+    actual.hash = "";
+    expected.hash = "";
+    return actual.href === expected.href;
+  });
+  const mcpCredentials = new FileMcpCredentialStore(
+    join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
+  );
+  const mcpSettings = dbHandle.ok
+    ? new McpSettingsService({
+        db: dbHandle.db,
+        credentials: mcpCredentials,
+        oauth: new McpOAuthBroker({
+          store: mcpCredentials,
+          // Only ever an authorization page the server's own metadata named,
+          // already checked to be https (or loopback) by the broker.
+          openExternal: (url) => shell.openExternal(url),
+        }),
+      })
+    : null;
+  // How MCP calls are dispatched and bounded (VC-454): the developer-only
+  // parallel-read opt-in, read once from an unpackaged build's environment
+  // (no setting, no UI), and one per-server bound every Session shares.
+  const mcpDispatch = desktopMcpDispatch({
+    env: process.env,
+    packaged: !isDev,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
+  // Code Mode (VC-471): the stored setting, read at each birth, which an
+  // unpackaged build's environment can override like the parallel-read opt-in
+  // above. It decides only what NEW Sessions are born with; a Session's own
+  // record decides the rest.
+  // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
+  // workspace's installed copy unpackaged, and the copy electron-builder
+  // unpacks beside app.asar when packaged. Located once, at boot: a launch
+  // that cannot find them offers no Session Code Mode at all.
+  const codeModeSandbox = codeModeSandboxAssets({
+    packaged: app.isPackaged,
+    appPath: () => app.getAppPath(),
+    resourcesPath: () => process.resourcesPath,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
+  const codeMode = desktopCodeMode({
+    env: process.env,
+    packaged: !isDev,
+    log: (message) => console.warn(`[volli] ${message}`),
+    policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
+    sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
+  });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1040,7 +1348,7 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants, within, mcpTools = []) => {
+          resolve: (role, grants, within, mcpTools = [], codeModeBirth, classify = false) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -1083,6 +1391,22 @@ app.whenReady().then(async () => {
                   "shell_start",
                   "shell_output",
                   "shell_kill",
+                  // The Browser search (VC-364), appended after the shell
+                  // tools for the same Cache Prefix reason. A surface frozen
+                  // before it keeps its list and is handed a port without
+                  // `find`.
+                  "browser_find",
+                  // The decision model (VC-478), appended last for the same
+                  // reason, and only for a Session born with one configured:
+                  // `resolveClassify` answered that at birth, and the record
+                  // keeps the answer for the Session's whole life.
+                  ...(classify ? (["classify"] as const) : []),
+                  "request_secret",
+                  // Code Mode (VC-471), when the setting gives this model a
+                  // mode or the Session holds an MCP server too large to
+                  // declare. Last, for the Cache Prefix reason every name
+                  // above is.
+                  ...(codeModeBirth?.offered === true ? (["codemode"] as const) : []),
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1093,19 +1417,40 @@ app.whenReady().then(async () => {
               mcpTools,
             });
           },
-          resolveMcp: (projectId) => mcpSettings?.selectedTools(projectId) ?? [],
+          // A root Session freezes today's selection, marked eligible for
+          // parallel reads only where the developer allowlist names the exact
+          // tool (VC-454).
+          resolveMcp: (projectId) =>
+            mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
+          resolveClassify: (projectId) =>
+            desktopDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           recordedMcp: async (sessionId) =>
             recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
-          record: async (sessionId, tools, mcpTools = []) => {
+          // Code Mode's one decision per birth (VC-471), from the Session's
+          // own model; `resolve` and `record` are both handed this answer.
+          codeModeAt: (model, mcpTools) => codeMode.birth(model, mcpTools),
+          record: async (sessionId, tools, mcpTools = [], { codeMode: codeModeBirth } = {}) => {
+            // Code Mode's routes and limits are frozen beside the names they
+            // route, at the same birth, from the decision `resolve` was given.
+            // A child's names are already bounded by its parent's record
+            // (VC-9); its routes follow its own model's mode.
+            const codeModeSurface =
+              codeModeBirth === undefined
+                ? undefined
+                : codeMode.surfaceFor(codeModeBirth, tools, mcpTools);
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {
                 kind: "tool-surface",
                 tools,
+                // At birth, freeze the wire spelling too. The old mcp_* names
+                // remain available only to Sessions whose record predates this marker.
+                mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },
               provenance: {
                 source: { kind: "system", id: "pi-runtime", detail: null },
@@ -1184,7 +1529,15 @@ app.whenReady().then(async () => {
    * is built here beside the tokens rather than in the ready path; its
    * renderer doors are registered there, once a window can receive them.
    */
+  // Where a background shell's exit or match is steered into the Session that
+  // started it (VC-495): the same delivery path a watch notice rides. Composed
+  // below, once the Session runtime exists; a shell that speaks before then, or
+  // in a build with no runtime, has nobody to tell.
+  let relayShellNotice: ((notice: BackgroundShellNotice) => void) | null = null;
   const backgroundShells = new BackgroundShellHost({
+    redactOutput: (text) => secrets.store.redact(text),
+    redactNoticeOutput: (text) => secrets.store.redactPartial(text),
+    onNotice: (notice) => relayShellNotice?.(notice),
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     // One row per started shell (VC-341). A background shell is the door a
@@ -1233,6 +1586,7 @@ app.whenReady().then(async () => {
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
+  let authorityReason = categoryAuthorityReason;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -1241,16 +1595,29 @@ app.whenReady().then(async () => {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          authorityReason: (input) => authorityReason(input),
+          // Paid background review is an independent opt-in, read live so an
+          // off switch stops subsequent reviews without restarting Sessions.
+          authorityShadowReviewEnabled: () => readAuthorityShadowReviewEnabled(dbHandle.db),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
           catalogs: piModelAccess.catalogs,
+          // Frozen parallel-read marks take effect only while the developer
+          // opt-in is set (VC-454); unset, every Session is sequential again.
+          parallelMcpReads: mcpDispatch.parallelMcpReads,
+          // Code Mode's sandbox (VC-471), located once at boot above.
+          ...codeModeSandbox,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
           // after it. Absent when the database never opened, which leaves the
           // runtime on its own no-op default.
           ...(agentObservability === null ? {} : { observability: agentObservability }),
+          // A closed lid or a missing Wi-Fi is waited out rather than charged
+          // to a turn's retry budget, and a request open across a sleep is
+          // re-sent instead of hanging on a dead socket (VC-443).
+          connectivity: createConnectivityPort({ net, powerMonitor }),
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -1278,18 +1645,22 @@ app.whenReady().then(async () => {
             // identity is resolved through the one per-attachment store the
             // shell port resolves through too (VC-270), so both doors export
             // the same token — see `attachment-identity.ts`.
-            return piExecutionEnv(workspacePath, {
-              pathPrefixes: [runtimePaths.binDir],
-              identity: attachmentIdentities.resolve(identity),
-              // This Session's concurrency budget (VC-339), computed at attach
-              // from the Sessions working now — under the identity above, which
-              // is what keeps a machine fact from ever posing as who is running.
-              environment: await sessionConcurrencyEnvFor(identity.sessionId),
-              // The execution environment is owned by this attachment and its
-              // cleanup runs on every close path. Revoke there so a copied
-              // token cannot outlive the structured attachment that held it.
-              onCleanup: () => attachmentIdentities.release(identity.attachmentId),
-            });
+            return refusingCredentialReads(
+              await piExecutionEnv(workspacePath, {
+                pathPrefixes: [runtimePaths.binDir],
+                identity: attachmentIdentities.resolve(identity),
+                // This Session's concurrency budget (VC-339), computed at attach
+                // from the Sessions working now — under the identity above, which
+                // is what keeps a machine fact from ever posing as who is running.
+                environment: await sessionConcurrencyEnvFor(identity.sessionId),
+                secretEnvironment: () => secrets.environment(identity.sessionId),
+                // The execution environment is owned by this attachment and its
+                // cleanup runs on every close path. Revoke there so a copied
+                // token cannot outlive the structured attachment that held it.
+                onCleanup: () => attachmentIdentities.release(identity.attachmentId),
+              }),
+              workspacePath,
+            );
           },
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the
@@ -1311,7 +1682,31 @@ app.whenReady().then(async () => {
               // machine, so it self-limits by the budget that is true when it
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
+              secretEnvironment: () => secrets.environment(scope.sessionId),
             }),
+          // The Session's decision port (VC-478), bound to the Session and its
+          // project at attach. Membership is the frozen record's; this only
+          // answers it. Absent when the database never opened.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                decisions: desktopDecisions.port,
+                resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
+                  desktopDecisions.classifyPort(scope),
+              }),
+          resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+            secrets.port(
+              {
+                sessionId,
+                sessionLabel: `Session ${shortSessionId(sessionId)}`,
+                projectId,
+                projectLabel: dbHandle.ok
+                  ? (getProjectById(dbHandle.db, projectId)?.name ?? "Project")
+                  : "Project",
+              },
+              wait,
+              allowInjection,
+            ),
           resolveMcpPort:
             mcpSettings === null
               ? undefined
@@ -1325,8 +1720,35 @@ app.whenReady().then(async () => {
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
                     ),
+                    // Credentials are resolved per connection and tokens per
+                    // request, so this attachment sees a sign-in or a stored
+                    // value a person adds while it runs (VC-470).
+                    open: mcpSettings.opener(),
+                    credentialsRevision: (serverId) => mcpSettings.credentials.revision(serverId),
+                    accessRevision: (serverId) => mcpSettings.credentials.accessRevision(serverId),
+                    // Signed in against the stored row, but only while it still
+                    // names the endpoint this Session's question names.
+                    signIn: (server, signal) =>
+                      mcpSettings.signIn({
+                        projectId: scope.projectId,
+                        serverId: server.id,
+                        signal,
+                        ...(server.transport.type === "streamable-http"
+                          ? { expectedUrl: server.transport.url }
+                          : {}),
+                      }),
                   });
-                  return { call: host.port.call, dispose: () => host.close() };
+                  // Behind the one per-server budget (VC-454): over-budget
+                  // calls queue, and closing the attachment withdraws this
+                  // Session's queued and in-flight calls and nobody else's.
+                  // The raw call goes behind the budget and the person-routing
+                  // (VC-470) wraps it from outside, so a sign-in a person is
+                  // finishing in the browser never holds a budget slot.
+                  const bound = mcpDispatch.bind({
+                    port: host.rawPort,
+                    close: () => host.close(),
+                  });
+                  return { call: host.routed(bound.call).call, dispose: bound.dispose };
                 },
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
@@ -1370,9 +1792,9 @@ app.whenReady().then(async () => {
               throw new Error("This launch has no Volli verb handlers.");
             }
             signal.throwIfAborted();
-            // Forwarded, not just read: `ticket.await` parks on it, and the
-            // signal firing is the only notice a suspended wait ever gets
-            // that its turn was interrupted (VC-85). `budgetAsk` rides along
+            // Forwarded, not just read: `session_send` races it, and the
+            // signal firing is the only notice a call still in flight gets
+            // that its turn was interrupted. `budgetAsk` rides along
             // for the one question a verb may raise mid-call — a spent
             // delegation allowance asking the person driving for one more
             // (VC-204) — answered through the binding that lent it.
@@ -1383,6 +1805,7 @@ app.whenReady().then(async () => {
           // recorded once before the first runtime construction; every later
           // attach reuses those exact bytes.
           resolveRuntimeContext: async (sessionId) => {
+            await sessions?.waitForBirth?.(sessionId);
             if (sessionEngine === null) return null;
             const projection = await sessionEngine.getSession({ sessionId });
             const attaching = projection?.session;
@@ -1395,8 +1818,13 @@ app.whenReady().then(async () => {
             } as const;
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
-            let mcpTools = recordedMcpTools(events);
+            // Frozen parallel-read marks, narrowed to today's developer
+            // allowlist (VC-454): a tool taken off it stops overlapping.
+            let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
+            let mcpManagementNames = recordedMcpManagementNames(events);
+            const codeModeSurface = recordedCodeMode(events);
             if (toolSurface === null) {
+              mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
@@ -1410,7 +1838,12 @@ app.whenReady().then(async () => {
                   sessionId,
                   input: {
                     kind: "tool-surface",
-                    tools: sessionToolSurface.resolve(attaching.role, []),
+                    // Nor is it born into Code Mode: that is a birth record
+                    // with routes, and a backfill has none to freeze.
+                    tools: sessionToolSurface
+                      .resolve(attaching.role, [])
+                      .filter((tool) => tool !== "codemode"),
+                    mcpManagementNames: "server",
                   },
                   provenance,
                 }),
@@ -1419,12 +1852,15 @@ app.whenReady().then(async () => {
               // settings; the newly recorded backfill is deliberately empty.
               mcpTools = [];
             }
+            const authorityPolicy = getProjectAuthorityPolicy(dbHandle.db, project.id);
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
+              ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
               // edit. Resolved per attach for the reason the web ports are: what
@@ -1432,7 +1868,32 @@ app.whenReady().then(async () => {
               // never lands mid-turn. A rehydrated attachment ignores this and
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
-              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              authorityPolicy,
+              // Main always supplies the host. The adapter activates it from
+              // the pinned Snapshot: fresh enforcing attachments use Protection;
+              // an off switch never adds a gate to a running/recovered attachment.
+              protection: createProtection({
+                db: dbHandle.db,
+                now: () => Date.now(),
+                projectId: project.id,
+                sessionId,
+                // A delegated subagent reads its parent's live "this
+                // Session" approvals; nothing it adds ever flows back.
+                inheritedFrom:
+                  attaching.role === "subagent" && attaching.parentSessionId !== null
+                    ? [attaching.parentSessionId]
+                    : [],
+                sessionTitle: attaching.title ?? null,
+                ticketDisplayId: (() => {
+                  const owned =
+                    attaching.ticketId === null
+                      ? undefined
+                      : getTicket(dbHandle.db, attaching.ticketId);
+                  return owned === undefined
+                    ? null
+                    : displayTicketId(project.ticketPrefix, owned.ticketNumber);
+                })(),
+              }),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
               // this one attachment.
@@ -1529,6 +1990,32 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  if (dbHandle.ok && piRuntimeHost !== null && sessionEngine !== null) {
+    authorityReason = createAuthorityReason({
+      db: dbHandle.db,
+      readModelDefaults: () => readModelAccessDefaults(dbHandle.db),
+      completeUtility: (input) => piRuntimeHost.completeUtility(input),
+      recordUsage: async (sessionId, usage) => {
+        await sessionEngine.observe({
+          id: `usage:authority-reason:${randomUUID()}`,
+          kind: "usage.recorded",
+          sessionId,
+          occurredAt: Date.now(),
+          provenance: {
+            source: {
+              kind: "system",
+              id: "authority-reason",
+              detail: { purpose: "authority.judge", reasonSource: "utility" },
+            },
+            venue: { id: "local", kind: "local" },
+          },
+          attachmentId: null,
+          turnId: null,
+          usage,
+        });
+      },
+    });
+  }
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).
@@ -1542,6 +2029,7 @@ app.whenReady().then(async () => {
           executor: piRuntimeHost.adapter,
           sessionEngine,
           artifacts: transcriptArtifacts,
+          ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
   listOpenNativeBindings =
@@ -1569,6 +2057,8 @@ app.whenReady().then(async () => {
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
+          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
+          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
@@ -1713,8 +2203,10 @@ app.whenReady().then(async () => {
           // (migration 024, NULL = inherit) — then the app-wide tier ladder
           // from the named rung down (VC-53, VC-9, VC-259). The facade maps a
           // Role onto its rung before it asks: a Ticket Session's default
-          // reads `ticket`, a Board chat's `global`, a Subagent's `utility`,
-          // and a `session_start` tier reads its own row — stated by
+          // reads `ticket`, a Board chat's `global`, a Subagent's `global`
+          // (VC-431: a subagent normally runs on its parent's own anchor, and
+          // no Role reads `utility`), and a named tier reads
+          // its own row — stated by
           // `resolveDefaultModel`, never substituted. One closure so every
           // door — renderer chat, the tool door, an Automation Run — walks
           // the same rungs.
@@ -1740,8 +2232,37 @@ app.whenReady().then(async () => {
           },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
+          readModelAnchor: async (sessionId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            return { selection: projection.modelSelection, tier: projection.modelTier };
+          },
+          readBirthModel: async (sessionId, commandId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            const intent = projection.commands?.find((command) => command.id === commandId)?.intent;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
+          readBirthModelFromLedger: async (sessionId, commandId) => {
+            const events = await sessionEngine!.listEvents({ sessionId });
+            const recorded = events.find(
+              (event) =>
+                event.payload.kind === "command.recorded" && event.payload.command.id === commandId,
+            );
+            const intent =
+              recorded?.payload.kind === "command.recorded"
+                ? recorded.payload.command.intent
+                : null;
+            if (intent?.kind !== "model.select") return null;
+            return {
+              selection: intent.selection,
+              tier: intent.tier ?? null,
+              ...(intent.auto === undefined ? {} : { auto: intent.auto }),
+            };
+          },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,
@@ -1749,14 +2270,30 @@ app.whenReady().then(async () => {
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // A start that named no model may have one chosen from the person's
+          // approved pairs by the decision model (VC-432), once, at birth.
+          ...(desktopDecisions === null
+            ? {}
+            : {
+                autoSelect: createModelAutoSelect({
+                  db: sessionDb,
+                  port: desktopDecisions.port,
+                }),
+              }),
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
           // door derived. Once per Session and not once per call (VC-162), now
           // that a replayed tool call can mint through it twice — the guard
           // lives with the ledger that can answer whether it already happened.
-          recordSessionStarted: ({ ticketId, sessionId, actor }) => {
-            recordSessionStartedOnce(sessionDb, { ticketId, sessionId, now: Date.now(), actor });
+          recordSessionStarted: ({ ticketId, sessionId, actor, origin }) => {
+            recordSessionStartedOnce(sessionDb, {
+              ticketId,
+              sessionId,
+              now: Date.now(),
+              actor,
+              origin,
+            });
           },
         })
       : null;
@@ -1801,6 +2338,13 @@ app.whenReady().then(async () => {
           writeCompactionPolicy:
             sessionDb !== null
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
+              : undefined,
+          // Read again at each Session's birth, never pushed: a write here
+          // reaches the next Session created and no Session already running.
+          readCodeModePolicy: sessionDb !== null ? () => readCodeModePolicy(sessionDb) : undefined,
+          writeCodeModePolicy:
+            sessionDb !== null
+              ? (policy) => writeCodeModePolicy(sessionDb, policy, Date.now())
               : undefined,
           readModelPickerView:
             sessionDb !== null ? () => readModelPickerView(sessionDb) : undefined,
@@ -1887,7 +2431,11 @@ app.whenReady().then(async () => {
               sessionId,
               intent: { kind: "session.retitle", title },
               provenance: {
-                source: { kind: "system", id: "auto-title", detail: null },
+                source: {
+                  kind: "system",
+                  id: "auto-title",
+                  detail: { sessionOrigin: { kind: "volli", reason: "auto-title" } },
+                },
                 venue: { id: "local", kind: "local" },
               },
             });
@@ -1900,6 +2448,31 @@ app.whenReady().then(async () => {
             // thing that makes the model's title appear before an unrelated
             // refresh happens to re-read the projection.
             broadcastSessionRetitled(sessionId, title);
+          },
+        })
+      : null;
+  // One owner for every window: hovers share cache, cooldown and concurrency.
+  // No runtime event or timer invokes this; only the peek IPC below does.
+  const peekSummarizer =
+    sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
+      ? createPeekSummarizer({
+          readModelDefaults: () => readModelAccessDefaults(sessionDb),
+          inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
+          completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          recordUsage: async (sessionId, usage) => {
+            await sessionEngine.observe({
+              id: `usage:peek-summary:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "peek-summary", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
           },
         })
       : null;
@@ -1920,13 +2493,16 @@ app.whenReady().then(async () => {
           text,
           commandId,
           messageId,
+          origin,
         }: {
           sessionId: string;
           text: string;
           commandId: string;
           messageId: string;
+          origin?: SessionOrigin;
         }): Promise<void> => {
           await sessionRuntime.command({
+            origin,
             commandId,
             sessionId,
             command: {
@@ -1949,16 +2525,93 @@ app.whenReady().then(async () => {
     ) {
       return null;
     }
-    delegations = createDelegations({
+    const created = createDelegations({
       sessions,
       submitSessionMessage: submitKickoffMessage,
       runtime: sessionRuntime,
       sessionEngine,
+      // The child's answer rides its notice (VC-457), read through the same
+      // artifact store `volli session answer` reads.
+      readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
       onMutation: (change) => broadcastDataChanged(change),
       now: () => Date.now(),
     });
+    delegations = created;
+    // A child a person resumes after its delegation settled reports to its
+    // parent again (VC-457): the first turn it runs unwatched re-arms the
+    // notice. Keyed off the post-commit bus so it sees every door a turn can
+    // open through — the app's composer, a steer, a retry.
+    if (sessionWakeBus !== null && sessionDelegation !== null) {
+      const store = sessionDelegation;
+      sessionWakeBus.subscribe((wake) => {
+        const payload = wake.event.payload;
+        if (payload.kind !== "turn.started" || created.watching(wake.event.sessionId)) return;
+        const entry = store.subagentDelegation(wake.event.sessionId);
+        if (entry === null) return;
+        void created
+          .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
+          .catch((error: unknown) => {
+            console.error(
+              `[volli] could not re-arm the notice for resumed subagent ${entry.childSessionId}:`,
+              errorMessage(error),
+            );
+          });
+      });
+    }
     return delegations;
   };
+  // The watch registry (VC-457): one per launch, over the two post-commit
+  // buses, composed on first use for the reason the delegation host is.
+  let watches: Watches | null = null;
+  const watchesFor = (): Watches | null => {
+    if (watches !== null) return watches;
+    if (
+      sessionWakeBus === null ||
+      sessionRuntime === null ||
+      sessionEngine === null ||
+      sessionDb === null
+    ) {
+      return null;
+    }
+    const db = sessionDb;
+    watches = createWatches({
+      subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
+      subscribeTicketWake,
+      runtime: sessionRuntime,
+      sessionEngine,
+      readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
+      readComment: (commentId) => getComment(db, commentId)?.body ?? null,
+      // A watched Session that ends a turn with subagents still running is
+      // between turns, not done (VC-485).
+      pendingSubagents: (sessionId) => delegations?.liveChildren(sessionId) ?? [],
+    });
+    return watches;
+  };
+  // Shell notices are the first durable producer. Other notice producers
+  // retain their optional ports and can adopt this same mechanism separately.
+  const shellHostNotices =
+    sessionRuntime === null || hostNoticeOutbox === null
+      ? null
+      : createHostNoticeDelivery({
+          runtime: sessionRuntime,
+          outbox: hostNoticeOutbox,
+          ...(sessionWakeBus === null
+            ? {}
+            : {
+                subscribeEvents: (listener) =>
+                  sessionWakeBus.subscribe(({ event }) => listener(event)),
+              }),
+          report: (message) => console.error(`[volli] ${message}`),
+        });
+  if (sessionRuntime !== null && shellHostNotices !== null) {
+    const relay = relayShellNotices({
+      runtime: sessionRuntime,
+      delivery: shellHostNotices,
+      report: (message) => console.error(`[volli] ${message}`),
+    });
+    // The relay resolves, never rejects: a notice it could not deliver is in the log.
+    relayShellNotice = (notice) => void relay(notice);
+  }
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
   // rest: the project list grows, and the facade is built further down this
@@ -1983,16 +2636,12 @@ app.whenReady().then(async () => {
                   list: (projectId) => listAutomationsForProject(sessionDb, projectId),
                   run: (input) => automationRunner!.run(input),
                 },
-          // `ticket.await`'s two ports (VC-85): the wait is judged against the
-          // caller's project policy when it starts, and parks on the
-          // post-commit wake bus until a planner fact matches.
+          // The caller's project policy: budgets, and what a watch may be
+          // woken by (VC-457, read when the watch is armed).
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
-          subscribeTicketWake,
-          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
-          // read through a closure because the bus and the door are composed
-          // under different null-guards in this same function.
-          subscribeSessionWake: (listener) =>
-            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
+          // The watch registry (VC-457) that replaced the await tools, read
+          // through a closure because it is composed lazily below.
+          watches: watchesFor,
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>
@@ -2039,7 +2688,15 @@ app.whenReady().then(async () => {
   registerModelAccessIpcHandlers(
     piModelAccess === null
       ? null
-      : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+      : new ModelAccessSignInService({
+          // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
+          pi: piSignIn(piModelAccess.models, {
+            deviceId: () => {
+              if (!dbHandle.ok) throw new Error("The local database is unavailable.");
+              return installationId(dbHandle.db);
+            },
+          }),
+        }),
     // When the runtime is down because the database never opened, the sign-in
     // surface must answer with the recorded (already-classified) reason — a
     // Node-ABI failure names the incompatibility, not a generic "unavailable"
@@ -2052,9 +2709,21 @@ app.whenReady().then(async () => {
     webAccess,
     dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
   );
+  // Decision models (VC-478): the setting, the cloud catalog with each
+  // provider's sign-in state, and the connection test. No key crosses it.
+  registerDecisionModelIpcHandlers(
+    desktopDecisions,
+    dbHandle.ok ? undefined : `Decision models are unavailable. ${dbHandle.error}`,
+  );
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing
   // instrumentation belongs.
+  registerProtectionIpcHandlers(
+    dbHandle.ok ? dbHandle.db : null,
+    dbHandle.ok
+      ? undefined
+      : `Protection settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   registerAgentObservabilityIpcHandlers(
     agentObservability,
     dbHandle.ok
@@ -2097,11 +2766,13 @@ app.whenReady().then(async () => {
   // and the silence, one notification for the person. Observe posture:
   // self-termination exists behind the watchdog's optional port and is
   // deliberately unwired here, so a false positive costs a notification,
-  // never the work.
+  // never the work. The suspend clock is what keeps a laptop opened after a
+  // night asleep from reporting the night as silence.
   const sessionWatchdog =
     sessionRuntime !== null && sessionEngine !== null
       ? createSessionWatchdog({
           listBindings: () => sessionRuntime.openNativeBindings(),
+          suspendedMsWithin: createSuspendClock(powerMonitor).suspendedMsWithin,
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
@@ -2109,6 +2780,23 @@ app.whenReady().then(async () => {
         })
       : null;
   sessionWatchdog?.start();
+  // Resumes a person scheduled for a provider's quota reset. Built here, beside
+  // the watchdog, so the quit coordinator below can stop it; STARTED only after
+  // boot recovery, because a schedule that fell due while the app was closed
+  // fires on the first pass and its retry must not race the reconcile of the
+  // very turn it resumes.
+  scheduledResumeHost =
+    sessionRuntime !== null && sessionEngine !== null && dbHandle.ok
+      ? createScheduledResumeHost({
+          candidates: async () => listScheduledResumeSessionIds(dbHandle.db),
+          projection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection,
+          ticketSessions: ({ projectId, ticketId }) =>
+            sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
+          command: (request) => sessionRuntime.command(request),
+          notify: (request) => notifications.deliver(request),
+        })
+      : null;
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -2118,12 +2806,18 @@ app.whenReady().then(async () => {
     lifecycle: app,
     shutdownNativeSessions: async () => {
       sessionWatchdog?.stop();
+      scheduledResumeHost?.stop();
+      shellHostNotices?.close();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
           console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
         }
       }
+      // Every Session has closed, and with it every MCP host it owned. This is
+      // the backstop for one whose own close never ran: a stdio server's whole
+      // process group goes with it, so a quit leaves no `npx`/`uvx` child.
+      await closeAllMcpSessionHosts();
       // The one flush, and it is here rather than anywhere else because this is
       // the only point at which every Session has stopped producing events.
       // Bounded inside the owner, so a collector that has stopped answering
@@ -2155,6 +2849,14 @@ app.whenReady().then(async () => {
   // `session-runtime/boot-recovery.ts`), and that invariant is held by position
   // — moving the sweep past several hundred lines of handler registration would
   // have made it depend on none of them ever growing a read.
+  // The pictures a transcript card shows (VC-238): live captures bounded in
+  // memory, model-requested screenshots also on disk under userData — never
+  // the Blob store, whose Session links become the next turn's input.
+  const browserPictures = new BrowserPictureStore({
+    createId: randomUUID,
+    now: Date.now,
+    persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+  });
   const browserTabs = new BrowserTabHost({
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
@@ -2180,13 +2882,14 @@ app.whenReady().then(async () => {
       }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
-    // The pictures a transcript card shows (VC-238): live captures bounded in
-    // memory, model-requested screenshots also on disk under userData — never
-    // the Blob store, whose Session links become the next turn's input.
-    pictures: new BrowserPictureStore({
+    pictures: browserPictures,
+    // A Session's steps in its own tabs, kept for the person to replay after
+    // the live set has moved on (VC-453) — its own directory, never a Blob.
+    traces: new BrowserTraceStore({
       createId: randomUUID,
       now: Date.now,
-      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+      frameOf: (pictureId) => browserPictures.copyOf(pictureId),
+      persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to
@@ -2231,9 +2934,13 @@ app.whenReady().then(async () => {
     // otherwise read as running.
     if (sessionDelegation !== null) {
       try {
+        // Composed here even with nothing to recover: composing it arms the
+        // resumed-subagent watch (VC-457), which must hear a child a person
+        // reopens this launch whether or not anything delegated yet.
+        const host = delegationsFor();
         const unanswered = sessionDelegation.listUnansweredSubagents();
         if (unanswered.length > 0) {
-          const recovered = await delegationsFor()?.recover(unanswered);
+          const recovered = await host?.recover(unanswered);
           if (recovered !== undefined) {
             console.log(
               `[volli] recovered ${unanswered.length} delegation(s): ${recovered.answered} answered, ${recovered.reported} reported, ${recovered.skipped} skipped`,
@@ -2244,6 +2951,34 @@ app.whenReady().then(async () => {
         console.error("[volli] failed to recover delegations:", errorMessage(error));
       }
     }
+  }
+  // After stale attachments are reconciled and all executor ports exist.
+  // recover() only reconstructs delivery; it never waits for an idle turn.
+  try {
+    await shellHostNotices?.recover();
+  } catch (error) {
+    console.error("[volli] failed to recover host notices:", errorMessage(error));
+  }
+  // A quit before the activity watch's 60ms flush must not lose Ticket history.
+  // Off the boot critical path; the indexed kind scan only folds resume candidates.
+  if (dbHandle.ok && sessionEngine !== null) {
+    const db = dbHandle.db;
+    const engine = sessionEngine;
+    setImmediate(() => {
+      void catchUpSessionResumptions(db, engine, {
+        publish: broadcastDataChanged,
+        report: (error) =>
+          console.error("[volli] failed to catch up Session resumptions:", errorMessage(error)),
+      });
+    });
+  }
+  // After recovery (see the host's construction above). Not awaited: the first
+  // pass may fire a resume whose run takes minutes, and boot does not wait on
+  // it. A wake from sleep looks again at once rather than on the next tick.
+  if (scheduledResumeHost !== null) {
+    const host = scheduledResumeHost;
+    void host.start();
+    powerMonitor.on("resume", () => void host.pass());
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
@@ -2432,10 +3167,16 @@ app.whenReady().then(async () => {
     blobsRoot: blobsRoot(app.getPath("userData")),
     // The renderer door of auto-titling (VC-81); absent with the runtime.
     autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
+    summarizePeek: peekSummarizer?.summarize,
+    // The peek card's fold reads the same transcript artifacts `volli session
+    // peek` does, from the same store (VC-30).
+    readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
     // The person's stop (VC-269) acts through the same runtime the agent
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
     mcpSettings: mcpSettings ?? undefined,
+    // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
+    piSessionsDirectory,
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
@@ -2542,8 +3283,9 @@ app.whenReady().then(async () => {
           // The composer's message shape, with the Run's durable command/message
           // ids rather than freshly minted ones. A crash after dispatch is then
           // a Session-runtime replay, never a duplicate first turn.
-          deliverInstructions: ({ sessionId, commandId, messageId, text, resources }) =>
+          deliverInstructions: ({ sessionId, commandId, messageId, text, resources, origin }) =>
             sessionRuntime.command({
+              origin,
               commandId,
               sessionId,
               command: {
@@ -2969,6 +3711,7 @@ app.whenReady().then(async () => {
         const delivered = await sessionRuntime.command({
           commandId,
           sessionId: notice.sessionId,
+          origin: { kind: "volli", reason: "browser-notice" },
           command: {
             kind: "message.submit",
             delivery: "steer",
@@ -3002,6 +3745,19 @@ app.whenReady().then(async () => {
       if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
     });
     window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    // A committed page reset strands any Browser plane the old page had put on
+    // screen (VC-424): a native view is the window's child, not the page's, so
+    // it goes on compositing over a fresh app UI that cannot hide a tab it has
+    // never heard of. Its own events, not the two above — a plane must not come
+    // off for a navigation that never commits. Parking is per window, and the
+    // tabs, their holds and their engines all survive it: a pane in the new
+    // page shows them again.
+    parkBrowserPlanesOnRendererReset({
+      host: browserTabs,
+      window,
+      contents: window.webContents,
+      log: (message) => console.error(message),
+    });
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps
@@ -3570,11 +4326,13 @@ app.whenReady().then(async () => {
                   text,
                   commandId,
                   messageId,
+                  origin,
                 }: {
                   sessionId: string;
                   text: string;
                   commandId: string;
                   messageId: string;
+                  origin?: SessionOrigin;
                 }) => {
                   // Both ids come from the caller's operation, never from
                   // `randomUUID()` (VC-162). The Session Engine deduplicates a
@@ -3583,6 +4341,7 @@ app.whenReady().then(async () => {
                   // lands one message — which is what makes a replayed tool
                   // call idempotent rather than merely unlikely to repeat.
                   await sessionRuntime.command({
+                    origin,
                     commandId,
                     sessionId,
                     command: {

@@ -8,8 +8,10 @@ import {
   isAppearance,
   isEmptyAuthorityPolicyOverride,
   isProjectThemeOverrideEmpty,
+  NO_DECISION_MODEL,
   parseAuthorityPolicyOverride,
   parseCanvas,
+  parseDecisionModelSetting,
   parseSessionModel,
   parseSkillModes,
   resolveAuthorityPolicy,
@@ -19,6 +21,7 @@ import type {
   AuthorityPolicy,
   AuthorityPolicyOverride,
   Canvas,
+  DecisionModelSetting,
   ModelSelection,
   Project,
   ProjectThemeOverride,
@@ -48,6 +51,8 @@ interface ProjectRow {
   session_model: string | null;
   /** Migration 025 — this project's authority departures; NULL = inherit every default. */
   authority_policy: string | null;
+  /** Migration 053 — this project's decision model; NULL = inherit the app-wide one. */
+  decision_model: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -147,11 +152,25 @@ function mapProject(row: ProjectRow): Project {
     // it resolves because the attach path wants the answer, not the question.
     authorityPolicy: parseAuthorityPolicyOverride(parseJsonColumn(row.authority_policy)),
     sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
+    decisionModel: readDecisionModelColumn(row.decision_model),
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * A project's decision model column (migration 053). `NULL` inherits. A row
+ * that no longer parses — a URL off this Mac, a cloud model without its
+ * opt-in, a kind a later build wrote — reads as NO decision model, never as
+ * inherit: a project that chose Local to keep its data on this Mac must not
+ * start reaching the app-wide cloud model because its own row became
+ * unreadable.
+ */
+function readDecisionModelColumn(value: string | null): DecisionModelSetting | null {
+  if (value === null) return null;
+  return parseDecisionModelSetting(parseJsonColumn(value)) ?? NO_DECISION_MODEL;
 }
 
 /** Every project, ordered by rail position. */
@@ -252,6 +271,32 @@ export function updateProjectAuthorityPolicy(
         SET authority_policy = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(stored, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Points this project at a different folder on disk (VC-430) and returns the
+ * authoritative row.
+ *
+ * The ONE write that moves `projects.path` after creation, and it moves
+ * nothing else: the id stays, which is what keeps every ticket, label, event,
+ * Session and setting attached to the same project through a rename. Callers
+ * come through `relinkProject` (`src/main/project-relink.ts`), which is where
+ * the folder is judged before this is reached — this function trusts its
+ * argument exactly as its `base_branch`/`setup_command` siblings above do.
+ */
+export function updateProjectPath(
+  db: Database.Database,
+  id: string,
+  path: string,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET path = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(path, now, id);
   return getProjectById(db, id);
 }
 
@@ -422,6 +467,25 @@ export function updateProjectSessionDefaults(
         SET session_model = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(model === null ? null : JSON.stringify(model), now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's decision model (VC-478); `null` clears it back to
+ * inheriting the app-wide one. The caller has already parsed the setting.
+ */
+export function updateProjectDecisionModel(
+  db: Database.Database,
+  id: string,
+  setting: DecisionModelSetting | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET decision_model = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(setting === null ? null : JSON.stringify(setting), now, id);
   return getProjectById(db, id);
 }
 

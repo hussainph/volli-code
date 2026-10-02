@@ -261,28 +261,102 @@ const LINK_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "cite", "action", 
 const PLAIN_STYLE = /^[a-z0-9 \t\-_.,%#:;]*$/i;
 
 /**
- * `<!doctype`, `<![CDATA[`, `<?…`: markup an HTML parser swallows into a
- * comment, a quirks mode, or nothing at all. Asked on the raw text, because
+ * `<!doctype`, `<![CDATA[`, `<?…`, `<!x>`: markup an HTML parser swallows into
+ * a comment, a quirks mode, or nothing at all. Asked on the raw text, because
  * after parsing there is nothing left to ask about — and a block that quietly
  * became nothing is exactly what the marker exists to announce.
+ *
+ * Asked AFTER {@link withoutComments}, so every real comment is already gone
+ * and any `<!` still standing is one of these — or the halves of an opener the
+ * removal joined back together (`<!<!---->--` leaves `<!--`), which a parser
+ * reads as neither and this gate therefore refuses with the rest.
  */
-const NON_ELEMENT_MARKUP = /<[!?](?!--)/;
+const NON_ELEMENT_MARKUP = /<[!?]/;
 
 /**
  * A block that authors a DOCUMENT ROOT rather than a fragment.
  *
  * Refused whole, and asked on the raw text for the same reason the line above
  * is: after parsing there is nothing left to see. A parser gives every fragment
- * an `html`, a `head` and a `body` of its own, so the tree cannot tell an
+ * an `html`, a `head` and a `body` of its own, so the tree cannot tell a bare
  * authored root from an invented one — which is how `<body onload="…">` reached
  * the page unmarked (review round 2), and how a `<frameset>` disappears without
  * a word. A markdown file is not a document, so a block that declares one is
- * unsupported by definition, handler or no handler.
+ * unsupported by definition, handler or no handler. (A root that brought
+ * attributes or replaced the body IS visible in the tree, and
+ * {@link inventedRoots} asks there too, for the root this scan cannot see.)
  */
 const DOCUMENT_ROOT = /<\/?(?:html|head|body|frame|frameset)\b/i;
 
-/** Comments, removed before the raw scans above: what is inside one is not markup. */
-const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const COMMENT_OPEN = "<!--";
+const COMMENT_CLOSE = "-->";
+
+/**
+ * The block with its comments removed, or `null` when one of them is written
+ * in a way only a tokenizer reads correctly (CodeQL #25).
+ *
+ * This used to be `/<!--[\s\S]*?-->/g`, and that is not where a parser ends a
+ * comment: `<!-->` and `<!--->` are whole (empty) comments, `--!>` closes one
+ * as well as `-->` does, and an unclosed `<!--` runs to the end of the input.
+ * So `<!--> <body onload=…> -->` was one comment to the regex and an empty
+ * comment followed by a real `<body>` to the parser — the raw scans never saw
+ * the root, and round 2's `<body onload>` hole was open again behind it.
+ *
+ * Rather than re-implement the tokenizer's comment states, the gate admits only
+ * the comments the HTML standard calls well-formed: closed by `-->`, not
+ * starting with `>` or `->`, and containing no `<!--`, `--!>` or trailing
+ * `<!-`. On exactly those, the first `-->` is where every reader agrees the
+ * comment ends. Each other spelling is a parse error and a place the readings
+ * part, so the block is refused, never repaired — a README has no use for
+ * `<!-->`, and an unclosed comment silently swallows the rest of the block,
+ * which is the kind of hole the marker exists to announce.
+ *
+ * What this cannot see is quoting: in `<div title="<!--">` the opener is an
+ * attribute value, not a comment. That is the parsed tree's question, and
+ * {@link inventedRoots} asks it.
+ */
+function withoutComments(html: string): string | null {
+  let kept = "";
+  let cursor = 0;
+  for (;;) {
+    const open = html.indexOf(COMMENT_OPEN, cursor);
+    if (open === -1) return kept + html.slice(cursor);
+    kept += html.slice(cursor, open);
+    const textFrom = open + COMMENT_OPEN.length;
+    const close = html.indexOf(COMMENT_CLOSE, textFrom);
+    if (close === -1) return null;
+    if (!wellFormedCommentText(html.slice(textFrom, close))) return null;
+    cursor = close + COMMENT_CLOSE.length;
+  }
+}
+
+/** The HTML standard's own rule for a comment's text, less the `-->` the search above already excludes. */
+function wellFormedCommentText(text: string): boolean {
+  if (text.startsWith(">") || text.startsWith("->")) return false;
+  if (text.includes(COMMENT_OPEN) || text.includes("--!>")) return false;
+  return !text.endsWith("<!-");
+}
+
+/**
+ * Whether the parser made the document's roots up itself, which is the only
+ * way a fragment ever has them: no attribute on `html`, `head` or `body`, and a
+ * `body` that is still a body rather than a `frameset`.
+ *
+ * The raw scan for {@link DOCUMENT_ROOT} reads characters, so a root written
+ * where a comment SEEMS to be (`<div title="<!--"><body onload=…><i title="-->">`)
+ * slips past it — and the parser, which reads quoting, hoists the handler onto
+ * a `<body>` the element walk below never visits, because it walks the roots'
+ * descendants. Asking the roots themselves closes that from the other side, so
+ * the two checks need not agree about where a comment is for the gate to hold.
+ */
+function inventedRoots(parsed: Document): boolean {
+  return (
+    parsed.documentElement.attributes.length === 0 &&
+    parsed.head.attributes.length === 0 &&
+    parsed.body.localName === "body" &&
+    parsed.body.attributes.length === 0
+  );
+}
 
 /**
  * Whether one raw HTML block may be handed to the renderer at all.
@@ -292,15 +366,19 @@ const HTML_COMMENT = /<!--[\s\S]*?-->/g;
  * clean costs the reader a silent hole in their file, and an admission nobody
  * cleans costs them their machine.
  *
- * Comments are ignored rather than scanned: the sanitizer deletes comment
- * nodes, so what is inside one cannot reach the page, and refusing a block over
- * the word `script` in a comment would hide the paragraph written around it.
+ * Well-formed comments are ignored rather than scanned: the sanitizer deletes
+ * comment nodes, so what is inside one cannot reach the page, and refusing a
+ * block over the word `script` in a comment would hide the paragraph written
+ * around it. A comment written any other way refuses the block
+ * ({@link withoutComments}).
  */
 export function renderableHtmlBlock(html: string): boolean {
-  const markup = html.replace(HTML_COMMENT, "");
+  const markup = withoutComments(html);
+  if (markup === null) return false;
   if (NON_ELEMENT_MARKUP.test(markup)) return false;
   if (DOCUMENT_ROOT.test(markup)) return false;
   const parsed = new DOMParser().parseFromString(html, "text/html");
+  if (!inventedRoots(parsed)) return false;
   // BOTH roots: the parser hoists `<link>`, `<meta>` and `<base>` into the head
   // of the document it builds, and a gate that walked only the body would never
   // see them.

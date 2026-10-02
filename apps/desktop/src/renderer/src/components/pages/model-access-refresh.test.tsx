@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
@@ -78,6 +79,8 @@ async function renderSettings(inspect: ModelAccessClient["inspect"]): Promise<vo
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
     setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
     pickerView: async () => "all" as const,
     setPickerView: async (view) => view,
     beginSignIn: async () => {
@@ -106,6 +109,20 @@ function refreshButton(): HTMLButtonElement {
 }
 
 describe("Model Access catalog refresh", () => {
+  it("renders catalogue names with the shared model mark", async () => {
+    await renderSettings(
+      vi
+        .fn<ModelAccessClient["inspect"]>()
+        .mockResolvedValue(snapshot([model("claude-opus-4-1", "Claude Opus 4.1")])),
+    );
+    const name = [...document.querySelectorAll('[data-slot="model-name"]')].find(
+      (node) => node.textContent === "Claude Opus 4.1",
+    );
+    expect(name).toBeDefined();
+    expect(name?.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("claude-opus-4-1");
+  });
+
   it("renders newly admitted rows immediately and reports the catalog change", async () => {
     const inspect = vi
       .fn<ModelAccessClient["inspect"]>()

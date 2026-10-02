@@ -6,13 +6,18 @@ import type {
   DatabaseResult,
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectMutationResult,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectUpdateResult,
   Result,
   RetentionArchiveCleanResult,
   RetentionKeepResult,
   RetentionTtlResult,
+  SessionActivityNotice,
+  SessionPeekContentResult,
+  SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
   SessionStopResult,
@@ -46,13 +51,28 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+// Keep the production detector entrypoints observable. Project-create tests
+// usually inject a detector; this seam also verifies the uninjected default.
+const { detectAsync, detectSync } = vi.hoisted(() => ({
+  detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
+  detectSync: vi.fn<(path: string) => string | null>(),
+}));
+
+vi.mock("./project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-base-branch")>()),
+  detectProjectBaseBranchAsync: detectAsync,
+  detectProjectBaseBranch: detectSync,
+}));
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
@@ -204,6 +224,7 @@ import { insertSession } from "./session-control/test-support";
 import { recordAutomationRun } from "./db/automations-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
+import { readSessionUnread } from "./db/session-read-repo";
 import { recordMcpOperation } from "./db/mcp-operations-repo";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
@@ -304,7 +325,7 @@ beforeEach(() => {
   // not refuse the next test's destructive path.
   resetDeletionLeasesForTest();
   ctx = openTestDb();
-  registerDataIpcHandlers({ ok: true, db: ctx.db });
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch: async () => null });
 });
 
 afterEach(() => {
@@ -323,12 +344,12 @@ function createProject(): string {
 
 /** A project plus the directory it tracks — both needed to name the container it owns. */
 function createProjectWithPath(): { id: string; path: string } {
+  // Most tests exercise other channels and need a synchronous project fixture;
+  // project-create itself is exercised through the async IPC handler below.
   const path = freshProjectDir();
-  const result = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
-    path,
-    name: "Proj",
-  });
-  return { id: result.project.id, path };
+  const project = testProject({ name: "Proj", path, ticketPrefix: "PR" });
+  insertProject(ctx.db, project);
+  return { id: project.id, path };
 }
 
 function createTicket(projectId: string): Ticket {
@@ -404,15 +425,20 @@ describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);
     const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
+    const accessFor = vi.fn(() => ({ "server-1": { signIn: "signed-in", missingSecrets: [] } }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list, save, accessFor } as never },
+    );
 
-    // One read carries both halves of what the pane shows: the servers, and
-    // the management history beside them (VC-380). Empty here because no
-    // operation has been recorded against this project.
+    // One read carries what the pane shows: the servers, the management
+    // history beside them (VC-380), and where each stands on credentials
+    // (VC-470). History is empty here because no operation was recorded.
     expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
       ok: true,
       servers: [{ id: "server-1" }],
       operations: [],
+      access: { "server-1": { signIn: "signed-in", missingSecrets: [] } },
     });
     await expect(
       invoke<Promise<unknown>>("volli:mcp-save" as never, {
@@ -452,7 +478,10 @@ describe("MCP settings IPC", () => {
       { ...entry, id: "session-1:b", projectId: "project-2", summary: "Elsewhere." },
       200,
     );
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list: () => [] } as never });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { list: () => [], accessFor: () => ({}) } as never },
+    );
 
     const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
       projectId: "project-1",
@@ -461,6 +490,60 @@ describe("MCP settings IPC", () => {
     // The pane reads one project. Another project's history appearing here
     // would be a leak between projects, not merely untidy.
     expect(result.operations.map((row) => row.summary)).toEqual(["Installed Fixture."]);
+  });
+});
+
+describe("MCP sign-in IPC (VC-470)", () => {
+  it("routes sign-in, cancel, sign-out and draft disposal to the service", async () => {
+    const finish = Promise.withResolvers<unknown>();
+    const signIn = vi.fn(() => finish.promise);
+    const cancelSignIn = vi.fn(() => {
+      finish.resolve({ ok: false, cancelled: true, message: "The sign-in to X was cancelled." });
+      return { ok: true };
+    });
+    const signOut = vi.fn(() => ({ ok: true }));
+    const discardDraft = vi.fn(() => ({ ok: true }));
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { mcpSettings: { signIn, cancelSignIn, signOut, discardDraft } as never },
+    );
+
+    const waiting = invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+      projectId: "project-1",
+      serverId: "server-1",
+    });
+    expect(signIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    expect(
+      invoke("volli:mcp-cancel-sign-in" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    expect(cancelSignIn).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    await expect(waiting).resolves.toEqual({
+      ok: false,
+      cancelled: true,
+      error: "The sign-in to X was cancelled.",
+    });
+
+    expect(
+      invoke("volli:mcp-sign-out" as never, { projectId: "project-1", serverId: "server-1" }),
+    ).toEqual({ ok: true });
+    expect(signOut).toHaveBeenCalledWith({ projectId: "project-1", serverId: "server-1" });
+    expect(
+      invoke("volli:mcp-discard-draft" as never, { projectId: "project-1", serverId: "draft-1" }),
+    ).toEqual({ ok: true });
+    expect(discardDraft).toHaveBeenCalledWith({ projectId: "project-1", serverId: "draft-1" });
+  });
+
+  it("answers a completed sign-in with its message, keyed by the draft's own id", async () => {
+    const signIn = vi.fn(async () => ({ ok: true, message: "Signed in to Draft." }));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { signIn } as never });
+
+    await expect(
+      invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
+        projectId: "project-1",
+        server: { id: "draft-1" },
+        secrets: { "header:authorization": "typed" },
+      }),
+    ).resolves.toEqual({ ok: true, message: "Signed in to Draft." });
   });
 });
 
@@ -532,29 +615,206 @@ describe("volli:project-authority-policy", () => {
   });
 });
 
+function deferredBranch(): {
+  promise: Promise<string | null>;
+  resolve: (branch: string | null) => void;
+} {
+  let resolve!: (branch: string | null) => void;
+  const promise = new Promise<string | null>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
-  it("pins the repository's detected base branch when a project is added", () => {
+  it("uses the async detector by default without a test override", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    detectAsync.mockReturnValue(branch.promise);
+    detectSync.mockReturnValue("sync-default");
+    registerDataIpcHandlers({ ok: true, db: ctx.db });
+
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
+    expect(detectSync).not.toHaveBeenCalled();
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+
+    branch.resolve("trunk");
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { baseBranch: "trunk" },
+    });
+  });
+
+  it("pins the repository's detected base branch when a project is added", async () => {
     handlers.clear();
     const volliPath = freshProjectDir();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { detectBaseBranch: (path) => (path === volliPath ? "trunk" : null) },
-    );
+    const detectBaseBranch = vi.fn(async (path: string) => (path === volliPath ? "trunk" : null));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
 
-    const result = invoke<ProjectCreateResult>("volli:project-create", {
+    const result = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: volliPath,
       name: "Volli Code",
     });
 
+    expect(detectBaseBranch).toHaveBeenCalledWith(volliPath);
     expect(result).toMatchObject({ ok: true, project: { baseBranch: "trunk" } });
   });
 
-  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
-    const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+  it("keeps other IPC available while detection is pending", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    const detectBaseBranch = vi.fn(() => branch.promise);
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledWith(path));
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+
+    branch.resolve("trunk");
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { baseBranch: "trunk" },
+    });
+  });
+
+  it("returns one project for concurrent creates of the same path", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    const detectBaseBranch = vi.fn(() => branch.promise);
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(1));
+    const second = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Different Name",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(2));
+    branch.resolve("main");
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toMatchObject({ ok: true, created: true });
+    expect(b).toMatchObject({ ok: true, created: false });
+    if (!a.ok || !b.ok) return;
+    expect(b.project).toMatchObject(a.project);
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [a.project] },
+    });
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path,
+        name: "Another Name",
+      }),
+    ).resolves.toMatchObject({ ok: true, created: false, project: a.project });
+    expect(detectBaseBranch).toHaveBeenCalledTimes(2);
+  });
+
+  it("allocates prefix, color and order from committed state after concurrent detection", async () => {
+    handlers.clear();
+    const [firstPath, secondPath, collisionPath] = [
+      freshProjectDir(),
+      freshProjectDir(),
+      freshProjectDir(),
+    ];
+    const firstBranch = deferredBranch();
+    const secondBranch = deferredBranch();
+    const collisionBranch = deferredBranch();
+    const branches = new Map([
+      [firstPath, firstBranch],
+      [secondPath, secondBranch],
+      [collisionPath, collisionBranch],
+    ]);
+    const detectBaseBranch = vi.fn((path: string) => {
+      const branch = branches.get(path);
+      if (!branch) throw new Error("Unexpected path");
+      return branch.promise;
+    });
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: firstPath,
+      name: "Volli Code",
+    });
+    const second = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: secondPath,
+      name: "Other Project",
+    });
+    const collision = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: collisionPath,
+      name: "Visual Compiler",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(3));
+    firstBranch.resolve("trunk");
+    const a = await first;
+    expect(a).toMatchObject({ ok: true, created: true, project: { colorIndex: 0, sortOrder: 0 } });
+    collisionBranch.resolve(null);
+    await expect(collision).resolves.toEqual({
+      ok: false,
+      error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
+    secondBranch.resolve("main");
+    await expect(second).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { colorIndex: 1, sortOrder: 1, baseBranch: "main" },
+    });
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [{ path: firstPath }, { path: secondPath }] },
+    });
+  });
+
+  it("refuses missing paths and files without running detection", async () => {
+    handlers.clear();
+    const directory = freshProjectDir();
+    const file = join(directory, "file");
+    writeFileSync(file, "not a directory");
+    const detectBaseBranch = vi.fn(async () => "main");
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path: join(directory, "missing"),
+        name: "Missing",
+      }),
+    ).resolves.toEqual({ ok: false, error: "Project path does not exist" });
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path: file,
+        name: "File",
+      }),
+    ).resolves.toEqual({ ok: false, error: "Project path is not a directory" });
+    expect(detectBaseBranch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", async () => {
+    const first = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Volli Code",
     });
-    const second = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+    const second = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Visual Compiler",
     });
@@ -564,6 +824,185 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
     });
+  });
+});
+
+describe("volli:project-relink — a folder that was renamed or moved", () => {
+  /**
+   * Renames `from` to a fresh sibling, and tracks the result for cleanup.
+   *
+   * The target name is MADE rather than fixed: the temp root is shared with
+   * every other test process on the machine, and a `rename` onto a name a
+   * previous run left behind fails with ENOTEMPTY rather than saying so.
+   */
+  function renameProjectDir(from: string, hint: string): string {
+    const to = `${mkdtempSync(join(tmpdir(), `volli-${hint}-`))}/moved`;
+    createdProjectDirs.push(dirname(to));
+    renameSync(from, to);
+    return to;
+  }
+
+  it("reports the registered folder as missing once it has been renamed", async () => {
+    const project = createProjectWithPath();
+    renameProjectDir(project.path, "renamed");
+
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: project.path, state: "missing" });
+  });
+
+  // The ticket's headline: the SAME project, its tickets still on it, now
+  // pointing at where the folder actually is. Nothing here creates a project.
+  it("reconnects the existing project, keeping its id and its tickets", async () => {
+    const project = createProjectWithPath();
+    const ticket = createTicket(project.id);
+    const moved = renameProjectDir(project.path, "moved");
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    expect(result.ok && result.project.id).toBe(project.id);
+    expect(result.ok && result.project.path).toBe(moved);
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(1);
+    expect(bootstrap.ok && bootstrap.data.projects[0]?.path).toBe(moved);
+    expect(
+      invoke<TicketsResult>("volli:data-project-roster", { projectId: project.id }),
+    ).toMatchObject({ ok: true, tickets: [{ id: ticket.id }] });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: moved, state: "present" });
+  });
+
+  // Every surface that reads a project path has to re-read: the rail, the file
+  // browsers, Configure, and the renderer's own root allowlist mirror. Without
+  // the invalidation the relink is committed and invisible.
+  it("announces the change so every surface re-reads the path", async () => {
+    const project = createProjectWithPath();
+    const moved = renameProjectDir(project.path, "announced");
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    // UNTARGETED on purpose (no `ticketId`): the path this relink rewrote is
+    // read by the rail, both file browsers, Configure and the renderer's root
+    // allowlist mirror, and the container move rewrote ticket rows as well. The
+    // conservative arm of the contract is the correct one here.
+    await expectDataChanged({ entity: "tickets", projectId: project.id });
+  });
+
+  it("announces nothing when the relink was refused", async () => {
+    const project = createProjectWithPath();
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: join(project.path, "nowhere-at-all"),
+    });
+
+    expectNoDataChange();
+  });
+
+  it("refuses a folder another project already tracks rather than duplicating it", async () => {
+    const project = createProjectWithPath();
+    // AWAITED: `volli:project-create` detects the base branch off the main
+    // thread, so the handler is async and a synchronous read of it would test a
+    // Promise's absent `ok` field rather than the answer.
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: other.project.path,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(2);
+  });
+
+  // Against the REAL disk, and through a symlink rather than a case difference,
+  // because the two platforms this suite runs on disagree about case and agree
+  // about links. A path that reaches a folder another project tracks is that
+  // folder, however it is spelled — and taking it would leave two rows on one
+  // checkout, which is the duplicate this channel exists to refuse.
+  it("refuses a path that reaches a tracked folder by another route", async () => {
+    const project = createProjectWithPath();
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+    const link = join(mkdtempSync(join(tmpdir(), "volli-link-")), "atlas");
+    createdProjectDirs.push(dirname(link));
+    symlinkSync(other.project.path, link);
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: link,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+  });
+
+  it("refuses a replacement folder that is not on disk", async () => {
+    const project = createProjectWithPath();
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: join(project.path, "nowhere-at-all"),
+      }),
+    ).resolves.toEqual({ ok: false, refusal: "missing", error: "That folder doesn't exist." });
+  });
+
+  // A project can be any folder, so a path that turns out to be a file is a
+  // refusal with its own sentence rather than a crash.
+  it("refuses a replacement that is a file rather than a folder", async () => {
+    const project = createProjectWithPath();
+    const file = join(freshProjectDir(), "not-a-folder.txt");
+    writeFileSync(file, "");
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: file,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "not-a-directory",
+      error: "That's a file, not a folder.",
+    });
+  });
+
+  it("refuses an unknown project", async () => {
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: "ghost",
+        path: freshProjectDir(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", { projectId: "ghost" }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
   });
 });
 
@@ -674,12 +1113,13 @@ describe("ticket-scoped invalidations carry their project (VC-387)", () => {
 });
 
 describe("volli:data-project-roster — the steady-state refresh read (VC-387)", () => {
-  it("answers one project's live board, carrying no ticket bodies", () => {
+  it("answers one project's live board, carrying no ticket bodies", async () => {
     const projectId = createProject();
-    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Other",
     });
+    if (!other.ok) throw new Error(other.error);
     const mine = invoke<TicketResult>("volli:ticket-create", {
       projectId,
       status: "todo",
@@ -773,6 +1213,60 @@ describe("volli:ticket-create — ticket numbers never recycle across a hard del
     // branch. The counter must instead keep moving forward.
     const four = createTicket(projectId);
     expect(four.ticketNumber).toBe(4);
+  });
+});
+
+describe("archiving or deleting a ticket drops its Sessions' saved tool output (VC-469)", () => {
+  function piToolOutput(sessionsRoot: string, ticketId: string, name: string): string {
+    const directory = join(sessionsRoot, "--Users-test-project--");
+    mkdirSync(directory, { recursive: true });
+    const sidecar = join(directory, `${name}.jsonl`);
+    writeFileSync(sidecar, "{}\n");
+    const output = join(directory, `${name}.tool-output`);
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "tc-1.txt"), "saved");
+    const session = testSession(
+      ctx.db.prepare("SELECT project_id FROM tickets WHERE id = ?").pluck().get(ticketId) as string,
+      ticketId,
+    );
+    insertSession(ctx.db, session);
+    ctx.db
+      .prepare(
+        `UPDATE session_attachments SET adapter_id = 'pi', native_detail = ? WHERE session_id = ?`,
+      )
+      .run(
+        JSON.stringify({
+          kind: "volli.native-binding.v1",
+          locator: { runtime: "pi", sessionId: name, sessionFilePath: sidecar },
+        }),
+        session.id,
+      );
+    return output;
+  }
+
+  it("removes it on archive, and on deleting a ticket archived before this existed", () => {
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "volli-pi-sessions-"));
+    createdProjectDirs.push(sessionsRoot);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { detectBaseBranch: async () => null, piSessionsDirectory: sessionsRoot },
+    );
+    const projectId = createProject();
+    const archived = createTicket(projectId);
+    const archivedOutput = piToolOutput(sessionsRoot, archived.id, "archived");
+    archiveTicket(archived.id);
+    expect(existsSync(archivedOutput)).toBe(false);
+
+    // A live ticket keeps it, even when a delete is wrongly asked for.
+    const live = createTicket(projectId);
+    const liveOutput = piToolOutput(sessionsRoot, live.id, "live");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: live.id }).ok).toBe(false);
+    expect(existsSync(liveOutput)).toBe(true);
+
+    // Saved again after the archive (an older build, say), then deleted.
+    const again = piToolOutput(sessionsRoot, archived.id, "again");
+    expect(invoke<Result>("volli:ticket-delete", { ticketId: archived.id }).ok).toBe(true);
+    expect(existsSync(again)).toBe(false);
   });
 });
 
@@ -1111,6 +1605,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
         value: {
           identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
           created: true,
+          restamped: true,
         },
       };
     });
@@ -1274,6 +1769,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
             baseBranch: "main",
           },
           created: true,
+          restamped: true,
         },
       };
     });
@@ -1318,6 +1814,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
       value: {
         identity: { worktreePath: null, branch: "volli/VC-1", baseBranch: "main" },
         created: false,
+        restamped: false,
       },
     });
 
@@ -1671,13 +2168,14 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(interrupt).not.toHaveBeenCalled();
   });
 
-  it("does not interrupt when a single-card request names the wrong project", () => {
+  it("does not interrupt when a single-card request names the wrong project", async () => {
     const interrupt = withInterrupt(["s1"]);
     const projectId = createProject();
-    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Other",
     });
+    if (!other.ok) throw new Error(other.error);
     const otherProjectId = other.project.id;
     const ticket = createTicket(projectId);
     move(projectId, ticket.id, "doing");
@@ -1911,10 +2409,16 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         activity: "idle",
         waitingOn: null,
         outcome: null,
+        latestTurnOrigin: null,
+        resumedAfterStop: false,
         lastActivityAt: 500,
         bornTicketless: false,
         role: "ticket",
         parentSessionId: null,
+        // What this Session is pinned to (VC-416). Null here because it has
+        // never recorded a policy — it was minted and never attached, which is
+        // exactly the state a row must not dress up as a reading.
+        model: null,
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both
@@ -2087,6 +2591,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     );
     expect(provenanceById.get(runSession)).toEqual({
       kind: "automation",
+      automationRunId: expect.any(String),
       automationName: "Nightly sweep",
     });
     expect(provenanceById.get(delegated)).toEqual({
@@ -2186,6 +2691,196 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       ok: false,
       error: "Invalid ticket",
     });
+  });
+});
+
+describe("volli:session-read-set (VC-30)", () => {
+  /** One chat Session, minted through the engine the handlers are given. */
+  async function chatSession(
+    sessionEngine: ReturnType<typeof createDesktopSessionEngine>,
+    ticketId: string | null,
+  ): Promise<string> {
+    const created = await sessionEngine.createSession({
+      commandId: "create-read",
+      projectId: createProject(),
+      ticketId,
+      role: roleImpliedByTicket(ticketId),
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    return created.session.id;
+  }
+
+  it("persists the receipt and re-publishes the row every sidebar holds", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const marked = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+
+    expect(marked.ok && marked.read.unreadSince).toEqual(expect.any(Number));
+    // The durable answer, read back through the same door a listing reads.
+    expect(readSessionUnread(ctx.db, sessionId).unreadSince).toBe(
+      marked.ok ? marked.read.unreadSince : null,
+    );
+    // And the row itself, on the push channel: this write moves no ledger fact,
+    // so without the re-publish the other sidebar and the second window would
+    // keep drawing the old dot.
+    const pushed = dataChangedSends.filter((send) => send.channel === "volli:session-activity");
+    expect(pushed).toHaveLength(1);
+    const notice = pushed[0]!.payload as SessionActivityNotice;
+    expect(rowId(notice.row)).toBe(sessionId);
+    expect(notice.row.read).toEqual(marked.ok ? marked.read : null);
+  });
+
+  it("clears the receipt again, and publishes a row with nothing to say", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+    dataChangedSends.length = 0;
+
+    const read = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: false,
+    });
+
+    expect(read).toEqual({ ok: true, read: { unreadSince: null } });
+    const notice = dataChangedSends.find((send) => send.channel === "volli:session-activity")
+      ?.payload as SessionActivityNotice;
+    // The resting state is the field's absence — the same row the fetch returns.
+    expect(notice.row).not.toHaveProperty("read");
+  });
+
+  it("refuses a Session the ledger does not have, and publishes nothing", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const result = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId: "never-minted",
+      unread: true,
+    });
+
+    expect(result).toEqual({ ok: false, error: "Unknown session" });
+    expect(dataChangedSends.filter((send) => send.channel === "volli:session-activity")).toEqual(
+      [],
+    );
+  });
+
+  it("rejects invalid input", () => {
+    expect(invoke<SessionReadSetResult>("volli:session-read-set", { sessionId: "s1" })).toEqual({
+      ok: false,
+      error: "Invalid session read state",
+    });
+    expect(
+      invoke<SessionReadSetResult>("volli:session-read-set", { sessionId: "", unread: true }),
+    ).toEqual({ ok: false, error: "Invalid session read state" });
+  });
+});
+
+describe("volli:session-peek-content (VC-30)", () => {
+  it("reads local content without utility work, then refines only on explicit demand", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const created = await sessionEngine.createSession({
+      commandId: "create-summary-peek",
+      projectId: createProject(),
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const summarizePeek = vi.fn(async () => "Combined summary");
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine, summarizePeek });
+    expect(summarizePeek).not.toHaveBeenCalled();
+    const local = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+    });
+    expect(local).toMatchObject({ ok: true, content: { entries: [], question: null } });
+    expect(summarizePeek).not.toHaveBeenCalled();
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+      refine: true,
+    });
+    expect(summarizePeek).toHaveBeenCalledExactlyOnceWith(created.session.id, []);
+    expect(result).toMatchObject({ ok: true, content: { summary: "Combined summary" } });
+  });
+
+  it("answers the Session's tail and the question it is asking", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const created = await sessionEngine.createSession({
+      commandId: "create-peek",
+      projectId: createProject(),
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      content: {
+        sessionId: created.session.id,
+        // No artifact store in this composition: counts, and no invented
+        // entries (and `unreadable` stays 0 — nothing looked).
+        entries: [],
+        question: null,
+        turns: 0,
+        turnDepth: 0,
+        unreadable: 0,
+        lastActivityAt: expect.any(Number),
+      },
+    });
+  });
+
+  it("answers null content for a Session the ledger does not have", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: "never-minted",
+    });
+
+    expect(result).toEqual({ ok: true, content: null });
+  });
+
+  it("rejects invalid input", () => {
+    expect(
+      invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: 7 }),
+    ).toEqual({ ok: false, error: "Invalid session peek" });
+    expect(
+      invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: "" }),
+    ).toEqual({ ok: false, error: "Invalid session peek" });
   });
 });
 
@@ -3226,6 +3921,7 @@ describe("volli:worktree-recreate", () => {
           baseBranch: "main",
         },
         created: true,
+        restamped: true,
       },
     });
 

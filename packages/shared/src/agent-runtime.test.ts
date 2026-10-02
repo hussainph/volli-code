@@ -3,19 +3,25 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askChoice,
   askOffer,
+  decodeApprovalConsent,
+  browserFindPort,
   browserHoldPort,
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
+  formatShellRuntime,
   shellCommandLine,
   shellStanding,
   UtilityCompletionError,
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
   type RuntimeShellPort,
+  type RuntimeClassifyPort,
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import { codeModeSurfaceFor } from "./code-mode";
+import { commandScope, gitScope, writeScope } from "./approvals";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -166,12 +172,16 @@ const browserPort: RuntimeBrowserPort = {
 
 /** The same port with its hold pair: what every Session born since VC-239 is handed. */
 const browserHoldPortFixture: RuntimeBrowserPort = { ...browserPort, acquire: port, release: port };
+const browserEveryPortFixture: RuntimeBrowserPort = { ...browserHoldPortFixture, find: port };
 
 /**
  * Stands in for a wired background shell port (VC-270). Presence only, like
  * the two above: the three shell tools ride this one port together.
  */
 const shellPort: RuntimeShellPort = { start: port, output: port, kill: port };
+
+/** Stands in for a wired decision port (VC-478). Presence only. */
+const classifyPort: RuntimeClassifyPort = { classify: port };
 
 /**
  * The verb port, which unlike the three above decides no membership — the
@@ -256,11 +266,62 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-3)).toEqual(["shell_start", "shell_output", "shell_kill"]);
+    expect(NON_CODING_TOOL_IDS.slice(-7, -4)).toEqual([
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
     // The binding carries the port, so the runtime never null-checks one.
     for (const binding of sessionToolBindings({ tools: { tools: [] }, shell: shellPort })) {
       expect(binding).toMatchObject({ port: shellPort });
     }
+  });
+
+  it("appends browser_find last, exactly when the port carries find (VC-364)", () => {
+    // Appended after the shell tools, never beside the other browser names:
+    // a Session frozen before it existed keeps every position and its Cache
+    // Prefix, and is handed a port without `find`.
+    expect(
+      sessionToolIds({ tools: { tools: [] }, browser: browserEveryPortFixture, shell: shellPort }),
+    ).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+      "browser_acquire",
+      "browser_release",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+      "browser_find",
+    ]);
+    // Followed by `classify` (VC-478) and `codemode` (VC-471), appended after it
+    // for the same reason.
+    expect(NON_CODING_TOOL_IDS.at(-4)).toBe("browser_find");
+    expect(NON_CODING_TOOL_IDS.at(-3)).toBe("classify");
+    expect(NON_CODING_TOOL_IDS.at(-2)).toBe("codemode");
+    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("request_secret");
+    expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).not.toContain(
+      "browser_find",
+    );
+    expect(browserFindPort(undefined)).toBeUndefined();
+    expect(browserFindPort(browserPort)).toBeUndefined();
+    expect(browserFindPort(browserEveryPortFixture)).toBe(browserEveryPortFixture);
+  });
+
+  it("appends classify last, exactly when the decision port is wired (VC-478)", () => {
+    // After the Browser search, so every Session frozen before decision
+    // models existed keeps every position and its Cache Prefix.
+    expect(NON_CODING_TOOL_IDS.at(-3)).toBe("classify");
+    expect(
+      sessionToolIds({ tools: { tools: [] }, classify: classifyPort, shell: shellPort }),
+    ).toEqual(["shell_start", "shell_output", "shell_kill", "classify"]);
+    expect(sessionToolIds({ tools: { tools: [] }, shell: shellPort })).not.toContain("classify");
+    expect(sessionToolBindings({ tools: { tools: [] }, classify: classifyPort })).toEqual([
+      { tool: "classify", port: classifyPort },
+    ]);
   });
 
   it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
@@ -278,6 +339,21 @@ describe("sessionToolIds", () => {
     // Exited with neither: the OS told us nothing, and the text says so
     // rather than inventing a zero that would read as success.
     expect(shellStanding({ state: "exited", code: null, signal: null })).toBe("exited ?");
+  });
+
+  it("says how long a shell ran in the two units that matter (VC-495)", () => {
+    // Whole seconds under a minute; a sub-second run is `0s`, never negative
+    // when a clock steps back.
+    expect(formatShellRuntime(0)).toBe("0s");
+    expect(formatShellRuntime(900)).toBe("0s");
+    expect(formatShellRuntime(-5_000)).toBe("0s");
+    expect(formatShellRuntime(45_000)).toBe("45s");
+    // Minutes with the seconds that remain, and no `0s` tacked on.
+    expect(formatShellRuntime(60_000)).toBe("1m");
+    expect(formatShellRuntime(125_000)).toBe("2m 5s");
+    // From an hour, minutes: the seconds are noise by then.
+    expect(formatShellRuntime(3_600_000)).toBe("1h");
+    expect(formatShellRuntime(3_700_000)).toBe("1h 1m");
   });
 
   it("names a shell by the first line that says something (VC-270)", () => {
@@ -327,12 +403,29 @@ describe("sessionToolIds", () => {
     // a Snapshot built from this call cannot under-report the surface, whatever
     // the surface holds.
     const everything = sessionToolIds({
-      tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+      tools: {
+        tools: ["read", "edit", "write", "execute"],
+        todoWrite: true,
+        codeMode: codeModeSurfaceFor({
+          tools: sessionToolIds({
+            tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+            askUser: port,
+            webFetch: port,
+            webSearch: port,
+            browser: browserEveryPortFixture,
+            shell: shellPort,
+            classify: classifyPort,
+            secret: { request: async () => "still missing", redact: (text) => text },
+          }),
+        }),
+      },
       askUser: port,
       webFetch: port,
       webSearch: port,
-      browser: browserHoldPortFixture,
+      browser: browserEveryPortFixture,
       shell: shellPort,
+      classify: classifyPort,
+      secret: { request: async () => "still missing", redact: (text) => text },
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
@@ -443,5 +536,117 @@ describe("UtilityCompletionError", () => {
   // Null means nothing reached a provider, never that a request was free.
   it("carries null for a failure that was never billed", () => {
     expect(new UtilityCompletionError("not in this runtime's catalog", null).usage).toBeNull();
+  });
+});
+
+describe("decodeApprovalConsent", () => {
+  it("only grants a single declared choice, matching case without trusting unknown ids", () => {
+    expect(decodeApprovalConsent([{ id: "ONCE" }], ["once"])).toBe("allow");
+    expect(decodeApprovalConsent([{ id: "project" }], ["PROJECT"])).toBe("allow-project");
+    expect(decodeApprovalConsent([{ id: "session" }], ["SESSION"])).toBe("allow-session");
+    expect(decodeApprovalConsent([{ id: "ledger" }], ["LEDGER"])).toBe("ledger");
+    expect(decodeApprovalConsent([{ id: "stop" }], ["stop"])).toBe("stop");
+    expect(decodeApprovalConsent([{ id: "unknown" }], ["unknown"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], ["project"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], ["once", "once"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "once" }], [])).toBe("refuse");
+  });
+
+  it("never steers with words unless steering was declared", () => {
+    expect(decodeApprovalConsent([{ id: "once" }], ["steer"], "use /tmp")).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "steer" }], ["steer"])).toBe("refuse");
+    expect(decodeApprovalConsent([{ id: "steer" }], ["steer"], "  use /tmp ")).toEqual({
+      kind: "steer",
+      message: "use /tmp",
+    });
+  });
+});
+
+describe("the approval card's offer and answer", () => {
+  const pathAsk = askRequest({
+    trip: "approval",
+    approval: {
+      asked: "write /a/b/c/d/e.md",
+      scopes: [writeScope("/Users/me/code/docs/guides/e.md")],
+    },
+  });
+  const gitAsk = askRequest({
+    trip: "approval",
+    approval: { asked: "git push", scopes: [gitScope("git push -C /x")] },
+  });
+  const wrappedAsk = askRequest({
+    trip: "approval",
+    approval: { asked: "bash -c x", scopes: [commandScope("bash -c x")] },
+  });
+  const onceOnly = askRequest({ trip: "approval", approval: { asked: "x", scopes: [] } });
+
+  it("does not offer approval even if a hard refusal carried approval detail", () => {
+    const hard = { ...pathAsk, overridable: false };
+    expect(askOffer(hard).options).toBe(SESSION_ESCALATION_OPTIONS);
+    expect(askChoice(hard, ["once"])).toBe("refuse");
+    expect(askChoice(hard, ["project"])).toBe("refuse");
+    expect(askChoice(hard, ["stop"])).toBe("stop");
+  });
+
+  it("offers all five choices, each naming what it will remember", () => {
+    const offer = askOffer(pathAsk);
+    expect(offer.kind).toBe("permission");
+    expect(offer.options.map((option) => option.id)).toEqual([
+      "once",
+      "session",
+      "project",
+      "reject",
+      "steer",
+    ]);
+    expect(offer.options[1].description).toContain("Write to /Users/me/code/docs/guides");
+    expect(offer.options[2].description).toContain("for every Session");
+  });
+
+  it("never offers a project-wide rule for a command it cannot read inside", () => {
+    expect(askOffer(wrappedAsk).options.map((option) => option.id)).toEqual([
+      "once",
+      "session",
+      "reject",
+      "steer",
+    ]);
+    expect(askChoice(wrappedAsk, ["project"])).toBe("refuse");
+  });
+
+  it("offers only once, deny and steer when nothing can be remembered", () => {
+    expect(askOffer(onceOnly).options.map((option) => option.id)).toEqual([
+      "once",
+      "reject",
+      "steer",
+    ]);
+    expect(askChoice(onceOnly, ["session"])).toBe("refuse");
+    expect(askChoice(onceOnly, ["project"])).toBe("refuse");
+  });
+
+  it.each([
+    ["once", "unknown"],
+    ["once", "session"],
+    ["project", "session"],
+  ])("refuses incoherent consent %j instead of silently widening it", (...ids) => {
+    expect(askChoice(pathAsk, ids)).toBe("refuse");
+  });
+
+  it("reads each answer, failing to a refusal", () => {
+    expect(askChoice(pathAsk, ["once"])).toBe("allow");
+    expect(askChoice(pathAsk, ["session"])).toBe("allow-session");
+    expect(askChoice(pathAsk, ["project"])).toBe("allow-project");
+    expect(askChoice(gitAsk, ["project"])).toBe("allow-project");
+    expect(askChoice(pathAsk, ["reject"])).toBe("refuse");
+    expect(askChoice(pathAsk, ["once", "reject"])).toBe("refuse");
+    expect(askChoice(pathAsk, [])).toBe("refuse");
+    expect(askChoice(pathAsk, ["something-stale"])).toBe("refuse");
+  });
+
+  it("turns a steer into the person's words, and a wordless steer into a plain denial", () => {
+    expect(askChoice(pathAsk, ["steer"], "  use /tmp instead ")).toEqual({
+      kind: "steer",
+      message: "use /tmp instead",
+    });
+    expect(askChoice(pathAsk, ["steer"], "   ")).toBe("refuse");
+    expect(askChoice(pathAsk, ["steer"])).toBe("refuse");
   });
 });

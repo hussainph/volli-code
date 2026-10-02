@@ -5,6 +5,15 @@
 
 import Ajv2020 from "ajv/dist/2020.js";
 
+import {
+  MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL,
+  mcpEndpointMayCarryCredentials,
+  sanitizeMcpCredentialEntries,
+  sanitizeMcpOAuthClient,
+  type McpCredentialEntry,
+  type McpOAuthClientConfig,
+} from "./mcp-credentials";
+
 export const MCP_PROVIDER_NAME_MAX_CHARS = 64;
 export const MCP_SERVER_ID_MAX_CHARS = 64;
 export const MCP_SERVER_NAME_MAX_CHARS = 100;
@@ -18,7 +27,37 @@ export const MCP_TOOL_COUNT_MAX = 128;
 export const MCP_PROVENANCE_VALUE_MAX_CHARS = 256;
 export const MCP_CONNECTION_TIMEOUT_MS = 10_000;
 export const MCP_CALL_TIMEOUT_MS = 30_000;
-export const MCP_RESULT_MAX_CHARS = 256 * 1_024;
+/**
+ * UTF-8 bytes of a result's text the model reads whole (VC-469).
+ *
+ * Pi 0.99's own MCP bound, which is Codex's: past it the model reads the
+ * start and the end of the text around a `…N chars truncated…` marker, and the
+ * whole text is saved to a file in the Session's own storage that the result
+ * names. A result is never refused for its size.
+ */
+export const MCP_RESULT_INLINE_MAX_BYTES = 20 * 1_024;
+/**
+ * The outer bound on one result: the most of its text written to disk, and the
+ * largest `structuredContent` (as UTF-8 JSON) the result keeps (VC-469).
+ *
+ * It replaced a hard 256 KiB refusal. Text past it is not saved, and the result
+ * says how much of the whole the file holds; structured content past it is
+ * dropped from the result, which says so.
+ */
+export const MCP_RESULT_MAX_BYTES = 8 * 1_024 * 1_024;
+/**
+ * What the host reads of one result at all (VC-469): four times
+ * {@link MCP_RESULT_MAX_BYTES}, measured over the result's text, image data and
+ * structured content before anything copies, cuts or saves it. A result past
+ * it is answered as an error naming the bound, never handed on. The transports
+ * bound what arrives before this does; this bounds what the main process then
+ * works on, whichever transport delivered it.
+ */
+export const MCP_RESULT_HOST_MAX_BYTES = 4 * MCP_RESULT_MAX_BYTES;
+/** The most images one result shows the model (VC-469). */
+export const MCP_RESULT_MAX_IMAGES = 8;
+/** The most base64 image data one result shows the model, after each image is fitted (VC-469). */
+export const MCP_RESULT_IMAGE_MAX_BYTES = 16 * 1_024 * 1_024;
 
 export type McpJsonPrimitive = string | number | boolean | null;
 export type McpJsonValue = McpJsonPrimitive | McpJsonObject | readonly McpJsonValue[];
@@ -36,6 +75,28 @@ export interface McpToolDefinition {
   providerName: McpToolId;
   description: string;
   inputSchema: McpJsonObject;
+  /**
+   * The JSON Schema the server publishes for this tool's `structuredContent`,
+   * when it publishes one that passes the same bounds as {@link inputSchema}
+   * (VC-469). Never sent to the model: it types the structured half of a result
+   * for programmatic callers. Absent on every definition frozen before 0.99,
+   * and on any tool whose server published none or one Volli could not accept.
+   */
+  outputSchema?: McpJsonObject;
+  /**
+   * Host-authored: Volli has audited this exact `(serverId, toolName)` as an
+   * idempotent read that may overlap other such reads in one model batch
+   * (VC-454).
+   *
+   * Written by {@link withParallelReadEligibility} alone, at Session birth,
+   * from the host's own allowlist. It is never copied from anything a server
+   * says: a description, an annotation or a `readOnlyHint` is third-party
+   * data, and {@link sanitizeMcpToolDefinition} never produces this field.
+   * Frozen with the rest of the definition, so a Session keeps what it was
+   * born with. Absent — which is every ordinary Session — means the tool runs
+   * one call at a time.
+   */
+  parallelRead?: true;
 }
 
 export interface McpToolCandidate {
@@ -44,11 +105,31 @@ export interface McpToolCandidate {
   toolName: string;
   description?: string;
   inputSchema: unknown;
+  /** What the server published as the tool's `outputSchema`, if anything. */
+  outputSchema?: unknown;
 }
 
+/**
+ * How Volli reaches one server.
+ *
+ * `env`, `headers` and `oauth` are VC-470's, each absent when empty so a
+ * configuration without credentials stores exactly what it always did. Every
+ * credential in them is a reference or a stored-secret marker, never a value —
+ * see `mcp-credentials.ts`.
+ */
 export type McpTransportConfig =
-  | { type: "stdio"; command: string; args: readonly string[] }
-  | { type: "streamable-http"; url: string };
+  | {
+      type: "stdio";
+      command: string;
+      args: readonly string[];
+      env?: readonly McpCredentialEntry[];
+    }
+  | {
+      type: "streamable-http";
+      url: string;
+      headers?: readonly McpCredentialEntry[];
+      oauth?: McpOAuthClientConfig;
+    };
 
 export interface McpServerDraft {
   id: string;
@@ -146,6 +227,79 @@ export interface McpCatalogTool {
   enabled: boolean;
   definition: McpToolDefinition | null;
   error: string | null;
+  /**
+   * What the server says about this tool, for Settings to show and sort by.
+   * Absent on every catalog read before it existed, and on a tool whose server
+   * said nothing. See {@link McpToolHints}.
+   */
+  hints?: McpToolHints;
+}
+
+/** The longest tool title Settings shows, as the server's `title` or `annotations.title`. */
+export const MCP_TOOL_TITLE_MAX_CHARS = 128;
+
+/**
+ * A server's own description of one tool: its human-readable title and the
+ * MCP behaviour annotations (`readOnlyHint`, `destructiveHint`).
+ *
+ * DISPLAY ONLY, and third-party data like a description. Settings groups a
+ * catalog into read-only tools and the rest by it, so a person can turn on
+ * every read in one move and judge the writes one at a time. Nothing that
+ * decides what runs reads it: it never reaches a frozen definition, the model,
+ * the parallel-read allowlist ({@link McpToolDefinition.parallelRead}) or any
+ * approval. A server that labels a delete "read-only" misleads a person's
+ * choice and gains nothing else, which is why Settings says the labels are the
+ * server's own.
+ *
+ * Each field is present only when the server said it; `false` is a statement,
+ * not a default.
+ */
+export interface McpToolHints {
+  title?: string;
+  readOnly?: boolean;
+  destructive?: boolean;
+}
+
+/**
+ * The hints worth keeping from one `tools/list` entry, or `undefined` when it
+ * carries none.
+ *
+ * Reads the tool's top-level `title` first (2025-06-18), then
+ * `annotations.title`. A title is kept only as a single trimmed line within
+ * {@link MCP_TOOL_TITLE_MAX_CHARS}, and not when it merely repeats the name;
+ * an annotation is kept only when it is a boolean. Anything else is dropped
+ * rather than refused: the tool works without its hints.
+ */
+export function sanitizeMcpToolHints(tool: unknown): McpToolHints | undefined {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return undefined;
+  const record = tool as Record<string, unknown>;
+  const annotations =
+    record["annotations"] !== null &&
+    typeof record["annotations"] === "object" &&
+    !Array.isArray(record["annotations"])
+      ? (record["annotations"] as Record<string, unknown>)
+      : {};
+  const hints: McpToolHints = {};
+  const title = hintTitle(record["title"]) ?? hintTitle(annotations["title"]);
+  if (title !== undefined && title !== record["name"]) hints.title = title;
+  if (typeof annotations["readOnlyHint"] === "boolean")
+    hints.readOnly = annotations["readOnlyHint"];
+  if (typeof annotations["destructiveHint"] === "boolean") {
+    hints.destructive = annotations["destructiveHint"];
+  }
+  return Object.keys(hints).length === 0 ? undefined : hints;
+}
+
+// eslint-disable-next-line no-control-regex -- matching control characters is the point.
+const HINT_TITLE_UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+function hintTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // One line, no control or bidi-override characters: a title is drawn in a
+  // row beside the tool's name, and a newline or an RLO could disguise which
+  // name it belongs to.
+  const title = value.replace(HINT_TITLE_UNSAFE, " ").replace(/\s+/g, " ").trim();
+  return title.length === 0 || title.length > MCP_TOOL_TITLE_MAX_CHARS ? undefined : title;
 }
 
 export interface McpServerRecord extends McpServerDraft {
@@ -161,7 +315,17 @@ export interface McpServerRecord extends McpServerDraft {
 }
 
 export type McpToolSanitization =
-  | { ok: true; definition: McpToolDefinition }
+  | {
+      ok: true;
+      definition: McpToolDefinition;
+      /**
+       * Why the published output schema was left off a tool that is otherwise
+       * usable. An output schema only types the structured half of a result,
+       * so one Volli cannot accept costs that typing and nothing else; the
+       * tool is not refused for it the way an unusable input schema refuses it.
+       */
+      outputSchemaRejected?: string;
+    }
   | { ok: false; reason: string };
 
 const PROVIDER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -207,38 +371,131 @@ export function mcpProviderToolName(
   return `mcp__${server}__${tool}__${hash}`;
 }
 
+/**
+ * One MCP tool's exact identity as a host-authored allowlist spells it:
+ * `serverId:toolName`. A server id cannot contain `:`, so the first colon
+ * always splits it, whatever the tool name holds. Branded so a key is only
+ * ever built by {@link mcpToolKey} or checked by {@link parseMcpToolKey}.
+ */
+export type McpToolKey = string & { readonly __mcpToolKey: unique symbol };
+
+export function mcpToolKey(
+  definition: Pick<McpToolDefinition, "serverId" | "toolName">,
+): McpToolKey {
+  return `${definition.serverId}:${definition.toolName}` as McpToolKey;
+}
+
+/**
+ * Read a key a host wrote by hand, or explain why it is not one: a valid
+ * server id, a colon, and a tool name within the tool-name limit.
+ */
+export function parseMcpToolKey(
+  value: unknown,
+): { ok: true; key: McpToolKey } | { ok: false; reason: string } {
+  if (typeof value !== "string") return { ok: false, reason: "an MCP tool key must be a string" };
+  const colon = value.indexOf(":");
+  const serverId = colon < 0 ? "" : value.slice(0, colon);
+  const toolName = colon < 0 ? "" : value.slice(colon + 1);
+  if (!SERVER_ID.test(serverId) || serverId.length > MCP_SERVER_ID_MAX_CHARS) {
+    return { ok: false, reason: `"${value}" is not "<serverId>:<toolName>"` };
+  }
+  if (toolName.length === 0) {
+    return { ok: false, reason: `"${value}" is not "<serverId>:<toolName>"` };
+  }
+  if (toolName.length > MCP_TOOL_NAME_MAX_CHARS) {
+    return { ok: false, reason: `"${value}" names a tool that is too long` };
+  }
+  return { ok: true, key: mcpToolKey({ serverId, toolName }) };
+}
+
+/** `definition` with no parallel-read mark, every other field kept. */
+function unmarked(definition: McpToolDefinition): McpToolDefinition {
+  const { parallelRead: _dropped, ...rest } = definition;
+  return rest;
+}
+
+/**
+ * Stamp host-authored parallel-read eligibility onto the definitions a new
+ * root Session is about to freeze (VC-454).
+ *
+ * The only writer of {@link McpToolDefinition.parallelRead}. A definition
+ * whose exact {@link mcpToolKey} is in `allowlist` gains the mark; every other
+ * definition loses any mark it carried, so a stored catalog row can never
+ * smuggle one in. Nothing about the definition itself — its description, its
+ * schema, a name that sounds read-only — is consulted. An empty allowlist
+ * returns unmarked definitions, and a definition already in the right state
+ * is returned as the same object.
+ */
+export function withParallelReadEligibility(
+  definitions: readonly McpToolDefinition[],
+  allowlist: ReadonlySet<McpToolKey>,
+): readonly McpToolDefinition[] {
+  return definitions.map((definition) => {
+    const eligible = allowlist.has(mcpToolKey(definition));
+    if (eligible === (definition.parallelRead === true)) return definition;
+    return eligible ? { ...definition, parallelRead: true } : unmarked(definition);
+  });
+}
+
+/**
+ * Keep a frozen mark only while the host still allowlists that exact tool
+ * (VC-454).
+ *
+ * Applied when an existing Session attaches. It can take eligibility away and
+ * never grants it: a tool added to the allowlist after a Session was born
+ * stays unmarked for that Session, while a tool removed from it stops running
+ * in parallel everywhere at the next attach. The durable record is untouched.
+ */
+export function narrowParallelReadEligibility(
+  definitions: readonly McpToolDefinition[],
+  allowlist: ReadonlySet<McpToolKey>,
+): readonly McpToolDefinition[] {
+  return definitions.map((definition) =>
+    definition.parallelRead === true && !allowlist.has(mcpToolKey(definition))
+      ? unmarked(definition)
+      : definition,
+  );
+}
+
 export function isMcpToolId(value: unknown): value is McpToolId {
   return typeof value === "string" && value.startsWith("mcp__") && PROVIDER_NAME.test(value);
 }
 
-function schemaFailure(value: unknown): string | null {
+/**
+ * Why a published schema cannot be used, or `null` when it can.
+ *
+ * One set of bounds for both halves of a tool (VC-469): an output schema is as
+ * much third-party JSON as an input schema, it is frozen into Session history
+ * the same way, and the MCP specification requires both to be object schemas.
+ */
+function schemaFailure(value: unknown, label: "input schema" | "output schema"): string | null {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
-    return "input schema must be a JSON Schema object";
+    return `${label} must be a JSON Schema object`;
   }
   const root = value as Record<string, unknown>;
-  if (root["type"] !== "object") return 'input schema root type must be "object"';
+  if (root["type"] !== "object") return `${label} root type must be "object"`;
   if (
     root["properties"] !== undefined &&
     (root["properties"] === null ||
       Array.isArray(root["properties"]) ||
       typeof root["properties"] !== "object")
   ) {
-    return "input schema properties must be an object";
+    return `${label} properties must be an object`;
   }
   if (
     root["required"] !== undefined &&
     (!Array.isArray(root["required"]) ||
       root["required"].some((entry: unknown) => typeof entry !== "string"))
   ) {
-    return "input schema required must contain only strings";
+    return `${label} required must contain only strings`;
   }
 
   let nodes = 0;
   const seen = new Set<object>();
   const visit = (entry: unknown, depth: number): string | null => {
     nodes += 1;
-    if (nodes > MCP_SCHEMA_MAX_NODES) return "input schema has too many values";
-    if (depth > MCP_SCHEMA_MAX_DEPTH) return "input schema is nested too deeply";
+    if (nodes > MCP_SCHEMA_MAX_NODES) return `${label} has too many values`;
+    if (depth > MCP_SCHEMA_MAX_DEPTH) return `${label} is nested too deeply`;
     if (
       entry === null ||
       typeof entry === "string" ||
@@ -247,8 +504,8 @@ function schemaFailure(value: unknown): string | null {
     ) {
       return null;
     }
-    if (typeof entry !== "object") return "input schema must contain only JSON values";
-    if (seen.has(entry)) return "input schema must not contain cycles";
+    if (typeof entry !== "object") return `${label} must contain only JSON values`;
+    if (seen.has(entry)) return `${label} must not contain cycles`;
     seen.add(entry);
     if (Array.isArray(entry)) {
       for (const child of entry) {
@@ -259,10 +516,10 @@ function schemaFailure(value: unknown): string | null {
     }
     const prototype = Object.getPrototypeOf(entry);
     if (prototype !== Object.prototype && prototype !== null) {
-      return "input schema must contain only JSON values";
+      return `${label} must contain only JSON values`;
     }
     for (const [key, child] of Object.entries(entry)) {
-      if (key.length > 256) return "input schema contains an oversized key";
+      if (key.length > 256) return `${label} contains an oversized key`;
       const failure = visit(child, depth + 1);
       if (failure !== null) return failure;
     }
@@ -271,13 +528,13 @@ function schemaFailure(value: unknown): string | null {
   const failure = visit(value, 0);
   if (failure !== null) return failure;
   const encoded = JSON.stringify(value);
-  if (encoded.length > MCP_SCHEMA_MAX_CHARS) return "input schema is too large";
+  if (encoded.length > MCP_SCHEMA_MAX_CHARS) return `${label} is too large`;
   try {
     return JSON_SCHEMA_VALIDATOR.validateSchema(value)
       ? null
-      : "input schema must be valid JSON Schema";
+      : `${label} must be valid JSON Schema`;
   } catch {
-    return "input schema must be valid JSON Schema";
+    return `${label} must be valid JSON Schema`;
   }
 }
 
@@ -296,18 +553,23 @@ export function sanitizeMcpToolDefinition(input: McpToolCandidate): McpToolSanit
   if (description.length > MCP_DESCRIPTION_MAX_CHARS) {
     return { ok: false, reason: "tool description is too long" };
   }
-  const schemaError = schemaFailure(input.inputSchema);
+  const schemaError = schemaFailure(input.inputSchema, "input schema");
   if (schemaError !== null) return { ok: false, reason: schemaError };
-  return {
-    ok: true,
-    definition: {
-      serverId: input.serverId,
-      toolName: input.toolName,
-      providerName: mcpProviderToolName(input.serverId, input.serverName, input.toolName),
-      description,
-      inputSchema: input.inputSchema as McpJsonObject,
-    },
+  const outputSchemaError =
+    input.outputSchema === undefined ? null : schemaFailure(input.outputSchema, "output schema");
+  const definition: McpToolDefinition = {
+    serverId: input.serverId,
+    toolName: input.toolName,
+    providerName: mcpProviderToolName(input.serverId, input.serverName, input.toolName),
+    description,
+    inputSchema: input.inputSchema as McpJsonObject,
+    ...(input.outputSchema === undefined || outputSchemaError !== null
+      ? {}
+      : { outputSchema: input.outputSchema as McpJsonObject }),
   };
+  return outputSchemaError === null
+    ? { ok: true, definition }
+    : { ok: true, definition, outputSchemaRejected: outputSchemaError };
 }
 
 const STDIO_ARG_COUNT_MAX = 64;
@@ -364,13 +626,20 @@ export function sanitizeMcpServerDraft(input: {
     ) {
       return { ok: false, reason: "stdio argument array is invalid" };
     }
+    const env = sanitizeMcpCredentialEntries("env", transport["env"]);
+    if (!env.ok) return env;
     return {
       ok: true,
       server: {
         id: input.id,
         name: input.name.trim(),
         enabled: input.enabled,
-        transport: { type: "stdio", command, args: [...(args as string[])] },
+        transport: {
+          type: "stdio",
+          command,
+          args: [...(args as string[])],
+          ...(env.entries.length === 0 ? {} : { env: env.entries }),
+        },
       },
     };
   }
@@ -396,13 +665,28 @@ export function sanitizeMcpServerDraft(input: {
     if (url.hash.length > 0) {
       return { ok: false, reason: "streamable HTTP endpoint must not contain a fragment" };
     }
+    const headers = sanitizeMcpCredentialEntries("header", transport["headers"]);
+    if (!headers.ok) return headers;
+    const oauth = sanitizeMcpOAuthClient(transport["oauth"]);
+    if (!oauth.ok) return oauth;
+    if (
+      (headers.entries.length > 0 || oauth.oauth !== undefined) &&
+      !mcpEndpointMayCarryCredentials(url.toString())
+    ) {
+      return { ok: false, reason: MCP_PLAIN_HTTP_CREDENTIAL_REFUSAL };
+    }
     return {
       ok: true,
       server: {
         id: input.id,
         name: input.name.trim(),
         enabled: input.enabled,
-        transport: { type: "streamable-http", url: url.toString() },
+        transport: {
+          type: "streamable-http",
+          url: url.toString(),
+          ...(headers.entries.length === 0 ? {} : { headers: headers.entries }),
+          ...(oauth.oauth === undefined ? {} : { oauth: oauth.oauth }),
+        },
       },
     };
   }
@@ -506,7 +790,7 @@ export function mcpInstallWarning(server: McpServerDraft): string {
   return [
     `${server.name} is a remote MCP server at ${origin}: it receives whatever arguments its tools are given,`,
     "including file contents, paths and anything a model puts in a tool call, and Volli cannot see what it does with them.",
-    "Volli adds no credentials of its own and supports no authentication, so this endpoint must be one that needs none.",
+    "Volli sends it no credential of its own. If it needs a sign-in or a key, only a person can provide one, in Settings \u2192 Configure \u2192 MCP Servers; an agent never supplies, sees or stores it.",
   ].join(" ");
 }
 
@@ -516,7 +800,8 @@ export function mcpInstallWarning(server: McpServerDraft): string {
  * Acceptance 12 is absolute: no secret reaches a server process, a verb
  * argument, or a stored record. A query string is the one place in a URL a
  * token can still sit once userinfo and fragments are already refused, and an
- * agent has no secret store to put one anywhere better. Volli cannot tell
+ * agent may not hold a credential at all (VC-470: credentials are routed to the
+ * person, who stores them as a header, a secret or a sign-in). Volli cannot tell
  * `?token=…` from `?version=2`, so it refuses the shape rather than guessing at
  * the meaning — the alternative is storing an unknown value in plain text, in
  * the database and in every backup bundle, and calling that support.
@@ -529,8 +814,8 @@ export function mcpInstallWarning(server: McpServerDraft): string {
 export function mcpEndpointSecretRefusal(): string {
   return [
     "That endpoint carries a query string, and the MCP verbs refuse one.",
-    "Volli has no secret storage for MCP servers and cannot tell a token from an ordinary parameter, so a query string would be stored in plain text and sent to the server as given.",
-    "Authenticated servers are not supported yet. Use an endpoint that needs no credentials, or add this server by hand in Settings \u2192 Configure \u2192 MCP Servers.",
+    "Volli cannot tell a token from an ordinary parameter, so a query string would be stored in plain text and sent to the server as given.",
+    "Credentials are a person's to add: use the endpoint without its query string, or ask the person driving to add this server in Settings \u2192 Configure \u2192 MCP Servers, where a header, a stored secret or an OAuth sign-in can carry the credential instead.",
   ].join(" ");
 }
 
@@ -549,7 +834,8 @@ export function mcpRemovalWarning(serverName: string): string {
   return [
     `Removing ${serverName} deletes its configuration.`,
     `Any older Session that was born holding one of ${serverName}'s tools will fail to reattach afterwards, because the transport its frozen tool needs no longer exists.`,
-    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
+    "A server holding credentials a person set up \u2014 a header, an environment value, a stored secret or a sign-in \u2014 cannot be removed by an agent at all: removing it deletes them, so only a person can, in Settings \u2192 Configure \u2192 MCP Servers.",
   ].join(" ");
 }
 
@@ -569,11 +855,20 @@ export function validateMcpToolDefinitions(
       toolName: definition.toolName,
       description: definition.description,
       inputSchema: definition.inputSchema,
+      ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
     });
     if (!sanitized.ok)
       throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.reason}`);
+    // Discovery drops an output schema it cannot accept, so a frozen one that
+    // fails the same check was damaged after it was written.
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(definition.providerName)) {
       throw new Error(`Invalid MCP provider name for ${definition.toolName}`);
+    }
+    if (definition.parallelRead !== undefined && definition.parallelRead !== true) {
+      throw new Error(`Invalid MCP parallel-read mark for ${definition.toolName}`);
     }
     const identity = `${definition.serverId}\u0000${definition.toolName}`;
     if (identities.has(identity)) throw new Error(`Duplicate MCP tool ${definition.toolName}`);

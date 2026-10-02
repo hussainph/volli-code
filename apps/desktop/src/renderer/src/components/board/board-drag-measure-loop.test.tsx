@@ -366,15 +366,20 @@ function installLayout(): () => void {
   }) as typeof window.getComputedStyle;
 
   // The board's own hit test (`board.tsx#pointerLanding`) is one
-  // `elementFromPoint` per pointer move. jsdom ships none.
-  document.elementFromPoint = ((x: number, y: number) => {
-    const { boxes } = boardBoxes();
-    const hit = boxes.findLast(
-      ([, box]) =>
-        x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
-    );
-    return hit?.[0] ?? null;
-  }) as typeof document.elementFromPoint;
+  // `elementsFromPoint` per pointer move — the stack, topmost first. jsdom
+  // ships neither hit test; a browser ships both, and they agree.
+  const hitsAt = (x: number, y: number): Element[] =>
+    boardBoxes()
+      .boxes.filter(
+        ([, box]) =>
+          x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
+      )
+      .map(([node]) => node)
+      .toReversed();
+  document.elementFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)[0] ?? null) as typeof document.elementFromPoint;
+  document.elementsFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)) as typeof document.elementsFromPoint;
 
   return () => {
     Element.prototype.getBoundingClientRect = realRect;
@@ -383,6 +388,7 @@ function installLayout(): () => void {
       Reflect.deleteProperty(element, name);
     }
     Reflect.deleteProperty(document, "elementFromPoint");
+    Reflect.deleteProperty(document, "elementsFromPoint");
   };
 }
 
@@ -660,7 +666,6 @@ beforeEach(() => {
     byProject: {},
     armingByProject: {},
     orderByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     // A landed rail version from an earlier mount would let this case answer

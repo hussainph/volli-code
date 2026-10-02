@@ -30,6 +30,7 @@ export function browserChatTransport(): ChatSessionTransport {
           ? {}
           : { requestedSessionId: input.requestedSessionId }),
         ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
+        ...(input.autoSelect === undefined ? {} : { autoSelect: input.autoSelect }),
         // A picked model reaches the wire as the OVERRIDE it is: the server
         // merges it onto the app default for the Role and refuses one Model
         // Access cannot honor, exactly as it does for `volli session start

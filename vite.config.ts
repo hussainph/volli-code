@@ -15,9 +15,18 @@ const toolingIgnorePatterns = [
   // Curated prose — mechanical reflow of the decision-log tables is noise.
   "docs",
   "CLAUDE.md",
+  // LGPL compliance material that ships inside the packaged app (VC-409).
+  // LGPL-LIBVIPS.md is GENERATED, and its `--check` gate compares byte for
+  // byte: a formatter that re-indents its lists and pads its table columns
+  // makes the generated file permanently "stale" and the gate unpassable.
+  // The same reasoning as `docs` above, with a build gate behind it.
+  "apps/desktop/licensing",
   // Vendored third-party agent skills (npx skills add) — reformatting would
   // drift them from their skills-lock.json content hashes.
   ".agents",
+  // The Document-view markdown corpus keeps the exact variants (`*` vs `_`,
+  // Setext underlines, tilde fences) a formatter exists to normalise away.
+  "apps/desktop/src/renderer/src/editor/__fixtures__",
 ];
 
 export default defineConfig({
@@ -108,6 +117,9 @@ export default defineConfig({
     // fail the hook. Filter the staged set down to what Oxfmt actually formats
     // and skip the command entirely when nothing's left. `vp check` in CI is
     // the full-tree format gate, so nothing slips through unformatted.
+    // `--no-error-on-unmatched-pattern` covers what this list misses (dotfiles
+    // like `.gitignore`, which Oxfmt has no formatter for) without growing an
+    // extension blocklist.
     "*": (files) => {
       const targets = files.filter(
         (f) =>
@@ -116,7 +128,9 @@ export default defineConfig({
           !f.endsWith("pnpm-lock.yaml") &&
           !/(^|\/)(docs|dist|dist-electron|node_modules)\//.test(f),
       );
-      return targets.length ? `vp fmt ${targets.map((f) => JSON.stringify(f)).join(" ")}` : [];
+      return targets.length
+        ? `vp fmt --no-error-on-unmatched-pattern ${targets.map((f) => JSON.stringify(f)).join(" ")}`
+        : [];
     },
   },
 });

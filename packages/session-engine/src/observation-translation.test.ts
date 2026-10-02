@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ACTIVITY_METADATA_KEY,
+  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
+  readSessionToolCallScope,
   type RuntimeObservation,
   type SessionInteraction,
 } from "@volli/shared";
@@ -320,30 +322,33 @@ describe("live observation translation", () => {
     expect(recorded?.usage.costUsd).toBeNull();
   });
 
-  it("records a compaction that produced nothing as its own fact", async () => {
-    const { translate, sink } = composition();
+  it.each(["marker-4", undefined])(
+    "records a failed compaction with recovery marker %s as its own fact",
+    async (marker) => {
+      const { translate, sink } = composition();
 
-    // No entry to name it by, because none was written — so it falls back to
-    // the executor's marker, exactly as an attention does.
-    await translate({
-      kind: "compaction",
-      state: "failed",
-      reason: "threshold",
-      message: "Summarization failed: the summarizer is unhappy",
-      recoveryCursor: "marker-4",
-    });
-
-    expect(sink.observations).toEqual([
-      {
-        id: `pi:compaction:${ATTACHMENT_ID}:failed:marker-4`,
-        kind: "context.compaction_failed",
-        occurredAt: 1000,
-        cursor: { entryId: "marker-4" },
+      // No summary was written: use its recovery marker when present, or a
+      // live identity when the executor could not supply one.
+      await translate({
+        kind: "compaction",
+        state: "failed",
         reason: "threshold",
-        detail: "Summarization failed: the summarizer is unhappy",
-      },
-    ]);
-  });
+        message: "Summarization failed: the summarizer is unhappy",
+        ...(marker === undefined ? {} : { recoveryCursor: marker }),
+      });
+
+      expect(sink.observations).toEqual([
+        {
+          id: `pi:compaction:${ATTACHMENT_ID}:failed:${marker ?? "live:1"}`,
+          kind: "context.compaction_failed",
+          occurredAt: 1000,
+          ...(marker === undefined ? {} : { cursor: { entryId: marker } }),
+          reason: "threshold",
+          detail: "Summarization failed: the summarizer is unhappy",
+        },
+      ]);
+    },
+  );
 
   it("streams a compaction's live progress without turning it into history", async () => {
     const { translate, sink } = composition();
@@ -567,6 +572,55 @@ describe("live observation translation", () => {
     ]);
   });
 
+  it.each(["completed", "failed"] as const)(
+    "keeps live and durable %s call scopes aligned without interpreting native ids",
+    async (state) => {
+      const scopes = [
+        { attachmentId: "attachment:a:activity:b", turnId: "turn:x:y" },
+        { attachmentId: "attachment:other", turnId: "turn:x:y" },
+        { attachmentId: "attachment:a:activity:b", turnId: "turn:other" },
+      ];
+      const observedScopes = [];
+      for (const scope of scopes) {
+        const translator = new RuntimeObservationTranslator({
+          namespace: NAMESPACE,
+          sessionId: SESSION_ID,
+          attachmentId: scope.attachmentId,
+          now: () => 1_000,
+        });
+        const sink = new Recorder();
+        const identity = { turnId: scope.turnId, activityId: "same:native:call:id" };
+        const started = activity(identity);
+        const settled = activity({ ...identity, state });
+        await translator.translate(started, sink.emit);
+        await translator.translate(activity({ ...identity, state: "progress" }), sink.emit);
+        await translator.translate(settled, sink.emit);
+
+        const liveParts = sink
+          .of("transcript.delta")
+          .flatMap(({ delta }) => (delta.op === "part.upsert" ? [delta.part] : []));
+        expect(liveParts).toHaveLength(2);
+        const [durable] = sink.of("transcript.message");
+        const [durablePart] = durable.message.parts;
+        for (const part of [...liveParts, durablePart]) {
+          expect(part.type).toBe("dynamic-tool");
+          if (part.type !== "dynamic-tool") throw new Error("Expected a tool part");
+          expect(part.toolCallId).toBe(started.activityId);
+          expect(part.toolMetadata).toEqual({
+            [ACTIVITY_METADATA_KEY]: started.descriptor,
+            [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: scope,
+          });
+          expect(readSessionToolCallScope(part.toolMetadata)).toEqual(scope);
+        }
+        expect(translator.replay(settled)).toEqual([durable]);
+        if (durablePart.type !== "dynamic-tool") throw new Error("Expected a tool part");
+        observedScopes.push(readSessionToolCallScope(durablePart.toolMetadata));
+      }
+      expect(observedScopes).toEqual(scopes);
+      expect(new Set(observedScopes.map((scope) => JSON.stringify(scope))).size).toBe(3);
+    },
+  );
+
   it("settles failed activity as a durable generic tool error", async () => {
     const { translate, sink } = composition();
 
@@ -603,6 +657,10 @@ describe("live observation translation", () => {
           input: { file: "config" },
           errorText: "The file could not be read.",
           toolMetadata: {
+            [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: {
+              attachmentId: ATTACHMENT_ID,
+              turnId: "turn-1",
+            },
             [ACTIVITY_METADATA_KEY]: {
               kind: "other",
               nativeToolName: "custom_reader",
@@ -955,6 +1013,7 @@ describe("live observation translation", () => {
       "context",
       "runtime-failure",
       "partial-turn",
+      "transport",
     ] as const) {
       await translate({ kind: "attention", state: "raised", reason, message: reason });
     }
@@ -965,6 +1024,8 @@ describe("live observation translation", () => {
       "context_limit_reached",
       "adapter_unrecoverable",
       "partial_turn_interrupted",
+      // The runtime reconnecting on its own: a waiting row, never a failure.
+      "transport_retrying",
     ]);
   });
 
@@ -1013,6 +1074,38 @@ describe("live observation translation", () => {
     await translate({ kind: "attachment", state: "recovered" });
 
     expect(sink.observations).toEqual([]);
+  });
+
+  it("translates classifier reviews without touching overlays and propagates write failures", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const review: Extract<RuntimeObservation, { kind: "authority-review" }> = {
+      kind: "authority-review",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow",
+      authoriser: "classifier",
+      wouldFlag: true,
+      reason: "Outside the request.",
+      category: "external",
+      answers: null,
+      missReason: null,
+      thresholds: { allow: 0.95, flag: 0.05 },
+    };
+    await translator.translate(review, sink.emit);
+    expect(sink.observations).toEqual([
+      {
+        ...review,
+        kind: "authority.reviewed",
+        id: "pi:authority-review:attachment-1:1",
+        occurredAt: 1000,
+      },
+    ]);
+    // The Session ledger, not executor-native recovery, replays verdicts.
+    expect(translator.replay(review)).toEqual([]);
+    sink.failNext();
+    await expect(translator.translate(review, sink.emit)).rejects.toThrow("sink unavailable");
   });
 
   it("translates a denied authority observation into a durable authority.denied fact", async () => {
@@ -1350,5 +1443,76 @@ describe("cold replay translation", () => {
       [`pi:${ATTACHMENT_ID}:turn-1:0`, "part.upsert"],
       [`pi:${ATTACHMENT_ID}:turn-1:0`, "part.append"],
     ]);
+  });
+});
+
+it("preserves stop facts on live and replayed interruption and Attention without changing old ids", async () => {
+  const stopDetail = {
+    category: "provider-refused" as const,
+    message: "Declined",
+    providerType: "refusal",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  const translator = tickingTranslator();
+  const sink = new Recorder();
+  const turn: RuntimeObservation = {
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    stopDetail,
+    occurredAt: 100,
+    recoveryCursor: "e1",
+  };
+  await translator.translate(turn, sink.emit);
+  expect(sink.of("turn.interrupted")[0]).toEqual(translator.replay(turn)[0]);
+  expect(sink.of("turn.interrupted")[0]).toMatchObject({ id: "pi:turn:t:interrupted", stopDetail });
+  for (const reason of ["runtime-failure", "auth"] as const) {
+    const attention: RuntimeObservation = {
+      kind: "attention",
+      state: "raised",
+      reason,
+      message: "Declined",
+      stopDetail,
+      occurredAt: 100,
+      recoveryCursor: `e-${reason}`,
+    };
+    await translator.translate(attention, sink.emit);
+    expect(sink.of("attention.raised").at(-1)).toEqual(translator.replay(attention)[0]);
+    expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
+  }
+});
+
+describe("ledger-hit historical facts", () => {
+  it("translates one fact to one transcript artifact, with identical cold replay and no interaction", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const observation = {
+      kind: "approval-used",
+      toolCallId: "call",
+      approvalId: "approval",
+      asked: "write /outside/docs",
+      summary: "Write to /outside/docs",
+      occurredAt: 42,
+    } as const;
+    await translator.translate(observation, sink.emit);
+    expect(sink.kinds()).toEqual(["transcript.message"]);
+    expect(translator.replay(observation)).toEqual(sink.observations);
+    expect(sink.observations[0]).toMatchObject({
+      message: {
+        role: "user",
+        metadata: {
+          kind: "session-host-notice",
+          notice: { kind: "approval-used", approvalId: "approval" },
+        },
+        parts: [{ type: "text", text: "Allowed by your earlier approval: Write to /outside/docs" }],
+      },
+    });
+    sink.failNext();
+    await expect(
+      translator.translate({ ...observation, toolCallId: "second" }, sink.emit),
+    ).rejects.toThrow("sink unavailable");
+    expect(sink.kinds()).toEqual(["transcript.message"]);
   });
 });

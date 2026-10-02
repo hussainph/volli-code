@@ -125,6 +125,36 @@ describe("MCP server repository", () => {
     expect(() => getMcpServer(ctx.db, "server-1")).toThrow(/server error is invalid/i);
   });
 
+  it("round-trips a tool's display hints, and drops stored hints it cannot read without refusing the row", () => {
+    const labelled = record();
+    const [echo, bad] = labelled.catalog;
+    putMcpServer(
+      ctx.db,
+      record({
+        catalog: [
+          { ...echo!, hints: { title: "Echo text", readOnly: true, destructive: false } },
+          bad!,
+        ],
+      }),
+    );
+    expect(getMcpServer(ctx.db, "server-1")?.catalog.map((tool) => tool.hints)).toEqual([
+      { title: "Echo text", readOnly: true, destructive: false },
+      undefined,
+    ]);
+
+    ctx.db.prepare("UPDATE mcp_servers SET catalog = ? WHERE id = ?").run(
+      JSON.stringify([
+        { ...echo!, hints: { title: "Echo\u202e", readOnly: "yes", destructive: true } },
+        { ...bad!, hints: ["read-only"] },
+      ]),
+      "server-1",
+    );
+    expect(getMcpServer(ctx.db, "server-1")?.catalog.map((tool) => tool.hints)).toEqual([
+      { title: "Echo", destructive: true },
+      undefined,
+    ]);
+  });
+
   it("cascades servers with their project and supports explicit removal", () => {
     putMcpServer(ctx.db, record());
     expect(deleteMcpServer(ctx.db, "p1", "server-1")).toBe(true);

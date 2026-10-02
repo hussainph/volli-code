@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   createTicketSessionRecordsStore,
   subscribeTicketSessionActivity,
+  ticketSessionListingStateOf,
   useTicketSessionRecordsStore,
 } from "./ticket-session-records";
 import type { SessionActivityNotice } from "../../../ipc/contract";
@@ -65,6 +66,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       bornTicketless: false,
       role: "ticket",
       parentSessionId: null,
+      model: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -434,6 +436,37 @@ describe("applyActivity", () => {
 
     expect(store.getState().byTicket["t2"]).toBeUndefined();
   });
+
+  it("leaves every row the notice did not name exactly as it was", async () => {
+    // The replacement walks the whole list, so the rows it passes over have to
+    // come out the other side UNCHANGED — same object, not an equal copy: the
+    // rail re-derives from row identity and a fresh object for an untouched
+    // Session is a re-render nobody asked for.
+    const store = await seeded([
+      terminalRow({ id: "s2", createdAt: 2 }),
+      terminalRow({ id: "s1" }),
+    ]);
+    const untouched = store.getState().byTicket["t1"]?.[0];
+
+    store.getState().applyActivity(notice(terminalRow({ id: "s1", title: "Renamed" })));
+
+    const rows = store.getState().byTicket["t1"] ?? [];
+    expect(rows[0]).toBe(untouched);
+    expect(rows.map(terminalRecord).map((row) => row.title)).toEqual(["Session 1", "Renamed"]);
+  });
+});
+
+describe("ticketSessionListingStateOf", () => {
+  it("reads a ticket whose rows arrived before this field existed as loaded", () => {
+    // `listingState` is the authority when it has an answer; a cache seeded
+    // without one (a restore, an older persisted shape) is judged by whether
+    // the rows are there at all.
+    expect(ticketSessionListingStateOf({ byTicket: { t1: [chatRow()] } }, "t1")).toBe("loaded");
+    expect(ticketSessionListingStateOf({ byTicket: {} }, "t1")).toBe("loading");
+    expect(
+      ticketSessionListingStateOf({ byTicket: { t1: [] }, listingState: { t1: "failed" } }, "t1"),
+    ).toBe("failed");
+  });
 });
 
 describe("subscribeTicketSessionActivity", () => {
@@ -461,5 +494,113 @@ describe("subscribeTicketSessionActivity", () => {
     unsubscribe();
     expect(off).toHaveBeenCalledTimes(1);
     useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
+  });
+});
+
+/** The read door, stubbed beside a roster the store can seed one chat row from. */
+function stubSetRead(impl: () => Promise<unknown>) {
+  vi.stubGlobal("window", {
+    api: {
+      sessions: {
+        listForTicket: vi.fn(() =>
+          Promise.resolve({ ok: true, sessions: [chatRow({ sessionId: "chat-1" })] }),
+        ),
+        setRead: vi.fn(impl),
+      },
+    },
+  });
+  return vi.mocked(window.api.sessions.setRead);
+}
+
+/** A store holding that roster, so a mark has a row to move. */
+async function seededStore() {
+  const store = createTicketSessionRecordsStore();
+  await store.getState().refresh("t1");
+  return store;
+}
+
+/**
+ * Unread on the rail's own rows (VC-30). The receipt is main's, so everything
+ * here is about the optimistic half: the dot has to answer a keypress in the
+ * same frame, and a refused write must put the old state back rather than leave
+ * the rail asserting a receipt main does not have.
+ */
+describe("setSessionRead", () => {
+  it("marks a row unread ahead of the persist, and keeps it when the write sticks", async () => {
+    const setRead = stubSetRead(() => Promise.resolve({ ok: true, read: { unreadSince: 5_000 } }));
+    const store = await seededStore();
+
+    await store.getState().setSessionRead("t1", "chat-1", true);
+
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "chat-1", unread: true });
+    expect(store.getState().byTicket["t1"]?.[0]?.read?.unreadSince).toEqual(expect.any(Number));
+  });
+
+  it("clears the field rather than storing a resting value", async () => {
+    stubSetRead(() => Promise.resolve({ ok: true, read: { unreadSince: null } }));
+    const store = await seededStore();
+    await store.getState().setSessionRead("t1", "chat-1", true);
+
+    await store.getState().setSessionRead("t1", "chat-1", false);
+
+    // Absence is the resting state on a row everywhere else in its life, so a
+    // read row must be byte-identical to the row main publishes.
+    expect(store.getState().byTicket["t1"]?.[0]).not.toHaveProperty("read");
+  });
+
+  it("reverts and toasts when the receipt is refused", async () => {
+    stubSetRead(() => Promise.resolve({ ok: false, error: "db locked" }));
+    const store = await seededStore();
+
+    await store.getState().setSessionRead("t1", "chat-1", true);
+
+    expect(store.getState().byTicket["t1"]?.[0]).not.toHaveProperty("read");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't mark the session: db locked",
+      expect.anything(),
+    );
+  });
+
+  it("reverts and toasts when the door throws", async () => {
+    stubSetRead(() => Promise.reject(new Error("ipc gone")));
+    const store = await seededStore();
+    await store.getState().setSessionRead("t1", "chat-1", true);
+    const marked = store.getState().byTicket["t1"]?.[0]?.read;
+
+    // Back to unread from read: the revert restores whatever was there before,
+    // not a fixed resting value.
+    stubSetRead(() => Promise.reject(new Error("ipc gone")));
+    useTicketSessionRecordsStore.setState({});
+    await store.getState().setSessionRead("t1", "chat-1", false);
+
+    expect(store.getState().byTicket["t1"]?.[0]?.read).toEqual(marked);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't mark the session: ipc gone",
+      expect.anything(),
+    );
+  });
+
+  it("leaves every other row alone, and says nothing about a ticket it never read", async () => {
+    vi.stubGlobal("window", {
+      api: {
+        sessions: {
+          listForTicket: vi.fn(() =>
+            Promise.resolve({
+              ok: true,
+              sessions: [chatRow({ sessionId: "chat-1" }), terminalRow({ id: "s1" })],
+            }),
+          ),
+          setRead: vi.fn(() => Promise.resolve({ ok: true, read: { unreadSince: 1 } })),
+        },
+      },
+    });
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("t1");
+
+    await store.getState().setSessionRead("t1", "chat-1", true);
+    await store.getState().setSessionRead("t-unknown", "chat-1", true);
+
+    expect(store.getState().byTicket["t1"]?.[1]).toEqual(terminalRow({ id: "s1" }));
+    expect(store.getState().byTicket["t-unknown"]).toBeUndefined();
   });
 });

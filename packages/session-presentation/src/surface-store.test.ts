@@ -30,6 +30,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: true,
+  scheduledResume: null,
 };
 
 describe("createSurfaceStore", () => {

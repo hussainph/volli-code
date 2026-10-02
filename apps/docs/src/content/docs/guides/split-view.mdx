@@ -1,0 +1,65 @@
+---
+title: Use split view
+description: Arrange tabs from Home or a ticket workspace side by side or stacked in panes.
+sidebar:
+  label: Split view
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Use **Split view** to show several tabs at once, side by side or stacked. Home
+and each ticket workspace keep their own layout. A tab cannot move from Home to
+a ticket workspace, or between ticket workspaces.
+
+## Split the focused pane
+
+In Home or a ticket workspace, select the pane you want to divide, then use:
+
+- `⌘\` to open an empty pane to its right.
+- `⇧⌘\` to open an empty pane below it.
+
+The new pane takes focus. Choose **New chat**, **New terminal**, **New browser**, or **Open
+file…** in the empty pane to open something there. Choose **Close pane** from
+that menu if you do not need the empty pane.
+
+## Move a tab or Session into a pane
+
+Drag a tab, Session, or file toward a pane. Drop in its center to move the item
+into that pane. Drop at the right edge or bottom edge to split there and place
+the item in the new pane. The highlight previews where the item will land.
+
+You can move an item only within Home or within one ticket workspace. For
+example, a Ticket Session belongs in that ticket workspace; a Board Session
+belongs in Home. A file opened in Project Files is separate from the same path
+opened in Ticket Files.
+
+## Focus and resize panes
+
+Select a pane or one of its tabs to focus it. The focused pane decides which
+tab is active and which ticket the rail describes. Drag a divider to change the
+panes' relative sizes. Use `⌃⌘` plus an arrow key to move focus to an adjacent
+pane.
+
+A Home split keeps the permanent **Board** tab in the top-left pane. A ticket
+workspace keeps its permanent Ticket Body there. Closing panes until only one
+remains returns the layout to a single pane.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Use Browser Tabs"
+    href="/guides/browser-tabs/"
+    description="Open a page and choose where to show a Browser Tab."
+  />
+  <LinkCard
+    title="Use a chat"
+    href="/guides/sessions/"
+    description="Start Board and ticket Sessions to place in a pane."
+  />
+  <LinkCard
+    title="What's new in 0.2"
+    href="/releases/whats-new-0-2/"
+    description="Read about split view and other 0.2 features."
+  />
+</CardGrid>

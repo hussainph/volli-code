@@ -12,13 +12,26 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
+import {
+  DEFAULT_CODE_MODE_POLICY,
+  DEFAULT_COMPACTION_POLICY,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  NO_AUTOMATION_TRIGGER,
+} from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationSkippedOccurrence,
+  ModelAccessState,
+  ModelSelection,
+  Ticket,
+} from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
 import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
@@ -115,6 +128,8 @@ const doors = {
   list: vi.fn(),
   runsForProject: vi.fn(),
   skipsForProject: vi.fn(),
+  runsForAutomation: vi.fn(),
+  skipsForAutomation: vi.fn(),
   enablement: vi.fn(),
   setEnabled: vi.fn(),
   create: vi.fn(),
@@ -124,6 +139,67 @@ const doors = {
   columnOrders: vi.fn(),
   setColumnOrder: vi.fn(),
 };
+
+interface CatalogueSeed {
+  modelLabel: string;
+  state?: ModelAccessState;
+  hidden?: boolean;
+}
+
+/**
+ * A model-access client whose catalogue knows ONE model, under a display label
+ * and availability the test chooses. Mounted through the real
+ * {@link ModelAccessProvider} — the context the app shell wraps every page in —
+ * because these tests must prove that the shared name resolves through the
+ * catalogue read, and a stub of the component would prove nothing about that.
+ */
+function catalogueClient({
+  modelLabel,
+  state = "available",
+  hidden = false,
+}: CatalogueSeed): ModelAccessClient {
+  return {
+    inspect: async () => ({
+      observedAt: 1,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state,
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: state === "available",
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          label: modelLabel,
+          state,
+          reasoningLevels: ["medium", "high", "xhigh"],
+          acceptsImageInput: true,
+        },
+      ],
+    }),
+    defaults: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    setDefault: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    hiddenModels: async () => (hidden ? [{ providerId: "anthropic", modelId: "claude-opus" }] : []),
+    setHiddenModels: async (refs) => refs,
+    compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
+    setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
+    pickerView: async () => "all" as const,
+    setPickerView: async (view) => view,
+    beginSignIn: async () => {
+      throw new Error("not under test");
+    },
+    signOut: async () => undefined,
+  };
+}
 
 async function mount(seed: {
   automations?: Automation[];
@@ -137,10 +213,24 @@ async function mount(seed: {
     rankedAutomationIds: string[];
     orderedAt: number;
   }[];
+  /** Mount the real model catalogue, even for hidden or unavailable models. */
+  catalogue?: CatalogueSeed;
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   doors.skipsForProject.mockResolvedValue({ ok: true, skips: seed.skips ?? [] });
+  // The SCOPED doors answer the way main does (`listProjectRunsForAutomation`,
+  // proven in `automations-repo.test.ts`): one record's rows, by id. The page
+  // cannot invent a row main did not send, so what these tests prove is that
+  // the page asks the right question and draws the answer it is given.
+  doors.runsForAutomation.mockImplementation(async (input: { automationId: string }) => ({
+    ok: true,
+    runs: (seed.runs ?? []).filter((row) => row.automationId === input.automationId),
+  }));
+  doors.skipsForAutomation.mockImplementation(async (input: { automationId: string }) => ({
+    ok: true,
+    skips: (seed.skips ?? []).filter((row) => row.automationId === input.automationId),
+  }));
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
   doors.armings.mockResolvedValue({ ok: true, armings: seed.armings ?? [] });
   doors.columnOrders.mockResolvedValue({ ok: true, orders: seed.orders ?? [] });
@@ -160,14 +250,24 @@ async function mount(seed: {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => {
+  const page = (
     // The provider the app shell already mounts around every page
     // (`ui/sidebar.tsx`): the lane header's arming bolt is the board's own
     // control, tooltip and all.
+    <TooltipProvider delayDuration={0}>
+      <AutomationsPage />
+    </TooltipProvider>
+  );
+  await act(async () => {
     root?.render(
-      <TooltipProvider delayDuration={0}>
-        <AutomationsPage />
-      </TooltipProvider>,
+      // The model catalogue rides the same context the app shell mounts.
+      // Absent, the page's model names fall back to the stored ids — the
+      // drawing every other test here sees.
+      seed.catalogue === undefined ? (
+        page
+      ) : (
+        <ModelAccessProvider client={catalogueClient(seed.catalogue)}>{page}</ModelAccessProvider>
+      ),
     );
   });
 }
@@ -186,6 +286,39 @@ function button(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
   return found as HTMLElement;
+}
+
+/** The one Run history on screen: the selected editor's, or the project's. */
+function historySection(): HTMLElement {
+  const sections = document.querySelectorAll<HTMLElement>("[data-run-history]");
+  if (sections.length !== 1) throw new Error(`${sections.length} Run histories on screen`);
+  return sections.item(0);
+}
+
+/** The ids the history actually drew, in drawn order. */
+function historyRowIds(kind: "run" | "skip"): string[] {
+  return [...historySection().querySelectorAll(`[data-run-history-${kind}]`)].map(
+    (row) => row.getAttribute(`data-run-history-${kind}`) ?? "",
+  );
+}
+
+function historyRun(id: string): HTMLElement {
+  const found = historySection().querySelector<HTMLElement>(`[data-run-history-run="${id}"]`);
+  if (found === null) throw new Error(`no Run row for ${id}`);
+  return found;
+}
+
+function railRow(id: string): HTMLElement {
+  const found = document.querySelector<HTMLElement>(`[data-automation-rail-row="${id}"]`);
+  if (found === null) throw new Error(`no rail row for ${id}`);
+  return found;
+}
+
+/** The rail's way back to the whole project's work (VC-297). */
+function activityRow(): HTMLElement {
+  const found = document.querySelector<HTMLElement>("[data-automation-rail-activity]");
+  if (found === null) throw new Error("no Project activity row in the rail");
+  return found;
 }
 
 function paragraph(copy: string): HTMLParagraphElement {
@@ -255,6 +388,12 @@ beforeEach(() => {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
+    // The scoped slices too (VC-297). The store is a module singleton, so a
+    // record's history cached by one test would otherwise be read by the next
+    // — which is exactly how a cold-cache assertion passes for the wrong
+    // reason, or a scoping bug hides behind a neighbour's warm cache.
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     editor: null,
   });
@@ -307,16 +446,25 @@ describe("the page", () => {
     expect(row?.textContent).toContain("Ticket enters Doing, Needs Review");
   });
 
-  it("shows a pinned Runtime as one model-and-reasoning pair", async () => {
+  it("shows a pinned Runtime as the shared model name, and a tier as its row", async () => {
+    // No catalogue in this harness, so what a row can prove anyway is the
+    // honest fallback: the stored id, the provider said beside it (the shared
+    // name always says the provider for a model it cannot list), and the
+    // effort carrying its noun. The catalogue-labelled drawing is the
+    // "the model's display name" describe below.
     await mount({
       automations: [
         automation({
           runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
         }),
+        automation({ id: "automation-tier", runtime: { kind: "tier", tier: "fast" } }),
       ],
     });
 
-    expect(text()).toContain("claude-opus · high");
+    expect(text()).toContain("claude-opus · anthropic · High effort");
+    // A tier names a Settings row, not a model, and keeps its sentence — the
+    // branch between the two drawings runs on the record's own runtime.
+    expect(text()).toContain("Fast");
   });
 
   it("offers the create action and preserves Run history with nothing listed", async () => {
@@ -440,12 +588,14 @@ describe("running by hand", () => {
 });
 
 describe("run history", () => {
-  it("names the Automation and the model and reasoning the Run resolved", async () => {
+  it("names the Automation and the model and effort the Run resolved", async () => {
     await mount({ runs: [run()] });
 
     expect(text()).toContain("Review sweep");
-    expect(text()).toContain("claude-opus · high");
-    expect(hasUiText("claude-opus · high")).toBe(true);
+    // Catalogue-less fallback: the stored id with its provider, the effort as
+    // a noun — `High` alone would read as an adjective on the name beside it.
+    expect(text()).toContain("claude-opus · anthropic · High effort");
+    expect(hasUiText("claude-opus · anthropic · High effort")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -457,6 +607,23 @@ describe("run history", () => {
     });
 
     expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
+  });
+
+  it("says how each Run started, so the row carries its trigger too (VC-297)", async () => {
+    // VC-297 asks for the originating record AND its trigger on every row. The
+    // record cannot supply the second one — a Trigger is editable and a record
+    // is deletable — so the row prints the Run's OWN attendance instead.
+    await mount({
+      runs: [
+        run({ id: "run-by-hand", attendance: "attended", createdAt: 200 }),
+        run({ id: "run-automatic", attendance: "unattended", createdAt: 100 }),
+      ],
+    });
+
+    expect(historyRun("run-by-hand").textContent).toContain("By hand");
+    expect(historyRun("run-automatic").textContent).toContain("Automatic");
+    // Never a schedule: an unattended Run may be the agent's, not a timer's.
+    expect(historyRun("run-automatic").textContent?.toLowerCase()).not.toContain("schedule");
   });
 
   it("names an Unbound Run rather than leaving its row anonymous", async () => {
@@ -497,6 +664,382 @@ describe("run history", () => {
       projectId: "p1",
       ticketId: null,
     });
+  });
+});
+
+/**
+ * The model's display name (VC-492). The pinned Runtime in the rail and the
+ * resolved model in a Run row are one shared `ResolvedModelName` drawing, and
+ * the catalogue it reads is the app shell's own context — so these mount the
+ * real provider over a client, not a stub of the component. What the catalogue
+ * answers for is the LABEL only: which model a Run used is the pair the Run
+ * stored, and the ids may surface again only as the honest fallback for a
+ * model the catalogue does not list.
+ */
+describe("the model's display name", () => {
+  it("resolves a pin and a Run row through the catalogue's label", async () => {
+    await mount({
+      automations: [
+        automation({
+          runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "xhigh" },
+        }),
+      ],
+      runs: [run()],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+
+    // The Run row prints the catalogue's name for the ids the Run stored.
+    expect(hasUiText("Claude Opus 4.5 · High effort")).toBe(true);
+    // The rail's pin draws the same shared name; `xhigh` is not an identifier
+    // a reader should have to meet.
+    expect(text()).toContain("Extra high effort");
+    // Display-only resolution: the raw id is gone from the screen entirely.
+    expect(text()).not.toContain("claude-opus");
+    const captions = [...document.querySelectorAll('[data-slot="model-name"]')].filter(
+      (node) => node.closest('[data-slot="select-trigger"]') === null,
+    );
+    expect(captions.length).toBeGreaterThanOrEqual(2);
+    for (const caption of captions) {
+      expect(caption.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      // ModelName wraps outside closed Select triggers. Its containers must
+      // not silently clip the caption before its own reveal can see it.
+      expect(caption.closest(".truncate")).toBeNull();
+    }
+  });
+
+  it.each(["unavailable", "authentication-required", "hidden"] as const)(
+    "still names a pin and its Run when the catalogue model is %s",
+    async (availability) => {
+      const pin: ModelSelection = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "xhigh",
+      };
+      const recordedModel: ModelSelection = { ...pin, reasoningLevel: "high" };
+      await mount({
+        automations: [automation({ runtime: pin })],
+        runs: [run({ model: recordedModel })],
+        catalogue: {
+          modelLabel: "Claude Opus 4.5",
+          state: availability === "hidden" ? "available" : availability,
+          hidden: availability === "hidden",
+        },
+      });
+
+      // Identity reads the full catalogue, not the editor's offerable slice.
+      // Scope each assertion so the editor cannot stand in for either caption.
+      const pinCaption = railRow("automation-1").querySelector('[data-slot="model-name"]');
+      const runCaption = historyRun("run-1").querySelector('[data-slot="model-name"]');
+      expect(pinCaption?.textContent).toBe("Claude Opus 4.5 · Extra high effort");
+      expect(runCaption?.textContent).toBe("Claude Opus 4.5 · High effort");
+      for (const caption of [pinCaption!, runCaption!]) {
+        expect(caption.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      }
+      expect(text()).not.toContain("claude-opus");
+      expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(pin);
+      expect(
+        Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model,
+      ).toEqual(recordedModel);
+      expect(doors.update).not.toHaveBeenCalled();
+      expect(doors.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps unknown pin and Run ids instead of borrowing a catalogue neighbour's label", async () => {
+    const selection: ModelSelection = {
+      providerId: "some-gateway",
+      modelId: "vendor/gpt-5-legacy",
+      reasoningLevel: "high",
+    };
+    await mount({
+      automations: [automation({ runtime: selection })],
+      runs: [run({ model: selection })],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+
+    const fallback = "vendor/gpt-5-legacy · some-gateway · High effort";
+    expect(railRow("automation-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
+      fallback,
+    );
+    expect(historyRun("run-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
+      fallback,
+    );
+    expect(text()).not.toContain("Claude Opus 4.5");
+    expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(selection);
+    expect(Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model).toEqual(
+      selection,
+    );
+  });
+});
+
+/**
+ * Whose history the editor shows (VC-297).
+ *
+ * Two Automations running in the same week interleave. An editor that drew the
+ * project's whole list would say the record on screen did work it never did —
+ * the rows name their origin, but provenance on a row is not scope on a list.
+ *
+ * The narrowing is MAIN's (`runsForAutomation` beside `runsForProject`, proven
+ * in `automations-repo.test.ts`). What these tests own is the page's half: that
+ * it asks for the record on screen, draws the answer, and asks again when the
+ * reader moves to another record.
+ */
+describe("history is scoped to the selected Automation", () => {
+  const REVIEW = automation();
+  const NIGHTLY = automation({ id: "automation-2", name: "Nightly sweep" });
+  // Interleaved on purpose: newest first across BOTH records is
+  // nightly-skip, nightly-run, review-skip, review-run.
+  const INTERLEAVED = {
+    automations: [REVIEW, NIGHTLY],
+    runs: [
+      run({
+        id: "run-nightly",
+        automationId: "automation-2",
+        automationName: "Nightly sweep",
+        sessionId: "s2",
+        createdAt: 400,
+      }),
+      run({ id: "run-review", automationId: "automation-1", createdAt: 100 }),
+    ],
+    skips: [
+      skip({ id: "skip-nightly", automationId: "automation-2", dueAt: 500 }),
+      skip({
+        id: "skip-review",
+        automationId: "automation-1",
+        automationName: "Review sweep",
+        dueAt: 200,
+      }),
+    ],
+  };
+
+  it("asks main for the selected record's own history, and draws that", async () => {
+    await mount(INTERLEAVED);
+
+    expect(doors.runsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-1",
+    });
+    expect(doors.skipsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-1",
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+    expect(historyRowIds("skip")).toEqual(["skip-review"]);
+    expect(historySection().textContent).not.toContain("Nightly sweep");
+  });
+
+  it("asks again, for the other record, when the reader moves to it", async () => {
+    // The other half of the same rule: neither record may masquerade as the
+    // other's history, so selecting the second one re-reads and swaps the list.
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    expect(doors.runsForAutomation).toHaveBeenCalledWith({
+      projectId: "p1",
+      automationId: "automation-2",
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
+    expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
+  });
+
+  it("never reads the project's whole history to draw ONE record's", async () => {
+    // The architectural half of VC-297, and the one a client that is not this
+    // process would feel: an editor asks for the list it draws. A page that
+    // fetched every Run in the project and sieved it here would pass every
+    // test above and still make a phone download a project's whole history.
+    await mount(INTERLEAVED);
+
+    expect(doors.runsForAutomation).toHaveBeenCalled();
+    expect(doors.runsForProject).not.toHaveBeenCalled();
+    expect(doors.skipsForProject).not.toHaveBeenCalled();
+  });
+
+  it("keeps a scoped Run a door to its OWN Session", async () => {
+    // Narrowing the list must not re-aim the rows: each Run still opens the
+    // Session it actually created, and the neighbour's Run holds "s2".
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      historyRun("run-review").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledTimes(1);
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("does not claim a record has never run before its history is read", async () => {
+    // Each scope is its own read now, so a cold cache is the ordinary state
+    // every time the reader picks another record. Answering that with
+    // "Nothing has run this Automation yet" states a fact the next frame may
+    // contradict, so the list stays silent until the read lands.
+    await mount(INTERLEAVED);
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+
+    // Now hold the neighbour's read open and move to it.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    doors.runsForAutomation.mockImplementation(async (input: { automationId: string }) => {
+      await held;
+      return {
+        ok: true,
+        runs: INTERLEAVED.runs.filter((row) => row.automationId === input.automationId),
+      };
+    });
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    // The read is in flight: the neighbour's heading, and NO claim under it.
+    // Critically, not the previous record's rows either.
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual([]);
+    expect(historySection().textContent).not.toContain("Nothing has run");
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
+  });
+
+  it("says nothing has run THIS Automation while the project has other Runs", async () => {
+    await mount({
+      automations: [REVIEW],
+      runs: [
+        run({
+          id: "run-nightly",
+          automationId: "automation-2",
+          automationName: "Nightly sweep",
+        }),
+      ],
+    });
+
+    expect(historyRowIds("run")).toEqual([]);
+    expect(paragraph("Nothing has run this Automation yet.")).not.toBeNull();
+    expect(historySection().textContent).not.toContain("Nightly sweep");
+  });
+});
+
+/**
+ * Project activity (VC-297): the interleaved list, labelled, and reachable.
+ *
+ * The rail always leaves one record selected once the list lands, so without
+ * its own way in this view would only ever appear for a project that has no
+ * Automations at all — and a Run whose record was DELETED, which main keeps on
+ * purpose, would be kept where nobody could read it.
+ */
+describe("project activity", () => {
+  it("is reachable from the rail while records exist", async () => {
+    await mount({
+      automations: [automation(), automation({ id: "automation-2", name: "Nightly sweep" })],
+      runs: [
+        run({ id: "run-review", automationId: "automation-1", createdAt: 100 }),
+        run({
+          id: "run-nightly",
+          automationId: "automation-2",
+          automationName: "Nightly sweep",
+          createdAt: 400,
+        }),
+      ],
+      skips: [skip({ id: "skip-nightly", automationId: "automation-2", dueAt: 500 })],
+    });
+
+    // Before: the editor's own narrow list.
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+
+    await act(async () => {
+      activityRow().click();
+    });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+    expect(historySection().textContent).toContain("Project activity");
+    // Every record's work, interleaved, newest first.
+    expect(historyRowIds("run")).toEqual(["run-nightly", "run-review"]);
+    expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
+    expect(doors.runsForProject).toHaveBeenCalledWith({ projectId: "p1" });
+  });
+
+  it("gives the reader their record back when they leave it", async () => {
+    await mount({ automations: [automation()], runs: [run()] });
+
+    await act(async () => {
+      activityRow().click();
+    });
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+
+    await act(async () => {
+      railRow("automation-1").click();
+    });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+  });
+
+  it("keeps a DELETED record's Run and an Unbound Run readable there", async () => {
+    // Deleting an Automation deletes the record; the history of what it did is
+    // not the record. Both rows belong to no editor, so this view is the only
+    // place they can be read — and they still open their own Sessions.
+    await mount({
+      automations: [automation()],
+      runs: [
+        run({
+          id: "run-retired",
+          automationId: "gone",
+          automationName: "Retired sweep",
+          sessionId: "s2",
+          createdAt: 300,
+        }),
+        run({
+          id: "run-unbound",
+          automationId: null,
+          automationName: null,
+          sessionId: "s3",
+          createdAt: 200,
+        }),
+      ],
+    });
+
+    await act(async () => {
+      activityRow().click();
+    });
+
+    expect(historyRowIds("run")).toEqual(["run-retired", "run-unbound"]);
+    expect(historySection().textContent).toContain("Retired sweep");
+    expect(historySection().textContent).toContain("Run once");
+
+    await act(async () => {
+      historyRun("run-unbound").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledTimes(1);
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s3",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("labels the unfiltered list as the project's on the empty state too", async () => {
+    // A project with no records at all: the same wide list, the same label,
+    // and no editor for it to be mistaken for.
+    await mount({ runs: [run()], skips: [skip({ automationId: "automation-2" })] });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+    expect(historySection().textContent).toContain("Project activity");
+    expect(historyRowIds("run")).toEqual(["run-1"]);
+    expect(historyRowIds("skip")).toEqual(["skip-1"]);
   });
 });
 

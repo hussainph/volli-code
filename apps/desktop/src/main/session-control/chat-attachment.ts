@@ -40,6 +40,8 @@ export function chatSessionRecord(
   const live = attachment?.status === "open" && executorBound;
   return {
     sessionId: projection.session.id,
+    latestTurnOrigin: projection.latestTurnOrigin,
+    resumedAfterStop: projection.resumedAfterStop,
     // A structured Session that has not yet exchanged a message is simply a
     // chat awaiting its subject — never the indistinguishable `Session` wall
     // the CLI start door used to create.
@@ -59,6 +61,10 @@ export function chatSessionRecord(
     bornTicketless: projection.bornTicketless,
     role: projection.session.role,
     parentSessionId: projection.session.parentSessionId,
+    // Verbatim from the fold, like `outcome` above (VC-416). The policy is
+    // durable across attachment and relaunch, so a row carries the model a
+    // Session is pinned to whether or not anything is attached to it now.
+    model: projection.modelSelection,
   };
 }
 

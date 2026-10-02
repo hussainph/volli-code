@@ -278,7 +278,12 @@ describe("registerSessionRpcIpcHandlers", () => {
     // The reason is the router's to state, not the renderer's: this transport
     // is the user seam, and abandonment is all it can honestly report.
     expect(fixture.calls.cancelled).toEqual([
-      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
+      {
+        sessionId: "session-1",
+        interactionId: "question-1",
+        reason: "abandoned",
+        origin: { kind: "user" },
+      },
     ]);
     await registration.close();
   });
@@ -631,6 +636,30 @@ describe("registerSessionRpcIpcHandlers", () => {
     const saved = { autoCompaction: false };
     await expect(
       invoke(sender(), { procedure: "modelAccess.setCompactionPolicy", input: saved }),
+    ).resolves.toEqual({ ok: true, data: saved });
+    expect(writes).toEqual([saved]);
+    await registration.close();
+  });
+
+  it("routes the Code Mode policy over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const stored = { enabled: true, models: { "anthropic/claude-opus-4-5": "only" as const } };
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readCodeModePolicy: () => stored,
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.codeModePolicy", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: stored });
+    const saved = { enabled: false, models: { "openai-codex/gpt-5.5": "both" } };
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.setCodeModePolicy", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });
     expect(writes).toEqual([saved]);
     await registration.close();

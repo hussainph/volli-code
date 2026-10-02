@@ -8,6 +8,7 @@ import {
   hashRulePack,
   isBudgetCause,
   isConfirmCause,
+  isCredentialConfirmCause,
   isOverridableAuthorityRule,
   NON_CODING_TOOL_IDS,
   OVERRIDABLE_AUTHORITY_RULES,
@@ -94,7 +95,12 @@ describe("isBudgetCause", () => {
 
 describe("isConfirmCause", () => {
   it("recognises the confirmation namespace, apart from rules and budgets", () => {
-    expect(CONFIRM_CAUSE_IDS).toEqual(["confirm.mcp-install", "confirm.mcp-remove"]);
+    expect(CONFIRM_CAUSE_IDS).toEqual([
+      "confirm.mcp-install",
+      "confirm.mcp-remove",
+      "confirm.mcp-sign-in",
+      "confirm.mcp-credential",
+    ]);
     for (const cause of CONFIRM_CAUSE_IDS) {
       expect(isConfirmCause(cause), cause).toBe(true);
       // A confirmation is not a budget: nothing was spent, and no allowance is
@@ -105,9 +111,22 @@ describe("isConfirmCause", () => {
     expect(isConfirmCause("call.unreadable")).toBe(false);
     expect(isConfirmCause("command.persistence")).toBe(false);
   });
+
+  it("tells the credential questions apart from the confirmations they can follow (VC-470)", () => {
+    expect(CONFIRM_CAUSE_IDS.filter(isCredentialConfirmCause)).toEqual([
+      "confirm.mcp-sign-in",
+      "confirm.mcp-credential",
+    ]);
+    expect(isCredentialConfirmCause("budget.delegation-children")).toBe(false);
+  });
 });
 
 describe("isOverridableAuthorityRule", () => {
+  it("permits a person to judge a classifier flag or unavailable judge, never a hard rule", () => {
+    expect(isOverridableAuthorityRule("classifier.flagged")).toBe(true);
+    expect(isOverridableAuthorityRule("classifier.unavailable")).toBe(true);
+    expect(isOverridableAuthorityRule("command.persistence")).toBe(false);
+  });
   it("is true for every rule a person may overrule when Volli stops and asks", () => {
     for (const rule of OVERRIDABLE_AUTHORITY_RULES) {
       expect(isOverridableAuthorityRule(rule)).toBe(true);

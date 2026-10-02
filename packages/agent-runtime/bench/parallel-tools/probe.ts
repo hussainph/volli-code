@@ -16,8 +16,8 @@
  * used.
  *
  * That file is a generated artefact committed in-tree, which is a rule this
- * repo otherwise holds to. It is kept deliberately: the benchmark tables in
- * `docs/research/pi-parallel-tool-execution-vc-245.md` are only reproducible
+ * repo otherwise holds to. It is kept deliberately: the VC-245 benchmark tables
+ * are only reproducible
  * against the latencies they were produced with, and network latency in
  * particular moves enough between runs to shift every absolute millisecond in
  * them. **Re-running this probe invalidates those tables** — regenerate them

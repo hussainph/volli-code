@@ -1,4 +1,4 @@
-import { converter } from "culori";
+import { converter, wcagContrast as referenceContrast } from "culori";
 import { describe, expect, it } from "vite-plus/test";
 
 import { APCA_VECTORS } from "./apca-reference";
@@ -19,7 +19,24 @@ import {
   oklchToOklab,
   rgbToHex,
   srgbToLinear,
+  wcagContrast,
 } from "./color";
+
+describe("WCAG sRGB contrast", () => {
+  it("matches published extremes and the independent culori implementation", () => {
+    expect(wcagContrast("#000", "#fff")).toBe(21);
+    expect(wcagContrast("#fff", "#fff")).toBe(1);
+    for (const foreground of ["#010a20", "#d37550", "#767676", "#00ff00", "#ffffff"]) {
+      for (const background of ["#000000", "#ffffff", "#ead7c9"]) {
+        expect(wcagContrast(foreground, background)).toBeCloseTo(
+          referenceContrast(foreground, background),
+          12,
+        );
+        expect(wcagContrast(background, foreground)).toBe(wcagContrast(foreground, background));
+      }
+    }
+  });
+});
 
 describe("clamp and lerp", () => {
   it("clamps to both bounds and passes anything already inside", () => {

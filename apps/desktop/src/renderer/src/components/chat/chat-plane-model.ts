@@ -1,3 +1,4 @@
+import { sessionStopSummary } from "@volli/shared";
 /**
  * The chat plane's decisions, without a plane.
  *
@@ -8,6 +9,7 @@
  */
 import type {
   BlobLinkView,
+  PresentedScheduledResume,
   ModelAccessModel,
   ModelAccessProvider,
   ModelAccessState,
@@ -18,6 +20,7 @@ import type {
   SessionInteractionResolution,
 } from "@volli/shared";
 import {
+  attentionResumeAt,
   findComposerVerb,
   REASONING_LEVELS,
   revealedSessionAttention,
@@ -701,6 +704,10 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
+  /** The resume this Session is waiting to run at a quota reset, if any. */
+  scheduledResume: PresentedScheduledResume | null;
+  /** Epoch ms: a reset already behind is not offered as a resume. */
+  now: number;
   /**
    * Providers offering an in-app sign-in, for the first-run menu. Empty is
    * honest — the row then offers Settings alone, exactly as before.
@@ -718,6 +725,10 @@ export interface SessionBlockerActs {
   dismissError(): void;
   /** Hides one rendered error locally; a changed or re-raised report returns. */
   dismiss(dismissKey: string): void;
+  /** Schedules the stopped run to resume at the reset its Attention stated. */
+  scheduleResume(input: { attentionId: string; attachmentId: string; resumeAt: number }): void;
+  /** Withdraws a scheduled resume. */
+  cancelScheduledResume(scheduleId: string): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -837,7 +848,12 @@ export function sessionBlocker(
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null
-      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss);
+      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
+          scheduled: input.scheduledResume,
+          now: input.now,
+          schedule: acts.scheduleResume,
+          cancel: acts.cancelScheduledResume,
+        });
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -918,7 +934,9 @@ function attentionDismissKey(attention: SessionAttention): string {
       ? attention.retryAt
       : attention.kind === "quota_exhausted"
         ? attention.resetAt
-        : null;
+        : attention.kind === "adapter_unrecoverable"
+          ? attention.resetsAt
+          : null;
   return JSON.stringify(["attention", attention.id, attention.kind, attention.detail, scheduledAt]);
 }
 
@@ -976,17 +994,22 @@ function providerRecovery(input: {
  *   without submitting the user's message again. Both halves are offered to
  *   every Session: the sign-in no longer depends on a manual Ticket terminal
  *   being there to hand off to, so neither does the Retry that follows it.
- * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
- *   The first two are a connection to re-establish, which is exactly what
- *   `recover` does. A rate limit gets one because the wait is the whole fix; the
- *   provider's own time is shown when it sent one, and an absent one stays
- *   absent rather than becoming a guess.
+ * - **Retry** — `adapter_disconnected` and `rate_limited`. The first is a
+ *   connection to re-establish, which is exactly what `recover` does. A rate
+ *   limit gets one because the wait is the whole fix; the provider's own time is
+ *   shown when it sent one, and an absent one stays absent rather than becoming
+ *   a guess.
  * - **Retry of the run** — `adapter_unrecoverable`. The kind is named for having
  *   no *automatic* recovery, and by the time it is raised the runtime has spent
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
- *   connection that never dropped.
- * - **No recovery** — `context_limit_reached` (the runtime has already compacted
+ *   connection that never dropped. When a spent allowance with a stated reset
+ *   stopped it, a scheduled resume sits beside the Retry — see
+ *   {@link stoppedRunBlocker}.
+ * - **No recovery** — `transport_retrying` (the runtime is already reconnecting
+ *   on its own, waiting for the network or backing off, and `recover` would
+ *   neither cut that wait short nor add a retry to it — a button there promises
+ *   an act that does nothing); `context_limit_reached` (the runtime has already compacted
  *   this Session and been refused again, so there is nothing left to summarize);
  *   `quota_exhausted` (a spent allowance is not retryable and no local setting
  *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
@@ -1000,6 +1023,7 @@ function attentionBlocker(
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
   dismiss: (dismissKey: string) => void,
+  resume: ResumeContext,
 ): SessionBlockerState {
   const detail = attention.detail;
   const dismissKey = attentionDismissKey(attention);
@@ -1007,7 +1031,9 @@ function attentionBlocker(
   switch (attention.kind) {
     case "auth_required":
       return providerRecovery({
-        message: "Sign-in required",
+        message: attention.stopDetail
+          ? sessionStopSummary(attention.stopDetail)
+          : "Sign-in required",
         detail,
         settings,
         retryRuntime,
@@ -1024,7 +1050,7 @@ function attentionBlocker(
         dismiss: dismissAttention,
       });
     case "transport_retrying":
-      return { message: "Reconnecting", detail, tone: "waiting", action: retry };
+      return { message: "Reconnecting", detail, tone: "waiting", action: null };
     case "adapter_disconnected":
       return errorBlocker(
         { message: "Disconnected", detail, action: retry },
@@ -1046,23 +1072,97 @@ function attentionBlocker(
       );
     case "context_limit_reached":
       return errorBlocker(
-        { message: "Context limit reached", detail, action: null },
+        {
+          message: "Context limit reached",
+          detail,
+          action: null,
+        },
         dismissKey,
         dismissAttention,
       );
     case "partial_turn_interrupted":
       return { message: "Turn interrupted", detail, tone: "waiting", action: null };
     case "adapter_unrecoverable":
-      return errorBlocker(
-        { message: "Session stopped", detail, action: retryRuntime },
-        dismissKey,
-        dismissAttention,
-      );
+      return stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":
       return { message: "Waiting for approval", detail, tone: "waiting", action: null };
   }
+}
+
+/** What the stopped-run row needs to offer, or show, a scheduled resume. */
+interface ResumeContext {
+  scheduled: PresentedScheduledResume | null;
+  now: number;
+  schedule: SessionBlockerActs["scheduleResume"];
+  cancel: SessionBlockerActs["cancelScheduledResume"];
+}
+
+/**
+ * A run that stopped, and — when a spent allowance stopped it — the resume.
+ *
+ * Retry stays the primary act either way: it is the exact failed run, now.
+ * Beside it, a reset the failure stated is offered as "Resume at …" — nothing
+ * is scheduled unless it is chosen (CLAUDE.md: quota needs explicit recovery,
+ * and this is that recovery made once instead of remembered). Once chosen the
+ * row stops being an error and stops saying "stopped": its headline is the
+ * time it resumes, the failure stays as the line under it, and it offers the
+ * Cancel, with Retry still beside it for a person who would rather not wait. A schedule for a different Attention than the one drawn is not this
+ * row's, and a reset already behind is not offered — Retry is the answer.
+ */
+function stoppedRunBlocker(
+  attention: Extract<SessionAttention, { kind: "adapter_unrecoverable" }>,
+  retryRuntime: SessionBlockerAction,
+  resume: ResumeContext,
+  dismissKey: string,
+  dismiss: () => void,
+): SessionBlockerState {
+  const detail = attention.detail;
+  const scheduled = resume.scheduled?.attentionId === attention.id ? resume.scheduled : null;
+  if (scheduled !== null) {
+    return {
+      message: `Resumes at ${resumeClock(scheduled.resumeAt, resume.now)}`,
+      detail,
+      tone: "waiting",
+      action: { label: "Cancel", act: () => resume.cancel(scheduled.id) },
+      secondaryAction: retryRuntime,
+    };
+  }
+  const resumeAt = attentionResumeAt(attention, resume.now);
+  const attachmentId = attention.attachmentId;
+  return errorBlocker(
+    {
+      message: attention.stopDetail ? sessionStopSummary(attention.stopDetail) : "Session stopped",
+      detail,
+      action: retryRuntime,
+      secondaryAction:
+        resumeAt === null || attachmentId === null
+          ? null
+          : {
+              label: `Resume at ${resumeClock(resumeAt, resume.now)}`,
+              act: () => resume.schedule({ attentionId: attention.id, attachmentId, resumeAt }),
+            },
+    },
+    dismissKey,
+    dismiss,
+  );
+}
+
+/**
+ * A resume time as a person reads it: the local clock alone when it is today,
+ * with the weekday inside the coming week, with the date beyond that. A Codex
+ * weekly reset five days out reading as a bare "04:24" would name the wrong day.
+ */
+export function resumeClock(instant: number, now: number): string {
+  const at = new Date(instant);
+  const clock = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (at.toDateString() === new Date(now).toDateString()) return clock;
+  const day =
+    instant - now < 6 * 24 * 60 * 60_000
+      ? at.toLocaleDateString(undefined, { weekday: "short" })
+      : at.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${day} ${clock}`;
 }
 
 /** A time the provider stated, or nothing at all. An absent one is not invented. */

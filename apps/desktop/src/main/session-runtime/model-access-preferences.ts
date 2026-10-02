@@ -1,11 +1,13 @@
 import type Database from "better-sqlite3";
 import {
+  readCodeModePolicy as parseStoredCodeModePolicy,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_MODEL_PICKER_VIEW,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isModelPickerView,
   MODEL_TIERS,
   REASONING_LEVELS,
+  type CodeModePolicy,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
@@ -41,6 +43,8 @@ export const MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY = "volli:model-access-hidd
 export const COMPACTION_POLICY_APP_STATE_KEY = "volli:compaction-policy";
 /** Which list the model pickers open on — see {@link ModelPickerView}. */
 export const MODEL_PICKER_VIEW_APP_STATE_KEY = "volli:model-picker-view";
+/** Code Mode's switch and per-model pins (VC-471) — see {@link CodeModePolicy}. */
+export const CODE_MODE_POLICY_APP_STATE_KEY = "volli:code-mode-policy";
 
 const MAX_IDENTIFIER_LENGTH = 512;
 
@@ -249,6 +253,28 @@ export function writeCompactionPolicy(
 ): CompactionPolicy {
   const next: CompactionPolicy = { autoCompaction: policy.autoCompaction };
   setAppState(db, COMPACTION_POLICY_APP_STATE_KEY, JSON.stringify(next), now);
+  return next;
+}
+
+/**
+ * Code Mode's policy as this profile set it (VC-471).
+ *
+ * Absent or unreadable reads as the default — on, with each model's built-in
+ * mode — and a stored pin that is not a mode is dropped, not the whole policy.
+ * Read when a Session is born; a Session keeps what it was born with.
+ */
+export function readCodeModePolicy(db: Database.Database): CodeModePolicy {
+  return parseStoredCodeModePolicy(readAppState(db, CODE_MODE_POLICY_APP_STATE_KEY));
+}
+
+/** Stores the whole policy — the switch and every pin — and answers what was stored. */
+export function writeCodeModePolicy(
+  db: Database.Database,
+  policy: CodeModePolicy,
+  now: number,
+): CodeModePolicy {
+  const next = parseStoredCodeModePolicy(policy);
+  setAppState(db, CODE_MODE_POLICY_APP_STATE_KEY, JSON.stringify(next), now);
   return next;
 }
 

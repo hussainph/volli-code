@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
@@ -25,10 +25,12 @@ import {
 } from "./db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
+import { removeTicketToolOutput } from "./pi-tool-output";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
@@ -60,12 +62,17 @@ import type {
   McpServerInput,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -79,6 +86,10 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
   SessionStopInput,
@@ -155,7 +166,14 @@ import {
  * models rather than here, so this handler stays dumb transport and the
  * performance harness can measure the same function the handler calls.
  */
-import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
+import {
+  createDesktopSessionEngine,
+  publishSessionListingRow,
+  readSessionPeekContent,
+  sessionListingRowsForRoster,
+  type SessionPeekContentPorts,
+} from "./session-control";
+import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { prepared } from "./db/prepared";
 import {
   getTicket,
@@ -180,8 +198,8 @@ import {
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "./ticket-commands";
-import { detectProjectBaseBranch } from "./project-base-branch";
-import { broadcastDataChanged } from "./broadcast";
+import { detectProjectBaseBranchAsync } from "./project-base-branch";
+import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
@@ -398,7 +416,7 @@ async function materializeSwitchedOnWorktree(
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
-    detectBaseBranch?: (projectPath: string) => string | null;
+    detectBaseBranch?: (projectPath: string) => Promise<string | null>;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -453,6 +471,8 @@ export function registerDataIpcHandlers(
      * boot) means the rename succeeds and nothing is refined.
      */
     autoTitle?: (input: AutoTitleRequest) => void;
+    /** Budgeted utility refinement, invoked only by the hover-peek content door. */
+    summarizePeek?: SessionPeekContentPorts["summarize"];
     /**
      * The live Session runtime's command door, for the person's stop
      * (VC-269): the interrupt and the release a stop performs after its
@@ -461,6 +481,14 @@ export function registerDataIpcHandlers(
      */
     sessionRuntime?: StopSessionByIdPorts["runtime"];
     /**
+     * Reads one durable transcript artifact, for the peek card's fold (VC-30).
+     * The same port `session peek` on the CLI socket is given, from the same
+     * store. Absent (tests, degraded boot) means a peek answers with its counts
+     * and no entries — honest about having no artifact store, rather than
+     * claiming a store looked and failed.
+     */
+    readTranscriptArtifact?: SessionPeekContentPorts["readArtifact"];
+    /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
      * rather than writing somewhere arbitrary.
@@ -468,6 +496,12 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
+    /**
+     * Where Pi keeps its sidecars and the tool output saved beside them
+     * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
+     * output. Absent (tests, degraded boot) means nothing is removed.
+     */
+    piSessionsDirectory?: string;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -481,6 +515,7 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
     // renderers do: coverage says whether an answer can be trusted at all, and
@@ -530,6 +565,21 @@ export function registerDataIpcHandlers(
   const busySeam = (): { busySites?: BusyWorktreeSites } =>
     options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
   const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
+
+  /**
+   * Drops a finished ticket's saved tool output (VC-469). Nobody asked for
+   * this and the archive or delete already happened, so a failure is logged
+   * rather than raised: the runtime's own bound still removes the files,
+   * oldest first, when room is needed.
+   */
+  const releaseTicketToolOutput = (ticketId: string): void => {
+    if (options.piSessionsDirectory === undefined) return;
+    try {
+      removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
+    } catch (error) {
+      console.warn(`[volli] Could not remove ticket ${ticketId}'s saved tool output:`, error);
+    }
+  };
 
   const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
     void trimFinishedWorktree(
@@ -627,30 +677,39 @@ export function registerDataIpcHandlers(
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": (input: ProjectCreateInput): ProjectCreateResult => {
+    "volli:project-create": async (input: ProjectCreateInput): Promise<ProjectCreateResult> => {
       const existing = findProjectByPath(db, input.path);
       if (existing) {
         return { ok: true, project: existing, created: false };
       }
       let stats;
       try {
-        stats = statSync(input.path);
+        stats = await stat(input.path);
       } catch {
         return { ok: false, error: "Project path does not exist" };
       }
       if (!stats.isDirectory()) {
         return { ok: false, error: "Project path is not a directory" };
       }
-      const now = Date.now();
+      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
+        input.path,
+      );
+      // Detection yields to other IPC requests. Re-read mutable project state only
+      // after it returns, then validate and insert without another await.
+      const createdWhileDetecting = findProjectByPath(db, input.path);
+      if (createdWhileDetecting) {
+        return { ok: true, project: createdWhileDetecting, created: false };
+      }
       const ticketPrefix = derivePrefix(input.name);
       const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
       if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
+      const now = Date.now();
       const project: Project = {
         id: randomUUID(),
         name: input.name,
         path: input.path,
         ticketPrefix,
-        baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
+        baseBranch,
         colorIndex: countProjects(db) % PROJECT_COLORS.length,
         sortOrder: nextSortOrder(db),
         createdAt: now,
@@ -658,6 +717,42 @@ export function registerDataIpcHandlers(
       };
       insertProject(db, project);
       return { ok: true, project, created: true };
+    },
+
+    /**
+     * Whether one project's registered folder is still there (VC-430) — the
+     * read the recovery path hangs off. Cheap by construction: one row and one
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
+     */
+    "volli:project-folder-check": (input: ProjectIdInput): Promise<ProjectFolderResult> =>
+      inspectProjectFolder(db, input.projectId),
+
+    /**
+     * Points an existing project at the folder it moved to (VC-430).
+     *
+     * The whole judgement lives in `relinkProject`, including the refusal that
+     * matters most: a folder another project already tracks is never taken,
+     * because the alternative a person reaches for — adding the new folder —
+     * is exactly what mints the duplicate this channel exists to avoid.
+     *
+     * `busyWorktreeSites` is threaded through so the answer can warn about
+     * Sessions still running in the folder being left; it is the same supplier
+     * the destructive worktree paths ask, because "what is live in this
+     * directory" must have one answer in this process.
+     */
+    "volli:project-relink": async (input: ProjectRelinkInput): Promise<ProjectRelinkResult> => {
+      const outcome = await relinkProject(
+        { db, busyWorktreeSites: options.busyWorktreeSites },
+        { projectId: input.id, path: input.path },
+      );
+      if (!outcome.ok) return outcome;
+      // Every surface that reads a project path has to re-read: the rail, the
+      // file browsers, Configure, and the renderer's own root allowlist mirror.
+      broadcastDataChanged({ projectId: outcome.project.id });
+      return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
     "volli:project-remove": (id: string): ProjectMutationResult => {
@@ -750,6 +845,7 @@ export function registerDataIpcHandlers(
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
       operations: listMcpOperations(db, input.projectId),
+      access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
     "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
@@ -757,6 +853,25 @@ export function registerDataIpcHandlers(
     "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
     "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
     "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
+    // A sign-in waits on the person's browser for up to five minutes. It is
+    // not tied to this request: the pane's Cancel stops it for everyone
+    // waiting on it, an agent's question included.
+    "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
+      // Only the fields a renderer may set: nothing it sends can stand in for
+      // the cancellation main owns.
+      const outcome = await mcpSettings.signIn({
+        projectId: input.projectId,
+        ...(input.serverId === undefined ? {} : { serverId: input.serverId }),
+        ...(input.server === undefined ? {} : { server: input.server }),
+        ...(input.secrets === undefined ? {} : { secrets: input.secrets }),
+      });
+      return outcome.ok
+        ? { ok: true, message: outcome.message }
+        : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
+    },
+    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
+    "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
+    "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());
@@ -970,6 +1085,7 @@ export function registerDataIpcHandlers(
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      releaseTicketToolOutput(input.ticketId);
       // An archive KEEPS the checkout, which makes an archived ticket the
       // longest-lived carrier of a dead dependency tree in the app (VC-340).
       trimFinishedInBackground(input.ticketId, ticket?.project_id);
@@ -987,6 +1103,11 @@ export function registerDataIpcHandlers(
     },
 
     "volli:ticket-delete": (input: TicketIdInput): Result => {
+      // Before the delete, which detaches the Sessions from the ticket; and
+      // only for an archived ticket, the one kind the delete accepts.
+      if (getTicketRow(db, input.ticketId)?.archived_at != null) {
+        releaseTicketToolOutput(input.ticketId);
+      }
       deleteTicketCommand(db, input.ticketId);
       return { ok: true };
     },
@@ -1206,6 +1327,65 @@ export function registerDataIpcHandlers(
       };
     },
 
+    /**
+     * A person's own read decision (VC-30).
+     *
+     * Two acts, in this order and for two different audiences. The receipt is
+     * persisted first, because it is the durable answer and everything else is
+     * a projection of it. Then the Session's listing row is re-published on
+     * `volli:session-activity` — the same broadcast the push channel uses,
+     * carrying a row built by the same `sessionListingRow` — because this write
+     * moves no ledger fact, so the activity watch has nothing to notice and the
+     * OTHER sidebar, the ticket rail and the second window would otherwise keep
+     * drawing the dot until something unrelated refreshed them.
+     *
+     * The caller already moved its own row optimistically; the answer is what it
+     * reverts to if this failed.
+     */
+    "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
+      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      if (existing === null) return { ok: false, error: "Unknown session" };
+      // Main's clock, never the renderer's: the receipt is main's record, and a
+      // stamp from a window with a skewed clock would date the dot wrongly for
+      // every other window.
+      writeSessionUnread(db, input.sessionId, input.unread ? Date.now() : null);
+      await publishSessionListingRow(
+        {
+          db,
+          getSession: (query) => sessionEngine.getSession(query),
+          liveAttachmentIds,
+          publish: broadcastSessionActivity,
+        },
+        input.sessionId,
+      );
+      return { ok: true, read: readSessionUnread(db, input.sessionId) };
+    },
+
+    /**
+     * One peek's content (VC-30): the Session's transcript tail plus its question.
+     * The default local read is immediate; an explicit refinement read can
+     * spend the host's utility budget while the client keeps local content visible.
+     *
+     * Straight through to `peek-content.ts`, which composes the engine fold the
+     * CLI's `session peek` already uses. No Session adoption or stream.
+     */
+    "volli:session-peek-content": async (
+      input: SessionPeekContentInput,
+    ): Promise<SessionPeekContentResult> => {
+      const content = await readSessionPeekContent(
+        {
+          listEvents: (query) => sessionEngine.listEvents(query),
+          ...(options.readTranscriptArtifact === undefined
+            ? {}
+            : { readArtifact: options.readTranscriptArtifact }),
+          getSession: (query) => sessionEngine.getSession(query),
+          ...(options.summarizePeek === undefined ? {} : { summarize: options.summarizePeek }),
+        },
+        input,
+      );
+      return { ok: true, content };
+    },
+
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
       // Straight through to the ledger's own unscoped read: the window is the
       // caller's (it draws a fixed number of days), and every project counts,
@@ -1245,7 +1425,7 @@ export function registerDataIpcHandlers(
         sessionId: input.sessionId,
         intent: { kind: "session.retitle", title: input.title.trim() },
         provenance: {
-          source: { kind: "user", id: "renderer", detail: null },
+          source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
           venue: { id: "local", kind: "local" },
         },
       });
@@ -1625,7 +1805,7 @@ export function registerDataIpcHandlers(
       return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
-    // ---- Done flow (docs/plans/done-flow.md) --------------------------------
+    // ---- Done flow ----------------------------------------------------------
     // The Details-rail diff/commit/push-PR affordances. `status`/`diff` are
     // read-only (no broadcast); `commit` records an event and `push-pr` writes
     // `pr_url`, so both broadcast to re-hydrate every board.
@@ -1864,6 +2044,7 @@ export function registerDataIpcHandlers(
         releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      releaseTicketToolOutput(input.ticketId);
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
       changeWatchManager.unwatchTicket(input.ticketId);

@@ -84,6 +84,15 @@ describe("browserChatTransport", () => {
       title: null,
       requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
     });
+    // A chat promoted with the default offers its first message to the
+    // automatic model choice (VC-432); every other create leaves it off.
+    await transport.createSession({
+      operationId: "auto-create",
+      projectId: "project-1",
+      ticketId: null,
+      title: null,
+      autoSelect: { request: "rename the helper" },
+    });
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
@@ -101,6 +110,7 @@ describe("browserChatTransport", () => {
       "sessions.create",
       "sessions.create",
       "sessions.create",
+      "sessions.create",
       "sessions.attach",
       "sessions.attach",
     ]);
@@ -111,6 +121,8 @@ describe("browserChatTransport", () => {
     expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
     expect(inputs[3]).toMatchObject({ skills: ["svg-logo-designer"] });
     expect(inputs[0]).not.toHaveProperty("modelOverride");
+    expect(inputs[0]).not.toHaveProperty("autoSelect");
+    expect(inputs[6]).toMatchObject({ autoSelect: { request: "rename the helper" } });
     expect(inputs[4]).toMatchObject({
       modelOverride: {
         model: { providerId: "anthropic", modelId: "sonnet-4.5" },

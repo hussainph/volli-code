@@ -5,6 +5,7 @@ import {
   MCP_TOOL_NAME_MAX_CHARS,
   sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
+  sanitizeMcpToolHints,
   validateMcpToolDefinitions,
   type McpCatalogTool,
   type McpServerProvenance,
@@ -86,13 +87,30 @@ function parseCatalog(value: string, serverId: string): readonly McpCatalogTool[
         throw new Error(`Stored MCP catalog entry ${index} has mismatched identity.`);
       }
     }
-    return {
+    // Hints are display-only and re-checked rather than trusted: a stored
+    // value this build cannot read is dropped, never a reason to refuse the
+    // row — the tool works without them.
+    const stored = row["hints"];
+    const hints =
+      stored !== null && typeof stored === "object" && !Array.isArray(stored)
+        ? sanitizeMcpToolHints({
+            name: row["name"],
+            title: (stored as Record<string, unknown>)["title"],
+            annotations: {
+              readOnlyHint: (stored as Record<string, unknown>)["readOnly"],
+              destructiveHint: (stored as Record<string, unknown>)["destructive"],
+            },
+          })
+        : undefined;
+    const tool: McpCatalogTool = {
       name: row["name"],
       description: row["description"],
       enabled: row["enabled"],
       definition,
       error: row["error"],
     };
+    if (hints !== undefined) tool.hints = hints;
+    return tool;
   });
   validateMcpToolDefinitions(
     catalog.flatMap((tool) => (tool.definition === null ? [] : [tool.definition])),

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
 
 import type { NotificationRequest } from "../notifications/dispatch";
 import { createSessionWatchdog } from "./session-watchdog";
@@ -22,6 +22,10 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments: [],
@@ -46,6 +50,7 @@ function harness(input: {
   projections: SessionProjection[];
   now?: () => number;
   stopSession?: SessionWatchdogPorts["stopSession"];
+  suspendedMsWithin?: SessionWatchdogPorts["suspendedMsWithin"];
 }) {
   const submits: unknown[] = [];
   const notifications: NotificationRequest[] = [];
@@ -55,11 +60,14 @@ function harness(input: {
   const progressById = new Map(
     input.projections.map((entry) => [entry.session.id, entry.lastActivityAt]),
   );
+  // The tool calls each live binding has in flight; unset means none.
+  const toolsById = new Map<string, readonly SessionInFlightTool[]>();
   const watchdog = createSessionWatchdog({
     listBindings: () =>
-      [...byId.keys()].map((sessionId) => ({
+      Array.from(byId.keys(), (sessionId) => ({
         sessionId,
         lastProgressAt: progressById.get(sessionId)!,
+        ...(toolsById.has(sessionId) ? { inFlightTools: toolsById.get(sessionId)! } : {}),
       })),
     projection: async (sessionId) => {
       const found = byId.get(sessionId);
@@ -72,10 +80,13 @@ function harness(input: {
     }) as unknown as SessionWatchdogPorts["submit"],
     notify: (notice) => notifications.push(notice),
     ...(input.stopSession === undefined ? {} : { stopSession: input.stopSession }),
+    ...(input.suspendedMsWithin === undefined
+      ? {}
+      : { suspendedMsWithin: input.suspendedMsWithin }),
     now: input.now ?? (() => T),
     onError: (error) => errors.push(error),
   });
-  return { watchdog, submits, notifications, errors, byId, progressById };
+  return { watchdog, submits, notifications, errors, byId, progressById, toolsById };
 }
 
 describe("createSessionWatchdog", () => {
@@ -222,6 +233,73 @@ describe("createSessionWatchdog", () => {
 
     expect(h.errors).toHaveLength(1);
     expect(h.submits).toHaveLength(1);
+  });
+
+  it("waits out a tool that waits on a person, however long", async () => {
+    // The retired awaits no longer wait (VC-457); `ask_user` is the one tool
+    // whose whole job is to.
+    const h = harness({ now: () => 5 * 60 * 60_000, projections: [projection()] });
+    h.toolsById.set(SESSION, [
+      { activityId: "call-1", toolName: "ask_user", declaredTimeoutMs: null },
+    ]);
+
+    await h.watchdog.scan();
+
+    expect(h.submits).toEqual([]);
+    expect(h.notifications).toEqual([]);
+  });
+
+  it("gives a tool its own timeout plus margin, then names it when it overruns", async () => {
+    let now = 20 * 60_000;
+    const h = harness({ now: () => now, projections: [projection()] });
+    h.toolsById.set(SESSION, [
+      { activityId: "call-1", toolName: "bash", declaredTimeoutMs: 45 * 60_000 },
+    ]);
+
+    // Past the bare-turn ten minutes, inside the tool's own 45.
+    await h.watchdog.scan();
+    expect(h.submits).toEqual([]);
+
+    now = 47 * 60_000;
+    await h.watchdog.scan();
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]).toMatchObject({
+      // The durable id is the same derivation a tool-less trip uses.
+      commandId: `watchdog:${SESSION}:0`,
+      intent: {
+        reason:
+          "Watchdog: no runtime progress for 47m inside an open turn; bash is still running past its limit.",
+      },
+    });
+    expect(h.notifications[0]?.body).toBe(
+      "Implementer has an open turn with no runtime progress for 47m; bash is still running past its limit.",
+    );
+  });
+
+  it("does not report a night asleep as silence when the laptop opens again", async () => {
+    const HOUR = 60 * 60_000;
+    let now = 3 * HOUR + 3 * 60_000;
+    const windows: [number, number][] = [];
+    const h = harness({
+      now: () => now,
+      projections: [projection()],
+      // Lid closed two minutes after the last token, opened three hours later.
+      suspendedMsWithin: (from, to) => {
+        windows.push([from, to]);
+        return 3 * HOUR;
+      },
+    });
+
+    await h.watchdog.scan();
+    expect(h.submits).toEqual([]);
+    // Asked about exactly the silence window: last progress to this scan.
+    expect(windows).toEqual([[0, now]]);
+
+    // Ten awake minutes of silence after the wake is a wedge again.
+    now = 3 * HOUR + T;
+    await h.watchdog.scan();
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]).toMatchObject({ commandId: `watchdog:${SESSION}:0` });
   });
 
   describe("the interval", () => {

@@ -28,7 +28,7 @@ import {
   AGENT_MODEL_TIERS,
   isAutomationRuntimePin,
   isAutomationRuntimeTier,
-  isModelTier,
+  isAgentModelTier,
   isValidAutomationRuntime,
   modelTierRow,
   NO_AUTOMATION_TRIGGER,
@@ -56,6 +56,7 @@ import {
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
 import { ModelName } from "@renderer/components/models/model-identity";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -217,7 +218,7 @@ function TriggerChoice({
       onClick={() => onSelect(value)}
       className={cn(
         "flex h-7 w-full items-center gap-2 rounded-lg border px-2 text-left text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        "focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-ring bg-accent text-foreground"
           : "border-border text-muted-foreground hover:text-foreground",
@@ -253,7 +254,7 @@ function ColumnPicker({
         <button
           type="button"
           aria-label="Columns"
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45"
+          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>
@@ -346,7 +347,9 @@ function RuntimeFields({
           }
           if (next.startsWith(TIER_VALUE_PREFIX)) {
             const tier = next.slice(TIER_VALUE_PREFIX.length);
-            if (isModelTier(tier)) onChange({ kind: "tier", tier });
+            // The same set the options below are built from (VC-431): a Run
+            // starts a Session, and no Session runs on the Utility row.
+            if (isAgentModelTier(tier)) onChange({ kind: "tier", tier });
             return;
           }
           const model = models.find((candidate) => candidate.id === next);
@@ -384,12 +387,7 @@ function RuntimeFields({
               name alone is ambiguous. */}
           {unavailableValue === null || pin === null ? null : (
             <SelectItem value={unavailableValue}>
-              <ModelName
-                model={{ providerId: pin.providerId, modelId: pin.modelId, label: pin.modelId }}
-                models={models}
-                providerLabel={pin.providerId}
-                alwaysProvider
-              />
+              <ResolvedModelName selection={pin} alwaysProvider />
             </SelectItem>
           )}
           {models.map((model) => (

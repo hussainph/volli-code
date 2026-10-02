@@ -37,6 +37,10 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments: [],
@@ -132,6 +136,7 @@ describe("watchSessionActivity", () => {
     const provenanceOf = vi.fn(() => ({
       kind: "automation" as const,
       automationName: "Nightly sweep",
+      automationRunId: null,
     }));
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
@@ -148,7 +153,75 @@ describe("watchSessionActivity", () => {
     expect(publish.mock.calls[0]![0].row.provenance).toEqual({
       kind: "automation",
       automationName: "Nightly sweep",
+      automationRunId: null,
     });
+    watch.stop();
+  });
+
+  // The same argument as provenance one test up, for the second per-Session
+  // fact a row carries (VC-30): the renderer upserts the whole row, so a push
+  // that dropped the receipt would clear the unread dot on the very fold that
+  // earned it.
+  it("carries the Session's unread state on the pushed row", async () => {
+    const publish = vi.fn();
+    const readOf = vi.fn(() => ({ unreadSince: 4_000 }));
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      { publish, readOf },
+    );
+
+    await watch.engine.observe({} as never);
+    await watch.flush();
+
+    expect(readOf).toHaveBeenCalledWith("session-1");
+    expect(publish.mock.calls[0]![0].row.read).toEqual({ unreadSince: 4_000 });
+    watch.stop();
+  });
+
+  it("leaves a read Session's row exactly as it was before unread existed", async () => {
+    const publish = vi.fn();
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      { publish },
+    );
+
+    await watch.engine.observe({} as never);
+    await watch.flush();
+
+    // The resting state is the field's ABSENCE, not a value: no receipt reader
+    // means nothing to say, and `sessionReadStateOf` answers the miss.
+    expect(publish.mock.calls[0]![0].row).not.toHaveProperty("read");
+    watch.stop();
+  });
+
+  it("republishes when only the read state moved, and not when it did not", async () => {
+    const publish = vi.fn();
+    let read = { unreadSince: null as number | null };
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      { publish, readOf: () => read },
+    );
+    const write = async () => {
+      await watch.engine.observe({} as never);
+      await watch.flush();
+    };
+
+    await write();
+    await write();
+    // Nothing moved: the difference gate still holds with the receipt threaded
+    // through it.
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    read = { unreadSince: 4_000 };
+    await write();
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls[1]![0].row.read).toEqual({ unreadSince: 4_000 });
+
+    read = { unreadSince: null };
+    await write();
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(publish.mock.calls[2]![0].row).not.toHaveProperty("read");
+
     watch.stop();
   });
 

@@ -189,7 +189,7 @@ export interface AttachOptions {
    * is recorded as Ticket Attention, which is the surface a person acts on. A
    * ticketless Session has no such surface, so its refusal is the slice's to
    * carry. A THROWN attach is neither — nothing was recorded anywhere — and is
-   * always settled onto the slice.
+   * always settled onto the slice and announced through the notification port.
    */
   refusalIsReportedElsewhere?: boolean;
 }
@@ -273,7 +273,9 @@ type ChatCommand =
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string }
-  | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution };
+  | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution }
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  | { kind: "resume.cancel"; scheduleId: string };
 
 export interface ChatCommandRequest {
   commandId: string;
@@ -409,6 +411,8 @@ export interface ChatSessionTransport {
      * surface but the New-ticket composer's Create & start sends (VC-56).
      */
     model?: ModelSelection;
+    /** The first message, for automatic model choice (VC-432); ignored when `model` is set. */
+    autoSelect?: { request: string };
   }): Promise<{ sessionId: string }>;
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
@@ -427,9 +431,10 @@ export type NotifyTone = "error" | "neutral";
 export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
   /**
-   * One line to a person about a command that ended as a moment, not a state
-   * — the surface {@link ChatSessionClient.#eventRun} speaks to. The desktop
-   * passes its error toast; nothing here assumes what the line becomes.
+   * One line to a person about a command outcome or a local transport failure.
+   * Transport failures also keep their recovery band, but must reach a person
+   * whose chat is not mounted. The desktop passes its error toast; nothing here
+   * assumes what the line becomes.
    *
    * `tone` is required rather than defaulted, so a second client cannot ship a
    * `notify` that quietly drops the distinction: `"error"` is a stopped turn,
@@ -494,6 +499,10 @@ export class ChatSessionClient {
   #reconnectable = false;
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
+  // Automatic queue reattachment can meet the same transport failure twice.
+  // Keep one notification per source until it recovers or the person retries.
+  readonly #reportedLocalFailures: Partial<Record<"attach" | "stream", string>> = {};
+  #retired = false;
   #draining = false;
   /** A store write arrived mid-drain; the pass that owns the latch owes it one. */
   #drainRequested = false;
@@ -550,6 +559,7 @@ export class ChatSessionClient {
    * arrives as deltas.
    */
   async connect(): Promise<void> {
+    delete this.#reportedLocalFailures.stream;
     await this.#open(null);
   }
 
@@ -604,6 +614,7 @@ export class ChatSessionClient {
     if (slice === undefined || slice.lifecycle === "starting" || slice.projection === null) {
       return false;
     }
+    delete this.#reportedLocalFailures.attach;
     this.#writes().attaching(this.sessionId);
     void this.connect();
     return this.#attachOnce(options);
@@ -656,22 +667,25 @@ export class ChatSessionClient {
         attached.state === "ready" && refusal === null
           ? null
           : (refusal ?? "Runtime recovery is required.");
-      // A refusal with a durable home is told once, there. Saying it on the
-      // slice as well would put the same sentence in two places and give the
-      // person two things to dismiss for one problem.
-      const slicePart =
+      // A retired client must not settle over a replacement surface's slice.
+      if (this.#retired) return failure === null;
+      // A refusal with a durable home is told once, there. An outstanding local
+      // stream failure is independent: attach success cannot repair that stream
+      // or clear the band that offers its recovery.
+      const attachPart =
         failure === null || options?.refusalIsReportedElsewhere === true
           ? null
           : `Could not start Session: ${failure}`;
+      const slicePart = attachPart ?? this.#reportedLocalFailures.stream ?? null;
       // Before the settle, which is the store write the drain re-enters on.
       this.#awaitingExecutorFor = failure === null ? (this.#slice()?.projection ?? null) : null;
+      if (failure === null) delete this.#reportedLocalFailures.attach;
       this.#writes().settle(this.sessionId, slicePart);
       return failure === null;
     } catch (failure) {
-      // A throw never reached the host, so there is no receipt and no durable
-      // Attention anywhere: the slice is the only surface that can carry it,
-      // whatever the Session's Role.
-      this.#writes().settle(this.sessionId, `Could not start Session: ${errorMessage(failure)}`);
+      // A throw has no durable Attention to report it. Keep the recovery band,
+      // but also notify: a background kickoff need not have a mounted chat.
+      this.#reportLocalFailure("attach", `Could not start Session: ${errorMessage(failure)}`);
       return false;
     }
   }
@@ -709,6 +723,7 @@ export class ChatSessionClient {
    * leaving the band it just wrote to say so.
    */
   async #reopenThenReconcile(): Promise<boolean> {
+    delete this.#reportedLocalFailures.stream;
     if (!(await this.#open(null))) return false;
     return this.reconcile();
   }
@@ -736,6 +751,42 @@ export class ChatSessionClient {
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         command: { kind: "executor.retry", attachmentId },
+      }),
+    );
+  }
+
+  /**
+   * Resume the run a spent allowance stopped, at the reset its Attention
+   * stated — a person's choice, recorded now and run by the host at that time.
+   * A refusal (the Attention moved on, the executor closed) toasts, as every
+   * one-shot command here does.
+   */
+  scheduleResume(input: {
+    attentionId: string;
+    attachmentId: string;
+    resumeAt: number;
+  }): Promise<boolean> {
+    return this.#eventRun("Resume", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: {
+          kind: "resume.schedule",
+          attentionId: input.attentionId,
+          attachmentId: input.attachmentId,
+          resumeAt: input.resumeAt,
+        },
+      }),
+    );
+  }
+
+  /** Withdraw the scheduled resume named by its schedule id. */
+  cancelScheduledResume(scheduleId: string): Promise<boolean> {
+    return this.#eventRun("Cancel", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: { kind: "resume.cancel", scheduleId },
       }),
     );
   }
@@ -925,6 +976,7 @@ export class ChatSessionClient {
 
   /** Retires this client. Releases nothing on the harness — the Session outlives it. */
   dispose(): void {
+    this.#retired = true;
     this.#generation += 1;
     this.#streamAlive = false;
     this.#cancelFlush?.();
@@ -973,6 +1025,7 @@ export class ChatSessionClient {
           : { sessionId: this.sessionId, afterSequence, lastEventId: cursor },
         {
           onStarted: () => {
+            delete this.#reportedLocalFailures.stream;
             this.#reconnectable = true;
             this.#streamAlive = true;
           },
@@ -1019,7 +1072,21 @@ export class ChatSessionClient {
   }
 
   #lost(failure: unknown): void {
-    this.#writes().settle(this.sessionId, `Lost the Session stream: ${errorMessage(failure)}`);
+    this.#reportLocalFailure("stream", `Lost the Session stream: ${errorMessage(failure)}`);
+  }
+
+  /**
+   * Transport failures have no host-owned Attention. The resident band keeps
+   * recovery available when the chat is opened, while the client's notification
+   * port reports the failure even when that chat has never been mounted.
+   * A surface that let go of the Session owes no late notification.
+   */
+  #reportLocalFailure(source: "attach" | "stream", message: string): void {
+    if (this.#slice() === undefined || this.#retired) return;
+    const previous = this.#reportedLocalFailures[source];
+    this.#reportedLocalFailures[source] = message;
+    this.#writes().settle(this.sessionId, message);
+    if (previous !== message) this.#notify(message, "error");
   }
 
   #receive(emission: unknown): void {

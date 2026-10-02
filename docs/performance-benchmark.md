@@ -19,7 +19,7 @@ The command builds the production Electron app and the real-`ChatPlane` renderer
 - `benchmark.summary.json`: the same run with the raw arrays removed — device, macOS, Git SHA and dirty flag, fixture preset/seed/verification, load name, worker count and duration, repetition count, per-interaction aggregates for both arms, and the arm gap. Machine-readable, for anything that wants to diff two runs.
 - `benchmark.md`: a compact table, the full run context, and the method needed to interpret it.
 
-**None of the JSON is committed.** `performance-results/` is gitignored and so is every JSON under `docs/performance-baselines/`: a benchmark report is machine output, it is large, it changes wholesale on every run, and a repository is a poor place to keep it. What gets committed is the Markdown — which carries the numbers, the device, the macOS build, the commit SHA, the fixture preset and seed, and the load arm, so a published baseline is still self-describing. Keep the JSON next to the run that produced it, or attach it to the ticket.
+**None of the JSON is committed.** `performance-results/` is gitignored: a benchmark report is machine output, it is large, it changes wholesale on every run, and a repository is a poor place to keep it. What gets published is the Markdown — which carries the numbers, the device, the macOS build, the commit SHA, the fixture preset and seed, and the load arm, so a published baseline is still self-describing. Keep the JSON next to the run that produced it, or attach it to the ticket.
 
 A run fails, rather than publishes, if any renderer emitted a console error, any health check came back false, or any streaming sample reported itself not ok — in any iteration of any arm. A baseline whose renderer was broken is not a baseline, so the gate refuses to summarize one.
 
@@ -119,27 +119,18 @@ Do not run unrelated builds, tests, screen recording, or energy-mode changes dur
 
 A harness is only worth its baseline if it moves when the product gets slower. That is proven by injecting a deliberate regression, measuring the movement, and then **removing** the injection: leaving a slow path behind — even an opt-in one — leaves a foot-gun in the bench and a flag that a future baseline could accidentally carry. The bench carries no such flag today.
 
-It is measured as a **curve rather than a single point**, because where the threshold sits is the useful fact: [the sensitivity record](performance-baselines/vc-353-owner-real/sensitivity.md) holds the injection, the command and the numbers. In short, on the baseline machine the stream+scroll probe calls a per-step main-thread regression of ≥40 ms unmistakably (1.5× wall time, 120+ dropped frames against a control that drops none), detects 20 ms through the dropped-frame counter alone, and does not see ≤10 ms — which is correct, since that still fits the frame budget the user actually experiences.
+It is measured as a **curve rather than a single point**, because where the threshold sits is the useful fact: VC-353's sensitivity record held the injection, the command and the numbers. In short, on the baseline machine the stream+scroll probe calls a per-step main-thread regression of ≥40 ms unmistakably (1.5× wall time, 120+ dropped frames against a control that drops none), detects 20 ms through the dropped-frame counter alone, and does not see ≤10 ms — which is correct, since that still fits the frame budget the user actually experiences.
 
-Two traps that record explains and every future reader should know:
+Two traps that record found and every future reader should know:
 
 - The stream interaction's **wall time is floored by the scripted token schedule** (120 steps at 30 tokens/s take ~4.0s regardless), so latency alone would have called a real 20 ms regression clean. Read dropped frames and frame times beside it.
 - A **development-React bench has less frame budget to spare**, so sensitivity measured on one does not transfer to the shipped build. The old +40%-at-20 ms claim came from exactly that mistake and is withdrawn.
 
-## Research references
-
-The harness decisions are supported by these scoped research records:
-
-- [Electron app measurement precedent](research/perf/electron-app-prior-art.md)
-- [Ephemeral Sessions and background load](research/perf/ephemeral-sessions-and-load.md)
-- [IPC, Session RPC, and SQLite](research/perf/ipc-rpc-sqlite.md)
-- [React, Zustand, and streaming transcripts](research/perf/react-zustand-streaming.md)
-
 ## Baseline use
 
-The owner-machine `real` baseline is [`docs/performance-baselines/vc-353-owner-real/benchmark.md`](performance-baselines/vc-353-owner-real/benchmark.md), taken at commit `e3c936ed` on a clean tree: both arms, 20 repetitions plus a discarded warm-up, zero renderer errors, every health check true. The 2026-09-13 baseline it replaces was withdrawn rather than corrected — development React, a published run whose renderer had thrown, arms with different cache warmth, and a 145 MB fixture standing in for 373 MB.
+The owner-machine `real` baseline (VC-353) was taken at commit `e3c936ed` on a clean tree: both arms, 20 repetitions plus a discarded warm-up, zero renderer errors, every health check true. The 2026-09-13 baseline it replaces was withdrawn rather than corrected — development React, a published run whose renderer had thrown, arms with different cache warmth, and a 145 MB fixture standing in for 373 MB.
 
-Two caveats travel with it and are recorded in the file. The fixture's event mix has changed since the run: it generated no `context.reasoning_dropped` events, and VC-368 put that family back at weight 10 per 1,000 units (taken from `observation.token-batch`), so the distribution differs from today's by 10 events per 1,000. And the host was **not exclusively idle** (mean load 7.66 and 306% of 800% CPU during the idle arm, from the owner's own running app). Absolute numbers are therefore pessimistic and the idle → loaded gap is understated. Re-taking it on a quiet machine is worth about 75 minutes whenever one is free.
+Two caveats travel with it and are recorded in its report. The fixture's event mix has changed since the run: it generated no `context.reasoning_dropped` events, and VC-368 put that family back at weight 10 per 1,000 units (taken from `observation.token-batch`), so the distribution differs from today's by 10 events per 1,000. And the host was **not exclusively idle** (mean load 7.66 and 306% of 800% CPU during the idle arm, from the owner's own running app). Absolute numbers are therefore pessimistic and the idle → loaded gap is understated. Re-taking it on a quiet machine is worth about 75 minutes whenever one is free.
 
 Before using any baseline as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration — the report records all of them for exactly this purpose. A later ticket should publish its own before/after pair on one machine rather than compare its machine to an owner baseline.
 

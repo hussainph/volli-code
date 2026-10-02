@@ -1,0 +1,69 @@
+---
+title: Manage local storage
+description: Inspect leftover processes and worktree files, reclaim disk space, and understand what Volli's JSON export includes.
+---
+
+Open **Settings → Storage** to inspect local processes, worktrees, logs, and
+the database. Scan results let you review what an action would remove before
+you confirm it.
+
+## Keep finished worktrees longer
+
+In **Retention → Keep Done worktrees for**, set the number of days. This
+controls when Volli can reclaim an eligible, clean worktree folder. It keeps
+the ticket, branch, commits, and pull-request link.
+
+Use **Keep worktree** on a ticket to exempt its folder. See
+[Clean up worktrees](/guides/clean-up-worktrees/) for eligibility and the
+difference between removal and archiving.
+
+## Inspect leftover processes
+
+1. In **Running processes**, select **Look for processes no Session owns**.
+2. Read the ticket, command, age, and memory information for each result.
+3. Use **Reap** for a process you want to stop, or **Reap all** for the eligible
+   results.
+
+Some processes are listed without a removal action. **Reap under memory
+pressure** controls automatic cleanup of eligible leftover processes. Stopping
+a process and deleting its files are separate actions.
+
+## Remove build artifacts
+
+In **Build artifacts**, scan for ignored dependency folders, build output, and
+caches. Review the results before confirming a trim. Volli protects local
+configuration and active or dirty worktrees. A trim keeps the checkout and
+its branch. You may need to reinstall dependencies before working there again.
+
+## Remove orphaned logs and worktrees
+
+**Pi session logs** finds logs no longer referenced by a Session. **Orphaned
+worktrees** checks for checkout folders that no ticket owns. Review each scan
+before confirming cleanup. These scans cover the local installation, not only
+the selected project.
+
+If you change retention or the folders change after a scan, scan again before
+acting on an outdated result.
+
+## Export records for inspection
+
+1. In **Database → Export data as JSON**, select **Export…**.
+2. Read the confirmation and choose a location for the file.
+
+The export contains readable project, ticket, comment, Session, and label
+records. It excludes attachments and transcript files and has no restore path.
+**It is not a restorable backup.** **Reveal in Finder** shows the database's
+location but does not copy or back it up.
+
+## Back up local data
+
+Keep your repositories and Volli's application-data folder in your normal Mac
+backup plan. Quit Volli before making a manual copy of its app-data folder.
+Copying only the SQLite file can miss recent writes and related files.
+Worktrees live separately and may contain uncommitted work that a pushed branch
+does not include.
+
+See [Local data and network access](/reference/data-and-privacy/) for the two
+storage locations. The app does not currently expose a backup-bundle creation
+or restore control. Do not delete your profile expecting the JSON export to
+restore it.
