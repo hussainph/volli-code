@@ -1,11 +1,11 @@
 /** VC-497: deliberately small, frozen read/write surface, not the production tools. */
 import { lstat, open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
-import type { SessionRuntimeSpec } from "@volli/shared";
-import { authorityVerdict } from "../../src/authority/gate.ts";
+import { containsPath, type SessionRuntimeSpec } from "@volli/shared";
+import { credentialPath } from "../../src/pi/credential-env.ts";
 
 export interface SpikeToolProbe {
   beforeEffect?(name: string): Promise<void>;
@@ -14,7 +14,6 @@ export interface SpikeToolProbe {
 
 export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
   const names = [...spec.tools.tools];
-  const authority = spec.authority ? structuredClone(spec.authority) : undefined;
   if (
     names.some((name) => name !== "read" && name !== "write") ||
     spec.tools.verbs?.length ||
@@ -29,11 +28,7 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
     spec.secret ||
     spec.classify ||
     spec.ask ||
-    spec.approvals ||
-    spec.decisions ||
-    spec.credentialRedaction ||
-    authority?.protection ||
-    authority?.enforcement === "observe"
+    spec.credentialRedaction
   ) {
     throw new Error("Pi Durable spike supports only the frozen read/write surface");
   }
@@ -47,9 +42,12 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
       name === "read"
         ? await realpath(target)
         : resolve(await realpath(dirname(target)), target.slice(dirname(target).length + 1));
-    const held = relative(root, canonical);
-    if (held === ".." || held.startsWith("../") || isAbsolute(held))
-      throw new Error("Outside spike workspace");
+    if (!containsPath(root, canonical)) throw new Error("Outside spike workspace");
+    // VC-504 removed authorityVerdict and attachment policy snapshots. Keep the
+    // surviving deterministic credential guard beside this stricter spike scope.
+    if (name === "read" && (credentialPath(target) || credentialPath(canonical))) {
+      throw new Error("Volli refuses credential-file reads. Ask with request_secret instead.");
+    }
     // A pre-existing write target may itself be a symlink.
     if (name === "write") {
       try {
@@ -59,10 +57,6 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
       } catch (error) {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       }
-    }
-    if (authority?.enforcement === "enforce") {
-      const verdict = authorityVerdict({ tool: name, args, authority, workspacePath: root });
-      if (verdict.outcome === "deny") throw new Error(verdict.reason);
     }
     return canonical;
   };

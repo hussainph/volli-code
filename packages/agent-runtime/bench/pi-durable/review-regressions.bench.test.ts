@@ -152,7 +152,7 @@ it("compares stored birth membership before resolution and preserves order", asy
 });
 
 for (const race of [false, true])
-  it(`refuses ${race ? "check-to-effect" : "dangling"} write symlink without authority snapshot`, async () => {
+  it(`refuses ${race ? "check-to-effect" : "dangling"} write symlink with deterministic workspace guards`, async () => {
     const directory = await mkdtemp(join(process.cwd(), ".pi-durable-link-"));
     const workspace = join(directory, "work");
     await mkdir(workspace);

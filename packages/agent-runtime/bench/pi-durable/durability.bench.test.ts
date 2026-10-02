@@ -3,11 +3,7 @@ import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { build } from "esbuild";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
-  type RuntimeObservation,
-} from "@volli/shared";
+import type { RuntimeObservation } from "@volli/shared";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createDurableSpikeRuntime } from "./runtime.ts";
 import type { TranslatedObservation } from "../../../session-engine/src/observation-translation.ts";
@@ -161,7 +157,7 @@ describe("VC-497 real process death with SQLite", () => {
       }
     }, 30_000);
 
-  it("flag off is the current runtime; authority fails closed; one store owner", async () => {
+  it("flag off is the current runtime; workspace/credential guards fail closed; one store owner", async () => {
     const directory = await mkdtemp(join(process.cwd(), ".pi-durable-gate-"));
     let handle: Awaited<ReturnType<typeof fallback.startSession>> | undefined;
     try {
@@ -181,23 +177,15 @@ describe("VC-497 real process death with SQLite", () => {
       spec.tools = { tools: ["read", "write", "execute"] };
       await expect(runtime.startSession(spec)).rejects.toThrow("only the frozen read/write");
       spec.tools = { tools: ["read", "write"] };
-      spec.authority = {
-        mode: "auto",
-        location: "worktree",
-        enforcement: "enforce",
-        judgmentMode: "ask",
-        tools: ["read", "write"],
-        rulePackId: BUILTIN_RULE_PACK_ID,
-        rulePackHash: BUILTIN_RULE_PACK_HASH,
-        classifierModel: null,
-        fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-      };
       handle = await runtime.startSession(spec);
       await expect(runtime.startSession(spec)).rejects.toThrow("already owned");
       await expect(handle.submitUserMessage("hello")).rejects.toThrow("Command ID");
       await handle.submitUserMessage("hello", "queue", "command-gate");
       expect(observations.some((o) => o.kind === "activity" && o.state === "completed")).toBe(true);
-      // A fresh provider script tests pre-intent denial; the regular script above exercised the pinned gate.
+      // VC-504 removed per-call authority: these are deterministic file guards,
+      // not a policy/classifier/approval proof. All files below are synthetic.
+      await writeFile(join(directory, ".env"), "synthetic credential fixture");
+      await symlink(join(directory, ".env"), join(directory, "credential-alias.txt"));
       const blockedModels = fixtureModels("unsafe");
       blockedModels.faux.setResponses([
         fauxAssistantMessage(
@@ -205,6 +193,10 @@ describe("VC-497 real process death with SQLite", () => {
           { stopReason: "toolUse" },
         ),
         fauxAssistantMessage("blocked call observed"),
+        ...[".env", "credential-alias.txt"].flatMap((path) => [
+          fauxAssistantMessage(fauxToolCall("read", { path }), { stopReason: "toolUse" }),
+          fauxAssistantMessage("credential call refused"),
+        ]),
       ]);
       await handle.close();
       handle = undefined;
@@ -231,6 +223,21 @@ describe("VC-497 real process death with SQLite", () => {
             String(o.output).includes("Outside spike workspace"),
         ),
       ).toBe(true);
+      for (const command of ["command-credential", "command-credential-alias"]) {
+        const before = observations.length;
+        await handle.submitUserMessage("read credential fixture", "queue", command);
+        const emitted = observations.slice(before);
+        expect(
+          emitted.some(
+            (o) =>
+              o.kind === "activity" &&
+              o.state === "failed" &&
+              String(o.output).includes("credential-file reads"),
+          ),
+        ).toBe(true);
+        expect(JSON.stringify(emitted)).not.toContain("synthetic credential fixture");
+      }
+      expect(executions).toBe(0);
     } finally {
       await handle?.close();
       await rm(directory, { recursive: true, force: true });
