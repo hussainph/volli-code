@@ -192,8 +192,8 @@ async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * The fixed function `select` runs against the resolved element. A constant by
- * design: the one place this file executes anything in the page, and nothing
- * in it comes from the model — the option value arrives as a CDP argument,
+ * design, like the rendering handshake below: nothing in its code comes from
+ * the model — the option value arrives as a CDP argument,
  * data rather than code.
  */
 const SELECT_OPTION_FUNCTION = `function(value) {

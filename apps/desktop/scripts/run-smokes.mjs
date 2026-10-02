@@ -197,10 +197,6 @@ export const CORE_E2E = new Set([
  */
 export const SMOKE_QUARANTINE = new Map([
   [
-    "browser-recovery-smoke.mjs",
-    "VC-523: 59/225 confirmed recoveries; lost click result / preview recovery",
-  ],
-  [
     "automations-picker-smoke.mjs",
     "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
   ],
