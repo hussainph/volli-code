@@ -762,6 +762,88 @@ function zeroPage(dbPath: string, page: number): void {
 }
 
 describe("migrate — backup integrity", () => {
+  it.each([51, 55])(
+    "upgrades a healthy WAL schema v%s with Session events intact and reopens without another backup",
+    (fromVersion) => {
+      const dbPath = tempDbPath();
+      const db = openRawDb(dbPath);
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      migrate(db, dbPath, { toVersion: 51 });
+      db.exec(`
+      INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+        VALUES ('p1', 'Preserved', '/repo', 'VC', 0, 0, 1, 1);
+      INSERT INTO sessions (id, project_id, title, created_at)
+        VALUES ('s1', 'p1', 'Preserved', 1);
+    `);
+      const provenanceId = internSessionEventProvenance(
+        db,
+        JSON.stringify({
+          source: { kind: "system", id: "desktop", detail: null },
+          venue: { id: "local", kind: "local" },
+        }),
+      );
+      db.prepare(`INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+      VALUES ('e1', 's1', 1, 1, 1, ?, '{"kind":"session.created"}')`).run(provenanceId);
+      migrate(db, dbPath, { toVersion: fromVersion });
+      const beforeEvents = db.prepare("SELECT * FROM session_events ORDER BY sequence").all();
+      const beforeSequence = db
+        .prepare("SELECT * FROM session_event_sequence ORDER BY sequence")
+        .all();
+      try {
+        expect(migrate(db, dbPath)).toBe(true);
+        expect(db.prepare("SELECT * FROM session_events ORDER BY sequence").all()).toEqual(
+          beforeEvents,
+        );
+        expect(db.prepare("SELECT * FROM session_event_sequence ORDER BY sequence").all()).toEqual(
+          beforeSequence,
+        );
+        verifyMigrationBackup(`${dbPath}.backup-v${fromVersion}`);
+        const backup = openRawDb(`${dbPath}.backup-v${fromVersion}`);
+        try {
+          expect(backup.pragma("user_version", { simple: true })).toBe(fromVersion);
+          expect(backup.prepare("SELECT * FROM session_events ORDER BY sequence").all()).toEqual(
+            beforeEvents,
+          );
+        } finally {
+          backup.close();
+        }
+        const backups = matchingBackupNames(dbPath);
+        expect(migrate(db, dbPath)).toBe(false);
+        expect(matchingBackupNames(dbPath)).toEqual(backups);
+      } finally {
+        db.close();
+      }
+      const reopened = openRawDb(dbPath);
+      try {
+        expect(migrate(reopened, dbPath)).toBe(false);
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
+  it("retries a failed WAL v55 upgrade without backup sidecars blocking publication", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 55 });
+    vi.spyOn(db, "exec").mockImplementationOnce(() => {
+      throw new Error("injected migration failure");
+    });
+    try {
+      expect(() => migrate(db, dbPath)).toThrow("injected migration failure");
+      expect(db.pragma("user_version", { simple: true })).toBe(55);
+      expect(existsSync(`${dbPath}.backup-v55-wal`)).toBe(false);
+      expect(existsSync(`${dbPath}.backup-v55-shm`)).toBe(false);
+      expect(migrate(db, dbPath)).toBe(true);
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      verifyMigrationBackup(`${dbPath}.backup-v55`);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([true, false])(
     "retains the real clean backup-v51 when newer copies have zeroed pages (new corrupt: %s)",
     (corruptNew) => {
