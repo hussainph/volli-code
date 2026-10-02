@@ -226,3 +226,7 @@ work-count assertions support unchanged work; they do not establish a complete
 variance-qualified timing pass. No demonstrated material regression was found,
 but satisfying the strict criterion needs a quieter machine, not discarded
 samples, threshold changes or unrelated production optimizations.
+
+The owner explicitly accepted this unresolved timing limitation and authorized
+merge **only after CI is green**. The acceptance does not turn the variance
+failures into passing measurements or change any coverage/benchmark threshold.
