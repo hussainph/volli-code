@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { migrate } from "./migrations";
+import { assertNoPendingDatabaseRecovery } from "./recovery-pending";
 
 /**
  * Opens (creating if absent) the Volli SQLite database at `dbPath`, applies
@@ -17,7 +19,43 @@ import { migrate } from "./migrations";
  * (and catches everything this throws) before calling in, since that's also
  * where the open+migrate failure is turned into the degraded IPC story.
  */
-export function openVolliDb(dbPath: string): Database.Database {
+export function openVolliDb(
+  dbPath: string,
+  options: { allowPendingRecovery?: boolean } = {},
+): Database.Database {
+  // A crash or full disk during publication must never turn a missing live
+  // pathname into an apparently successful, empty first-run database.
+  if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+  if (existsSync(dbPath)) {
+    // Read-only preflight cannot checkpoint/delete a damaged WAL on close or
+    // overwrite a clean migration safety copy before recovery becomes available.
+    // SQLite can update SHM even on a read-only handle. Reject a broken header
+    // without invoking SQLite, preserving malformed sidecars as raw evidence.
+    const fd = openSync(dbPath, "r");
+    const header = Buffer.alloc(100);
+    let bytesRead: number;
+    try {
+      bytesRead = readSync(fd, header, 0, header.length, 0);
+    } finally {
+      closeSync(fd);
+    }
+    if (bytesRead !== header.length || header.subarray(0, 16).toString() !== "SQLite format 3\0") {
+      throw new Error(
+        "The local database has a damaged header. Restore from the last backup that checks clean.",
+      );
+    }
+    const check = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const rows = check.pragma("quick_check") as { quick_check: string }[];
+      if (rows.length !== 1 || rows[0]?.quick_check !== "ok") {
+        throw new Error(
+          "The local database failed its integrity check. Restore from the last backup that checks clean.",
+        );
+      }
+    } finally {
+      check.close();
+    }
+  }
   const db = new Database(dbPath);
   try {
     db.pragma("journal_mode = WAL");

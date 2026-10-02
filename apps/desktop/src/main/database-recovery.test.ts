@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  renameSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -14,9 +15,31 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DatabaseRecoveryListResult, DatabaseRecoveryRestoreResult } from "../ipc/contract";
 
-const { handlers } = vi.hoisted(() => ({
+const { handlers, faults } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  faults: { dbPath: "", publish: false, rollback: false, moveWal: false },
 }));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  const fail = () => Object.assign(new Error("injected full disk"), { code: "ENOSPC" });
+  return {
+    ...fs,
+    linkSync: (...args: Parameters<typeof fs.linkSync>) => {
+      const source = String(args[0]);
+      if (
+        String(args[1]) === faults.dbPath &&
+        ((faults.publish && source.includes(".restore-")) ||
+          (faults.rollback && source.includes(".damaged-")))
+      )
+        throw fail();
+      return fs.linkSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+      if (faults.moveWal && String(args[0]) === `${faults.dbPath}-wal`) throw fail();
+      return fs.renameSync(...args);
+    },
+  };
+});
 vi.mock("electron", () => ({
   ipcMain: {
     handle: (channel: string, handler: (...args: unknown[]) => unknown) =>
@@ -26,6 +49,7 @@ vi.mock("electron", () => ({
 
 import * as database from "./db";
 import { migrate, MIGRATIONS } from "./db/migrations";
+import { beginDatabaseRecovery, recoveryPendingPath } from "./db/recovery-pending";
 import {
   DatabaseRecovery,
   NO_CLEAN_BACKUP,
@@ -39,7 +63,19 @@ let recovery: DatabaseRecovery;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "volli-recovery-test-"));
   dbPath = join(directory, "volli.db");
-  writeFileSync(dbPath, "damaged database evidence");
+  Object.assign(faults, { dbPath, publish: false, rollback: false, moveWal: false });
+  const damaged = new Database(dbPath);
+  damaged.exec(
+    "CREATE TABLE damaged_probe(value TEXT); CREATE INDEX damaged_probe_idx ON damaged_probe(value); INSERT INTO damaged_probe VALUES ('evidence')",
+  );
+  const { rootpage } = damaged
+    .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'damaged_probe_idx'")
+    .get() as { rootpage: number };
+  const pageSize = damaged.pragma("page_size", { simple: true }) as number;
+  damaged.close();
+  const bytes = readFileSync(dbPath);
+  bytes.fill(0, (rootpage - 1) * pageSize, rootpage * pageSize);
+  writeFileSync(dbPath, bytes);
   recovery = new DatabaseRecovery({ dbPath, userData: directory });
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -182,6 +218,29 @@ describe("DatabaseRecovery", () => {
     expect(readFileSync(path)).toEqual(bytes);
   });
 
+  it("accepts empty verification WAL/SHM caches without modifying or following them", () => {
+    const path = backup(1);
+    const bytes = readFileSync(path);
+    writeFileSync(`${path}-wal`, "");
+    writeFileSync(`${path}-shm`, Buffer.alloc(32768));
+    const shm = readFileSync(`${path}-shm`);
+    expect(recovery.list()[0]?.integrity).toBe("clean");
+    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(readFileSync(`${path}-shm`)).toEqual(shm);
+    expect(readFileSync(`${path}-wal`).length).toBe(0);
+  });
+
+  it("offers a clean same-version original preserved by migration safety checks", () => {
+    const path = backup(1);
+    const name = "volli.db.backup-v1.preserved-01234567-89ab-cdef-0123-456789abcdef";
+    renameSync(path, join(directory, name));
+    const bytes = readFileSync(join(directory, name));
+    expect(recovery.list()[0]).toMatchObject({ name, integrity: "clean" });
+    expect(recovery.restore()).toBe(name);
+    expect(readFileSync(join(directory, name))).toEqual(bytes);
+  });
+
   it("checks real WAL-mode migration copies without modifying their bytes", () => {
     const path = backup(1);
     const bytes = readFileSync(path);
@@ -270,12 +329,92 @@ describe("DatabaseRecovery", () => {
     }
   }, 15000);
 
+  it.each(["publication", "rollback", "sidecar-move"] as const)(
+    "fails closed across a full-disk %s boundary and can resume",
+    (boundary) => {
+      const path = backup(1);
+      const backupBytes = readFileSync(path);
+      const damagedBytes = readFileSync(dbPath);
+      writeFileSync(`${dbPath}-wal`, "preserved WAL evidence");
+      faults.publish = boundary !== "sidecar-move";
+      faults.rollback = boundary === "rollback";
+      faults.moveWal = boundary === "sidecar-move";
+      expect(() => recovery.restore()).toThrow("Restore failed");
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+      expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
+      const saved = preservedDirectory();
+      expect(readFileSync(join(saved, "before-checkpoint", "volli.db"))).toEqual(damagedBytes);
+      expect(readFileSync(join(saved, "before-checkpoint", "volli.db-wal")).toString()).toBe(
+        "preserved WAL evidence",
+      );
+      expect(readFileSync(path)).toEqual(backupBytes);
+      Object.assign(faults, { publish: false, rollback: false, moveWal: false });
+      expect(recovery.restore()).toBe("volli.db.backup-v1");
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+      expect(readFileSync(path)).toEqual(backupBytes);
+    },
+  );
+
+  it("refuses an idle existing writer, not just an active WAL reader", () => {
+    backup(1);
+    rmSync(dbPath);
+    const writer = database.openVolliDb(dbPath);
+    writer.exec(
+      "CREATE TABLE idle_writer_probe (value TEXT); INSERT INTO idle_writer_probe VALUES ('before')",
+    );
+    try {
+      expect(() => recovery.restore()).toThrow("Close other Volli instances");
+      writer.exec("INSERT INTO idle_writer_probe VALUES ('after')");
+      expect(writer.prepare("SELECT value FROM idle_writer_probe ORDER BY rowid").all()).toEqual([
+        { value: "before" },
+        { value: "after" },
+      ]);
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+    } finally {
+      writer.close();
+    }
+    expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
+  }, 15000);
+
+  it("resumes an interrupted switch without allowing boot to create an empty database", () => {
+    backup(1);
+    const original = readFileSync(dbPath);
+    const preserved = join(directory, "prior-preserved.db");
+    writeFileSync(preserved, original);
+    beginDatabaseRecovery(dbPath, "prior-preservation-directory");
+    rmSync(dbPath);
+    expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
+    expect(existsSync(dbPath)).toBe(false);
+    expect(recovery.list()[0]?.integrity).toBe("clean");
+    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+    expect(readFileSync(preserved)).toEqual(original);
+    const reopened = database.openVolliDb(dbPath);
+    reopened.close();
+  });
+
+  it("keeps interrupted-recovery intent when a publication re-open fails", () => {
+    backup(1);
+    const open = database.openVolliDb;
+    vi.spyOn(database, "openVolliDb").mockImplementation((path, options) => {
+      if (path === dbPath) throw new Error("injected re-open failure");
+      return open(path, options);
+    });
+    expect(() => recovery.restore()).toThrow("Restore failed");
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+    vi.mocked(database.openVolliDb).mockRestore();
+    expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
+    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+  });
+
   it("refuses a linked damaged WAL and preserves its target", () => {
     const clean = backup(1);
     const bytes = readFileSync(clean);
+    const original = readFileSync(dbPath);
     symlinkSync(clean, `${dbPath}-wal`);
     expect(() => recovery.restore()).toThrow("Restore failed");
-    expect(readFileSync(dbPath).toString()).toBe("damaged database evidence");
+    expect(readFileSync(dbPath)).toEqual(original);
     expect(readFileSync(clean)).toEqual(bytes);
   });
 });

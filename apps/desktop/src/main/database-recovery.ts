@@ -16,6 +16,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSafetyCopy } from "../ipc/contract";
 import { openVolliDb } from "./db";
 import { migrationBackupCandidatePattern } from "./db/backup-retention";
+import {
+  beginDatabaseRecovery,
+  finishDatabaseRecovery,
+  hasPendingDatabaseRecovery,
+  recoveryPendingPath,
+  syncRecoveryPath,
+} from "./db/recovery-pending";
 import { DATABASE_RECOVERY_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
 
@@ -49,10 +56,15 @@ function integrity(path: string): DatabaseSafetyCopy["integrity"] {
   let db: Database.Database | undefined;
   try {
     regularFile(path);
-    // Migration safety copies are checkpointed standalone files. Do not silently
-    // ignore a journal that could contain newer data than the base being checked.
-    if (existsSync(`${path}-wal`) || existsSync(`${path}-shm`) || existsSync(`${path}-journal`))
-      return "unavailable";
+    // Read-only verification can leave an empty WAL and SHM cache (VC-520).
+    // Those contain no durable frames. Never ignore a nonempty journal or follow
+    // a sidecar link; a backup requiring journal replay needs manual recovery.
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      const sidecar = `${path}${suffix}`;
+      if (!existsSync(sidecar)) continue;
+      regularFile(sidecar);
+      if (suffix !== "-shm" && lstatSync(sidecar).size !== 0) return "unavailable";
+    }
     const bytes = readFileSync(path);
     if (bytes.length < 100 || bytes.subarray(0, 16).toString() !== "SQLite format 3\0")
       return "damaged";
@@ -90,7 +102,12 @@ export class DatabaseRecovery {
     ) {
       throw new Error("Backup recovery is only available for the local user-data database.");
     }
-    regularFile(dbPath);
+    const pending = hasPendingDatabaseRecovery(dbPath);
+    if (pending) regularFile(recoveryPendingPath(dbPath));
+    // An interrupted switch may have moved the live pathname away. Boot is
+    // blocked by the durable marker; the remaining safety copies can still heal it.
+    if (existsSync(dbPath)) regularFile(dbPath);
+    else if (!pending) throw new Error("The local database is missing.");
   }
 
   list(): DatabaseSafetyCopy[] {
@@ -99,7 +116,14 @@ export class DatabaseRecovery {
     const pattern = migrationBackupCandidatePattern(dbPath);
     return readdirSync(dirname(dbPath))
       .flatMap((name): DatabaseSafetyCopy[] => {
-        const match = pattern.exec(name);
+        // VC-520 preserves same-version originals/quarantines under UUID names.
+        // They are still safety copies; a transient check failure may check clean
+        // later. Strip only that exact suffix before the directory allowlist.
+        const baseName = name.replace(
+          /\.(?:preserved|corrupt)-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/,
+          "",
+        );
+        const match = pattern.exec(baseName);
         if (match === null || match[2] !== undefined) return [];
         const path = join(dirname(dbPath), name);
         try {
@@ -121,6 +145,8 @@ export class DatabaseRecovery {
     let savedDirectory: string | undefined;
     const moved: string[] = [];
     let installed = false;
+    let verified = false;
+    let damaged: Database.Database | undefined;
     try {
       // Upgrade in isolation: the ordinary migration runner may overwrite/prune
       // safety copies, so it must never run beside the user's original backups.
@@ -146,21 +172,33 @@ export class DatabaseRecovery {
         const source = `${dbPath}${suffix}`;
         if (!existsSync(source)) continue;
         regularFile(source);
-        copyFileSync(source, join(rawDirectory, `${name}${suffix}`), constants.COPYFILE_EXCL);
+        const saved = join(rawDirectory, `${name}${suffix}`);
+        copyFileSync(source, saved, constants.COPYFILE_EXCL);
+        syncRecoveryPath(saved);
       }
-      let damaged: Database.Database | undefined;
-      try {
+      syncRecoveryPath(rawDirectory);
+      syncRecoveryPath(savedDirectory);
+      // Durable intent precedes ANY displacement. An interruption/failed rollback
+      // now fails boot closed instead of silently creating an empty profile.
+      beginDatabaseRecovery(dbPath, basename(savedDirectory));
+      // A checkpoint alone does not exclude idle connections. Acquire and HOLD
+      // SQLite's exclusive file ownership through preservation and publication.
+      // If corruption prevents ownership, refuse rather than detach a live writer.
+      if (existsSync(dbPath)) {
         damaged = new Database(dbPath, { fileMustExist: true });
         damaged.pragma("busy_timeout = 5000");
-        this.checkpoint(damaged);
-      } catch (error) {
-        const code = (error as { code?: string }).code;
-        // Corruption may make checkpoint impossible. The complete raw bundle is
-        // already safe; busy/I/O/permission failures must instead fail closed.
-        if (code !== "SQLITE_CORRUPT" && code !== "SQLITE_NOTADB") throw error;
-      } finally {
-        damaged?.close();
+        damaged.pragma("locking_mode = EXCLUSIVE");
+        try {
+          damaged.exec("BEGIN EXCLUSIVE; COMMIT");
+        } catch (error) {
+          if ((error as { code?: string }).code === "SQLITE_BUSY")
+            throw new RecoveryFailure(
+              "The database is in use. Close other Volli instances before restoring.",
+            );
+          throw error;
+        }
       }
+      if (damaged !== undefined) this.checkpoint(damaged);
       for (const suffix of suffixes) {
         const source = `${dbPath}${suffix}`;
         if (!existsSync(source)) continue;
@@ -168,12 +206,15 @@ export class DatabaseRecovery {
         renameSync(source, join(savedDirectory, `${name}${suffix}`));
         moved.push(suffix);
       }
+      // Persist the post-checkpoint bundle's new names before publication too.
+      syncRecoveryPath(savedDirectory);
+      syncRecoveryPath(userData);
       // Exclusive atomic publication, with no partially copied live database.
       linkSync(stagedPath, dbPath);
       installed = true;
       // Re-open the installed file, not just the staging copy. It is already at
       // the current schema, so this cannot prune the original migration copies.
-      const restored = openVolliDb(dbPath);
+      const restored = openVolliDb(dbPath, { allowPendingRecovery: true });
       try {
         if (!checksClean(restored))
           throw new Error("The restored database failed its integrity check.");
@@ -181,12 +222,28 @@ export class DatabaseRecovery {
       } finally {
         restored.close();
       }
+      // Release the old inode before allowing other app instances to boot.
+      damaged?.close();
+      damaged = undefined;
+      syncRecoveryPath(dbPath);
+      syncRecoveryPath(savedDirectory);
+      syncRecoveryPath(userData);
+      verified = true;
+      finishDatabaseRecovery(dbPath);
       console.info("[database recovery] restored", {
         backup: selected.name,
         preserved: savedDirectory,
       });
       return selected.name;
     } catch (error) {
+      if (verified) {
+        // The replacement is already durable. A marker cleanup failure must not
+        // undo it after the boot guard may have been removed.
+        console.error("[database recovery] finalization failed", error);
+        throw new RecoveryFailure(
+          "The backup was restored and checked, but recovery could not be finalized. Your original files and safety copies are preserved for manual recovery.",
+        );
+      }
       if (savedDirectory !== undefined) {
         try {
           // Keep a failed installed copy as evidence as well; never overwrite a
@@ -197,12 +254,10 @@ export class DatabaseRecovery {
                 renameSync(`${dbPath}${suffix}`, join(savedDirectory, `failed-restore${suffix}`));
             }
           }
+          // Hard links are exclusive and do not allocate another DB-sized file:
+          // a full disk cannot force a second full-data copy just to roll back.
           for (const suffix of moved)
-            copyFileSync(
-              join(savedDirectory, `${name}${suffix}`),
-              `${dbPath}${suffix}`,
-              constants.COPYFILE_EXCL,
-            );
+            linkSync(join(savedDirectory, `${name}${suffix}`), `${dbPath}${suffix}`);
         } catch (rollbackError) {
           console.error("[database recovery] rollback failed", {
             savedDirectory,
@@ -218,6 +273,7 @@ export class DatabaseRecovery {
         `Restore failed. Your original database and safety copies are preserved for manual recovery.${error instanceof RecoveryFailure ? ` ${error.message}` : ""}`,
       );
     } finally {
+      damaged?.close();
       try {
         rmSync(stageDirectory, { recursive: true, force: true });
       } catch (error) {
