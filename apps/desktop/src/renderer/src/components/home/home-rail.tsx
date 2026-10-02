@@ -59,7 +59,7 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import type { Project } from "@volli/shared";
+import { sessionProvenanceHoverLine, type Project } from "@volli/shared";
 
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
@@ -88,6 +88,8 @@ import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot } from "@renderer/components/ui/status-dot";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
+import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
@@ -499,6 +501,8 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
  * no room for the state.
  */
 function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessionRow }) {
+  const provenance = useSessionProvenance(projectId, row.id);
+  const provenanceLine = sessionProvenanceHoverLine(provenance);
   const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   return (
     <li>
@@ -513,6 +517,8 @@ function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessi
           />
         }
         primary={row.title}
+        primaryTrailing={<SessionProvenanceMark provenance={provenance} />}
+        title={provenanceLine === null ? row.title : `${row.title}\n${provenanceLine}`}
         secondary={
           <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
             <StatusDot state={row.state} />

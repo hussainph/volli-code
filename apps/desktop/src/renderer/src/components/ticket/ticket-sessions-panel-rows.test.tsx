@@ -330,10 +330,11 @@ describe("TicketSessionsPanel rows", () => {
   });
 
   describe("who started the Session", () => {
-    it("carries the bolt and the Automation's name on a Run's row", () => {
+    it("carries only the bolt on a Run's row and keeps its origin accessible", () => {
       const html = panel();
 
       expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
+      expect(html.replace(/<[^>]*>/g, "")).not.toContain("Nightly sweep");
     });
 
     it("drops the native tooltip on a peekable row, where the card now says it", () => {
