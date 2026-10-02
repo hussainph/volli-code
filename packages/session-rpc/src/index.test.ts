@@ -247,6 +247,10 @@ function snapshot(): SessionRuntimeSnapshot {
       },
       status: "open",
       commands: [],
+      resumptions: [],
+      latestTurnId: null,
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
       receipts: [],
       pendingExecutorStart: null,
       attachments: [],
@@ -1921,6 +1925,7 @@ describe("Session tRPC router", () => {
       expect.objectContaining({
         commandId: "create-command",
         command: expect.objectContaining({ kind: "session.create" }),
+        origin: { kind: "user" },
       }),
     ]);
   });
@@ -1969,11 +1974,13 @@ describe("Session tRPC router", () => {
 
     expect(fixture.calls.command.slice(-2)).toEqual([
       {
+        origin: { kind: "user" },
         commandId: "retry-command",
         sessionId: "session-1",
         command: { kind: "executor.retry", attachmentId: "attachment-1" },
       },
       {
+        origin: { kind: "user" },
         commandId: "session-owned-retry-command",
         sessionId: "session-1",
         command: { kind: "executor.retry" },
@@ -2106,11 +2113,13 @@ describe("Session tRPC router", () => {
 
     expect(fixture.calls.command.slice(-2)).toEqual([
       {
+        origin: { kind: "user" },
         commandId: "compact-command",
         sessionId: "session-1",
         command: { kind: "context.compact", instructions: "keep the API work" },
       },
       {
+        origin: { kind: "user" },
         commandId: "bare-compact-command",
         sessionId: "session-1",
         command: { kind: "context.compact" },
@@ -2158,6 +2167,7 @@ describe("Session tRPC router", () => {
     });
 
     expect(fixture.calls.command.at(-1)).toEqual({
+      origin: { kind: "user" },
       commandId: "select-model",
       sessionId: "session-1",
       command: {
@@ -2278,7 +2288,12 @@ describe("Session tRPC router", () => {
     // The transport carries no reason of its own: what it knows is that a user
     // left the interaction undecided.
     expect(fixture.calls.cancelled).toEqual([
-      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
+      {
+        sessionId: "session-1",
+        interactionId: "question-1",
+        reason: "abandoned",
+        origin: { kind: "user" },
+      },
     ]);
     expect(diagnostics.list().map((entry) => entry.procedure)).toEqual([
       "session.snapshot",

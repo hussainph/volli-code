@@ -1,3 +1,4 @@
+import { readSessionOrigin, type SessionOrigin } from "./session-origin";
 /**
  * The durable, harness-agnostic facts that make up a Session's local history.
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
@@ -967,17 +968,19 @@ export interface SessionAttachmentFailure {
  * One immutable local fact WITHOUT its audit provenance (VC-355).
  *
  * Provenance answers "which door did this come through", which is an audit and
- * future-replay question. Folding a Session's state never asks it: the reducer
- * switches on `payload.kind` and reads nothing else about the source. Storing
- * provenance interned and joining it back per row therefore costs one JSON
- * decode per event to answer a question the caller did not ask, and a Session
- * listing pays that across every event in the profile.
+ * future-replay question. The fold needs only the trusted command origin for
+ * attribution, not runtime-native detail. Slim readers extract that field on
+ * `command.recorded` instead of joining full provenance for every event in a
+ * Session listing. Full-log readers may still supply provenance as a fallback.
  *
  * This is the shape a fold consumes. {@link SessionEvent} extends it for the
  * callers that genuinely need the audit field, so anything holding a full
  * event can still be passed wherever this is accepted.
  */
 export interface SessionProjectionEvent {
+  /** Slim fold readers carry only origin, not full native provenance. */
+  commandOrigin?: SessionOrigin | null;
+  provenance?: SessionEventProvenance;
   id: string;
   sessionId: string;
   sequence: number;
@@ -1566,6 +1569,10 @@ export interface ListSessionEventsQuery {
 }
 
 export interface SessionAttachmentProjection extends SessionAttachment {
+  /** Trusted command that successfully opened this attachment; absent history is unknown. */
+  readonly origin?: SessionOrigin | null;
+  /** A previous attachment successfully opened, independently of continuity or a stop. */
+  readonly reattached?: boolean;
   readonly status: "open" | "failed" | "closed";
   readonly openedAt: number | null;
   readonly closedAt: number | null;
@@ -1609,9 +1616,22 @@ export interface SessionInteractionProjection {
  * modifiers make that a compile error instead, on both sides of an RPC seam
  * where a runtime freeze does not survive the copy.
  */
+/** A successful reopening, recorded even if no message or turn follows. */
+export interface SessionAttachmentResumption {
+  readonly attachmentId: string;
+  readonly origin: SessionOrigin | null;
+  readonly startedAt: number;
+}
+
 export interface SessionProjection {
   readonly session: Session;
   readonly status: "open" | "archived";
+  readonly latestTurnId: string | null;
+  readonly latestTurnOrigin: SessionOrigin | null;
+  /** This turn began on an attachment that successfully recovered an explicit stop. */
+  readonly resumedAfterStop: boolean;
+  /** Retained so a coalesced observer cannot lose an intermediate resume. */
+  readonly resumptions: readonly SessionAttachmentResumption[];
   readonly commands: readonly SessionCommand[];
   readonly receipts: readonly CommandReceipt[];
   /** Latest unresolved executor.start intent; it exists before an attachment is observable. */
@@ -1725,9 +1745,13 @@ export interface SessionProjectionCheckpoint {
   pendingExecutorStarts: readonly SessionCommand[];
   /** Unrounded sum of every priced `usage.recorded` fact through the cursor. */
   usageCostUsdExact: number | null;
+  stopSinceLastTurn: boolean;
+  stoppedRecoveryAttachmentId: string | null;
+  pendingAttachmentCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
+  pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
 }
 
-export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
+export const SESSION_PROJECTION_CHECKPOINT_VERSION = 4 as const;
 
 export interface SessionProjectionCheckpointValidationOptions {
   /** Reject a checkpoint that belongs to another Session. */
@@ -1763,6 +1787,8 @@ export function assertSessionProjectionCheckpoint(
     projection?: unknown;
     pendingExecutorStarts?: unknown;
     usageCostUsdExact?: unknown;
+    stoppedRecoveryAttachmentId?: unknown;
+    pendingAttachmentCommands?: unknown;
   };
   const projection = checkpoint.projection;
   const projectionSession =
@@ -1794,6 +1820,11 @@ export function assertSessionProjectionCheckpoint(
     !Number.isInteger(throughSequence) ||
     throughSequence < 0 ||
     !Array.isArray(checkpoint.pendingExecutorStarts) ||
+    !Array.isArray(checkpoint.pendingAttachmentCommands) ||
+    !(
+      checkpoint.stoppedRecoveryAttachmentId === null ||
+      typeof checkpoint.stoppedRecoveryAttachmentId === "string"
+    ) ||
     !validExactCost ||
     (options.expectedSessionId !== undefined && checkpoint.sessionId !== options.expectedSessionId)
   ) {
@@ -1885,6 +1916,18 @@ function foldSessionProjection(
   let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
   let modelTier: ModelTier | null = base?.modelTier ?? null;
   let modelAuto: ModelAutoPick | null = base?.modelAuto ?? null;
+  const resumptions: SessionAttachmentResumption[] = [...(base?.resumptions ?? [])];
+  let latestTurnId = base?.latestTurnId ?? null;
+  let latestTurnOrigin = base?.latestTurnOrigin ?? null;
+  let resumedAfterStop = base?.resumedAfterStop ?? false;
+  let stopSinceLastTurn = checkpoint?.stopSinceLastTurn ?? false;
+  let stoppedRecoveryAttachmentId = checkpoint?.stoppedRecoveryAttachmentId ?? null;
+  const pendingAttachmentCommands = new Map(
+    checkpoint?.pendingAttachmentCommands.map(({ commandId, origin }) => [commandId, origin]) ?? [],
+  );
+  const pendingTurnCommands = new Map(
+    checkpoint?.pendingTurnCommands.map(({ commandId, origin }) => [commandId, origin]) ?? [],
+  );
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
   let lastTurnStopDetail = base?.lastTurnStopDetail ?? null;
@@ -1927,12 +1970,35 @@ function foldSessionProjection(
     }
 
     switch (event.payload.kind) {
-      case "command.recorded":
-        commands.push(event.payload.command);
-        if (event.payload.command.intent.kind === "executor.start") {
-          pendingExecutorStarts.set(event.payload.command.id, event.payload.command);
+      case "command.recorded": {
+        const { command } = event.payload;
+        commands.push(command);
+        const detail = event.provenance?.source.detail;
+        const origin =
+          event.commandOrigin !== undefined
+            ? event.commandOrigin
+            : readSessionOrigin(
+                typeof detail === "object" && detail !== null && !Array.isArray(detail)
+                  ? (detail as Record<string, unknown>).sessionOrigin
+                  : null,
+              );
+        if (
+          (command.intent.kind === "message.submit" && (!turnActive || stopSinceLastTurn)) ||
+          command.intent.kind === "executor.retry"
+        ) {
+          // Turn submitters and attachment openers are independent attribution.
+          // A steer joins active work; outstanding turn openers are retained
+          // separately so rejecting one cannot erase another's attribution.
+          pendingTurnCommands.set(command.id, origin);
+        }
+        if (command.intent.kind === "executor.start" || command.intent.kind === "executor.retry") {
+          pendingAttachmentCommands.set(command.id, origin);
+        }
+        if (command.intent.kind === "executor.start") {
+          pendingExecutorStarts.set(command.id, command);
         }
         break;
+      }
       case "session.archived":
         status = "archived";
         break;
@@ -1954,6 +2020,8 @@ function foldSessionProjection(
         };
         break;
       case "session.stopped":
+        stopSinceLastTurn = true;
+        stoppedRecoveryAttachmentId = null;
         stopped = {
           at: event.occurredAt,
           reason: event.payload.reason,
@@ -1981,8 +2049,20 @@ function foldSessionProjection(
       }
       case "attachment.opened": {
         const { attachment } = event.payload;
+        const reattached = [...attachments.values()].some(({ openedAt }) => openedAt !== null);
+        const origin = event.commandId
+          ? (pendingAttachmentCommands.get(event.commandId) ?? null)
+          : null;
+        if (reattached && !resumptions.some(({ attachmentId }) => attachmentId === attachment.id)) {
+          resumptions.push({ attachmentId: attachment.id, origin, startedAt: event.occurredAt });
+        }
+        if (stopped !== null || stoppedRecoveryAttachmentId !== null) {
+          stoppedRecoveryAttachmentId = attachment.id;
+        }
         attachments.set(attachment.id, {
           ...attachment,
+          origin,
+          reattached,
           status: "open",
           openedAt: event.occurredAt,
           closedAt: null,
@@ -1995,13 +2075,18 @@ function foldSessionProjection(
         // Work resuming ends a stop: the record stays in history, the state
         // does not (VC-86).
         stopped = null;
-        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        if (event.commandId) {
+          pendingExecutorStarts.delete(event.commandId);
+          pendingAttachmentCommands.delete(event.commandId);
+        }
         break;
       }
       case "attachment.failed": {
         const { attachment } = event.payload;
         attachments.set(attachment.id, {
           ...attachment,
+          origin: null,
+          reattached: false,
           status: "failed",
           openedAt: null,
           closedAt: event.occurredAt,
@@ -2015,7 +2100,10 @@ function foldSessionProjection(
         // not the turn losing what it said — `foldSessionAnswerState` agrees).
         if (turnActive) lastTurnOutcome = "failed";
         turnActive = false;
-        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        if (event.commandId) {
+          pendingExecutorStarts.delete(event.commandId);
+          pendingAttachmentCommands.delete(event.commandId);
+        }
         break;
       }
       case "attachment.closed": {
@@ -2070,8 +2158,11 @@ function foldSessionProjection(
         break;
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
+        if (event.payload.receipt.status === "rejected")
+          pendingTurnCommands.delete(event.payload.receipt.commandId);
         if (event.payload.receipt.status === "rejected") {
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
+          pendingAttachmentCommands.delete(event.payload.receipt.commandId);
         }
         break;
       // A turn is the durable half of "the agent is working", and a listing has
@@ -2083,6 +2174,13 @@ function foldSessionProjection(
       // latch "working" durably, forever, on the strength of a turn nobody is
       // running any more.
       case "turn.started":
+        latestTurnId = event.payload.turnId;
+        latestTurnOrigin =
+          pendingTurnCommands.size === 1 ? [...pendingTurnCommands.values()][0]! : null;
+        resumedAfterStop = stoppedRecoveryAttachmentId === event.payload.attachmentId;
+        if (resumedAfterStop) stoppedRecoveryAttachmentId = null;
+        stopSinceLastTurn = false;
+        pendingTurnCommands.clear();
         turnActive = true;
         // The outcome is about the latest turn, and this one has none yet.
         lastTurnOutcome = null;
@@ -2178,6 +2276,10 @@ function foldSessionProjection(
     modelTier,
     ...(modelAuto === null ? {} : { modelAuto }),
     turnActive,
+    latestTurnId,
+    latestTurnOrigin,
+    resumedAfterStop,
+    resumptions,
     lastTurnOutcome,
     ...(lastTurnStopDetail === null ? {} : { lastTurnStopDetail }),
     authorityDenials,
@@ -2200,6 +2302,16 @@ function foldSessionProjection(
     projection,
     pendingExecutorStarts: [...pendingExecutorStarts.values()],
     usageCostUsdExact: usageSummary.pricedRequestCount === 0 ? null : usageCostUsdExact,
+    stopSinceLastTurn,
+    stoppedRecoveryAttachmentId,
+    pendingAttachmentCommands: [...pendingAttachmentCommands].map(([commandId, origin]) => ({
+      commandId,
+      origin,
+    })),
+    pendingTurnCommands: [...pendingTurnCommands].map(([commandId, origin]) => ({
+      commandId,
+      origin,
+    })),
   };
 }
 

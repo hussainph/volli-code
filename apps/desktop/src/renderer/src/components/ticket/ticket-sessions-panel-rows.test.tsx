@@ -162,7 +162,7 @@ const fixture = vi.hoisted(() => {
       kind: "chat",
       record: byRun,
       usage: unmetered,
-      provenance: { kind: "automation", automationName: "Nightly sweep" },
+      provenance: { kind: "automation", automationRunId: null, automationName: "Nightly sweep" },
     },
     {
       kind: "chat",

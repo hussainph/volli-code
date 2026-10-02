@@ -27,7 +27,8 @@
  *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) → check 5,
  *         which asserts the resume comes back with that exact id.
  *     Resume opens a new attachment on the same durable Volli Session; it does
- *     not mint a second Session or write terminal lifecycle into ticket events.
+ *     not mint a second Session. Ticket history names the successful reattachment
+ *     and its user origin, while process lifecycle evidence stays in the ledger.
  *
  * The terminal renders to a WebGPU canvas (no text in the DOM), so — exactly
  * like composer-kickoff-smoke.mjs — the "agent" is the FAKE harness
@@ -182,6 +183,24 @@ async function sessionsForTicket(page, ticketId) {
 async function eventsFor(page, ticketId) {
   const res = await page.evaluate((tid) => window.api.tickets.events({ ticketId: tid }), ticketId);
   return res.ok ? res.events : [];
+}
+
+async function hasAttributedResumption(page, ticketId, sessionId) {
+  return waitUntil(
+    "Ticket history attributes the successful terminal reattachment",
+    async () => {
+      const resumed = (await eventsFor(page, ticketId)).filter(
+        (event) =>
+          event.payload.kind === "session_resumed" && event.payload.sessionId === sessionId,
+      );
+      return resumed.length === 1 &&
+        typeof resumed[0].payload.attachmentId === "string" &&
+        resumed[0].payload.origin?.kind === "user"
+        ? true
+        : null;
+    },
+    { timeout: 10000 },
+  ).catch(() => false);
 }
 
 async function busy(page, sessionId) {
@@ -589,10 +608,7 @@ async function main() {
             detail: `linkOk=${linkOk} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeText = await waitUntil(
           "resume probe records claude --resume <uuid>",
@@ -612,12 +628,12 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeText;
         return {
           ok,
           detail:
-            `linkOk=${linkOk} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} ` +
+            `linkOk=${linkOk} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} ` +
             `resumeProbe=${probeText}`,
         };
       },
@@ -666,10 +682,7 @@ async function main() {
             detail: `killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeText = await waitUntil(
           "resume probe records opencode --continue (and never a by-id resume)",
@@ -691,13 +704,13 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeText;
         return {
           ok,
           detail:
             `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
-            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeText}`,
+            `sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} resumeProbe=${probeText}`,
         };
       },
     );
@@ -754,10 +767,7 @@ async function main() {
             detail: `minted=${minted} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeOk = await waitUntil(
           "resume probe records claude --resume <the minted uuid>",
@@ -777,13 +787,13 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeOk;
         return {
           ok,
           detail:
             `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
-            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeOk}`,
+            `sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} resumeProbe=${probeOk}`,
         };
       },
     );

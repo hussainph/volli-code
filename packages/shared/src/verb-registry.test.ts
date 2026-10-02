@@ -48,6 +48,7 @@ const SOCKET_SURFACE = [
   "model.list",
   "cost",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
   "session.done",
@@ -83,6 +84,7 @@ const REFERENCE_SURFACE = [
   "worktree.sync",
   "label.merge",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
   "session.done",
@@ -141,6 +143,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // app-owned policy, and a cap the capped Session could write is decoration.
   cost: "read",
   "session.list": "read",
+  "session.show": "read",
   "session.peek": "read",
   // The whole of a chat's last message (VC-9): a read, like the peek beside it.
   "session.answer": "read",
@@ -383,7 +386,7 @@ describe("verbTier", () => {
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
     // VC-9 adds `session.answer`, a read beside the peek.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(19);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
     // VC-310 adds label.merge, the label cleanup write.

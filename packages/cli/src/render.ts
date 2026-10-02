@@ -1,10 +1,12 @@
 import {
   ERROR_RECOVERY,
+  formatSessionOrigin,
   decodeSessionStopDetail,
   sessionStopSummary,
   isAgentMutationPlan,
   LEGACY_DOCTOR_REMEDY,
   legacyDoctorFailureTitle,
+  readSessionOrigin,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
   untrustedProseResponseLines,
@@ -28,6 +30,7 @@ import { renderDoctorReport } from "./doctor";
  */
 export interface RenderOptions {
   json: boolean;
+  full?: boolean;
 }
 
 // ESC/OSC/CSI controls can mutate terminal state (including OSC 52 clipboard
@@ -176,16 +179,17 @@ interface TicketLogProse {
  */
 interface TicketLogProseCollector {
   /** Bounds and records one block, returning the `[n]` token its row cites. */
-  cite(label: string, text: string): string;
+  cite(label: string, text: string, uncapped?: boolean): string;
+  full: boolean;
   blocks(): readonly TicketLogProse[];
 }
 
-function ticketLogProse(): TicketLogProseCollector {
+function ticketLogProse(full = false): TicketLogProseCollector {
   const blocks: TicketLogProse[] = [];
   return {
-    cite(label, text) {
-      // A text-mode read must not let one prose field consume the caller's context.
-      const truncated = text.length > TICKET_SHOW_PROSE_MAX_CHARS;
+    full,
+    cite(label, text, uncapped = false) {
+      const truncated = !full && !uncapped && text.length > TICKET_SHOW_PROSE_MAX_CHARS;
       const ref = `[${blocks.length + 1}]`;
       blocks.push({
         ref,
@@ -235,7 +239,8 @@ const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = 
   worktree_trimmed: ["entries", "bytes", "kept"],
   attachment_added: ["attachmentId"],
   attachment_removed: ["attachmentId"],
-  session_started: ["sessionId"],
+  session_started: [],
+  session_resumed: ["turn", "attachment"],
 };
 
 /** Ticket events cross the socket under `payload`; a top-level kind is not an event payload. */
@@ -244,33 +249,34 @@ function ticketEventPayload(event: Record<string, unknown>): Record<string, unkn
 }
 
 /** One scalar or scalar list as a scan-friendly event field, with no silent record drop. */
-function ticketEventValue(value: unknown): string {
+function ticketEventValue(value: unknown, full: boolean): string {
   let text: string;
   if (value === null) {
     text = "-";
   } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     text = String(value);
   } else if (Array.isArray(value)) {
-    text = value.length === 0 ? "[]" : value.map(ticketEventValue).join(",");
+    text =
+      value.length === 0 ? "[]" : value.map((entry) => ticketEventValue(entry, full)).join(",");
   } else {
     text = "<record>";
   }
   // Inline fields are structured facts, not prose, but malformed or future
   // data must still not turn one event line into an unbounded response.
   const bounded =
-    text.length > TICKET_SHOW_PROSE_MAX_CHARS
+    !full && text.length > TICKET_SHOW_PROSE_MAX_CHARS
       ? `${text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS)}…`
       : text;
   return terminalSafeInline(bounded);
 }
 
 /** Flatten a nested structured fact instead of dropping its identities from the event row. */
-function ticketEventFacts(field: string, value: unknown): string[] {
-  if (!isRecord(value)) return [`${terminalSafeInline(field)}=${ticketEventValue(value)}`];
+function ticketEventFacts(field: string, value: unknown, full: boolean): string[] {
+  if (!isRecord(value)) return [`${terminalSafeInline(field)}=${ticketEventValue(value, full)}`];
   const entries = Object.entries(value);
   if (entries.length === 0) return [`${terminalSafeInline(field)}=<empty>`];
   return entries.flatMap(([nestedField, nestedValue]) =>
-    ticketEventFacts(`${field}.${nestedField}`, nestedValue),
+    ticketEventFacts(`${field}.${nestedField}`, nestedValue, full),
   );
 }
 
@@ -309,24 +315,45 @@ function renderTicketEvent(
   prose: TicketLogProseCollector,
 ): string[] {
   const payload = ticketEventPayload(event);
+  const kindValue = payload?.["kind"];
+  const kind = typeof kindValue === "string" ? kindValue : "-";
+  // Who asked for a Session to start or resume. The origin names the door
+  // exactly, so it replaces the actor columns it would only repeat (and for a
+  // resume, whose actor context is the Session that asked, would contradict
+  // the `session=` the row is about). A launch recorded before origins existed
+  // has none: its actor columns are all there is, and they stay.
+  const by = payload === null ? null : launchOriginFact(kind, payload, prose.full);
   const metadata: string[] = [];
-  if (typeof event["actor"] === "string") {
+  if (by === null && typeof event["actor"] === "string") {
     metadata.push(`actor=${terminalSafeInline(event["actor"])}`);
   }
-  if (isRecord(event["actorContext"]) && typeof event["actorContext"]["session"] === "string") {
-    metadata.push(`session=${terminalSafeInline(event["actorContext"]["session"])}`);
+  if (
+    by === null &&
+    isRecord(event["actorContext"]) &&
+    typeof event["actorContext"]["session"] === "string"
+  ) {
+    metadata.push(
+      `${kind === "session_started" ? "by" : "session"}=${terminalSafeInline(event["actorContext"]["session"])}`,
+    );
   }
   if (typeof event["createdAt"] === "number") metadata.push(`at=${event["createdAt"]}`);
   if (payload === null) {
     return [["event", "-", "payload=<missing>", ...metadata].join("  ")];
   }
 
-  const kindValue = payload["kind"];
-  const kind = typeof kindValue === "string" ? kindValue : "-";
   const inlineFields = new Set(TICKET_EVENT_INLINE_FIELDS[kind] ?? []);
   const facts = Object.entries(payload).flatMap(([field, value]) => {
     if (field === "kind") return [];
-    if (inlineFields.has(field)) return ticketEventFacts(field, value);
+    if (field === "origin" && by !== null) return [];
+    if (
+      (kind === "session_started" || kind === "session_resumed") &&
+      (field === "session" || field === "sessionId") &&
+      typeof value === "string" &&
+      /^(?:[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(value)
+    ) {
+      return [`session=${value.slice(0, 8)}`];
+    }
+    if (inlineFields.has(field)) return ticketEventFacts(field, value, prose.full);
     // An omitted signal detail carries no prose; every other present field is
     // named on the row and handed over as bounded, quoted data below it.
     if (
@@ -344,7 +371,31 @@ function renderTicketEvent(
     );
     return [`${terminalSafeInline(field)}=${ref}`];
   });
-  return [["event", terminalSafeInline(kind), ...facts, ...metadata].join("  ")];
+  return [
+    ["event", terminalSafeInline(kind), ...facts, ...(by === null ? [] : [by]), ...metadata].join(
+      "  ",
+    ),
+  ];
+}
+
+/**
+ * The `by=` column of a Session launch or resume row, or `null` when the event
+ * has no readable origin to state.
+ *
+ * A resume always states one: a stored `null` is a legacy turn whose door
+ * recorded nothing, and that is `unknown` — never a person. A Run's name is
+ * another party's text, so it arrives quoted by the shared formatter and then
+ * passes through the same bound and terminal escaping as every inline field.
+ */
+function launchOriginFact(
+  kind: string,
+  payload: Record<string, unknown>,
+  full: boolean,
+): string | null {
+  if (kind !== "session_started" && kind !== "session_resumed") return null;
+  const origin = readSessionOrigin(payload["origin"]);
+  if (origin !== null) return `by=${ticketEventValue(formatSessionOrigin(origin), full)}`;
+  return kind === "session_resumed" ? "by=unknown" : null;
 }
 
 function renderTicketSignal(
@@ -373,7 +424,7 @@ function renderTicketComment(
   ].filter((value): value is string => value !== null);
   const row = `comment  ${metadata.join("  ")}`;
   if (typeof comment["body"] !== "string") return [row];
-  return [`${row}  body=${prose.cite("ticket comment", comment["body"])}`];
+  return [`${row}  body=${prose.cite("ticket comment", comment["body"], true)}`];
 }
 
 /** Rows first, then the one envelope that carries every prose block they cite. */
@@ -388,7 +439,7 @@ function ticketLogLines(
     .filter((block) => block.truncated)
     .map(
       (block) =>
-        `The ${block.label} in ${block.ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`,
+        `The ${block.label} in ${block.ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters; use --full or --json for the rest.`,
     );
   return [
     ...rows,
@@ -400,13 +451,13 @@ function ticketLogLines(
   ];
 }
 
-function renderDetail(data: unknown): string | null {
+function renderDetail(data: unknown, full: boolean): string | null {
   if (!isRecord(data) || !isRecord(data["ticket"])) return null;
   const ticket = data["ticket"];
   const first = ticketLine(ticket);
   if (first === null) return null;
   const lines = [first];
-  const prose = ticketLogProse();
+  const prose = ticketLogProse(full);
   for (const key of ["priority", "harness", "baseBranch", "branch"] as const) {
     const value = ticket[key];
     if (typeof value === "string") lines.push(`${key}  ${terminalSafeInline(value)}`);
@@ -449,13 +500,133 @@ function countCell(value: unknown): string {
 function sessionStateCell(session: Record<string, unknown>): unknown {
   const status = session["status"];
   const waitingOn = session["waitingOn"];
-  const reason = session["interruptedReason"];
+  const interruptedReason = session["interruptedReason"];
   const detail = session["interruption"];
   const category = isRecord(detail) ? detail["category"] : null;
   const suffix = typeof category === "string" ? `; ${category}` : "";
-  if (typeof waitingOn === "string") return `${status} on ${waitingOn}${suffix}`;
-  if (typeof reason === "string") return `${status} (${reason}${suffix})`;
-  return status;
+  const cell =
+    typeof waitingOn === "string"
+      ? `${status} on ${waitingOn}${suffix}`
+      : typeof interruptedReason === "string"
+        ? `${status} (${interruptedReason}${suffix})`
+        : status;
+  const pending = session["pendingSubagents"];
+  return Array.isArray(pending) && pending.length > 0
+    ? `${cell}, waiting on ${pending.length} subagents: ${pending.join(", ")}`
+    : cell;
+}
+
+/** A wire origin (Session ids already public handles) as one line; `null` is unknown, never the user. */
+function originText(value: unknown): string {
+  return formatSessionOrigin(readSessionOrigin(value));
+}
+
+/**
+ * Who started a Session, from the `startedBy` cell. A Run's name is quoted by
+ * the shared formatter; a Run that named no Run id (a launch recorded before
+ * the id was kept) says what it knows and no more.
+ */
+function startedByText(value: unknown): string {
+  if (!isRecord(value)) return formatSessionOrigin(null);
+  if (value["kind"] === "user") return formatSessionOrigin({ kind: "user" });
+  if (value["kind"] === "automation") {
+    const name = typeof value["automationName"] === "string" ? value["automationName"] : null;
+    return typeof value["automationRunId"] === "string"
+      ? formatSessionOrigin({
+          kind: "automation",
+          automationRunId: value["automationRunId"],
+          automationName: name,
+        })
+      : `Automation${name === null ? "" : ` ${JSON.stringify(name)}`}`;
+  }
+  if (value["kind"] === "session" && typeof value["parentSessionId"] === "string") {
+    const session = formatSessionOrigin({ kind: "session", sessionId: value["parentSessionId"] });
+    return typeof value["parentTitle"] === "string"
+      ? `${session} (${value["parentTitle"]})`
+      : session;
+  }
+  return formatSessionOrigin(null);
+}
+
+/** `started by <who>` for a list row that something other than a person started. */
+function sessionStartedByCell(session: Record<string, unknown>): string | null {
+  const startedBy = session["startedBy"];
+  return isRecord(startedBy) && startedBy["kind"] !== "user"
+    ? `started by ${startedByText(startedBy)}`
+    : null;
+}
+
+/** How many of a Session's resumptions `session show` prints; the rest are counted. */
+const SESSION_RESUMPTIONS_SHOWN = 5;
+
+/**
+ * Who asked for a chat Session's latest turn, from the `latestTurn` cell:
+ * `null` before any turn, and an unknown origin for a turn no door attributed.
+ */
+function latestTurnText(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return `by ${originText(value["origin"])}${value["resumedAfterStop"] === true ? " (resumed after stop)" : ""}`;
+}
+
+/** Successful reattachment is attributed to its opener, not the next message's sender. */
+function resumedByText(session: Record<string, unknown>): string | null {
+  const attachment = session["latestAttachment"];
+  if (isRecord(attachment)) {
+    return attachment["reattached"] === true
+      ? `resumed by ${originText(attachment["origin"])}`
+      : null;
+  }
+  // Read older hosts that reported only turn chronology.
+  const turn = session["latestTurn"];
+  return isRecord(turn) && turn["resumedAfterStop"] === true
+    ? `resumed by ${originText(turn["origin"])}`
+    : null;
+}
+
+function renderSessionShow(data: Record<string, unknown>): string | null {
+  if (typeof data["id"] !== "string" || typeof data["status"] !== "string") return null;
+  const lines = [
+    `${terminalSafeInline(data["id"])}  ${terminalSafeInline(sessionStateCell(data))}  ${terminalSafeInline(data["title"])}`,
+  ];
+  for (const field of ["kind", "role", "ticket", "project", "harness"] as const) {
+    if (field in data) lines.push(`${field}  ${terminalSafeInline(data[field] ?? "-")}`);
+  }
+  if ("startedBy" in data)
+    lines.push(`started-by  ${terminalSafeInline(startedByText(data["startedBy"]))}`);
+  const latestTurn = latestTurnText(data["latestTurn"]);
+  if (latestTurn !== null) lines.push(`latest-turn  ${terminalSafeInline(latestTurn)}`);
+  const attachment = data["latestAttachment"];
+  if (isRecord(attachment)) {
+    lines.push(
+      `latest-attachment  by ${terminalSafeInline(originText(attachment["origin"]))}${attachment["reattached"] === true ? " (reattached)" : ""}`,
+    );
+  }
+  const resumptions = recordsAt(data, "resumptions") ?? [];
+  if (resumptions.length > SESSION_RESUMPTIONS_SHOWN) {
+    lines.push(`resumed  ${resumptions.length - SESSION_RESUMPTIONS_SHOWN} earlier not shown`);
+  }
+  for (const resumption of resumptions.slice(-SESSION_RESUMPTIONS_SHOWN)) {
+    lines.push(
+      `resumed  ${typeof resumption["attachment"] === "string" ? `attachment ${terminalSafeInline(resumption["attachment"])}` : `turn ${terminalSafeInline(resumption["turn"])}`}  by ${terminalSafeInline(originText(resumption["origin"]))}`,
+    );
+  }
+  const parent = data["parentSession"];
+  if (isRecord(parent))
+    lines.push(
+      `parent  ${terminalSafeInline(parent["id"])}  ${terminalSafeInline(parent["title"] ?? "-")}`,
+    );
+  for (const child of recordsAt(data, "children") ?? []) {
+    lines.push(
+      `child  ${terminalSafeInline(child["id"])}  ${terminalSafeInline(child["role"])}  ${terminalSafeInline(child["status"])}  ${terminalSafeInline(child["title"])}`,
+    );
+  }
+  if ("model" in data) lines.push(`model  ${terminalSafeInline(sessionModelCell(data) ?? "-")}`);
+  lines.push(`cost  ${usdCell(data)}  tokens ${usageCountCell(data["tokens"])}`);
+  lines.push(
+    `created  ${ageText(data["ageMs"])} ago`,
+    `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
+  );
+  return lines.join("\n");
 }
 
 /** Free-form provider text gets the same trust envelope as another Session's answer. */
@@ -509,12 +680,24 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
     ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
+    ...sessionOriginHeaderCells(data),
   ].join("  ");
   return [
     header,
     ...sessionStopLines(data),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
+}
+
+/** Origin cells shared by terminal and chat peek headers. */
+function sessionOriginHeaderCells(data: Record<string, unknown>): string[] {
+  const resumed = resumedByText(data);
+  return [
+    ...(data["startedBy"] === undefined
+      ? []
+      : [terminalSafeInline(`started by ${startedByText(data["startedBy"])}`)]),
+    ...(resumed === null ? [] : [terminalSafeInline(resumed)]),
+  ];
 }
 
 /**
@@ -1036,7 +1219,7 @@ function renderPromptBaseline(data: Record<string, unknown>): string | null {
   return [header, ...rows, ...excluded].join("\n");
 }
 
-function renderStableLines(command: string, data: unknown): string | null {
+function renderStableLines(command: string, data: unknown, full: boolean): string | null {
   if (!isRecord(data)) return null;
   if (command === "prompt.baseline") return renderPromptBaseline(data);
   if (command === "worktree.status") return renderWorktreeStatus(data);
@@ -1046,7 +1229,7 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {
     return renderTicketResult(data);
   }
-  if (command === "ticket.show") return renderDetail(data);
+  if (command === "ticket.show") return renderDetail(data, full);
   if (command === "ticket.archive" && isRecord(data["ticket"])) {
     const id = data["ticket"]["id"];
     return typeof id === "string" ? `${terminalSafeInline(id)}  archived` : null;
@@ -1087,9 +1270,10 @@ function renderStableLines(command: string, data: unknown): string | null {
     );
   }
   if (command === "label.merge") return renderLabelMerge(data);
+  if (command === "session.show") return renderSessionShow(data);
   if (command === "session.list") {
     const sessions = recordsAt(data, "sessions");
-    return (
+    const rows =
       sessions
         ?.map(
           (session) =>
@@ -1108,6 +1292,12 @@ function renderStableLines(command: string, data: unknown): string | null {
                   : null,
                 session["ticket"],
                 sessionModelCell(session),
+                // Said only where it informs: a person-started Session is the
+                // common row and keeps its width. A Run, a parent Session and
+                // a resume after a stop each get one cell, before the cost
+                // cells so the title stays last.
+                sessionStartedByCell(session),
+                resumedByText(session),
               ]
                 .filter((value) => value !== null && value !== undefined)
                 .map(terminalSafeInline),
@@ -1124,8 +1314,12 @@ function renderStableLines(command: string, data: unknown): string | null {
               ? ""
               : `\n${sessionStopLines(session).join("\n")}`),
         )
-        .join("\n") ?? null
-    );
+        .join("\n") ?? null;
+    if (rows === null) return null;
+    const hidden = data["hidden"];
+    return typeof hidden === "number" && hidden > 0
+      ? `${rows}${rows.length > 0 ? "\n" : ""}${hidden} older sessions hidden; --all or --since shows them.`
+      : rows;
   }
   if (command === "session.answer") {
     if (typeof data["session"] !== "string" || typeof data["state"] !== "string") return null;
@@ -1134,11 +1328,15 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;
     // A chat peek is told apart by what it carries, not by a `kind` word: the
-    // terminal reply is a status line plus raw output and stays byte-for-byte
-    // what it always was, while a chat's is an activity line plus a transcript.
+    // terminal reply is a status/origin line plus raw output, while a chat's
+    // is an activity line plus a transcript.
     if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
-    return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
+    const header = [
+      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
+      ...sessionOriginHeaderCells(data),
+    ].join("  ");
+    return `${header}${output.length > 0 ? `\n${output}` : ""}`;
   }
   // The dedicated event log reads the same rows `ticket show` does, at ten
   // times the default count, so it takes the same formatter and the same
@@ -1146,7 +1344,7 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "ticket.events") {
     const events = recordsAt(data, "events");
     if (events === null) return null;
-    const prose = ticketLogProse();
+    const prose = ticketLogProse(full);
     const rows = events.flatMap((event) => renderTicketEvent(event, prose));
     return ticketLogLines("ticket events response", rows, prose).join("\n");
   }
@@ -1328,7 +1526,7 @@ function doctorReport(data: unknown): string | null {
     : renderDoctorReport(report.checks, report.summary, report.pathRepair);
 }
 
-function renderCliTextSuccess(command: string, data: unknown): string {
+function renderCliTextSuccess(command: string, data: unknown, full: boolean): string {
   if (command === "doctor") {
     const report = doctorReport(data);
     if (report !== null) return report;
@@ -1356,7 +1554,7 @@ function renderCliTextSuccess(command: string, data: unknown): string {
         .concat(tickets.length === 0 ? "" : "\n");
     }
   }
-  const stable = renderStableLines(command, data);
+  const stable = renderStableLines(command, data, full);
   if (stable !== null) return stable.length === 0 ? "" : `${stable}\n`;
   return `${terminalSafeJson(data)}\n`;
 }
@@ -1392,7 +1590,7 @@ export function renderCliSuccess(command: string, data: unknown, options: Render
       ].join("\n"),
     );
   }
-  return terminalSafeText(renderCliTextSuccess(command, data));
+  return terminalSafeText(renderCliTextSuccess(command, data, options.full === true));
 }
 
 export interface RenderErrorOptions {

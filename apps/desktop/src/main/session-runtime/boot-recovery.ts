@@ -155,7 +155,11 @@ function raiseCrashRecoveryAttention(
     attachmentId,
     occurredAt: options.now(),
     provenance: {
-      source: { kind: "system", id: "desktop-recovery", detail: null },
+      source: {
+        kind: "system",
+        id: "desktop-recovery",
+        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+      },
       venue: { id: "local", kind: "local" },
     },
     attention: {
@@ -180,7 +184,11 @@ function closeInterrupted(
     attachmentId,
     occurredAt: options.now(),
     provenance: {
-      source: { kind: "system", id: "desktop-recovery", detail: null },
+      source: {
+        kind: "system",
+        id: "desktop-recovery",
+        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+      },
       venue: { id: "local", kind: "local" },
     },
     outcome: "interrupted",

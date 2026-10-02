@@ -243,7 +243,7 @@ describe("identity", () => {
   it("carries what the row's dropped `title` attribute used to say (D1)", () => {
     render({
       row: row({
-        provenance: { kind: "automation", automationName: "Nightly triage" },
+        provenance: { kind: "automation", automationRunId: null, automationName: "Nightly triage" },
       }),
     });
     const line = container.querySelector("[data-peek-identity]")?.textContent ?? "";
@@ -266,7 +266,11 @@ describe("identity", () => {
       ],
       providers: [],
     };
-    render({ row: row({ provenance: { kind: "automation", automationName: "Nightly triage" } }) });
+    render({
+      row: row({
+        provenance: { kind: "automation", automationRunId: null, automationName: "Nightly triage" },
+      }),
+    });
     const identity = container.querySelector("[data-peek-identity]");
     expect(identity?.textContent).toContain(
       "Claude Opus 5 · Anthropic · Automation · Nightly triage",

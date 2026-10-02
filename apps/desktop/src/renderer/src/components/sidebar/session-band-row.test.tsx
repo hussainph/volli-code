@@ -251,7 +251,7 @@ describe("the Active row's marks", () => {
     const marked = render(
       row({
         title: "Fix the flaky worktree test",
-        provenance: { kind: "automation", automationName: "Nightly sweep" },
+        provenance: { kind: "automation", automationRunId: null, automationName: "Nightly sweep" },
       }),
     );
     expect(marked).toContain('aria-label="Started by the Automation Nightly sweep"');

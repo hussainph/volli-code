@@ -58,6 +58,15 @@ export function submitHostNotice(ports: HostNoticeDeliveryPorts, notice: HostNot
   void ports.runtime
     .command({
       commandId: notice.commandId,
+      origin: {
+        kind: "volli",
+        reason:
+          notice.metadata.notice.kind === "watch"
+            ? "watch-notice"
+            : notice.metadata.notice.kind === "subagent"
+              ? "subagent-notice"
+              : "browser-notice",
+      },
       sessionId: notice.sessionId,
       command: {
         kind: "message.submit",

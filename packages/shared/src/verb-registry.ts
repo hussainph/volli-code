@@ -625,6 +625,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Latest signal per kind is always printed: signals carry state, comments carry prose.",
       "Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.",
+      "Comment bodies print in full; other log prose is capped at 1,000 characters unless --full or --json is used.",
     ],
     positionalId: "required",
     positionalSubject: "ticket",
@@ -646,6 +647,7 @@ export const VERB_REGISTRY = [
         kind: "flag",
         help: "Show comments/signals with a compact ticket header; read no event history.",
       },
+      { name: "--full", kind: "flag", help: "Print all log prose without truncation." },
     ],
   },
   {
@@ -658,10 +660,14 @@ export const VERB_REGISTRY = [
     group: "Read",
     summary: "Print a ticket's event log.",
     example: "volli ticket events VC-12 --limit 20",
+    notes: [
+      "session_started and session_resumed name who asked, as by=: a person, an Automation with its run id, a session, or Volli itself.",
+    ],
     positionalId: "required",
     positionalSubject: "ticket",
     options: [
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of events." },
+      { name: "--full", kind: "flag", help: "Print all event prose without truncation." },
     ],
   },
   {
@@ -784,6 +790,13 @@ export const VERB_REGISTRY = [
         help: "Append to the body.",
       },
       {
+        name: "--append-file",
+        kind: "value",
+        placeholder: "<path>",
+        group: "body",
+        help: "Append text from a file.",
+      },
+      {
         name: "--edit",
         kind: "multi",
         placeholder: "<old> <new>",
@@ -824,7 +837,10 @@ export const VERB_REGISTRY = [
     group: "Write",
     summary: "Move a ticket to another column.",
     example: "volli ticket move VC-12 --to needs-review",
-    notes: ["Moving to the current column is a no-op."],
+    notes: [
+      "Moving to the current column is a no-op.",
+      "Columns ignore case and accept board labels such as Needs Review or needs_review.",
+    ],
     effects: {
       durableWrites: [
         {
@@ -1352,17 +1368,50 @@ export const VERB_REGISTRY = [
     listed: true,
     referenceOrder: 25,
     group: "Session",
-    summary: "List a project's active terminal and chat sessions.",
+    summary: "List a project's active and recent terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
     notes: [
-      "Prints each session's title and short id; session peek takes either type.",
+      "Prints each session's title and short id; session show and peek take either type.",
+      "Default: working, waiting, interrupted, running or idle with pending subagents at any age, plus activity in the last 24h. --since replaces that window; --all removes it. --state intersects these filters.",
+      "Chat rows and peek also name pending delegated subagents, even if those children are filtered out.",
+      "Terminal and chat rows name who started a session unless a person did, and who last reattached it, even before another turn begins.",
       "Chat rows carry liveness: working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
       "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
       { name: "--ticket", kind: "value", placeholder: "<id>", help: "Filter by ticket." },
+      { name: "--all", kind: "flag", help: "Include older sessions." },
+      {
+        name: "--state",
+        kind: "value",
+        placeholder: "<s>[,<s>...]",
+        help: "Filter by working, waiting, idle, stopped, interrupted, running or exited.",
+      },
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Activity window: RFC 3339 instant or look-back (24h, 7d, 90m).",
+      },
     ],
+  },
+  {
+    key: "session.show",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "session.show" },
+    listed: true,
+    referenceOrder: 25.5,
+    group: "Session",
+    summary: "Show a session's identity, state, ancestry, model and usage.",
+    example: "volli session show a1b2c3d4",
+    notes: [
+      "Handle is a short session id from session list — terminal or chat.",
+      "Terminal and chat details include who started it and who last reattached it. Chat details also include its latest turn's sender, parent and children, and pending subagents. Reattachment history is independent of turns.",
+    ],
+    positionalId: "required",
+    options: [],
   },
   {
     // Read tier despite the disclosure it carries: cross-session transcript
@@ -1378,7 +1427,7 @@ export const VERB_REGISTRY = [
     example: "volli session peek a1b2c3 --lines 60",
     notes: [
       "Handle is a short session id from session list — terminal or chat.",
-      "A chat answers activity, last-event age, turn depth, then its transcript tail.",
+      "Terminal and chat headers name who started and last reattached the session. A chat also answers activity, last-event age, turn depth and its transcript tail.",
       "--lines is trailing terminal lines (60), or chat messages (12).",
       "Keep peeks narrow — output consumes the caller's context.",
     ],

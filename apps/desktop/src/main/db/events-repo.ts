@@ -1,3 +1,4 @@
+import type { SessionOrigin, SessionProjection } from "@volli/shared";
 /**
  * `ticket_events` repo: the append-only log every ticket mutation writes to
  * in the same transaction as its row change.
@@ -167,7 +168,13 @@ export function recordTicketEvent(
  */
 export function recordSessionStartedOnce(
   db: Database.Database,
-  input: { ticketId: string; sessionId: string; now: number; actor: TicketEventActor },
+  input: {
+    ticketId: string;
+    sessionId: string;
+    now: number;
+    actor: TicketEventActor;
+    origin?: SessionOrigin;
+  },
 ): boolean {
   // Keyed on kind and session id in SQL rather than folding the Ticket's whole
   // history in memory: a Ticket accumulates events for as long as it is worked,
@@ -184,7 +191,11 @@ export function recordSessionStartedOnce(
   recordTicketEvent(
     db,
     input.ticketId,
-    { kind: "session_started", sessionId: input.sessionId },
+    {
+      kind: "session_started",
+      sessionId: input.sessionId,
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
+    },
     input.now,
     input.actor,
   );
@@ -368,4 +379,36 @@ export function listTicketStatusEntries(
     });
   }
   return entries;
+}
+
+/** A durable per-attachment key survives re-fold/relaunch and activity coalescing. */
+export function recordSessionResumedOnce(
+  db: Database.Database,
+  projection: SessionProjection,
+): boolean {
+  const { session } = projection;
+  if (session.ticketId === null) return false;
+  let wrote = false;
+  for (const { attachmentId, origin, startedAt } of projection.resumptions) {
+    const exists = prepared<[string, string, string], { found: number }>(
+      db,
+      `SELECT 1 AS found FROM ticket_events WHERE ticket_id = ? AND kind = 'session_resumed' AND json_extract(payload, '$.sessionId') = ? AND json_extract(payload, '$.attachmentId') = ? LIMIT 1`,
+    ).get(session.ticketId, session.id, attachmentId);
+    if (exists !== undefined) continue;
+    const actor: TicketEventActor =
+      origin?.kind === "session"
+        ? { kind: "session", sessionId: origin.sessionId, ticketId: null }
+        : origin?.kind === "user"
+          ? { kind: "user" }
+          : { kind: "automation" };
+    recordTicketEvent(
+      db,
+      session.ticketId,
+      { kind: "session_resumed", sessionId: session.id, attachmentId, origin },
+      startedAt,
+      actor,
+    );
+    wrote = true;
+  }
+  return wrote;
 }

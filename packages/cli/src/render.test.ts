@@ -732,12 +732,13 @@ describe("renderCliSuccess", () => {
       "[4] event worktree_committed message:\n  | Commit message from another author",
     );
 
+    expect(text).toContain(longComment);
+    expect(text).not.toContain("The ticket comment in [5] was truncated");
     for (const [ref, label, source] of [
-      ["[5]", "ticket comment", longComment],
       ["[3]", "event worktree_failed stderr", longStderr],
     ] as const) {
       expect(text).toContain(
-        `The ${label} in ${ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`,
+        `The ${label} in ${ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters; use --full or --json for the rest.`,
       );
       expect(text).not.toContain(source);
     }

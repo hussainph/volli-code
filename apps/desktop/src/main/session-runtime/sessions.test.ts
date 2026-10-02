@@ -78,6 +78,42 @@ function sessions(
 }
 
 describe("Sessions", () => {
+  it.each([
+    { actor: undefined, expected: { kind: "user" } },
+    { actor: { kind: "user" } as TicketEventActor, expected: { kind: "user" } },
+    {
+      actor: { kind: "session", sessionId: "caller", ticketId: null } as TicketEventActor,
+      expected: { kind: "session", sessionId: "caller" },
+    },
+    { actor: { kind: "automation" } as TicketEventActor, expected: undefined },
+    { actor: { kind: "unauthenticated" } as TicketEventActor, expected: undefined },
+  ])(
+    "attributes birth and model selection from the trusted door: $actor",
+    async ({ actor, expected }) => {
+      const { commands, sessions: door } = sessions();
+      await door.create({ ...startInput("birth"), actor });
+      expect(commands[0]?.origin).toEqual(expected);
+      expect(commands[1]?.origin).toEqual(expected);
+    },
+  );
+
+  it("uses the delegating parent for birth, but lets an explicit origin override parent and Actor", async () => {
+    const { commands, sessions: door } = sessions({
+      readModelAnchor: async () => ({ selection: null, tier: null }),
+    });
+    const child = {
+      ...startInput("child"),
+      role: "subagent" as const,
+      parentSessionId: "parent",
+      actor: { kind: "user" as const },
+    };
+    await door.create(child);
+    expect(commands[0]?.origin).toEqual({ kind: "session", sessionId: "parent" });
+    const origin = { kind: "automation" as const, automationRunId: "run", automationName: null };
+    await door.create({ ...child, operationId: "explicit", origin });
+    expect(commands[2]?.origin).toEqual(origin);
+    expect(commands[3]?.origin).toEqual(origin);
+  });
   it("freezes selected MCP definitions at root birth and gives a child its parent's exact frozen definitions", async () => {
     const parentTool: McpToolDefinition = {
       serverId: "server-1",
@@ -434,9 +470,15 @@ describe("Sessions", () => {
         ticketId: "ticket-1",
         sessionId: "session-1",
         actor: { kind: "session", sessionId: "driver-session", ticketId: "ticket-9" },
+        origin: { kind: "session", sessionId: "driver-session" },
       },
       // A start with no threaded actor is the human's.
-      { ticketId: "ticket-1", sessionId: "session-1", actor: { kind: "user" } },
+      {
+        ticketId: "ticket-1",
+        sessionId: "session-1",
+        actor: { kind: "user" },
+        origin: { kind: "user" },
+      },
     ]);
   });
 

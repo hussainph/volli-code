@@ -147,7 +147,11 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
         reason: `Watchdog: no runtime progress for ${minutes}m inside an open turn${overdue}.`,
       },
       provenance: {
-        source: { kind: "system", id: "session-watchdog", detail: null },
+        source: {
+          kind: "system",
+          id: "session-watchdog",
+          detail: { sessionOrigin: { kind: "volli", reason: "supervision" } },
+        },
         venue: { id: "local", kind: "local" },
       },
     });

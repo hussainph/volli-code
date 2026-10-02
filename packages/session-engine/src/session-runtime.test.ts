@@ -2405,6 +2405,7 @@ describe("SessionRuntime native adapter contract", () => {
     const settled = await runtime.command({
       commandId: "schedule-1:settle",
       sessionId,
+      origin: { kind: "volli", reason: "scheduled-resume" },
       command: {
         kind: "resume.settle",
         scheduleId: "schedule-1",
@@ -2422,7 +2423,23 @@ describe("SessionRuntime native adapter contract", () => {
     expect(provenanceOf("schedule-1:settle")).toMatchObject({
       kind: "system",
       id: "scheduled-resume",
+      detail: { sessionOrigin: { kind: "volli", reason: "scheduled-resume" } },
     });
+    // A settle that names no origin records none rather than inventing one.
+    await runtime.command({
+      commandId: "schedule-1:settle-again",
+      sessionId,
+      command: {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+    });
+    const again = (await engine.listEvents({ sessionId })).find(
+      ({ payload }) =>
+        payload.kind === "command.recorded" && payload.command.id === "schedule-1:settle-again",
+    );
+    expect(again?.provenance.source).toMatchObject({ id: "scheduled-resume", detail: null });
 
     const cancelled = await runtime.command({
       commandId: "cancel-1",
@@ -5760,6 +5777,105 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
           event.payload.kind === "turn.started" && event.payload.turnId === "turn-sink-throws",
       ),
     ).toBe(true);
+  });
+});
+
+describe("trusted command origins", () => {
+  it("attributes a no-turn reattachment to its trusted opener and preserves it after durable replay", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const oldAttachmentId = (await first.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    await first.runtime.command({
+      commandId: "release-for-reattach",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: oldAttachmentId },
+    });
+    const origin = { kind: "session", sessionId: "parent" } as const;
+    const request = {
+      commandId: "origin-reattach",
+      sessionId,
+      origin,
+      command: { kind: "adapter.attach", continuity: "context_replay" } as const,
+    };
+    await first.runtime.command(request);
+    const attached = (await first.engine.getSession({ sessionId }))!;
+    expect(attached.liveExecutor).toMatchObject({
+      origin,
+      reattached: true,
+      continuity: "context_replay",
+    });
+    expect(attached.latestTurnOrigin).toBeNull();
+    expect(attached.resumptions).toEqual([
+      {
+        attachmentId: attached.liveExecutor!.id,
+        origin,
+        startedAt: attached.liveExecutor!.openedAt,
+      },
+    ]);
+    await first.runtime.close();
+    const replay = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "replay-",
+    });
+    await replay.runtime.command({ ...request, origin: { kind: "user" } });
+    expect((await replay.engine.getSession({ sessionId }))!.resumptions).toEqual(
+      attached.resumptions,
+    );
+    expect(
+      (await replay.runtime.projection({ sessionId })).projection.liveExecutor?.origin,
+    ).toEqual(origin);
+    expect((await replay.engine.getSession({ sessionId }))!.liveExecutor?.origin).toEqual(origin);
+    await replay.runtime.close();
+  });
+
+  it("persists origin separately from intent and projects it through the slim ledger and checkpoint", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const request = {
+      commandId: "origin-message",
+      sessionId,
+      origin: { kind: "session", sessionId: "parent" } as const,
+      command: { kind: "message.submit", message: userMessage(), settle: "opened" } as const,
+    };
+    const pending = runtime.command(request);
+    await settleMicrotasks();
+    const retry = runtime.command({ ...request, origin: { kind: "user" } });
+    expect(retry).toBe(pending);
+    await adapter.emit({ kind: "turn", state: "started", occurredAt: 500, turnId: "turn-origin" });
+    await adapter.emit({
+      kind: "turn",
+      state: "completed",
+      occurredAt: 510,
+      turnId: "turn-origin",
+    });
+    await pending;
+    const events = await engine.listEvents({ sessionId });
+    const command = events.find(
+      (event) => event.payload.kind === "command.recorded" && event.commandId === request.commandId,
+    );
+    expect(command?.provenance.source).toEqual({
+      kind: "user",
+      id: "session-client",
+      detail: { sessionOrigin: request.origin },
+    });
+    expect((await engine.getSession({ sessionId }))?.latestTurnOrigin).toEqual(request.origin);
+    expect((await runtime.projection({ sessionId })).projection.latestTurnOrigin).toEqual(
+      request.origin,
+    );
+    await runtime.command({ ...request, origin: { kind: "user" } });
+    // Durable replay must retain the first writer's attribution, not the retrying door's.
+    expect((await engine.getSession({ sessionId }))?.latestTurnOrigin).toEqual(request.origin);
+    expect((await runtime.projection({ sessionId })).projection.latestTurnOrigin).toEqual(
+      request.origin,
+    );
+    expect(
+      (await engine.listEvents({ sessionId })).filter(
+        (event) =>
+          event.payload.kind === "command.recorded" && event.commandId === request.commandId,
+      ),
+    ).toHaveLength(1);
+    await runtime.close();
   });
 });
 

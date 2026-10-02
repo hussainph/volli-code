@@ -219,7 +219,11 @@ describe("buildCommandPaletteItems", () => {
   // taken for one a person opened. "Everywhere a Session appears" includes it
   // (VC-131).
   describe("who started each listed Session", () => {
-    const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+    const RUN: SessionProvenance = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    };
     const CHILD: SessionProvenance = {
       kind: "session",
       parentSessionId: "session-parent",
@@ -457,7 +461,11 @@ describe("buildCommandPaletteItems", () => {
     });
 
     it("marks a closed terminal a Run started, like every other row", () => {
-      const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+      const RUN: SessionProvenance = {
+        kind: "automation",
+        automationRunId: null,
+        automationName: "Nightly sweep",
+      };
       const result = buildCommandPaletteItems(
         [alpha],
         { [alpha.id]: [linked] },

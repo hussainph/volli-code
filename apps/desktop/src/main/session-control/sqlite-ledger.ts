@@ -1,3 +1,4 @@
+import { readSessionOrigin } from "@volli/shared";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
@@ -488,7 +489,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     return this.#readEvents(
       query,
       `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
-              e.attachment_id, e.command_id, e.payload
+              e.attachment_id, e.command_id, e.payload,
+              CASE WHEN json_extract(e.payload, '$.kind') = 'command.recorded'
+                THEN (SELECT json_extract(provenance, '$.source.detail.sessionOrigin') FROM session_provenances WHERE id = e.provenance_id)
+                ELSE NULL END AS command_origin
          FROM session_events e`,
       decodeProjectionEvent,
     );
@@ -1026,6 +1030,13 @@ function decodeProjectionEvent(row: unknown, context: string): SessionProjection
   const attachmentId = readNullableString(value.attachment_id, `${context}.attachment_id`);
   const commandId = readNullableString(value.command_id, `${context}.command_id`);
   const event: SessionProjectionEvent = {
+    ...(typeof value.command_origin === "string"
+      ? {
+          commandOrigin: readSessionOrigin(
+            parseJson(value.command_origin, `${context}.command_origin`),
+          ),
+        }
+      : {}),
     id: readString(value.id, `${context}.id`),
     sessionId: readString(value.session_id, `${context}.session_id`),
     sequence: readInteger(value.sequence, `${context}.sequence`),

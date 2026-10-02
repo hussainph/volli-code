@@ -116,17 +116,17 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     return "Pass --json to any command for stable structured JSON output. Failures keep a stable code and add reason plus next; next is null when Volli cannot name a safe action. Dry-run plans use one versioned object shape on CLI and tool doors.\n";
   }
   if (topic === "addressing") {
-    return "Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error. VOLLI_SESSION attributes the current socket caller in this build; it does not authenticate that process.\n";
+    return "Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error. VOLLI_SESSION attributes the current socket caller in this build; it does not authenticate that process. Value options accept --opt=value verbatim, even when the value starts with --. Columns ignore case and accept board labels such as Needs Review or needs_review.\n";
   }
   return [
     "Read before writing; work your own board unless instructed; do not drive another Session's terminal or chain-spawn work.",
     "Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.",
     "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
-    "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
+    "ticket show prints the latest signal per kind and full comment bodies; --comments-only and --events 0 keep a poll cheap. --full or --json lifts the other prose caps.",
     "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
     "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
     "Nothing waits, and nothing needs to. Sleeping in a shell to poll is how sessions wedge, and a tool call that parks holds the person's chat hostage, so work you are not doing yourself reports to you as a notice from Volli: read mid-turn if you are working, or opening a new turn if you have ended yours. session_delegate's notice carries the subagent's answer. session_start, automation_run and session_send watch the Session they open or steer — its next turn ending, its done/blocked signal, its stop. The watch tool covers the rest: other Sessions, and tickets' moves, comments and signals. Changes that land together arrive as one notice.",
-    "Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes, or — while a tool runs — past that tool's own timeout (an hour if it set none).",
+    "session list defaults to active plus activity in the last 24h; --all, --since and --state narrow or expand it. session show reads metadata and who started it. An idle parent with pendingSubagents is waiting on its helpers, not done. Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes, or — while a tool runs — past that tool's own timeout (an hour if it set none).",
     "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
     "",
   ].join("\n");

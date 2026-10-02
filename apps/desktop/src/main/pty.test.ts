@@ -101,7 +101,7 @@ import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { importBlob } from "./blob-import";
 import { blobsRoot, removeBlob } from "./blob-store";
-import { listTicketEvents } from "./db/events-repo";
+import { listTicketEvents, recordSessionResumedOnce } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
 import {
   getSession,
@@ -1359,8 +1359,19 @@ describe("ticket sessions", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: result.sessionId, ticketId: "tk1", title: "Session 1" });
 
-    // Session evidence is private ledger history, never a planner event.
-    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+    // Session birth is visible in Ticket history; process evidence stays private.
+    expect(listTicketEvents(testDb.db, "tk1")).toMatchObject([
+      {
+        actor: "user",
+        payload: { kind: "session_started", sessionId: result.sessionId, origin: { kind: "user" } },
+      },
+    ]);
+    const projection = await createDesktopSessionEngine(testDb.db).getSession({
+      sessionId: result.sessionId,
+    });
+    expect(projection?.attachments).toEqual([
+      expect.objectContaining({ origin: { kind: "user" }, reattached: false }),
+    ]);
   });
 
   it("revokes the attachment token when its PTY exits", async () => {
@@ -1454,7 +1465,9 @@ describe("ticket sessions", () => {
       // null placeholder in adapter detail would leave the old, private answer
       // spellable and invite a second host to parse it again.
       expect(openedNativeExitField.type).toBeNull();
-      expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+      expect(listTicketEvents(testDb.db, "tk1").map(({ payload }) => payload.kind)).toEqual([
+        "session_started",
+      ]);
     },
   );
 
@@ -1688,7 +1701,11 @@ describe("ticket sessions", () => {
     expect(result.session.placement).toBe("tab");
     const rows = listTicketSessions(testDb.db, "tk1");
     expect(rows[0]?.harnessId).toBe("opencode");
-    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+    expect(listTicketEvents(testDb.db, "tk1")).toMatchObject([
+      {
+        payload: { kind: "session_started", sessionId: result.sessionId, origin: { kind: "user" } },
+      },
+    ]);
   });
 });
 
@@ -1953,13 +1970,30 @@ describe("resume launch (issue #78)", () => {
     });
   });
 
-  it("continues the same durable Session without planner history", async () => {
+  it("attributes a native resume before any Turn and retains the durable Session", async () => {
     const prior = insertEndedAgent("rtk1", "abc-123");
     const { result } = await resumeSession("rtk1", prior.id);
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
     expect(result.sessionId).toBe(prior.id);
-    expect(listTicketEvents(testDb.db, "rtk1")).toEqual([]);
+    const engine = createDesktopSessionEngine(testDb.db);
+    const projection = await engine.getSession({ sessionId: prior.id });
+    expect(projection?.attachments.at(-1)).toMatchObject({
+      origin: { kind: "user" },
+      reattached: true,
+    });
+    expect(projection?.resumptions).toEqual([
+      {
+        attachmentId: projection?.attachments.at(-1)?.id,
+        origin: { kind: "user" },
+        startedAt: projection?.attachments.at(-1)?.openedAt,
+      },
+    ]);
+    expect(recordSessionResumedOnce(testDb.db, projection!)).toBe(true);
+    expect(recordSessionResumedOnce(testDb.db, projection!)).toBe(false);
+    expect(listTicketEvents(testDb.db, "rtk1")).toMatchObject([
+      { payload: { kind: "session_resumed", sessionId: prior.id, origin: { kind: "user" } } },
+    ]);
   });
 
   it("rejects resuming an unknown session", async () => {

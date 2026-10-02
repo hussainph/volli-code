@@ -54,9 +54,10 @@
  * The child's first `turn.completed` with no pending interaction — and a
  * subagent cannot open one, since it holds no `ask_user`. `turn.interrupted`,
  * `session.stopped`, and a failed or closed attachment end the watch too, and
- * every one of them still notifies: a parent that delegated and heard nothing
- * would spend turns finding out why. There is no wall clock (VC-457, owner
- * ruling): a long research child runs until it answers, and a person or the
+ * every one of them still notifies unless the parent itself stopped the child:
+ * that stop is already the parent's own decision, not news to echo back.
+ * There is no wall clock (VC-457, owner ruling): a long research child runs
+ * until it answers, and a person or the
  * parent stops it when it is wrong, not a timer when it is slow.
  *
  * ## A child resumed later reports again
@@ -365,9 +366,19 @@ export interface DelegationRecovery {
   skipped: number;
 }
 
-/** How a child event ends a watch, or `null` for one that does not. */
-function outcomeOf(payload: SessionEvent["payload"]): SubagentOutcomeState | null {
+/** The outcomes of this delegation's watch, not of unrelated commands or a prior kickoff. */
+function outcomeOf(
+  payload: SessionEvent["payload"],
+  operationId: string,
+  resumed = false,
+): SubagentOutcomeState | null {
   switch (payload.kind) {
+    case "command.receipt.recorded":
+      return !resumed &&
+        payload.receipt.status === "rejected" &&
+        payload.receipt.commandId === kickoffIds(operationId).commandId
+        ? "failed"
+        : null;
     case "turn.completed":
       return "completed";
     case "turn.interrupted":
@@ -469,7 +480,13 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     reason: SubagentNoticeReason | null = null,
     stoppedBy: SessionStopActor | null = null,
     stopDetail?: SessionStopDetail,
-  ): Promise<NoticeDelivery> {
+  ): Promise<NoticeDelivery | "suppressed"> {
+    // A parent's own stop is already a durable fact in the child's ledger.
+    // Recovery and the durable answered index derive settlement from that
+    // fact, without recording a synthetic parent-side :answer message.
+    if (state === "stopped" && isParentStop(stoppedBy, entry.parentSessionId)) {
+      return "suppressed";
+    }
     const answer = await answerOf(entry.childSessionId);
     return deliverHostNotice(delivery, {
       sessionId: entry.parentSessionId,
@@ -596,13 +613,27 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       async (emission) => {
         if (state.settled || !isSessionStreamFrame(emission)) return;
         const payload = emission.event.payload;
-        const outcome = outcomeOf(payload);
+        const outcome = outcomeOf(payload, entry.operationId, state.resumed);
         if (outcome === null) return;
+        // Stream frames can lag each other. Settle on the earliest durable
+        // outcome of this watch, not whichever frame happened to arrive first.
+        // In particular, a later own stop cannot erase a rejected kickoff,
+        // and a rejection after an own stop cannot manufacture a failure notice.
+        const childEvents = await ports.sessionEngine.listEvents({
+          sessionId: entry.childSessionId,
+        });
+        const firstOutcome = childEvents.find(
+          (event) =>
+            event.sequence > afterSequence &&
+            event.sequence <= emission.event.sequence &&
+            outcomeOf(event.payload, entry.operationId, state.resumed) !== null,
+        );
+        const firstPayload = firstOutcome?.payload ?? payload;
         await settle(
           state,
-          outcome,
-          payload.kind === "session.stopped" ? payload.by : null,
-          payload.kind === "turn.interrupted" ? payload.stopDetail : undefined,
+          outcomeOf(firstPayload, entry.operationId, state.resumed) ?? outcome,
+          firstPayload.kind === "session.stopped" ? firstPayload.by : null,
+          firstPayload.kind === "turn.interrupted" ? firstPayload.stopDetail : undefined,
         );
       },
       (error) => {
@@ -676,11 +707,19 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
             text: `${delegatedTaskMarker(parent.sessionId)}\n\n${input.task}`,
             commandId: ids.commandId,
             messageId: ids.messageId,
+            origin: { kind: "session", sessionId: parent.sessionId },
           }),
         )
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
           report(
             `delegated task for subagent ${shortSessionId(started.sessionId)} was not delivered: ${errorText(error)}`,
+          );
+          const child = live.get(started.sessionId);
+          if (child !== undefined && !child.resumed) await settle(child, "failed");
+        })
+        .catch((error: unknown) => {
+          report(
+            `could not notify parent of failed subagent ${shortSessionId(started.sessionId)}: ${errorText(error)}`,
           );
         });
       return {
@@ -715,7 +754,26 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       const recovery: DelegationRecovery = { answered: 0, reported: 0, skipped: 0 };
       for (const entry of unanswered) {
         const events = await ports.sessionEngine.listEvents({ sessionId: entry.childSessionId });
-        const { state } = foldSessionAnswerState(events);
+        let { state } = foldSessionAnswerState(events);
+        let stoppedBy = lastStopActor(events);
+        let reason: SubagentNoticeReason | null = state === "interrupted" ? "app-relaunched" : null;
+        // Recovery settles the original watch at its earliest outcome, just
+        // like live delivery. A later stop (or relaunch sweep) cannot erase a
+        // rejected kickoff whose frame never reached the watcher.
+        const firstOutcome = events.find(
+          (event) => outcomeOf(event.payload, entry.operationId) !== null,
+        );
+        const firstState =
+          firstOutcome === undefined ? null : outcomeOf(firstOutcome.payload, entry.operationId);
+        if (firstOutcome !== undefined && firstState !== null) {
+          state = firstState;
+          reason =
+            state === "interrupted" && !isParentStop(stoppedBy, entry.parentSessionId)
+              ? "app-relaunched"
+              : null;
+          stoppedBy =
+            firstOutcome.payload.kind === "session.stopped" ? firstOutcome.payload.by : null;
+        }
         const ids = noticeIds(entry.operationId);
         switch (state) {
           case "completed":
@@ -724,12 +782,16 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
             break;
           case "interrupted":
           case "failed":
-            await deliver(entry, ids, state, state === "interrupted" ? "app-relaunched" : null);
+            await deliver(entry, ids, state, reason);
             recovery.reported += 1;
             break;
           case "stopped":
-            await deliver(entry, ids, state, null, lastStopActor(events));
-            recovery.reported += 1;
+            if (isParentStop(stoppedBy, entry.parentSessionId)) {
+              recovery.skipped += 1;
+            } else {
+              await deliver(entry, ids, state, null, stoppedBy);
+              recovery.reported += 1;
+            }
             break;
           case "running":
             // Unreachable after the boot sweep, which closes every open
@@ -751,10 +813,17 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
   };
 }
 
+function isParentStop(by: SessionStopActor | null, parentSessionId: string): boolean {
+  return by?.kind === "session" && by.sessionId === parentSessionId;
+}
+
+/** The last committed stop, including its sequence for delayed-frame ordering. */
+function lastStopEvent(events: readonly SessionEvent[]): SessionEvent | null {
+  return events.findLast((event) => event.payload.kind === "session.stopped") ?? null;
+}
+
 /** Who recorded the last stop in a ledger, or null when none did. */
 function lastStopActor(events: readonly SessionEvent[]): SessionStopActor | null {
-  for (const event of events.toReversed()) {
-    if (event.payload.kind === "session.stopped") return event.payload.by;
-  }
-  return null;
+  const stop = lastStopEvent(events);
+  return stop?.payload.kind === "session.stopped" ? stop.payload.by : null;
 }

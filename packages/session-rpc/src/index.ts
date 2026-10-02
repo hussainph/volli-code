@@ -1013,7 +1013,11 @@ export function createSessionRouter() {
       cancelInteraction: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }))
         .mutation(({ ctx, input }) =>
-          ctx.runtime.cancelInteraction({ ...input, reason: "abandoned" }),
+          ctx.runtime.cancelInteraction({
+            ...input,
+            reason: "abandoned",
+            origin: { kind: "user" },
+          }),
         ),
       reconcile: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
@@ -1237,9 +1241,10 @@ function toSessionRuntimeCommandRequest(
   input: z.infer<typeof commandRequestSchema>,
 ): SessionRuntimeCommandRequest {
   if (input.command.kind === "session.create") {
-    return { commandId: input.commandId, command: input.command };
+    return { origin: { kind: "user" }, commandId: input.commandId, command: input.command };
   }
   return {
+    origin: { kind: "user" },
     commandId: input.commandId,
     sessionId: input.sessionId!,
     command: input.command,

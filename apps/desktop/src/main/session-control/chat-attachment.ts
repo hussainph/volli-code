@@ -40,6 +40,8 @@ export function chatSessionRecord(
   const live = attachment?.status === "open" && executorBound;
   return {
     sessionId: projection.session.id,
+    latestTurnOrigin: projection.latestTurnOrigin,
+    resumedAfterStop: projection.resumedAfterStop,
     // A structured Session that has not yet exchanged a message is simply a
     // chat awaiting its subject — never the indistinguishable `Session` wall
     // the CLI start door used to create.

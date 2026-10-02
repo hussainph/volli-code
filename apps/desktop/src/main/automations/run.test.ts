@@ -249,6 +249,11 @@ describe("createAutomationRunner", () => {
       ticketId: h.ticketId,
       title: "Two-opinion review",
       actor: { kind: "automation" },
+      origin: {
+        kind: "automation",
+        automationRunId: outcome.run.id,
+        automationName: "Two-opinion review",
+      },
     });
     expect(h.creates[0]?.modelOverride).toBeUndefined();
     expect(outcome.run).toMatchObject({
@@ -275,6 +280,11 @@ describe("createAutomationRunner", () => {
       expect.objectContaining({
         sessionId: "session-1",
         text: composer.text,
+        origin: {
+          kind: "automation",
+          automationRunId: outcome.run.id,
+          automationName: "Two-opinion review",
+        },
         resources: composer.resources,
       }),
     ]);
@@ -300,6 +310,7 @@ describe("createAutomationRunner", () => {
               sessionId,
               now: 42_000,
               actor: input.actor ?? { kind: "user" },
+              origin: input.origin,
             });
           }
           return { sessionId, model: RESOLVED };
@@ -332,6 +343,11 @@ describe("createAutomationRunner", () => {
     expect(started[0]?.payload).toEqual({
       kind: "session_started",
       sessionId: outcome.run.sessionId,
+      origin: {
+        kind: "automation",
+        automationRunId: outcome.run.id,
+        automationName: outcome.run.automationName,
+      },
     });
 
     // And the same launch, read back as the mark every listing draws. The bolt
@@ -342,7 +358,11 @@ describe("createAutomationRunner", () => {
         sessionId: outcome.run.sessionId,
         ticketId: h.ticketId,
       }),
-    ).toEqual({ kind: "automation", automationName: "Two-opinion review" });
+    ).toEqual({
+      kind: "automation",
+      automationRunId: outcome.run.id,
+      automationName: "Two-opinion review",
+    });
   });
 
   it("passes a pinned Runtime whole — model and reasoning together", async () => {
@@ -607,6 +627,7 @@ describe("createAutomationRunner", () => {
     ).toEqual({ automation_command_id: expect.any(String) });
     expect(readSessionProvenance(ctx.db, { sessionId: "session-1", ticketId: null })).toEqual({
       kind: "automation",
+      automationRunId: null,
       automationName: null,
     });
   });

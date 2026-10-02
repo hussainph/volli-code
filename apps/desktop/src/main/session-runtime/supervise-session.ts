@@ -188,7 +188,11 @@ export async function stopSessionOperation(
     by: { kind: "session", sessionId: input.callerSessionId },
     reason: input.reason ?? null,
     name: `Session ${input.handle}`,
-    provenance: { kind: "system", id: "session-supervision", detail: null },
+    provenance: {
+      kind: "system",
+      id: "session-supervision",
+      detail: { sessionOrigin: { kind: "session", sessionId: input.callerSessionId } },
+    },
   });
 }
 
@@ -241,7 +245,7 @@ export async function stopSessionById(
     by: { kind: "user" },
     reason: input.reason ?? null,
     name: `Session ${shortSessionId(input.sessionId)}`,
-    provenance: { kind: "user", id: "renderer", detail: null },
+    provenance: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
   });
 }
 
@@ -301,6 +305,10 @@ async function stopResolvedSession(
     if (liveTarget.turnActive) {
       try {
         const result = await ports.runtime.command({
+          origin:
+            acts.by.kind === "session"
+              ? { kind: "session", sessionId: acts.by.sessionId }
+              : { kind: "user" },
           commandId: `${acts.operationId}:interrupt`,
           sessionId: target.session.id,
           command: { kind: "executor.interrupt", attachmentId: attachment.id },
@@ -313,6 +321,10 @@ async function stopResolvedSession(
     }
     try {
       const result = await ports.runtime.command({
+        origin:
+          acts.by.kind === "session"
+            ? { kind: "session", sessionId: acts.by.sessionId }
+            : { kind: "user" },
         commandId: `${acts.operationId}:release`,
         sessionId: target.session.id,
         command: { kind: "adapter.release", attachmentId: attachment.id },
@@ -390,6 +402,7 @@ export async function sendSessionMessageOperation(
   const text = `${supervisionMarker(input.callerSessionId)}\n\n${message}`;
   const delivered = await ports.runtime.command({
     commandId: input.operationId,
+    origin: { kind: "session", sessionId: input.callerSessionId },
     sessionId: target.session.id,
     command: {
       kind: "message.submit",

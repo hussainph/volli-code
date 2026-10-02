@@ -8,6 +8,7 @@ import {
   ACTIVITY_METADATA_KEY,
   makeAgentError,
   MUTATION_PLAN_CONTRACT,
+  readSessionOrigin,
   roleImpliedByTicket,
 } from "@volli/shared";
 import type {
@@ -1999,6 +2000,7 @@ describe("agent command service", () => {
       v: 1,
       ok: true,
       data: {
+        hidden: 0,
         sessions: [
           {
             id: "abcdef12",
@@ -3227,6 +3229,45 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+  });
+
+  it("attributes a lifecycle signal to the Session that sent it", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
+
+    for (const cmd of ["session.done", "session.blocked"] as const) {
+      const response = await service.execute({
+        v: 1,
+        cmd,
+        args: { reason: "why" },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+      expect(response).toMatchObject({ ok: true, data: { recorded: true } });
+    }
+
+    const signals = (await sessionEngine.listEvents({ sessionId })).filter(
+      (event) =>
+        event.payload.kind === "command.recorded" &&
+        event.payload.command.intent.kind === "session.signal",
+    );
+    expect(signals).toHaveLength(2);
+    for (const event of signals) {
+      // The legacy adapter/terminal source stays; the new part is the origin,
+      // read back through the same reader every other door's origin is.
+      expect(event.provenance.source).toMatchObject({ kind: "adapter", id: "terminal" });
+      expect(
+        readSessionOrigin(
+          (event.provenance.source.detail as Record<string, unknown>).sessionOrigin,
+        ),
+      ).toEqual({ kind: "session", sessionId });
+    }
   });
 
   /**

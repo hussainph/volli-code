@@ -595,7 +595,11 @@ describe("buildActiveSessionListing — the Active band", () => {
 });
 
 describe("buildActiveSessionListing — who started each Session", () => {
-  const RUN = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const RUN = {
+    kind: "automation",
+    automationRunId: null,
+    automationName: "Nightly sweep",
+  } as const;
   const NOW = 100_000;
 
   /** One live chat and one long-quiet one, so both bands are populated at once. */

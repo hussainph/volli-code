@@ -37,6 +37,10 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments: [],
@@ -132,6 +136,7 @@ describe("watchSessionActivity", () => {
     const provenanceOf = vi.fn(() => ({
       kind: "automation" as const,
       automationName: "Nightly sweep",
+      automationRunId: null,
     }));
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
@@ -148,6 +153,7 @@ describe("watchSessionActivity", () => {
     expect(publish.mock.calls[0]![0].row.provenance).toEqual({
       kind: "automation",
       automationName: "Nightly sweep",
+      automationRunId: null,
     });
     watch.stop();
   });
