@@ -171,3 +171,58 @@ base-ancestry check pass. Neighboring shared, Session Engine, Session RPC and
 CLI coverage suites pass: **3,872 + 344 + 354 + 84 tests**, each at 100% in all
 four metrics. Detailed ignored logs are under `.bench-tmp/pi-migration-vc496/`;
 CI and whole-runtime final results are recorded separately below when complete.
+
+Final rebase onto `271ad1ab8` (background-shell notices) completed without
+conflicts. Integrated `pnpm typecheck` and `pnpm build` pass, including standalone
+preload and packed-require checks. The integrated Agent Runtime suite passes
+**2,814 tests**, with four existing skips, and **100% statements, branches,
+functions and lines** under the unchanged gate. JSONL independent review also
+passes: it confirmed real failed-write recovery, once-only reservations and
+publication, original errors/cleanup, and preserved persistence/replay behavior.
+
+The final sequential Node 24.18.0, 400× pair passed 4/4 work assertions each
+but did not close strict timing acceptance: baseline first-message/context RSD
+was 29.0%/24.2%; all integrated figures were below 20%. Complete figures, without
+filtering samples:
+
+| Path | Before p50/p95 µs | After p50/p95 µs | Before/after RSD |
+| --- | ---: | ---: | ---: |
+| System prompt | 19.5 / 26.4 | 19.0 / 25.9 | 15.6% / 18.6% |
+| First message | 3.6 / 6.3 | 3.8 / 4.7 | 29.0% / 17.3% |
+| Context | 17.4 / 24.4 | 14.1 / 15.0 | 24.2% / 5.3% |
+| Activity | 1414.3 / 2023.1 | 1476.9 / 1807.9 | 16.6% / 11.3% |
+
+The local run had no other verification commands from this Session once timing
+began; shared-machine load still exists and was captured with `ps -eo
+pid,pcpu,comm` before/between/after. Logs: `final-paired-{baseline,current}.log`
+and `final-paired-context-{before,between,after}.log` in the ignored evidence
+folder. A further equal 800× pair retains the same twenty samples, three warmup
+batches, fixtures and work assertions in both arms; only repetition scale changes.
+It uses Vite+'s managed Node 24.21.0 for both arms, not mixed versions.
+
+Both equal 800× attempts passed 4/4 work assertions per arm, but **strict timing
+acceptance remains blocked by shared-machine variance**. Do not combine rows
+from separate pairs or report this as green:
+
+| Pair / path | Before p50/p95 µs | After p50/p95 µs | Before/after RSD |
+| --- | ---: | ---: | ---: |
+| 800× / System prompt | 9.3 / 11.4 | 7.6 / 8.9 | 14.8% / 9.3% |
+| 800× / First message | 2.3 / 4.1 | 1.8 / 1.9 | 30.0% / 4.4% |
+| 800× / Context | 13.4 / 15.0 | 12.2 / 12.9 | 7.4% / 2.7% |
+| 800× / Activity | 1210.0 / 1595.8 | 1038.9 / 1160.2 | 25.6% / 5.2% |
+| 800× repeat / System prompt | 7.2 / 11.0 | 7.5 / 11.2 | 19.5% / 21.2% |
+| 800× repeat / First message | 1.8 / 1.8 | 1.9 / 3.9 | 2.1% / 34.0% |
+| 800× repeat / Context | 12.9 / 13.7 | 12.5 / 13.6 | 2.8% / 3.6% |
+| 800× repeat / Activity | 1049.5 / 1230.9 | 1045.9 / 1622.3 | 10.5% / 17.3% |
+
+The repeat used unchanged inputs after the other Node-heavy process visible
+before the first run had exited. Both sides used managed Node 24.21.0. Each
+configuration forces a single benchmark file, so the host concurrency hint
+changing from one to two did not change timing concurrency. Logs and process
+snapshots: `final-800-{baseline,current}.log`,
+`final-800-repeat-{baseline,current}.log`, and corresponding `context-*` logs.
+All previous failed/noisy runs remain retained. Stable context measurements and
+work-count assertions support unchanged work; they do not establish a complete
+variance-qualified timing pass. No demonstrated material regression was found,
+but satisfying the strict criterion needs a quieter machine, not discarded
+samples, threshold changes or unrelated production optimizations.
