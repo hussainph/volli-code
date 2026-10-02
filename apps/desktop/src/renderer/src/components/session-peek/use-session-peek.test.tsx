@@ -553,6 +553,47 @@ describe("Space into a folder's card", () => {
     ).toBe("Summary for chat-b2");
   });
 
+  it("changing folder membership keeps existing summaries and reads only the added Session", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const added = Promise.withResolvers<SessionPeekContent | null>();
+    const readContent = vi.mocked(PORTS.readContent);
+    readContent.mockImplementation(async (_id, refine) => (refine ? GENERATED : LOCAL));
+    await render({
+      rowIds: [FOLDER_ROW],
+      folders: new Map([[TICKET.id, [SESSION_ROW]]]),
+      activityToken: 1,
+    });
+    await pressSpace(rowButton(FOLDER_ROW));
+    await act(async () => vi.advanceTimersByTime(60_000));
+    readContent.mockImplementation((id, refine) => {
+      if (id === "chat-b2") {
+        return refine
+          ? Promise.resolve({ ...GENERATED, sessionId: id, summary: "Added Session summary" })
+          : added.promise;
+      }
+      return Promise.resolve(LOCAL);
+    });
+    await render({
+      rowIds: [FOLDER_ROW],
+      folders: new Map([[TICKET.id, [SESSION_ROW, SECOND_ROW]]]),
+      activityToken: 2,
+    });
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SESSION_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe(GENERATED.summary);
+    expect(readContent.mock.calls).toEqual([
+      ["chat-a1", false],
+      ["chat-a1", true],
+      ["chat-b2", false],
+    ]);
+    await act(async () => added.resolve({ ...LOCAL, sessionId: "chat-b2" }));
+    expect(readContent.mock.calls.at(-1)).toEqual(["chat-b2", true]);
+    expect(
+      card()?.querySelector(`[data-peek-drill="${SECOND_ROW}"] [data-peek-summary]`)?.textContent,
+    ).toBe("Added Session summary");
+  });
+
   it("a closed folder never refines a local read that settles after dismissal", async () => {
     const local = Promise.withResolvers<SessionPeekContent | null>();
     const readContent = vi.mocked(PORTS.readContent);

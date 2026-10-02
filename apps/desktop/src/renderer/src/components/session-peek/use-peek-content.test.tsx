@@ -134,6 +134,24 @@ describe("two-stage peek content", () => {
     expect(latest.content?.entries).toEqual(CONTENT.entries);
   });
 
+  it("unpinning refines the held local fold without reading it again", async () => {
+    const refinement = Promise.withResolvers<SessionPeekContent | null>();
+    read.mockImplementation((_id, refine) =>
+      refine ? refinement.promise : Promise.resolve(CONTENT),
+    );
+    await render("s", 1, false);
+    expect(latest.content).toBe(CONTENT);
+    expect(read.mock.calls).toEqual([["s", false]]);
+    await render("s", 1, true);
+    expect(latest).toEqual({ content: CONTENT, loading: false, failed: false });
+    expect(read.mock.calls).toEqual([
+      ["s", false],
+      ["s", true],
+    ]);
+    await act(async () => refinement.resolve(REFINED));
+    expect(latest.content).toBe(REFINED);
+  });
+
   it("reopening joins a pending refinement, retaining local data until the shared answer lands", async () => {
     const refinement = Promise.withResolvers<SessionPeekContent | null>();
     read.mockImplementation((_id, refine) =>
