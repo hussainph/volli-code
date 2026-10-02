@@ -78,6 +78,13 @@ beforeAll(async () => {
 
   await fs.mkdir(join(root, "links", "real-dir"), { recursive: true });
   await fs.symlink(outside, join(root, "links", "linked"));
+
+  // The outside target carries a marker so a symlink escape is observable as
+  // leaked content, not just as a changed ok flag.
+  await fs.writeFile(join(outside, "outside-secret.txt"), "");
+  // An in-root link straight out of the project, and one kept inside it.
+  await fs.symlink(outside, join(root, "escape-link"));
+  await fs.symlink(join(root, "listing"), join(root, "in-link"));
 });
 
 afterAll(async () => {
@@ -198,13 +205,46 @@ describe("volli:list-directory", () => {
     });
   });
 
-  it("types a symlinked directory as a file so it is never traversed", async () => {
+  it("types a symlinked directory as a file in listings", async () => {
     syncRoots([root]);
     await expect(listDirectory(join(root, "links"))).resolves.toEqual({
       ok: true,
       entries: [
         { name: "real-dir", kind: "dir" },
         { name: "linked", kind: "file" },
+      ],
+    });
+  });
+
+  it("refuses a symlink inside a root that points outside it", async () => {
+    syncRoots([root]);
+    // The link passes the lexical prefix check; only resolving it through the
+    // filesystem sees it land on the outside directory.
+    await expect(listDirectory(join(root, "escape-link"))).resolves.toEqual({
+      ok: false,
+      error: "Path is outside known projects",
+    });
+  });
+
+  it("refuses a child beneath an out-pointing symlink", async () => {
+    syncRoots([root]);
+    // The leaf does not exist, so containment must judge the deepest existing
+    // ancestor — the link itself — not the lexical string.
+    await expect(listDirectory(join(root, "escape-link", "child"))).resolves.toEqual({
+      ok: false,
+      error: "Path is outside known projects",
+    });
+  });
+
+  it("follows an in-root symlink to an in-root target", async () => {
+    syncRoots([root]);
+    await expect(listDirectory(join(root, "in-link"))).resolves.toEqual({
+      ok: true,
+      entries: [
+        { name: "sub", kind: "dir" },
+        { name: "Zebra", kind: "dir" },
+        { name: "apple.txt", kind: "file" },
+        { name: "Banana.txt", kind: "file" },
       ],
     });
   });
@@ -315,5 +355,29 @@ describe("volli:reveal-in-finder", () => {
     syncRoots([root]);
     expect(revealInFinder(`${root}/links/../listing`)).toEqual({ ok: true });
     expect(showItemInFolder).toHaveBeenCalledWith(join(root, "listing"));
+  });
+
+  it("refuses a symlink inside a root that points outside it", () => {
+    syncRoots([root]);
+    expect(revealInFinder(join(root, "escape-link"))).toEqual({
+      ok: false,
+      error: "Path is outside known projects",
+    });
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("refuses a child beneath an out-pointing symlink", () => {
+    syncRoots([root]);
+    expect(revealInFinder(join(root, "escape-link", "child"))).toEqual({
+      ok: false,
+      error: "Path is outside known projects",
+    });
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("reveals through an in-root symlink to an in-root target", () => {
+    syncRoots([root]);
+    expect(revealInFinder(join(root, "in-link"))).toEqual({ ok: true });
+    expect(showItemInFolder).toHaveBeenCalledWith(join(root, "in-link"));
   });
 });
