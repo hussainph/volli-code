@@ -2134,6 +2134,11 @@ describe("Session tRPC router", () => {
         message: {
           id: "message-1",
           role: "user",
+          metadata: {
+            omitted: undefined,
+            sparse: [undefined],
+            retained: { none: null, count: 1, enabled: true },
+          },
           parts: [{ type: "text", text: "private prompt" }],
         },
       },
@@ -2450,6 +2455,8 @@ describe("Session tRPC router", () => {
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
+    const circularPayload: Record<string, unknown> = {};
+    circularPayload.self = circularPayload;
     const invalidMessages = [
       {
         id: "date-message",
@@ -2460,6 +2467,26 @@ describe("Session tRPC router", () => {
         id: "map-message",
         role: "user",
         parts: [{ type: "data-example", data: { nested: new Map([["key", "value"]]) } }],
+      },
+      {
+        id: "nan-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: Number.NaN } }],
+      },
+      {
+        id: "function-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: () => undefined } }],
+      },
+      {
+        id: "cycle-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: circularPayload } }],
+      },
+      {
+        id: "symbol-key-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: { [Symbol("hidden")]: "value" } } }],
       },
     ];
 
