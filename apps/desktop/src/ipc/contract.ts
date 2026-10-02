@@ -18,7 +18,6 @@ import type {
   BrowserTrace,
   Appearance,
   ArchivedTicket,
-  AuthorityApproval,
   AutoReapPolicy,
   BrowserTabHolder,
   OrphanProcessCandidate,
@@ -170,12 +169,10 @@ export interface ProjectSkillModesInput {
 }
 
 /**
- * One project's authority departures (VC-172, migration 025).
+ * One project's actor policy and delegation budget departures (VC-172).
  *
- * The WHOLE override every time and `null` to state nothing, matching
- * `ProjectSkillModesInput`: the Authority pane holds every control on screen at
- * once, so a per-field channel would turn one visible state into N writes that
- * can land out of order and half-fail.
+ * The whole override every time and `null` to inherit the defaults, matching
+ * `ProjectSkillModesInput`.
  *
  * Typed `unknown` on the wire ON PURPOSE. This is the one project write whose
  * payload is a nested document rather than a flat row, and the renderer is not
@@ -753,7 +750,7 @@ export interface VolliDataIpcContract {
     result: ProjectUpdateResult;
   };
   /**
-   * Replaces this project's authority departures wholesale (VC-172).
+   * Replaces this project's actor policy and delegation budget departures (VC-172).
    *
    * APP-ONLY, and that is the security property rather than an oversight. There
    * is no agent verb behind this channel and there must not be: writing the
@@ -1794,42 +1791,6 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
-// ---- protection (VC-480) ---------------------------------------------------
-
-/**
- * Protection's remembered approvals.
- *
- * App-only, and the agent has no door to any of it: no verb projects these, the
- * socket does not carry them, and the rows live in the app-owned database the
- * governed Session cannot write. The renderer lists and revokes; rows are
- * WRITTEN only in main, from a person's answer on a card.
- */
-export interface VolliProtectionIpcContract {
-  /** A project's live remembered approvals, newest first. */
-  "volli:protection-approvals": {
-    args: [projectId: string];
-    result: Result<{ approvals: AuthorityApproval[]; passedRequestCount: number }>;
-  };
-  /** Soft-deletes one row; the next matching call asks again. */
-  "volli:protection-revoke": {
-    args: [approvalId: string, commandId: string];
-    result: Result<{
-      approval: AuthorityApproval;
-      receipt: import("@volli/shared").ApprovalCommandReceipt;
-    }>;
-  };
-  /** Undo of a revoke: the same row, id and provenance. */
-  "volli:protection-restore": {
-    args: [approvalId: string, commandId: string];
-    result: Result<{
-      approval: AuthorityApproval;
-      receipt: import("@volli/shared").ApprovalCommandReceipt;
-    }>;
-  };
-}
-
-export type ProtectionIpcChannel = keyof VolliProtectionIpcContract;
-
 // ---- notifications (VC-295) ------------------------------------------------
 
 /**
@@ -2792,7 +2753,6 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
-    VolliProtectionIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
     VolliAutomationIpcContract,

@@ -1,9 +1,9 @@
 /**
  * MCP results through the real loop on Pi 0.99 (VC-469): an error that keeps
  * its structured data, and a result too long for the model that is cut, saved
- * beside the sidecar, and read back under an enforcing authority gate.
+ * beside the sidecar, and read back with its untrusted-data notice.
  *
- * Everything runs for real — Pi's `Agent`, the tools, the gate, the sidecar —
+ * Everything runs for real — Pi's `Agent`, the tools, the sidecar —
  * except the provider, which is scripted one request at a time.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -21,12 +21,8 @@ import {
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   MCP_RESULT_INLINE_MAX_BYTES,
   mcpProviderToolName,
-  sessionToolIds,
-  type AuthoritySnapshot,
   type McpToolDefinition,
   type RuntimeMcpCallResult,
   type RuntimeObservation,
@@ -125,7 +121,7 @@ const MCP_TOOL: McpToolDefinition = {
   },
 };
 
-/** An enforcing Session, so a read of saved output has to pass the real gate. */
+/** A Session that can read back saved tool output. */
 function attachment(answer: () => RuntimeMcpCallResult): {
   spec: SessionRuntimeSpec;
   observations: RuntimeObservation[];
@@ -157,18 +153,7 @@ function attachment(answer: () => RuntimeMcpCallResult): {
       observations.push(observation);
     },
   };
-  const authority: AuthoritySnapshot = {
-    mode: "auto",
-    location: "worktree",
-    enforcement: "enforce",
-    judgmentMode: "ask",
-    tools: sessionToolIds(spec),
-    rulePackId: BUILTIN_RULE_PACK_ID,
-    rulePackHash: BUILTIN_RULE_PACK_HASH,
-    classifierModel: null,
-    fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-  };
-  return { spec: { ...spec, authority }, observations, sessionDataDir };
+  return { spec, observations, sessionDataDir };
 }
 
 describe("MCP results on Pi 0.99 (VC-469)", () => {
@@ -238,7 +223,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       (_, index) => `row ${String(index).padStart(5, "0")} ${"·".repeat(28)}`,
     ).join("\n");
     expect(Buffer.byteLength(whole)).toBeGreaterThan(1_000_000);
-    const { spec, observations, sessionDataDir } = attachment(() => ({
+    const { spec, sessionDataDir } = attachment(() => ({
       content: [{ type: "text", text: whole }],
       structuredContent: { url: "https://fixture/7", number: 7 },
       isError: false,
@@ -292,8 +277,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     // The sidecar holds the cut, never the megabyte.
     expect(statSync(sidecar).size).toBeLessThan(200_000);
 
-    // The read was allowed by the enforcing gate and came back marked.
-    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    // Reading saved output preserves its untrusted-data notice.
     const read = toolResultsIn(sent[1]!).find((message) => message.toolCallId === "tc-read");
     expect(read?.isError).toBe(false);
     expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
@@ -307,7 +291,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       { length: 4_096 },
       (_, index) => `entry ${index} ${"-".repeat(40)}`,
     ).join("\n");
-    const { spec, observations, sessionDataDir } = attachment(() => ({
+    const { spec, sessionDataDir } = attachment(() => ({
       content: [{ type: "text", text: whole }],
       isError: false,
     }));
@@ -375,8 +359,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     );
 
     expect(dirname(savedPath)).not.toBe(toolOutputDirectoryFor(b.recovery.sessionFilePath));
-    // Every read passed the enforcing gate and came back marked as untrusted.
-    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    // Every read came back marked as untrusted.
     for (const { read } of [b, bAgain, c]) {
       expect(read?.isError).toBe(false);
       expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });

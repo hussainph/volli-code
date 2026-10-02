@@ -164,24 +164,17 @@ describe("closeStaleAttachments", () => {
     expect(target.observed).toEqual([]);
   });
 
-  it("retires only adapter-authored approvals parked on the recovered attachment", async () => {
+  it("retires only host permission questions parked on the recovered attachment", async () => {
     const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
-    const approval = {
-      asked: "write /outside/a",
-      because: "outside",
-      reason: "outside",
-      stages: [],
-      held: null,
-    };
     const target = recorder({
       "project-1": [
         {
           ...lost,
           interactions: {
             active: [
-              { id: "ask:lost", attachmentId: "pi-1", approval },
-              { id: "ask-user:model", attachmentId: "pi-1" },
-              { id: "ask:elsewhere", attachmentId: "pi-2", approval },
+              { id: "budget-ask:lost", attachmentId: "pi-1", kind: "permission" },
+              { id: "ask-user:model", attachmentId: "pi-1", kind: "question" },
+              { id: "confirm-ask:elsewhere", attachmentId: "pi-2", kind: "permission" },
             ],
           },
         },
@@ -189,12 +182,12 @@ describe("closeStaleAttachments", () => {
     });
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
     expect(target.observed).toMatchObject([
-      { kind: "interaction.cancelled", interactionId: "ask:lost", reason: "abandoned" },
+      { kind: "interaction.cancelled", interactionId: "budget-ask:lost", reason: "abandoned" },
     ]);
     expect(target.observed).toHaveLength(1);
   });
 
-  it("reports a failed approval retirement and keeps recovering", async () => {
+  it("reports a failed permission retirement and keeps recovering", async () => {
     const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
     const target = recorder(
       {
@@ -204,15 +197,9 @@ describe("closeStaleAttachments", () => {
             interactions: {
               active: [
                 {
-                  id: "ask:lost",
+                  id: "budget-ask:lost",
                   attachmentId: "pi-1",
-                  approval: {
-                    asked: "write /outside/a",
-                    because: "outside",
-                    reason: "outside",
-                    stages: [],
-                    held: null,
-                  },
+                  kind: "permission",
                 },
               ],
             },
@@ -233,7 +220,7 @@ describe("closeStaleAttachments", () => {
   });
 
   it.each(["already-interrupted", "failed-reconcile", "closed"])(
-    "retires abandoned approvals after %s",
+    "retires abandoned host permissions after %s",
     async (state) => {
       const lost = session(
         "session-1",
@@ -254,15 +241,9 @@ describe("closeStaleAttachments", () => {
               interactions: {
                 active: [
                   {
-                    id: "ask:lost",
+                    id: "budget-ask:lost",
                     attachmentId: "pi-1",
-                    approval: {
-                      asked: "write /outside/a",
-                      because: "outside",
-                      reason: "outside",
-                      stages: [],
-                      held: null,
-                    },
+                    kind: "permission",
                   },
                 ],
               },
@@ -277,7 +258,8 @@ describe("closeStaleAttachments", () => {
       await sweep(target, ["project-1"]).run;
       expect(
         target.observed.some(
-          (event) => event.kind === "interaction.cancelled" && event.interactionId === "ask:lost",
+          (event) =>
+            event.kind === "interaction.cancelled" && event.interactionId === "budget-ask:lost",
         ),
       ).toBe(true);
     },

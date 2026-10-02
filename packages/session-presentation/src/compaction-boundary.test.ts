@@ -60,7 +60,6 @@ function shape(
   return projectTranscriptRows(turns, compactions, []).map((row) => {
     if (row.kind === "turn") return row.messages.map((held) => held.id).join("+");
     if (row.kind === "host-notice") return `host:${row.notice.kind}`;
-    if (row.kind === "authority-review") return `review:${row.review.sequence}`;
     return row.kind === "compaction" ? `—${row.compaction.sequence}—` : `!${row.drop.sequence}!`;
   });
 }
@@ -189,7 +188,6 @@ describe("projectTranscriptRows", () => {
       rows.map((row) => {
         if (row.kind === "turn") return row.messages[0]!.id;
         if (row.kind === "host-notice") return `host:${row.notice.kind}`;
-        if (row.kind === "authority-review") return `review:${row.review.sequence}`;
         return row.kind === "compaction"
           ? `compaction:${row.compaction.sequence}`
           : `drop:${row.drop.sequence}`;

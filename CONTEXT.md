@@ -75,8 +75,8 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role and model policy, and each of its attachments is
-governed by an Authority Snapshot frozen when that attachment opens. Reconnect,
+Each Session has a Role, model policy, frozen tools, and deterministic workspace
+and host-API boundaries. Reconnect,
 restart, and recovery may replace its live executor attachment without changing
 that identity. A model change is an explicit recorded action, never a silent
 fallback. A Session begins at its first message, not at the gesture that opened
@@ -170,33 +170,14 @@ as made. Write-capable children in a shared tree are VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 
-**Authority Snapshot**:
-The durable policy one attachment runs under: which actions are
-automatic, which require a decision, which are forbidden, and the classifier
-model allowed to help within deterministic boundaries. Built at every
-attachment from the project's Authority Policy and recorded on the attachment,
-so a refusal can name the rule pack that produced it. A Settings change does
-not silently change a running Session's authority: the Snapshot is pinned for
-the life of the attachment, and a policy change applies at the next one. An
-attachment rebuilt after a relaunch replays its recorded Snapshot rather than
-re-resolving policy, so "the life of the attachment" outlives the process.
-_Avoid_: permission preset (when meaning live authority), auto-approve flag
-
 **Authority Policy**:
-The per-project document an Authority Snapshot is built from: the enforcement
-posture, the judgment mode, the fallback thresholds, and what each actor kind
-may do. It is app-owned state, never a file in the worktree and never
-repo-committed — a policy store the agent can write would let the thing being
-governed author its own permissions. Built-in defaults with per-project
-departures; a project list that names `$defaults` extends rather than replaces.
-_Avoid_: rule pack (that is the compiled rules the policy runs), settings
-
-**Enforcement posture**:
-What a project's Authority Policy does with the rule pack. `off` builds no
-Snapshot, so no gate is installed and the Session runs at the runtime's own
-defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
-hands the Snapshot to the runtime and the pack binds. `observe` is the default.
-_Avoid_: auto mode (that is the judgment mode), permission mode
+The app-owned per-project policy for host-API access and delegation budgets.
+It defines which coordination verbs each actor may use, transcript disclosure,
+and awaitable Ticket and Session facts. Built-in defaults have per-project
+departures; a project list naming `$defaults` extends rather than replaces.
+It is not a per-call file/command gate or a model judgment mode. Legacy gate
+fields in stored overrides are ignored.
+_Avoid_: tool permissions, model judgment, repo instruction file
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
@@ -253,9 +234,9 @@ _Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
-Session Role, work location, model policy, prompt resources, scoped tools, and
-an Authority Snapshot when the host supplies one; it emits runtime observations
-and tool requests without owning
+Session Role, work location, model policy, prompt resources, and scoped tools;
+it enforces deterministic workspace and secret boundaries and emits runtime
+observations and tool requests without owning
 durable Session or Ticket state. Pi is its initial acknowledged substrate, but
 Pi types and events never become renderer or Session contracts. The package may
 depend on Node but never Electron or DOM APIs, so Electron main can host it
@@ -288,8 +269,7 @@ only in Sessions created while one was configured.
 its own switch, pick a new Session's model and reasoning level from the
 person's approved pairs — once, at birth, falling back to the configured default
 on any miss — and the Session records and shows the pick (`Auto-picked`).
-_Avoid_: classifier model (when meaning the setting), router, judge (that is a
-purpose)
+_Avoid_: classifier model (when meaning the setting), router, permission judge
 
 **Web Access**:
 The app-wide decision about whether Volli may reach the Internet on a
@@ -616,8 +596,8 @@ metadata until the product deliberately promotes it into this vocabulary.
 _Avoid_: UI state, provider payload, component props
 
 **Session Presentation Contract**:
-The portable consumer boundary that projects Session Semantic Facts, Role, and
-Authority Snapshot into a surface model for a Volli client. It determines which
+The portable consumer boundary that projects Session Semantic Facts and Role
+into a surface model for a Volli client. It determines which
 shared affordances are meaningful and progressively discloses active product
 state, but does not parse Pi or provider protocols or require Electron or React.
 Presentation dispatch follows Volli semantic kind and state, never runtime tool
@@ -947,7 +927,7 @@ _Avoid_: prompt template, Ticket Body, Runtime Brief
 
 **Runtime**:
 An Automation's execution setting: its model policy, reasoning policy, Session
-Role, and Authority Snapshot defaults. Model and reasoning travel together as
+Role, and frozen tool defaults. Model and reasoning travel together as
 one selection, and are inherited or pinned together rather than separately — the
 reasoning levels a model offers are its own, so a pinned level against an
 inherited model can name a pair that does not exist. An Automation that pins
@@ -959,9 +939,8 @@ _Avoid_: agent, harness, model (alone)
 **Run**:
 One invocation of an Automation, and the record of which Automation and which
 _resolved_ model and reasoning produced a given Session. A Run owns exactly one
-Session and always starts a fresh one: it never wakes an existing Session, whose
-Authority Snapshot was granted while a person was present and whose context is
-stale by the time a schedule fires. A ticket has at most one Run in flight at a
+Session and always starts a fresh one: it never wakes an existing Session whose
+context is stale by the time a schedule fires. A ticket has at most one Run in flight at a
 time. A Board Session can start one too, through the `automation.run` tool its
 Role bundle holds; the Run it starts carries the automation Actor and is
 indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,

@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
-  AuthoritySnapshot,
   ObservabilityEvent,
   ObservabilitySink,
   RuntimeObservation,
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
-import { nativeObservationEventId, sessionPersonNeed } from "@volli/shared";
+import {
+  decodeSessionEventPayload,
+  nativeObservationEventId,
+  sessionPersonNeed,
+} from "@volli/shared";
+import legacyLedger from "../../shared/src/fixtures/legacy-authority-ledger.json";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -112,8 +116,6 @@ class FakeAdapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: RuntimeObservation | null = null;
   releaseReasons: string[] = [];
-  /** The policy this fake binding reports running under (VC-44). */
-  authority: AuthoritySnapshot | null = null;
 
   async attach(
     spec: Parameters<NativeHarnessAdapter["attach"]>[0],
@@ -128,7 +130,6 @@ class FakeAdapter implements NativeHarnessAdapter {
     if (this.attachFailure) throw this.attachFailure;
     return {
       native: { id: "native-session-1", detail: { provider: "fake" } },
-      authority: this.authority,
       dispatch: async (command) => {
         this.dispatches += 1;
         this.commands.push(command);
@@ -249,6 +250,58 @@ async function createAndAttach(runtime: SessionRuntime) {
 }
 
 describe("SessionRuntime native adapter contract", () => {
+  it("rehydrates a recorded enforce attachment without passing authority to its executor", async () => {
+    const ledger = createInMemorySessionLedger();
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write({
+      ...legacyLedger.artifact,
+      version: 1,
+      message: legacyLedger.artifact.message as UIMessage,
+    });
+    const born = decodeSessionEventPayload(legacyLedger.events[0].payload, "recorded");
+    if (born.kind !== "session.created") throw new Error("invalid fixture");
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(born.session);
+      for (const row of legacyLedger.events) {
+        const payload = decodeSessionEventPayload(row.payload, "recorded");
+        if (payload.kind === "attachment.opened") {
+          payload.attachment.adapterId = "fake";
+          payload.attachment.native = {
+            id: "native-session-1",
+            detail: {
+              kind: "volli.native-binding.v1",
+              directory: "/projects/fake",
+              locator: { provider: "fake" },
+            },
+          };
+        }
+        if (payload.kind === "transcript.referenced") payload.reference = reference;
+        transaction.appendEvent({
+          ...row,
+          payload,
+          provenance: { source: { kind: "system", id: "desktop", detail: null }, venue },
+        });
+      }
+    });
+    const engine = createSessionEngine({ ledger, clock: { now: () => 500 }, ids: ids() });
+    const { runtime, adapter } = composition({ engine, artifacts });
+    await expect(
+      runtime.reconcile({ sessionId: born.session.id, attachmentId: "attachment-1" }),
+    ).resolves.toBeUndefined();
+    expect(adapter.specs.at(-1)).toMatchObject({
+      continuity: "native_resume",
+      attachmentId: "attachment-1",
+    });
+    expect(adapter.specs.at(-1)).not.toHaveProperty("pinnedAuthority");
+    expect(adapter.specs.at(-1)).not.toHaveProperty("authority");
+    const { projection } = await runtime.projection({ sessionId: born.session.id });
+    expect(projection.liveExecutor?.authority).toBeNull();
+    expect(projection.interactions.active).toEqual([]);
+    expect(projection).not.toHaveProperty("authorityDenials");
+    const snapshot = await runtime.snapshot({ sessionId: born.session.id });
+    expect(snapshot.transcript).toMatchObject([{ message: legacyLedger.artifact.message }]);
+    await runtime.close();
+  });
   it("honors a client-requested Session id on create, and the ledger derivation absent one (VC-358)", async () => {
     const { runtime } = composition();
     const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
@@ -816,77 +869,6 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(Promise.all([message, steering])).resolves.toHaveLength(2);
   });
 
-  it("records the binding's Authority Snapshot on the attachment, so a denial can name its pack", async () => {
-    // VC-44's third acceptance criterion, end to end. An `authority.denied`
-    // event carries an `attachmentId` and nothing else about the policy that
-    // refused; the pack it cites is resolved through the attachment recorded
-    // here, which is what makes a denial interpretable long after the pack has
-    // moved on — and comparable between two attachments of the same Session.
-    const adapter = new FakeAdapter();
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: "volli.builtin",
-      rulePackHash: "dca89a93",
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-    adapter.authority = authority;
-    const { runtime } = composition({ adapter });
-
-    const sessionId = await createAndAttach(runtime);
-    const snapshot = await runtime.snapshot({ sessionId });
-    const opened = snapshot.frames.find(
-      ({ event }) => event.payload.kind === "attachment.opened",
-    )!.event;
-
-    expect(
-      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
-    ).toEqual(authority);
-  });
-
-  it("hands a rehydrated binding the Snapshot the attachment opened under", async () => {
-    // The other half of pinning, and the half a relaunch breaks if nobody
-    // carries it: `#rehydrateBinding` rebuilds an attachment from history, and
-    // the adapter would otherwise resolve whatever policy says NOW. One
-    // `attachmentId` would then run under one policy while the `attachment.opened`
-    // record cited another — and a denial resolves through that id, so the
-    // durable answer would be the wrong one.
-    const first = composition();
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: "volli.builtin",
-      rulePackHash: "dca89a93",
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-    first.adapter.authority = authority;
-    const sessionId = await createAndAttach(first.runtime);
-    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-    await first.runtime.close();
-
-    // The project edits policy while nothing is running. A fresh attach would
-    // pick the new one up; this attachment must not.
-    first.adapter.authority = { ...authority, enforcement: "observe", judgmentMode: "auto" };
-    const recovered = composition({
-      engine: first.engine,
-      adapter: first.adapter,
-      runtimeIdPrefix: "cold-authority-",
-    });
-    await recovered.runtime.reconcile({ sessionId, attachmentId });
-
-    const rehydrated = first.adapter.specs.at(-1)!;
-    expect(rehydrated.continuity).toBe("native_resume");
-    expect(rehydrated.pinnedAuthority).toEqual(authority);
-  });
-
   it("records no Snapshot for a binding that runs no gate", async () => {
     // An adapter that answers nothing — a terminal companion — and a project
     // that turned the gate off both land here, because both mean the same thing
@@ -950,72 +932,6 @@ describe("SessionRuntime native adapter contract", () => {
     const snapshot = await runtime.snapshot({ sessionId });
     expect(snapshot.projection.turnActive).toBe(false);
     expect(snapshot.frames.map(({ event }) => event.payload.kind)).toContain("turn.interrupted");
-  });
-
-  it("records a durable authority.denied event with the attachment id filled in from the spec", async () => {
-    const { runtime, adapter } = composition();
-    const sessionId = await createAndAttach(runtime);
-    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-
-    await adapter.emit({
-      kind: "authority",
-      state: "denied",
-      occurredAt: 160,
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    });
-
-    const snapshot = await runtime.snapshot({ sessionId });
-    const denial = snapshot.frames.find(({ event }) => event.payload.kind === "authority.denied");
-    expect(denial?.event.attachmentId).toBe(attachmentId);
-    expect(denial?.event.payload).toEqual({
-      kind: "authority.denied",
-      attachmentId,
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    });
-    expect(snapshot.projection.authorityDenials).toBe(1);
-  });
-
-  it("persists classifier reviews under system provenance, not executor attribution or denial counts", async () => {
-    const { runtime, adapter } = composition();
-    const sessionId = await createAndAttach(runtime);
-    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-    const review = {
-      kind: "authority-review" as const,
-      turnId: "turn-1",
-      toolCallId: "call-1",
-      tool: "execute",
-      mode: "shadow" as const,
-      authoriser: "classifier" as const,
-      wouldFlag: true,
-      reason: "Outside the request.",
-      category: "external",
-      answers: null,
-      missReason: null,
-      thresholds: { allow: 0.95, flag: 0.05 },
-    };
-    await adapter.emit(review);
-    const snapshot = await runtime.snapshot({ sessionId });
-    const fact = snapshot.frames.find(({ event }) => event.payload.kind === "authority.reviewed");
-    expect(fact?.event.attachmentId).toBe(attachmentId);
-    expect(fact?.event.payload).toEqual({ ...review, kind: "authority.reviewed", attachmentId });
-    expect(fact?.event.provenance).toEqual({
-      source: { kind: "system", id: "authority-classifier", detail: null },
-      venue: snapshot.projection.liveExecutor!.venue,
-    });
-    expect(snapshot.projection.authorityDenials).toBe(0);
-    // A fresh snapshot reads the same durable fact, not a transcript artifact.
-    expect(
-      (await runtime.snapshot({ sessionId })).frames.find(
-        ({ event }) => event.payload.kind === "authority.reviewed",
-      ),
-    ).toEqual(fact);
-    expect(fact?.transcript).toBeNull();
   });
 
   it("records a provider reasoning drop as a durable Session Event", async () => {

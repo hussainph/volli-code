@@ -80,13 +80,6 @@
  * Defaults ON, which is what `SOURCE_MODE_OPTIONS` hardcoded before there was a
  * control, so an existing install sees no change until it asks for one.
  *
- * `authorityHintsVisible` — whether the chat transcript draws the auto-mode
- * authority hints (the "Would block …" notices that ride tool calls, VC-498).
- * Persisted app-wide like `costVisible`, and a DISPLAY preference like it too:
- * hiding the hints changes nothing about enforcement or classifier usage.
- * Shadow review has a separate opt-in; this preference only controls display
- * of its recorded hints, never actual refusals.
- *
  * `defaultExternalAppId` — a chosen external app, or explicit `null` for Ask
  * every time. It is app-wide chrome too; a successful Launch Services listing
  * resolves an app removed since the choice was saved back to asking.
@@ -328,10 +321,6 @@ function sanitizeWordWrap(wordWrap: unknown): boolean {
  * `sanitizeWordWrap` follow: a missing key or corrupt JSON lands on the visible
  * default rather than silently silencing a feed the reader never silenced.
  */
-function sanitizeAuthorityHints(visible: unknown): boolean {
-  return visible !== false;
-}
-
 /**
  * A persisted preference may only name an app this build knows how to launch.
  * A later successful Launch Services listing reconciles an uninstalled known
@@ -425,15 +414,6 @@ interface UiState {
    * copy says so out loud.
    */
   costVisible: boolean;
-  /**
-   * Whether the transcript draws the auto-mode authority hints (VC-498).
-   * Persisted app-wide (see module doc).
-   *
-   * A DISPLAY preference and nothing more, exactly like `costVisible` above:
-   * enforcement keeps running whether or not the hints are drawn, so hiding
-   * them must never be mistaken for turning authority reviews off.
-   */
-  authorityHintsVisible: boolean;
   /** Which of the ticket rail's folds are open. Persisted app-wide (see module doc). */
   railFolds: RailFolds;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
@@ -508,7 +488,6 @@ interface UiState {
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setCostVisible(visible: boolean): void;
-  setAuthorityHintsVisible(visible: boolean): void;
   /** Open or close one of the rail's folds — the eyebrow's and the footer rows' one gesture. */
   toggleRailFold(fold: RailFold): void;
   setRailFold(fold: RailFold, open: boolean): void;
@@ -568,7 +547,6 @@ type PersistedUiState = Pick<
   | "homeRailMode"
   | "homeEmptyVisual"
   | "costVisible"
-  | "authorityHintsVisible"
   | "railFolds"
   | "diffPresentation"
   | "wordWrap"
@@ -608,7 +586,6 @@ export function createUiStore(storage?: StateStorage) {
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         costVisible: true,
-        authorityHintsVisible: true,
         railFolds: DEFAULT_RAIL_FOLDS,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         wordWrap: DEFAULT_WORD_WRAP,
@@ -642,7 +619,6 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setCostVisible: (visible) => set({ costVisible: visible }),
-        setAuthorityHintsVisible: (visible) => set({ authorityHintsVisible: visible }),
         toggleRailFold: (fold) =>
           set((state) => ({ railFolds: { ...state.railFolds, [fold]: !state.railFolds[fold] } })),
         // Same discipline as the fault dismissals: a fold already in the asked
@@ -711,7 +687,6 @@ export function createUiStore(storage?: StateStorage) {
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
           costVisible: state.costVisible,
-          authorityHintsVisible: state.authorityHintsVisible,
           railFolds: state.railFolds,
           diffPresentation: state.diffPresentation,
           wordWrap: state.wordWrap,
@@ -757,10 +732,6 @@ export function createUiStore(storage?: StateStorage) {
             // silently hiding a feature the reader never turned off — the same
             // discipline `sidebarPinned` above follows.
             costVisible: stored.costVisible !== false,
-            // Only an explicit `false` hides the auto-mode authority hints, so
-            // a missing key or corrupt JSON keeps the feed as it was — the same
-            // discipline `costVisible` and `sidebarPinned` above follow.
-            authorityHintsVisible: sanitizeAuthorityHints(stored.authorityHintsVisible),
             // Only an explicit `true` opens a fold (see `sanitizeRailFolds`).
             railFolds: sanitizeRailFolds(stored.railFolds),
             // Missing/unknown presentation (older build, corrupt JSON) keeps

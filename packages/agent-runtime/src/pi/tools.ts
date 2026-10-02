@@ -690,7 +690,7 @@ function verbObjectSchema(
  * What the host is handed, and what the model is told, for one product verb.
  *
  * The two names in play are deliberately not the same string. `binding.verb` is
- * the canonical dot-key — what authority, the durable `tool-surface` record, the
+ * the canonical dot-key — what the durable `tool-surface` record, the
  * Role bundle and any grant all spell — and `entry.tool.name` is what a
  * provider will actually accept, since neither Anthropic nor OpenAI permits a
  * dot in a tool name. The wire name goes out; the dot-key is what comes back

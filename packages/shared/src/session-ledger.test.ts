@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { readSessionOrigin } from "./session-origin";
 import {
-  askInteractionId,
   askUserInteractionId,
   assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
@@ -266,34 +265,6 @@ describe("observationPayload", () => {
         attribution,
       ),
     ).toEqual({ kind: "usage.recorded", attachmentId: null, turnId: null, attribution, usage });
-  });
-
-  it("round-trips an authority.denied observation into its matching payload", () => {
-    const observation: SessionObservation = {
-      id: "authority-denied-1",
-      sessionId: session.id,
-      occurredAt: 1,
-      provenance: systemProvenance,
-      kind: "authority.denied",
-      attachmentId: "attachment-1",
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    };
-
-    expect(observationPayload(observation, attribution)).toEqual({
-      kind: "authority.denied",
-      attachmentId: "attachment-1",
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    });
-    // A denial before any turn opened carries no turn to blame it on.
-    expect(observationPayload({ ...observation, turnId: null }, attribution)).toMatchObject({
-      turnId: null,
-    });
   });
 
   it("round-trips both halves of a compaction into their matching payloads", () => {
@@ -1717,43 +1688,6 @@ describe("projectSession bornTicketless", () => {
   });
 });
 
-describe("projectSession authorityDenials", () => {
-  it("counts zero denials for a Session that has never been refused", () => {
-    expect(projectSession(session, []).authorityDenials).toBe(0);
-  });
-
-  it("counts every authority.denied event over the Session's whole life", () => {
-    const projection = projectSession(session, [
-      event(1, {
-        kind: "authority.denied",
-        attachmentId: "attachment-1",
-        turnId: "turn-1",
-        tool: "execute",
-        cause: "command.destructive-removal",
-        reason: "rm -rf resolves under a home directory",
-      }),
-      event(2, {
-        kind: "authority.denied",
-        attachmentId: "attachment-1",
-        turnId: "turn-1",
-        tool: "execute",
-        cause: "command.git-discards-work",
-        reason: "git reset --hard discards uncommitted work",
-      }),
-      event(3, {
-        kind: "authority.denied",
-        attachmentId: "attachment-1",
-        turnId: null,
-        tool: "write",
-        cause: "call.unreadable",
-        reason: "the write target could not be resolved",
-      }),
-    ]);
-
-    expect(projection.authorityDenials).toBe(3);
-  });
-});
-
 function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
   return {
     cause: "assistant",
@@ -2200,19 +2134,15 @@ describe("the frozen ask interaction id derivations", () => {
     // Frozen segments: these land inside durable event ids that are re-derived
     // and deduped by exact match on every relaunch, and the renderer keys a
     // gated tool row to its interaction through the same strings.
-    expect(askInteractionId("call-1")).toBe("ask:call-1");
     expect(askUserInteractionId("call-1")).toBe("ask-user:call-1");
     expect(budgetAskInteractionId("call-1")).toBe("budget-ask:call-1");
     // Distinct prefixes on purpose: either answer settling the other's wait is
     // the failure a shared prefix would not collide loudly on — and one tool
     // call can raise both a gate ask and a budget ask (VC-204).
-    expect(askInteractionId("x")).not.toBe(askUserInteractionId("x"));
-    expect(budgetAskInteractionId("x")).not.toBe(askInteractionId("x"));
     // VC-380's confirmation, a third frozen segment for the same reason: a
     // question the verb's own door raises before it writes anything.
     expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
     expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
-    expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
     // VC-470's credential question: it can follow a confirmation on the same
     // tool call, so it must not share that confirmation's id.
     expect(credentialAskInteractionId("call-1")).toBe("credential-ask:call-1");

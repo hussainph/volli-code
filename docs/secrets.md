@@ -92,7 +92,7 @@ not on this base and is not claimed here.
   this structured-runtime boundary, so secrets are not injected there.
 - Secret re-entry after a cancelled/restarted request. Waiting and settlement
   metadata now use the Engine's durable interactions and existing Attention and
-  presentation paths, like approval cards. The dedicated person-only write
+  presentation paths, alongside ordinary question and permission cards. The dedicated person-only write
   channel is the only answer door; generic interaction answers are refused before
   persistence. Secret values never become ledger facts.
 

@@ -3,7 +3,7 @@ import { basename, resolve } from "node:path";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 /** Credential stores are never a structured file-read capability, even with
- * authority enforcement off. Project .env files join this list (VC-481).
+ * without per-call approvals. Project .env files join this list (VC-481).
  * This is not a shell sandbox: arbitrary programs can encode or send a value.
  */
 export function credentialPath(path: string): boolean {

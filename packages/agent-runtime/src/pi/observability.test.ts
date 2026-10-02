@@ -19,7 +19,6 @@ import {
   instrumentStreamFn,
   providerErrorClassForStatus,
   providerErrorClass,
-  recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
 
@@ -183,20 +182,6 @@ describe("teeObservationsToSink", () => {
 
     await expect(teed(turnCompleted)).resolves.toBeUndefined();
     expect(seen).toEqual([turnCompleted]);
-  });
-
-  it("records an observability-only allowance without involving the runtime observer", () => {
-    const { sink, events } = recordingSink();
-    const reducer = new ObservabilityReducer(() => 0);
-
-    recordObservationToSink(reducer, sink, "run-1", {
-      kind: "authority",
-      state: "allowed",
-      turnId: "t1",
-      toolCallId: "call-1",
-    });
-
-    expect(events).toEqual([{ kind: "authority", outcome: "allowed", runId: "run-1" }]);
   });
 
   it("still delivers when the reducer itself throws", async () => {

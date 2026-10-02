@@ -205,10 +205,8 @@ export function getProjectById(db: Database.Database, id: string): Project | und
  * surface that edits an override has to distinguish a chosen value from an
  * inherited one.
  *
- * What survives the change is the split itself. This is the ATTACH path's
- * reader: `resolveRuntimeContext` wants the resolved answer, because a Snapshot
- * is built from what a Session may actually do. The renderer wants the
- * unresolved question. Resolving once here and shipping the departures there is
+ * This is the host-API policy reader: actor admission and delegation budgets
+ * need the resolved answer. The renderer wants the unresolved question. Resolving once here and shipping the departures there is
  * what keeps the resolved document from ever being written back — migration
  * 025's ruling, and the thing that would break inheritance if it slipped.
  *

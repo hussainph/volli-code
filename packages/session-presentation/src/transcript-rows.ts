@@ -1,7 +1,6 @@
 import type { UIMessage } from "ai";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
 import type {
-  TranscriptAuthorityReview,
   TranscriptCompaction,
   TranscriptReasoningDrop,
 } from "./transcript";
@@ -11,16 +10,10 @@ export type TranscriptRow =
   | {
       kind: "turn";
       messages: readonly UIMessage[];
-      authorityReviews?: readonly TranscriptAuthorityReview[];
     }
   | { kind: "host-notice"; messageId: string; notice: TranscriptHostNotice }
   | { kind: "compaction"; compaction: TranscriptCompaction }
-  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
-  | { kind: "authority-review"; review: TranscriptAuthorityReview };
-
-export function authorityReviewNoticeCopy(review: TranscriptAuthorityReview): string {
-  return `${review.mode === "shadow" ? "Would block" : "Blocked"} ${review.tool}: ${review.reason}`;
-}
+  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop };
 
 function rowFor(messages: readonly UIMessage[]): TranscriptRow {
   const message = messages.length === 1 ? messages[0] : undefined;
@@ -43,12 +36,6 @@ type AnchoredContextNotice =
       sequence: number;
       afterMessageId: string | null;
       value: TranscriptReasoningDrop;
-    }
-  | {
-      kind: "authority-review";
-      sequence: number;
-      afterMessageId: string | null;
-      value: TranscriptAuthorityReview;
     };
 
 function noticeRow(notice: AnchoredContextNotice): TranscriptRow {
@@ -57,16 +44,12 @@ function noticeRow(notice: AnchoredContextNotice): TranscriptRow {
       return { kind: "compaction", compaction: notice.value };
     case "reasoning-drop":
       return { kind: "reasoning-drop", drop: notice.value };
-    case "authority-review":
-      return { kind: "authority-review", review: notice.value };
   }
 }
 
 /**
  * Projects Turns and host-authored messages into rows, then lays durable
- * context notices beside the row they followed. Classifier reviews belong to
- * the exact tool call, not their chronological anchor; only unmatched reviews
- * remain standalone notices (including while a live call is still arriving).
+ * context notices beside the row they followed.
  *
  * Notice lists are already ordered on their own. They are joined by durable
  * Session Event sequence before they are anchored, so different notice kinds
@@ -77,30 +60,8 @@ export function projectTranscriptRows(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
   reasoningDrops: readonly TranscriptReasoningDrop[],
-  authorityReviews: readonly TranscriptAuthorityReview[] = [],
 ): readonly TranscriptRow[] {
-  const reviewsByCall = new Map<string, TranscriptAuthorityReview[]>();
-  for (const review of authorityReviews) {
-    const reviews = reviewsByCall.get(review.toolCallId) ?? [];
-    reviews.push(review);
-    reviewsByCall.set(review.toolCallId, reviews);
-  }
-  const linked = new Set<TranscriptAuthorityReview>();
-  const turnRows = turns.map((messages) => {
-    const row = rowFor(messages);
-    if (row.kind !== "turn" || reviewsByCall.size === 0) return row;
-    const reviews = messages.flatMap((message) =>
-      message.parts.flatMap((part) => {
-        if (!("toolCallId" in part) || typeof part.toolCallId !== "string") return [];
-        return (reviewsByCall.get(part.toolCallId) ?? []).filter((review) => {
-          if (linked.has(review)) return false;
-          linked.add(review);
-          return true;
-        });
-      }),
-    );
-    return reviews.length === 0 ? row : { ...row, authorityReviews: reviews };
-  });
+  const turnRows = turns.map(rowFor);
   const pending: AnchoredContextNotice[] = [
     ...compactions.map((value) => ({
       kind: "compaction" as const,
@@ -108,14 +69,6 @@ export function projectTranscriptRows(
       afterMessageId: value.afterMessageId,
       value,
     })),
-    ...authorityReviews
-      .filter((value) => !linked.has(value))
-      .map((value) => ({
-        kind: "authority-review" as const,
-        sequence: value.sequence,
-        afterMessageId: value.afterMessageId,
-        value,
-      })),
     ...reasoningDrops.map((value) => ({
       kind: "reasoning-drop" as const,
       sequence: value.sequence,

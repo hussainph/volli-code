@@ -25,19 +25,15 @@ import {
   decisionMiss,
   decisionTargetFor,
   isDecisionPurpose,
-  isSensitiveKey,
   readDecisionAnswers,
-  redactPayloadSecrets,
   type DecisionAnswered,
   type DecisionCall,
   type DecisionMiss,
-  type DecisionJson,
   type DecisionModelSetting,
   type DecisionPort,
   type DecisionPurpose,
   type DecisionPurposePolicy,
   type DecisionRequest,
-  type DecisionState,
   type DecisionTarget,
   type SessionUsage,
 } from "@volli/shared";
@@ -48,7 +44,7 @@ import {
   type DecisionClassifier,
 } from "../pi/classifier";
 
-/** What one audited decision leaves behind (VC-28's authority verdicts will need it). */
+/** What one audited decision leaves behind. */
 export interface DecisionAuditFact {
   purpose: DecisionPurpose;
   sessionId: string | null;
@@ -179,34 +175,10 @@ function describeTarget(target: DecisionTarget): DecisionAnswered["model"] {
     : { where: "cloud", providerId: target.providerId, modelId: target.modelId };
 }
 
-/**
- * Only a state already held to the raw JSON bounds reaches this walk. Build a
- * separate snapshot: neither transport nor the durable audit can retain the
- * caller's raw object, and secret text in object keys is scrubbed as well.
- */
-function redactAuthorityValue(value: DecisionJson): DecisionJson {
-  if (typeof value === "string") return redactPayloadSecrets(value);
-  if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(redactAuthorityValue);
-  const result: Record<string, DecisionJson> = {};
-  for (const [key, child] of Object.entries(value)) {
-    const safeKey = redactPayloadSecrets(key);
-    // Silently dropping a colliding field would give the policy reader an
-    // incomplete call. Refuse it instead, before transport or persistence.
-    if (Object.hasOwn(result, safeKey)) throw new Error("redacted key collision");
-    Object.defineProperty(result, safeKey, {
-      value: isSensitiveKey(key) ? "[redacted]" : redactAuthorityValue(child),
-      enumerable: true,
-    });
-  }
-  return result;
-}
-
 /** The decision service, as every caller holds it. */
 export function createDecisionService(options: DecisionServiceOptions): DecisionPort {
   const now = options.now ?? Date.now;
-  // One queue per purpose, so a purpose with a deadline of seconds (VC-28's
-  // authority judge) never waits behind another purpose's slow calls.
+  // One queue per purpose so independent callers never share a slow queue.
   const queues = new Map<DecisionPurpose, Slots>();
   const slotsFor = (purpose: DecisionPurpose): Slots => {
     const existing = queues.get(purpose);
@@ -242,16 +214,7 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
       const policy = options.policyFor?.(purpose) ?? DECISION_PURPOSE_POLICY[purpose];
       const checked = checkDecisionRequest({ state: call.state, questions: call.questions });
       if (!checked.ok) return miss(decisionMiss("invalid-request", checked.problem));
-      let request = checked.value;
-      if (purpose === "authority.judge") {
-        try {
-          request = { ...request, state: redactAuthorityValue(request.state) as DecisionState };
-        } catch {
-          return miss(
-            decisionMiss("invalid-request", "The authority state could not be redacted."),
-          );
-        }
-      }
+      const request = checked.value;
 
       // One deadline for the whole call — reading the setting, queueing and
       // asking: a caller is promised an answer or its fallback within its

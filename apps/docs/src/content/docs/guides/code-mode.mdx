@@ -40,9 +40,9 @@ the tools its Session already has, and nothing else:
 - It has no file system, network, process, environment, timers or modules.
   To read a file it calls `read`; to run a command it calls `bash`.
 - Every call it makes is checked exactly as if the model had made it directly,
-  as the same Session. [Agent authority](/guides/authority/) rules, budgets and
-  approvals all apply. A call that needs your approval pauses the program until
-  you answer, and only one question is ever open at a time.
+  as the same Session. [Workspace and host-API boundaries](/guides/authority/)
+  and budgets still apply. A budget question or existing confirmation pauses
+  the program until you answer, and only one question is open at a time.
 - It cannot call a few tools at all: asking you a question, the todo list,
   background shells, Browser screenshots, and taking or releasing a Browser
   Tab's hold. The model calls those directly.

@@ -37,7 +37,7 @@ function table(headers: readonly string[], rows: readonly (readonly string[])[])
 
 function repeatCount(
   results: readonly McpRunResult[],
-  key: "providerRequests" | "providerTokens" | "fixtureCalls" | "gatedCalls",
+  key: "providerRequests" | "providerTokens" | "fixtureCalls",
 ): string {
   const values = new Set(results.map((result) => result[key]));
   return values.size === 1 ? String(values.values().next().value) : [...values].join("/");
@@ -87,7 +87,6 @@ function formatAccountingRows(rows: readonly ReportRow[]): string {
       "result bytes/tokens (p50)",
       "errors seq/par/unbatch",
       "retries/cancelled",
-      "gated calls/approval wait ms",
       "par queue wait p50 ms",
       "peak host / per server (fixture)",
       "source order / completion≠source / cleanup",
@@ -118,7 +117,6 @@ function formatAccountingRows(rows: readonly ReportRow[]): string {
         )}`,
         `${sumErrors(row.sequential)}/${sumErrors(row.parallel)}/${sumErrors(row.unbatched)}`,
         `${all.reduce((sum, result) => sum + result.retryCount, 0)}/${all.reduce((sum, result) => sum + result.fixtureCancelled, 0)}`,
-        `${repeatCount(row.parallel, "gatedCalls")}/${Math.max(...all.map((result) => result.approvalWaitMs)).toFixed(1)}`,
         quantile(
           row.parallel.map((result) => result.queueWaitMs),
           0.5,
@@ -201,13 +199,13 @@ export async function buildMcpBenchReport(repeats = DEFAULT_REPEATS): Promise<Mc
     "# VC-454 local MCP parallel-dispatch benchmark (real Session path)",
     "",
     `- Repeats per cell: ${repeats} (after one discarded warm-up trial); p50/${tail} are nearest-rank milliseconds over task wall time and summed MCP tool-call time${tail === "max" ? " (fewer than 20 samples cannot resolve a p95, so the tail is the maximum)" : ""}.`,
-    "- Every turn is a real `createPiAgentRuntime` Session: `startSession`, the Authority gate, the Agent Tool Surface, the MCP tool wrapper and durable activity observations. Only the provider is scripted.",
+    "- Every turn is a real `createPiAgentRuntime` Session: `startSession`, the Agent Tool Surface, the MCP tool wrapper and durable activity observations. Only the provider is scripted.",
     "- Sequential arm: an ordinary Session on a default runtime. Parallel arm: a runtime built with `parallelMcpReads`, and a Session born with its MCP definitions stamped from the exact-key allowlist. Unbatched control: the parallel configuration, one call per model reply.",
     `- Every Session's calls pass the shipped per-server bound (${bound.maxConcurrent} in flight, ${bound.maxStarts} starts per ${bound.windowMs} ms, counted until settle) into the desktop \`McpSessionHost\`; the budget is fresh per trial.`,
     `- Synthetic provider: fixed replies (not model propensity), ${PROVIDER_LATENCY_MS}ms per request, 1,000 input + 60 output tokens per request.`,
     `- Local Streamable HTTP MCP server: network-like per-call delays ${NETWORK_LATENCIES_MS.join("/")}ms on the first server; a second server adds max(5ms, latency/4) (${NETWORK_LATENCIES_MS.map((ms) => ms + Math.max(5, ms / 4)).join("/")}ms) so completions interleave; cold attach adds ${COLD_START_MS}ms per server; warm cells pre-open and reuse the host's cached client.`,
     "- Every sequential/parallel pair receives the same single-reply model batch; unbatched control emits the same N calls over N replies.",
-    "- Tool time is the sum of host call intervals after the budget admits them; queue wait is the time calls spent in the budget before that. Approval wait is time the Authority gate parked a call on a person (MCP reads are allowed by the built-in rule pack, so no call parks).",
+    "- Tool time is the sum of host call intervals after the budget admits them; queue wait is the time calls spent in the budget before that.",
     "- Baseline fixture has no rate/connection cap; constrained-limit stress is reported separately by the test. All result token counts use o200k_base on the tool-result text the model receives.",
     "",
     `## Task wall time and MCP tool time (p50/${tail} ms)`,

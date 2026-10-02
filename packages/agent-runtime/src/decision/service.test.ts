@@ -1,8 +1,6 @@
 import {
-  DECISION_LIMITS,
   DECISION_PURPOSE_POLICY,
   type DecisionAnswered,
-  type DecisionRequest,
   type DecisionMiss,
   type DecisionModelSetting,
   type DecisionPurpose,
@@ -19,11 +17,7 @@ import {
   FIXTURE_SECRET,
   fixtureModels,
 } from "./fixture.test-support";
-import {
-  createDecisionService,
-  type DecisionAuditFact,
-  type DecisionServiceOptions,
-} from "./service";
+import { createDecisionService, type DecisionServiceOptions } from "./service";
 
 const CLOUD: DecisionModelSetting = {
   kind: "cloud",
@@ -652,161 +646,8 @@ describe("bounds", () => {
   });
 });
 
-describe("authority state redaction at the service boundary", () => {
-  const authorityCloud: DecisionModelSetting = {
-    ...CLOUD,
-    optIn: { acceptedAt: 1, purposes: ["authority.judge"] },
-  };
-  const state = {
-    call: {
-      tool: "bash",
-      args: {
-        command:
-          "AWS_SECRET_ACCESS_KEY='dummy; aws secret';GITHUB_TOKEN=dummy-token|rm -rf /important",
-        env: { VENDOR_KEY: "dummy-env-key", AWS_ACCESS_KEY_ID: "dummy-access-id" },
-      },
-    },
-    userMessages: [
-      "Use github_pat_dummy_pat AKIA0123456789ABCDEF sk-dummy-api-key",
-      "eyJhbGciOiJub25lIn0.eyJmaXh0dXJlIjp0cnVlfQ.ZHVtbXk",
-      "-----BEGIN PRIVATE KEY-----\nZHVtbXk=\n-----END PRIVATE KEY-----",
-    ],
-    nested: [{ ghp_dummy_object_name: "ordinary value", count: 1, ok: true, absent: null }],
-  };
-
-  it.each(["answered", "miss"] as const)(
-    "scrubs the same request before classifier input and a %s audit, without changing the caller's state",
-    async (kind) => {
-      const seen: DecisionRequest[] = [];
-      const facts: DecisionAuditFact[] = [];
-      const { decisions } = service({
-        resolveSetting: () => authorityCloud,
-        classifier: {
-          classify: async (_target, request) => {
-            seen.push(request);
-            return kind === "answered"
-              ? { ok: true, answers: { blocked: { type: "bool", probability: 0.9 } }, usage: null }
-              : {
-                  ok: false,
-                  miss: { status: "error", reason: "provider-error", message: "Unavailable" },
-                  usage: null,
-                };
-          },
-        },
-        recordDecision: (fact) => void facts.push(fact),
-      });
-      const original = JSON.stringify(state);
-      const outcome = await ask(decisions, {
-        purpose: "authority.judge",
-        state,
-        questions: { blocked: QUESTIONS.blocked },
-      });
-      expect(kind in outcome).toBe(true);
-      expect(seen).toHaveLength(1);
-      expect(facts).toHaveLength(1);
-      expect(facts[0]?.request).toBe(seen[0]);
-      expect(facts[0]?.request.state).not.toBe(state);
-      expect(seen[0]?.state).toEqual({
-        call: {
-          tool: "bash",
-          args: {
-            command: "AWS_SECRET_ACCESS_KEY= [redacted];GITHUB_TOKEN= [redacted]|rm -rf /important",
-            env: { VENDOR_KEY: "[redacted]", AWS_ACCESS_KEY_ID: "[redacted]" },
-          },
-        },
-        userMessages: ["Use [redacted] [redacted] [redacted]", "[redacted]", "[redacted]"],
-        nested: [{ "[redacted]": "ordinary value", count: 1, ok: true, absent: null }],
-      });
-      expect(JSON.stringify(state)).toBe(original);
-      for (const raw of [
-        "dummy; aws secret",
-        "dummy-token",
-        "dummy-env-key",
-        "dummy-access-id",
-        "github_pat_dummy_pat",
-        "AKIA0123456789ABCDEF",
-        "sk-dummy-api-key",
-        "eyJhbGci",
-        "ZHVtbXk=",
-        "ghp_dummy_object_name",
-      ]) {
-        expect(JSON.stringify({ seen, facts })).not.toContain(raw);
-      }
-    },
-  );
-
-  it("holds raw sensitive values to byte and depth bounds before redaction can shrink them", async () => {
-    const classify = vi.fn();
-    const recordDecision = vi.fn();
-    const { decisions } = service({
-      resolveSetting: () => authorityCloud,
-      classifier: { classify },
-      recordDecision,
-    });
-    for (const invalidState of [
-      { password: "x".repeat(DECISION_LIMITS.stateMaxBytes + 1) },
-      {
-        password: Array.from({ length: DECISION_LIMITS.stateMaxDepth + 1 }).reduce<unknown>(
-          (child) => ({ child }),
-          null,
-        ),
-      },
-      { password: Number.NaN },
-    ]) {
-      expect(
-        await ask(decisions, { purpose: "authority.judge", state: invalidState }),
-      ).toMatchObject({
-        miss: { reason: "invalid-request" },
-      });
-    }
-    expect(classify).not.toHaveBeenCalled();
-    expect(recordDecision).not.toHaveBeenCalled();
-  });
-
-  it("refuses redacted object-key collisions rather than hiding a field from the policy reader", async () => {
-    const classify = vi.fn();
-    const recordDecision = vi.fn();
-    const { decisions } = service({
-      resolveSetting: () => authorityCloud,
-      classifier: { classify },
-      recordDecision,
-    });
-    expect(
-      await ask(decisions, {
-        purpose: "authority.judge",
-        state: { ghp_dummy_first: "first", ghp_dummy_second: "second" },
-      }),
-    ).toMatchObject({ miss: { reason: "invalid-request" } });
-    expect(classify).not.toHaveBeenCalled();
-    expect(recordDecision).not.toHaveBeenCalled();
-  });
-
-  it("does not apply authority state scrubbing to other decision purposes", async () => {
-    let sent: DecisionRequest | undefined;
-    const { decisions } = service({
-      classifier: {
-        classify: async (_target, request) => {
-          sent = request;
-          return {
-            ok: true,
-            answers: { blocked: { type: "bool", probability: 0.9 } },
-            usage: null,
-          };
-        },
-      },
-    });
-    expect(
-      await ask(decisions, {
-        state: { password: "dummy-value" },
-        questions: { blocked: QUESTIONS.blocked },
-      }),
-    ).toHaveProperty("answered");
-    expect(sent?.state).toEqual({ password: "dummy-value" });
-  });
-});
-
 describe("audit", () => {
-  // No shipped purpose is audited yet (VC-28's authority.judge will be), so the
+  // No shipped purpose is audited, so the
   // rule is pinned under a policy that says it is.
   const audited = withPolicy({ audit: true });
 

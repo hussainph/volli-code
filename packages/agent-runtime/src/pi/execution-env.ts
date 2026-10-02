@@ -325,10 +325,8 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * not assumed. Only Seatbelt's `denyRead` ever answered that, and nothing
  * installs it today.
  *
- * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one the two-axis authority rearchitecture rebuilds on. It is kept
- * whole, with the stricter {@link scopedEnvironment} it was written against;
- * nothing wires it up.
+ * `ScopedExecutionEnv` remains available to hosts injecting a scoped boundary,
+ * with the stricter {@link scopedEnvironment}; this default path does not use it.
  *
  * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
  * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and

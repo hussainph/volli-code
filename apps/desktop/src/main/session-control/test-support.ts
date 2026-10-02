@@ -268,7 +268,6 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     modelTier: null,
     turnActive: false,
     lastTurnOutcome: null,
-    authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: session.created_at,
     // This helper reads the ledger tables directly rather than replaying

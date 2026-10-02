@@ -184,38 +184,6 @@ describe("ObservabilityReducer tools", () => {
     // The capability class still carries the call, so it is counted either way.
     expect(event).toMatchObject({ activityKind: "run-command" });
   });
-
-  it("reports execution time with an approval wait taken back out", () => {
-    const reducer = new ObservabilityReducer(() => 0);
-    reducer.reduce({
-      kind: "authority",
-      state: "allowed",
-      turnId: "turn-1",
-      toolCallId: "activity-1",
-      waitDurationMs: 60,
-    });
-    // 160ms wall clock, 60ms of which was a person deciding.
-    expect(reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }))).toMatchObject({
-      durationMs: 100,
-      waitDurationMs: 60,
-    });
-  });
-
-  it("reports no execution time when the wait outlasts the whole measured span", () => {
-    const reducer = new ObservabilityReducer(() => 0);
-    reducer.reduce({
-      kind: "authority",
-      state: "allowed",
-      turnId: "turn-1",
-      toolCallId: "activity-1",
-      waitDurationMs: 5_000,
-    });
-    // The two clocks disagree about a call this reducer only saw the ends of;
-    // a duration derived from that contradiction would be worse than none.
-    const event = reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }));
-    expect(event).not.toHaveProperty("durationMs");
-    expect(event).toMatchObject({ waitDurationMs: 5_000 });
-  });
 });
 
 describe("observedToolId", () => {
@@ -240,76 +208,6 @@ describe("observedToolId", () => {
 const freshReducer = () => new ObservabilityReducer(() => 0);
 
 describe("ObservabilityReducer lifecycle facts", () => {
-  it("keeps an authority denial's cause and nothing the model chose", () => {
-    const event = freshReducer().reduce({
-      kind: "authority",
-      state: "denied",
-      turnId: null,
-      toolCallId: "activity-1",
-      tool: SENSITIVE,
-      cause: "call.unreadable",
-      reason: SENSITIVE,
-    });
-    expect(event).toEqual({ kind: "authority", outcome: "denied", cause: "call.unreadable" });
-    expect(leaks(event)).toBe(false);
-  });
-
-  it("keeps an allowed authority decision and separates its wait from tool execution", () => {
-    const reducer = freshReducer();
-    const decision = reducer.reduce({
-      kind: "authority",
-      state: "allowed",
-      turnId: "turn-1",
-      toolCallId: "activity-1",
-      waitDurationMs: 40,
-    });
-    const tool = reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }));
-
-    expect(decision).toEqual({ kind: "authority", outcome: "allowed", waitDurationMs: 40 });
-    expect(tool).toEqual({
-      kind: "tool",
-      activityKind: "run-command",
-      outcome: "completed",
-      durationMs: 120,
-      waitDurationMs: 40,
-    });
-  });
-
-  it("keeps authority decisions without a wait, and never invents negative execution time", () => {
-    const reducer = freshReducer();
-    expect(
-      reducer.reduce({
-        kind: "authority",
-        state: "allowed",
-        turnId: "turn-1",
-        toolCallId: "activity-1",
-      }),
-    ).toEqual({ kind: "authority", outcome: "allowed" });
-    expect(
-      reducer.reduce({
-        kind: "authority",
-        state: "denied",
-        turnId: "turn-1",
-        toolCallId: "activity-1",
-        waitDurationMs: 200,
-        tool: SENSITIVE,
-        cause: "call.unreadable",
-        reason: SENSITIVE,
-      }),
-    ).toEqual({
-      kind: "authority",
-      outcome: "denied",
-      cause: "call.unreadable",
-      waitDurationMs: 200,
-    });
-    expect(reducer.reduce(activity("failed", { startedAt: 100, endedAt: 150 }))).toEqual({
-      kind: "tool",
-      activityKind: "run-command",
-      outcome: "failed",
-      waitDurationMs: 200,
-    });
-  });
-
   it("keeps a landed compaction's reason and both token measurements", () => {
     const event = freshReducer().reduce({
       kind: "compaction",
@@ -608,29 +506,7 @@ describe("ObservabilityReducer content carriers", () => {
   it("reduces every content-bearing observation kind to null", () => {
     const reducer = new ObservabilityReducer(() => 0);
     const carriers: RuntimeObservation[] = [
-      {
-        kind: "approval-used",
-        toolCallId: "call",
-        approvalId: "row",
-        summary: SENSITIVE,
-        asked: SENSITIVE,
-        occurredAt: 0,
-      },
       { kind: "delta", turnId: "t1", channel: "text", text: SENSITIVE },
-      {
-        kind: "authority-review",
-        turnId: "t1",
-        toolCallId: "call",
-        tool: SENSITIVE,
-        mode: "shadow",
-        authoriser: "classifier",
-        wouldFlag: true,
-        reason: SENSITIVE,
-        category: "external",
-        answers: null,
-        missReason: null,
-        thresholds: { allow: 0.95, flag: 0.05 },
-      },
       { kind: "message-settled", turnId: "t1", message: settledMessage() },
       { kind: "compaction-progress", state: "started", reason: "manual" },
       { kind: "compaction-progress", state: "finished", reason: "manual" },

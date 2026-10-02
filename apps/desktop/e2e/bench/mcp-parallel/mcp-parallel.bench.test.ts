@@ -46,10 +46,6 @@ describe("VC-454 MCP parallel dispatch through createPiAgentRuntime", () => {
           expect(run.retryCount).toBe(0);
           expect(run.fixtureCancelled).toBe(0);
           expect(run.turnState).toBe("completed");
-          // Every call passed the Authority gate before it ran, and none
-          // parked on a person.
-          expect(run.gatedCalls).toBe(batchSize);
-          expect(run.approvalWaitMs).toBe(0);
           for (const peak of run.hostPeakPerServer) expect(peak).toBeLessThanOrEqual(cap);
         }
         expect(seq.providerRequests).toBe(2);

@@ -1,23 +1,8 @@
 /**
- * A small shell lexer, ported from pi-automode.
- *
- * Rules need the program separated from its operands, because the dangerous
- * cases are operand-shaped: `rm -rf /` and `rm -rf ./build` differ in one word.
- * A regex over the whole command line cannot make that distinction, and it
- * cannot see past the oldest bypass there is — a safe prefix hiding a risky
- * suffix behind `&&`, `|`, or `;`.
- *
- * What this is worth, stated plainly: it handles quoting, escaping, operators,
- * and redirects, and it is defeated by `eval`, `base64`, command substitution,
- * `xargs`, and any other construct that produces a command line the lexer never
- * sees. It is sound only as a layer beneath a boundary that holds whatever the
- * lexer concluded, and unsound as a standalone one. It was written beneath the
- * Seatbelt sandbox, which denied the network, stripped credentials from the
- * child environment and scoped writes to the workspace; that sandbox is no
- * longer installed, and neither is the rule pack this feeds, so nothing lexes a
- * command today. Do not promote it to a boundary to fill the gap.
- *
- * See `./README.md` for the upstream revision and the divergences.
+ * A small shell lexer, ported from pi-automode. The waited-process lifecycle
+ * guard uses it to distinguish background syntax from quoted/escaped text.
+ * Generated command text can evade it; it is never a containment boundary.
+ * See ./UPSTREAM.md for provenance, divergences and licence.
  */
 
 /** One command in a pipeline or operator chain, with its redirects pulled out. */
@@ -34,11 +19,6 @@ export interface LexedSegment {
 
 /** A leading `NAME=value` assignment, which scopes an environment variable to one command. */
 const ASSIGNMENT = /^\w+=/;
-
-/** Whether a token sets an environment variable rather than naming an operand. */
-export function isAssignment(token: string): boolean {
-  return ASSIGNMENT.test(token);
-}
 
 /** Redirect operators this tokenizer can emit, with the optional file descriptor. */
 const REDIRECT = /^(?:\d*|&)(?:>>|>&|>\||>|<&|<)$/;

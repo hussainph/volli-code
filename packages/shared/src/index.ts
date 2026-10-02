@@ -29,7 +29,6 @@ export * from "./model-mark-color";
 export * from "./model-access-sign-in";
 export * from "./usage-limits";
 export * from "./compaction-policy";
-export * from "./approvals";
 export * from "./authority";
 export * from "./agent-tool-surface";
 export * from "./code-mode";
@@ -120,5 +119,3 @@ export * from "./theme/editor-themes";
 
 export * from "./session-origin";
 export * from "./session-stop";
-export * from "./approval-observation";
-export * from "./approval-command";

@@ -76,6 +76,7 @@ describe("table decisions", () => {
       "authority_approval_commands",
       "authority_approval_events",
       "authority_approval_completions",
+      "authority_decisions",
     ]) {
       expect(tableBackupDecision(table)?.decision, `${table} must be excluded`).toBe("exclude");
       expect(BACKUP_INCLUDED_TABLES).not.toContain(table);

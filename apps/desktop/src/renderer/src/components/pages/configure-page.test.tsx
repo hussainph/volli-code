@@ -126,7 +126,6 @@ describe("Configure rail", () => {
       "Skills",
       "Commands",
       "MCP Servers",
-      "Protection",
       "Secrets",
       "Sessions",
       "Appearance",

@@ -296,7 +296,6 @@ describe("PeekConversation", () => {
       },
       status: "open",
       liveExecutor: null,
-      authority: null,
       attention: { active: [], primary: null },
       interactions: { active: [], resolved: [] },
       signal: null,

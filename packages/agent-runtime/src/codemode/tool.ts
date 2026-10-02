@@ -10,10 +10,8 @@
  *
  * - **Same door as a direct call.** A nested call goes through Pi's own
  *   `runToolCall` — the argument preparation and schema validation a
- *   model-issued call gets — then through the Session's own `beforeToolCall`
- *   gate, the same function instance the `Agent` holds, so authority rules,
- *   the escalation counters and approvals are shared rather than copied. The
- *   tool it reaches is the Session's own `AgentTool`, bound to the same
+ *   model-issued call gets. The tool is the Session's own `AgentTool`, bound
+ *   to the same
  *   environment, ports, Session identity and host handlers. A program can name
  *   a tool and its arguments; who is calling is never something it states.
  * - **Checked before it runs** (`./script.ts`), **scheduled** (`./schedule.ts`),
@@ -25,12 +23,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  AgentContext,
-  AgentLoopConfig,
-  AgentTool,
-  AgentToolResult,
-} from "@earendil-works/pi-agent-core";
+import type { AgentContext, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { runToolCall } from "@earendil-works/pi-agent-core";
 import {
   CodemodeSandbox,
@@ -84,8 +77,6 @@ import { isUntrustedSource, untrustedEnvelope } from "./trust";
 import { withCallScope } from "../pi/call-scope";
 import { SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
 
-type BeforeToolCall = NonNullable<AgentLoopConfig["beforeToolCall"]>;
-
 /** A nested call's lifecycle, in the shape of Pi's own tool events. */
 export type NestedToolEvent =
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
@@ -124,12 +115,6 @@ export interface CodeModeHost {
   surface: CodeModeSurface;
   /** Every other tool of the Session's frozen surface, in surface order. */
   tools: readonly SurfaceTool[];
-  /**
-   * The gate every direct call passes, read when a nested call is judged.
-   * Absent when the Session runs without an Authority Snapshot — exactly when
-   * the `Agent` has no gate either.
-   */
-  gate: () => BeforeToolCall | undefined;
   /** The activity path a direct call's tool events take. */
   observe: (event: NestedToolEvent) => Promise<void>;
   journal: CodeModeJournal;
@@ -140,7 +125,7 @@ export interface CodeModeHost {
    */
   honourParallelReads?: boolean;
   /**
-   * How long a run may spend paused — on approvals and Volli verbs — before
+   * How long a run may spend paused — on questions and Volli verbs — before
    * it is stopped anyway, in milliseconds. Pausing stops the run's own clock,
    * but not the VM: a program that spins instead of awaiting keeps a core busy
    * for as long as a person takes, so the pause is bounded too.
@@ -160,7 +145,7 @@ export interface CodeModeDetails {
   error?: "check" | "script" | "timeout" | "aborted" | "sandbox" | "replay" | "limit";
   /** Active running time, in milliseconds. */
   activeMs: number;
-  /** Time the run spent paused on judgement — a person answering, at the most. */
+  /** Time the run spent paused on a person answering. */
   pausedMs: number;
   nestedCalls: NestedToolCalls;
   /** Nested calls answered from the replay journal rather than run. */
@@ -199,7 +184,7 @@ export const MAX_HELD_OUTPUT_CHARS = 4 * 1_024 * 1_024;
  */
 const CALLS_PAST_LIMIT = 10;
 
-/** How long a run may stay paused on approvals and verbs before it is stopped anyway. */
+/** How long a run may stay paused on questions and verbs before it is stopped anyway. */
 export const DEFAULT_PAUSE_ALLOWANCE_MS = 15 * 60_000;
 
 /**
@@ -258,7 +243,7 @@ const codemodeSchema = Type.Object({
   }),
 });
 
-/** A stand-in for the message a nested call came from. Volli's gate reads only the call. */
+/** A stand-in for the message a nested call came from. */
 function syntheticMessage(): AssistantMessage {
   return {
     role: "assistant",
@@ -463,7 +448,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     ),
   );
   // The pause is bounded too: the VM keeps running while the clock is
-  // stopped, so a program that spins instead of awaiting an approval would
+  // stopped, so a program that spins instead of awaiting an answer would
   // otherwise hold a core for as long as nobody answers.
   const pauseAllowanceMs = host.pauseAllowanceMs ?? DEFAULT_PAUSE_ALLOWANCE_MS;
   const ceiling = setTimeout(
@@ -476,7 +461,6 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       ),
     check.timeoutMs + pauseAllowanceMs,
   );
-  const judging = new Mutex();
   const slots = new ExecutionSlots(limits.maxConcurrency);
   const records: CallRecord[] = [];
   const untrusted = new Map<string, number>();
@@ -488,32 +472,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     untrusted.set(name, (untrusted.get(name) ?? 0) + 1);
   };
 
-  // The Session's own gate, with the clock stopped while it decides:
-  // judgement is where a call may wait on a person.
-  const gate = host.gate();
-  const judge: BeforeToolCall | undefined =
-    gate === undefined
-      ? undefined
-      : async (context, callSignal) => {
-          if (callSignal?.aborted) return { block: true, reason: "The program was cancelled." };
-          clock.pause();
-          try {
-            return await gate(context, callSignal);
-          } finally {
-            clock.resume();
-          }
-        };
-  // Admitted calls are judged under the lock, one at a time in issue order.
-  // The execution slot covers judgement too: no call may normalize paths or
-  // receive approval before an earlier exclusive call finishes changing them.
-  // Reads can still be judged and run beside other reads. Running holds no
-  // judgement lock; any question it asks waits its turn below.
-  const lockedJudge: BeforeToolCall | undefined =
-    judge === undefined
-      ? undefined
-      : (context, callSignal) => judging.run(() => judge(context, callSignal));
   // One question at a time, structurally: every question any nested call puts
-  // to a person — the gate's escalation, a verb's budget, an MCP server's
+  // to a person — a verb's budget, an MCP server's
   // sign-in — goes through this lock, and the clock stops from the moment a
   // question waits for its turn until it is answered. Calls run beside each
   // other as their kind allows until one of them actually asks.
@@ -603,14 +563,11 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
           tools: [tool],
           assistantMessage: syntheticMessage(),
           context: { messages: [], tools: [tool] } satisfies AgentContext,
-          ...(lockedJudge === undefined ? {} : { beforeToolCall: lockedJudge }),
           signal,
         },
       );
-    // Admit before argument preparation, validation, the gate (including its
-    // audit), and execution. The slot cannot be released between approval and
-    // use. Keep the program's scope around the whole call so questions raised
-    // by either the gate or the tool take the question lock.
+    // Admit before validation and execution. The tool's own host guards see
+    // the effects of earlier exclusive calls. Questions take the shared lock.
     const outcome = await slots
       .run(shared, signal, () => withCallScope(scope, call))
       .catch((error: unknown) => {
@@ -912,7 +869,7 @@ async function assemble(input: {
   const header = [
     `Program ${ok ? "completed" : "failed"} in ${seconds(input.activeMs)}`,
     input.pausedMs >= 1_000
-      ? ` (plus ${seconds(input.pausedMs)} paused on approvals and Volli verbs)`
+      ? ` (plus ${seconds(input.pausedMs)} paused on questions and Volli verbs)`
       : "",
     ` · ${callSummary(input.records, input.replayed)}.`,
     printed.images > 0

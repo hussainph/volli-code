@@ -3,7 +3,6 @@ import {
   assertSession,
   assertSessionEvent,
   parseRendererSessionEvent,
-  scrubSessionAuthority,
   scrubSessionCommand,
   scrubSessionEvent,
   scrubSessionEventPayload,
@@ -19,10 +18,8 @@ import {
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
-import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
   Session,
@@ -59,21 +56,8 @@ const attachment: SessionAttachment = {
   authority: null,
 };
 
-/** A Snapshot as it sits in history, for the decode cases below. */
-const recordedAuthority: AuthoritySnapshot = {
-  mode: "auto",
-  location: "worktree",
-  enforcement: "enforce",
-  judgmentMode: "ask",
-  tools: ["read"],
-  rulePackId: BUILTIN_RULE_PACK_ID,
-  rulePackHash: BUILTIN_RULE_PACK_HASH,
-  classifierModel: null,
-  fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-};
-
 const interaction: SessionInteraction = {
-  id: "ask:tool-1",
+  id: "budget-ask:tool-1",
   attachmentId: "attachment-1",
   kind: "permission",
   title: "Allow write?",
@@ -353,13 +337,13 @@ const payloads = samples(
   {
     kind: "interaction.resolved",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     resolution: { optionIds: ["once"], response: null },
   },
   {
     kind: "interaction.resolved",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     resolution: {
       optionIds: ["src", "no"],
       response: "text",
@@ -372,7 +356,7 @@ const payloads = samples(
   {
     kind: "interaction.cancelled",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     reason: "abandoned",
   },
   { kind: "command.receipt.recorded", receipt },
@@ -409,29 +393,6 @@ const payloads = samples(
       recordedAt: 105,
       sequence: 5,
     },
-  },
-  {
-    kind: "authority.reviewed",
-    attachmentId: "attachment-1",
-    turnId: "turn-1",
-    toolCallId: "call-1",
-    tool: "execute",
-    mode: "shadow",
-    authoriser: "classifier",
-    wouldFlag: true,
-    reason: "This action exceeds the request.",
-    category: "external",
-    answers: { authorised: { type: "bool", value: false, probability: 0.1, confidence: 0.8 } },
-    missReason: null,
-    thresholds: { allow: 0.95, flag: 0.05 },
-  },
-  {
-    kind: "authority.denied",
-    attachmentId: "attachment-1",
-    turnId: null,
-    tool: "bash",
-    cause: "command.destructive-removal",
-    reason: "rm -rf ~ discards more than this Session's workspace.",
   },
   {
     kind: "context.compacted",
@@ -688,7 +649,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       {
         kind: "interaction.resolve",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         resolution: { optionIds: ["once"], response: null },
         reference: { id: "sha256:r", mediaType: null, digest: null },
       },
@@ -756,7 +717,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
     const resolved = roundTrip({
       kind: "interaction.resolved",
       attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
+      interactionId: "budget-ask:tool-1",
       resolution: { optionIds: [], response: null },
     });
     expect(resolved.kind === "interaction.resolved" && "answers" in resolved.resolution).toBe(
@@ -789,7 +750,7 @@ const resolved = (resolution: unknown) =>
     {
       kind: "interaction.resolved",
       attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
+      interactionId: "budget-ask:tool-1",
       resolution,
     },
     "payload",
@@ -1138,19 +1099,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(() =>
       decodeSessionEventPayload(
         {
-          kind: "authority.denied",
-          attachmentId: "attachment-1",
-          turnId: null,
-          tool: 7,
-          cause: "cause",
-          reason: "reason",
-        },
-        "payload",
-      ),
-    ).toThrow("payload.tool must be a string");
-    expect(() =>
-      decodeSessionEventPayload(
-        {
           kind: "context.compacted",
           attachmentId: "attachment-1",
           reason: "threshold",
@@ -1233,7 +1181,7 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         {
           kind: "interaction.cancelled",
           attachmentId: "attachment-1",
-          interactionId: "ask:tool-1",
+          interactionId: "budget-ask:tool-1",
           reason: "resolved",
         },
         "payload",
@@ -1363,42 +1311,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     );
   });
 
-  it("round-trips a recorded Authority Snapshot, so a denial can name the pack that ruled", () => {
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-
-    const decoded = openedAttachment({ ...attachment, authority });
-
-    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
-  });
-
-  it.each([true, false])("round-trips pinned Protection mode (%s)", (protection) => {
-    const authority = { ...recordedAuthority, protection };
-    const decoded = openedAttachment({ ...attachment, authority });
-    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
-  });
-
-  it("leaves legacy Snapshots without a Protection mode instead of opting them in", () => {
-    const decoded = openedAttachment({ ...attachment, authority: recordedAuthority });
-    if (decoded.kind !== "attachment.opened") throw new Error("not opened");
-    expect(decoded.attachment.authority).not.toHaveProperty("protection");
-  });
-
-  it("rejects a corrupt pinned Protection mode", () => {
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, protection: "true" } }),
-    ).toThrow("payload.attachment.authority.protection must be a boolean");
-  });
-
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
     // Every attachment in history predates VC-44 and carries no `authority` key.
     // Refusing to decode without one would make those Sessions unopenable rather
@@ -1409,71 +1321,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
       kind: "attachment.opened",
       attachment: { ...legacy, authority: null },
     });
-  });
-
-  it("keeps a tool name this build no longer offers, because history outlives a vocabulary", () => {
-    // The record is most valuable precisely here: it is how a reader learns that
-    // the Session which made a call held a tool that has since been retired.
-    const decoded = openedAttachment({
-      ...attachment,
-      authority: { ...recordedAuthority, tools: ["read", "a_tool_that_was_retired"] },
-    });
-
-    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority?.tools).toEqual([
-      "read",
-      "a_tool_that_was_retired",
-    ]);
-  });
-
-  it("rejects a corrupt Authority Snapshot rather than guessing what governed a Session", () => {
-    expect(() => openedAttachment({ ...attachment, authority: "enforce" })).toThrow(
-      "payload.attachment.authority must be an object",
-    );
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, enforcement: "off" } }),
-    ).toThrow("payload.attachment.authority.enforcement has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, mode: "manual" } }),
-    ).toThrow("payload.attachment.authority.mode has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, location: "orbit" } }),
-    ).toThrow("payload.attachment.authority.location has an unsupported value");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, judgmentMode: "vibes" },
-      }),
-    ).toThrow("payload.attachment.authority.judgmentMode has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: "read" } }),
-    ).toThrow("payload.attachment.authority.tools must be an array");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: [7] } }),
-    ).toThrow("payload.attachment.authority.tools[0] must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackId: 1 } }),
-    ).toThrow("payload.attachment.authority.rulePackId must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackHash: 1 } }),
-    ).toThrow("payload.attachment.authority.rulePackHash must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, classifierModel: 1 } }),
-    ).toThrow("payload.attachment.authority.classifierModel must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, fallback: null } }),
-    ).toThrow("payload.attachment.authority.fallback must be an object");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, fallback: { consecutiveDenials: "three" } },
-      }),
-    ).toThrow("payload.attachment.authority.fallback.consecutiveDenials must be an integer");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, fallback: { consecutiveDenials: 3 } },
-      }),
-    ).toThrow("payload.attachment.authority.fallback.sessionDenials must be an integer");
   });
 
   it("rejects malformed attention, prompts, and answers", () => {
@@ -1779,57 +1626,6 @@ describe("the renderer-safe scrub", () => {
     expect(scrubbed.kind === "attachment.opened" && "native" in scrubbed.attachment).toBe(false);
   });
 
-  /*
-   * The Authority summary (VC-285) is the ONE thing the attachment scrub keeps
-   * withholding and a surface now needs: a chip that says what the live
-   * attachment was pinned to. It is derived beside the scrub rather than added
-   * back to `RendererSessionAttachment`, so the durable Snapshot's recovery-
-   * adjacent remainder — the tool surface, the classifier model, the location,
-   * the thresholds — stays behind the product edge.
-   */
-  it("summarizes the live attachment's saved policy without shipping the Snapshot", () => {
-    const summary = scrubSessionAuthority({ ...attachment, authority: recordedAuthority });
-
-    expect(summary).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: {
-        enforcement: "enforce",
-        rulePackId: BUILTIN_RULE_PACK_ID,
-        rulePackHash: BUILTIN_RULE_PACK_HASH,
-      },
-    });
-    // Everything else the Snapshot carries stays host-side.
-    for (const withheld of ["tools", "classifierModel", "fallback", "location", "judgmentMode"]) {
-      expect(withheld in (summary?.snapshot ?? {})).toBe(false);
-    }
-  });
-
-  it("keeps observe distinguishable from enforce, because they are different outcomes", () => {
-    expect(
-      scrubSessionAuthority({
-        ...attachment,
-        authority: { ...recordedAuthority, enforcement: "observe" },
-      })?.snapshot?.enforcement,
-    ).toBe("observe");
-  });
-
-  /*
-   * A `null` Snapshot is a permanent answer, not a gap: `enforcement: "off"`
-   * hands the attachment none, and so does every attachment written before
-   * VC-44. The summary says so rather than letting a reader infer today's
-   * project setting.
-   */
-  it("reports an attachment that saved no Snapshot as exactly that", () => {
-    expect(scrubSessionAuthority(attachment)).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: null,
-    });
-  });
-
-  it("has nothing to say when no attachment is live", () => {
-    expect(scrubSessionAuthority(null)).toBeNull();
-  });
-
   it("nulls a failure's diagnostic beside its scrubbed attachment", () => {
     const scrubbed = scrubSessionEventPayload({
       kind: "attachment.failed",
@@ -2013,25 +1809,16 @@ describe("the renderer-safe scrub", () => {
       {
         kind: "interaction.resolved",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         resolution: { optionIds: ["once"], response: null },
       },
       {
         kind: "interaction.cancelled",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         reason: "abandoned",
       },
       { kind: "command.receipt.recorded", receipt },
-      // Volli's own vocabulary already, not a harness's.
-      {
-        kind: "authority.denied",
-        attachmentId: "attachment-1",
-        turnId: null,
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "refused",
-      },
       // An executor's entry id, which addresses its history and locates
       // nothing on disk, and a diagnostic sanitized before it was recorded.
       {
@@ -2290,66 +2077,5 @@ describe("the renderer-side parse", () => {
       reason: "malformed",
       message: "event.payload.attachment is not a valid Session attachment",
     });
-  });
-});
-
-describe("typed approval metadata", () => {
-  const approval = {
-    asked: "printf 'a\u241eb'",
-    because: "why\u241enow",
-    reason: "rule\u241etext",
-    stages: ["echo 'a\u241eb'", "tee /x"],
-    held: 1,
-    heldStages: [0, 1],
-  };
-
-  it.each([null, 1])("round-trips metadata without splitting any field (held=%s)", (held) => {
-    const original = { ...interaction, approval: { ...approval, held } };
-    const payload = { kind: "interaction.opened" as const, interaction: original };
-    expect(roundTrip(payload)).toEqual(payload);
-    expect(scrubSessionInteraction(original).approval).toEqual(original.approval);
-    expect(scrubSessionEventPayload(payload)).toMatchObject({
-      interaction: { approval: original.approval },
-    });
-  });
-
-  it("keeps older typed cards with only a single held-stage field", () => {
-    const { heldStages, ...olderApproval } = approval;
-    expect(heldStages).toEqual([0, 1]);
-    const payload = {
-      kind: "interaction.opened" as const,
-      interaction: { ...interaction, approval: olderApproval },
-    };
-    expect(roundTrip(payload)).toEqual(payload);
-  });
-
-  it("keeps historical and model questions without approval metadata", () => {
-    const opened = roundTrip({ kind: "interaction.opened", interaction });
-    expect(opened.kind === "interaction.opened" && "approval" in opened.interaction).toBe(false);
-  });
-
-  it.each([
-    null,
-    "forged",
-    { ...approval, asked: 1 },
-    { ...approval, because: null },
-    { ...approval, reason: false },
-    { ...approval, stages: "echo" },
-    { ...approval, stages: [1] },
-    { ...approval, held: "1" },
-    { ...approval, held: -1 },
-    { ...approval, held: 2 },
-    { ...approval, held: 0.5 },
-    { ...approval, heldStages: "0,1" },
-    { ...approval, heldStages: ["0"] },
-    { ...approval, heldStages: [-1] },
-    { ...approval, heldStages: [2] },
-  ])("rejects malformed approval metadata: %j", (invalid) => {
-    expect(() =>
-      decodeSessionEventPayload(
-        { kind: "interaction.opened", interaction: { ...interaction, approval: invalid } },
-        "payload",
-      ),
-    ).toThrow(/approval/u);
   });
 });

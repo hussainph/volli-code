@@ -44,15 +44,15 @@
  *    a promise that {@link PiBinding.dispatch} settles when the answering
  *    command comes back the other way. The interaction id is the whole of what
  *    the two halves share — the runtime names a tool call and a Session command
- *    names an interaction — which is why {@link askInteractionId} derives one
+ *    names an interaction — which is why {@link budgetAskInteractionId} derives one
  *    from the other and why that derivation is frozen. What is deliberately
  *    absent is durability: the question, the answer and the withdrawal are all
  *    Session facts, and this file emits observations for the Engine to write
  *    rather than writing any of them itself.
  *
  *    Two kinds of question take that path, parked in two maps under two frozen
- *    prefixes. An escalation is the runtime's own policy asking whether to stand
- *    aside, and its answer is read back through `askChoice` as a verdict; the
+ *    prefixes. A budget extension or host confirmation is read back through
+ *    `askChoice` as a decision; the
  *    model's own question ({@link PiBinding.#askUser}) carries the model's
  *    options and hands the answer back untouched, because reading it would mean
  *    deciding what one of the model's own ids meant. One prefix serving both
@@ -73,10 +73,8 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
-  approvalCopy,
   askChoice,
   askOffer,
-  askInteractionId,
   askUserInteractionId,
   budgetAskInteractionId,
   confirmAskInteractionId,
@@ -84,8 +82,6 @@ import {
   isBudgetCause,
   isConfirmCause,
   isCredentialConfirmCause,
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   isMcpToolId,
@@ -93,8 +89,6 @@ import {
   sessionToolIds,
   verbToolsOf,
   type AgentRuntime,
-  type AuthorityPolicy,
-  type AuthoritySnapshot,
   type CommandRefusalSeverity,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
@@ -105,9 +99,6 @@ import {
   type PromptResource,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
-  type ApprovalDecision,
-  type ApprovalScope,
-  type RuntimeApprovalHit,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
@@ -130,7 +121,6 @@ import {
   type SessionNativeReference,
   type SessionRuntimeSpec,
   type UIMessageLike,
-  type WorkLocationKind,
 } from "@volli/shared";
 import type { SecretWaitPublisher } from "../secrets/service";
 
@@ -188,8 +178,7 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
 
 /**
  * The coding tools this slice loads. Exported for the `prompt.baseline`
- * diagnostic, which must price the authority layer over the same tool list a
- * real attach names.
+ * diagnostic, which uses the same coding tool list a real attach names.
  */
 export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
@@ -198,81 +187,8 @@ function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
   return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
 }
 
-/**
- * The Authority Snapshot for one attachment, or `null` when the gate is off.
- *
- * Handed the Session's FROZEN Agent Tool Surface rather than deriving one, and
- * that is the whole point of taking `toolSurface`: it is durable data recorded
- * once for the Session (VC-164), and `runtimeSpec` asserts the array Pi resolves
- * against re-derives to exactly it. So the list history records and the list the
- * model can call are the same list by construction. A hand-written list here
- * would compile, would look right, and would under-report the surface by exactly
- * the three tools that tripped VC-3 — and it would no longer be caught, because
- * `tool.not-bundled` was deleted once the lists had one source. What is left of
- * that failure is quieter and worse for being durable: a Snapshot recorded here
- * is read back months later to interpret a denial, and a tool list that was
- * never the Session's is a record that lies.
- *
- * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
- * with no Snapshot to pin, which is what every Session did before VC-44 and what
- * Codex and Claude Code both ship as an explicit bypass. It is a decision a
- * project makes, not a state the product falls into.
- */
-function piAuthoritySnapshot(
-  policy: AuthorityPolicy,
-  location: WorkLocationKind,
-  toolSurface: readonly SessionToolId[],
-  protectionEnabled: boolean,
-): AuthoritySnapshot | null {
-  if (policy.enforcement === "off") return null;
-  return {
-    mode: "auto",
-    location,
-    enforcement: policy.enforcement,
-    protection: policy.enforcement === "enforce" && protectionEnabled,
-    judgmentMode: policy.judgmentMode,
-    tools: [...toolSurface],
-    rulePackId: BUILTIN_RULE_PACK_ID,
-    rulePackHash: BUILTIN_RULE_PACK_HASH,
-    classifierModel: policy.classifierModel,
-    fallback: policy.fallback,
-  };
-}
-
-/**
- * One answer that asks to be remembered (VC-480), as main hands it to the
- * ledger. Everything the row's provenance needs beyond this is already known
- * to the port: the Session, its project, its Ticket.
- */
-export interface PiProtectionGrant {
-  scope: "session" | "project";
-  scopes: readonly ApprovalScope[];
-  rule: string;
-  asked: string;
-  reason: string;
-  interactionId: string;
-}
-
-/**
- * Protection mode for one attachment (VC-480): the remembered approvals it may
- * read and the one door that writes them.
- *
- * Supplied by main independently of current policy so recovery can replay a
- * protected attachment. The adapter activates it only from the pinned Snapshot.
- * `covers` reads live on every call; `remember` runs in main, from the person's
- * answer, BEFORE the runtime is told — the runtime holds no way to write a row.
- */
-export interface PiProtection {
-  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
-  decided(decision: ApprovalDecision): void;
-  completed?(toolCallId: string): void;
-  remember(grant: PiProtectionGrant): void;
-}
-
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
-  /** Host capability, available even when current policy is off (VC-480). */
-  protection?: PiProtection;
   projectId: string;
   /**
    * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
@@ -299,47 +215,6 @@ interface PiRuntimeContextFields {
   mcpTools?: readonly McpToolDefinition[];
   /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
   codeMode?: CodeModeSurface;
-  /**
-   * Which tree the Session runs in. Not derivable from the Role here: a Ticket
-   * that never took a worktree is bound to the project's Main checkout by
-   * `location.ts`, and policy that assumed otherwise would treat a person's
-   * uncommitted work as a disposable branch.
-   *
-   * Read onto every Authority Snapshot this adapter builds (VC-44), which is
-   * what a rule like `command.git-discards-work` keys off: `git reset --hard` in
-   * a disposable branch worktree and the same command in a person's Main
-   * checkout are not the same act.
-   */
-  location: WorkLocationKind;
-  /**
-   * The project's resolved authority policy — built-in defaults with this
-   * project's recorded departures applied (VC-44).
-   *
-   * Resolved by main, because only main can reach the store: it is a column on
-   * `projects` in the SQLite database under Electron's `userData`, and this
-   * module stays Electron-free so its tests run in plain Node. That split is
-   * also the security property. Policy is read from app-owned state and never
-   * from the tree the Session is editing, so a Session cannot write the file
-   * that governs it — the privilege-escalation loop Claude Code's classifier
-   * refuses repo-local `autoMode` settings to avoid.
-   *
-   * Read once per attachment, like the web ports and for the same reason: what a
-   * Session may do is pinned when it starts, so a Settings change never lands
-   * mid-turn.
-   */
-  authorityPolicy: AuthorityPolicy;
-  /**
-   * Refusals this Session accrued before this attachment existed, from
-   * `SessionProjection.authorityDenials` (VC-44).
-   *
-   * Carried because the Session half of {@link AuthorityFallback} is a fact
-   * about the Session and not about one attachment: a counter that restarted at
-   * zero on every attach would never reach a threshold of twenty, so the
-   * escalation it exists to trigger would simply never happen. It is live
-   * machine state rather than policy, which is why it rides beside the Snapshot
-   * instead of inside it — the Snapshot is pinned and this is re-read every time.
-   */
-  priorAuthorityDenials: number;
   /**
    * The skills this Session was explicitly started with, read from its own
    * durable `prompt-resources` record — never from disk at attach time, so a
@@ -548,11 +423,6 @@ export interface PiAdapterOptions {
     allowInjection: boolean;
     wait: SecretWaitPublisher;
   }) => DesktopSecretPort;
-  /** Live opt-in for paid shadow review; separate from automatic enforcement. */
-  authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
-  /** Authority review is host policy, not an agent tool capability. */
-  decisions?: import("@volli/shared").DecisionPort;
-  authorityReason?: SessionRuntimeSpec["authorityReason"];
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -596,7 +466,7 @@ export interface PiAdapterOptions {
      * handler for the one question a verb may raise mid-call: a spent budget
      * (VC-204). Bound here rather than resolved by the door so the question
      * rides the same interaction ledger, withdrawal signal and answer path as
-     * every escalation this binding asks — and so a door reached any other way
+     * every host permission this binding asks — and so a door reached any other way
      * simply has no one to ask, which reads as the hard refusal it should.
      */
     budgetAsk: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
@@ -842,9 +712,6 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
-    ...(options.authorityShadowReviewEnabled === undefined
-      ? {}
-      : { authorityShadowReviewEnabled: options.authorityShadowReviewEnabled }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
     ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
@@ -922,8 +789,6 @@ function piNativeAdapter(
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
         }),
-        decisions: options.decisions,
-        authorityReason: options.authorityReason,
         classify: options.resolveClassifyPort?.({
           sessionId: spec.sessionId,
           projectId: context.projectId,
@@ -961,22 +826,10 @@ function piNativeAdapter(
   };
 }
 
-// The `ask:` / `ask-user:` interaction id derivations are frozen durable
-// segments and live in @volli/shared beside the interaction vocabulary, so the
-// renderer that correlates on them and this adapter that mints them cannot
-// drift. See `askInteractionId` / `askUserInteractionId` there.
+// Model questions use the shared `askUserInteractionId` derivation. Budget
+// and confirmation permissions use their own durable id prefixes below.
 
-/**
- * What the question says, in the two shapes an escalation arrives in.
- *
- * A refusal a person may overrule is a question about this one call; a refusal
- * that stands whatever the answer is a statement that it did not run. The
- * difference is not tone, it is the options: {@link askOffer} answers the second
- * case with "Keep working" and "Stop the turn", neither of which grants
- * anything, so a title phrased as a permission request would describe controls
- * that do not exist. The refusing rule's own words are the explanation and go in
- * `detail`; the title only has to name the call.
- */
+/** The existing generic permission title for budget and confirmation asks. */
 function askTitle(request: RuntimeAskRequest): string {
   return request.overridable
     ? `Allow this ${request.tool} call?`
@@ -1003,7 +856,7 @@ interface ParkedAsk {
 /**
  * One of the model's own questions, parked the same way and answered differently.
  *
- * It keeps no request. An escalation holds one because `askChoice` reads the
+ * It keeps no request. A host permission holds one because `askChoice` reads the
  * answer back against it; there is nothing to read back against here, and
  * keeping the request anyway would be an invitation to start.
  */
@@ -1030,8 +883,6 @@ interface PiBindingOptions {
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
   resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
-  decisions: import("@volli/shared").DecisionPort | undefined;
-  authorityReason: SessionRuntimeSpec["authorityReason"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -1041,9 +892,6 @@ interface PiBindingOptions {
 }
 
 class PiBinding implements BindingHandle {
-  // A revoke while parked can require another card for the same tool call.
-  #approvalRounds = new Map<string, number>();
-  #approvalAnswersInFlight = new Set<string>();
   readonly #spec: NativeAttachmentSpec;
   readonly #sink: ObservationSink;
   readonly #context: PiRuntimeContext;
@@ -1055,8 +903,6 @@ class PiBinding implements BindingHandle {
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
   readonly #secret: DesktopSecretPort | undefined;
-  readonly #decisions: import("@volli/shared").DecisionPort | undefined;
-  readonly #authorityReason: SessionRuntimeSpec["authorityReason"];
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1080,8 +926,6 @@ class PiBinding implements BindingHandle {
    */
   #releasing = false;
   #released = false;
-  /** Pinned at construction; see {@link PiBinding.authority}. */
-  readonly #authority: AuthoritySnapshot | null;
 
   constructor(options: PiBindingOptions) {
     this.#spec = options.spec;
@@ -1135,34 +979,10 @@ class PiBinding implements BindingHandle {
           ),
       },
     });
-    this.#decisions = options.decisions;
-    this.#authorityReason = options.authorityReason;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
-    // Last, because every field it reads must already be set.
-    //
-    // A rehydrated attachment REPLAYS the Snapshot it opened under; only a fresh
-    // one resolves current policy (VC-44). Pinning is a claim about the
-    // attachment's whole life, not about one process, so an attachment that
-    // outlives a relaunch and a policy edit must keep answering with the pack it
-    // was judged against — otherwise `authority.denied`, which resolves through
-    // `attachmentId`, would cite a pack that never saw the call.
-    //
-    // Tested for PRESENCE, not for truthiness: a rehydrated attachment that
-    // opened under `off` pins `null`, and `??` would read that as "nobody said"
-    // and resolve today's policy — handing a Snapshot to the one attachment that
-    // is entitled to run without one.
-    this.#authority =
-      "pinnedAuthority" in options.spec
-        ? (options.spec.pinnedAuthority ?? null)
-        : piAuthoritySnapshot(
-            options.context.authorityPolicy,
-            options.context.location,
-            options.context.toolSurface,
-            options.context.protection !== undefined,
-          );
   }
 
   /**
@@ -1184,24 +1004,8 @@ class PiBinding implements BindingHandle {
     return this.#native;
   }
 
-  /**
-   * The policy this attachment runs under, for the Session Engine to record.
-   *
-   * Computed once in the constructor rather than per read, because a Snapshot is
-   * pinned for the life of an attachment by its own definition — two reads that
-   * could differ would make "pinned" a claim rather than a property.
-   */
-  get authority(): AuthoritySnapshot | null {
-    return this.#authority;
-  }
-
   runtimeSpec(): SessionRuntimeSpec {
     const context = this.#context;
-    // Losing the ledger/audit host must not silently downgrade a protected
-    // attachment to an ordinary authority gate during recovery.
-    if (this.#authority?.protection === true && context.protection === undefined) {
-      throw new Error("Pi requires the Protection approval and audit host for this attachment.");
-    }
     const identity = {
       sessionId: this.#spec.sessionId,
       rootThreadId: context.rootThreadId,
@@ -1304,40 +1108,6 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // Off installs no gate. Observe permits behavior-neutral shadow review
-      // only with the host's live opt-in; enforce retains rule-pack gating.
-      // The pinned Snapshot records
-      // which posture this attachment uses, independent of tool capability.
-      //
-      // Spread rather than assigned for `promptResources`' reason: the field must
-      // be ABSENT, not set to undefined.
-      ...(this.#authority === null ? {} : { authority: this.#authority }),
-      // Protection mode rides only a gate that binds. `covers` is the read
-      // port and nothing else; the runtime cannot author a row (VC-480).
-      ...(this.#authority?.enforcement === "enforce" &&
-      this.#authority.protection === true &&
-      this.#context.protection !== undefined
-        ? {
-            approvals: {
-              covers: (scope) => this.#context.protection!.covers(scope),
-              decided: (decision) => {
-                this.#context.protection!.decided(decision);
-                if (decision.authoriser === "policy:ledger") void this.#showLedgerHit(decision);
-              },
-              ...(this.#context.protection.completed === undefined
-                ? {}
-                : {
-                    completed: (toolCallId: string) =>
-                      this.#context.protection!.completed!(toolCallId),
-                  }),
-            },
-          }
-        : {}),
-      ...(this.#decisions === undefined ? {} : { decisions: this.#decisions }),
-      ...(this.#authorityReason === undefined ? {} : { authorityReason: this.#authorityReason }),
-      // Read on every attach, never pinned: it is the count of refusals history
-      // already holds, and the Session's own threshold is measured against it.
-      priorAuthorityDenials: this.#context.priorAuthorityDenials,
       brief: { text: this.#context.brief },
       // Spread, not assigned, for the same reason `promptResources` is: an
       // unmeasured workspace must reach the prompt as an ABSENT field rather
@@ -1529,71 +1299,50 @@ class PiBinding implements BindingHandle {
         if (!this.#awaiting(command.interaction.id)) {
           return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
         }
-        const protectedAnswer =
-          this.#asked.get(command.interaction.id)?.request.approval !== undefined;
-        if (protectedAnswer && this.#approvalAnswersInFlight.has(command.interaction.id)) {
+        // The answer is announced from here, and it has to be: the Session
+        // Engine writes `interaction.resolved` from THIS observation and from
+        // nowhere else. The delivery receipt this returns is a receipt, not a
+        // fact — `projectSession` folds it into `receipts` and never looks at
+        // its `result` — so a Session whose adapter stayed silent would settle
+        // the parked call, resume the turn, and leave the question active
+        // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
+        // true, and every later question hidden behind it.
+        //
+        // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
+        // which refuses to park on a question the Session could not record. The
+        // same bargain read the other way: an answer the Session could not
+        // record must not be reported as delivered, because the turn would
+        // resume on a decision history has no account of.
+        try {
+          await this.#observe({
+            kind: "interaction",
+            state: "resolved",
+            occurredAt: this.#now(),
+            interactionId: command.interaction.id,
+            resolution: command.resolution,
+          });
+        } catch (error) {
+          // Nothing was claimed, so the question is still parked and still
+          // active: the card stays answerable and pressing it again retries.
+          // That recoverable state is the whole reason the claim happens after
+          // the emit — claiming first would leave the ask unparked AND
+          // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
+          // turn blocked behind a card nothing can ever answer.
           return this.#rejected(
             command.commandId,
-            "PI_INTERACTION_RESOLVING",
-            "An answer is already being recorded for this approval.",
+            "PI_INTERACTION_NOT_RECORDED",
+            `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
           );
         }
-        if (protectedAnswer) this.#approvalAnswersInFlight.add(command.interaction.id);
-        try {
-          // The answer is announced from here, and it has to be: the Session
-          // Engine writes `interaction.resolved` from THIS observation and from
-          // nowhere else. The delivery receipt this returns is a receipt, not a
-          // fact — `projectSession` folds it into `receipts` and never looks at
-          // its `result` — so a Session whose adapter stayed silent would settle
-          // the parked call, resume the turn, and leave the question active
-          // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
-          // true, and every later question hidden behind it.
-          //
-          // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
-          // which refuses to park on a question the Session could not record. The
-          // same bargain read the other way: an answer the Session could not
-          // record must not be reported as delivered, because the turn would
-          // resume on a decision history has no account of.
-          try {
-            await this.#observe({
-              kind: "interaction",
-              state: "resolved",
-              occurredAt: this.#now(),
-              interactionId: command.interaction.id,
-              resolution: command.resolution,
-            });
-          } catch (error) {
-            // Nothing was claimed, so the question is still parked and still
-            // active: the card stays answerable and pressing it again retries.
-            // That recoverable state is the whole reason the claim happens after
-            // the emit — claiming first would leave the ask unparked AND
-            // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
-            // turn blocked behind a card nothing can ever answer.
-            return this.#rejected(
-              command.commandId,
-              "PI_INTERACTION_NOT_RECORDED",
-              `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
-            );
-          }
-          // Lost the claim while the fact was committing — a withdrawal or a
-          // release got here first. History keeps the resolution, which is true:
-          // a person did answer. What is no longer true is that the runtime is
-          // waiting for it, so this reports a decision that reached nobody.
-          const settled = this.#settleAnswer(command.interaction.id, command.resolution);
-          if (settled === false) {
-            return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
-          }
-          if (typeof settled === "string") {
-            return this.#rejected(
-              command.commandId,
-              "PI_APPROVAL_NOT_REMEMBERED",
-              `The approval could not be saved. Allowed once only; future calls will ask again: ${settled}`,
-            );
-          }
-          return this.#accepted(command.commandId);
-        } finally {
-          if (protectedAnswer) this.#approvalAnswersInFlight.delete(command.interaction.id);
+        // Lost the claim while the fact was committing — a withdrawal or a
+        // release got here first. History keeps the resolution, which is true:
+        // a person did answer. What is no longer true is that the runtime is
+        // waiting for it, so this reports a decision that reached nobody.
+        const settled = this.#settleAnswer(command.interaction.id, command.resolution);
+        if (settled === false) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
         }
+        return this.#accepted(command.commandId);
       }
     }
   }
@@ -1748,43 +1497,15 @@ class PiBinding implements BindingHandle {
    * a question that was never asked.
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
+    if (!isBudgetCause(request.cause) && !isConfirmCause(request.cause)) {
+      throw new Error("This host request is not a budget extension or confirmation.");
+    }
     const offer = askOffer(request);
-    const approval = request.approval;
-    const stages = approval?.stages ?? [];
-    const heldStages = [
-      ...new Set(
-        (approval?.scopes ?? []).flatMap((scope) =>
-          scope.stage !== undefined && scope.stage >= 0 && scope.stage < stages.length
-            ? [scope.stage]
-            : [],
-        ),
-      ),
-    ];
-    const copy = approvalCopy(request.cause);
-    const objections = approval?.objections ?? [];
-    const title = objections.length > 1 ? "Allow these actions?" : copy.title;
-    const because =
-      objections.length > 1
-        ? objections.map((objection) => approvalCopy(objection.cause).because).join(" Also, ")
-        : copy.because;
-    // Three frozen derivations, chosen by cause: a budget question keeps its
-    // own `budget-ask:` segment and a confirmation its `confirm-ask:` one, so
-    // that a gate ask and either of them about ONE tool call can never mint one
-    // interaction id — under a shared prefix the second `opened` emit would
-    // dedupe against the first and park a question nobody was shown. See
-    // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
-    const round = approval === undefined ? 0 : (this.#approvalRounds.get(request.toolCallId) ?? 0);
-    if (approval !== undefined) this.#approvalRounds.set(request.toolCallId, round + 1);
-    const interactionId =
-      round > 0
-        ? `approval-retry:${round}:${request.toolCallId}`
-        : isBudgetCause(request.cause)
-          ? budgetAskInteractionId(request.toolCallId)
-          : isCredentialConfirmCause(request.cause)
-            ? credentialAskInteractionId(request.toolCallId)
-            : isConfirmCause(request.cause)
-              ? confirmAskInteractionId(request.toolCallId)
-              : askInteractionId(request.toolCallId);
+    const interactionId = isBudgetCause(request.cause)
+      ? budgetAskInteractionId(request.toolCallId)
+      : isCredentialConfirmCause(request.cause)
+        ? credentialAskInteractionId(request.toolCallId)
+        : confirmAskInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1792,41 +1513,10 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: offer.kind,
-        title: approval === undefined ? askTitle(request) : title,
+        title: askTitle(request),
         detail: request.reason,
-        ...(approval === undefined
-          ? {}
-          : {
-              approval: {
-                asked: approval.asked,
-                because,
-                reason: approval.reason ?? request.reason,
-                stages,
-                held: heldStages[0] ?? null,
-                heldStages,
-              },
-            }),
         options: offer.options,
         multiple: false,
-        // An approval card takes free text: that is what "Deny and steer" sends.
-        ...(approval === undefined
-          ? {}
-          : {
-              prompts: [
-                {
-                  id: DEFAULT_INTERACTION_PROMPT_ID,
-                  label: title,
-                  detail: null,
-                  options: offer.options,
-                  multiple: false,
-                  custom: true,
-                },
-              ],
-            }),
-        // `prompts` is left off rather than written out. A record without them
-        // is read as the one question its flat fields ask, and stating that
-        // single prompt here would be the same derivation made twice — once
-        // durably, where a later disagreement could not be corrected.
         native: this.#native,
       },
     });
@@ -1845,24 +1535,6 @@ class PiBinding implements BindingHandle {
     if (signal.aborted) withdraw();
     else signal.addEventListener("abort", withdraw, { once: true });
     return parked.settle.promise;
-  }
-
-  /** A ledger receipt is a single nonblocking historical fact, never a parked ask. */
-  async #showLedgerHit(decision: ApprovalDecision): Promise<void> {
-    if (decision.approvalId === null) return;
-    try {
-      await this.#observe({
-        kind: "approval-used",
-        occurredAt: this.#now(),
-        toolCallId: decision.toolCallId,
-        approvalId: decision.approvalId,
-        summary: decision.summary,
-        asked: decision.asked,
-      });
-    } catch (error) {
-      // The fail-closed audit already committed; missing cosmetic history cannot undo it.
-      console.warn("[volli] approval receipt:", error);
-    }
   }
 
   /**
@@ -1955,11 +1627,11 @@ class PiBinding implements BindingHandle {
    * Hand one answer to whichever kind of question was waiting for it.
    *
    * The two readings are the whole reason this is one function and not a shared
-   * one: an escalation's option ids are the runtime's private evidence for a
+   * one: a host permission's option ids are the runtime's private evidence for a
    * verdict, and the model's are the model's own, handed back exactly as a
    * person chose them. False means nothing was still waiting.
    */
-  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean | string {
+  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean {
     const parkedUser = this.#takeUser(interactionId);
     if (parkedUser !== undefined) {
       parkedUser.settle.resolve(resolution);
@@ -1969,27 +1641,7 @@ class PiBinding implements BindingHandle {
     if (parked === undefined) return false;
     // `askChoice` is the runtime's own private reading of a decision the ledger
     // already holds in the person's own option ids.
-    const choice = askChoice(parked.request, resolution.optionIds, resolution.response);
-    // Only the winning, durably recorded answer may activate a grant. There is
-    // no await from this claim through the all-or-nothing insert and settlement.
-    if (choice === "allow-session" || choice === "allow-project") {
-      try {
-        this.#context.protection!.remember({
-          scope: choice === "allow-session" ? "session" : "project",
-          scopes: parked.request.approval?.scopes ?? [],
-          rule: parked.request.cause,
-          asked: parked.request.approval?.asked ?? parked.request.tool,
-          reason: parked.request.reason,
-          interactionId,
-        });
-      } catch (error) {
-        // The resolved fact preserves what the person requested. The rejected
-        // mutation receipt surfaces the failure and makes its UI receipt once;
-        // the audit and executor receive only the effective one-time grant.
-        parked.settle.resolve("allow");
-        return errorMessage(error);
-      }
-    }
+    const choice = askChoice(parked.request, resolution.optionIds);
     parked.settle.resolve(choice);
     return true;
   }

@@ -1,3 +1,9 @@
+# Historical VC-480 review
+
+This review describes the retired per-call permission feature. VC-504 removes
+that feature; it is not current product guidance. The UI screenshots have been
+removed. Historical implementation and review evidence remain in git history.
+
 # VC-480 final owner-review fixes
 
 Reviews: [first, 15d1d7b8](https://github.com/hussainph/volli-code/pull/656#issuecomment-5937498826) and [second, 22f321f6](https://github.com/hussainph/volli-code/pull/656#issuecomment-5937862086). This map covers every P1/P2 and the inexpensive P3s; VC-45 remains deferred and Protection remains off by default.
@@ -25,7 +31,6 @@ Reviews: [first, 15d1d7b8](https://github.com/hussainph/volli-code/pull/656#issu
 - Fresh off mode executes real file/command operations; recovered off/observe attachments execute a write despite current project On. Legacy pinned behavior remains unchanged.
 - Approval-answer Command replay uses the same ID concurrently and after SQLite reopen. The new integration exposed settled-card replay failing with “Interaction is not open”; session-runtime now replays its durable result while still checking changed consent.
 - Receipt-code table feeds each actual rejection through `approvalAnswerFailures`; approval copy tests assert distinctive rule explanations rather than generic fallback shapes.
-- [1400 × 900 Off](protection-off-1400x900.png) and [populated On](protection-on-1400x900.png) screenshots use shipping AppShell/Protection components and fixture data. Advanced is collapsed; pane client and scroll heights match. Owner hands-on acceptance is still required.
 
 ## Red/green evidence
 

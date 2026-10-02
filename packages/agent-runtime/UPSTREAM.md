@@ -131,20 +131,19 @@ the patched hunk moved or landed upstream. Regenerate through
 
 ## Replicated Pi code
 
-`src/authority/pi-tool-path.ts` reproduces `normalizeToolPath` from
+`src/pi/tool-path.ts` reproduces `normalizeToolPath` from
 `dist/harness/tools/path-utils.js`: it collapses the Unicode spaces
 `U+00A0`, `U+2000`–`U+200A`, `U+202F`, `U+205F` and `U+3000` to an ASCII
 space and strips one leading `@`. Every Pi
-file tool runs its `path` through it before opening anything, so policy that
-reads the raw argument judges a different file than the tool touches —
-`write { path: "@.git/hooks/pre-commit" }` lands on `.git/hooks/pre-commit`.
+file tool runs its `path` through it before opening anything, so saved-output trust marking must use the same normalization as the
+read tool. This replica no longer feeds an authority gate.
 
 Copied rather than imported because the package `exports` map is closed to `.`,
 `./node` and `./session/testing`, and the function is module-private within a
 file none of those re-export.
 
 A copy is a divergence waiting to happen, so it is not trusted on inspection:
-`pi-tool-path.test.ts` drives Pi's real `createWriteTool`/`createEditTool`
+`tool-path.test.ts` drives Pi's real `createWriteTool`/`createEditTool`
 against a stub `ExecutionEnv` that records the string Pi passes to
 `absolutePath`, and asserts the replica agrees for every transformation. Bumping
 the pin fails that test if Pi changes the normalization. Re-check it, and this
@@ -231,8 +230,8 @@ tarballs:
   data as compact JSON unless a text block already carries it; see
   `docs/mcp.md`, "What a call returns".
 - **`runToolCall`** runs one call through argument preparation, validation and
-  both hooks without emitting events. Not used yet; it is the seam a nested
-  caller (VC-471's Code Mode) needs so authority still judges each call.
+  both hooks without emitting events. Used by Code Mode for each nested call, preserving argument validation and
+  the same bound host tool implementation as direct calls.
 - **`thinkingLevel` on assistant messages.** The agent loop now stamps the
   requested level on every assistant message, so new sidecar entries carry it
   and entries written by 0.87.1 do not. Nothing here reads it.

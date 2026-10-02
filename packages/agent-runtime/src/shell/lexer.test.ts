@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { lexCommandLine, splitProgram } from "./shell";
+import { lexCommandLine, splitProgram } from "./lexer";
 
 /** Segments reduced to what a rule reads, so a case is one readable line. */
 function shape(command: string) {

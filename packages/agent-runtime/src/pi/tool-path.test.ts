@@ -5,7 +5,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it } from "vite-plus/test";
-import { normalizeToolPath } from "./pi-tool-path";
+import { normalizeToolPath } from "./tool-path";
 
 /**
  * The five arguments a 0.85 harness tool takes after its params: the required

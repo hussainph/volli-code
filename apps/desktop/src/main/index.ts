@@ -23,7 +23,6 @@ import { pathToFileURL } from "node:url";
 import {
   acceptsImageInputIn,
   applySkillModes,
-  authorityJudgeDenialReason,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -188,12 +187,8 @@ import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
-import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
-import { createProtection } from "./protection/host";
-import { registerProtectionIpcHandlers } from "./protection/ipc";
-import { migrateProtectionPolicies } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -204,7 +199,6 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
-import { readAuthorityShadowReviewEnabled } from "./session-runtime/authority-shadow-review";
 import { SecretStore } from "./secrets/store";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
@@ -607,10 +601,6 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
   return input.tools;
 }
 
-async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
-  return authorityJudgeDenialReason(input.cause);
-}
-
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
 function openExternal(target: string): void {
   if (target.startsWith("http:") || target.startsWith("https:")) {
@@ -914,12 +904,6 @@ app.whenReady().then(async () => {
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = openVolliDb(dbPath);
-    try {
-      migrateProtectionPolicies(db, Date.now());
-    } catch (error) {
-      db.close();
-      throw error;
-    }
     dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
@@ -1174,31 +1158,6 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           models: piModelAccess.models,
           catalogReady: piModelAccess.catalogReady,
-          recordDecision: async (fact) => {
-            if (sessionEngine === null || fact.sessionId === null) {
-              throw new Error("Authority review has no durable Session ledger.");
-            }
-            // authority.judge's caller redacts the reasoning-blind state BEFORE
-            // decide, so neither cloud transport nor this full-state audit sees
-            // secrets. Renderer scrubbing drops the native audit copy entirely.
-            await sessionEngine.observe({
-              id: `audit:decision:${randomUUID()}`,
-              kind: "adapter.observed",
-              sessionId: fact.sessionId,
-              occurredAt: Date.now(),
-              provenance: {
-                source: {
-                  kind: "system",
-                  id: "authority-classifier",
-                  detail: { purpose: fact.purpose, authoriser: "classifier" },
-                },
-                venue: { id: "local", kind: "local" },
-              },
-              attachmentId: null,
-              name: "authority.judge.audit",
-              native: JSON.parse(JSON.stringify(fact)),
-            });
-          },
           recordUsage: async (sessionId, usage, purpose) => {
             if (sessionEngine === null) return;
             await sessionEngine.observe({
@@ -1559,7 +1518,6 @@ app.whenReady().then(async () => {
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
-  let authorityReason = categoryAuthorityReason;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -1568,10 +1526,6 @@ app.whenReady().then(async () => {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
-          authorityReason: (input) => authorityReason(input),
-          // Paid background review is an independent opt-in, read live so an
-          // off switch stops subsequent reviews without restarting Sessions.
-          authorityShadowReviewEnabled: () => readAuthorityShadowReviewEnabled(dbHandle.db),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -1663,7 +1617,6 @@ app.whenReady().then(async () => {
           ...(desktopDecisions === null
             ? {}
             : {
-                decisions: desktopDecisions.port,
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),
@@ -1825,7 +1778,6 @@ app.whenReady().then(async () => {
               // settings; the newly recorded backfill is deliberately empty.
               mcpTools = [];
             }
-            const authorityPolicy = getProjectAuthorityPolicy(dbHandle.db, project.id);
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
@@ -1834,43 +1786,6 @@ app.whenReady().then(async () => {
               ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
               ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
-              // The policy a FRESH attachment is pinned to (VC-44), read from
-              // app-owned state and never from the tree the Session is about to
-              // edit. Resolved per attach for the reason the web ports are: what
-              // a Session may do is fixed when it starts, so a Settings change
-              // never lands mid-turn. A rehydrated attachment ignores this and
-              // replays its own recorded Snapshot instead — see
-              // `NativeAttachmentSpec.pinnedAuthority`.
-              authorityPolicy,
-              // Main always supplies the host. The adapter activates it from
-              // the pinned Snapshot: fresh enforcing attachments use Protection;
-              // an off switch never adds a gate to a running/recovered attachment.
-              protection: createProtection({
-                db: dbHandle.db,
-                now: () => Date.now(),
-                projectId: project.id,
-                sessionId,
-                // A delegated subagent reads its parent's live "this
-                // Session" approvals; nothing it adds ever flows back.
-                inheritedFrom:
-                  attaching.role === "subagent" && attaching.parentSessionId !== null
-                    ? [attaching.parentSessionId]
-                    : [],
-                sessionTitle: attaching.title ?? null,
-                ticketDisplayId: (() => {
-                  const owned =
-                    attaching.ticketId === null
-                      ? undefined
-                      : getTicket(dbHandle.db, attaching.ticketId);
-                  return owned === undefined
-                    ? null
-                    : displayTicketId(project.ticketPrefix, owned.ticketNumber);
-                })(),
-              }),
-              // What history already holds, so the Session-wide fallback
-              // threshold is measured against the Session rather than against
-              // this one attachment.
-              priorAuthorityDenials: projection.authorityDenials,
               // The skills this Session was started with, as recorded ahead of
               // its first attachment (`SessionSkillPorts`). Read from the
               // durable record on EVERY attach — never from disk — so a
@@ -1916,9 +1831,6 @@ app.whenReady().then(async () => {
                 ticketId: subagentTicket?.id ?? null,
                 parentSessionId,
                 brief: briefText(brief),
-                // Where the parent runs: the same predicate `location.ts`
-                // binds the directory on.
-                location: subagentTicket?.usesWorktree ? "worktree" : "main-checkout",
               };
             }
             if (attaching.role === "project" || attaching.ticketId === null) {
@@ -1935,7 +1847,6 @@ app.whenReady().then(async () => {
                 role: "project",
                 ticketId: null,
                 brief: briefText(brief),
-                location: "main-checkout",
               };
             }
             if (ticket === null || ticket.projectId !== project.id) return null;
@@ -1956,39 +1867,10 @@ app.whenReady().then(async () => {
               role: "ticket",
               ticketId: ticket.id,
               brief: briefText(brief),
-              // The same predicate `location.ts` binds the directory on: a Ticket
-              // that never took a worktree runs in the project's Main checkout.
-              location: ticket.usesWorktree ? "worktree" : "main-checkout",
             };
           },
         })
       : null;
-  if (dbHandle.ok && piRuntimeHost !== null && sessionEngine !== null) {
-    authorityReason = createAuthorityReason({
-      db: dbHandle.db,
-      readModelDefaults: () => readModelAccessDefaults(dbHandle.db),
-      completeUtility: (input) => piRuntimeHost.completeUtility(input),
-      recordUsage: async (sessionId, usage) => {
-        await sessionEngine.observe({
-          id: `usage:authority-reason:${randomUUID()}`,
-          kind: "usage.recorded",
-          sessionId,
-          occurredAt: Date.now(),
-          provenance: {
-            source: {
-              kind: "system",
-              id: "authority-reason",
-              detail: { purpose: "authority.judge", reasonSource: "utility" },
-            },
-            venue: { id: "local", kind: "local" },
-          },
-          attachmentId: null,
-          turnId: null,
-          usage,
-        });
-      },
-    });
-  }
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).
@@ -2666,12 +2548,6 @@ app.whenReady().then(async () => {
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing
   // instrumentation belongs.
-  registerProtectionIpcHandlers(
-    dbHandle.ok ? dbHandle.db : null,
-    dbHandle.ok
-      ? undefined
-      : `Protection settings are unavailable — the local database failed to open: ${dbHandle.error}`,
-  );
   registerAgentObservabilityIpcHandlers(
     agentObservability,
     dbHandle.ok

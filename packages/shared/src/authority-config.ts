@@ -1,113 +1,9 @@
-/**
- * The durable authority policy a project is governed by, as data rather than code.
- *
- * `./authority.ts` holds the Authority Snapshot — the policy one Session
- * executes under, pinned for the life of one attachment. This module holds the
- * thing a Snapshot is *made from*: a per-project document with built-in
- * defaults, resolved at attach. Slice 7 of
- * the two-axis authority rearchitecture calls this "policy as data",
- * and the point is that changing what a Session may do stops requiring a build.
- *
- * **Where this may be stored is a security property, not a convenience.** The
- * override is app-owned state — a column on `projects` in the SQLite database
- * under Electron's `userData`. It is never a file in the worktree and never a
- * repo-committed settings file. Claude Code's classifier refuses to read
- * `autoMode` out of repo-local settings for exactly this reason: a checked-in
- * file, or a build step that writes one, would let the thing being governed
- * write its own permissions. A policy store the agent can edit is not a policy
- * store.
- *
- * Say the limit of that honestly, because today it is a limit and not a
- * guarantee. The database is outside every Session workspace, so no file tool
- * reaches it — `path.outside-workspace` refuses reads and writes there. But the
- * pack does not judge command *operands*, and the capability axis is off, so a
- * Session's `execute` tool can still reach the database through an ordinary
- * shell command. What closes that is `writableRoots` in VC-45, not anything
- * here. What this module does buy today is that policy is never sourced from
- * the tree the agent is editing, which is the mistake that costs nothing to
- * avoid and everything to make.
- *
- * Nothing here is a rule. The rule pack stays compiled (`./authority-policy.ts`)
- * and its identity stays {@link AUTHORITY_RULE_IDS}; what became data is which
- * posture a project runs the pack under, who judges what the pack cannot, and
- * the per-actor policy VC-163 and VC-85 read. Rules-as-data is a later slice,
- * and it needs a rule language before it needs a store.
+/** App-owned per-actor host-API policy and delegation budget posture.
+ * Retired per-call review fields are ignored when reading old project overrides.
  */
-
-import type { AuthorityFallback } from "./authority";
 import { SESSION_AWAIT_KINDS, type SessionAwaitKind } from "./session-await";
 import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
 
-/**
- * What the deterministic rule pack does to a Session, as a per-project posture.
- *
- * Three states and not two, because "no gate at all" is a real answer a person
- * must be able to give. Codex ships it as a bypass mode and Claude Code as
- * `--dangerously-skip-permissions`; Volli has shipped it since the sandbox came
- * out, as the absence of a Snapshot. Naming it makes it a decision rather than
- * the status quo nobody chose.
- *
- * The three map onto the runtime seam exactly, which is why there is no fourth:
- *
- * - `off` — no Snapshot is constructed, so `SessionRuntimeSpec.authority` is
- *   absent, so Pi installs no `beforeToolCall`. The rule pack, the fallback
- *   thresholds and the escalation port are all unreachable rather than quietly
- *   permissive. This is what every Session ran under before this ticket.
- * - `observe` — the Snapshot is built, pinned and durably recorded against the
- *   attachment, and the gate does not install. Nothing is refused. The pack's
- *   identity is on the record, so a later reader can say what a Session *would*
- *   have been governed by, which is the whole of what the Snapshot is for.
- * - `enforce` — the Snapshot is also handed to the runtime, the gate installs,
- *   and a refusal is a refusal: recorded as `authority.denied`, escalated to a
- *   person once {@link AuthorityFallback} trips, and overridable exactly where
- *   `OVERRIDABLE_AUTHORITY_RULES` says a person's "yes" could be carried out.
- *
- * `observe` is not `off` with extra steps: it is the posture that makes the
- * Snapshot durable without changing what any Session can do, which is what lets
- * this slice ship without silently re-activating a dormant rule pack. VC-28 v0
- * gives `observe` its second half — a gate that records what it would have
- * refused — and it attaches to this name rather than inventing another.
- */
-export type AuthorityEnforcement = "off" | "observe" | "enforce";
-
-export const AUTHORITY_ENFORCEMENTS = ["off", "observe", "enforce"] as const;
-
-/**
- * Who judges a call the deterministic rules cannot settle.
- *
- * Defined here and given behaviour by VC-28. `ask` is today's path: a refusal
- * the rules produced goes to a person through the escalation port. `auto` is
- * Anthropic's auto-mode shape — a classifier judges first and only a flag
- * reaches the person. The field rides the Snapshot so that a Session's judge is
- * pinned at attach like everything else about its authority; a Settings change
- * mid-Session must not silently change who is deciding.
- *
- * It is deliberately not a third enforcement value. Enforcement asks whether the
- * pack binds; judgment asks who rules on what the pack cannot answer. Collapsing
- * them is the same one-dial-two-jobs mistake the re-architecture exists to undo.
- */
-export type JudgmentMode = "ask" | "auto";
-
-export const JUDGMENT_MODES = ["ask", "auto"] as const;
-
-/**
- * What happens when a Session spends a budget to its end (VC-204).
- *
- * Two postures and not three, because "no budget at all" is not offered: the
- * allowance itself stays fixed — it is the guardrail against a Session
- * spiralling — and what a project chooses is only whether its end is a
- * question or a wall. `ask` parks the call in front of the person driving,
- * whose "once" extends the allowance by exactly one; `refuse` is the pre-VC-204
- * behaviour, kept for projects that want an unattended fleet to hit a hard
- * stop rather than a parked question nobody is present to answer.
- *
- * Deliberately not a {@link JudgmentMode}: judgment asks who rules on what the
- * rules cannot answer, and a spent budget is not ambiguous — it is spent. When
- * VC-28's classifier lands, whether a budget cause may be judged by it rather
- * than a person is a separate eligibility question, and the default answer is
- * no: starting more agents is spend, and spend is the category auto mode still
- * flags to a human.
- */
 export type BudgetPosture = "ask" | "refuse";
 
 export const BUDGET_POSTURES = ["ask", "refuse"] as const;
@@ -206,17 +102,9 @@ export interface AuthorityActorPolicy {
 /**
  * The per-project authority document, fully resolved.
  *
- * Everything a Snapshot needs and nothing a Snapshot has. The Snapshot adds what
- * only an attachment knows — the tree it runs in, the Agent Tool Surface it was
- * handed, the pack it pinned — and this supplies what a project decided in
- * advance.
+ * Host-API access and budget posture, independent of any executor attachment.
  */
 export interface AuthorityPolicy {
-  enforcement: AuthorityEnforcement;
-  judgmentMode: JudgmentMode;
-  /** The model allowed to judge what the rules cannot. Null until VC-28. */
-  classifierModel: string | null;
-  fallback: AuthorityFallback;
   budgets: AuthorityBudgetPolicy;
   actors: Readonly<Record<AuthorityActorKind, AuthorityActorPolicy>>;
 }
@@ -271,54 +159,8 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
   "hook",
 ] as const;
 
-/**
- * The built-in policy, and the reasoning for each departure from "off".
- *
- * `enforcement: "observe"` is this ticket's day-one posture and it was taken
- * deliberately, against the nine-rule pack as VC-3 left it rather than the ten
- * it used to be. Enforcing on day one refuses two things the product itself
- * asks a Session to do: the skills index tells the model to activate a skill by
- * reading its `SKILL.md`, and a personal-tier skill lives at
- * `<home>/.agents/skills/<slug>/SKILL.md` — outside every Session workspace, so
- * `path.outside-workspace` refuses the read. The Main checkout a ticket brief
- * offers as reference reads the same way. Worse, the same file is readable
- * through `execute`, because no rule judges command operands: the model would
- * learn to reach for `cat` where `read` was refused, which is the workaround
- * coaching the plan's denial-semantics slice exists to stop. `observe` pins and
- * records the Snapshot, changes nothing a Session can do, and leaves the flip to
- * `enforce` a per-project decision that needs no build. Slice 1 of the plan —
- * one read policy for both layers — is what makes `enforce` the right default,
- * and it is VC-45's to ship.
- *
- * `judgmentMode: "ask"` because no classifier exists yet; `auto` without VC-28
- * would name a judge that cannot judge.
- *
- * The actor defaults carry VC-92's rulings. An authenticated Session gets the
- * coordination verbs it already uses and may read its own transcript. The
- * unauthenticated caller gets **reads only** — no coordination verb, no
- * transcript, nothing to await — which VC-92 justified as costing almost
- * nothing: the app drives ~99% of human interaction, in-Session agents
- * authenticate, and an external client will authenticate through the host API.
- * The user is the person driving Volli and is bounded by the app's own surfaces
- * rather than by this table, so their entry is permissive and is here to be
- * a complete table rather than a live restriction.
- *
- * `awaitable` names the whole await vocabulary for the user and for
- * authenticated Sessions (VC-85): waiting is not itself an act of authority —
- * VC-92 ruled blocking a runtime property, not a privilege — so the default
- * withholds nothing and a project that wants a narrower list writes one. The
- * unauthenticated caller keeps the empty list for the reason its whole row is
- * empty: it holds no tool surface, so there is nothing the list could admit.
- * `awaitableSessions` takes the same posture over the Session vocabulary, for
- * the same reason and with the same empty unauthenticated row.
- */
+/** Authenticated Sessions keep coordination and await access; anonymous callers get reads only. */
 export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
-  enforcement: "observe",
-  judgmentMode: "ask",
-  classifierModel: null,
-  // Anthropic's published defaults for the same mechanism, adopted with no
-  // knowledge of how they were tuned — see `AuthorityFallback`.
-  fallback: Object.freeze({ consecutiveDenials: 3, sessionDenials: 20 }),
   // `ask` is VC-204's ruling: the in-ticket delegation allowance was always a
   // soft cap in intent, and its end is a question for the person driving
   // rather than a refusal. The allowance itself stays 3 and stays hard-coded —
@@ -423,10 +265,6 @@ export interface AuthorityBudgetPolicyOverride {
  * that never disagreed with it.
  */
 export interface AuthorityPolicyOverride {
-  enforcement?: AuthorityEnforcement;
-  judgmentMode?: JudgmentMode;
-  classifierModel?: string | null;
-  fallback?: Partial<AuthorityFallback>;
   budgets?: AuthorityBudgetPolicyOverride;
   actors?: Partial<Record<AuthorityActorKind, AuthorityActorPolicyOverride>>;
 }
@@ -479,15 +317,6 @@ export function resolveAuthorityPolicy(
   const defaults = DEFAULT_AUTHORITY_POLICY;
   if (override === null || override === undefined) return defaults;
   return {
-    enforcement: override.enforcement ?? defaults.enforcement,
-    judgmentMode: override.judgmentMode ?? defaults.judgmentMode,
-    classifierModel:
-      override.classifierModel === undefined ? defaults.classifierModel : override.classifierModel,
-    fallback: {
-      consecutiveDenials:
-        override.fallback?.consecutiveDenials ?? defaults.fallback.consecutiveDenials,
-      sessionDenials: override.fallback?.sessionDenials ?? defaults.fallback.sessionDenials,
-    },
     budgets: {
       delegationExceeded:
         override.budgets?.delegationExceeded ?? defaults.budgets.delegationExceeded,
@@ -520,15 +349,6 @@ export function parseAuthorityPolicyOverride(value: unknown): AuthorityPolicyOve
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const override: AuthorityPolicyOverride = {};
-  const enforcement = enumOrUndefined(row.enforcement, AUTHORITY_ENFORCEMENTS);
-  if (enforcement !== undefined) override.enforcement = enforcement;
-  const judgmentMode = enumOrUndefined(row.judgmentMode, JUDGMENT_MODES);
-  if (judgmentMode !== undefined) override.judgmentMode = judgmentMode;
-  if (typeof row.classifierModel === "string" || row.classifierModel === null) {
-    override.classifierModel = row.classifierModel;
-  }
-  const fallback = parseFallback(row.fallback);
-  if (fallback !== undefined) override.fallback = fallback;
   const budgets = parseBudgets(row.budgets);
   if (budgets !== undefined) override.budgets = budgets;
   const actors = parseActors(row.actors);
@@ -540,28 +360,6 @@ function enumOrUndefined<T extends string>(value: unknown, allowed: readonly T[]
   return typeof value === "string" && (allowed as readonly string[]).includes(value)
     ? (value as T)
     : undefined;
-}
-
-/**
- * A threshold is kept only when it is a whole number of denials.
- *
- * `AuthorityEscalation` already defends itself against zero, negative and `NaN`
- * by reading them as "never escalate", but a stored document is written by a
- * person and a rejected value there is a value someone can be told about. This
- * drops it so the default stands, rather than persisting a number that silently
- * disables escalation while looking configured.
- */
-function parseFallback(value: unknown): Partial<AuthorityFallback> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const row = value as Record<string, unknown>;
-  const fallback: Partial<AuthorityFallback> = {};
-  if (isThreshold(row.consecutiveDenials)) fallback.consecutiveDenials = row.consecutiveDenials;
-  if (isThreshold(row.sessionDenials)) fallback.sessionDenials = row.sessionDenials;
-  return Object.keys(fallback).length === 0 ? undefined : fallback;
-}
-
-function isThreshold(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1;
 }
 
 /** The read-path half of `budgets`, dropping what it cannot read like every field here. */
@@ -690,35 +488,7 @@ export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicy
     errors,
   );
 
-  if (row.enforcement !== undefined) {
-    const enforcement = enumOrUndefined(row.enforcement, AUTHORITY_ENFORCEMENTS);
-    if (enforcement === undefined) errors.push(badEnum("enforcement", AUTHORITY_ENFORCEMENTS));
-    else override.enforcement = enforcement;
-  }
-
-  if (row.judgmentMode !== undefined) {
-    const judgmentMode = enumOrUndefined(row.judgmentMode, JUDGMENT_MODES);
-    if (judgmentMode === undefined) errors.push(badEnum("judgmentMode", JUDGMENT_MODES));
-    else override.judgmentMode = judgmentMode;
-  }
-
-  // `null` is a MEANINGFUL value here, not an absence: it is how a project says
-  // "no classifier" against a default that names one. `undefined` is the
-  // absence, and only that inherits — which is why `resolveAuthorityPolicy`
-  // tests this field with `=== undefined` rather than `??`.
-  if (row.classifierModel !== undefined) {
-    if (row.classifierModel === null || typeof row.classifierModel === "string") {
-      override.classifierModel = row.classifierModel;
-    } else {
-      errors.push("classifierModel must be a string or null.");
-    }
-  }
-
-  if (row.fallback !== undefined) {
-    const fallback = validateFallback(row.fallback, errors);
-    if (fallback !== undefined) override.fallback = fallback;
-  }
-
+  // VC-504: old stored review settings are accepted but never retained.
   if (row.budgets !== undefined) {
     const budgets = validateBudgets(row.budgets, errors);
     if (budgets !== undefined) override.budgets = budgets;
@@ -766,28 +536,6 @@ function rejectUnknownKeys(
   for (const key of Object.keys(row)) {
     if (!allowed.includes(key)) errors.push(`Unknown field: ${prefix}${key}.`);
   }
-}
-
-function validateFallback(
-  value: unknown,
-  errors: string[],
-): Partial<AuthorityFallback> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    errors.push("fallback must be an object.");
-    return undefined;
-  }
-  const row = value as Record<string, unknown>;
-  rejectUnknownKeys(row, ["consecutiveDenials", "sessionDenials"], "fallback.", errors);
-  const fallback: Partial<AuthorityFallback> = {};
-  for (const key of ["consecutiveDenials", "sessionDenials"] as const) {
-    if (row[key] === undefined) continue;
-    // `isThreshold`'s floor of 1, surfaced as a refusal rather than a drop.
-    // `AuthorityEscalation` reads 0 and negatives as "never escalate", so a
-    // stored 0 would disable escalation while looking configured.
-    if (isThreshold(row[key])) fallback[key] = row[key] as number;
-    else errors.push(`fallback.${key} must be a whole number of denials, 1 or greater.`);
-  }
-  return Object.keys(fallback).length === 0 ? undefined : fallback;
 }
 
 function validateBudgets(

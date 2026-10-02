@@ -14,9 +14,9 @@
  *
  *     One inflation is deliberate and worth naming rather than burying. The
  *     gap between two tool results contains whatever happened in between,
- *     including an approval wait — and Pi's preflight is serial even in
- *     parallel mode, so approval time is exactly what concurrency CANNOT
- *     recover. The saving reported here is therefore an UPPER BOUND. That errs
+ *     including a question's wait (or per-call approvals in historical logs).
+ *     Tool concurrency does not recover time a person spent answering. The
+ *     saving reported here is therefore an UPPER BOUND. That errs
  *     in favour of parallel mode while the conclusion drawn from it is against
  *     parallel mode, so it is the safe direction to be wrong in: a tighter
  *     measurement can only make the case weaker.
@@ -49,7 +49,7 @@ const estimateTokens = (chars: number): number => Math.ceil(chars / CHARS_PER_TO
 /**
  * Durations above this are read as a person, not a tool.
  *
- * A gap between tool results can contain an approval prompt, a laptop lid, or
+ * A gap between tool results can contain a question, a laptop lid, or
  * an overnight pause. Ten minutes is far above any real tool call in this
  * product and far below the pauses that would otherwise dominate the mean.
  * Capped samples are counted and reported rather than dropped silently.

@@ -96,25 +96,11 @@ describe("Settings → Appearance", () => {
 });
 
 describe("Settings → Appearance → Display", () => {
-  it("offers the auto-mode hints switch, on by default", () => {
-    // VC-498. The Display block is the row's only home: hiding the hints is a
-    // display choice, not an authority one. Stated as the positive and drawn
-    // with no hint — the control is the explanation (AGENTS.md: let controls
-    // talk), and the store carries the display-not-enforcement fact.
+  it("keeps zoom, diff layout and cost controls, without retired review hints", () => {
     const html = renderToStaticMarkup(<DisplaySection />);
-
-    expect(html).toContain("Show Auto mode hints");
-    expect(html).toContain('id="authority-hints-visible"');
-    expect(html).toContain('for="authority-hints-visible"');
-    // The persisted default is visible (true), so a fresh install draws the
-    // switch checked.
-    expect(html).toContain('data-state="checked"');
-  });
-
-  it("carries no prose under the hints row", () => {
-    const html = renderToStaticMarkup(<DisplaySection />);
-
-    expect(html).not.toContain("enforcement");
-    expect(html).not.toContain("Would block");
+    expect(html).toContain("Zoom");
+    expect(html).toContain("Diff layout");
+    expect(html).toContain("Show cost and token usage");
+    expect(html).not.toContain("Show Auto mode hints");
   });
 });

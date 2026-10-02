@@ -89,8 +89,8 @@ structural rather than a guess:
 An entry may carry `document` (fold a whole attribution file in), `text` (a
 licence file beside the material), or `unresolved` (provenance nobody has
 established — recorded, never invented). Today `@volli/shared` declares the
-APCA-W3 formulation; `@volli/agent-runtime` declares the vendored pi-automode
-helpers.
+APCA-W3 formulation; `@volli/agent-runtime` declares the retained pi-automode
+shell lexer used by the background-process lifecycle guard.
 
 > This replaced a marker grep that searched every shipped source file for a
 > vendor's name. The material it most needed to catch was a generated catalog of

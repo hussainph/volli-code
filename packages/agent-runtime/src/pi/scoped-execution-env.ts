@@ -454,10 +454,9 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  * installed.
  *
  * The runtime hands Pi its own uncontained environment now, so this reaches a
- * Session only through an injected `executionEnvFactory`. It is kept whole
- * because the two-axis authority rearchitecture rebuilds the
- * boundary on it, and a boundary is a bad thing to delete and rewrite from
- * memory.
+ * Session only through an injected `executionEnvFactory`. Its native
+ * path checks and process boundary are deterministic and independent of any
+ * per-call approval policy.
  *
  * What it contains is whatever that Session's workspace is — a Ticket worktree,
  * or the project's Main checkout for a Ticket that never took one — and nothing

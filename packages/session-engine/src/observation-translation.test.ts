@@ -1018,93 +1018,6 @@ describe("live observation translation", () => {
     expect(sink.observations).toEqual([]);
   });
 
-  it("translates classifier reviews without touching overlays and propagates write failures", async () => {
-    const translator = fixedTranslator();
-    const sink = new Recorder();
-    const review: Extract<RuntimeObservation, { kind: "authority-review" }> = {
-      kind: "authority-review",
-      turnId: "turn-1",
-      toolCallId: "call-1",
-      tool: "execute",
-      mode: "shadow",
-      authoriser: "classifier",
-      wouldFlag: true,
-      reason: "Outside the request.",
-      category: "external",
-      answers: null,
-      missReason: null,
-      thresholds: { allow: 0.95, flag: 0.05 },
-    };
-    await translator.translate(review, sink.emit);
-    expect(sink.observations).toEqual([
-      {
-        ...review,
-        kind: "authority.reviewed",
-        id: "pi:authority-review:attachment-1:1",
-        occurredAt: 1000,
-      },
-    ]);
-    // The Session ledger, not executor-native recovery, replays verdicts.
-    expect(translator.replay(review)).toEqual([]);
-    sink.failNext();
-    await expect(translator.translate(review, sink.emit)).rejects.toThrow("sink unavailable");
-  });
-
-  it("translates a denied authority observation into a durable authority.denied fact", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "denied",
-      turnId: "turn-1",
-      tool: "bash",
-      cause: "command.destructive-removal",
-      reason: "rm -rf ~ discards more than this Session's workspace.",
-    });
-
-    expect(sink.of("authority.denied")).toEqual([
-      {
-        id: `pi:authority:${ATTACHMENT_ID}:1`,
-        kind: "authority.denied",
-        occurredAt: 1000,
-        turnId: "turn-1",
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "rm -rf ~ discards more than this Session's workspace.",
-      },
-    ]);
-  });
-
-  it("leaves an allowed authority observation out of durable Session history", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "allowed",
-      turnId: "turn-1",
-      toolCallId: "local-tool-call",
-      waitDurationMs: 100,
-    });
-
-    expect(sink.observations).toEqual([]);
-  });
-
-  it("carries a refusal reported before any turn has opened with a null turnId", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "denied",
-      turnId: null,
-      tool: "read",
-      cause: "path.outside-workspace",
-      reason: "refused",
-      occurredAt: 55,
-    });
-
-    expect(sink.of("authority.denied")[0]).toMatchObject({ turnId: null, occurredAt: 55 });
-  });
-
   it("names an interaction by the ask rather than by a counter", async () => {
     const { translate, sink } = composition();
 
@@ -1301,19 +1214,8 @@ describe("cold replay translation", () => {
     const ignored: RuntimeObservation[] = [
       { kind: "attachment", state: "closed" },
       { kind: "delta", turnId: "turn-1", channel: "text", text: "late" },
-      {
-        kind: "authority",
-        state: "denied",
-        turnId: "turn-1",
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "refused",
-      },
       activity({ state: "started" }),
       activity({ state: "progress", output: { content: "partial" } }),
-      // Both edges of a compaction wait, for the same reason: the operation
-      // that emitted them did not survive the restart being replayed, so a
-      // recovered spinner would never be retired by anything.
       { kind: "compaction-progress", state: "started", reason: "manual" },
       { kind: "compaction-progress", state: "finished", reason: "manual" },
       {
@@ -1322,7 +1224,6 @@ describe("cold replay translation", () => {
         message: { entryId: "empty", role: "assistant", text: "" },
       },
     ];
-
     expect(ignored.flatMap((observation) => translator.replay(observation))).toEqual([]);
   });
 
@@ -1424,37 +1325,4 @@ it("preserves stop facts on live and replayed interruption and Attention without
     expect(sink.of("attention.raised").at(-1)).toEqual(translator.replay(attention)[0]);
     expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
   }
-});
-
-describe("ledger-hit historical facts", () => {
-  it("translates one fact to one transcript artifact, with identical cold replay and no interaction", async () => {
-    const translator = fixedTranslator();
-    const sink = new Recorder();
-    const observation = {
-      kind: "approval-used",
-      toolCallId: "call",
-      approvalId: "approval",
-      asked: "write /outside/docs",
-      summary: "Write to /outside/docs",
-      occurredAt: 42,
-    } as const;
-    await translator.translate(observation, sink.emit);
-    expect(sink.kinds()).toEqual(["transcript.message"]);
-    expect(translator.replay(observation)).toEqual(sink.observations);
-    expect(sink.observations[0]).toMatchObject({
-      message: {
-        role: "user",
-        metadata: {
-          kind: "session-host-notice",
-          notice: { kind: "approval-used", approvalId: "approval" },
-        },
-        parts: [{ type: "text", text: "Allowed by your earlier approval: Write to /outside/docs" }],
-      },
-    });
-    sink.failNext();
-    await expect(
-      translator.translate({ ...observation, toolCallId: "second" }, sink.emit),
-    ).rejects.toThrow("sink unavailable");
-    expect(sink.kinds()).toEqual(["transcript.message"]);
-  });
 });

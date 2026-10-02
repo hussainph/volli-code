@@ -12,10 +12,8 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
-  gatedToolCallId,
   bestEffortSubject,
   bundleNeedsAttention,
-  gatedToolCallIds,
   bundleSummary,
   compactSignature,
   describeActivity,
@@ -248,26 +246,6 @@ describe("segmentMessageParts", () => {
       "m2f",
     );
     expect(bundleOf(segments)).toHaveLength(1);
-  });
-
-  it("breaks a gated call out of the bundle", () => {
-    const segments = segmentMessageParts(
-      [tool("read-file"), tool("run-command", { state: "approval-requested" })],
-      "m3",
-    );
-    // The one thing that leaves. It blocks the reader and it needs controls, so
-    // it must not sit behind a disclosure — and its decision draws under it,
-    // beside the command it is about.
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
-    expect(bundleOf(segments)).toHaveLength(1);
-  });
-
-  it("closes the bundle around it rather than reordering the turn", () => {
-    const segments = segmentMessageParts(
-      [tool("read-file"), tool("run-command", { state: "approval-requested" }), tool("search")],
-      "m3b",
-    );
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention", "bundle"]);
   });
 
   it("keeps failures and denials inside the bundle", () => {
@@ -568,39 +546,18 @@ describe("bundle state", () => {
   });
 });
 
-describe("the decision a call is gated on", () => {
-  it("reads the tool call id off the gated state and nowhere else", () => {
-    const gated = tool("run-command", { state: "approval-requested" });
-    expect(gatedToolCallId(gated)).toBe(gated.toolCallId);
-    expect(gatedToolCallId(tool("run-command", { state: "output-denied" }))).toBe(null);
-    expect(gatedToolCallId(tool("run-command"))).toBe(null);
-  });
-
-  it("collects every gate the transcript is already showing", () => {
-    // What the foot slot subtracts. An interaction drawn on its row and again
-    // under the composer is one question asked twice.
-    const gated = tool("run-command", { state: "approval-requested" });
-    const messages = [
-      message("m1", [tool("read-file"), gated]),
-      message("m2", [{ type: "text", text: "waiting" }]),
-    ];
-    expect([...gatedToolCallIds(messages)]).toEqual([gated.toolCallId]);
-    expect(gatedToolCallIds([message("m3", [tool("read-file")])]).size).toBe(0);
-  });
-});
-
 describe("activityStatus", () => {
-  it("separates approval from running", () => {
+  it("keeps retired permission states noninteractive", () => {
     expect(activityStatus(tool("run-command", { state: "input-available" }))).toBe("running");
-    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("approval");
+    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("done");
     expect(activityStatus(tool("run-command", { state: "input-streaming" }))).toBe("pending");
     expect(activityStatus(tool("run-command", { state: "output-error" }))).toBe("failed");
   });
 
-  it("resumes running once a gated call is approved, or stays denied", () => {
+  it("keeps an old answered permission settled", () => {
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: true })),
-    ).toBe("running");
+    ).toBe("done");
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: false })),
     ).toBe("denied");

@@ -1,12 +1,6 @@
 import {
-  askOffer,
-  askChoice,
-  commandScope,
-  writeScope,
-  type RuntimeAskRequest,
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
-  SESSION_REFUSAL_OPTION_IDS,
   type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionPrompt,
@@ -19,16 +13,13 @@ import {
   createSubmissionLatch,
   describeInteractionSent,
   indexOpenedInteractions,
-  approvalAnswerFailures,
   readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
   firstUnansweredPrompt,
-  footInteraction,
   interactionAdvance,
   interactionAnswers,
   interactionCarousel,
-  interactionForApproval,
   interactionQuestions,
   interactionRedirected,
   interactionResolution,
@@ -1598,90 +1589,7 @@ describe("one press of the control that moves the flow on", () => {
   });
 });
 
-describe("where a card draws", () => {
-  it("pairs a gated call with its question on the durable ask:<toolCallId> id", () => {
-    // The identity that survives the product edge: the runtime mints the
-    // interaction as `ask:<toolCallId>`, and the gated part carries the same
-    // tool call id. `native` is nulled on everything the edge ships, so it
-    // correlates nothing.
-    const gated = permission({ id: "ask:call-1" });
-    const other = permission({ id: "ask:call-2" });
-    expect(interactionForApproval([other, gated], "call-1")).toBe(gated);
-    expect(interactionForApproval([other, gated], "call-9")).toBe(null);
-    // A row with no gate names no interaction — never the only open one by
-    // adjacency, which would put a subagent's question on a parent's call.
-    expect(interactionForApproval([gated], null)).toBe(null);
-    const retry = {
-      ...gated,
-      id: "approval-retry:1:call-1",
-      approval: {
-        asked: "write /outside/a",
-        because: "outside",
-        reason: "revoked",
-        stages: [],
-        held: null,
-      },
-    };
-    expect(interactionForApproval([other, retry], "call-1")).toBe(retry);
-    expect(footInteraction([retry], new Set(["call-1"]))).toBeNull();
-    expect(interactionForApproval([{ ...retry, approval: undefined }], "call-1")).toBeNull();
-  });
-
-  it("leaves the foot the oldest interaction no row is showing", () => {
-    const gated = permission({ id: "ask:call-1" });
-    const asked = question([prompt()]);
-    expect(footInteraction([gated, asked], new Set(["call-1"]))).toBe(asked);
-    expect(footInteraction([gated, asked], new Set())).toBe(gated);
-    expect(footInteraction([gated], new Set(["call-1"]))).toBe(null);
-  });
-
-  it("keeps a model's own question at the foot even while calls are gated", () => {
-    // An `ask-user:` id is never the `ask:` derivation of any gated call, so
-    // it belongs there by construction rather than by having survived a filter.
-    const loose = permission({ id: "ask-user:call-1", native: { id: null, detail: null } });
-    expect(footInteraction([loose], new Set(["call-1"]))).toBe(loose);
-  });
-});
-
 describe("the durable answer in scrollback", () => {
-  it("indexes only failed standing-grant mutation receipts for truthful allow-once copy", () => {
-    const receipt = {
-      id: "r",
-      commandId: "answer-1",
-      sequence: 1,
-      recordedAt: 1,
-      status: "rejected" as const,
-      code: "PI_APPROVAL_NOT_REMEMBERED",
-      detail: "disk full",
-    };
-    expect([
-      ...approvalAnswerFailures([
-        { event: null },
-        { event: { payload: { kind: "turn.started", attachmentId: "a", turnId: "t" } } },
-        {
-          event: {
-            payload: {
-              kind: "command.receipt.recorded",
-              receipt: { ...receipt, status: "unreconciled", detail: null },
-            },
-          },
-        },
-        {
-          event: {
-            payload: {
-              kind: "command.receipt.recorded",
-              receipt: { ...receipt, commandId: "answer-2", code: "OTHER" },
-            },
-          },
-        },
-        { event: { payload: { kind: "command.receipt.recorded", receipt } } },
-      ]),
-    ]).toEqual([
-      ["answer-2", "not-delivered"],
-      ["answer-1", "once"],
-    ]);
-  });
-
   it("indexes every interaction the log recorded opening", () => {
     const interaction = permission();
     const index = indexOpenedInteractions([
@@ -1844,197 +1752,3 @@ describe("the durable answer in scrollback", () => {
   });
 });
 
-describe("describeInteractionResolution for an approval card (VC-480)", () => {
-  const offer = askOffer({
-    cause: "path.outside-workspace",
-    tool: "write",
-    toolCallId: "call-1",
-    turnId: null,
-    reason: "outside",
-    trip: "approval",
-    overridable: true,
-    approval: { asked: "write /x", scopes: [writeScope("/Users/me/code/docs/guides/a.md")] },
-  });
-  const card: RendererSessionInteraction = {
-    id: "ask:call-1",
-    attachmentId: "attach-1",
-    kind: "permission",
-    title: "Allow writing outside this workspace?",
-    detail: null,
-    approval: {
-      asked: "write /x",
-      because: "b",
-      reason: "r",
-      stages: [],
-      held: null,
-    },
-    options: offer.options,
-    multiple: false,
-    native: { id: null, detail: null },
-  };
-  const receipt = (optionIds: string[], response: string | null = null) =>
-    describeInteractionResolution(card, { optionIds, response });
-
-  it.each(["ask-user:model", "ledger-hit:model"])(
-    "never identifies model approval-like ids as an approval (%s)",
-    (id) => {
-      const modelQuestion: RendererSessionInteraction = {
-        ...card,
-        id,
-        kind: "question",
-        approval: undefined,
-        title: "Where next?",
-        detail: "Model-authored question",
-        options: [{ id: "steer", label: "North", description: null }],
-      };
-      expect(isAskUserInteraction(modelQuestion)).toBe(true);
-      expect(
-        describeInteractionResolution(modelQuestion, { optionIds: ["steer"], response: null }),
-      ).toEqual({
-        verdict: "answered",
-        lead: "You answered",
-        subject: "Where next?",
-        trailer: "North",
-      });
-    },
-  );
-
-  it.each(["session", "project", "ledger", "steer"])(
-    "never records undeclared %s consent or steering",
-    (id) => {
-      expect(
-        describeInteractionResolution(
-          { ...card, options: [{ id: "once", label: "Allow once", description: null }] },
-          { optionIds: [id], response: "use /tmp" },
-        ),
-      ).toMatchObject({ verdict: "rejected", trailer: null });
-    },
-  );
-
-  it.each([
-    ["once", "unknown"],
-    ["once", "session"],
-    ["project", "session"],
-  ])("records malformed consent as refused %j", (...ids) => {
-    expect(receipt(ids)).toMatchObject({ verdict: "rejected" });
-  });
-
-  it("says what was remembered, and for how long", () => {
-    expect(receipt(["once"])).toEqual({
-      verdict: "allowed",
-      lead: "You allowed",
-      subject: "writing outside this workspace",
-      trailer: "once",
-    });
-    expect(receipt(["session"])).toMatchObject({
-      verdict: "standing",
-      trailer: "for this Session",
-    });
-    expect(receipt(["project"])).toMatchObject({
-      verdict: "standing",
-      trailer: "always in this project",
-    });
-  });
-
-  it.each([
-    [],
-    ["once"],
-    ["session"],
-    ["project"],
-    ["ledger"],
-    ["ONCE"],
-    ["once", "project"],
-    ["once", "stale"],
-    ["once", "reject"],
-    ["steer"],
-  ])("agrees with execution for a command whose project grant was never offered: %j", (...ids) => {
-    const request: RuntimeAskRequest = {
-      cause: "call.unreadable",
-      tool: "execute",
-      toolCallId: "c",
-      turnId: null,
-      reason: "Opaque command",
-      trip: "approval",
-      overridable: true,
-      approval: { asked: "bash -c x", scopes: [commandScope("bash -c x")] },
-    };
-    const interaction = { ...card, options: askOffer(request).options };
-    const choice = askChoice(request, ids, null);
-    const shown = describeInteractionResolution(interaction, { optionIds: ids, response: null });
-    expect(shown.verdict === "allowed" || shown.verdict === "standing").toBe(
-      choice === "allow" || choice === "allow-session" || choice === "allow-project",
-    );
-  });
-
-  it("records a denial, with the person's words when they steered", () => {
-    expect(receipt(["reject"])).toMatchObject({
-      verdict: "rejected",
-      lead: "You denied",
-      trailer: null,
-    });
-    expect(receipt(["steer"], "  use\n/tmp ")).toMatchObject({
-      verdict: "rejected",
-      trailer: "\u201cuse /tmp\u201d",
-    });
-    expect(receipt(["steer"])).toMatchObject({ trailer: null });
-    expect(receipt([])).toMatchObject({ verdict: "rejected" });
-  });
-
-  it.each(["once", "session", "project", "ledger"])(
-    "reads denial before a contradictory %s grant, as the runtime does",
-    (grant) => {
-      for (const denial of SESSION_REFUSAL_OPTION_IDS) {
-        for (const optionIds of [
-          [grant, denial],
-          [denial.toUpperCase(), grant],
-        ]) {
-          expect(receipt(optionIds, "ignored words")).toEqual({
-            verdict: "rejected",
-            lead: "You denied",
-            subject: "writing outside this workspace",
-            trailer: null,
-          });
-        }
-      }
-    },
-  );
-
-  it.each(["once", "session", "project", "ledger"])(
-    "reads steer before denial and a contradictory %s grant",
-    (grant) => {
-      expect(receipt([grant, "reject", "STEER"], "  use\n/tmp ")).toEqual({
-        verdict: "rejected",
-        lead: "You denied",
-        subject: "writing outside this workspace",
-        trailer: "\u201cuse /tmp\u201d",
-      });
-      expect(receipt(["steer", "reject", grant], "  ")).toMatchObject({
-        verdict: "rejected",
-        lead: "You denied",
-        trailer: null,
-      });
-    },
-  );
-
-  it("reads a ledger hit as one quiet line naming the earlier approval", () => {
-    const hit: RendererSessionInteraction = {
-      ...card,
-      id: "ledger-hit:call-2",
-      options: [
-        { id: "ledger", label: "Allowed by your earlier approval", description: "Write to /a" },
-      ],
-    };
-    expect(describeInteractionResolution(hit, { optionIds: ["ledger"], response: null })).toEqual({
-      verdict: "standing",
-      lead: "Allowed by your earlier approval:",
-      subject: "Write to /a",
-      trailer: null,
-    });
-    expect(
-      describeInteractionResolution(
-        { ...hit, options: [{ id: "ledger", label: "x", description: null }] },
-        { optionIds: ["ledger"], response: null },
-      ).subject,
-    ).toBe("write /x");
-  });
-});

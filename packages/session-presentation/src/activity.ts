@@ -62,57 +62,14 @@ export type BundleRow =
  * the summary that counts them, and the caret is the only thing that says one
  * contains the other.
  *
- * One thing leaves the bundle, and only one: a call gated on a decision. It
- * blocks the reader and it needs controls, so it must not sit behind a
- * disclosure at all — and the decision belongs *where it happened*, beside the
- * command it is about, rather than as a card at the foot of the transcript with
- * the row it gates left saying only that it is waiting. Failures and denials
- * stay inside; the summary confesses them in red and `needsAttention` opens the
- * bundle, which costs the transcript no second left edge.
  */
 export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
-  | { kind: "bundle"; rows: BundleRow[]; key: string }
-  | { kind: "attention"; part: DynamicToolUIPart; key: string };
+  | { kind: "bundle"; rows: BundleRow[]; key: string };
 
 /** Outcomes a bundle must not swallow silently. */
 export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
-  return state === "output-error" || state === "output-denied" || state === "approval-requested";
-}
-
-/** The one state that leaves the bundle: it blocks, and it needs controls. */
-export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
-  return state === "approval-requested";
-}
-
-/**
- * The tool call a blocking decision is gating. Null on every other state, so a
- * row can be asked without narrowing it first. The correlation to the open
- * interaction goes through the durable `ask:<toolCallId>` derivation — never
- * through `native.id`, which the product edge nulls on everything it ships.
- */
-export function gatedToolCallId(part: DynamicToolUIPart): string | null {
-  return part.state === "approval-requested" ? part.toolCallId : null;
-}
-
-/**
- * Every gated call a transcript row is already showing.
- *
- * The foot slot takes what is left. Without this an interaction correlated to a
- * visible call would be drawn twice — once on its row and once under the
- * composer — and answering one copy would leave the other on screen until the
- * projection caught up.
- */
-export function gatedToolCallIds(messages: readonly UIMessage[]): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.type !== "dynamic-tool") continue;
-      const id = gatedToolCallId(part);
-      if (id !== null) ids.add(id);
-    }
-  }
-  return ids;
+  return state === "output-error" || state === "output-denied";
 }
 
 /**
@@ -226,11 +183,6 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
       return;
     }
     if (part.type !== "dynamic-tool") return;
-    if (isBlocking(part.state)) {
-      flush();
-      segments.push({ kind: "attention", part, key });
-      return;
-    }
     bundle ??= [];
     bundle.push({ kind: "tool", part, key });
   });
@@ -446,10 +398,10 @@ function joinNames(names: readonly string[]): string {
 
 export function isRowActive(part: DynamicToolUIPart): boolean {
   const status = activityStatus(part);
-  return status === "pending" || status === "running" || status === "approval";
+  return status === "pending" || status === "running";
 }
 
-export type ActivityStatus = "pending" | "running" | "approval" | "done" | "denied" | "failed";
+export type ActivityStatus = "pending" | "running" | "done" | "denied" | "failed";
 
 export function activityStatus(part: DynamicToolUIPart): ActivityStatus {
   switch (part.state) {
@@ -458,9 +410,9 @@ export function activityStatus(part: DynamicToolUIPart): ActivityStatus {
     case "input-available":
       return "running";
     case "approval-requested":
-      return "approval";
+      return "done";
     case "approval-responded":
-      return part.approval.approved ? "running" : "denied";
+      return part.approval.approved ? "done" : "denied";
     case "output-error":
       return "failed";
     case "output-denied":

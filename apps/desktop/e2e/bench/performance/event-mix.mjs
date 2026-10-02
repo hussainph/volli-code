@@ -9,8 +9,8 @@
  * explicit and weighted, and the weights say what an agent Session's durable
  * history actually is: mostly runtime observations, a third of them
  * tool-result-sized, wrapped in turn and run lifecycle pairs, with transcript
- * references, spend, interactions, attention and authority in the proportions a
- * long-running Session accumulates them.
+ * references, spend, interactions, attention and legacy authority-denial facts
+ * in the proportions a long-running Session's retained history contains them.
  *
  * Every payload here is built in the production vocabulary and is written
  * through `assertSessionEvent`, so a kind or field this build cannot decode
@@ -194,6 +194,8 @@ export const EVENT_FAMILIES = Object.freeze(
         ];
       },
     },
+    // Legacy permission transcript fixture: decoding retained approval history
+    // must remain measurable, but no runtime is asked to open or answer it.
     {
       id: "interaction.cycle",
       weight: 25,
@@ -261,6 +263,8 @@ export const EVENT_FAMILIES = Object.freeze(
         ];
       },
     },
+    // Legacy transcript fixture only: retained to measure decoding old history,
+    // not an active gate, approval request or current runtime observation.
     {
       id: "authority.denied",
       weight: 20,
@@ -502,27 +506,6 @@ export function attachmentClosedPayload(attachmentId) {
   return { kind: "attachment.closed", attachmentId, outcome: "completed" };
 }
 
-/**
- * A durable Authority Snapshot for the fixture's attachments (VC-44 shape).
- *
- * The tool list is the production vocabulary the caller hands in, not a literal
- * copied into this file: a retired tool name should change the fixture the day
- * it changes the product, rather than the day somebody notices.
- */
-export function authoritySnapshot(toolIds) {
-  return {
-    mode: "auto",
-    location: "worktree",
-    enforcement: "enforce",
-    judgmentMode: "ask",
-    tools: [...toolIds],
-    rulePackId: "vc-353-benchmark",
-    rulePackHash: deterministicUuid("rule-pack", "vc-353-benchmark").replaceAll("-", ""),
-    classifierModel: null,
-    fallback: { consecutiveDenials: 3, sessionDenials: 12 },
-  };
-}
-
 const COMMAND_INTENTS = ["message.submit", "executor.start", "interaction.resolve", "model.select"];
 
 /**
@@ -538,6 +521,8 @@ export function commandIntent(context) {
     return { kind: "executor.start", adapterId: context.adapterId, continuity: "fresh" };
   }
   if (intent === "interaction.resolve") {
+    // Legacy command fact paired with the retained permission history above;
+    // fixture generation records it directly and never dispatches an approval.
     const interactionId = context.uuid("interaction", context.unitKey);
     return {
       kind: "interaction.resolve",

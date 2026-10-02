@@ -1,6 +1,4 @@
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   DEFAULT_CODE_MODE_LIMITS,
   roleVerbBundle,
   type CodeModeSurface,
@@ -31,17 +29,6 @@ function spec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntimeSpec {
     workspacePath: "/worktrees/VC-12-mcp-server",
     venue: "local",
     model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "medium" },
-    authority: {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute"],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    },
     brief: { text: "VC-12 — add an MCP server." },
     tools: { tools: ["read", "edit", "write", "execute"] },
     observer: async () => {},
@@ -317,15 +304,13 @@ describe("composeSystemPrompt", () => {
       "This Session's authority is bounded to the Session's execution workspace.",
     );
     expect(prompt).not.toContain("auto authority");
-    // The tool bundle is the prompt term: a Session-specific policy is enforced
-    // at the tool boundary and cannot create a fifth Cache Prefix term.
+    // The tool bundle is the stable prompt term.
     expect(prompt).toContain("The available coding tools are: read, edit, write, execute.");
   });
 
   it("never claims a confinement that no longer exists", () => {
     for (const prompt of [
       composeSystemPrompt(spec()),
-      composeSystemPrompt(spec({ authority: undefined })),
       composeSystemPrompt(spec({ tools: { tools: ["read", "edit"] } })),
       composeSystemPrompt(projectSpec()),
     ]) {
@@ -340,7 +325,7 @@ describe("composeSystemPrompt", () => {
     }
   });
 
-  it("keeps the write-side rule and the credentials carve-out until enforcement exists", () => {
+  it("keeps the write-side norm and the credentials carve-out", () => {
     // The workspace layer softened from prohibition to norm (VC-11): reads
     // elsewhere are task-anchored judgment. The write side and the credentials
     // sentence are pinned here because this instruction is currently the only
@@ -612,7 +597,6 @@ describe("composeSystemPrompt — cache stability", () => {
   it("composes the same bytes when every session-varying input changes", () => {
     const stable = {
       tools: { tools: ["read", "edit", "write", "execute"] },
-      authority: undefined,
       promptResources: [{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }],
     } as const;
 
@@ -645,7 +629,6 @@ describe("composeSystemPrompt — cache stability", () => {
       brief: { text: "VC-99 — a completely different Ticket." },
       model: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
       workspaceEnvironment: { dependencies: "installed", installCommand: "yarn install" },
-      priorAuthorityDenials: 7,
     });
 
     expect(composeSystemPrompt(one)).toBe(composeSystemPrompt(other));
@@ -655,21 +638,6 @@ describe("composeSystemPrompt — cache stability", () => {
     expect(composeSystemPrompt(projectSpec({ workspacePath: "/code/volli" }))).toBe(
       composeSystemPrompt(projectSpec({ workspacePath: "/elsewhere/checkout" })),
     );
-  });
-
-  it("does not turn a Session's Authority Snapshot into a fifth prompt term", () => {
-    const base = spec();
-    if (base.authority === undefined) throw new Error("fixture requires an Authority Snapshot");
-    expect(
-      composeSystemPrompt({
-        ...base,
-        authority: {
-          ...base.authority,
-          rulePackId: "session-specific-pack",
-          rulePackHash: "session-specific-hash",
-        },
-      }),
-    ).toBe(composeSystemPrompt(base));
   });
 
   // The three request-data terms that MAY move the prompt, each on its own.
