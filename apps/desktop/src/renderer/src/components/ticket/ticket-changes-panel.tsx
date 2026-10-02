@@ -8,6 +8,28 @@
  * filename over its muted parent, and the two line counts in a fixed column so
  * the numbers line up down the list.
  *
+ * THE STATUS IS A GLYPH, NOT A WORD (VC-406 follow-up). The rows used to trail
+ * `Modified` / `Added` / `Renamed` in the status ink, fading out under the
+ * hover actions that share that strip and collapsing to `sr-only` on a narrow
+ * rail — three renderings of one fact, and the widest of them was the one a
+ * reader never needed, since the coloured mark at the left of the line already
+ * says which kind of change this is and the `←` origin says the rename. The
+ * word is not lost: it still leads every row's accessible name
+ * (`presentChangeRow`, `Modified: <path>, …`), which is where the reader who
+ * cannot see the glyph was always getting it.
+ *
+ * THE PAGE IS THE CHANGE SET ALONE (VC-406, second pass). The repository card
+ * — branch, where it stands, whether CI is happy, and the done-flow button —
+ * spent one pass in this header, over the files it commits, so the act sat
+ * beside its subject. It is the rail's worktree FOOTER now
+ * (`ticket-repository-summary.tsx`): one pinned row under every rail page,
+ * its body folded above it. On this page the body still unfolds over the
+ * list it acts on, and on every other page the row is the one worktree fact
+ * the resting view had lost. What this panel keeps is the count, the ± pair,
+ * refresh and the filter; what it never does is ask for `worktree.status` —
+ * the footer asks for its own, and main serves both from one snapshot
+ * (VC-372).
+ *
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
  * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
@@ -42,13 +64,23 @@ import {
 } from "@volli/shared";
 
 import {
+  navigatorScopeKey,
+  useRememberedNavigatorView,
+} from "@renderer/components/files/navigator-scope-state";
+import {
   DiffTotals,
   RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
   RailFaultBanner,
+  RailHeadingReadStatus,
   RailPanelSkeleton,
+  RailReadFaultBody,
   RailRowActions,
 } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  railReadCanClaimEmpty,
+  railReadFeedback,
+} from "@renderer/components/ticket/rail-read-feedback";
 import {
   applyChangeSetRefresh,
   presentChangeRowWithRecency,
@@ -57,14 +89,10 @@ import {
 } from "@renderer/components/ticket/ticket-changes-model";
 import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
-import {
-  formatWorktreeState,
-  type WorktreeStatusSnapshot,
-} from "@renderer/components/ticket/worktree-done-flow-model";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Notice } from "@renderer/components/ui/notice";
@@ -81,7 +109,11 @@ import { toastError } from "@renderer/lib/toast";
  * colours.
  */
 export interface ChangeListRow extends ChangeRowPresentation {
-  /** The raw status, which picks the row's glyph — `statusLabel` is its word. */
+  /**
+   * The raw status, which picks the row's glyph. Its WORD is carried by the
+   * presentation's `accessibleName` (and by the now-undrawn `statusLabel`);
+   * no row renders it as visible text.
+   */
   statusKind: ChangeSetFileStatus;
   insertions: number | null;
   deletions: number | null;
@@ -103,19 +135,20 @@ export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState
  * The glyph and ink each status wears. The scratch names three — modified,
  * added, renamed — and the Change Set has three more it never had to draw:
  * `deleted` takes the removal mark in the deletions' own red, `untracked`
- * shares `added`'s green because both are "this file is new" (the status word
- * beside it is what separates staged from not), and `conflicted` is the one
+ * shares `added`'s green because both are "this file is new" (the exact status
+ * remains in the accessible name), and `conflicted` is the one
  * failure among them, so it takes the warning glyph.
  *
  * ONE ink per status, where this was a `{iconClass, labelClass}` pair. The pair
  * only ever encoded a light-mode shade step (`-600` glyph, `-900` label) that
  * dark mode collapsed anyway — six statuses × two fields × two appearances of
- * hand-written Tailwind, saying what the canvas now solves once. The glyph and
- * its label are one object; they were never two decisions.
+ * hand-written Tailwind, saying what the canvas now solves once. The visible
+ * status label is gone; the glyph alone carries the ink.
  *
- * `bold`, not `fill`: at 16px a status mark sits beside an 11px label, which is
- * the size tier where regular draws lighter than its own text (CLAUDE.md).
- * Filling them would make five different drawings rather than one heavier set.
+ * `bold`, not `fill`: at 16px this mark is now the only thing on the row
+ * saying which kind of change it is, and regular draws lighter than the text
+ * it sits among at that tier (CLAUDE.md). Filling them would make five
+ * different drawings rather than one heavier set.
  */
 const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: string }> = {
   modified: { icon: GitDiffIcon, ink: "text-attention" },
@@ -207,52 +240,6 @@ function useRowReveal(lines: readonly React.RefObject<HTMLElement | null>[]): {
   return { open, onOpenChange };
 }
 
-/** Working tree, local commits, and remote state — visible without opening another page. */
-export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot }) {
-  const state = formatWorktreeState(status);
-  const items = [
-    {
-      label: "Working",
-      value: state.working,
-      ink: status.uncommitted ? "text-attention" : "text-muted-foreground",
-    },
-    {
-      label: "Local",
-      value: state.local,
-      ink:
-        status.aheadOfBase !== null && status.aheadOfBase > 0
-          ? "text-foreground"
-          : "text-muted-foreground",
-    },
-    {
-      label: "Remote",
-      value: state.remote,
-      ink:
-        status.unpushed === 0 && status.aheadOfBase !== 0
-          ? "text-positive"
-          : (status.unpushed !== null && status.unpushed > 0) ||
-              (status.unpushed === null && status.aheadOfBase !== null && status.aheadOfBase > 0)
-            ? "text-attention"
-            : "text-muted-foreground",
-    },
-  ] as const;
-
-  return (
-    <div
-      data-testid="ticket-changes-git-state"
-      aria-label={`Working: ${state.working}; Local: ${state.local}; Remote: ${state.remote}`}
-      className="grid grid-cols-3 gap-2 rounded-md bg-muted/50 px-2 py-1.5"
-    >
-      {items.map((item) => (
-        <span key={item.label} className="flex min-w-0 flex-col">
-          <span className="text-label text-muted-foreground">{item.label}</span>
-          <span className={cn("truncate text-label font-medium", item.ink)}>{item.value}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function HeaderAction({
   label,
   icon: Icon,
@@ -316,9 +303,8 @@ function ChangeRow({
             data-current={current ? "true" : undefined}
             // One AX stop per row: the name carries status, the FULL path (the
             // visible lines truncate), counts in words, rename origin and
-            // recency — everything VoiceOver must say, because the glyph, the
-            // status word and the counts it can also see say it for sighted
-            // readers in three different places.
+            // recency — everything VoiceOver must say, and the only place the
+            // status WORD is said at all now that the row draws it as a glyph.
             aria-label={row.accessibleName}
             // The list is not a selection widget, so the row on screen marks
             // itself CURRENT instead. `aria-selected` without a listbox parent
@@ -333,30 +319,19 @@ function ChangeRow({
                 className="min-w-0 flex-1 text-ui font-medium"
               />
             }
+            // The recency mark alone: the status word that used to share this
+            // strip is the glyph on the left now, so nothing here has to fade
+            // out under the hover actions that land in the same place.
             primaryTrailing={
-              <>
-                {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
-                  <span
-                    data-testid="ticket-changes-updated"
-                    aria-label={row.updatedDescription}
-                    className="shrink-0 text-label font-medium text-primary-text"
-                  >
-                    {row.updatedLabel}
-                  </span>
-                ) : null}
-                {/* The status word yields to the row's hover actions — they
-                    occupy the same strip, and the glyph on the left has
-                    already said which kind of change this is. */}
+              row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
                 <span
-                  className={cn(
-                    "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
-                    "group-data-[narrow=true]/rail:sr-only",
-                    status.ink,
-                  )}
+                  data-testid="ticket-changes-updated"
+                  aria-label={row.updatedDescription}
+                  className="shrink-0 text-label font-medium text-primary-text"
                 >
-                  {row.statusLabel}
+                  {row.updatedLabel}
                 </span>
-              </>
+              ) : undefined
             }
             secondary={
               <span className="flex min-w-0 items-baseline text-ui text-muted-foreground/70">
@@ -400,12 +375,26 @@ function ChangeRow({
   );
 }
 
+/**
+ * What a list with no VISIBLE rows is entitled to say.
+ *
+ * Three different facts, and the cap is what makes the third one necessary: a
+ * filter runs over the files the snapshot carries, so under a cap it has
+ * neither shown nor searched the rest — "No files match" would be a claim about
+ * a set this page never held.
+ */
+function noVisibleRowsLabel(filtered: boolean, hiddenCount: number): string {
+  if (!filtered) return "No changed files shown";
+  return hiddenCount > 0 ? "No matches among the files shown" : "No files match";
+}
+
 /** Presentational flat list. */
 export function TicketChangesList({
   rows,
   currentPath,
   onSelectRow,
-  error,
+  filtered = false,
+  canClaimEmpty = true,
   hiddenCount = 0,
 }: {
   rows: readonly ChangeListRow[];
@@ -416,26 +405,61 @@ export function TicketChangesList({
    */
   currentPath: string | null;
   onSelectRow(path: string): void;
-  error?: string | null;
-  /** Paths the snapshot cap left out — surfaced as a trailing row, never hidden. */
+  /**
+   * Whether the rows were narrowed by the header's filter (VC-406).
+   *
+   * An empty list under a filter is the FILTER's emptiness, not the branch's —
+   * and "No changes vs base · the branch is up to date" over a hidden change
+   * set is simply false. Two different facts, so two different lines.
+   */
+  filtered?: boolean;
+  /**
+   * Whether a read has LANDED, so an empty list is a real answer (VC-406).
+   *
+   * "No changes vs base" is a claim about the branch, and only a completed read
+   * entitles the page to make it — a refused first read is a page that does not
+   * know. The fault body above says that instead; this draws nothing.
+   *
+   * The list no longer takes an `error` at all: a failed refresh keeps its rows
+   * and reports on the heading, so there is no state where an error REPLACES
+   * the list.
+   */
+  canClaimEmpty?: boolean;
+  /**
+   * Paths the snapshot cap left out — surfaced as a trailing row, never hidden,
+   * and named beside the empty sentence too when nothing is visible at all.
+   */
   hiddenCount?: number;
 }) {
-  if (error) {
-    return (
-      <div
-        data-testid="ticket-changes-error"
-        className={cn("flex min-h-0 flex-1 flex-col py-4", RAIL_PANEL_INSET)}
-        role="alert"
-      >
-        <p className="text-ui text-destructive">{error}</p>
-      </div>
-    );
-  }
-
   if (rows.length === 0) {
+    if (!canClaimEmpty) return null;
+    // NOTHING VISIBLE IS NOT NOTHING CHANGED, and a cap makes the sentence
+    // narrower still: the filter ran over the files this snapshot carries, so
+    // over a truncated one it has searched neither the hidden paths nor proved
+    // anything about them. The count and the claim are drawn together rather
+    // than the truncation notice dropping out with the list it rode in.
+    if (filtered || hiddenCount > 0) {
+      return (
+        <div className={cn("flex shrink-0 flex-col gap-1", RAIL_PANEL_MARGIN)}>
+          <p data-testid="ticket-changes-filter-empty" className={EMPTY_INLINE}>
+            {noVisibleRowsLabel(filtered, hiddenCount)}
+          </p>
+          {hiddenCount > 0 ? (
+            <p
+              data-testid="ticket-changes-truncated"
+              data-hidden-count={hiddenCount}
+              className="text-center text-ui text-muted-foreground/70"
+            >
+              {hiddenCount.toLocaleString()} {hiddenCount === 1 ? "file" : "files"} not shown or
+              searched
+            </p>
+          ) : null}
+        </div>
+      );
+    }
     // A framed note rather than a centred sentence in an empty column: "nothing
     // changed" is a state the branch is IN, and a card says that the way the
-    // repository card above says everything else about the worktree.
+    // rail's worktree footer says everything else about the worktree.
     return (
       <Notice
         tone="positive"
@@ -512,14 +536,30 @@ export function TicketChangesPanel({
     hiddenCount: 0,
   }));
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
-  const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
+  /**
+   * Whether a read has SUCCEEDED at least once, which is a different fact from
+   * `loaded` ("an attempt finished"). It is what entitles the page to say the
+   * branch is clean, and what turns a fault from a body into a caveat.
+   */
+  const [hasData, setHasData] = React.useState(false);
+  /** A read is in flight — the ref below is the queue, this is what the heading draws. */
+  const [reading, setReading] = React.useState(false);
   const [watchError, setWatchError] = React.useState<string | null>(null);
   // Bumped by Retry to re-run the watch effect after a fault tore it down.
   const [watchAttempt, setWatchAttempt] = React.useState(0);
-  const [filtering, setFiltering] = React.useState(false);
-  const [query, setQuery] = React.useState("");
+
+  // The filter survives the rail drawing another page, per ticket: the same
+  // ephemeral bounded store the navigators use, holding the words and nothing
+  // live (VC-406).
+  const scopeKey = navigatorScopeKey("diffs", {
+    projectId: ticket.projectId,
+    ticketId: ticket.id,
+  });
+  const [view, setView] = useRememberedNavigatorView(scopeKey);
+  const filtering = view.filtering;
+  const query = view.query;
 
   // A refresh spans several git reads over the whole worktree, and a write storm
   // can outpace it. Never stack overlapping loads: a request arriving mid-load
@@ -528,6 +568,21 @@ export function TicketChangesPanel({
   const loading = React.useRef(false);
   const reloadPending = React.useRef(false);
   const loadRef = React.useRef<() => Promise<void>>(async () => {});
+
+  /**
+   * Which read may still write. A ticket swapped under this panel, or a rail
+   * that switched pages, must not be painted by the previous checkout's answer
+   * landing afterwards — the read is several git subprocesses and easily
+   * outlives the question.
+   */
+  const readId = React.useRef(0);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   /**
    * `notify` toasts the failure, and ONLY the loads the user personally asked
@@ -543,8 +598,9 @@ export function TicketChangesPanel({
         setError(null);
         setNav((prev) => ({ ...prev, revision: null, files: [] }));
         setDiff(null);
-        setStatus(null);
         setLoaded(true);
+        setHasData(false);
+        setReading(false);
         return;
       }
       if (loading.current) {
@@ -552,27 +608,38 @@ export function TicketChangesPanel({
         return;
       }
       loading.current = true;
+      const request = ++readId.current;
+      const live = (): boolean => mounted.current && readId.current === request;
+      setReading(true);
       try {
-        const [result, statusResult] = await Promise.all([
-          window.api.worktree.changeSet(ticket.id),
-          window.api.worktree.status(ticket.id),
-        ]);
-        setStatus(statusResult.ok ? statusResult.status : null);
+        // The Change Set alone. `worktree.status` was only ever read for the
+        // Git-state strip, and the strip is the worktree footer's row now
+        // (VC-406) — the footer asks for its own, off main's shared snapshot.
+        const result = await window.api.worktree.changeSet(ticket.id);
+        if (!live()) return;
         if (!result.ok) {
+          // The rows STAY. They were true as of the last read, and the heading
+          // above them says the refresh failed rather than the list vanishing.
           setError(result.error);
           if (notify) toastError(`Couldn't load changes: ${result.error}`);
           return;
         }
         setError(null);
         setNav((prev) => applyChangeSetRefresh(prev, result.changeSet));
+        // The SAME snapshot the rows and the count come from, so the header's
+        // ± pair can never describe a different read than the list under it.
         setDiff(changeSetToDiffStat(result.changeSet));
+        setHasData(true);
       } catch (err) {
         const message = errorMessage(err);
-        setError(message);
+        if (live()) setError(message);
         if (notify) toastError(`Couldn't load changes: ${message}`);
       } finally {
         loading.current = false;
-        setLoaded(true);
+        if (live()) {
+          setLoaded(true);
+          if (!reloadPending.current) setReading(false);
+        }
       }
       if (reloadPending.current) {
         reloadPending.current = false;
@@ -585,6 +652,22 @@ export function TicketChangesPanel({
   React.useEffect(() => {
     loadRef.current = loadChangeSet;
   }, [loadChangeSet]);
+
+  // A different ticket is a different question, so nothing of the last one's
+  // answer may be on screen while the new read is out — including the fact that
+  // a read had ever succeeded.
+  const shownTicket = React.useRef(ticket.id);
+  React.useEffect(() => {
+    if (shownTicket.current === ticket.id) return;
+    shownTicket.current = ticket.id;
+    readId.current += 1;
+    setNav({ revision: null, files: [], hiddenCount: 0 });
+    setDiff(null);
+    setError(null);
+    setLoaded(false);
+    setHasData(false);
+    setReading(false);
+  }, [ticket.id]);
 
   React.useEffect(() => {
     void loadChangeSet(true);
@@ -622,19 +705,6 @@ export function TicketChangesPanel({
     [onOpenDiff],
   );
 
-  if (!loaded && ticket.worktreePath !== null) {
-    return <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />;
-  }
-
-  if (ticket.worktreePath === null) {
-    return (
-      <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
-      </div>
-    );
-  }
-
   const needle = query.trim().toLowerCase();
   const visible =
     needle === ""
@@ -642,46 +712,54 @@ export function TicketChangesPanel({
       : nav.files.filter((file) => file.path.toLowerCase().includes(needle));
   const rows = visible.map((file) => toChangeListRow(file, recency));
   const total = nav.files.length + nav.hiddenCount;
+  const read = { hasData, pending: reading, failed: error !== null };
+  const feedback = ticket.worktreePath === null ? null : railReadFeedback(read, "Changes");
+  const refresh = React.useCallback(() => void loadChangeSet(true), [loadChangeSet]);
 
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        {/* Nothing to refine or total up on a clean branch, so the first row
-            keeps only its name and zero. The Git-state strip still distinguishes
-            a clean pushed branch from a branch with nothing committed yet. */}
+        {/* The name, the count and the read's own state, then the page's two
+            acts. */}
         <div className="flex min-h-7 items-center gap-1">
           <ChangesTitle count={total} />
-          {total === 0 ? null : (
+          <RailHeadingReadStatus
+            feedback={feedback}
+            onRetry={refresh}
+            testId="ticket-changes-read-status"
+          />
+          {ticket.worktreePath === null ? null : (
             <>
-              <HeaderAction
-                label="Refresh changes"
-                icon={ArrowClockwiseIcon}
-                onClick={() => void loadChangeSet(true)}
-              />
-              <HeaderAction
-                label="Filter changed files"
-                icon={MagnifyingGlassIcon}
-                pressed={filtering}
-                onClick={() =>
-                  setFiltering((open) => {
+              <HeaderAction label="Refresh changes" icon={ArrowClockwiseIcon} onClick={refresh} />
+              {/* Nothing to refine or total up on a clean branch — but refresh
+                  stays, because a clean branch is exactly where a stale read
+                  hides, and it is the recovery a failed one needs. */}
+              {total === 0 ? null : (
+                <HeaderAction
+                  label="Filter changed files"
+                  icon={MagnifyingGlassIcon}
+                  pressed={filtering}
+                  onClick={() =>
                     // Closing the field must also clear it, or the list stays
                     // filtered by a query with nothing on screen explaining it.
-                    if (open) setQuery("");
-                    return !open;
-                  })
-                }
-              />
+                    setView(
+                      filtering
+                        ? { cwd: "", filtering: false, query: "" }
+                        : { cwd: "", filtering: true, query },
+                    )
+                  }
+                />
+              )}
               <span className="min-w-1 flex-1" />
-              {diff === null ? null : <DiffTotals diff={diff} />}
+              {total === 0 || diff === null ? null : <DiffTotals diff={diff} />}
             </>
           )}
         </div>
-        {status === null ? null : <WorktreeStateStrip status={status} />}
-        {filtering ? (
+        {filtering && total > 0 ? (
           <Input
             autoFocus
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => setView({ cwd: "", filtering: true, query: event.target.value })}
             aria-label="Filter changed files"
             placeholder="Filter changed files…"
             className="h-7 text-ui"
@@ -689,15 +767,48 @@ export function TicketChangesPanel({
         ) : null}
       </header>
       {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
-      <TicketChangesList
-        rows={rows}
-        // Never a remembered click: a diff the person closed stops being the
-        // current row the moment its tab is gone.
-        currentPath={parseDiffTabId(activeTabId)}
-        onSelectRow={handleSelect}
-        error={error}
-        hiddenCount={nav.hiddenCount}
+      {/* A read that has never landed has no rows to caveat, so the failure is
+          the body itself — and "No changes vs base" may not be drawn beside it. */}
+      <RailReadFaultBody
+        feedback={feedback}
+        detail={error}
+        onRetry={refresh}
+        testId="ticket-changes-error"
+        className={cn("shrink-0", RAIL_PANEL_MARGIN)}
       />
+      {/* The BODY swaps; the header above never does. A ticket with no
+          worktree yet still reaches its scoping choice through the rail's
+          worktree footer, which stands under this page as under every other. */}
+      {ticket.worktreePath === null ? (
+        <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
+          <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
+          {/* VC-16: the two scopings do not become one sentence here. A
+             worktree ticket is waiting for a Session to cut one; a
+             main-checkout ticket is never going to have one, and telling it to
+             move to Doing would be an instruction that does nothing. */}
+          <p className="text-ui text-muted-foreground/70">
+            {ticket.usesWorktree
+              ? "Move this ticket to Doing to start one"
+              : "This ticket runs in the project checkout"}
+          </p>
+        </div>
+      ) : !loaded ? (
+        <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />
+      ) : (
+        <TicketChangesList
+          rows={rows}
+          // Only a landed read may say the branch is clean. A filtered list
+          // that matched nothing is not that claim either, but it is the
+          // filter's own emptiness — left as it was.
+          canClaimEmpty={railReadCanClaimEmpty(read)}
+          filtered={needle !== "" && nav.files.length > 0}
+          // Never a remembered click: a diff the person closed stops being the
+          // current row the moment its tab is gone.
+          currentPath={parseDiffTabId(activeTabId)}
+          onSelectRow={handleSelect}
+          hiddenCount={nav.hiddenCount}
+        />
+      )}
     </div>
   );
 }

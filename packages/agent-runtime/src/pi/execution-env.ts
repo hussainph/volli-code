@@ -79,6 +79,8 @@ export interface PiExecutionEnvOptions {
    * therefore cannot be shadowed from here.
    */
   environment?: Readonly<Record<string, string>>;
+  /** Read at each exec, so credentials supplied after attach reach later commands. */
+  secretEnvironment?: () => Readonly<Record<string, string>>;
   /**
    * Runs exactly once when the attachment cleans this environment up. Main
    * uses it to revoke the per-attachment Session token exported above; keeping
@@ -207,6 +209,8 @@ export interface SessionCommandEnvironmentOptions {
   identity?: PiSessionEnvIdentity;
   /** See {@link PiExecutionEnvOptions.environment}. */
   environment?: Readonly<Record<string, string>>;
+  /** See {@link PiExecutionEnvOptions.secretEnvironment}; evaluated for each command. */
+  secretEnvironment?: () => Readonly<Record<string, string>>;
   /**
    * The caller's own variables, believed over the sanitized set and the
    * identity alike: a tool call that names `VOLLI_SESSION` explicitly is
@@ -241,6 +245,7 @@ export function sessionCommandEnvironment(
   const merged = {
     ...unsandboxedEnvironment(source),
     ...options.environment,
+    ...options.secretEnvironment?.(),
     ...identityVariables(options.identity),
     ...options.overrides,
   };
@@ -251,20 +256,16 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identity: PiSessionEnvIdentity | undefined;
   readonly #environment: Readonly<Record<string, string>> | undefined;
+  readonly #secretEnvironment: PiExecutionEnvOptions["secretEnvironment"];
   readonly #onCleanup: (() => void | Promise<void>) | undefined;
   #cleaned = false;
 
-  constructor(options: {
-    cwd: string;
-    pathPrefixes?: readonly string[];
-    identity?: PiSessionEnvIdentity;
-    environment?: Readonly<Record<string, string>>;
-    onCleanup?: () => void | Promise<void>;
-  }) {
+  constructor(options: PiExecutionEnvOptions & { cwd: string }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identity = options.identity;
     this.#environment = options.environment;
+    this.#secretEnvironment = options.secretEnvironment;
     this.#onCleanup = options.onCleanup;
   }
 
@@ -285,6 +286,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
       pathPrefixes: this.#pathPrefixes,
       identity: this.#identity,
       environment: this.#environment,
+      secretEnvironment: this.#secretEnvironment,
       overrides: options?.env,
     });
     return super.exec(command, { ...options, env, inheritEnv: false }, context);
@@ -324,7 +326,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * installs it today.
  *
  * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one `docs/plans/authority-two-axis-rearchitecture.md` rebuilds on. It is kept
+ * one the two-axis authority rearchitecture rebuilds on. It is kept
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
  *
@@ -365,6 +367,7 @@ export async function piExecutionEnv(
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
     environment: options?.environment,
+    secretEnvironment: options?.secretEnvironment,
     onCleanup: options?.onCleanup,
   });
 }

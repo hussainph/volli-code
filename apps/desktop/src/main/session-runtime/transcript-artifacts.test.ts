@@ -1,11 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { renameSync, symlinkSync } from "node:fs";
 import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { canonicalJson, type SessionTranscriptArtifact } from "@volli/session-engine";
 
 import {
@@ -14,12 +16,65 @@ import {
   repackLegacyTranscriptArtifacts,
 } from "./transcript-artifacts";
 
+/**
+ * CodeQL #23/#24: the read used to `lstat` a path and then `readFile` it, so the
+ * path could be swapped for a symlink between the check and the use. These
+ * seams let a test do exactly that swap at the worst moment — right after the
+ * store's FIRST filesystem touch of the artifact path, whichever call that is —
+ * without assuming which call the store makes. A read that checks and reads one
+ * open file is unaffected by the swap; a read that re-resolves the path is not.
+ */
+const race = vi.hoisted(() => ({
+  target: undefined as string | undefined,
+  swap: undefined as (() => void) | undefined,
+  touched(path: unknown): void {
+    if (path !== race.target || race.swap === undefined) return;
+    const swap = race.swap;
+    race.swap = undefined;
+    swap();
+  },
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const info = await actual.lstat(...args);
+      race.touched(args[0]);
+      return info;
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      race.touched(args[0]);
+      return handle;
+    },
+  };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const lstatSync = ((...args: Parameters<typeof actual.lstatSync>) => {
+    const info = actual.lstatSync(...args);
+    race.touched(args[0]);
+    return info;
+  }) as typeof actual.lstatSync;
+  const openSync = (...args: Parameters<typeof actual.openSync>) => {
+    const fd = actual.openSync(...args);
+    race.touched(args[0]);
+    return fd;
+  };
+  return { ...actual, lstatSync, openSync };
+});
+
 const gunzipAsync = promisify(gunzip);
 const gzipAsync = promisify(gzip);
 
 let directory: string | undefined;
 
 afterEach(async () => {
+  race.target = undefined;
+  race.swap = undefined;
   if (directory) await rm(directory, { recursive: true, force: true });
   directory = undefined;
 });
@@ -191,6 +246,71 @@ describe("FileTranscriptArtifactStore", () => {
     await symlink(externalPath, artifactPath);
 
     await expect(artifacts.read(reference)).rejects.toThrow("not a regular file");
+  });
+
+  it("rejects a symlinked digest path on the synchronous read too", async () => {
+    const artifacts = await store();
+    const reference = await artifacts.write(artifact());
+    const artifactPath = join(directory!, `${reference.id.slice("sha256:".length)}.json.gz`);
+    const externalPath = join(directory!, "outside.json.gz");
+    await writeFile(externalPath, await readFile(artifactPath));
+    await rm(artifactPath);
+    await symlink(externalPath, artifactPath);
+
+    expect(() => artifacts.readCanonicalBytesSync(reference)).toThrow("not a regular file");
+  });
+
+  it("refuses a FIFO at the digest path instead of blocking on it", async () => {
+    // Opening a FIFO for reading waits for a writer. The old `lstat` refused it
+    // before any open; an open-first read has to refuse it without waiting.
+    const artifacts = await store();
+    const reference = await artifacts.write(artifact());
+    const artifactPath = join(directory!, `${reference.id.slice("sha256:".length)}.json.gz`);
+    await rm(artifactPath);
+    execFileSync("mkfifo", [artifactPath]);
+
+    await expect(artifacts.read(reference)).rejects.toThrow("not a regular file");
+    expect(() => artifacts.readCanonicalBytesSync(reference)).toThrow("not a regular file");
+  });
+
+  describe("a digest path swapped for a symlink after the store first touches it", () => {
+    /**
+     * Arms the race: the first touch of the compressed path replaces it, in one
+     * atomic rename, with a symlink to a decoy holding ANOTHER artifact's valid
+     * bytes. Reading through the symlink therefore fails the digest check, and
+     * reading the file the store actually opened and checked succeeds.
+     */
+    async function armSwap() {
+      const artifacts = await store();
+      const value = artifact("the bytes that were checked");
+      const reference = await artifacts.write(value);
+      const decoy = await artifacts.write(artifact("a decoy behind the symlink"));
+      const digestPath = (id: string) => join(directory!, `${id.slice("sha256:".length)}.json.gz`);
+      const swapLink = join(directory!, "swap.link");
+      race.target = digestPath(reference.id);
+      race.swap = () => {
+        symlinkSync(digestPath(decoy.id), swapLink);
+        renameSync(swapLink, digestPath(reference.id));
+      };
+      return { artifacts, reference, value };
+    }
+
+    it("reads the file it checked on the async path", async () => {
+      const { artifacts, reference, value } = await armSwap();
+
+      await expect(artifacts.read(reference)).resolves.toEqual(value);
+      expect(race.swap).toBeUndefined();
+      expect((await lstat(race.target!)).isSymbolicLink()).toBe(true);
+    });
+
+    it("reads the file it checked on the synchronous path", async () => {
+      const { artifacts, reference, value } = await armSwap();
+
+      const bytes = artifacts.readCanonicalBytesSync(reference);
+      expect(JSON.parse(bytes.toString("utf8"))).toEqual(value);
+      expect(race.swap).toBeUndefined();
+      expect((await lstat(race.target!)).isSymbolicLink()).toBe(true);
+    });
   });
 
   it("rejects tampered and symlinked digest paths before publishing a write", async () => {

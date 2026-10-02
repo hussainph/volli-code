@@ -80,6 +80,7 @@ import {
   packagingFailures,
   renderNoticeDocument,
   repositoryUrl,
+  shippedAsFor,
   uncoveredPlatformPackages,
   unpackedPackages,
   wrapText,
@@ -302,7 +303,64 @@ function readSourcesRegistry() {
     text: normalizeLicenseText(readFileSync(join(NOTICES_DIR, entry.file), "utf8")),
   }));
 
-  return { platformNative, toolchain, vendored, fragments, registryFailures: ownFailures };
+  const nestedLicences = (registry.nestedLicences ?? []).map((entry) => ({
+    name: entry.name,
+    files: entry.files,
+  }));
+
+  return {
+    platformNative,
+    toolchain,
+    vendored,
+    fragments,
+    nestedLicences,
+    registryFailures: ownFailures,
+  };
+}
+
+/**
+ * Licence files a reviewed `nestedLicences` entry names INSIDE a package —
+ * `LICENSES/<upstream>.txt` beside adapted code — appended to the files the
+ * root-only walk found, plus a failure for every entry that no longer applies.
+ *
+ * Kept explicit rather than widening the walk: the walk is root-only because a
+ * `licenses/` directory in the wild is as often fixtures as terms, so a file
+ * below the root is reproduced only when a person has named it. A named file
+ * that has gone, or a package that left the closure, fails the check rather
+ * than silently dropping a licence the notice used to carry.
+ *
+ * @param {{ name: string, dir: string }[]} packages
+ * @param {{ name: string, files: string[] }[]} nested
+ * @param {(path: string) => string | null} readText
+ */
+export function nestedLicenceFiles(packages, nested, readText) {
+  /** @type {Map<string, { file: string, kind: "license", text: string }[]>} */
+  const byName = new Map();
+  const failures = [];
+  for (const entry of nested) {
+    const pkg = packages.find((candidate) => candidate.name === entry.name);
+    if (pkg === undefined) {
+      failures.push(
+        `notices/sources.json names nested licence files for ${entry.name}, which no longer ships — drop the entry.`,
+      );
+      continue;
+    }
+    for (const file of entry.files) {
+      const text = readText(join(pkg.dir, file));
+      if (text === null || text === "") {
+        failures.push(
+          `notices/sources.json names ${file} in ${entry.name}, which the installed package does not contain.`,
+        );
+        continue;
+      }
+      byName.set(entry.name, [...(byName.get(entry.name) ?? []), { file, kind: "license", text }]);
+    }
+  }
+  return { byName, failures };
+}
+
+function readOptionalLicence(path) {
+  return existsSync(path) ? normalizeLicenseText(readFileSync(path, "utf8")) : null;
 }
 
 /**
@@ -383,7 +441,14 @@ function readPatchedDependencies() {
 
 function buildModel(artifact) {
   const builderConfig = parseYaml(readFileSync(artifact.builderConfigPath, "utf8"));
-  const keptNames = new Set(keptNodeModulePackages(builderConfig));
+  // Packages main both inlines and starts files of by path (VC-471), shared
+  // with verify-packed-requires so the two never disagree about which they are.
+  const pathReached = join(
+    dirname(artifact.builderConfigPath),
+    "scripts",
+    "path-reached-packages.json",
+  );
+  const alsoBundled = new Set(existsSync(pathReached) ? Object.keys(readJson(pathReached)) : []);
 
   const closure = collectPackageClosure({
     roots: artifact.roots,
@@ -392,18 +457,24 @@ function buildModel(artifact) {
   });
 
   const skippedPlatformPackages = closure.platformSpecific;
+  const registry = readSourcesRegistry();
+  const nested = nestedLicenceFiles(
+    closure.thirdParty,
+    registry.nestedLicences,
+    readOptionalLicence,
+  );
   const entries = closure.thirdParty.map((pkg) => ({
     name: pkg.name,
     version: pkg.version,
     spdx: declaredLicense(pkg.manifest),
     repository: repositoryUrl(pkg.manifest),
-    // The whitelist is the set electron-builder keeps in the shipped
-    // node_modules tree; everything else reaches the .app inside a chunk.
-    shippedAs: isNameCovered(pkg.name, keptNames) ? "node_modules tree" : "bundled into a chunk",
-    files: licenseFilesIn(pkg.dir),
+    // The whitelist (with its scope narrowings) is the set electron-builder
+    // keeps in the shipped node_modules tree, asarUnpack the part of it
+    // unpacked from the archive; everything else reaches the .app inside a chunk.
+    shippedAs: shippedAsFor(pkg.name, builderConfig, alsoBundled),
+    files: [...licenseFilesIn(pkg.dir), ...(nested.byName.get(pkg.name) ?? [])],
   }));
 
-  const registry = readSourcesRegistry();
   // The roots are themselves first-party and can declare their own notices,
   // but the walk records DEPENDENCIES, never the roots it started from.
   const owned = collectPackageOwnedNotices([...closure.firstParty, ...artifact.roots]);
@@ -430,7 +501,7 @@ function buildModel(artifact) {
     fragments: [...registry.fragments, ...owned.documents].toSorted((a, b) =>
       a.title < b.title ? -1 : a.title > b.title ? 1 : 0,
     ),
-    noticeFailures: [...registry.registryFailures, ...owned.failures],
+    noticeFailures: [...registry.registryFailures, ...nested.failures, ...owned.failures],
     builderConfig,
     skippedPlatformPackages,
   };
@@ -675,6 +746,34 @@ function selfTestClosure() {
     closure.notInstalled,
     ["gone"],
     "an uninstalled optional is recorded, not fatal",
+  );
+}
+
+function selfTestShippedAs() {
+  const config = {
+    files: ["!node_modules/!(@scope|plain|native)/**", "!node_modules/@scope/!(kept)/**"],
+    asarUnpack: ["**/node_modules/native/**", "**/node_modules/@scope/kept/**"],
+  };
+  assert.equal(shippedAsFor("bundled", config), "bundled into a chunk");
+  assert.equal(shippedAsFor("plain", config), "node_modules tree");
+  assert.equal(shippedAsFor("native", config), "node_modules tree, unpacked from the asar");
+  assert.equal(
+    shippedAsFor("@scope/dropped", config),
+    "bundled into a chunk",
+    "a narrowed-out scope member is bundled",
+  );
+  assert.equal(shippedAsFor("@other/x", config), "bundled into a chunk");
+  assert.equal(
+    shippedAsFor("@scope/kept", config, new Set(["@scope/kept"])),
+    "bundled into a chunk and node_modules tree, unpacked from the asar",
+  );
+  assert.equal(
+    shippedAsFor("@wide/x", {
+      files: ["!node_modules/!(@wide)/**"],
+      asarUnpack: ["**/node_modules/@wide/**"],
+    }),
+    "node_modules tree, unpacked from the asar",
+    "a whole unpacked scope covers its members",
   );
 }
 
@@ -1024,42 +1123,48 @@ function decideFixtureNotices(entries, present) {
  * one the grep got wrong: material in the tree, notice file absent.
  */
 function selfTestPackageNotices() {
-  const themeEntry = {
-    title: "Ghostty terminal theme catalog",
-    covers: ["src/ghostty-theme-sources.generated.ts"],
-    document: "THIRD-PARTY-THEMES.md",
+  // A SYNTHETIC entry, and deliberately not a real one. This fixture used to be
+  // the Ghostty theme catalog, which VC-413 deleted for unverified provenance;
+  // naming it here would both describe material that no longer exists and trip
+  // `check:vendored-themes`, which fails any tracked file that names the retired
+  // module. The rule under test is about files and declarations, not about which
+  // material happens to be declared this month.
+  const vendoredEntry = {
+    title: "Example vendored collection",
+    covers: ["src/example-vendored.generated.ts"],
+    document: "THIRD-PARTY-EXAMPLE.md",
   };
   const run = decideFixtureNotices;
 
   const bothHere = run(
-    [themeEntry],
-    ["src/ghostty-theme-sources.generated.ts", "THIRD-PARTY-THEMES.md"],
+    [vendoredEntry],
+    ["src/example-vendored.generated.ts", "THIRD-PARTY-EXAMPLE.md"],
   );
   assert.deepEqual(bothHere.failures, []);
   assert.deepEqual(
     bothHere.include.map((item) => item.document),
-    ["THIRD-PARTY-THEMES.md"],
+    ["THIRD-PARTY-EXAMPLE.md"],
     "material and notice both present: the notice is folded in",
   );
 
-  // THE REGRESSION THIS RULE EXISTS FOR. The Ghostty catalog shipped as
-  // `ghostty-theme-sources.generated.ts`, whose 463 entries say "iTerm2 Dark
-  // Background" and never the marker "iTerm2-Color-Schemes". The old grep
-  // therefore concluded the material had not shipped, stayed green, and would
-  // have packaged the catalog with no attribution. Keyed on the file instead,
-  // the same state is a failure that names both sides.
-  const materialWithoutNotice = run([themeEntry], ["src/ghostty-theme-sources.generated.ts"]);
+  // THE REGRESSION THIS RULE EXISTS FOR. The predecessor was a grep for a marker
+  // string across shipped sources, and the material it most needed to catch — a
+  // generated catalog of third-party themes — never contained the marker. The
+  // grep concluded the material had not shipped, stayed green, and would have
+  // packaged it with no attribution. Keyed on the file instead, the same state
+  // is a failure that names both sides.
+  const materialWithoutNotice = run([vendoredEntry], ["src/example-vendored.generated.ts"]);
   assert.deepEqual(materialWithoutNotice.include, [], "nothing is folded in");
   assert.equal(materialWithoutNotice.failures.length, 1);
   assert.match(
     materialWithoutNotice.failures[0],
-    /THIRD-PARTY-THEMES\.md.*no attribution/s,
+    /THIRD-PARTY-EXAMPLE\.md.*no attribution/s,
     "material present with its notice absent fails, naming the missing notice",
   );
 
   // The mirror: a declaration whose material is gone has rotted. Silence here
   // would let a mistyped path masquerade as coverage.
-  const noticeWithoutMaterial = run([themeEntry], ["THIRD-PARTY-THEMES.md"]);
+  const noticeWithoutMaterial = run([vendoredEntry], ["THIRD-PARTY-EXAMPLE.md"]);
   assert.deepEqual(noticeWithoutMaterial.include, []);
   assert.match(
     noticeWithoutMaterial.failures[0],
@@ -1296,18 +1401,52 @@ function selfTestLiveDeclarations() {
     "this repository's own package-declared notices must satisfy the rule",
   );
   assert.ok(
-    owned.documents.length + owned.vendored.length >= 3,
-    "shared declares the theme catalog and APCA; agent-runtime declares pi-automode",
+    owned.documents.length + owned.vendored.length >= 2,
+    "shared declares APCA; agent-runtime declares the vendored pi-automode helpers",
   );
   assert.ok(
-    owned.documents.some((doc) => /THIRD-PARTY-THEMES\.md/.test(doc.source)),
-    "the Ghostty theme attribution is collected from @volli/shared, not grepped for",
+    owned.vendored.some((entry) => /APCA/i.test(entry.title ?? "")),
+    "the APCA-W3 declaration is collected from @volli/shared, not grepped for",
   );
 }
 
+function selfTestNestedLicences() {
+  const files = {
+    "/n/pi-mcp/LICENSES/sdk.txt": "SDK TERMS\n",
+    "/n/pi-mcp/LICENSES/empty.txt": "",
+  };
+  const read = (path) => files[path] ?? null;
+  const packages = [{ name: "pi-mcp", dir: "/n/pi-mcp" }];
+
+  const found = nestedLicenceFiles(
+    packages,
+    [{ name: "pi-mcp", files: ["LICENSES/sdk.txt"] }],
+    read,
+  );
+  assert.deepEqual(found.failures, []);
+  assert.deepEqual(found.byName.get("pi-mcp"), [
+    { file: "LICENSES/sdk.txt", kind: "license", text: "SDK TERMS\n" },
+  ]);
+
+  const stale = nestedLicenceFiles(
+    packages,
+    [
+      { name: "gone", files: ["LICENSES/x.txt"] },
+      { name: "pi-mcp", files: ["LICENSES/missing.txt", "LICENSES/empty.txt"] },
+    ],
+    read,
+  );
+  assert.equal(stale.failures.length, 3, "a package that left and two unreadable files each fail");
+  assert.match(stale.failures[0], /gone.*no longer ships/);
+  assert.match(stale.failures[1], /LICENSES\/missing\.txt in pi-mcp/);
+  assert.equal(stale.byName.has("pi-mcp"), false);
+}
+
 function selfTest() {
+  selfTestNestedLicences();
   selfTestClosure();
   selfTestDeclarations();
+  selfTestShippedAs();
   selfTestGrouping();
   selfTestPackagingRules();
   selfTestPackageNotices();

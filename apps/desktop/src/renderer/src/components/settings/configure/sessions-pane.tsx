@@ -15,10 +15,11 @@ import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import type { ModelAccessModel, ModelAccessProvider, ModelSelection, Project } from "@volli/shared";
 
+import { ProjectDecisionModelRow } from "@renderer/components/pages/decision-model-settings";
 import {
+  availableModelsByProvider,
   offerableModels,
   preferredReasoning,
-  providerLabelFor,
 } from "@renderer/components/pages/model-access-settings";
 import {
   CONTROL_W,
@@ -32,11 +33,14 @@ import { MODELS_CATEGORY_KEY } from "@renderer/components/settings/settings-grou
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
+import { ModelName } from "@renderer/components/models/model-identity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -188,11 +192,19 @@ export function SessionsPane({ project }: { project: Project }) {
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableModels.map((availableModel) => (
-                    <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
-                      {availableModel.label} ·{" "}
-                      {providerLabelFor(providers, availableModel.providerId)}
-                    </SelectItem>
+                  {availableModelsByProvider(availableModels, providers).map((group) => (
+                    <SelectGroup key={group.providerId}>
+                      <SelectLabel>{group.providerLabel}</SelectLabel>
+                      {group.models.map((availableModel) => (
+                        <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
+                          <ModelName
+                            model={availableModel}
+                            models={availableModels}
+                            providers={providers}
+                          />
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
@@ -222,6 +234,7 @@ export function SessionsPane({ project }: { project: Project }) {
             </div>
           </OverrideControl>
         </PrefRow>
+        <ProjectDecisionModelRow project={project} onSaved={adoptProject} />
       </PrefSection>
 
       <PrefSection

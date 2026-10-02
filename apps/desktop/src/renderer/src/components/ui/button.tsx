@@ -5,11 +5,9 @@ import { Slot } from "radix-ui";
 import { cn } from "@renderer/lib/utils";
 
 const buttonVariants = cva(
-  // The keyboard ring: 2px at 45%, not shadcn's 3px at 50%. A control that is
-  // already a filled pill needs the ring to name it, not to outweigh it — three
-  // pixels of half-strength ember around a 20px icon button is more ink than the
-  // button. Text fields answer focus differently and carry no ring at all
-  // (`ui/field-classes.ts`).
+  // Focus is an opaque, surface-solved token. Diluting it to 45% discarded
+  // its contrast floor. The offset separates the ring from a filled control.
+  // Text fields carry their caret instead (`ui/field-classes.ts`).
   //
   // THE PRESS: `scale` is in the transition list and naming `transform` is not
   // enough. Tailwind v4 compiles `scale-*` to the standalone `scale` property,
@@ -21,11 +19,13 @@ const buttonVariants = cva(
   // class inside a media query, (0,1,0), against `:active`'s (0,1,1) — the
   // longer version of that argument is on MENU_SURFACE_FADE in
   // `ui/menu-classes.ts`.
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Keep the solved fill opaque on hover: a 90% wash loses AA on light
+        // surfaces. Elevation supplies hover feedback without changing ink.
+        default: "bg-primary text-primary-foreground hover:shadow-raised",
         // `--destructive-foreground`, not a literal white: the destructive red
         // is hue-locked, but the ink that reads on it is solved rather than
         // assumed, so the label follows whatever actually lands on that fill.
@@ -36,15 +36,9 @@ const buttonVariants = cva(
         // pale on dark paper, deep on light — so the mode is already accounted
         // for in the colour, and a 60% wash would only break the one guarantee
         // the solve makes: the label is solved against THIS fill, not against
-        // a diluted version of it. The ring's `dark:` step is gone for the same
-        // reason one collapse later: it was 20% in light and 40% in dark, and
-        // both land on the alpha ladder's quiet rung (30) — so the fork was a
-        // hand-written mode difference stacked on a fill the generator already
-        // solves per mode, which is exactly the double-counting the two-block
-        // rule exists to stop. It comes back the day a canvas gives evidence
-        // that one rung cannot serve both appearances, and not before.
-        destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/30",
+        // a diluted version of it. Keyboard focus uses the same opaque semantic
+        // ring as every other button, not a translucent destructive wash.
+        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline:
           "border bg-background shadow-raised hover:bg-accent hover:text-foreground dark:border-border dark:bg-border/30 dark:hover:bg-border/50",
         secondary: "bg-muted text-foreground hover:bg-muted/70",

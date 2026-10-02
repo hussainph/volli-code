@@ -72,6 +72,7 @@ import type {
   BrowserTabHolder,
   RuntimeBrowserActResult,
   RuntimeBrowserConsole,
+  RuntimeBrowserFind,
   RuntimeBrowserHoldOutcome,
   RuntimeBrowserHolder,
   RuntimeBrowserNavigation,
@@ -90,6 +91,8 @@ import type {
 } from "./tab-host";
 import { BrowserSessionTabLimitError, BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
 import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-controller";
+import { traced } from "./trace-steps";
+import type { BrowserTraceStepInput } from "./trace-store";
 
 /**
  * What the port asks of the host — the registry and navigation surface, as a
@@ -117,6 +120,11 @@ export interface AgentBrowserHost {
   releaseHold(tabId: string, holder: BrowserSessionHolder, why?: BrowserHoldEnd): void;
   releaseAllHeldBy(holder: BrowserSessionHolder, why: BrowserHoldEnd): string[];
   forgetSession(holder: BrowserSessionHolder): void;
+  /**
+   * Records one settled call against a tab for replay (VC-453); the host decides
+   * whether the tab is one it records. Optional so a test host can omit it.
+   */
+  recordTraceStep?(step: BrowserTraceStepInput): void;
 }
 
 /**
@@ -127,6 +135,8 @@ export interface AgentBrowserHost {
 export interface AgentBrowserPort extends RuntimeBrowserPort {
   acquire(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
   release(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
+  /** Always carried here; the adapter strips it for a surface frozen before it (VC-364). */
+  find(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
   /** The Session's turn completed or was interrupted: every hold it has ends now. */
   turnEnded(): void;
   dispose(): void;
@@ -527,6 +537,39 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     };
   };
 
+  /**
+   * A search (VC-364): a read on `snapshotOf`'s terms — scope, wake, settle,
+   * sync — with the controller's find in place of its snapshot and no
+   * picture, because a search changes nothing.
+   */
+  const findOf = async (
+    tabId: string,
+    query: string,
+    signal: AbortSignal,
+    controller: () => Promise<BrowserTabController>,
+  ): Promise<RuntimeBrowserFind> => {
+    resolve(tabId);
+    signal.throwIfAborted();
+    keepAwake(tabId);
+    await options.waitForLoad(tabId, signal, "current");
+    signal.throwIfAborted();
+    const tab = resolve(tabId);
+    const ready = await syncedController(tab, controller, signal);
+    const found = await ready.find(query, signal);
+    signal.throwIfAborted();
+    const settled = visible().find((candidate) => candidate.tabId === tabId) ?? tab;
+    return {
+      ...pageOf(settled),
+      query,
+      findText: found.text,
+      generation: found.generation,
+      matches: found.matches,
+      shown: found.shown,
+      truncated: found.truncated,
+      empty: found.empty,
+    };
+  };
+
   const steer = (
     tabId: string | undefined,
     navigation: RuntimeBrowserNavigation,
@@ -678,6 +721,14 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         }),
       );
     },
+    find: async (input) => {
+      const tab = resolve(input.tabId);
+      return await refusalsOn(tab, async () =>
+        scheduled(input.tabId, input.signal, async (controller) =>
+          findOf(input.tabId, input.query, input.signal, controller),
+        ),
+      );
+    },
     screenshot: async (input) => {
       input.signal.throwIfAborted();
       const aimed = resolve(input.tabId);
@@ -761,11 +812,14 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
   return {
     ...port,
     tabs: scoped(port.tabs),
-    navigate: scoped(port.navigate),
-    snapshot: scoped(port.snapshot),
-    act: scoped(port.act),
-    screenshot: scoped(port.screenshot),
-    console: scoped(port.console),
+    navigate: scoped(
+      traced.navigate(options.host, options.scope, session.sessionId, port.navigate),
+    ),
+    snapshot: scoped(traced.snapshot(options.host, session.sessionId, port.snapshot)),
+    act: scoped(traced.act(options.host, session.sessionId, port.act)),
+    find: scoped(traced.find(options.host, session.sessionId, port.find)),
+    screenshot: scoped(traced.screenshot(options.host, session.sessionId, port.screenshot)),
+    console: scoped(traced.console(options.host, session.sessionId, port.console)),
     acquire: scoped(port.acquire),
     release: scoped(port.release),
   };

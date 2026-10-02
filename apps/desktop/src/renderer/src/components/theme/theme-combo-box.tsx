@@ -9,28 +9,26 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import { cn } from "@renderer/lib/utils";
 
 /**
- * The searchable "pick one name from a catalog" control every Appearance row
- * uses — global Settings and per-project Configure alike.
+ * The searchable "pick one name from a long list" control the Appearance rows
+ * use.
  *
- * It carries the shared Popover + cmdk contracts for Appearance rows that need
- * a searchable catalog. The interesting part is a set of contracts that must
- * NOT drift between those rows:
+ * It carries the shared Popover + cmdk contracts. Two of them survive from the
+ * version that also drove a live theme preview, because they are cmdk's rules
+ * rather than the preview's:
  *
  *  - **cmdk must be CONTROLLED** or it never calls `onValueChange` — it just
- *    updates its own store and returns. An uncontrolled picker here would
- *    silently never preview anything.
- *  - **A hover-preview has no Escape.** The pointer just wanders off, so the
- *    pointer leaving the list IS the "never mind" ({@link onEndPreview}), and
- *    the highlight is cleared with it — cmdk no-ops on an unchanged value, so
- *    a row left highlighted would swallow the re-entry and never preview again.
- *    Every other way out (Escape, an outside click, the commit) clears it too.
- *  - **Commit first, then end the preview.** The write resolves into the same
- *    palette, so there is no flash; ending first would repaint twice.
- *  - **Unmounting ends the preview.** Leaving the surface mid-preview would
- *    strand the app on a look that is stored nowhere.
+ *    updates its own store and returns.
+ *  - **Every way out clears the highlight.** cmdk no-ops on an unchanged value,
+ *    so a row left highlighted would swallow the next hover over that same row.
+ *    The ways out are more than the pointer leaving: Escape, an outside click,
+ *    and the commit itself.
  *
- * Preview itself is optional: a row with nothing to preview (font family) just
- * omits the two callbacks and gets the same list, search and check mark.
+ * THE LIVE PREVIEW IS GONE, and so is its plumbing (VC-413). It existed for the
+ * terminal theme row, whose list was a theme catalog vendored out of Ghostty.app
+ * — hovering a name repainted every live terminal. The app ships no catalog and
+ * the row reports rather than picks, which leaves this control one caller (the
+ * font-family row) and nothing to preview: a font is not a palette, and the list
+ * is of faces already installed on the machine.
  */
 
 /**
@@ -60,10 +58,6 @@ export interface ThemeComboBoxProps<Value extends string> {
   items: readonly ThemeComboBoxItem<Value>[];
   /** The committed value, check-marked in the list. Null when nothing is set. */
   activeValue: string | null;
-  /** Paint the highlighted value live, writing nothing. Omit for a row with no live preview. */
-  onPreview?(value: string): void;
-  /** Put the committed look back. Required whenever {@link onPreview} is given. */
-  onEndPreview?(): void;
   /** Persist `value`; the menu closes only if this resolves true. */
   onSelect(value: Value): Promise<boolean>;
   /** Opening is the moment to fetch a list that is expensive to enumerate. */
@@ -79,8 +73,6 @@ export function ThemeComboBox<Value extends string>({
   empty,
   items,
   activeValue,
-  onPreview,
-  onEndPreview,
   onSelect,
   onOpenChange,
   className,
@@ -88,28 +80,11 @@ export function ThemeComboBox<Value extends string>({
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState("");
 
-  // Read through a ref so the unmount effect stays exhaustive-deps clean and
-  // never captures a stale closure over an earlier render's restore target. The
-  // ref is moved in an effect rather than during render: render must stay pure,
-  // and this effect is declared first, so the cleanup below always sees the
-  // latest committed callback.
-  const endPreview = React.useRef(onEndPreview);
-  React.useEffect(() => {
-    endPreview.current = onEndPreview;
-  });
-  const end = React.useCallback((): void => endPreview.current?.(), []);
-
-  React.useEffect(() => end, [end]);
-
-  // Every way OUT of a preview: the highlight has to go with it. cmdk fires
-  // `onValueChange` only on a CHANGE, so a row left highlighted would swallow
-  // the next hover over that same row and never preview again — and the ways
-  // out are more than the pointer leaving (Escape, an outside click, and the
-  // commit itself, which closes through our own `setOpen`).
-  const endHighlightedPreview = React.useCallback((): void => {
-    setSelected("");
-    endPreview.current?.();
-  }, []);
+  // cmdk fires `onValueChange` only on a CHANGE, so a row left highlighted
+  // would swallow the next hover over that same row — and the ways out are more
+  // than the pointer leaving (Escape, an outside click, and the commit itself,
+  // which closes through our own `setOpen`).
+  const clearHighlight = React.useCallback((): void => setSelected(""), []);
 
   return (
     <Popover
@@ -117,7 +92,7 @@ export function ThemeComboBox<Value extends string>({
       onOpenChange={(next) => {
         setOpen(next);
         onOpenChange?.(next);
-        if (!next) endHighlightedPreview();
+        if (!next) clearHighlight();
       }}
     >
       <PopoverTrigger asChild>
@@ -134,11 +109,8 @@ export function ThemeComboBox<Value extends string>({
         <Command
           loop
           value={selected}
-          onValueChange={(value) => {
-            setSelected(value);
-            onPreview?.(value);
-          }}
-          onPointerLeave={endHighlightedPreview}
+          onValueChange={setSelected}
+          onPointerLeave={clearHighlight}
           className="flex flex-col overflow-hidden rounded-md"
         >
           <Command.Input
@@ -156,15 +128,14 @@ export function ThemeComboBox<Value extends string>({
                 keywords={item.keywords === undefined ? undefined : [...item.keywords]}
                 onSelect={() => {
                   // `finally`, not the resolve path: a persist that REJECTS
-                  // would otherwise strand the app on a previewed look that is
-                  // stored nowhere — the one thing the contracts above exist to
-                  // prevent. The rejection itself still propagates; every call
+                  // must still leave the list in a state the next hover can
+                  // act on. The rejection itself still propagates; every call
                   // site persists through `writeThrough`, which toasts.
                   void onSelect(item.value)
                     .then((saved) => {
                       if (saved) setOpen(false);
                     })
-                    .finally(endHighlightedPreview);
+                    .finally(clearHighlight);
                 }}
                 className="flex cursor-default items-center justify-between gap-2 rounded-sm px-2 py-1 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
               >

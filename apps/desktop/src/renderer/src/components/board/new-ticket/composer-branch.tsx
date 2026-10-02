@@ -198,6 +198,8 @@ function BaseBranchChip({
   );
   const label = baseChipLabel(value, state);
 
+  // Options has a fixed width; the base gives up space to the destination,
+  // while the full ref stays in the accessible name.
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
@@ -207,10 +209,12 @@ function BaseBranchChip({
           aria-label={`Base branch: ${label.spoken}`}
           variant="ghost"
           size="sm"
-          className={composerChipClass()}
+          className={cn(composerChipClass(), "min-w-0 flex-1 justify-start")}
         >
           <GitBranchIcon />
-          {label.text}
+          <span className="min-w-0 truncate" title={label.text}>
+            {label.text}
+          </span>
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
       </PopoverTrigger>
@@ -301,7 +305,7 @@ export function ComposerBranchRow({
   onUsesWorktreeChange,
 }: ComposerBranchRowProps) {
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="flex w-full min-w-0 items-center gap-1">
       {usesWorktree ? (
         <>
           <BaseBranchChip state={state} value={baseBranch} onChange={onBaseBranchChange} />

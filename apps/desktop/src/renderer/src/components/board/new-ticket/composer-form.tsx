@@ -33,7 +33,6 @@ import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
  * The New-ticket composer's stateful body: field state, the description editor
@@ -160,7 +159,7 @@ export function ComposerForm({
   // rung order main resolves — read per open, overridable for this ticket
   // alone (`composer-run.tsx`). Deliberately NOT part of the draft above — see
   // that module's header.
-  const run = useComposerRun(target.sessionModel ?? null);
+  const run = useComposerRun(target.sessionModel ?? null, target.id);
 
   // Read on arrival and project changes: a composer can open without ever
   // visiting the board, or retarget to a project whose cache is still cold.
@@ -246,8 +245,6 @@ export function ComposerForm({
       // instruction, so its queued metadata lets the model refine that fallback
       // without briefly naming the Session after the instruction itself.
       startChat: (projectId, ticketId, chat) => startTicketChat(projectId, ticketId, chat),
-      openTicketWorkspace: (projectId, ticketId) =>
-        useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId),
       toastSuccess: (message) => toast.success(message),
       linkAttachments: async (ticketId) => {
         const pending = attachmentsRef.current;
@@ -304,14 +301,15 @@ export function ComposerForm({
     if (title.trim() === "" || submitting) return;
     setSubmitting(true);
     try {
-      const result = await runKickoff(currentFields(), deps, {
-        createMore,
-        ...(run.selection === null ? {} : { model: run.selection }),
-      });
+      const result = await runKickoff(
+        currentFields(),
+        deps,
+        !run.explicit || run.selection === null ? {} : { model: run.selection },
+      );
       if (!result.created) return;
       clearDraft(); // the kickoff consumed the draft — next open starts blank
-      // Foreground kickoff already navigated into the ticket workspace; either way
-      // the composer is done — close it (Create-more resets in place instead).
+      // Starting work leaves the underlying workspace alone. Create-more only
+      // decides whether the composer resets for another ticket or closes.
       if (createMore) resetForm();
       else onClose();
     } catch (error) {
@@ -319,7 +317,17 @@ export function ComposerForm({
     } finally {
       setSubmitting(false);
     }
-  }, [title, submitting, currentFields, deps, createMore, run.selection, resetForm, onClose]);
+  }, [
+    title,
+    submitting,
+    currentFields,
+    deps,
+    createMore,
+    run.explicit,
+    run.selection,
+    resetForm,
+    onClose,
+  ]);
 
   // The third commit (VC-329 item 4): create in the chip's status — never
   // moved to make a column match — then run the chosen saved Automation on it.

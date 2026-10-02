@@ -1,0 +1,41 @@
+---
+/*
+ * The header's links, in the website header's voice (BRAND.md §7.6): words,
+ * not an icon row. GitHub is quiet like the website's; Download is the one
+ * link at full ink, as it is there.
+ *
+ * Starlight renders this slot in the desktop header and again in the mobile
+ * menu's footer, so the same two links travel to both.
+ */
+const links = [
+  { label: "GitHub", href: "https://github.com/hussainph/volli-code", rel: "me" },
+  { label: "Download", href: "https://volli.app/download/", strong: true },
+];
+---
+
+{
+  links.map(({ label, href, rel, strong }) => (
+    <a class:list={["volli-nav-link", { "volli-nav-link--strong": strong }]} href={href} rel={rel}>
+      {label}
+    </a>
+  ))
+}
+
+<style>
+  .volli-nav-link {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    color: var(--volli-ink-2);
+    font-size: 14.5px;
+    font-weight: 480;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color 160ms ease;
+  }
+
+  .volli-nav-link:hover,
+  .volli-nav-link--strong {
+    color: var(--volli-ink);
+  }
+</style>

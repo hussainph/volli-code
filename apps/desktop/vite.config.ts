@@ -37,18 +37,34 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // whitelist and keeping that list in sync as their dependency graph moves.
 // `verify-packed-requires.mjs` is what catches getting this wrong.
 //
-// The MCP client (VC-8) rides along on exactly the same reasoning. It is
-// main-only, pure JavaScript, and — checked across every file of its `dist/`,
-// including the stdio transport — reads nothing relative to its own package
-// layout: no `__dirname`, no `require.resolve`, no module-load file read. That
-// is the property that forces jsdom into `neverBundle`, and its absence is what
-// makes inlining safe here. Bundling it also spares this repo from tracking its
-// runtime tree (cross-spawn, zod, jose, eventsource, @modelcontextprotocol/core
-// …) in the electron-builder whitelist as that graph moves.
+// The MCP client rides along on exactly the same reasoning — VC-8's official
+// SDK first, and since VC-470 `@earendil-works/pi-mcp`. It is main-only, pure
+// JavaScript, and — checked across every file of its `dist/`, the stdio
+// transport and the OAuth loopback server included — reads nothing relative to
+// its own package layout: no `__dirname`, no `require.resolve`, no module-load
+// file read. That is the property that forces jsdom into `neverBundle`, and its
+// absence is what makes inlining safe here. It is also ESM-only (its exports
+// have no `require` condition), so a runtime `require()` from the CJS main
+// bundle is not an option anyway. Bundling it spares this repo from tracking
+// its runtime tree (cross-spawn and its three small dependencies) in the
+// electron-builder whitelist.
+//
+// Code Mode's sandbox (VC-471) is the one package here that is BOTH bundled
+// and shipped. apps/desktop declares `@earendil-works/pi-codemode` only so
+// electron-builder collects it: its worker file and the `quickjs-wasi`
+// WebAssembly it compiles are reached BY PATH at runtime and ship unpacked
+// (electron-builder.yml). The host half — `CodemodeSandbox`, imported by
+// @volli/agent-runtime — must stay inlined all the same, which is why it is
+// named here: a declared dependency is external by default, and the package
+// is ESM-only, exporting no `require` condition, so the `require()` main.cjs
+// would be left with fails at boot. `verify-packed-requires.mjs` fails the
+// build if a chunk ever requires it.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") ||
   id.startsWith("@opentelemetry/") ||
-  id.startsWith("@modelcontextprotocol/");
+  id.startsWith("@earendil-works/pi-mcp") ||
+  id === "@earendil-works/pi-codemode" ||
+  id.startsWith("@earendil-works/pi-codemode/");
 
 function sourceFilesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -235,6 +251,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Where the Browser replay moves (VC-453): which step a key, a drag or
+        // a growing trace lands on. None of it shows in a screenshot.
+        "src/components/browser/browser-trace-model.ts",
         "src/components/board/board-dnd.ts",
         // Desktop selection gestures are board policy, not view glue: modifier
         // toggles may span columns while Shift ranges stay in one visual column.
@@ -338,6 +357,19 @@ export default defineConfig(({ mode }) => ({
         // chosen as the headline, is a person told they have room they do not
         // have — and neither shows up as an error anywhere.
         "src/components/usage-limits/accounts.ts",
+        // And what the window-bar GLYPH says about all that (VC-376). In the
+        // gate on the same argument, only harder to catch: the icon and the
+        // popover are never on screen at the same moment, so if this module
+        // ever reached a different verdict from the bars below it — a different
+        // window reported, a figure rounded another way, a failed account drawn
+        // as empty rather than dropped — nobody would be looking at the two
+        // together to see it. The spoken name is here too, because it is the
+        // whole reading for anyone who cannot use the drawing.
+        "src/components/usage-limits/icon-reading.ts",
+        // What a pin on that glyph holds, and what pressing one does to it
+        // (VC-452). A missed branch is a pin that silently holds a window from
+        // another account, or a third one the glyph has no side to draw.
+        "src/components/usage-limits/usage-pin.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -348,6 +380,13 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/model-access-refresh-model.ts",
         "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
+        // What the Decision model controls write and say (VC-478). In the gate
+        // because the cloud choice it builds IS the person's opt-in record,
+        // and a status that read "ready" for a provider nobody signed in to
+        // would send them to a model that can only answer "needs setup".
+        "src/components/pages/decision-model-model.ts",
+        // Host and client must agree on the explicit shadow-spending opt-in.
+        "**/src/authority-review-preferences.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
@@ -376,8 +415,26 @@ export default defineConfig(({ mode }) => ({
         // and which command that offer would run.
         "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
+        // The hover peek's three decisions (VC-30), pure `.ts` beside the cards
+        // for `tab-focus.ts`'s reason: none of them is visible in a screenshot
+        // of an open card. `peek-machine.ts` owns dwell, the warm switch and the
+        // suppression window — a state machine whose failure is a card that
+        // opens on a pointer merely crossing a row, or never opens at all.
+        // `peek-geometry.ts` is arithmetic against real bounds, where a missed
+        // branch is a card off the edge of the window. `peek-subject.ts` decides
+        // WHAT a row peeks — a Session, a ticket folder, or nothing.
+        "src/components/session-peek/peek-machine.ts",
+        "src/components/session-peek/peek-geometry.ts",
+        "src/components/session-peek/peek-subject.ts",
+        // Local/refinement demand, coalescing and stale-reply safety (VC-473).
+        "src/components/session-peek/peek-content-cache.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
+        // Which row the keyboard is on, and what each key does to the band
+        // (VC-30 D8): folders and their open Sessions step as one order, so an
+        // off-by-one here is focus landing inside a collapsed group nobody can
+        // see. Pure precisely so the gate can reach it.
+        "src/components/sidebar/session-band-keys.ts",
         "src/components/sidebar/edge-region.ts",
         // How the shell's pin/unpin journey decides what to do next (VC-359).
         // Enrolled on `edge-region.ts`'s argument and then some: the rule holds
@@ -406,6 +463,11 @@ export default defineConfig(({ mode }) => ({
         // of a wide window would never show.
         "src/components/ticket/diff-fit.ts",
         "src/components/ticket/label-picker-model.ts",
+        // What MCP's tool picker selects in bulk and what a server row says
+        // about its health (VC-470): a select-all that reached a hidden or an
+        // unavailable tool, or a row that called a broken server Ready, is a
+        // tool offered to every new Session that nobody chose.
+        "src/components/settings/configure/mcp-tools-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
@@ -480,6 +542,13 @@ export default defineConfig(({ mode }) => ({
         // shape as its two neighbours here, and gated for the same reason: it
         // decides whether a keystroke may write a PERSISTED preference.
         "src/lib/rail-toggle.ts",
+        // Which card the keyboard's place comes back to when a ticket closes
+        // (VC-419). In the gate on `escape-guard.ts`'s argument, one surface
+        // over: the origin of a journey is frequently GONE by the time it ends
+        // — filtered out, archived, deleted, or simply never mounted by a
+        // windowed column — and every one of those is a branch whose wrong
+        // answer is focus on BODY, which is precisely what no screenshot shows.
+        "src/lib/ticket-focus-origin.ts",
         "src/lib/relative-time.ts",
         "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",
@@ -608,6 +677,14 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
+        // Relinking a project to the folder it moved to (VC-430). In the gate
+        // because every branch of it is a rule about a filesystem nobody is
+        // watching: the refusal that stops two projects tracking one checkout,
+        // and the container move that keeps a renamed project's worktrees
+        // inside the set this database recognises as its own. Both are silent
+        // when wrong — one duplicates a project, the other strands checkouts
+        // that no cleanup surface will ever list again.
+        "**/src/main/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
@@ -624,6 +701,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        // Where "unread" is written down (VC-30). Enrolled beside the other
+        // named db modules for the reason the notification boundary is: a
+        // receipt read or written wrong is work a person never sees they have,
+        // and nothing on screen says the dot was the part that was broken.
+        "**/src/main/db/session-read-repo.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a
@@ -633,6 +715,13 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",
+        // The turn boundary that decides unread (VC-30), beside the watch it
+        // decorates: main is the only process that knows both that a turn ended
+        // and whether anyone was looking, so every branch of this is one nobody
+        // else can check. The peek's fold rides here too — it is the whole of
+        // what a card is allowed to say about a Session it never adopted.
+        "**/src/main/session-control/session-read-watch.ts",
+        "**/src/main/session-control/peek-content.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

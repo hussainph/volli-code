@@ -26,6 +26,8 @@
  * for the app to fill when it next creates the resource.
  */
 
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";
 
@@ -118,6 +120,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Session identity, role and parentage — durable ahead of any executor.",
   },
   {
+    table: "host_notice_outbox",
+    decision: "include",
+    reason:
+      "Sanitized pending notices and terminal delivery ids; omitting them loses notices or resurrects replays.",
+  },
+  {
     table: "session_provenances",
     decision: "include",
     reason:
@@ -127,6 +135,42 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     table: "session_events",
     decision: "include",
     reason: "The canonical ordered Session history; payload working directories are stripped.",
+  },
+  {
+    table: "session_read_receipts",
+    decision: "include",
+    reason:
+      "Which Sessions the person has not yet seen (VC-30): their own record, with no path or live handle in it, so a restore brings the unread dots back rather than silently marking everything read.",
+  },
+  {
+    table: "authority_approvals",
+    decision: "exclude",
+    reason:
+      "Remembered approvals (VC-480) authorize actions on THIS machine's paths and repositories; a restore re-asks rather than silently granting them on another one.",
+  },
+  {
+    table: "authority_approval_commands",
+    decision: "exclude",
+    reason:
+      "Approval mutation receipts embed machine-local grants; like the excluded approvals, a restored machine must re-ask instead of replaying source-machine authority.",
+  },
+  {
+    table: "authority_approval_events",
+    decision: "exclude",
+    reason:
+      "Approval mutation history embeds source-machine grant snapshots and references the excluded local commands; it cannot authorize a restored machine.",
+  },
+  {
+    table: "authority_approval_completions",
+    decision: "exclude",
+    reason:
+      "Successful uses count source-machine approvals that are excluded; restored approvals start empty and their local completion accounting starts empty too.",
+  },
+  {
+    table: "authority_decisions",
+    decision: "include",
+    reason:
+      "Who authorised each gated call, as it was recorded (VC-480): the person's own activity log, with no credential or live handle in it.",
   },
   {
     table: "session_event_sequence",
@@ -259,7 +303,7 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     table: "mcp_servers",
     decision: "include",
     reason:
-      "Per-project MCP server configuration and selected tool catalogs; transport settings contain no credentials.",
+      "Per-project MCP server configuration and selected tool catalogs. Transport settings hold credential REFERENCES (`${NAME}`, or a marker that a secret is stored) and never a value (VC-470); the values and OAuth tokens live in the excluded MCP credential file.",
   },
   {
     table: "mcp_operations",
@@ -353,6 +397,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_events",
   "ticket_event_sequence",
   "sessions",
+  "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",
   "session_delegation_claims",
@@ -361,6 +406,10 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "session_commands",
   "session_provenances",
   "session_events",
+  // After `sessions`, which it references and cascades with.
+  "session_read_receipts",
+  // After `projects` and `sessions`, which it references and cascades with.
+  "authority_decisions",
   "session_event_sequence",
   "session_command_receipts",
   "ticket_comments",
@@ -495,6 +544,18 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     area: "pi-sessions",
     decision: "exclude",
     reason: "Agent runtime scratch for live sessions; a runtime handle, not durable history.",
+  },
+  {
+    // Bound to the store's own name, as the included areas are bound to theirs.
+    area: `${MCP_CREDENTIAL_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "MCP secrets a person stored and OAuth tokens (VC-470). Credentials never travel in a backup; a restored profile signs in again.",
+  },
+  {
+    area: "session-secrets.enc*",
+    decision: "exclude",
+    reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
   },
   {
     area: "browser-pictures",

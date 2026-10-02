@@ -281,6 +281,7 @@ describe("buildExportDocument — populated db", () => {
         // No recorded departure, so this project inherits every authority
         // default (migration 025).
         authorityPolicy: null,
+        decisionModel: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.
@@ -524,6 +525,21 @@ describe("buildExportDocument — populated db", () => {
    * A column is exempt because it is dead, never because someone forgot it.
    */
   const UNEXPORTED_DEAD_COLUMNS: ReadonlySet<string> = new Set(["runtime_preferences"]);
+
+  it.each([null, '{ "providerId": "local", "modelId": "classifier" }'])(
+    "preserves the stored decision model override %s without parsing",
+    async (decisionModel) => {
+      ctx = openTestDb();
+      insertProject(ctx.db, testProject({ id: "proj-1" }));
+      ctx.db
+        .prepare("UPDATE projects SET decision_model = ? WHERE id = ?")
+        .run(decisionModel, "proj-1");
+
+      const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+
+      expect(document.projects[0]).toHaveProperty("decisionModel", decisionModel);
+    },
+  );
 
   it("carries every live projects column, so a migration cannot silently drop one", async () => {
     ctx = openTestDb();

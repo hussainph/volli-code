@@ -51,7 +51,8 @@ export type SessionProvenance =
        *
        * - An Unbound Run — one that carried its own Instructions and named no
        *   Automation, so there is nothing afterwards to name.
-       * - A Run whose `automation_runs` row has not landed yet. The Session and
+       * - A legacy Run whose launch did not record its origin and whose
+       *   `automation_runs` row has not landed yet. The Session and
        *   its `session_started` event are durable one step before that row is
        *   written, so a crash in between leaves a Session that is provably a
        *   Run's without anything on disk that can say whose
@@ -61,6 +62,7 @@ export type SessionProvenance =
        * printed a guess here would be worse than one that prints nothing.
        */
       automationName: string | null;
+      automationRunId: string | null;
     }
   | {
       kind: "session";
@@ -124,48 +126,16 @@ export function drawsSessionProvenanceMark(provenance: SessionProvenance): boole
  * The one accessible sentence the bolt carries, or `null` for a provenance
  * that draws no bolt.
  *
- * Spelled here rather than in the component because the visible half of the
- * mark is conditional ({@link automationMarkName}) and this one never is: the
- * fact must not depend on a sighted comparison with the row's title. When the
- * Automation cannot be named the sentence keeps the half that is still true —
- * that no person opened this Session — instead of naming something it does not
- * know.
+ * The visible mark is a bolt only; this sentence preserves the Automation's
+ * full name without competing with the Session title. When the Automation
+ * cannot be named the sentence keeps the half that is still true — that no
+ * person opened this Session — instead of naming something it does not know.
  */
 export function automationMarkLabel(provenance: SessionProvenance): string | null {
   if (provenance.kind !== "automation") return null;
   return provenance.automationName === null
     ? "Started by an Automation"
     : `Started by the Automation ${provenance.automationName}`;
-}
-
-/**
- * The Automation name a row must PRINT beside its bolt, or `null` when the row
- * already says it.
- *
- * A Run is born titled after its Automation — `run.ts` hands the Session start
- * `title: plan.automationName` — so the name is initially the largest text on
- * the row, and printing it again beside the glyph would be two copies of one
- * word in a rail VC-112 explicitly asks not to clutter. The bolt always draws;
- * this decides only whether the word repeats.
- *
- * It comes apart exactly where it should. Once the first turn auto-titles the
- * Session — or a person renames it, or an Unbound Run supplied no Automation
- * name — the title no longer carries its origin. Those are precisely the rows
- * where the reader cannot otherwise tell which Automation is responsible, so
- * the name appears.
- *
- * Compared after trimming and case-insensitively, because a title that differs
- * from its Automation only by whitespace or capitalisation is the same answer
- * to the reader, and a mark that printed it again would look like a bug.
- *
- * An Automation this row cannot name prints nothing at all rather than a
- * stand-in word: the bolt has already said the only thing that is known.
- */
-export function automationMarkName(provenance: SessionProvenance, rowTitle: string): string | null {
-  if (provenance.kind !== "automation") return null;
-  const name = provenance.automationName;
-  if (name === null) return null;
-  return name.trim().toLowerCase() === rowTitle.trim().toLowerCase() ? null : name;
 }
 
 /**
@@ -178,10 +148,10 @@ export function automationMarkName(provenance: SessionProvenance, rowTitle: stri
  * agent — so the parent's name, in the tooltip every row already has, answers
  * both and costs the resting rail nothing.
  *
- * The `automation` arm gets a line too even though its name is already on
- * screen, because the visible one truncates in a rail this narrow and the
- * tooltip is where the untruncated fact belongs. It leads with the noun so the
- * two lines cannot be confused for each other at a glance.
+ * The `automation` arm names the origin behind the bolt, since the visible
+ * Session title may no longer name its Automation. The untruncated fact lives
+ * here rather than beside the title. It leads with the noun so the two lines
+ * cannot be confused for each other at a glance.
  *
  * Kept to one short sentence each, per "kept as concise as possible": a tooltip
  * that needs reading twice is a tooltip nobody reads once.

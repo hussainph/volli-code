@@ -9,6 +9,7 @@ import {
   scrubSessionEventPayload,
   scrubSessionEventProvenance,
   scrubSessionInteraction,
+  sanitizeSessionInteraction,
   decodeCommandReceipt,
   decodeSessionCommand,
   decodeSessionCommandIntent,
@@ -19,7 +20,8 @@ import {
   UnknownSessionEventKindError,
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
-import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
+import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
+import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
@@ -146,6 +148,20 @@ const payloads = samples(
     selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
     tier: "fast",
   },
+  // A decision model's pick at birth (VC-432) writes its provenance beside it.
+  {
+    kind: "model.selected",
+    selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+    auto: {
+      confidence: 0.64,
+      alternatives: [
+        {
+          selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+          probability: 0.21,
+        },
+      ],
+    },
+  },
   { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
   // The attach-time skill record: names + whole delivered bodies, so a
   // recovery re-attach composes the prompt the first attach composed.
@@ -165,6 +181,24 @@ const payloads = samples(
     input: {
       kind: "tool-surface",
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+    },
+  },
+  // Old surfaces keep the historical mcp_* wire projection; the new marker is
+  // durable so reattachment and a model switch never change the tool names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "server" },
+  },
+  // Code Mode's routes and limits travel with the names they route (VC-471).
+  {
+    kind: "session.input.recorded",
+    input: {
+      kind: "tool-surface",
+      tools: ["read", "execute", "ask_user", "codemode", "session.start"],
+      codeMode: {
+        routes: { read: "code", execute: "both", ask_user: "direct", "session.start": "both" },
+        limits: { ...DEFAULT_CODE_MODE_LIMITS },
+      },
     },
   },
   { kind: "session.signaled", signal: "done", reason: null },
@@ -267,6 +301,28 @@ const payloads = samples(
       diagnostic: null,
     },
   },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "adapter_unrecoverable",
+      id: "attention-4",
+      attachmentId: "attachment-1",
+      detail: "429: Usage limit reached for 5 hour.",
+      diagnostic: null,
+      resetsAt: 1_800_000_000_000,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "adapter_unrecoverable",
+      id: "attention-4",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      resetsAt: null,
+    },
+  },
   { kind: "attention.cleared", attentionId: "attention-1" },
   { kind: "interaction.opened", interaction },
   {
@@ -353,6 +409,21 @@ const payloads = samples(
       recordedAt: 105,
       sequence: 5,
     },
+  },
+  {
+    kind: "authority.reviewed",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    toolCallId: "call-1",
+    tool: "execute",
+    mode: "shadow",
+    authoriser: "classifier",
+    wouldFlag: true,
+    reason: "This action exceeds the request.",
+    category: "external",
+    answers: { authorised: { type: "bool", value: false, probability: 0.1, confidence: 0.8 } },
+    missReason: null,
+    thresholds: { allow: 0.95, flag: 0.05 },
   },
   {
     kind: "authority.denied",
@@ -449,6 +520,100 @@ type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
 
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
+  it("round-trips credential presentation metadata but never extra fields or values", () => {
+    const credential = {
+      id: "credential-1",
+      name: "DEPLOY_TOKEN",
+      sessionId: "session-1",
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const opened = {
+      kind: "interaction.opened" as const,
+      interaction: {
+        ...interaction,
+        kind: "question" as const,
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    };
+    expect(roundTrip(opened)).toEqual(opened);
+    expect(sanitizeSessionInteraction(opened.interaction)).toEqual(opened.interaction);
+    expect(readInteractionPrompts(opened.interaction)).toMatchObject([
+      { options: [], custom: false },
+    ]);
+    expect(
+      roundTrip({
+        ...opened,
+        interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+      }),
+    ).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+    });
+    expect(scrubSessionEventPayload(opened)).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, native: { id: null, detail: null } },
+    });
+    const contaminated = {
+      ...opened,
+      interaction: {
+        ...opened.interaction,
+        value: "outside-secret",
+        unknown: "outside-extra",
+        credential: { ...credential, value: "inside-secret", unknown: "inside-extra" },
+      },
+    };
+    const encoded = encodeSessionJson(contaminated);
+    expect(encoded).not.toMatch(/inside-secret|outside-secret|inside-extra|outside-extra/);
+    expect(roundTrip(contaminated)).toEqual(opened);
+    expect(decodeSessionEventPayload(contaminated, "payload")).toEqual(opened);
+    expect(sanitizeSessionInteraction(contaminated.interaction)).toEqual(opened.interaction);
+    // Checkpoints also serialize interactions, without an event envelope.
+    expect(JSON.parse(encodeSessionJson({ active: [contaminated.interaction] }))).toEqual({
+      active: [opened.interaction],
+    });
+    expect(
+      JSON.parse(encodeSessionJson({ ...contaminated.interaction, kind: "permission" })),
+    ).toEqual({
+      ...opened.interaction,
+      kind: "permission",
+    });
+    expect(encodeSessionJson({ credential: "not-an-interaction" })).toBe(
+      '{"credential":"not-an-interaction"}',
+    );
+    expect(encodeSessionJson({ credential: "not-an-interaction", kind: "diagnostic" })).toBe(
+      '{"credential":"not-an-interaction","kind":"diagnostic"}',
+    );
+    for (const key of Object.keys(credential)) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            ...opened,
+            interaction: { ...opened.interaction, credential: { ...credential, [key]: 123 } },
+          },
+          "payload",
+        ),
+      ).toThrow(`payload.interaction.credential.${key}`);
+    }
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          ...opened,
+          interaction: { ...opened.interaction, credential: null },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.interaction.credential must be an object");
+    expect(scrubSessionInteraction(contaminated.interaction)).toEqual({
+      ...opened.interaction,
+      native: { id: null, detail: null },
+    });
+  });
+
   for (const payload of payloads) {
     it(`round-trips ${payload.kind}${"attention" in payload ? ` (${payload.attention.kind})` : ""}${"receipt" in payload ? ` (${payload.receipt.status})` : ""}`, () => {
       expect(roundTrip(payload)).toEqual(payload);
@@ -497,6 +662,19 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
         tier: "deep",
       },
+      {
+        kind: "model.select",
+        selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
+        auto: {
+          confidence: 0.64,
+          alternatives: [
+            {
+              selection: { providerId: "openai", modelId: "gpt-5-mini", reasoningLevel: "low" },
+              probability: 0.21,
+            },
+          ],
+        },
+      },
       { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
@@ -513,6 +691,28 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         interactionId: "ask:tool-1",
         resolution: { optionIds: ["once"], response: null },
         reference: { id: "sha256:r", mediaType: null, digest: null },
+      },
+      {
+        kind: "resume.schedule",
+        attentionId: "attention-1",
+        attachmentId: "attachment-1",
+        resumeAt: 1_800_000_000_000,
+      },
+      { kind: "resume.cancel", scheduleId: "schedule-1" },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "skipped", reason: "superseded", detail: null },
+      },
+      {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "skipped", reason: "refused", detail: "There is no failed Pi turn." },
       },
     ];
     for (const intent of intents) {
@@ -596,6 +796,43 @@ const resolved = (resolution: unknown) =>
   );
 
 describe("decodeSessionEventPayload tolerance and corruption", () => {
+  it("reads a stopped-run Attention written before `resetsAt` existed as stating no reset", () => {
+    const legacy = decodeSessionEventPayload(
+      {
+        kind: "attention.raised",
+        attention: {
+          kind: "adapter_unrecoverable",
+          id: "a-1",
+          attachmentId: null,
+          detail: "Codex error: The usage limit has been reached",
+          diagnostic: null,
+        },
+      },
+      "payload",
+    );
+    expect(legacy.kind === "attention.raised" && legacy.attention).toMatchObject({
+      kind: "adapter_unrecoverable",
+      resetsAt: null,
+    });
+    // Absent is legacy; present-and-wrong is corruption inside a known kind.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "attention.raised",
+          attention: {
+            kind: "adapter_unrecoverable",
+            id: "a-1",
+            attachmentId: null,
+            detail: null,
+            diagnostic: null,
+            resetsAt: "soon",
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.attention.resetsAt must be an integer");
+  });
+
   it("reads a Session written before `role` existed as the Role its birth Ticket implied (VC-9)", () => {
     const legacyTicket = decodeSessionEventPayload(
       {
@@ -775,6 +1012,30 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.tier has an unsupported value");
+    // Provenance is held to its shape too: a probability is a number in [0, 1].
+    const selection = { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" };
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 2, alternatives: [] } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.confidence must be a number between 0 and 1");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "model.selected", selection, auto: { confidence: 0.5, alternatives: "x" } },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "model.selected",
+          selection,
+          auto: { confidence: 0.5, alternatives: [{ selection, probability: "high" }] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.auto.alternatives[0].probability must be a number between 0 and 1");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },
@@ -813,6 +1074,52 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.tools[1] has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "unknown" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    // Code Mode's name and its record travel together, and the record routes
+    // exactly the surface it was frozen with (VC-471).
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["read", "codemode"] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input names codemode without its routes");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode is present but the surface does not hold codemode");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: {
+            kind: "tool-surface",
+            tools: ["read", "write", "codemode"],
+            codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.codeMode.routes must name exactly the tools of the surface");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },
@@ -1074,6 +1381,24 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
   });
 
+  it.each([true, false])("round-trips pinned Protection mode (%s)", (protection) => {
+    const authority = { ...recordedAuthority, protection };
+    const decoded = openedAttachment({ ...attachment, authority });
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("leaves legacy Snapshots without a Protection mode instead of opting them in", () => {
+    const decoded = openedAttachment({ ...attachment, authority: recordedAuthority });
+    if (decoded.kind !== "attachment.opened") throw new Error("not opened");
+    expect(decoded.attachment.authority).not.toHaveProperty("protection");
+  });
+
+  it("rejects a corrupt pinned Protection mode", () => {
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, protection: "true" } }),
+    ).toThrow("payload.attachment.authority.protection must be a boolean");
+  });
+
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
     // Every attachment in history predates VC-44 and carries no `authority` key.
     // Refusing to decode without one would make those Sessions unopenable rather
@@ -1230,6 +1555,21 @@ describe("decodeSessionCommand and its parts", () => {
     );
   });
 
+  it("rejects a malformed scheduled-resume outcome as corruption", () => {
+    expect(() =>
+      decodeSessionCommandIntent(
+        { kind: "resume.settle", scheduleId: "s", outcome: { kind: "maybe" } },
+        "intent",
+      ),
+    ).toThrow("intent.outcome.kind has an unsupported value");
+    expect(() =>
+      decodeSessionCommandIntent(
+        { kind: "resume.settle", scheduleId: "s", outcome: { kind: "skipped", reason: "bored" } },
+        "intent",
+      ),
+    ).toThrow("intent.outcome.reason has an unsupported value");
+  });
+
   it("rejects an unknown intent kind loudly — commands are not tolerant history", () => {
     expect(() => decodeSessionCommandIntent({ kind: "session.merge" }, "intent")).toThrow(
       "intent.kind is not a known Session command",
@@ -1255,6 +1595,17 @@ describe("decodeCommandReceipt", () => {
     expect(() => decodeCommandReceipt({ ...receipt, status: "maybe" }, "receipt")).toThrow(
       "receipt.status is not a known receipt status",
     );
+  });
+
+  it("reads the scheduled-resume result kinds", () => {
+    for (const kind of ["resume.scheduled", "resume.cancelled", "resume.settled"] as const) {
+      expect(
+        decodeCommandReceipt(
+          { ...receipt, status: "completed", result: { kind, sessionId: "session-1" } },
+          "receipt",
+        ),
+      ).toMatchObject({ result: { kind } });
+    }
   });
 
   it("rejects an unknown result kind", () => {
@@ -1939,5 +2290,66 @@ describe("the renderer-side parse", () => {
       reason: "malformed",
       message: "event.payload.attachment is not a valid Session attachment",
     });
+  });
+});
+
+describe("typed approval metadata", () => {
+  const approval = {
+    asked: "printf 'a\u241eb'",
+    because: "why\u241enow",
+    reason: "rule\u241etext",
+    stages: ["echo 'a\u241eb'", "tee /x"],
+    held: 1,
+    heldStages: [0, 1],
+  };
+
+  it.each([null, 1])("round-trips metadata without splitting any field (held=%s)", (held) => {
+    const original = { ...interaction, approval: { ...approval, held } };
+    const payload = { kind: "interaction.opened" as const, interaction: original };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionInteraction(original).approval).toEqual(original.approval);
+    expect(scrubSessionEventPayload(payload)).toMatchObject({
+      interaction: { approval: original.approval },
+    });
+  });
+
+  it("keeps older typed cards with only a single held-stage field", () => {
+    const { heldStages, ...olderApproval } = approval;
+    expect(heldStages).toEqual([0, 1]);
+    const payload = {
+      kind: "interaction.opened" as const,
+      interaction: { ...interaction, approval: olderApproval },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+  });
+
+  it("keeps historical and model questions without approval metadata", () => {
+    const opened = roundTrip({ kind: "interaction.opened", interaction });
+    expect(opened.kind === "interaction.opened" && "approval" in opened.interaction).toBe(false);
+  });
+
+  it.each([
+    null,
+    "forged",
+    { ...approval, asked: 1 },
+    { ...approval, because: null },
+    { ...approval, reason: false },
+    { ...approval, stages: "echo" },
+    { ...approval, stages: [1] },
+    { ...approval, held: "1" },
+    { ...approval, held: -1 },
+    { ...approval, held: 2 },
+    { ...approval, held: 0.5 },
+    { ...approval, heldStages: "0,1" },
+    { ...approval, heldStages: ["0"] },
+    { ...approval, heldStages: [-1] },
+    { ...approval, heldStages: [2] },
+  ])("rejects malformed approval metadata: %j", (invalid) => {
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "interaction.opened", interaction: { ...interaction, approval: invalid } },
+        "payload",
+      ),
+    ).toThrow(/approval/u);
   });
 });

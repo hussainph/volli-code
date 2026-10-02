@@ -152,11 +152,18 @@ interface KeyedPart {
   key: string;
 }
 
+/** The portable address of one rendered transcript part. */
+export function transcriptPartKey(messageId: string, index: number): string {
+  return `${messageId}:${index}`;
+}
+
 export function segmentMessageParts(
   parts: readonly MessagePart[],
   messageId: string,
 ): ChatSegment[] {
-  return segmentParts(parts.map((part, index) => ({ part, key: `${messageId}:${index}` })));
+  return segmentParts(
+    parts.map((part, index) => ({ part, key: transcriptPartKey(messageId, index) })),
+  );
 }
 
 /**
@@ -173,7 +180,9 @@ export function segmentMessageParts(
 export function segmentTurn(messages: readonly UIMessage[]): ChatSegment[] {
   const parts: KeyedPart[] = [];
   for (const message of messages) {
-    message.parts.forEach((part, index) => parts.push({ part, key: `${message.id}:${index}` }));
+    message.parts.forEach((part, index) =>
+      parts.push({ part, key: transcriptPartKey(message.id, index) }),
+    );
   }
   return segmentParts(parts);
 }
@@ -773,6 +782,7 @@ const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
   screenshot: "Screenshot",
   console: "Read console",
   tabs: "Listed tabs",
+  find: "Searched for",
 };
 
 /** Actions whose object is an element the page named, quoted as the page's words. */
@@ -815,23 +825,37 @@ function browseFacts(context: ActivityContext): ActivityFacts {
   return facts;
 }
 
+/**
+ * What one browser action says on its own: the verb, and the object when the
+ * action has one the row names — an element (quoted as the page's words), a
+ * key, or a direction. The transcript row and a Browser Trace frame (VC-453)
+ * both read it, so the row and the replay of the same call cannot name it
+ * differently; the row adds the page as its meta, the replay draws the page
+ * beside the caption.
+ */
+export function browseCaption(
+  action: ActivityBrowseAction,
+  target: string | null,
+): { verb: string; object: string | null } {
+  const verb = BROWSE_VERBS[action];
+  if (ELEMENT_ACTIONS.has(action)) return { verb, object: quotedTarget(target) };
+  if (PAGE_INPUT_ACTIONS.has(action)) return { verb, object: target };
+  // A find's object is the model's own query, quoted even when it looks like
+  // a ref: it is words searched for, never a handle.
+  if (action === "find") return { verb, object: target === null ? null : `“${target}”` };
+  return { verb, object: null };
+}
+
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
   const verb = BROWSE_VERBS[facet.action];
-  if (ELEMENT_ACTIONS.has(facet.action)) {
+  if (
+    ELEMENT_ACTIONS.has(facet.action) ||
+    PAGE_INPUT_ACTIONS.has(facet.action) ||
+    facet.action === "find"
+  ) {
     return {
-      verb,
-      object: quotedTarget(facet.target),
-      openPath: null,
-      meta: page,
-      metaTone: "muted",
-      detail: null,
-    };
-  }
-  if (PAGE_INPUT_ACTIONS.has(facet.action)) {
-    return {
-      verb,
-      object: facet.target,
+      ...browseCaption(facet.action, facet.target),
       openPath: null,
       meta: page,
       metaTone: "muted",

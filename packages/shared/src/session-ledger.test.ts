@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
+import { readSessionOrigin } from "./session-origin";
 import {
   askInteractionId,
   askUserInteractionId,
   assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
   confirmAskInteractionId,
+  credentialAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -728,6 +730,32 @@ describe("projectSession", () => {
     expect(repinned.modelTier).toBeNull();
   });
 
+  it("carries a decision model's pick, and drops it with the next selection", () => {
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+    const auto = {
+      confidence: 0.7,
+      alternatives: [
+        { selection: { ...selection, reasoningLevel: "high" as const }, probability: 0.2 },
+      ],
+    };
+    const picked = projectSession(session, [event(1, { kind: "model.selected", selection, auto })]);
+    expect(picked.modelAuto).toEqual(auto);
+    // Absent, not null, on every Session nobody auto-picked.
+    expect(
+      "modelAuto" in projectSession(session, [event(1, { kind: "model.selected", selection })]),
+    ).toBe(false);
+    // A later pick by hand is no longer the decision's.
+    const overridden = projectSession(session, [
+      event(1, { kind: "model.selected", selection, auto }),
+      event(2, { kind: "model.selected", selection: { ...selection, reasoningLevel: "high" } }),
+    ]);
+    expect("modelAuto" in overridden).toBe(false);
+  });
+
   it("projects retitle and native-continuation facts without mutating immutable inputs", () => {
     const attachment = {
       id: "attachment-1",
@@ -1279,12 +1307,14 @@ describe("Session projection checkpoints", () => {
     const checkpoint = createSessionProjectionCheckpoint(session, []);
     expect(checkpoint.compatibility).toBe(SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY);
     const invalid = [
-      { ...checkpoint, version: 2 as typeof checkpoint.version },
+      { ...checkpoint, version: 1 as typeof checkpoint.version },
       { ...checkpoint, compatibility: "session-event-kinds:retired" },
       { ...checkpoint, projection: undefined },
       { ...checkpoint, sessionId: "another-session" },
       { ...checkpoint, throughSequence: 0.5 },
       { ...checkpoint, throughSequence: -1 },
+      { ...checkpoint, pendingAttachmentCommands: undefined },
+      { ...checkpoint, stoppedRecoveryAttachmentId: undefined },
     ] as unknown as SessionProjectionCheckpoint[];
 
     for (const candidate of invalid) {
@@ -1817,7 +1847,8 @@ describe("projectSession usage", () => {
 function raised(
   kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">,
 ): SessionAttention {
-  return { id: `attention-${kind}`, kind, attachmentId: null, detail: null, diagnostic: null };
+  const base = { id: `attention-${kind}`, attachmentId: null, detail: null, diagnostic: null };
+  return kind === "adapter_unrecoverable" ? { ...base, kind, resetsAt: null } : { ...base, kind };
 }
 
 describe("sessionAwaitsUser", () => {
@@ -2182,5 +2213,353 @@ describe("the frozen ask interaction id derivations", () => {
     expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
     expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
     expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
+    // VC-470's credential question: it can follow a confirmation on the same
+    // tool call, so it must not share that confirmation's id.
+    expect(credentialAskInteractionId("call-1")).toBe("credential-ask:call-1");
+    expect(credentialAskInteractionId("x")).not.toBe(confirmAskInteractionId("x"));
+  });
+});
+
+function importOrigin(detail: import("./session-ledger").SessionNativeDetail | null) {
+  return readSessionOrigin(
+    typeof detail === "object" && detail !== null && !Array.isArray(detail)
+      ? (detail as Record<string, unknown>).sessionOrigin
+      : null,
+  );
+}
+
+describe("turn origins and stopped resumption", () => {
+  function messageCommand(
+    sequence: number,
+    origin?: import("./session-origin").SessionOrigin,
+    kind: "message.submit" | "executor.retry" = "message.submit",
+  ): SessionEvent {
+    return {
+      ...event(sequence, {
+        kind: "command.recorded",
+        command: {
+          id: `c${sequence}`,
+          sessionId: session.id,
+          createdAt: sequence,
+          intent:
+            kind === "message.submit"
+              ? { kind, reference: { id: "message", mediaType: null, digest: null } }
+              : { kind, attachmentId: "a" },
+          route: null,
+        },
+      }),
+      provenance: {
+        ...systemProvenance,
+        source: {
+          ...systemProvenance.source,
+          detail: origin === undefined ? null : { sessionOrigin: origin },
+        },
+      },
+    };
+  }
+  const turn = (sequence: number) =>
+    event(sequence, { kind: "turn.started", attachmentId: "a", turnId: `t${sequence}` });
+  const stop = (sequence: number) =>
+    event(sequence, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+  it("reads legacy events as unknown, not user, and does not invent a resume", () => {
+    expect(projectSession(session, [messageCommand(1), turn(2)])).toMatchObject({
+      latestTurnId: "t2",
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
+    });
+    expect(projectSession(session, [turn(1)])).toMatchObject({
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
+    });
+  });
+  function attachCommand(sequence: number, origin?: import("./session-origin").SessionOrigin) {
+    const command = messageCommand(sequence, origin);
+    if (command.payload.kind === "command.recorded") {
+      command.payload = {
+        kind: "command.recorded",
+        command: {
+          ...command.payload.command,
+          intent: { kind: "executor.start", adapterId: "pi", continuity: "context_replay" },
+        },
+      };
+    }
+    return command;
+  }
+  function opened(sequence: number, id: string, commandId?: string): SessionEvent {
+    return {
+      ...event(sequence, {
+        kind: "attachment.opened",
+        attachment: {
+          id,
+          sessionId: session.id,
+          adapterId: "pi",
+          venue: localVenue,
+          continuity: "context_replay",
+          native: null,
+          authority: null,
+        },
+      }),
+      commandId,
+    };
+  }
+  function verifyPartitions(events: SessionEvent[]) {
+    const full = projectSession(session, events);
+    const slim = events.map(({ provenance, ...rest }) => ({
+      ...rest,
+      commandOrigin:
+        rest.payload.kind === "command.recorded"
+          ? importOrigin(provenance.source.detail)
+          : undefined,
+    }));
+    expect(projectSession(session, slim)).toEqual(full);
+    // Re-reading a checkpoint tail, and every possible split, preserve identity.
+    for (const log of [events, slim]) {
+      for (let split = 0; split <= log.length; split++) {
+        const prefix = createSessionProjectionCheckpoint(session, log.slice(0, split));
+        const checkpoint = advanceSessionProjection(prefix, log.slice(split));
+        expect(checkpoint.projection).toEqual(full);
+        expect(advanceSessionProjection(checkpoint, log).projection).toEqual(full);
+      }
+    }
+    return full;
+  }
+  it("attributes successful reopening immediately, separately from the next turn submitter", () => {
+    const origin = { kind: "session", sessionId: "parent" } as const;
+    const events = [
+      opened(1, "a"),
+      messageCommand(2, { kind: "user" }),
+      turn(3),
+      stop(4),
+      attachCommand(5, origin),
+      opened(6, "b", "c5"),
+    ];
+    const attached = verifyPartitions(events);
+    expect(attached.resumptions).toEqual([{ attachmentId: "b", origin, startedAt: 60 }]);
+    expect(attached.attachments.find(({ id }) => id === "b")).toMatchObject({
+      origin,
+      reattached: true,
+    });
+    expect(attached.stopped).toBeNull();
+    const resumed = verifyPartitions([
+      ...events,
+      messageCommand(7, { kind: "user" }),
+      event(8, { kind: "turn.started", attachmentId: "b", turnId: "t8" }),
+    ]);
+    expect(resumed).toMatchObject({ latestTurnOrigin: { kind: "user" }, resumedAfterStop: true });
+    expect(resumed.resumptions).toEqual(attached.resumptions);
+    expect(
+      verifyPartitions([
+        ...events,
+        messageCommand(7, { kind: "user" }, "executor.retry"),
+        event(8, { kind: "turn.started", attachmentId: "b", turnId: "t8" }),
+        event(9, { kind: "turn.started", attachmentId: "b", turnId: "t9" }),
+      ]).resumedAfterStop,
+    ).toBe(false);
+  });
+  it("never calls an already-admitted racing turn a resumption", () => {
+    const racing = [opened(1, "a"), messageCommand(2, { kind: "user" }), stop(3), turn(4)];
+    const full = verifyPartitions(racing);
+    expect(full).toMatchObject({ resumedAfterStop: false, resumptions: [], stopped: { at: 30 } });
+    const recovered = verifyPartitions([
+      ...racing,
+      attachCommand(5, { kind: "user" }),
+      opened(6, "b", "c5"),
+      turn(7), // Old attachment must not consume the recovery of b.
+      event(8, { kind: "turn.started", attachmentId: "b", turnId: "t8" }),
+    ]);
+    expect(recovered.resumedAfterStop).toBe(true);
+    expect(recovered.resumptions).toHaveLength(1);
+  });
+  it("retains every successful reopening but deduplicates attachment identity", () => {
+    expect(
+      verifyPartitions([opened(1, "a"), opened(2, "b"), opened(3, "c"), opened(4, "c")])
+        .resumptions,
+    ).toEqual([
+      { attachmentId: "b", origin: null, startedAt: 20 },
+      { attachmentId: "c", origin: null, startedAt: 30 },
+    ]);
+  });
+  it("records crash recovery with no turn and preserves explicit terminal recreation", () => {
+    for (const continuity of ["native_resume", "context_replay", "recreate"] as const) {
+      const reopen = opened(5, "b", "c4");
+      if (reopen.payload.kind === "attachment.opened") {
+        reopen.payload.attachment.continuity = continuity;
+        reopen.payload.attachment.adapterId = "terminal";
+      }
+      const full = verifyPartitions([
+        opened(1, "a"),
+        turn(2),
+        event(3, { kind: "attachment.closed", attachmentId: "a", outcome: "interrupted" }),
+        attachCommand(4, { kind: "volli", reason: "relaunch-recovery" }),
+        reopen,
+      ]);
+      expect(full.resumptions).toEqual([
+        {
+          attachmentId: "b",
+          origin: { kind: "volli", reason: "relaunch-recovery" },
+          startedAt: 50,
+        },
+      ]);
+      expect(full.liveExecutor).toMatchObject({ continuity, reattached: true });
+      expect(full.resumedAfterStop).toBe(false);
+      expect(full.session.id).toBe(session.id);
+    }
+  });
+  it("does not treat a failed or rejected attach as successful history or carry its attribution", () => {
+    const failed = opened(2, "failed", "c1");
+    if (failed.payload.kind !== "attachment.opened") throw new Error("fixture");
+    const failure = {
+      ...failed,
+      payload: {
+        kind: "attachment.failed" as const,
+        attachment: failed.payload.attachment,
+        failure: { code: "refused", detail: null, diagnostic: null },
+      },
+    };
+    const initial = verifyPartitions([
+      attachCommand(1, { kind: "user" }),
+      failure,
+      opened(3, "a", "c1"),
+    ]);
+    expect(initial.resumptions).toEqual([]);
+    expect(initial.liveExecutor).toMatchObject({ origin: null, reattached: false });
+    const rejected = event(5, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: "r",
+        commandId: "c4",
+        sequence: 5,
+        recordedAt: 50,
+        status: "rejected",
+        code: "refused",
+        detail: null,
+      },
+    });
+    expect(
+      verifyPartitions([opened(1, "a"), stop(2), attachCommand(4, { kind: "user" }), rejected])
+        .resumptions,
+    ).toEqual([]);
+    expect(
+      verifyPartitions([
+        opened(1, "a"),
+        attachCommand(4, { kind: "user" }),
+        rejected,
+        opened(6, "b", "c4"),
+      ]).attachments.find(({ id }) => id === "b")?.origin,
+    ).toBeNull();
+  });
+  it("matches only the opening command, never native detail or competing commands", () => {
+    const reattach = opened(4, "b", "c2");
+    if (reattach.payload.kind !== "attachment.opened") throw new Error("fixture");
+    reattach.payload.attachment.native = {
+      id: "native",
+      detail: { sessionOrigin: { kind: "user" } },
+    };
+    const full = verifyPartitions([
+      opened(1, "a"),
+      attachCommand(2, { kind: "session", sessionId: "parent" }),
+      attachCommand(3, { kind: "user" }),
+      reattach,
+    ]);
+    expect(full.attachments.find(({ id }) => id === "b")?.origin).toEqual({
+      kind: "session",
+      sessionId: "parent",
+    });
+    expect(
+      verifyPartitions([opened(1, "a"), reattach]).attachments.find(({ id }) => id === "b")?.origin,
+    ).toBeNull();
+    const explicitUnknown = { ...attachCommand(2, { kind: "user" }), commandOrigin: null };
+    expect(
+      projectSession(session, [opened(1, "a"), explicitUnknown, reattach]).attachments.find(
+        ({ id }) => id === "b",
+      )?.origin,
+    ).toBeNull();
+  });
+  it("does not carry a mid-turn notice steer into a user's resumption", () => {
+    const events = [
+      messageCommand(1, { kind: "user" }),
+      turn(2),
+      messageCommand(3, { kind: "volli", reason: "watch-notice" }),
+      event(4, { kind: "turn.completed", attachmentId: "a", turnId: "t2" }),
+      stop(5),
+      messageCommand(6, { kind: "user" }),
+      turn(7),
+    ];
+    expect(projectSession(session, events).latestTurnOrigin).toEqual({ kind: "user" });
+    for (let split = 0; split <= events.length; split++) {
+      expect(
+        advanceSessionProjection(
+          createSessionProjectionCheckpoint(session, events.slice(0, split)),
+          events.slice(split),
+        ).projection,
+      ).toEqual(projectSession(session, events));
+    }
+  });
+  it("removes only a rejected competitor and leaves genuine competition unknown", () => {
+    const candidates = [
+      messageCommand(1, { kind: "user" }),
+      messageCommand(2, { kind: "volli", reason: "watch-notice" }),
+    ];
+    const rejection = event(3, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: "r",
+        commandId: "c2",
+        sequence: 3,
+        recordedAt: 3,
+        status: "rejected",
+        code: "refused",
+        detail: null,
+      },
+    });
+    for (const events of [
+      [...candidates, rejection, turn(4)],
+      [...candidates, turn(4)],
+    ]) {
+      expect(projectSession(session, events).latestTurnOrigin).toEqual(
+        events.length === 4 ? { kind: "user" } : null,
+      );
+      for (let split = 0; split <= events.length; split++) {
+        expect(
+          advanceSessionProjection(
+            createSessionProjectionCheckpoint(session, events.slice(0, split)),
+            events.slice(split),
+          ).projection,
+        ).toEqual(projectSession(session, events));
+      }
+    }
+  });
+  it("uses slim origins, ignores rejected opening commands, and does not reuse attribution", () => {
+    const command = messageCommand(1);
+    command.commandOrigin = { kind: "volli", reason: "watch-notice" };
+    expect(projectSession(session, [command, turn(2), turn(3)]).latestTurnOrigin).toBeNull();
+    expect(projectSession(session, [command, turn(2)]).latestTurnOrigin).toEqual(
+      command.commandOrigin,
+    );
+    expect(
+      projectSession(session, [command, messageCommand(2, { kind: "user" }), turn(3)])
+        .latestTurnOrigin,
+    ).toBeNull();
+    const rejection = event(2, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: "r",
+        commandId: "c1",
+        sequence: 2,
+        recordedAt: 21,
+        status: "rejected",
+        code: "refused",
+        detail: "no",
+      },
+    });
+    expect(projectSession(session, [command, rejection, turn(3)]).latestTurnOrigin).toBeNull();
+    // Untrusted native detail is not origin evidence.
+    for (const detail of [[], "user", {}, null]) {
+      const old = messageCommand(1);
+      old.provenance = { ...systemProvenance, source: { ...systemProvenance.source, detail } };
+      expect(projectSession(session, [old, turn(2)]).latestTurnOrigin).toBeNull();
+    }
+    const slim = { ...command, provenance: undefined, commandOrigin: undefined };
+    expect(projectSession(session, [slim, turn(2)]).latestTurnOrigin).toBeNull();
   });
 });

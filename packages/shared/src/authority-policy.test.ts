@@ -3,13 +3,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  isOverridableAuthorityRule,
   type AuthorityRuleId,
   type AuthoritySnapshot,
   type PolicyCommandSegment,
   type PolicyDecision,
   type PolicyToolCall,
 } from "./authority";
-import { evaluate } from "./authority-policy";
+import { evaluate, violations } from "./authority-policy";
+import { approvalCovers, type ApprovalScope } from "./approvals";
 
 const WORKSPACE = "/Users/dev/code/volli";
 
@@ -52,6 +54,19 @@ function decide(
   return evaluate(toolCall, snapshot(overrides), { workspacePath: WORKSPACE });
 }
 
+/** The same judgment under the per-call review order, where hard denies speak first. */
+function decideHardFirst(
+  toolCall: PolicyToolCall,
+  overrides: Partial<AuthoritySnapshot> = {},
+): PolicyDecision {
+  return evaluate(
+    toolCall,
+    snapshot(overrides),
+    { workspacePath: WORKSPACE },
+    { hardDeniesFirst: true },
+  );
+}
+
 /** The rule that refused, or "allow" — keeps the table of cases below readable. */
 function ruleOf(
   toolCall: PolicyToolCall,
@@ -59,6 +74,13 @@ function ruleOf(
 ): AuthorityRuleId | "allow" {
   const decision = decide(toolCall, overrides);
   return decision.outcome === "allow" ? "allow" : decision.rule;
+}
+
+function doesNotCover(approved: ApprovalScope, changed: ApprovalScope) {
+  expect(approved.key).not.toBeNull();
+  expect(approvalCovers({ operation: approved.operation, key: approved.key! }, changed)).toBe(
+    false,
+  );
 }
 
 describe("evaluate", () => {
@@ -115,6 +137,23 @@ describe("tool identity", () => {
 });
 
 describe("path.outside-workspace", () => {
+  it("lets a Session read, and never write, its own saved tool output (VC-469)", () => {
+    const saved = "/Users/dev/Library/Application Support/Volli/pi-sessions/--ws--/s.tool-output";
+    const context = { workspacePath: WORKSPACE, readableRoots: [saved] };
+    const judged = (toolCall: PolicyToolCall) => evaluate(toolCall, snapshot(), context).outcome;
+
+    expect(judged(call({ tool: "read", reads: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe("allow");
+    expect(judged(call({ tool: "read", reads: [`${WORKSPACE}/src/app.ts`] }))).toBe("allow");
+    // A sibling of the root is not inside it, and the root grants no write.
+    expect(judged(call({ tool: "read", reads: [`${saved}-other/x.txt`] }))).toBe("deny");
+    expect(judged(call({ tool: "write", writes: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe("deny");
+    expect(judged(exec(segment("echo", ["hi"], { writes: [`${saved}/x.txt`] })))).toBe("deny");
+    // Without the root, the same read is outside the workspace as ever.
+    expect(ruleOf(call({ tool: "read", reads: [`${saved}/tc-1.0a1b2c3d.txt`] }))).toBe(
+      "path.outside-workspace",
+    );
+  });
+
   it("refuses a read above the workspace", () => {
     const decision = decide(call({ tool: "read", reads: ["/etc/passwd"] }));
     expect(decision).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });
@@ -933,4 +972,404 @@ describe("rule order", () => {
       ),
     ).toBe("allow");
   });
+});
+
+describe("violations", () => {
+  const OTHER = "/Users/dev/code/other/docs/guides";
+
+  function all(toolCall: PolicyToolCall, overrides: Partial<AuthoritySnapshot> = {}) {
+    return violations(toolCall, snapshot(overrides), {
+      workspacePath: WORKSPACE,
+    });
+  }
+
+  it("lists nothing for a call no rule objects to", () => {
+    expect(all(call({ tool: "read", reads: [`${WORKSPACE}/a.ts`] }))).toEqual([]);
+  });
+
+  it("names a write outside the workspace by its folder, once per distinct target", () => {
+    const [violation] = all(
+      call({ tool: "write", writes: [`${OTHER}/a.md`, `${OTHER}/a.md`, `${OTHER}/b.md`] }),
+    );
+    expect(violation.rule).toBe("path.outside-workspace");
+    expect(violation.scopes?.map((scope) => [scope.operation, scope.key, scope.target])).toEqual([
+      ["write", OTHER, `${OTHER}/a.md`],
+      ["write", OTHER, `${OTHER}/b.md`],
+    ]);
+  });
+
+  it("names an outside file-tool read exactly, without adding a capability denylist", () => {
+    const read = all(call({ tool: "read", reads: ["/Users/dev/.zshrc"] }));
+    expect(read[0].rule).toBe("path.outside-workspace");
+    expect(read[0].scopes?.map((scope) => [scope.operation, scope.key])).toEqual([
+      ["read", "/Users/dev/.zshrc"],
+    ]);
+    expect(all(exec(segment("cat", ["/etc/hosts"], { paths: ["/etc/hosts"] })))).toEqual([]);
+  });
+
+  it("keeps read and write objections separate even for the same outside path", () => {
+    const path = `${OTHER}/a.md`;
+    expect(
+      all(call({ reads: [path], writes: [path] }))[0].scopes?.map((scope) => scope.operation),
+    ).toEqual(["read", "write"]);
+    expect(
+      violations(call({ reads: [path] }), snapshot(), {
+        workspacePath: WORKSPACE,
+        readableRoots: [OTHER],
+      }),
+    ).toEqual([]);
+    expect(
+      violations(call({ writes: [path] }), snapshot(), {
+        workspacePath: WORKSPACE,
+        readableRoots: [OTHER],
+      })[0].scopes?.[0].operation,
+    ).toBe("write");
+  });
+
+  it("keeps plumbing and Volli's own files exact, and git config writes once-only", () => {
+    const hook = all(call({ tool: "write", writes: [`${WORKSPACE}/.git/hooks/pre-commit`] }));
+    const internals = hook.find((violation) => violation.rule === "path.git-internals");
+    expect(internals?.scopes?.map((scope) => scope.key)).toEqual([
+      `${WORKSPACE}/.git/hooks/pre-commit`,
+    ]);
+    const volli = all(call({ tool: "write", writes: [`${WORKSPACE}/.volli/state.json`] }));
+    expect(
+      volli.find((violation) => violation.rule === "path.volli-internals")?.scopes?.[0].key,
+    ).toBe(`${WORKSPACE}/.volli/state.json`);
+    // Ordinary folder grants must not authorise exact-only plumbing scopes.
+    for (const target of [
+      `${WORKSPACE}/.git/hooks/pre-commit`,
+      `${WORKSPACE}/.git/config`,
+      `${WORKSPACE}/.volli/state.json`,
+    ]) {
+      const scope = all(call({ tool: "write", writes: [target] }))
+        .flatMap((violation) => violation.scopes ?? [])
+        .find((candidate) => candidate.key === target)!;
+      expect(approvalCovers({ operation: "write", key: WORKSPACE }, scope)).toBe(false);
+      expect(approvalCovers({ operation: "write", key: target }, scope)).toBe(true);
+    }
+    const config = all(exec(segment("git", ["config", "core.editor", "vim"])));
+    expect(config.find((violation) => violation.rule === "path.git-internals")?.scopes).toBeNull();
+  });
+
+  function gitApproval(
+    args: readonly string[],
+    workspacePath = WORKSPACE,
+    overrides: Partial<AuthoritySnapshot> = {},
+  ): ApprovalScope {
+    const found = violations(exec(segment("git", args)), snapshot(overrides), { workspacePath });
+    const scope = found.find((violation) => violation.rule.startsWith("command.git-"))?.scopes?.[0];
+    expect(scope).toBeDefined();
+    return scope!;
+  }
+
+  it("does not let the first escaping -C approve a later repository target", () => {
+    const approved = gitApproval(["-C", "/repo/first", "push"]);
+    for (const args of [
+      ["-C", "/repo/first", "-C", "/repo/second", "push"],
+      ["-C", "/repo/first", "--git-dir=/repo/second/.git", "push"],
+      ["-C", "/repo/first", "--work-tree", "/repo/second", "push"],
+    ]) {
+      doesNotCover(approved, gitApproval(args));
+    }
+  });
+
+  it("does not reuse relative git targets across workspace contexts", () => {
+    const args = ["-C", "../other", "push"];
+    doesNotCover(gitApproval(args, "/repo/first/ws"), gitApproval(args, "/repo/second/ws"));
+  });
+
+  it("retains every force spelling and value in git keys and summaries", () => {
+    const plain = gitApproval(["-C", "/repo/first", "push"]);
+    for (const flag of [
+      "--force-with-lease",
+      "--force-with-lease=refs/heads/main:abc123",
+      "--force-if-includes",
+      "-vf",
+      "-fv",
+      "--force=true",
+      "--delete=main",
+    ]) {
+      const forced = gitApproval(["-C", "/repo/first", "push", flag]);
+      doesNotCover(plain, forced);
+      expect(forced.key).toContain(flag);
+      expect(forced.summary).toContain(flag);
+    }
+    doesNotCover(
+      gitApproval(["-C", "/repo/first", "push", "--force-with-lease=main:abc123"]),
+      gitApproval(["-C", "/repo/first", "push", "--force-with-lease=main:def456"]),
+    );
+  });
+
+  it("binds exact git approvals to normalized paths, environment and earlier shell stages", () => {
+    const args = ["-C", "../other", "push"];
+    const scope = (toolCall: PolicyToolCall) => all(toolCall)[0].scopes![0];
+    const first = scope(exec(segment("git", args, { paths: ["/repo/first/other"] })));
+    const second = scope(exec(segment("git", args, { paths: ["/repo/second/other"] })));
+    doesNotCover(first, second);
+    doesNotCover(
+      scope(exec(segment("git", args, { env: ["GIT_DIR=/repo/first/.git"] }))),
+      scope(exec(segment("git", args, { env: ["GIT_DIR=/repo/second/.git"] }))),
+    );
+    doesNotCover(
+      scope(exec(segment("cd", ["/repo/first"]), segment("git", args))),
+      scope(exec(segment("cd", ["/repo/second"]), segment("git", args))),
+    );
+  });
+
+  it("does not collapse separate escaping git stages into one approval", () => {
+    const toolCall = exec(
+      segment("git", ["-C", "/repo/first", "push"]),
+      segment("git", ["-C", "/repo/second", "push"]),
+    );
+    const scopes = all(toolCall)[0].scopes!;
+    expect(scopes.map((scope) => scope.stage)).toEqual([0, 1]);
+    doesNotCover(scopes[0], scopes[1]);
+    expect(approvalCovers({ operation: scopes[0].operation, key: scopes[0].key! }, scopes[0])).toBe(
+      true,
+    );
+  });
+
+  it("preserves argument boundaries even when the raw display line is identical", () => {
+    const scope = (toolCall: PolicyToolCall) => all(toolCall)[0].scopes![0];
+    doesNotCover(
+      scope(exec(segment("git", ["-C", "/repo/first", "push", "origin main"]))),
+      scope(exec(segment("git", ["-C", "/repo/first", "push", "origin", "main"]))),
+    );
+  });
+
+  it("retains bundled destructive flags in Main checkout approvals", () => {
+    const main = { location: "main-checkout" } as const;
+    const clean = gitApproval(["clean", "-f"], WORKSPACE, main);
+    const recursive = gitApproval(["clean", "-fdx"], WORKSPACE, main);
+    doesNotCover(clean, recursive);
+    expect(recursive.key).toContain("-fdx");
+    expect(recursive.summary).toContain("-fdx");
+    doesNotCover(
+      gitApproval(["reset", "--hard", "HEAD~1"], WORKSPACE, main),
+      gitApproval(["reset", "--hard", "HEAD~2"], WORKSPACE, main),
+    );
+  });
+
+  it("names git in another tree by its complete call, and holds the stage that made it", () => {
+    const [escape] = all(
+      exec(
+        segment("echo", ["hi"]),
+        segment("git", ["-C", "/Users/dev/code/other", "push", "--force"]),
+      ),
+    );
+    expect(escape.rule).toBe("command.git-escapes-workspace");
+    expect(escape.scopes?.[0]).toMatchObject({
+      operation: "git",
+      key: expect.stringContaining("git -C /Users/dev/code/other push --force"),
+      stage: 1,
+    });
+    const single = all(exec(segment("git", ["-C", "/Users/dev/code/other", "status"])));
+    expect(single[0].scopes?.[0].stage).toBeUndefined();
+    expect(single[0].scopes?.[0].key).toContain("git -C /Users/dev/code/other status");
+    const bare = all(exec(segment("git", ["worktree", "add", "/Users/dev/code/other"])));
+    expect(bare[0].scopes?.[0].key).toContain("git worktree add /Users/dev/code/other");
+    const none = all(exec(segment("git", ["-C", "/Users/dev/code/other"])));
+    expect(none[0].scopes?.[0].key).toContain("git -C /Users/dev/code/other");
+  });
+
+  it("skips the git stages that did not escape or discard", () => {
+    const [escape] = all(
+      exec(segment("git", ["status"]), segment("git", ["-C", "/Users/dev/code/other", "log"])),
+    );
+    expect(escape.scopes?.map((scope) => scope.key)).toEqual([
+      expect.stringContaining("git status && git -C /Users/dev/code/other log"),
+    ]);
+    const [discard] = all(exec(segment("git", ["-C", "."]), segment("git", ["reset", "--hard"])), {
+      location: "main-checkout",
+    });
+    expect(discard.scopes?.map((scope) => scope.stage)).toEqual([1]);
+  });
+
+  it("names a discard by its complete call in the Main checkout", () => {
+    const found = all(exec(segment("git", ["reset", "--hard"]), segment("ls")), {
+      location: "main-checkout",
+    });
+    expect(found[0].rule).toBe("command.git-discards-work");
+    expect(found[0].scopes?.[0]).toMatchObject({
+      key: expect.stringContaining("git reset --hard && ls"),
+      stage: 0,
+    });
+    expect(
+      all(exec(segment("ls"), segment("git", ["status"])), { location: "main-checkout" }),
+    ).toEqual([]);
+  });
+
+  it("stamps the stage of a path a later segment writes", () => {
+    const found = all(
+      exec(segment("true"), segment("mkdir", ["-p", OTHER], { writes: [`${OTHER}/x`] })),
+    );
+    expect(found[0].scopes?.[0].stage).toBe(1);
+    const plain = all(call({ tool: "write", writes: [`${OTHER}/x`] }));
+    expect(plain[0].scopes?.[0].stage).toBeUndefined();
+  });
+
+  it("remembers a command it cannot read inside only as itself", () => {
+    const raw = call({
+      command: {
+        raw: "bash -c 'echo x > /tmp/out/y/z/w'",
+        segments: [segment("bash", ["-c", "echo x"], { writes: ["/tmp/out/y/z/w"] })],
+      },
+    });
+    const found = all(raw);
+    expect(found[0].rule).toBe("path.outside-workspace");
+    expect(found[0].scopes).toEqual([
+      expect.objectContaining({ operation: "command", key: "bash -c 'echo x > /tmp/out/y/z/w'" }),
+    ]);
+  });
+
+  it("holds no stage for a wrapped command, which is approved as a whole", () => {
+    const found = all(
+      call({
+        command: {
+          raw: "true && bash -c x",
+          segments: [segment("true"), segment("bash", ["-c", "x"], { writes: ["/tmp/a/b/c/d"] })],
+        },
+      }),
+    );
+    expect(found[0].scopes?.[0]).toMatchObject({ operation: "command" });
+    expect(found[0].scopes?.[0].stage).toBeUndefined();
+  });
+
+  it("lists every objection, so a hard rule cannot ride behind an approvable one", () => {
+    const found = all(
+      exec(
+        segment("tee", ["/Users/dev/code/other/a/b/c.txt"], {
+          writes: ["/Users/dev/code/other/a/b/c.txt"],
+        }),
+        segment("launchctl", ["load", "x"]),
+      ),
+    );
+    expect(found.map((violation) => violation.rule)).toEqual([
+      "path.outside-workspace",
+      "command.persistence",
+    ]);
+    expect(found[1].scopes).toBeNull();
+    expect(isOverridableAuthorityRule(found[1].rule)).toBe(false);
+  });
+});
+
+describe("hard denies first", () => {
+  /**
+   * Per-call review (VC-28) escalates on the one denial the gate returns, and an
+   * override may only be offered for a rule a person can lift. Plain pack order
+   * lets the earliest rule speak, and `path.outside-workspace` is earliest — so
+   * a redirect outside the workspace masks a hard deny riding the same command
+   * line, and the ask could offer to lift a refusal that has a hard deny hidden
+   * behind it. The option reruns the same pack hard-rules-first. It never changes
+   * whether a call is refused, only which refusal is cited.
+   */
+  const curlThroughRedirect = exec(
+    segment("curl", ["-k", "https://example.com"], { writes: ["/tmp/out"] }),
+  );
+
+  it("keeps the default a pure first-match over pack order", () => {
+    // The mask is the behaviour the option exists beside, so it is pinned rather
+    // than assumed — for every spelling of "option absent".
+    expect(decide(curlThroughRedirect)).toMatchObject({
+      outcome: "deny",
+      rule: "path.outside-workspace",
+    });
+    for (const options of [
+      {},
+      { hardDeniesFirst: false },
+      // The gate forwards its own optional flag, so a field of undefined reads
+      // as absent rather than as any kind of truth.
+      { hardDeniesFirst: undefined },
+    ]) {
+      expect(
+        evaluate(curlThroughRedirect, snapshot(), { workspacePath: WORKSPACE }, options),
+      ).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });
+    }
+  });
+
+  it("cites the hard deny a soft rule would have masked", () => {
+    const decision = decideHardFirst(curlThroughRedirect);
+    expect(decision).toMatchObject({ outcome: "deny", rule: "command.tls-weakening" });
+    expect(decision.outcome === "deny" && decision.reason).toContain("certificate verification");
+
+    expect(decideHardFirst(exec(segment("sudo", ["ls"], { writes: ["/tmp/out"] })))).toMatchObject({
+      outcome: "deny",
+      rule: "command.platform-weakening",
+    });
+  });
+
+  it("keeps pack order inside the hard pass", () => {
+    // tls-weakening and persistence both deny; the earlier pack rule speaks.
+    expect(
+      decideHardFirst(
+        exec(
+          segment("curl", ["-k", "https://example.com"], { writes: ["/tmp/out"] }),
+          segment("launchctl", ["load", "x"]),
+        ),
+      ),
+    ).toMatchObject({ outcome: "deny", rule: "command.tls-weakening" });
+  });
+
+  it("keeps pack order inside the overridable pass", () => {
+    // Both denials are overridable — the redirect and, in a main checkout, the
+    // discard — and the earlier pack rule still speaks.
+    expect(
+      decideHardFirst(
+        exec(segment("echo", ["x"], { writes: ["/tmp/out"] }), segment("git", ["reset", "--hard"])),
+        { location: "main-checkout" },
+      ),
+    ).toMatchObject({ outcome: "deny", rule: "path.outside-workspace" });
+  });
+
+  it("returns the identical verdict when only an overridable rule fires", () => {
+    // No hard rule is involved, so reordering must not disturb the denial —
+    // same rule, same reason, or a caller could not treat the two modes alike.
+    const softOnly = exec(segment("echo", ["hi"], { writes: ["/tmp/out"] }));
+    expect(decideHardFirst(softOnly)).toEqual(decide(softOnly));
+
+    const MAIN = { location: "main-checkout" } as const;
+    const discard = exec(segment("git", ["reset", "--hard"]));
+    expect(decideHardFirst(discard, MAIN)).toEqual(decide(discard, MAIN));
+  });
+
+  it("allows whatever the default allows", () => {
+    const harmless = call({ tool: "read", reads: [`${WORKSPACE}/src/app.ts`] });
+    expect(decideHardFirst(harmless)).toEqual({ outcome: "allow" });
+  });
+});
+
+describe("operation-specific objection stages", () => {
+  it.each([
+    "/Users/dev/code/other/docs/out.txt",
+    `${WORKSPACE}/.volli/state.json`,
+    `${WORKSPACE}/.git/HEAD`,
+  ])("holds every write to %s, not a mention or read", (target) => {
+    const found = violations(
+      exec(
+        segment("cat", [target], { paths: [target] }),
+        segment("echo", ["a"], { writes: [target] }),
+        segment("echo", ["b"], { writes: [target] }),
+      ),
+      snapshot(),
+      { workspacePath: WORKSPACE },
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].scopes?.map((scope) => [scope.operation, scope.target, scope.stage])).toEqual([
+      ["write", target, 1],
+      ["write", target, 2],
+    ]);
+  });
+});
+
+it("does not assign a read/file-tool objection to a command mentioning the same target", () => {
+  const target = "/Users/dev/code/other/docs/out.txt";
+  const toolCall = exec(segment("echo", [target], { paths: [target] }), segment("true"));
+  const found = violations({ ...toolCall, reads: [target], writes: [target] }, snapshot(), {
+    workspacePath: WORKSPACE,
+  });
+  expect(found[0].scopes?.map((scope) => [scope.operation, scope.stage])).toEqual([
+    ["read", undefined],
+    ["write", undefined],
+  ]);
 });

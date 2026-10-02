@@ -415,7 +415,7 @@ export function EffortSlider({
           // The pill, not the rail, wears the keyboard ring: it is the object
           // the eye reads as the control, and a ring on the untransformed rail
           // would sit still while the pill stretched out through it.
-          "group-focus-visible/rail:ring-2 group-focus-visible/rail:ring-ring/45",
+          "group-focus-visible/rail:ring-2 group-focus-visible/rail:ring-ring",
           // 1:1 WHILE DRAGGING. A transition on the stretch is lag against a
           // finger that is already there; the spring back on release is the
           // only part that animates, and `--ease-out` is a hard decelerate, so

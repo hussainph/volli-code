@@ -62,6 +62,7 @@
  * to fail the command that triggered it.
  */
 import {
+  isApprovalInteraction,
   sessionNotificationItem,
   sessionPersonNeed,
   shortSessionId,
@@ -134,8 +135,20 @@ export interface RunAttentionWatch {
 export function runAttentionNotification(
   need: SessionPersonNeed,
   session: { id: string; title: string | null },
+  approval: { title: string; asked: string } | null = null,
 ): { title: string; body: string } {
   const subject = session.title ?? `Session ${shortSessionId(session.id)}`;
+  // A Protection approval card (VC-480) is the one waiting need whose errand is
+  // known exactly, so the notice says what is being approved. The Run is
+  // paused until a person answers: there is no deadline and nothing decides for
+  // them.
+  if (need === "waiting" && approval !== null) {
+    const what = approval.title.replace(/^Allow /u, "").replace(/\?$/u, "");
+    return {
+      title: "An Automation needs your approval",
+      body: `${subject} needs approval for ${what}: ${approval.asked}. It's paused until you answer.`,
+    };
+  }
   return need === "waiting"
     ? { title: "An Automation is waiting on you", body: `${subject} stopped to ask.` }
     : { title: "An Automation stopped", body: `${subject} could not keep running.` };
@@ -170,6 +183,12 @@ export function runAttentionTarget(
   };
 }
 
+/** The approval card this Session is parked on, if that is what it is waiting for. */
+function openApproval(projection: SessionProjection): { title: string; asked: string } | null {
+  const card = projection.interactions.active.find(isApprovalInteraction);
+  return card === undefined ? null : { title: card.title, asked: card.approval.asked };
+}
+
 export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionWatch {
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] run attention:", error));
@@ -193,7 +212,19 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
     observe(projection) {
       try {
         const sessionId = projection.session.id;
-        const need = sessionPersonNeed(projection);
+        // The quiet line a ledger hit leaves is opened and answered in one
+        // breath. Exclude those cosmetic interactions, not the whole need:
+        // a simultaneous failure or real question still needs a person.
+        const attentionProjection: SessionProjection = {
+          ...projection,
+          interactions: {
+            ...projection.interactions,
+            active: projection.interactions.active.filter(
+              (interaction) => !interaction.id.startsWith("ledger-hit:"),
+            ),
+          },
+        };
+        const need = sessionPersonNeed(attentionProjection);
         const known = seen.has(sessionId);
         const previous = seen.get(sessionId) ?? null;
         seen.set(sessionId, need);
@@ -217,8 +248,8 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
         // preference read to forget here and none to get wrong.
         ports.notify({
           producer: "run-attention",
-          ...runAttentionNotification(need, projection.session),
-          target: runAttentionTarget(need, projection),
+          ...runAttentionNotification(need, projection.session, openApproval(attentionProjection)),
+          target: runAttentionTarget(need, attentionProjection),
         });
       } catch (error) {
         onError(error);

@@ -12,6 +12,7 @@ import type {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  CODE_MODE_POLICY_MODELS_MAX,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
@@ -246,6 +247,10 @@ function snapshot(): SessionRuntimeSnapshot {
       },
       status: "open",
       commands: [],
+      resumptions: [],
+      latestTurnId: null,
+      latestTurnOrigin: null,
+      resumedAfterStop: false,
       receipts: [],
       pendingExecutorStart: null,
       attachments: [],
@@ -559,11 +564,14 @@ describe("Session tRPC router", () => {
       "liveExecutor",
       "modelSelection",
       "modelTier",
+      "scheduledResume",
       "session",
       "signal",
       "status",
       "turnActive",
     ]);
+    // Derived from the commands and receipts that never cross this edge.
+    expect(resolved.projection.scheduledResume).toBeNull();
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     // The tier the model resolved from crosses whole (VC-259): it is the
     // user's own vocabulary, and the header reads it beside the model.
@@ -711,6 +719,7 @@ describe("Session tRPC router", () => {
       "liveExecutor",
       "modelSelection",
       "modelTier",
+      "scheduledResume",
       "session",
       "signal",
       "status",
@@ -1335,6 +1344,83 @@ describe("Session tRPC router", () => {
     );
     await expect(caller.modelAccess.pickerView()).rejects.toThrow("unavailable");
     await expect(caller.modelAccess.setPickerView("defaults")).rejects.toThrow("unavailable");
+    await expect(caller.modelAccess.codeModePolicy()).rejects.toThrow("unavailable");
+    await expect(
+      caller.modelAccess.setCodeModePolicy({ enabled: true, models: {} }),
+    ).rejects.toThrow("unavailable");
+  });
+
+  it("round-trips the Code Mode policy whole — the switch and every pin", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readCodeModePolicy: () => ({
+        enabled: true,
+        models: { "anthropic/claude-sonnet-4-5": "only" },
+      }),
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.codeModePolicy()).resolves.toEqual({
+      enabled: true,
+      models: { "anthropic/claude-sonnet-4-5": "only" },
+    });
+
+    // A routed model id carries its own slash; the key splits at the first.
+    const saved = {
+      enabled: false,
+      models: {
+        "openai-codex/gpt-5.5": "both" as const,
+        "openrouter/z-ai/glm-4.6": "off" as const,
+      },
+    };
+    await expect(caller.modelAccess.setCodeModePolicy(saved)).resolves.toEqual(saved);
+    expect(writes).toEqual([saved]);
+  });
+
+  it("refuses a Code Mode policy storage would quietly drop part of", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      writeCodeModePolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // A mode the shared vocabulary does not name.
+    await expect(
+      caller.modelAccess.setCodeModePolicy({
+        enabled: true,
+        models: { "anthropic/claude-opus-4-5": "sometimes" as never },
+      }),
+    ).rejects.toThrow();
+    // Keys that are not `providerId/modelId`.
+    for (const key of ["claude-opus-4-5", "/claude-opus-4-5", "anthropic/", ""]) {
+      await expect(
+        caller.modelAccess.setCodeModePolicy({ enabled: true, models: { [key]: "both" } }),
+      ).rejects.toThrow();
+    }
+    // More pins than a stored policy may hold.
+    const tooMany = Object.fromEntries(
+      Array.from({ length: CODE_MODE_POLICY_MODELS_MAX + 1 }, (_, index) => [
+        `acme/model-${index}`,
+        "both" as const,
+      ]),
+    );
+    await expect(
+      caller.modelAccess.setCodeModePolicy({ enabled: true, models: tooMany }),
+    ).rejects.toThrow("At most");
+    // A missing switch is not "off": the policy crosses whole or not at all.
+    await expect(caller.modelAccess.setCodeModePolicy({ models: {} } as never)).rejects.toThrow();
+    expect(writes).toEqual([]);
   });
 
   it("round-trips the picker view as one word", async () => {
@@ -1506,6 +1592,82 @@ describe("Session tRPC router", () => {
         modelOverride: { reasoningLevel: "ludicrous" },
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("carries the first message for automatic model choice on create (VC-432)", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: null,
+      title: null,
+      autoSelect: { request: "rename the helper" },
+    });
+    expect(calls).toEqual([
+      expect.objectContaining({ autoSelect: { request: "rename the helper" } }),
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-2",
+        projectId: "project-1",
+        ticketId: null,
+        title: null,
+        // @ts-expect-error — the request is text.
+        autoSelect: { request: 7 },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("carries the decision model's pick across to the renderer, and a command cannot declare one", async () => {
+    const fixture = runtimeFixture();
+    const auto = { confidence: 0.8, alternatives: [] };
+    const caller = createSessionRouter().createCaller({
+      runtime: {
+        ...fixture.runtime,
+        projection: async (input) => {
+          const base = await fixture.runtime.projection(input);
+          return { ...base, projection: { ...base.projection, modelAuto: auto } };
+        },
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+    expect(resolved.projection.modelAuto).toEqual(auto);
+
+    const submitted: unknown[] = [];
+    const commandCaller = createSessionRouter().createCaller({
+      runtime: {
+        ...fixture.runtime,
+        command: async (request) => {
+          submitted.push(request.command);
+          return fixture.runtime.command(request);
+        },
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await commandCaller.session.command({
+      commandId: "command-1",
+      sessionId: "session-1",
+      command: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+        // A renderer-side pick is a person's: provenance is never self-declared.
+        auto,
+      } as never,
+    });
+    expect(submitted[0]).not.toHaveProperty("auto");
   });
 
   it("carries a client-requested Session id on create, UUID-checked at the edge (VC-358)", async () => {
@@ -1731,6 +1893,8 @@ describe("Session tRPC router", () => {
         }),
       () => caller.modelAccess.hiddenModels(),
       () => caller.modelAccess.setHiddenModels([]),
+      () => caller.modelAccess.codeModePolicy(),
+      () => caller.modelAccess.setCodeModePolicy({ enabled: true, models: {} }),
     ];
 
     for (const call of calls) {
@@ -1761,6 +1925,7 @@ describe("Session tRPC router", () => {
       expect.objectContaining({
         commandId: "create-command",
         command: expect.objectContaining({ kind: "session.create" }),
+        origin: { kind: "user" },
       }),
     ]);
   });
@@ -1809,17 +1974,123 @@ describe("Session tRPC router", () => {
 
     expect(fixture.calls.command.slice(-2)).toEqual([
       {
+        origin: { kind: "user" },
         commandId: "retry-command",
         sessionId: "session-1",
         command: { kind: "executor.retry", attachmentId: "attachment-1" },
       },
       {
+        origin: { kind: "user" },
         commandId: "session-owned-retry-command",
         sessionId: "session-1",
         command: { kind: "executor.retry" },
       },
     ]);
     expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
+  });
+
+  it("passes a person's scheduled resume and its cancel, and never a settle", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "schedule-1",
+      sessionId: "session-1",
+      command: {
+        kind: "resume.schedule",
+        attentionId: "attention-1",
+        attachmentId: "attachment-1",
+        resumeAt: 1_800_000_000_000,
+      },
+    });
+    await caller.session.command({
+      commandId: "cancel-1",
+      sessionId: "session-1",
+      command: { kind: "resume.cancel", scheduleId: "schedule-1" },
+    });
+    expect(fixture.calls.command.map(({ command }) => command.kind)).toEqual([
+      "resume.schedule",
+      "resume.cancel",
+    ]);
+    // What became of a schedule is the host's to record, never a client's.
+    await expect(
+      caller.session.command({
+        commandId: "settle-1",
+        sessionId: "session-1",
+        command: {
+          kind: "resume.settle",
+          scheduleId: "schedule-1",
+          outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+        } as never,
+      }),
+    ).rejects.toThrow();
+    // A reset is an instant, never zero or fractional.
+    await expect(
+      caller.session.command({
+        commandId: "schedule-2",
+        sessionId: "session-1",
+        command: {
+          kind: "resume.schedule",
+          attentionId: "attention-1",
+          attachmentId: "attachment-1",
+          resumeAt: 0,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("presents the one scheduled resume a surface may draw", async () => {
+    const base = snapshot();
+    const attachment = attachmentWithRecovery();
+    const runtime: SessionRuntime = {
+      ...runtimeFixture().runtime,
+      projection: async () => ({
+        throughSequence: 6,
+        projection: {
+          ...base.projection,
+          attachments: [attachment],
+          liveExecutor: attachment,
+          commands: [
+            {
+              id: "schedule-1",
+              sessionId: "session-1",
+              createdAt: 10,
+              intent: {
+                kind: "resume.schedule",
+                attentionId: "attention-1",
+                attachmentId: attachment.id,
+                resumeAt: 5_000,
+              },
+              route: null,
+            },
+          ],
+          receipts: [
+            {
+              id: "receipt-schedule-1",
+              commandId: "schedule-1",
+              status: "completed",
+              result: { kind: "resume.scheduled", sessionId: "session-1" },
+              recordedAt: 10,
+              sequence: 5,
+            },
+          ],
+        },
+      }),
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+    expect(resolved.projection.scheduledResume).toEqual({
+      id: "schedule-1",
+      attentionId: "attention-1",
+      resumeAt: 5_000,
+    });
   });
 
   it("passes an explicit compaction, with or without instructions", async () => {
@@ -1842,11 +2113,13 @@ describe("Session tRPC router", () => {
 
     expect(fixture.calls.command.slice(-2)).toEqual([
       {
+        origin: { kind: "user" },
         commandId: "compact-command",
         sessionId: "session-1",
         command: { kind: "context.compact", instructions: "keep the API work" },
       },
       {
+        origin: { kind: "user" },
         commandId: "bare-compact-command",
         sessionId: "session-1",
         command: { kind: "context.compact" },
@@ -1894,6 +2167,7 @@ describe("Session tRPC router", () => {
     });
 
     expect(fixture.calls.command.at(-1)).toEqual({
+      origin: { kind: "user" },
       commandId: "select-model",
       sessionId: "session-1",
       command: {
@@ -2014,7 +2288,12 @@ describe("Session tRPC router", () => {
     // The transport carries no reason of its own: what it knows is that a user
     // left the interaction undecided.
     expect(fixture.calls.cancelled).toEqual([
-      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
+      {
+        sessionId: "session-1",
+        interactionId: "question-1",
+        reason: "abandoned",
+        origin: { kind: "user" },
+      },
     ]);
     expect(diagnostics.list().map((entry) => entry.procedure)).toEqual([
       "session.snapshot",

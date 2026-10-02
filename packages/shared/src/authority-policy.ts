@@ -4,7 +4,11 @@
  * Ordered evaluation is load-bearing rather than incidental. The rules overlap —
  * `git config http.sslVerify false` writes repository plumbing *and* weakens TLS
  * — and first-match-wins is what turns that overlap into one nameable refusal
- * instead of a set.
+ * instead of a set. Which order is load-bearing too, and there are two: pack
+ * order by default, and — behind {@link evaluate}'s `hardDeniesFirst` option,
+ * for per-call review (VC-28) — every hard deny ahead of the overridable rules,
+ * so a liftable refusal cannot end up speaking for one nobody may lift. Both are
+ * first-match; only the list they match against differs.
  *
  * No rule judges the tool's *name*, and the absence is deliberate. The Agent
  * Tool Surface makes availability the enforcement: a Session is offered exactly
@@ -93,6 +97,7 @@
 
 import {
   AUTHORITY_RULE_IDS,
+  isOverridableAuthorityRule,
   type AuthorityRuleId,
   type AuthoritySnapshot,
   type PolicyCommandSegment,
@@ -100,6 +105,16 @@ import {
   type PolicyDecision,
   type PolicyToolCall,
 } from "./authority";
+import {
+  commandScope,
+  describeApproval,
+  gitScope,
+  readScope,
+  wrapsCommands,
+  writeScope,
+  type ApprovalScope,
+  type PolicyViolation,
+} from "./approvals";
 
 /**
  * Case folding, and the one class of comparison that must not fold.
@@ -244,12 +259,27 @@ function isDeviceSink(path: string): boolean {
   return DEVICE_SINKS.has(path) || containsPath("/dev/fd", path);
 }
 
-/** Every path `path.outside-workspace` judges. Command operands are not among them. */
-function containedPaths(call: PolicyToolCall): string[] {
+/**
+ * Every path `path.outside-workspace` judges, and where each may be. Command
+ * operands are not among them.
+ *
+ * A read may also land in one of the Session's own readable roots (VC-469);
+ * a write never may.
+ */
+function containedPaths(
+  call: PolicyToolCall,
+  context: PolicyContext,
+): { path: string; roots: readonly string[]; operation: "read" | "write" }[] {
+  const writeRoots = [context.workspacePath];
+  const readRoots = [context.workspacePath, ...(context.readableRoots ?? [])];
   return [
-    ...call.reads,
-    ...call.writes,
-    ...segmentsOf(call).flatMap((segment) => segment.writes.filter((path) => !isDeviceSink(path))),
+    ...call.reads.map((path) => ({ path, roots: readRoots, operation: "read" as const })),
+    ...[
+      ...call.writes,
+      ...segmentsOf(call).flatMap((segment) =>
+        segment.writes.filter((path) => !isDeviceSink(path)),
+      ),
+    ].map((path) => ({ path, roots: writeRoots, operation: "write" as const })),
   ];
 }
 
@@ -524,6 +554,28 @@ function isForced(args: readonly string[]): boolean {
   return args.includes("--force") || hasShortFlag(args, "f");
 }
 
+function gitInternalsHazard(call: PolicyToolCall, context: PolicyContext): string | null {
+  const gitDir = gitDirOf(context);
+  for (const segment of segmentsOf(call)) {
+    for (const path of segment.paths) {
+      if (isGitExecutablePath(gitDir, path)) {
+        return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
+      }
+    }
+    if (baseName(segment.program) !== "git") continue;
+    const inlineConfig = gitInlineConfigHazard(segment.args);
+    if (inlineConfig !== null) {
+      return `git ${inlineConfig} makes git run something this policy never inspected; drop it and run the command directly.`;
+    }
+    const invocation = gitInvocation(segment.args);
+    if (invocation === null) continue;
+    if (invocation.subcommand === "config" && gitConfigWrites(invocation.rest)) {
+      return `This git config would write repository configuration and change what later commands do; only the read forms (--get, --list) are available.`;
+    }
+  }
+  return null;
+}
+
 /** A rule's verdict: the sentence the model should read, or null to pass the call on. */
 type RuleCheck = (
   call: PolicyToolCall,
@@ -540,8 +592,8 @@ type RuleCheck = (
  */
 const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   "path.outside-workspace": (call, _snapshot, context) => {
-    for (const path of containedPaths(call)) {
-      if (!containsPath(context.workspacePath, path)) {
+    for (const { path, roots } of containedPaths(call, context)) {
+      if (!roots.some((root) => containsPath(root, path))) {
         return `${path} is outside the Session workspace ${context.workspacePath}; every read and write must stay inside it.`;
       }
     }
@@ -555,24 +607,7 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
         return `Writing ${path} is not permitted; hand-editing the repository's plumbing changes what later commands do. Reading it is fine.`;
       }
     }
-    for (const segment of segmentsOf(call)) {
-      for (const path of segment.paths) {
-        if (isGitExecutablePath(gitDir, path)) {
-          return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
-        }
-      }
-      if (baseName(segment.program) !== "git") continue;
-      const inlineConfig = gitInlineConfigHazard(segment.args);
-      if (inlineConfig !== null) {
-        return `git ${inlineConfig} makes git run something this policy never inspected; drop it and run the command directly.`;
-      }
-      const invocation = gitInvocation(segment.args);
-      if (invocation === null) continue;
-      if (invocation.subcommand === "config" && gitConfigWrites(invocation.rest)) {
-        return `This git config would write repository configuration and change what later commands do; only the read forms (--get, --list) are available.`;
-      }
-    }
-    return null;
+    return gitInternalsHazard(call, context);
   },
 
   "path.volli-internals": (call, _snapshot, context) => {
@@ -661,18 +696,206 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   },
 };
 
+/** The first rule in `order` that refuses, or null when none does. */
+function firstDenial(
+  order: readonly AuthorityRuleId[],
+  call: PolicyToolCall,
+  snapshot: AuthoritySnapshot,
+  context: PolicyContext,
+): PolicyDecision | null {
+  for (const rule of order) {
+    const reason = RULE_CHECKS[rule](call, snapshot, context);
+    if (reason !== null) return { outcome: "deny", rule, reason };
+  }
+  return null;
+}
+
 /**
- * The verdict on one normalized call: the first rule in pack order that refuses,
- * or `allow` when none does.
+ * The pack reordered for per-call review (VC-28): every rule a person cannot
+ * overrule, then the rules they can, each half in pack order.
+ *
+ * Split with {@link isOverridableAuthorityRule} rather than by restocking the
+ * halves from `OVERRIDABLE_AUTHORITY_RULES`, so the one list in `authority.ts`
+ * stays the single source of truth — a rule moved between the lists there
+ * reorders this one without a second edit to keep in step. That
+ * predicate also answers for the classifier causes, which are not rules: they
+ * never appear in {@link AUTHORITY_RULE_IDS}, so over the pack the predicate is
+ * exactly the record's overridable membership.
+ *
+ * The order exists because pack order alone lets an overridable refusal mask a
+ * hard one. `path.outside-workspace` leads the pack, so `curl -k
+ * https://example.com > /tmp/out` cites the redirect — a refusal a person may
+ * lift — while the TLS weakening riding the same command line, which no "yes"
+ * may carry out, never speaks. Per-call review asks over exactly the denial the
+ * gate returns, so offered that question a person could answer yes and release
+ * a call with a live hard deny. Under this order the same call cites
+ * `command.tls-weakening`, and only a call whose every refusal is liftable
+ * reaches the ask.
+ */
+const HARD_DENIES_FIRST_ORDER: readonly AuthorityRuleId[] = [
+  ...AUTHORITY_RULE_IDS.filter((rule) => !isOverridableAuthorityRule(rule)),
+  ...AUTHORITY_RULE_IDS.filter((rule) => isOverridableAuthorityRule(rule)),
+];
+
+/**
+ * The verdict on one normalized call: the first rule in evaluation order that
+ * refuses, or `allow` when none does.
+ *
+ * The order is pack order unless `options.hardDeniesFirst` is set, which runs
+ * {@link HARD_DENIES_FIRST_ORDER} instead — see its comment for why per-call
+ * review asks for it. Both orders are first-match over the same nine pure
+ * predicates, so the option changes only which refusal is cited, never whether
+ * a call is refused at all; with the option absent or false this function is
+ * exactly what it has always been.
  */
 export function evaluate(
   call: PolicyToolCall,
   snapshot: AuthoritySnapshot,
   context: PolicyContext,
+  options: { hardDeniesFirst?: boolean } = {},
 ): PolicyDecision {
+  const order = options.hardDeniesFirst === true ? HARD_DENIES_FIRST_ORDER : AUTHORITY_RULE_IDS;
+  return firstDenial(order, call, snapshot, context) ?? { outcome: "allow" };
+}
+
+/**
+ * Remember git only as this exact normalized call in this workspace. The first
+ * escaping argument is evidence for a refusal, not the effective repository:
+ * later -C/--git-dir/--work-tree options can change it, and relative paths depend
+ * on the workspace and earlier shell stages. Likewise, a list of destructive
+ * flags cannot safely summarize git's valued options and short-flag bundles.
+ *
+ * Keeping the complete call avoids guessing at git's grammar. JSON preserves
+ * argument boundaries, environment and resolved paths as well as the raw shell
+ * line; workspace binding prevents a project row crossing workspace contexts.
+ * This deliberately narrows reuse, including for Main-checkout discards. The
+ * stage remains part of the identity so one approval does not cover another
+ * git stage in the same line. The git operation keeps the full key visible in
+ * both card and ledger summaries.
+ */
+function exactGitScope(call: PolicyToolCall, context: PolicyContext, stage: number): ApprovalScope {
+  return gitScope(`git exactly ${JSON.stringify([context.workspacePath, call.command, stage])}`);
+}
+
+/** A write remembered as exactly this path: plumbing and Volli's own files never widen to a folder. */
+function exactWriteScope(path: string): ApprovalScope {
+  return {
+    ...writeScope(path),
+    key: path,
+    summary: describeApproval({ operation: "write", key: path }),
+  };
+}
+
+function uniqueScopes(scopes: readonly ApprovalScope[]): ApprovalScope[] {
+  const seen = new Set<string>();
+  return scopes.filter((scope) => {
+    const id = `${scope.operation}\0${scope.key}\0${scope.target}\0${scope.stage ?? ""}`;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/**
+ * What each approvable rule objects to, as scopes a ledger row can cover.
+ * Null means "this refusal cannot be narrowed", and the person can only allow
+ * it once. A rule absent here is not approvable at all.
+ */
+const RULE_SCOPES: Partial<
+  Record<
+    AuthorityRuleId,
+    (
+      call: PolicyToolCall,
+      snapshot: AuthoritySnapshot,
+      context: PolicyContext,
+    ) => ApprovalScope[] | null
+  >
+> = {
+  "path.outside-workspace": (call, _snapshot, context) =>
+    containedPaths(call, context)
+      .filter(({ path, roots }) => !roots.some((root) => containsPath(root, path)))
+      .map(({ path, operation }) => (operation === "read" ? readScope(path) : writeScope(path))),
+
+  "path.git-internals": (call, _snapshot, context) =>
+    gitInternalsHazard(call, context) !== null
+      ? null
+      : writtenPaths(call)
+          .filter((path) => guardsPath(gitDirOf(context), path))
+          .map(exactWriteScope),
+
+  "path.volli-internals": (call, _snapshot, context) =>
+    writtenPaths(call)
+      .filter((path) => guardsPath(volliDirOf(context), path))
+      .map(exactWriteScope),
+
+  "command.git-escapes-workspace": (call, _snapshot, context) => {
+    const scopes: ApprovalScope[] = [];
+    for (const [stage, segment] of segmentsOf(call).entries()) {
+      if (baseName(segment.program) !== "git") continue;
+      const escape = gitTreeEscape(segment.args, context.workspacePath);
+      if (escape === null) continue;
+      scopes.push({ ...exactGitScope(call, context, stage), stage });
+    }
+    return scopes;
+  },
+
+  "command.git-discards-work": (call, _snapshot, context) => {
+    const scopes: ApprovalScope[] = [];
+    for (const [stage, segment] of segmentsOf(call).entries()) {
+      if (baseName(segment.program) !== "git") continue;
+      const invocation = gitInvocation(segment.args);
+      const discard = invocation === null ? null : gitDiscard(invocation);
+      if (discard !== null) {
+        scopes.push({ ...exactGitScope(call, context, stage), stage });
+      }
+    }
+    return scopes;
+  },
+};
+
+/**
+ * Every rule that objects to a call, in pack order, each with what it objects
+ * to. {@link evaluate} stops at the first; the approval funnel needs them all,
+ * because a person's "yes" to a write outside the workspace must not carry a
+ * `launchctl` in the same command through with it.
+ */
+export function violations(
+  call: PolicyToolCall,
+  snapshot: AuthoritySnapshot,
+  context: PolicyContext,
+): PolicyViolation[] {
+  const wrapped = call.command !== null && wrapsCommands(call.command);
+  const found: PolicyViolation[] = [];
+  const stages = call.command?.segments ?? [];
+  // Path scopes belong to the operation that caused the objection, never an
+  // earlier mention/read. Keep every writer so repeated writes all highlight.
+  const stamp = (scope: ApprovalScope): ApprovalScope[] => {
+    if (stages.length < 2) {
+      const { stage: _single, ...whole } = scope;
+      return [whole];
+    }
+    if (scope.stage !== undefined) return [scope];
+    if (scope.operation !== "write") return [scope];
+    const writers = stages.flatMap((segment, stage) =>
+      segment.writes.includes(scope.target) ? [{ ...scope, stage }] : [],
+    );
+    return writers.length === 0 ? [scope] : writers;
+  };
   for (const rule of AUTHORITY_RULE_IDS) {
     const reason = RULE_CHECKS[rule](call, snapshot, context);
-    if (reason !== null) return { outcome: "deny", rule, reason };
+    if (reason === null) continue;
+    const builder = RULE_SCOPES[rule];
+    const scopes =
+      builder === undefined
+        ? null
+        : wrapped && call.command !== null
+          ? [commandScope(call.command.raw)]
+          : builder(call, snapshot, context);
+    found.push({
+      rule,
+      reason,
+      scopes: scopes === null || scopes.length === 0 ? null : uniqueScopes(scopes.flatMap(stamp)),
+    });
   }
-  return { outcome: "allow" };
+  return found;
 }

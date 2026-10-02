@@ -27,6 +27,10 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     },
     status: "open",
     commands: [],
+    resumptions: [],
+    latestTurnId: null,
+    latestTurnOrigin: null,
+    resumedAfterStop: false,
     receipts: [],
     pendingExecutorStart: null,
     attachments: [],
@@ -153,7 +157,7 @@ describe("stopSessionById", () => {
       sessionId: TARGET,
       intent: { kind: "session.stop", reason: "Runaway", by: { kind: "user" } },
       provenance: {
-        source: { kind: "user", id: "renderer", detail: null },
+        source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
         venue: { id: "local", kind: "local" },
       },
     });
@@ -495,6 +499,9 @@ describe("sendSessionMessageOperation", () => {
     // Dispatch has begun, but the tool cannot claim delivery until the runtime
     // has returned a durable accepted receipt.
     expect(settled).toBe(false);
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: { kind: "session", sessionId: CALLER } }),
+    );
 
     delivery.resolve({ receipt: { status: "accepted" }, delivery: "steer" });
     const outcome = await sending;

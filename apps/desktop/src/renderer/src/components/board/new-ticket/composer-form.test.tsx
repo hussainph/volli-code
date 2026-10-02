@@ -2,12 +2,15 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { Automation, BlobLinkView, Project } from "@volli/shared";
+import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
+import type { ComposerChips } from "./composer-chips";
+import { clearDraft } from "./draft";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { runPlainCreate, runKickoff, runCreateWithAutomation } from "./submit";
+import type { MonacoDocumentEditor } from "@renderer/components/editor/monaco-document-editor";
 
 const mocks = vi.hoisted(() => ({
   offer: {
@@ -19,10 +22,18 @@ const mocks = vi.hoisted(() => ({
     attachments: [] as readonly BlobLinkView[],
     attachFiles: async () => {},
     remove: async () => {},
-    clear: () => {},
+    clear: vi.fn(() => {
+      mocks.attachments.attachments = [];
+    }),
     reset: () => {},
   },
-  run: { models: [], tiers: [], selection: null, setSelection: () => {} },
+  run: {
+    models: [],
+    tiers: [],
+    selection: null as ModelSelection | null,
+    explicit: false,
+    setSelection: () => {},
+  },
   branches: { status: "loading" },
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
@@ -43,9 +54,25 @@ vi.mock("./submit", () => ({
   runCreateWithAutomation: vi.fn(async () => ({ created: false })),
 }));
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
-  MonacoDocumentEditor: () => <textarea aria-label="Ticket description" />,
+  MonacoDocumentEditor: ({
+    value,
+    onChange,
+    ariaLabel,
+  }: ComponentProps<typeof MonacoDocumentEditor>) => (
+    <textarea
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
 }));
-vi.mock("./composer-chips", () => ({ ComposerChips: () => null }));
+vi.mock("./composer-chips", () => ({
+  ComposerChips: ({ createMore, onCreateMoreChange }: ComponentProps<typeof ComposerChips>) => (
+    <button aria-pressed={createMore} onClick={() => onCreateMoreChange(!createMore)}>
+      Create more
+    </button>
+  ),
+}));
 vi.mock("./composer-breadcrumb", () => ({
   ComposerBreadcrumb: ({ projects, onRetarget }: ComponentProps<typeof ComposerBreadcrumb>) => (
     <button onClick={() => onRetarget(projects[1]!)}>Retarget</button>
@@ -106,6 +133,8 @@ beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.clearAllMocks();
   mocks.attachments.attachments = [];
+  mocks.run.selection = null;
+  mocks.run.explicit = false;
   mocks.offer.ready = true;
   mocks.offer.groups = [
     { status: "doing", label: "Doing", current: false, automations: [automation] },
@@ -128,12 +157,25 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 async function click(text: string) {
   await act(async () =>
     [...host.querySelectorAll("button")].find((el) => el.textContent === text)!.click(),
   );
+}
+async function typeInto(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  // Go through the DOM event, not a React callback: bypass React's installed
+  // value tracker just as a person's keystroke would.
+  const prototype =
+    element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : HTMLTextAreaElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 async function chord(shiftKey = false, ctrlKey = false) {
   await act(async () =>
@@ -155,6 +197,133 @@ it("sends the default primary action through kickoff, by click and by ⇧⌘Ente
   expect(runKickoff).toHaveBeenCalledTimes(2);
   expect(runPlainCreate).not.toHaveBeenCalled();
 });
+it.each([false, true])(
+  "only sends a model when the person chose it (explicit=%s)",
+  async (explicit) => {
+    const model: ModelSelection = {
+      providerId: "anthropic",
+      modelId: "opus",
+      reasoningLevel: "high",
+    };
+    mocks.run.selection = model;
+    mocks.run.explicit = explicit;
+    await chord(true);
+    expect(runKickoff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      explicit ? { model } : {},
+    );
+  },
+);
+it.each([false, true])(
+  "successful kickoff with Create more=%s only closes or resets the composer",
+  async (createMore) => {
+    const onClose = vi.fn();
+    vi.mocked(runKickoff).mockResolvedValueOnce({ created: true });
+    await act(async () =>
+      root.render(
+        <ComposerForm
+          initialProject={project}
+          expanded={false}
+          onToggleExpand={() => {}}
+          onClose={onClose}
+        />,
+      ),
+    );
+    if (createMore) await click("Create more");
+    await click("Submit");
+
+    expect(clearDraft).toHaveBeenCalledOnce();
+    expect(runKickoff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {});
+    if (createMore) {
+      expect(onClose).not.toHaveBeenCalled();
+      expect(host.querySelector("input")?.value).toBe("");
+    } else {
+      expect(onClose).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+it("creates a second ticket in the same mount with fresh fields and no inherited attachments", async () => {
+  const onClose = vi.fn();
+  const frames: FrameRequestCallback[] = [];
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+  const linkDrafts = vi.fn(async () => ({ ok: true }));
+  vi.stubGlobal("api", { attachments: { linkDrafts } });
+  const attachment: BlobLinkView = {
+    linkId: null,
+    blobHash: "a".repeat(64),
+    label: "first-ticket.png",
+    originalName: "first-ticket.png",
+    mime: "image/png",
+    sizeBytes: 1024,
+  };
+  mocks.attachments.attachments = [attachment];
+  await act(async () =>
+    root.render(
+      <ComposerForm
+        initialProject={project}
+        expanded={false}
+        onToggleExpand={() => {}}
+        onClose={onClose}
+      />,
+    ),
+  );
+  vi.mocked(runKickoff)
+    .mockImplementationOnce(async (_fields, deps) => {
+      await deps.linkAttachments?.("first-ticket");
+      return { created: true };
+    })
+    .mockImplementationOnce(async (_fields, deps) => {
+      await deps.linkAttachments?.("second-ticket");
+      return { created: true };
+    });
+  await click("Create more");
+  const title = host.querySelector("input")!;
+  const body = host.querySelector("textarea")!;
+  body.focus();
+  await click("Submit");
+  expect(runKickoff).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ title: "Typed ticket", body: "Keep this prompt" }),
+    expect.anything(),
+    {},
+  );
+  expect(linkDrafts).toHaveBeenCalledWith({
+    ticketId: "first-ticket",
+    blobs: [{ blobHash: attachment.blobHash, label: attachment.label }],
+  });
+  expect(mocks.attachments.clear).toHaveBeenCalledOnce();
+  expect(title.value).toBe("");
+  expect(body.value).toBe("");
+  expect(host.querySelector('[aria-label="Attachments"]')).toBeNull();
+  frames.splice(0).forEach((callback) => callback(0));
+  expect(document.activeElement).toBe(title);
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toBe("Create more");
+
+  await typeInto(title, "Second ticket");
+  await typeInto(body, "Only the second brief");
+  body.focus();
+  await chord(true);
+
+  expect(runKickoff).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({ title: "Second ticket", body: "Only the second brief" }),
+    expect.anything(),
+    {},
+  );
+  expect(linkDrafts).toHaveBeenCalledOnce(); // no first-ticket blob linked to the second ticket
+  expect(runKickoff).toHaveBeenCalledTimes(2);
+  expect(clearDraft).toHaveBeenCalledTimes(2);
+  expect(mocks.attachments.clear).toHaveBeenCalledTimes(2);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(title.value).toBe("");
+  expect(body.value).toBe("");
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toBe("Create more");
+  frames.splice(0).forEach((callback) => callback(0));
+  expect(document.activeElement).toBe(title);
+});
+
 it("gives plain creation its own button and the unmodified chord", async () => {
   await click("Create");
   await chord();

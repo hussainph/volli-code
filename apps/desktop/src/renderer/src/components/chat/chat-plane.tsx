@@ -79,6 +79,7 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
+  authorityReviewNoticeCopy,
   projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
@@ -86,6 +87,8 @@ import {
   type MessageDelivery,
   type QueuedMessage,
   type TranscriptRow,
+  type TranscriptAuthorityReview,
+  type TranscriptLinkedAuthorityReview,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -151,6 +154,7 @@ import {
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
   rememberTranscriptView,
@@ -170,9 +174,12 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { SubagentPeekDialog } from "@renderer/components/chat/subagent-peek-dialog";
 import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
@@ -253,6 +260,9 @@ export interface ChatPlaneProps {
    * stands the rest of the plane down, so it has to be told. Default true.
    */
   visible?: boolean;
+  /** Modal previews cannot let a tall question/composer grow past their header.
+   * Cap and scroll the dock there, keeping part of the transcript visible. */
+  constrainComposer?: boolean;
   /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
@@ -282,6 +292,7 @@ export function ChatPlane({
   onOpenSession,
   store,
   visible: surfaceVisible = true,
+  constrainComposer = false,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
@@ -308,11 +319,22 @@ export function ChatPlane({
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
   );
+  // Where a Session's Browser replay opens (VC-453): one request, so one
+  // replay at a time is structural. The transcript card and the island both
+  // open it; the card through its host below, the island through its deps.
+  const [traceRequest, setTraceRequest] = React.useState<BrowserTraceRequest | null>(null);
+  const closeTrace = React.useCallback(() => setTraceRequest(null), []);
+  const cardHost = browser?.cardHost ?? null;
+  const tracedCardHost = React.useMemo(
+    () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
+    [cardHost],
+  );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
     peekSession: setPeekedAgentId,
     ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
+    ...(browser === null ? {} : { openTrace: setTraceRequest }),
   });
   // The peeked child as the island models it; a child that left the listing
   // while peeked closes the overlay with it.
@@ -338,6 +360,8 @@ export function ChatPlane({
     selectModel,
     submit,
     dismissError,
+    scheduleResume,
+    cancelScheduledResume,
   } = controller;
   const session = controller.session;
 
@@ -406,7 +430,11 @@ export function ChatPlane({
   // The tier the model resolved from (VC-259), as the Settings row names it;
   // null for the ordinary Session whose model was chosen by exact id.
   const modelTier = projection?.modelTier ?? null;
-  const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
+  // A model a decision model chose at birth (VC-432) reads "Auto" where a
+  // named tier would read its label: the same "qualifier · model" grammar.
+  const selectionAuto = projection?.modelAuto ?? null;
+  const selectionTier =
+    selectionAuto !== null ? "Auto" : modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null || provisional !== undefined,
@@ -889,7 +917,9 @@ export function ChatPlane({
       // Blob/setup failure must replay the same model even if Settings changes
       // before retry or relaunch.
       if (launch !== undefined && launch.model === undefined && provisionalModel !== null) {
-        drafts.setProvisionalModel(sessionId, provisionalModel);
+        // Frozen from the default, not picked: promotion lets an automatic
+        // model choice (VC-432) have the say a person did not take.
+        drafts.setProvisionalModel(sessionId, provisionalModel, { fromDefault: true });
       }
       // Resources ride the message object itself — through hold, queue and
       // steer — so a copy released later delivers exactly what `/skill`
@@ -1117,7 +1147,12 @@ export function ChatPlane({
           // The revealed question takes the slot, when it is still open: the
           // card stack draws one at a time, so "select that question" is this
           // ordering and nothing else.
-          preferRevealedInteraction(interactions, revealed?.interactionId ?? null),
+          preferRevealedInteraction(
+            // Credential questions have their own person-only controls; they
+            // must never reach the generic free-text answer stack.
+            interactions.filter((interaction) => interaction.credential === undefined),
+            revealed?.interactionId ?? null,
+          ),
           gatedToolCallIds(messages),
         )
       : null;
@@ -1353,11 +1388,20 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
+      approvalFailures: session.approvalFailures,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, onOpenSession, resolving, session.openedInteractions],
+    [
+      answer,
+      interactions,
+      onOpenFile,
+      onOpenSession,
+      session.approvalFailures,
+      resolving,
+      session.openedInteractions,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1372,8 +1416,14 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
-    [session.compactions, session.reasoningDrops, turns],
+    () =>
+      projectTranscriptRows(
+        turns,
+        session.compactions,
+        session.reasoningDrops,
+        session.authorityReviews,
+      ),
+    [session.compactions, session.reasoningDrops, session.authorityReviews, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1425,9 +1475,39 @@ export function ChatPlane({
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
+      scheduleResume: (request) => void scheduleResume(request),
+      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
     }),
-    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [
+      cancelScheduledResume,
+      dismissBlocker,
+      dismissError,
+      liveExecutorId,
+      recover,
+      retryRuntime,
+      scheduleResume,
+      setSettingsOpen,
+    ],
   );
+  // The clock the resume offer is read against. It only has to move when an
+  // offered reset passes — then "Resume at" gives way to the plain Retry — so
+  // it wakes once, at the nearest reset, rather than ticking.
+  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
+  const nearestReset = React.useMemo(() => {
+    let nearest: number | null = null;
+    for (const item of activeAttention) {
+      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
+      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
+    }
+    return nearest;
+  }, [activeAttention]);
+  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setResumeNow(Date.now());
+    if (nearestReset === null) return;
+    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
+    return () => window.clearTimeout(timer);
+  }, [nearestReset]);
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
   const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
@@ -1449,6 +1529,8 @@ export function ChatPlane({
       catalogError,
       sessionModel,
       signInProviders,
+      scheduledResume: projection?.scheduledResume ?? null,
+      now: resumeNow,
     },
     blockerActs,
     interactions.length > 0,
@@ -1472,7 +1554,7 @@ export function ChatPlane({
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
-      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
+      <BrowserCardHostContext.Provider value={tracedCardHost}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
               against (VC-273) — the agent writes the path the brief handed it,
@@ -1562,7 +1644,11 @@ export function ChatPlane({
           transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
+        data-slot="chat-composer-dock"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
+        )}
       >
         <ContentColumn>
           {/* Above whatever the slot holds, card included. A card answers the
@@ -1587,6 +1673,7 @@ export function ChatPlane({
           {/* Overlay on the composer, never in its place. Ask-user cards
               stack above the input so a follow-up can still be typed while
               the card waits. */}
+          <SecretCards sessionId={sessionId} interactions={interactions} />
           <ComposerInteractionStack
             interaction={pending}
             resolving={pending ? resolving.has(pending.id) : false}
@@ -1622,6 +1709,7 @@ export function ChatPlane({
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
               selectionTier={selectionTier}
+              selectionAuto={selectionAuto}
               onSelectionChange={changeModel}
               modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
               working={working}
@@ -1644,8 +1732,14 @@ export function ChatPlane({
       {shellsApi === undefined ? null : (
         <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
       )}
+      {browser === null ? null : (
+        <BrowserTraceDialog request={traceRequest} api={browser.api} onClose={closeTrace} />
+      )}
       <SubagentPeekDialog
         agent={peekedAgent}
+        projectId={projectId}
+        ticketId={ticketId}
+        onOpenFile={onOpenFile}
         onClose={closePeek}
         returnFocus={peekReturnFocus}
         {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}
@@ -1903,6 +1997,8 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
+  /** Mutation receipts for standing grants that could only be allowed once. */
+  approvalFailures?: ReadonlyMap<string, "once" | "not-delivered">;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
   open: readonly RendererSessionInteraction[];
   /** The ids with a decision in flight — one card in flight is not all of them. */
@@ -1949,8 +2045,7 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * cache now answer variable heights better, but they do not answer this plane's
  * scroller ownership or disclosure-driven height changes. With the document
  * already bounded to 60 rows, their observers, estimates and correction state
- * cost more than they save. The sourced verdict and the conditions that would
- * reopen it are in `docs/research/perf/react-zustand-streaming.md` §3.
+ * cost more than they save.
  *
  * WHAT THE READER SEES. At rest, the last {@link TRANSCRIPT_TAIL_ROWS} rows.
  * Above them, "Show earlier" — and the same sentinel the button sits on pages
@@ -2214,7 +2309,27 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
+    case "authority-review":
+      return `authority-review:${row.review.sequence}`;
   }
+}
+
+/** Projection adds placement to fresh wrappers; unchanged facts must still memoize. */
+function sameLinkedAuthorityReview(
+  previous: TranscriptLinkedAuthorityReview,
+  next: TranscriptLinkedAuthorityReview,
+): boolean {
+  return (
+    previous.sequence === next.sequence &&
+    previous.afterMessageId === next.afterMessageId &&
+    previous.toolCallId === next.toolCallId &&
+    previous.toolRowKey === next.toolRowKey &&
+    previous.tool === next.tool &&
+    previous.mode === next.mode &&
+    previous.reason === next.reason &&
+    previous.scope?.attachmentId === next.scope?.attachmentId &&
+    previous.scope?.turnId === next.scope?.turnId
+  );
 }
 
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
@@ -2229,6 +2344,17 @@ export function ChatTranscriptRow({
   live: boolean;
   onOpenSession?(sessionId: string): void;
 }) {
+  const hintsVisible = useUiStore((store) => store.authorityHintsVisible);
+  const authorityReviews = useStableList<TranscriptLinkedAuthorityReview>(
+    React.useMemo(
+      () =>
+        row.kind === "turn"
+          ? (row.authorityReviews ?? []).filter((review) => hintsVisible || review.mode === "auto")
+          : [],
+      [row, hintsVisible],
+    ),
+    sameLinkedAuthorityReview,
+  );
   switch (row.kind) {
     case "host-notice":
       return (
@@ -2241,8 +2367,32 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
+    case "authority-review":
+      if (!hintsVisible && row.review.mode === "shadow") return null;
+      // Until the matching call arrives (or in incomplete older history), the
+      // record still has a disclosure rather than an uncollapsible feed line.
+      return (
+        <details
+          className="not-prose text-ui text-muted-foreground"
+          open={row.review.mode === "auto"}
+        >
+          <summary className="cursor-default select-none">
+            {row.review.mode === "shadow" ? "Would block" : "Blocked"} {row.review.tool}
+          </summary>
+          <p className="py-1 whitespace-pre-wrap break-words">
+            {authorityReviewNoticeCopy(row.review)}
+          </p>
+        </details>
+      );
     case "turn":
-      return <ChatTurn messages={row.messages} context={context} live={live} />;
+      return (
+        <ChatTurn
+          messages={row.messages}
+          context={context}
+          live={live}
+          authorityReviews={authorityReviews}
+        />
+      );
   }
 }
 
@@ -2260,14 +2410,41 @@ export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
   live,
+  authorityReviews,
 }: {
   messages: readonly UIMessage[];
+  authorityReviews?: readonly TranscriptLinkedAuthorityReview[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const heldReviewsByRow = React.useRef<
+    ReadonlyMap<string, readonly TranscriptLinkedAuthorityReview[]>
+  >(new Map());
+  const reviewsByRow = React.useMemo(() => {
+    const indexed = new Map<string, TranscriptLinkedAuthorityReview[]>();
+    for (const review of authorityReviews ?? []) {
+      const entries = indexed.get(review.toolRowKey) ?? [];
+      entries.push(review);
+      indexed.set(review.toolRowKey, entries);
+    }
+    // A new verdict for one call must not invalidate every settled ToolRow.
+    // Like useStableList, retain content-equal groups, not just their entries.
+    const previous = heldReviewsByRow.current;
+    const next = new Map<string, readonly TranscriptLinkedAuthorityReview[]>();
+    let unchanged = previous.size === indexed.size;
+    for (const [key, reviews] of indexed) {
+      const before = previous.get(key);
+      const entries =
+        before === undefined ? reviews : holdList(before, reviews, sameLinkedAuthorityReview);
+      next.set(key, entries);
+      if (entries !== before) unchanged = false;
+    }
+    if (!unchanged) heldReviewsByRow.current = next;
+    return heldReviewsByRow.current;
+  }, [authorityReviews]);
 
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
@@ -2324,8 +2501,14 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (answered) {
     const interaction = context.interactions.get(answered.interactionId);
+    const failure =
+      interaction?.approval === undefined ? undefined : context.approvalFailures?.get(first.id);
+    if (failure === "not-delivered")
+      return <p className="text-ui text-muted-foreground">Answer not delivered</p>;
+    const resolution =
+      failure === "once" ? { optionIds: ["once"], response: null } : answered.resolution;
     return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
+      <InteractionReceiptLine interaction={interaction} resolution={resolution} />
     ) : null;
   }
 
@@ -2345,7 +2528,9 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
+                <div key={segment.key}>
+                  {renderSegment(segment, role, context, live, reviewsByRow)}
+                </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
@@ -2420,6 +2605,7 @@ function renderSegment(
   role: UIMessage["role"],
   context: TurnContext,
   live: boolean,
+  authorityReviews: ReadonlyMap<string, readonly TranscriptAuthorityReview[]>,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
@@ -2432,12 +2618,19 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
+          authorityReviews={authorityReviews}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
         />
       );
     case "attention":
-      return <GatedCall part={segment.part} context={context} />;
+      return (
+        <GatedCall
+          part={segment.part}
+          context={context}
+          authorityReviews={authorityReviews.get(segment.key)}
+        />
+      );
     default:
       return null;
   }
@@ -2454,13 +2647,26 @@ function renderSegment(
  * No card when nothing correlates: a gate we cannot pair with a question must
  * not invent one, and `footInteraction` draws it at the foot instead.
  */
-function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
+function GatedCall({
+  part,
+  context,
+  authorityReviews,
+}: {
+  part: DynamicToolUIPart;
+  context: TurnContext;
+  authorityReviews?: readonly TranscriptAuthorityReview[];
+}) {
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
     // The id is on the row so a notification click can scroll to THIS question
     // (VC-295): it is the one card the foot slot never draws.
     <div className="space-y-1" data-interaction-id={interaction?.id}>
-      <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
+      <ToolRow
+        part={part}
+        authorityReviews={authorityReviews}
+        onOpenFile={context.onOpenFile}
+        onOpenSession={context.onOpenSession}
+      />
       {interaction ? (
         <InteractionCard
           key={interaction.id}

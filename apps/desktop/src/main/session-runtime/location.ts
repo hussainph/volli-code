@@ -83,12 +83,14 @@ export function createDesktopSessionLocationResolver(
         const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
         throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
       }
-      const { identity, created } = outcome.value;
+      const { identity, created, restamped } = outcome.value;
       if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
       // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
-      // on the ticket; a reused one changed nothing. Same targeting the terminal
-      // uses, so the booting ticket's own rail refreshes promptly.
-      if (created) {
+      // on the ticket, or a reuse adopted the same-ticket branch actually
+      // checked out there; a reuse that changed nothing stays quiet. Same
+      // targeting the terminal uses, so the booting ticket's own rail refreshes
+      // promptly.
+      if (created || restamped) {
         broadcastDataChanged({ ticketId: ticket.id, projectId: project.id, kind: "worktree" });
       }
       return { directory: identity.worktreePath, venue: LOCAL };

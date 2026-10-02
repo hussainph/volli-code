@@ -26,33 +26,32 @@ A canvas has four parts:
   most each mode allows.
 - **Grain.** A noise layer over the gradient. Zero turns it off.
 
-That's the whole of it. Panel elevation, card tint, shadow depth, and text
-weight aren't settings; Volli holds a fixed set of each for light and for dark,
-so one canvas covers both modes.
+Panel elevation, card tint, shadow depth, and text weight use fixed values for
+each mode. The same canvas works in light and dark.
 
 ## Edit the canvas
 
 ![Settings → Appearance with the App theme canvas editor open: one orange color stop on the placement pad, light/dark/auto controls, plus and minus stop controls, color swatches, two faders, and the `#e8652a` field.](../../../assets/screenshots/canvas-editor.png)
 
 Go to **Settings → Appearance → App theme**. Every edit paints the real app as
-you make it and saves when you release the control. There's no apply button.
+you make it, and saves when you release the control. There is no apply button.
 
 ### The pad
 
-The pad is a minimap of your window, at the same 16:10 proportions, so where a
+The pad is a minimap of your window at the same 16:10 proportions, so where a
 color sits on the pad is where it pools on screen. Each stop is a circle.
 
 - **Drag a circle** to move that stop.
 - **Click a circle** without dragging to make it the primary.
 - **Arrow keys** move a focused circle by 1%, or 5% with `Shift` held.
 
-The circles show the colors you picked. What the window paints is a lighter or
-darker version of each, depending on the mode.
+The circles show the colors you picked. The window paints a lighter or darker
+version of each, depending on the mode.
 
 ### Colors
 
-**+** and **−** at the pad's foot add a color, up to three, or remove the
-last stop that isn't primary.
+**+** and **−** at the pad's foot add a color, up to three, or remove the last
+stop that isn't primary.
 
 Only the primary's color is editable. The others follow it around the color
 wheel: two stops sit opposite each other, three sit at even thirds. Changing a
@@ -66,17 +65,16 @@ is never applied.
 
 ### Vibrancy and grain
 
-Both run from 0 to 100%. Vibrancy and grain are matching vertical faders that
-flank the pad. Grain appears as texture on the pad and the window, so the canvas
-itself shows the setting as you adjust it; the faders also support keyboard
-arrows.
+Both run from 0 to 100%. They are matching vertical faders that flank the pad.
+Grain appears as texture on the pad and the window, so the canvas itself shows
+the setting as you adjust it. The faders also support keyboard arrows.
 
 ### Contrast
 
 The rest of the app derives its text, border, and surface tiers from the canvas,
 and keeps each as legible as that surface allows. A more saturated canvas leaves
-less separation; lower vibrancy or choose another primary color when you want
-more.
+less separation. Lower the vibrancy or choose another primary color when you
+want more.
 
 ## Light, dark, and auto
 
@@ -88,8 +86,8 @@ and a project can override either one on its own.
 
 ## Use a different theme for one project
 
-Open **Configure → Appearance** for that project. It has three sections:
-**App theme**, **Editor**, and **Terminal**.
+Open **Configure → Appearance** for that project. It has three sections: **App
+theme**, **Editor**, and **Terminal**.
 
 **App theme** gives **Mode** and **Canvas** separate **Inherit** / **Custom**
 controls. A project can pin its mode while inheriting the app-wide canvas, or
@@ -120,9 +118,8 @@ configuration takes precedence over Volli's.
   through Volli's terminal settings, that theme wins. A `theme = light:X,dark:Y`
   pair is re-read on every mode change, so you get the half that matches.
 
-The other fifteen ANSI colors are fixed per mode: a restrained set tuned for a
-near-black background in dark, and GitHub Light Default in light. Volli has no
-app color to derive them from.
+The other fifteen ANSI colors use Volli's own palette. The light-mode palette
+derives from its dark-mode hues with contrast adjusted for a light background.
 
 <Aside type="note">
   Volli never edits your Ghostty config. It writes overlay files layered on top

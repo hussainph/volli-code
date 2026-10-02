@@ -12,7 +12,7 @@
  * boundary does not ship. The Seatbelt sandbox that used to sit under it is no
  * longer installed, so a Session's tools carry the authority of whoever is
  * running Volli. That is a deliberate decision to run Pi at its own defaults,
- * not an erosion — and `docs/plans/authority-two-axis-rearchitecture.md` is
+ * not an erosion — and the two-axis authority rearchitecture is
  * where both axes come back.
  *
  * The gate itself is wired now. VC-44 made `@volli/shared`'s
@@ -34,6 +34,8 @@
  * --hard` over a person's uncommitted work is permitted by every boundary ever
  * proposed here and is still the wrong thing to do.
  */
+
+export * from "./authority-judge";
 
 import type { JudgmentMode } from "./authority-config";
 import type { McpToolId } from "./mcp";
@@ -135,6 +137,43 @@ export const NON_CODING_TOOL_IDS = [
   "shell_output",
   /** Ending a background shell. */
   "shell_kill",
+  /**
+   * Searching a Browser Tab's accessibility tree for literal text, and reading
+   * back only the matching subtrees with actionable refs (VC-364).
+   *
+   * A browser name, but appended here rather than beside the other eight, for
+   * the hold pair's reason one step further: the Cache Prefix is computed over
+   * the serialized tool array, so every Session frozen before it keeps its
+   * list and every position in it — and is handed a port without `find`.
+   */
+  "browser_find",
+  /**
+   * Asking the configured decision model typed questions about a JSON state —
+   * one of N, a level, or yes/no — and reading back probabilities, not text
+   * (VC-478).
+   *
+   * A port decides it, like the web tools: a Session born with no decision
+   * model configured (or a cloud one nobody opted into) has no port and is
+   * offered no tool. It reaches the rule pack as a name no rule objects to,
+   * because it has no side effect and carries no path or command; what it can
+   * send off the machine was decided by the person's opt-in, not per call.
+   * Appended last for the Cache Prefix reason every name above was.
+   */
+  "classify",
+  /**
+   * Running a short JavaScript program that calls this Session's other tools
+   * and returns only what the model needs (VC-471).
+   *
+   * Like `todo_write`, no port decides it: the bundle's `codeMode` record
+   * does, and the record also carries the route of every other tool. The
+   * tool reaches the rule pack as a name no rule objects to, because it
+   * carries nothing a rule reads — every call the program makes is judged on
+   * its own, through the same gate a direct call passes. Appended last for
+   * the Cache Prefix reason every name above was.
+   */
+  "codemode",
+  /** Requesting a credential outside the chat; the model receives only an outcome (VC-481). */
+  "request_secret",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
@@ -254,6 +293,13 @@ export interface AuthoritySnapshot {
    */
   enforcement: "observe" | "enforce";
   /**
+   * Whether this attachment uses Protection's approvals and decision audit.
+   * Frozen with the gate, not inferred from current project or app settings on
+   * recovery. Older Snapshots omit it and keep their original gate without
+   * opting into approvals; only an explicit `true` activates Protection.
+   */
+  protection?: boolean;
+  /**
    * Who judges a call the deterministic rules cannot settle. Data here,
    * behaviour in VC-28.
    *
@@ -285,7 +331,7 @@ export interface AuthoritySnapshot {
    * no longer for the reason originally written here: that with the network
    * denied and the filesystem scoped, the categories a classifier is best at
    * were largely unreachable. Both premises are gone, and
-   * `docs/plans/authority-two-axis-rearchitecture.md` names that argument as the
+   * the two-axis authority rearchitecture names that argument as the
    * mistake the whole rework exists to undo — containment was one dial doing two
    * jobs.
    *
@@ -354,6 +400,18 @@ export interface PolicyToolCall {
 export interface PolicyContext {
   /** Absolute, resolved Session workspace root. */
   workspacePath: string;
+  /**
+   * Absolute, resolved directories outside the workspace that hold output this
+   * Session's own tools saved, which `path.outside-workspace` lets it READ and
+   * never write (VC-469).
+   *
+   * Today that is one directory: where a tool result too long for the model
+   * was saved whole, beside the Session's recovery sidecar. The result names a
+   * path there and tells the model to `read` it, so refusing that read would
+   * refuse the instruction the runtime itself just gave. The runtime supplies
+   * it; nothing a model says can add to it.
+   */
+  readableRoots?: readonly string[];
 }
 
 /**
@@ -476,6 +534,16 @@ export const CONFIRM_CAUSE_IDS = [
   "confirm.mcp-install",
   /** Deleting an MCP server, which breaks reattachment for older Sessions using it. */
   "confirm.mcp-remove",
+  /**
+   * Signing in to an MCP server (VC-470): allowing it opens the server's OAuth
+   * page in the person's browser, and the agent learns only whether it worked.
+   */
+  "confirm.mcp-sign-in",
+  /**
+   * An MCP server missing a credential only a person can supply (VC-470): the
+   * person adds it in Settings and allows the retry; the agent never sees it.
+   */
+  "confirm.mcp-credential",
 ] as const;
 
 export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
@@ -483,6 +551,17 @@ export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
 /** Whether a cause is a confirmation — an operation asking before it acts. */
 export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCauseId {
   return (CONFIRM_CAUSE_IDS as readonly string[]).includes(cause);
+}
+
+/**
+ * Whether a confirmation is a credential question (VC-470): a sign-in, or a
+ * value only a person can supply. These can follow another confirmation on
+ * the same tool call, so they are asked under their own interaction id.
+ */
+export function isCredentialConfirmCause(
+  cause: AuthorityDenialCause,
+): cause is "confirm.mcp-sign-in" | "confirm.mcp-credential" {
+  return cause === "confirm.mcp-sign-in" || cause === "confirm.mcp-credential";
 }
 
 /**
@@ -500,6 +579,8 @@ export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCau
 export type AuthorityDenialCause =
   | AuthorityRuleId
   | "call.unreadable"
+  | "classifier.flagged"
+  | "classifier.unavailable"
   | BudgetCauseId
   | ConfirmCauseId;
 
@@ -538,7 +619,7 @@ export type AuthorityDenialCause =
  *
  * They stay refusals rather than becoming allowances: the read is still worth
  * stopping to confirm, and slice 1 of
- * `docs/plans/authority-two-axis-rearchitecture.md` replaces the question with
+ * the two-axis authority rearchitecture replaces the question with
  * one coherent read policy for both layers (VC-45). Until then a person can say
  * yes, which is the honest state of a boundary with nothing underneath it.
  *
@@ -560,7 +641,11 @@ export const OVERRIDABLE_AUTHORITY_RULES = [
 
 /** Whether a refusal is one a person can overrule, or one that only reports. */
 export function isOverridableAuthorityRule(cause: AuthorityDenialCause): boolean {
-  return (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause);
+  return (
+    cause === "classifier.flagged" ||
+    cause === "classifier.unavailable" ||
+    (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause)
+  );
 }
 
 export const BUILTIN_RULE_PACK_ID = "volli.builtin";

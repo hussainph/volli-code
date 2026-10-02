@@ -23,11 +23,13 @@ import * as React from "react";
 import type { SessionUsage, SessionUsageSummary } from "@volli/shared";
 import { summarizeSessionUsage } from "@volli/shared";
 
+import { HomeSessionCard } from "@renderer/components/home/home-session-card";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { StatusDot } from "@renderer/components/ui/status-dot";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
+import { UsageCostFigure } from "@renderer/components/usage/usage-card";
 import { formatTokens } from "@volli/session-presentation";
 import {
   formatCachedShare,
@@ -81,28 +83,59 @@ const PROJECT = summarize([
   ),
 ]);
 
+/**
+ * A model row as the rail hands one over: named against the catalogue, carrying
+ * the identity its mark is drawn from (`modelName`). The marks are what make
+ * this a column the eye scans rather than four grey lines.
+ */
+function modelRow(
+  key: string,
+  label: string,
+  providerLabel: string,
+  usage: SessionUsageSummary,
+): UsageGroupRow {
+  const slash = key.indexOf("/");
+  const model = { providerId: key.slice(0, slash), modelId: key.slice(slash + 1), label };
+  return { key, label, usage, model: { model, providerLabel } };
+}
+
 const PROJECT_MODELS: readonly UsageGroupRow[] = [
-  {
-    key: "anthropic/claude-opus-4-1",
-    label: "Claude Opus 4.1",
-    usage: summarize(Array.from({ length: 120 }, () => op())),
-  },
-  {
-    key: "openai/gpt-5.3-codex",
-    label: "GPT-5.3 Codex",
-    usage: summarize(Array.from({ length: 60 }, () => op({ costUsd: 0.028 }))),
-  },
-  {
-    key: "google/gemini-3-pro",
-    label: "Gemini 3 Pro",
-    usage: summarize(Array.from({ length: 24 }, () => op({ costUsd: 0.011 }))),
-  },
-  {
-    key: "anthropic/claude-haiku-4",
-    label: "Claude Haiku 4",
-    usage: summarize([op({ costUsd: 0.002 })]),
-  },
+  modelRow(
+    "anthropic/claude-opus-4-1",
+    "Claude Opus 4.1",
+    "Anthropic",
+    summarize(Array.from({ length: 120 }, () => op())),
+  ),
+  modelRow(
+    "openai/gpt-5.3-codex",
+    "GPT-5.3 Codex",
+    "OpenAI",
+    summarize(Array.from({ length: 60 }, () => op({ costUsd: 0.028 }))),
+  ),
+  modelRow(
+    "google/gemini-3-pro",
+    "Gemini 3 Pro",
+    "Google",
+    summarize(Array.from({ length: 24 }, () => op({ costUsd: 0.011 }))),
+  ),
+  modelRow(
+    "anthropic/claude-haiku-4",
+    "Claude Haiku 4",
+    "Anthropic",
+    summarize([op({ costUsd: 0.002 })]),
+  ),
 ];
+
+/** The dearest model, which is the one fact the Ticket footer says about models. */
+const TOP_MODEL: UsageGroupRow | null = PROJECT_MODELS[0] ?? null;
+
+/** A name long enough to clip at the 240px floor, where the reveal is the way out. */
+const LONG_TOP_MODEL: UsageGroupRow = modelRow(
+  "anthropic/claude-opus-4-1-extended-thinking",
+  "Claude Opus 4.1 (extended thinking)",
+  "Anthropic",
+  summarize(Array.from({ length: 120 }, () => op())),
+);
 
 const TICKET = summarize(Array.from({ length: 34 }, () => op()));
 
@@ -171,119 +204,54 @@ export default function UsageSurfaces() {
   const [window, setWindow] = React.useState<UsageWindow>("30d");
 
   return (
-    <div className="flex flex-col gap-8">
-      <Intro />
+    // The app's own provider is `SidebarProvider`'s, which the lab shell has no
+    // half of — and every model row on this page hands its full identity back
+    // through a Radix tooltip (`ValueReveal`), which throws rather than
+    // degrading without one.
+    <TooltipProvider>
+      <div className="flex flex-col gap-8">
+        <Intro />
 
-      <Group heading="1 · Home rail — Now, both scopes in one card">
-        <Rail>
-          {/* The rail's own inset, which the real Home rail's `SECTION` pays for
-              this block and the card pays for itself. */}
-          <div className="flex flex-col gap-2 px-4">
-            <SectionHeading as="h3">Session</SectionHeading>
-            <dl className="flex flex-col gap-2">
-              <Fact label="Model">claude-opus-4-1</Fact>
-              <Fact label="Effort">high</Fact>
-              <Fact label="Activity">
-                <span className="flex items-center gap-1">
-                  <StatusDot state="working" />
-                  Working
-                </span>
-              </Fact>
-            </dl>
-          </div>
-          <HomeUsageBlock
-            summary={PROJECT}
-            models={PROJECT_MODELS}
-            sessionCount={38}
-            meteredSessionCount={24}
-            session={SESSION}
-            window={window}
-            onWindowChange={setWindow}
-          />
-        </Rail>
-        <Caption>
-          The Session block stops at what the Session IS; what it has spent is a row of the card
-          below, beside the project total it is part of. Before VC-203 those were three key/value
-          rows up in the Session list and a separate card down here — two drawings of one kind of
-          number, a section apart.
-        </Caption>
-      </Group>
-
-      <Group heading="1b · The same card with no Session in front">
-        <Rail>
-          <HomeUsageBlock
-            summary={PROJECT}
-            models={PROJECT_MODELS}
-            sessionCount={38}
-            meteredSessionCount={24}
-            session={null}
-            window={window}
-            onWindowChange={setWindow}
-          />
-        </Rail>
-        <Caption>
-          The Board tab, a file tab, a terminal companion, a chat before its first reply. The row
-          leaves; the card does not restructure itself around its absence.
-        </Caption>
-      </Group>
-
-      <Group heading="2 · Ticket rail — the card and its breakdown">
-        <Rail>
-          <TicketUsageBlock
-            summary={TICKET}
-            sessions={TICKET_SESSIONS}
-            topModelLabel="Claude Opus 4.1"
-          />
-        </Rail>
-        <Caption>
-          Two doors, and each one opens what its own line asks about: the face explains the figure
-          (basis, the bar’s legend, the cached share, the top model), the “4 sessions” row is the
-          per-session breakdown — the placement that adds no block and touches no roster row.
-          “Terminal (claude)” stays in that list at `—`: dropping it would make the rows fail to add
-          up to the total above them.
-        </Caption>
-      </Group>
-
-      <Group heading="3 · The notation, every state">
-        <div className="flex flex-wrap gap-4">
-          <State label="Estimated · complete" summary={SESSION} />
-          <State label="Provider-reported" summary={REPORTED} hint="the only bare $" />
-          <State label="Mixed basis" summary={MIXED} hint="tilde: the weaker claim wins" />
-          <State label="Partial coverage" summary={PARTIAL} hint="+ means at least" />
-          <State label="Unpriced" summary={UNPRICED} hint="— never $0.00" />
-          <State label="Nothing metered" summary={EMPTY} hint="absent, not zero" />
-        </div>
-      </Group>
-
-      <Group heading="4 · Cache cold — the incident the bar is for">
-        <div className="flex flex-wrap gap-4">
-          <State label="Warm cache" summary={SESSION} hint="cache carrying the prompt" />
-          <State
-            label="Cold cache"
-            summary={COLD_CACHE}
-            hint={
-              COLD_MULTIPLE === null
-                ? "cache cold"
-                : `${COLD_MULTIPLE.toFixed(1)}× the cost, same token count`
-            }
-          />
-        </div>
-        <Caption>
-          Same component, same notation. The bar is the fastest read of the difference — and it is
-          labelled in tokens, because cost cannot be divided this way.
-        </Caption>
-      </Group>
-
-      <Group heading="5 · The 240px floor">
-        <div className="flex flex-wrap items-start gap-4">
-          <Rail width={RAIL_FLOOR} narrow>
-            <TicketUsageBlock
-              summary={TICKET}
-              sessions={TICKET_SESSIONS}
-              topModelLabel="Claude Opus 4.1 (extended thinking)"
+        <Group heading="1 · Home rail — Now, both scopes in one card">
+          <Rail>
+            {/* The block above the usage card, as the rail really draws it since
+              VC-406 — the shipping `HomeSessionCard` rather than a copy of its
+              innards. This scratch used to restate it as a `<dl>` of
+              Model/Effort/Activity rows, which was accurate until the page it
+              was copied from stopped being a table; a scratch that redraws a
+              component beside it is the surface you check the design against,
+              and it was quietly a version behind. `home-rail-now.tsx` is where
+              this card is studied at its states. */}
+            <div className="flex flex-col gap-2 px-4">
+              <SectionHeading as="h3">Session</SectionHeading>
+            </div>
+            <HomeSessionCard
+              facts={{
+                kind: "chat",
+                model: {
+                  model: {
+                    providerId: "anthropic",
+                    modelId: "claude-opus-4-1",
+                    label: "Claude Opus 4.1",
+                  },
+                  providerLabel: "Anthropic",
+                },
+                tier: "Deep",
+                effort: "high",
+                activity: "working",
+              }}
+              venue={{
+                status: "ready",
+                venue: {
+                  kind: "main-checkout",
+                  path: "/Users/someone/code/volli-code",
+                  branch: "main",
+                  files: { committed: 6, modified: 3, added: 1, untracked: 2 },
+                  diff: { added: 214, removed: 31, base: "main" },
+                },
+              }}
+              onRetryVenue={() => {}}
             />
-          </Rail>
-          <Rail width={RAIL_FLOOR} narrow>
             <HomeUsageBlock
               summary={PROJECT}
               models={PROJECT_MODELS}
@@ -294,32 +262,124 @@ export default function UsageSurfaces() {
               onWindowChange={setWindow}
             />
           </Rail>
-        </div>
-        <Caption>
-          Nothing has to drop at the floor any more — the lines that used to be squeezed here (model
-          names, the basis sentence, the session tally) are behind carets at every width, so the
-          narrow card is the wide card with a tighter inset rather than a reduced one.
-        </Caption>
-      </Group>
+          <Caption>
+            The Session block stops at what the Session IS; what it has spent is a row of the card
+            below, beside the project total it is part of. Before VC-203 those were three key/value
+            rows up in the Session list and a separate card down here — two drawings of one kind of
+            number, a section apart.
+          </Caption>
+        </Group>
 
-      <Group heading="6 · Empty projects">
-        <Rail>
-          <HomeUsageBlock
-            summary={EMPTY}
-            models={[]}
-            sessionCount={4}
-            meteredSessionCount={0}
-            session={null}
-            window={window}
-            onWindowChange={setWindow}
-          />
-        </Rail>
-        <Caption>
-          “No metered model calls yet”, and the session count kept beside it. `$0.00` here would be
-          the single most misleading string this feature could print.
-        </Caption>
-      </Group>
-    </div>
+        <Group heading="1b · The same card with no Session in front">
+          <Rail>
+            <HomeUsageBlock
+              summary={PROJECT}
+              models={PROJECT_MODELS}
+              sessionCount={38}
+              meteredSessionCount={24}
+              session={null}
+              window={window}
+              onWindowChange={setWindow}
+            />
+          </Rail>
+          <Caption>
+            The Board tab, a file tab, a terminal companion, a chat before its first reply. The row
+            leaves; the card does not restructure itself around its absence.
+          </Caption>
+        </Group>
+
+        <Group heading="2 · Ticket rail — the pinned footer and its breakdown">
+          <Rail>
+            <TicketUsageBlock summary={TICKET} sessions={TICKET_SESSIONS} topModel={TOP_MODEL} />
+          </Rail>
+          <Caption>
+            One row, one door (VC-406): the figure with its muted <code>est.</code>, the token
+            count, the caret. Everything the hero used to carry — the bar and its legend, the cached
+            share, the basis sentence, the top model, the per-session ranking — is behind that one
+            press. “Terminal (claude)” stays in the ranking at `—`: dropping it would make the rows
+            fail to add up to the total above them. It is pinned UNDER the Now page rather than
+            stacked in it, so it wears a top rule instead of a frame: cost is the one thing on that
+            page that is only ever read, and a footer&rsquo;s boundary is with the page above it.
+          </Caption>
+        </Group>
+
+        <Group heading="3 · The notation, every state">
+          <div className="flex flex-wrap gap-4">
+            <State label="Estimated · complete" summary={SESSION} />
+            <State label="Provider-reported" summary={REPORTED} hint="the only bare $" />
+            <State label="Mixed basis" summary={MIXED} hint="est.: the weaker claim wins" />
+            <State label="Partial coverage" summary={PARTIAL} hint="+ means at least" />
+            <State label="Unpriced" summary={UNPRICED} hint="— never $0.00" />
+            <State label="Nothing metered" summary={EMPTY} hint="absent, not zero" />
+          </div>
+        </Group>
+
+        <Group heading="4 · Cache cold — the incident the bar is for">
+          <div className="flex flex-wrap gap-4">
+            <State label="Warm cache" summary={SESSION} hint="cache carrying the prompt" />
+            <State
+              label="Cold cache"
+              summary={COLD_CACHE}
+              hint={
+                COLD_MULTIPLE === null
+                  ? "cache cold"
+                  : `${COLD_MULTIPLE.toFixed(1)}× the cost, same token count`
+              }
+            />
+          </div>
+          <Caption>
+            Same component, same notation. The bar is the fastest read of the difference — and it is
+            labelled in tokens, because cost cannot be divided this way.
+          </Caption>
+        </Group>
+
+        <Group heading="5 · The 240px floor">
+          <div className="flex flex-wrap items-start gap-4">
+            <Rail width={RAIL_FLOOR} narrow>
+              <TicketUsageBlock
+                summary={TICKET}
+                sessions={TICKET_SESSIONS}
+                topModel={LONG_TOP_MODEL}
+              />
+            </Rail>
+            <Rail width={RAIL_FLOOR} narrow>
+              <HomeUsageBlock
+                summary={PROJECT}
+                models={PROJECT_MODELS}
+                sessionCount={38}
+                meteredSessionCount={24}
+                session={SESSION}
+                window={window}
+                onWindowChange={setWindow}
+              />
+            </Rail>
+          </div>
+          <Caption>
+            Nothing has to drop at the floor any more — the lines that used to be squeezed here
+            (model names, the basis sentence, the session tally) are behind carets at every width,
+            so the narrow card is the wide card with a tighter inset rather than a reduced one.
+          </Caption>
+        </Group>
+
+        <Group heading="6 · Empty projects">
+          <Rail>
+            <HomeUsageBlock
+              summary={EMPTY}
+              models={[]}
+              sessionCount={4}
+              meteredSessionCount={0}
+              session={null}
+              window={window}
+              onWindowChange={setWindow}
+            />
+          </Rail>
+          <Caption>
+            “No metered model calls yet”, and the session count kept beside it. `$0.00` here would
+            be the single most misleading string this feature could print.
+          </Caption>
+        </Group>
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -413,7 +473,7 @@ function State({
         <p className="text-ui text-muted-foreground">(renders nothing)</p>
       ) : (
         <>
-          <p className="text-heading tabular-nums text-foreground">{cost}</p>
+          <UsageCostFigure summary={summary} className="text-heading text-foreground" />
           <UsageBar summary={summary} />
           {tokens > 0 ? (
             <p className="text-ui text-muted-foreground tabular-nums">
@@ -423,16 +483,6 @@ function State({
         </>
       )}
       {hint === undefined ? null : <p className="text-ui text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
-
-/** home-rail.tsx's own Fact row, copied so the scratch can stack it. */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className="shrink-0 text-ui text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-ui text-foreground">{children}</dd>
     </div>
   );
 }

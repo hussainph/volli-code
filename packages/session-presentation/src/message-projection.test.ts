@@ -1,4 +1,5 @@
 import type { KeyedTranscriptMessage, TranscriptOverlay } from "@volli/session-engine";
+import { SESSION_TOOL_CALL_SCOPE_METADATA_KEY } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -21,6 +22,78 @@ function overlay(...messages: readonly KeyedTranscriptMessage[]): TranscriptOver
 }
 
 describe("projectTranscriptMessages", () => {
+  it("recovers call scope from Session facts without changing the stored artifact or other metadata", () => {
+    const held: UIMessage = {
+      id: "opaque-message-id",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Checking" },
+        {
+          type: "dynamic-tool",
+          toolCallId: "reused",
+          toolName: "execute",
+          state: "output-available",
+          input: {},
+          output: "done",
+          toolMetadata: { existing: "kept" },
+        },
+      ],
+    };
+    const payload = {
+      kind: "transcript.referenced" as const,
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      reference: { id: "artifact-1", mediaType: null, digest: null },
+    };
+    const [projected] = projectTranscriptMessages([{ ...frame(1, held), event: { payload } }]);
+    expect(projected).toEqual({
+      ...held,
+      parts: [
+        held.parts[0],
+        {
+          ...held.parts[1],
+          toolMetadata: {
+            existing: "kept",
+            [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: {
+              attachmentId: "attachment-1",
+              turnId: "turn-1",
+            },
+          },
+        },
+      ],
+    });
+    expect(projected?.parts[0]).toBe(held.parts[0]);
+    expect(held.parts[1]).toMatchObject({ toolMetadata: { existing: "kept" } });
+
+    const unscoped: UIMessage = {
+      ...held,
+      parts: [{ ...held.parts[1], toolMetadata: undefined } as UIMessage["parts"][number]],
+    };
+    expect(
+      projectTranscriptMessages([{ ...frame(2, unscoped), event: { payload } }])[0]?.parts[0],
+    ).toMatchObject({
+      toolMetadata: {
+        [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: {
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+        },
+      },
+    });
+
+    // Missing historical scope must remain unknown, not inferred from IDs or
+    // a neighboring turn. Messages without tools preserve their identity.
+    for (const event of [
+      null,
+      { payload: { ...payload, attachmentId: null } },
+      { payload: { ...payload, turnId: null } },
+      { payload: { kind: "turn.started" as const, attachmentId: "a", turnId: "t" } },
+    ]) {
+      expect(projectTranscriptMessages([{ ...frame(1, held), event }])[0]).toBe(held);
+    }
+    const prose = durable("prose", "Done");
+    expect(projectTranscriptMessages([{ ...frame(1, prose), event: { payload } }])[0]).toBe(prose);
+  });
+
   it("replaces streamed snapshots without duplicating their message bubble", () => {
     expect(
       projectTranscriptMessages([

@@ -1,9 +1,13 @@
+import { readSessionOrigin, type SessionOrigin } from "./session-origin";
 /**
  * The durable, harness-agnostic facts that make up a Session's local history.
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type {
+  AuthorityReviewObservation,
   CompactionReason,
   CompactionWorkReason,
   ModelSelection,
@@ -12,8 +16,12 @@ import type {
   SessionRole,
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import type { CodeModeSurface } from "./code-mode";
+import type { ApprovalDetail } from "./approvals";
 import type { McpToolDefinition } from "./mcp";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
+import type { SecretRequestMetadata } from "./secrets";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   mergeSessionUsageSummaries,
@@ -194,6 +202,8 @@ export interface SessionInteraction {
   kind: "permission" | "question";
   title: string;
   detail: string | null;
+  /** Approval card metadata written only by the authority adapter, never from model question options. */
+  approval?: ApprovalDetail;
   options: readonly SessionInteractionOption[];
   multiple: boolean;
   /**
@@ -202,6 +212,8 @@ export interface SessionInteraction {
    * directly.
    */
   prompts?: readonly SessionInteractionPrompt[];
+  /** Person-only credential waiting. Metadata only; never resolve via a generic answer. */
+  credential?: SecretRequestMetadata;
   native: SessionNativeReference;
 }
 
@@ -290,6 +302,22 @@ export function budgetAskInteractionId(toolCallId: string): string {
  */
 export function confirmAskInteractionId(toolCallId: string): string {
   return `confirm-ask:${toolCallId}`;
+}
+
+/**
+ * The interaction id a credential question is asked under (VC-470):
+ * `confirm.mcp-sign-in` and `confirm.mcp-credential`.
+ *
+ * A fifth frozen segment, for {@link confirmAskInteractionId}'s own reason one
+ * level down: an `mcp_install` apply first raises `confirm.mcp-install` and
+ * then, when the server turns out to need a sign-in, raises the sign-in
+ * question on the SAME tool call. Under one `confirm-ask:` id the second
+ * `opened` would dedupe against the first and park a question nobody was
+ * shown. One call asks at most one credential question, so the tool call id
+ * is still enough within this segment.
+ */
+export function credentialAskInteractionId(toolCallId: string): string {
+  return `credential-ask:${toolCallId}`;
 }
 
 /**
@@ -482,11 +510,8 @@ export function sessionAwaitsUser(
  * cancellation or an incomplete record and does not enter the red listing
  * state.
  *
- * Deliberately NOT a network/auth/provider vocabulary: which transport fault
- * produced the dead end is classified inside the runtime and thrown away
- * before the Attention is written, so a row that said "network" here would be
- * guessing. Widening this vocabulary is a change to what the runtime RECORDS,
- * not to what this function reads.
+ * Provider facts now travel separately as SessionStopDetail; the umbrella
+ * remains frozen so old Sessions retain their meaning.
  */
 export const SESSION_INTERRUPTION_REASONS = ["stopped-by-runtime", "crash-recovered"] as const;
 
@@ -524,14 +549,39 @@ const INTERRUPTION_ATTENTIONS = [
  * turning into a lifecycle fact it is explicitly not allowed to be.
  */
 export function sessionInterruptionReason(
-  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
 ): SessionInterruptionReason | null {
   if (projection.turnActive) return null;
   if (projection.lastTurnOutcome !== "interrupted") return null;
+  // A fact on THIS turn outranks a still-active Attention from an older crash.
+  if (projection.lastTurnStopDetail) return "stopped-by-runtime";
   for (const [kind, reason] of INTERRUPTION_ATTENTIONS) {
     if (projection.attention.active.some((attention) => attention.kind === kind)) return reason;
   }
   return null;
+}
+
+/** The latest interruption's facts, or an honest generic detail for legacy events. */
+export function sessionInterruptionDetail(
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
+): SessionStopDetail | null {
+  if (sessionInterruptionReason(projection) !== "stopped-by-runtime") return null;
+  return (
+    projection.lastTurnStopDetail ?? {
+      category: "unknown",
+      message: null,
+      providerType: null,
+      httpStatus: null,
+      retry: "not-retried",
+      resetsAt: null,
+    }
+  );
 }
 
 /**
@@ -542,12 +592,16 @@ export function sessionInterruptionReason(
  * CLI's `session list`), and two hand-copies is how they come to disagree.
  */
 export function sessionEndedInterrupted(
-  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+  projection: Pick<
+    SessionProjection,
+    "turnActive" | "lastTurnOutcome" | "attention" | "lastTurnStopDetail"
+  >,
 ): boolean {
   return sessionInterruptionReason(projection) !== null;
 }
 
 interface SessionAttentionBase {
+  stopDetail?: SessionStopDetail;
   id: string;
   attachmentId: string | null;
   detail: string | null;
@@ -558,8 +612,19 @@ interface SessionAttentionBase {
 export type SessionAttention =
   | (SessionAttentionBase & { kind: "rate_limited"; retryAt: number | null })
   | (SessionAttentionBase & { kind: "quota_exhausted"; resetAt: number | null })
+  /**
+   * `resetsAt`: when the run failed on a spent provider allowance whose reset
+   * the runtime could read unambiguously, that instant (epoch ms) — the time a
+   * person may choose to have the run resumed at. `null` for every other
+   * failure, and for every Attention written before the field existed (the
+   * codec reads its absence as `null`). See `quotaResetInstant`.
+   */
+  | (SessionAttentionBase & { kind: "adapter_unrecoverable"; resetsAt: number | null })
   | (SessionAttentionBase & {
-      kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">;
+      kind: Exclude<
+        SessionAttentionKind,
+        "rate_limited" | "quota_exhausted" | "adapter_unrecoverable"
+      >;
     });
 
 /**
@@ -583,8 +648,15 @@ export type SessionInput =
   | {
       kind: "tool-surface";
       tools: readonly SessionToolId[];
+      /** New MCP-management wire names. Absent on historical surfaces, whose mcp_* names must survive reattachment. */
+      mcpManagementNames?: "server";
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
+      /**
+       * Code Mode's routes and limits, present exactly when `tools` names
+       * `codemode` (VC-471). Written by the host at birth, never by a Session.
+       */
+      codeMode?: CodeModeSurface;
     };
 
 /**
@@ -629,8 +701,11 @@ export type SessionEventPayload =
    * pin, never the policy itself: the Session runs `selection`, and a later
    * Settings change to that tier moves nothing here. Absent on every
    * selection a person or a caller made by exact id.
+   *
+   * `auto` (VC-432) is present when a decision model chose the selection at
+   * the Session's birth: how sure it was and what it passed over.
    */
-  | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier }
+  | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
@@ -682,7 +757,12 @@ export type SessionEventPayload =
   | { kind: "run.completed"; attachmentId: string; runId: string }
   | { kind: "turn.started"; attachmentId: string; turnId: string }
   | { kind: "turn.completed"; attachmentId: string; turnId: string }
-  | { kind: "turn.interrupted"; attachmentId: string; turnId: string }
+  | {
+      kind: "turn.interrupted";
+      attachmentId: string;
+      turnId: string;
+      stopDetail?: SessionStopDetail;
+    }
   /**
    * The Session's context was summarized, and the history before the summary
    * left the model's view without leaving the Session's.
@@ -780,6 +860,11 @@ export type SessionEventPayload =
       /** The refusing rule's own words, as the model received them. */
       reason: string;
     }
+  /** A classifier verdict, not a denial: shadow reviews never block a call. */
+  | (Omit<AuthorityReviewObservation, "kind"> & {
+      kind: "authority.reviewed";
+      attachmentId: string;
+    })
   | {
       kind: "adapter.observed";
       attachmentId: string | null;
@@ -831,6 +916,7 @@ export const SESSION_PROJECTION_EVENT_KINDS = [
   "attachment.native_referenced",
   "attachment.opened",
   "authority.denied",
+  "authority.reviewed",
   "command.receipt.recorded",
   "command.recorded",
   "context.compacted",
@@ -882,17 +968,19 @@ export interface SessionAttachmentFailure {
  * One immutable local fact WITHOUT its audit provenance (VC-355).
  *
  * Provenance answers "which door did this come through", which is an audit and
- * future-replay question. Folding a Session's state never asks it: the reducer
- * switches on `payload.kind` and reads nothing else about the source. Storing
- * provenance interned and joining it back per row therefore costs one JSON
- * decode per event to answer a question the caller did not ask, and a Session
- * listing pays that across every event in the profile.
+ * future-replay question. The fold needs only the trusted command origin for
+ * attribution, not runtime-native detail. Slim readers extract that field on
+ * `command.recorded` instead of joining full provenance for every event in a
+ * Session listing. Full-log readers may still supply provenance as a fallback.
  *
  * This is the shape a fold consumes. {@link SessionEvent} extends it for the
  * callers that genuinely need the audit field, so anything holding a full
  * event can still be passed wherever this is accepted.
  */
 export interface SessionProjectionEvent {
+  /** Slim fold readers carry only origin, not full native provenance. */
+  commandOrigin?: SessionOrigin | null;
+  provenance?: SessionEventProvenance;
   id: string;
   sessionId: string;
   sequence: number;
@@ -981,6 +1069,7 @@ type ObservedSessionEventKind =
   | "interaction.resolved"
   | "interaction.cancelled"
   | "authority.denied"
+  | "authority.reviewed"
   | "adapter.observed"
   | "usage.recorded";
 
@@ -1085,6 +1174,9 @@ export function observationPayload(
         kind: observation.kind,
         attachmentId: observation.attachmentId,
         turnId: observation.turnId,
+        ...(observation.kind === "turn.interrupted" && observation.stopDetail !== undefined
+          ? { stopDetail: observation.stopDetail }
+          : {}),
       };
     case "context.compacted":
       return {
@@ -1149,6 +1241,22 @@ export function observationPayload(
         cause: observation.cause,
         reason: observation.reason,
       };
+    case "authority.reviewed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        toolCallId: observation.toolCallId,
+        tool: observation.tool,
+        mode: observation.mode,
+        authoriser: observation.authoriser,
+        wouldFlag: observation.wouldFlag,
+        reason: observation.reason,
+        category: observation.category,
+        answers: observation.answers,
+        missReason: observation.missReason,
+        thresholds: observation.thresholds,
+      };
     case "adapter.observed":
       return {
         kind: observation.kind,
@@ -1203,7 +1311,7 @@ export type SessionCommandIntent =
   /** End this Session's work, recording who did it (VC-86). Completes in-engine like a signal. */
   | { kind: "session.stop"; reason: string | null; by: SessionStopActor }
   /** `tier`: which named tier this selection resolved from, if a start named one (VC-259). */
-  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier }
+  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
@@ -1231,7 +1339,42 @@ export type SessionCommandIntent =
       interactionId: string;
       resolution: SessionInteractionResolution;
       reference: TranscriptReference;
-    };
+    }
+  /**
+   * Resume the run an Attention stopped, once the provider's allowance is back.
+   *
+   * A person's choice, made on the failure itself: nothing is scheduled unless
+   * they ask. `resumeAt` is the reset the Attention carried when they chose it
+   * and is checked against it on acceptance, so a schedule can never name a
+   * time the failure did not state. The command's own id is the schedule's
+   * identity. A later schedule replaces an earlier one still pending.
+   */
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  /** Withdraw the pending scheduled resume named by its schedule command id. */
+  | { kind: "resume.cancel"; scheduleId: string }
+  /**
+   * The host's account of what became of a scheduled resume at its time:
+   * resumed through the named retry command, or skipped and why. System-only;
+   * the Session RPC edge does not accept it from a client.
+   */
+  | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
+
+/** Why a scheduled resume did not run. See `scheduledResumeVerdict`. */
+export const SCHEDULED_RESUME_SKIP_REASONS = [
+  // The Session was continued by hand after the resume was scheduled.
+  "continued",
+  // Another Session on the same Ticket moved on after it was scheduled.
+  "superseded",
+  // The Session was stopped, archived, or lost the executor it failed in.
+  "ended",
+  // The retry itself was refused.
+  "refused",
+] as const;
+export type ScheduledResumeSkipReason = (typeof SCHEDULED_RESUME_SKIP_REASONS)[number];
+
+export type ScheduledResumeOutcome =
+  | { kind: "resumed"; retryCommandId: string }
+  | { kind: "skipped"; reason: ScheduledResumeSkipReason; detail: string | null };
 
 /**
  * The adapter delivery target resolved by the control plane when it records a
@@ -1273,7 +1416,10 @@ export type CommandReceiptResult =
   | { kind: "executor.retried"; sessionId: string }
   | { kind: "context.compacted"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string }
-  | { kind: "interaction.resolved"; sessionId: string };
+  | { kind: "interaction.resolved"; sessionId: string }
+  | { kind: "resume.scheduled"; sessionId: string }
+  | { kind: "resume.cancelled"; sessionId: string }
+  | { kind: "resume.settled"; sessionId: string };
 
 interface CommandReceiptDetailsAccepted {
   status: "accepted";
@@ -1423,6 +1569,10 @@ export interface ListSessionEventsQuery {
 }
 
 export interface SessionAttachmentProjection extends SessionAttachment {
+  /** Trusted command that successfully opened this attachment; absent history is unknown. */
+  readonly origin?: SessionOrigin | null;
+  /** A previous attachment successfully opened, independently of continuity or a stop. */
+  readonly reattached?: boolean;
   readonly status: "open" | "failed" | "closed";
   readonly openedAt: number | null;
   readonly closedAt: number | null;
@@ -1466,9 +1616,22 @@ export interface SessionInteractionProjection {
  * modifiers make that a compile error instead, on both sides of an RPC seam
  * where a runtime freeze does not survive the copy.
  */
+/** A successful reopening, recorded even if no message or turn follows. */
+export interface SessionAttachmentResumption {
+  readonly attachmentId: string;
+  readonly origin: SessionOrigin | null;
+  readonly startedAt: number;
+}
+
 export interface SessionProjection {
   readonly session: Session;
   readonly status: "open" | "archived";
+  readonly latestTurnId: string | null;
+  readonly latestTurnOrigin: SessionOrigin | null;
+  /** This turn began on an attachment that successfully recovered an explicit stop. */
+  readonly resumedAfterStop: boolean;
+  /** Retained so a coalesced observer cannot lose an intermediate resume. */
+  readonly resumptions: readonly SessionAttachmentResumption[];
   readonly commands: readonly SessionCommand[];
   readonly receipts: readonly CommandReceipt[];
   /** Latest unresolved executor.start intent; it exists before an attachment is observable. */
@@ -1503,6 +1666,13 @@ export interface SessionProjection {
    * clears it, because the model then running is no longer the tier's.
    */
   readonly modelTier: ModelTier | null;
+  /**
+   * Present when a decision model chose `modelSelection` at birth (VC-432):
+   * the confidence and the alternatives it passed over. Absent otherwise — and
+   * cleared, like the tier, by any later selection that is not itself an
+   * automatic one, since the model then running is no longer its pick.
+   */
+  readonly modelAuto?: ModelAutoPick;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   readonly turnActive: boolean;
   /**
@@ -1515,6 +1685,7 @@ export interface SessionProjection {
    * verdict on an earlier one.
    */
   readonly lastTurnOutcome: SessionTurnOutcome | null;
+  readonly lastTurnStopDetail?: SessionStopDetail | null;
   /**
    * How many calls this Session's authority has refused, over its whole life.
    *
@@ -1574,9 +1745,13 @@ export interface SessionProjectionCheckpoint {
   pendingExecutorStarts: readonly SessionCommand[];
   /** Unrounded sum of every priced `usage.recorded` fact through the cursor. */
   usageCostUsdExact: number | null;
+  stopSinceLastTurn: boolean;
+  stoppedRecoveryAttachmentId: string | null;
+  pendingAttachmentCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
+  pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
 }
 
-export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
+export const SESSION_PROJECTION_CHECKPOINT_VERSION = 4 as const;
 
 export interface SessionProjectionCheckpointValidationOptions {
   /** Reject a checkpoint that belongs to another Session. */
@@ -1612,6 +1787,8 @@ export function assertSessionProjectionCheckpoint(
     projection?: unknown;
     pendingExecutorStarts?: unknown;
     usageCostUsdExact?: unknown;
+    stoppedRecoveryAttachmentId?: unknown;
+    pendingAttachmentCommands?: unknown;
   };
   const projection = checkpoint.projection;
   const projectionSession =
@@ -1643,6 +1820,11 @@ export function assertSessionProjectionCheckpoint(
     !Number.isInteger(throughSequence) ||
     throughSequence < 0 ||
     !Array.isArray(checkpoint.pendingExecutorStarts) ||
+    !Array.isArray(checkpoint.pendingAttachmentCommands) ||
+    !(
+      checkpoint.stoppedRecoveryAttachmentId === null ||
+      typeof checkpoint.stoppedRecoveryAttachmentId === "string"
+    ) ||
     !validExactCost ||
     (options.expectedSessionId !== undefined && checkpoint.sessionId !== options.expectedSessionId)
   ) {
@@ -1733,8 +1915,22 @@ function foldSessionProjection(
   let stopped: SessionProjection["stopped"] = base?.stopped ?? null;
   let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
   let modelTier: ModelTier | null = base?.modelTier ?? null;
+  let modelAuto: ModelAutoPick | null = base?.modelAuto ?? null;
+  const resumptions: SessionAttachmentResumption[] = [...(base?.resumptions ?? [])];
+  let latestTurnId = base?.latestTurnId ?? null;
+  let latestTurnOrigin = base?.latestTurnOrigin ?? null;
+  let resumedAfterStop = base?.resumedAfterStop ?? false;
+  let stopSinceLastTurn = checkpoint?.stopSinceLastTurn ?? false;
+  let stoppedRecoveryAttachmentId = checkpoint?.stoppedRecoveryAttachmentId ?? null;
+  const pendingAttachmentCommands = new Map(
+    checkpoint?.pendingAttachmentCommands.map(({ commandId, origin }) => [commandId, origin]) ?? [],
+  );
+  const pendingTurnCommands = new Map(
+    checkpoint?.pendingTurnCommands.map(({ commandId, origin }) => [commandId, origin]) ?? [],
+  );
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
+  let lastTurnStopDetail = base?.lastTurnStopDetail ?? null;
   let authorityDenials = base?.authorityDenials ?? 0;
   const usage: SessionUsage[] = [];
   let usageCostUsdExact = checkpoint?.usageCostUsdExact ?? 0;
@@ -1774,12 +1970,35 @@ function foldSessionProjection(
     }
 
     switch (event.payload.kind) {
-      case "command.recorded":
-        commands.push(event.payload.command);
-        if (event.payload.command.intent.kind === "executor.start") {
-          pendingExecutorStarts.set(event.payload.command.id, event.payload.command);
+      case "command.recorded": {
+        const { command } = event.payload;
+        commands.push(command);
+        const detail = event.provenance?.source.detail;
+        const origin =
+          event.commandOrigin !== undefined
+            ? event.commandOrigin
+            : readSessionOrigin(
+                typeof detail === "object" && detail !== null && !Array.isArray(detail)
+                  ? (detail as Record<string, unknown>).sessionOrigin
+                  : null,
+              );
+        if (
+          (command.intent.kind === "message.submit" && (!turnActive || stopSinceLastTurn)) ||
+          command.intent.kind === "executor.retry"
+        ) {
+          // Turn submitters and attachment openers are independent attribution.
+          // A steer joins active work; outstanding turn openers are retained
+          // separately so rejecting one cannot erase another's attribution.
+          pendingTurnCommands.set(command.id, origin);
+        }
+        if (command.intent.kind === "executor.start" || command.intent.kind === "executor.retry") {
+          pendingAttachmentCommands.set(command.id, origin);
+        }
+        if (command.intent.kind === "executor.start") {
+          pendingExecutorStarts.set(command.id, command);
         }
         break;
+      }
       case "session.archived":
         status = "archived";
         break;
@@ -1789,6 +2008,7 @@ function foldSessionProjection(
       case "model.selected":
         modelSelection = event.payload.selection;
         modelTier = event.payload.tier ?? null;
+        modelAuto = event.payload.auto ?? null;
         break;
       case "session.input.recorded":
         break;
@@ -1800,6 +2020,8 @@ function foldSessionProjection(
         };
         break;
       case "session.stopped":
+        stopSinceLastTurn = true;
+        stoppedRecoveryAttachmentId = null;
         stopped = {
           at: event.occurredAt,
           reason: event.payload.reason,
@@ -1827,8 +2049,20 @@ function foldSessionProjection(
       }
       case "attachment.opened": {
         const { attachment } = event.payload;
+        const reattached = [...attachments.values()].some(({ openedAt }) => openedAt !== null);
+        const origin = event.commandId
+          ? (pendingAttachmentCommands.get(event.commandId) ?? null)
+          : null;
+        if (reattached && !resumptions.some(({ attachmentId }) => attachmentId === attachment.id)) {
+          resumptions.push({ attachmentId: attachment.id, origin, startedAt: event.occurredAt });
+        }
+        if (stopped !== null || stoppedRecoveryAttachmentId !== null) {
+          stoppedRecoveryAttachmentId = attachment.id;
+        }
         attachments.set(attachment.id, {
           ...attachment,
+          origin,
+          reattached,
           status: "open",
           openedAt: event.occurredAt,
           closedAt: null,
@@ -1841,13 +2075,18 @@ function foldSessionProjection(
         // Work resuming ends a stop: the record stays in history, the state
         // does not (VC-86).
         stopped = null;
-        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        if (event.commandId) {
+          pendingExecutorStarts.delete(event.commandId);
+          pendingAttachmentCommands.delete(event.commandId);
+        }
         break;
       }
       case "attachment.failed": {
         const { attachment } = event.payload;
         attachments.set(attachment.id, {
           ...attachment,
+          origin: null,
+          reattached: false,
           status: "failed",
           openedAt: null,
           closedAt: event.occurredAt,
@@ -1861,7 +2100,10 @@ function foldSessionProjection(
         // not the turn losing what it said — `foldSessionAnswerState` agrees).
         if (turnActive) lastTurnOutcome = "failed";
         turnActive = false;
-        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        if (event.commandId) {
+          pendingExecutorStarts.delete(event.commandId);
+          pendingAttachmentCommands.delete(event.commandId);
+        }
         break;
       }
       case "attachment.closed": {
@@ -1916,8 +2158,11 @@ function foldSessionProjection(
         break;
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
+        if (event.payload.receipt.status === "rejected")
+          pendingTurnCommands.delete(event.payload.receipt.commandId);
         if (event.payload.receipt.status === "rejected") {
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
+          pendingAttachmentCommands.delete(event.payload.receipt.commandId);
         }
         break;
       // A turn is the durable half of "the agent is working", and a listing has
@@ -1929,9 +2174,17 @@ function foldSessionProjection(
       // latch "working" durably, forever, on the strength of a turn nobody is
       // running any more.
       case "turn.started":
+        latestTurnId = event.payload.turnId;
+        latestTurnOrigin =
+          pendingTurnCommands.size === 1 ? [...pendingTurnCommands.values()][0]! : null;
+        resumedAfterStop = stoppedRecoveryAttachmentId === event.payload.attachmentId;
+        if (resumedAfterStop) stoppedRecoveryAttachmentId = null;
+        stopSinceLastTurn = false;
+        pendingTurnCommands.clear();
         turnActive = true;
         // The outcome is about the latest turn, and this one has none yet.
         lastTurnOutcome = null;
+        lastTurnStopDetail = null;
         // A turn can have been admitted before a supervisor recorded its stop.
         // Only a fresh attachment is an explicit resumption, so this turn must
         // not erase the stop while the supervisor is still releasing it.
@@ -1939,10 +2192,12 @@ function foldSessionProjection(
       case "turn.completed":
         turnActive = false;
         lastTurnOutcome = "completed";
+        lastTurnStopDetail = null;
         break;
       case "turn.interrupted":
         turnActive = false;
         lastTurnOutcome = "interrupted";
+        lastTurnStopDetail = event.payload.stopDetail ?? null;
         break;
       // `session.created` carries the Session row as it was at birth — the
       // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
@@ -1967,6 +2222,7 @@ function foldSessionProjection(
       case "context.compacted":
       case "context.compaction_failed":
       case "context.reasoning_dropped":
+      case "authority.reviewed":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
@@ -2018,8 +2274,14 @@ function foldSessionProjection(
     stopped,
     modelSelection,
     modelTier,
+    ...(modelAuto === null ? {} : { modelAuto }),
     turnActive,
+    latestTurnId,
+    latestTurnOrigin,
+    resumedAfterStop,
+    resumptions,
     lastTurnOutcome,
+    ...(lastTurnStopDetail === null ? {} : { lastTurnStopDetail }),
     authorityDenials,
     // `usageSummary` supplies exact counters, bases and token totals. Money is
     // recomputed from the checkpoint's unrounded accumulator instead of adding
@@ -2040,6 +2302,16 @@ function foldSessionProjection(
     projection,
     pendingExecutorStarts: [...pendingExecutorStarts.values()],
     usageCostUsdExact: usageSummary.pricedRequestCount === 0 ? null : usageCostUsdExact,
+    stopSinceLastTurn,
+    stoppedRecoveryAttachmentId,
+    pendingAttachmentCommands: [...pendingAttachmentCommands].map(([commandId, origin]) => ({
+      commandId,
+      origin,
+    })),
+    pendingTurnCommands: [...pendingTurnCommands].map(([commandId, origin]) => ({
+      commandId,
+      origin,
+    })),
   };
 }
 

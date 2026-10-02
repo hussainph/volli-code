@@ -30,7 +30,11 @@ import {
 } from "@earendil-works/pi-agent-core/node";
 import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
-import { scopedEnvironment } from "./execution-env";
+import {
+  scopedEnvironment,
+  sessionCommandEnvironment,
+  type SessionCommandEnvironmentOptions,
+} from "./execution-env";
 
 const KILL_GRACE_MS = 250;
 /** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
@@ -70,7 +74,10 @@ export interface ExecutionEnvOwner {
   projectId: string | null;
 }
 
-export interface ScopedExecutionEnvOptions {
+export interface ScopedExecutionEnvOptions extends Omit<
+  SessionCommandEnvironmentOptions,
+  "overrides"
+> {
   /**
    * Where each spawned command is recorded, and who it is recorded as.
    *
@@ -448,7 +455,7 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  *
  * The runtime hands Pi its own uncontained environment now, so this reaches a
  * Session only through an injected `executionEnvFactory`. It is kept whole
- * because `docs/plans/authority-two-axis-rearchitecture.md` rebuilds the
+ * because the two-axis authority rearchitecture rebuilds the
  * boundary on it, and a boundary is a bad thing to delete and rewrite from
  * memory.
  *
@@ -477,12 +484,19 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   readonly #processKill: ProcessKill;
   readonly #fileOperations: FileOperations;
   readonly #ledger: { port: SpawnLedgerPort; owner: ExecutionEnvOwner } | undefined;
+  readonly #commandEnvironment: Omit<SessionCommandEnvironmentOptions, "overrides">;
   readonly #activeChildren = new Set<ChildProcess>();
   readonly #tempDirectories = new Set<string>();
 
   private constructor(root: string, options: ScopedExecutionEnvOptions) {
     this.cwd = root;
     this.#ledger = options.ledger;
+    this.#commandEnvironment = {
+      pathPrefixes: options.pathPrefixes,
+      identity: options.identity,
+      environment: options.environment,
+      secretEnvironment: options.secretEnvironment,
+    };
     this.#delegate = new NodeExecutionEnv({ cwd: root });
     this.#sandbox = options.sandbox ?? SandboxManager;
     this.#spawn = options.spawn ?? spawn;
@@ -613,6 +627,18 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     _options?: { maxLines?: number },
     _context?: Context,
   ): Promise<Result<string[], FileError>> {
+    return this.#unsupported();
+  }
+  /**
+   * Pi 0.87's pull-based line reader, which its Node environment builds
+   * `readTextLines` on. The same answer as `readTextLines`: nothing this
+   * runtime hands the scoped environment reads a file line by line, and a
+   * capability nobody uses stays fail-closed rather than quietly delegated.
+   */
+  async openTextLineReader(
+    _path: string,
+    _context?: Context,
+  ): ReturnType<ExecutionEnv["openTextLineReader"]> {
     return this.#unsupported();
   }
   async appendFile(
@@ -937,7 +963,10 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       try {
         child = this.#spawn(descriptor.argv[0]!, descriptor.argv.slice(1), {
           cwd: commandCwd.value,
-          env: scopedEnvironment(descriptor.env),
+          env: sessionCommandEnvironment(
+            scopedEnvironment(descriptor.env),
+            this.#commandEnvironment,
+          ),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],

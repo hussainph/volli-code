@@ -27,6 +27,8 @@
  */
 
 import type {
+  AuthorityReviewObservation,
+  SessionStopDetail,
   AttentionObservation,
   CompactionObservation,
   CompactionProgressObservation,
@@ -44,7 +46,11 @@ import type {
   TranscriptDeltaObservation,
   UsageObservation,
 } from "@volli/shared";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
+  sessionHostNoticeMetadata,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { TranscriptDelta } from "./transcript-overlay";
 
@@ -139,7 +145,11 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
-  | (TranslatedObservationBase & { kind: "turn.interrupted"; turnId: string })
+  | (TranslatedObservationBase & {
+      kind: "turn.interrupted";
+      turnId: string;
+      stopDetail?: SessionStopDetail;
+    })
   /**
    * The executor summarized its context, or tried to and could not.
    *
@@ -192,6 +202,10 @@ export type TranslatedObservation =
       cause: string;
       reason: string;
     })
+  | (TranslatedObservationBase &
+      Omit<AuthorityReviewObservation, "kind"> & {
+        kind: "authority.reviewed";
+      })
   | (TranslatedObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;
@@ -208,17 +222,28 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & {
       kind: "attention.raised";
-      attention: {
-        id: string;
-        kind:
-          | "auth_required"
-          | "configuration_invalid"
-          | "context_limit_reached"
-          | "partial_turn_interrupted"
-          | "adapter_unrecoverable";
-        detail: string | null;
-        diagnostic: SessionNativeDetail | null;
-      };
+      attention:
+        | {
+            id: string;
+            stopDetail?: SessionStopDetail;
+            kind:
+              | "auth_required"
+              | "configuration_invalid"
+              | "context_limit_reached"
+              | "partial_turn_interrupted"
+              | "transport_retrying";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+          }
+        | {
+            id: string;
+            stopDetail?: SessionStopDetail;
+            kind: "adapter_unrecoverable";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+            /** The spent allowance's reset, when the run failed on one that stated it. */
+            resetsAt: number | null;
+          };
     })
   | (TranslatedObservationBase & { kind: "attention.cleared"; attentionId: string });
 
@@ -232,6 +257,7 @@ const ATTENTION_KINDS = {
   context: "context_limit_reached",
   "runtime-failure": "adapter_unrecoverable",
   "partial-turn": "partial_turn_interrupted",
+  transport: "transport_retrying",
 } as const satisfies Record<
   AttentionObservation["reason"],
   Extract<TranslatedObservation, { kind: "attention.raised" }>["attention"]["kind"]
@@ -376,8 +402,20 @@ export class RuntimeObservationTranslator {
         return this.#translateActivity(observation, emit);
       case "authority":
         return this.#translateAuthority(observation, emit);
+      case "authority-review": {
+        const { kind: _kind, ...review } = observation;
+        return emit({
+          ...review,
+          // Durable id derivation: frozen on ship, like authority.denied.
+          id: `${this.#namespace}:authority-review:${this.#attachmentId}:${++this.#sequence}`,
+          kind: "authority.reviewed",
+          occurredAt: this.#now(),
+        });
+      }
       case "attention":
         return emit(this.#attentionObservation(observation));
+      case "approval-used":
+        return emit(this.#approvalUsedObservation(observation));
       case "interaction":
         return emit(this.#interactionObservation(observation));
     }
@@ -426,6 +464,8 @@ export class RuntimeObservationTranslator {
           : [this.#activityObservation(observation)];
       case "attention":
         return [this.#attentionObservation(observation)];
+      case "approval-used":
+        return [this.#approvalUsedObservation(observation)];
       case "interaction":
         return [this.#interactionObservation(observation)];
       case "attachment":
@@ -437,6 +477,7 @@ export class RuntimeObservationTranslator {
       // log. Reconcile therefore never actually offers one — the case exists so
       // this switch stays exhaustive against the type it is honestly wider than.
       case "authority":
+      case "authority-review":
         return [];
     }
   }
@@ -597,7 +638,7 @@ export class RuntimeObservationTranslator {
         op: "part.upsert",
         key: activityPartKey(observation.activityId),
         index: 0,
-        part: activityPart(observation),
+        part: activityPart(observation, this.#attachmentId),
       });
       return;
     }
@@ -623,6 +664,7 @@ export class RuntimeObservationTranslator {
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
       turnId: observation.turnId,
+      ...(observation.stopDetail === undefined ? {} : { stopDetail: observation.stopDetail }),
     };
   }
 
@@ -738,6 +780,32 @@ export class RuntimeObservationTranslator {
     };
   }
 
+  #approvalUsedObservation(
+    observation: Extract<RuntimeObservation, { kind: "approval-used" }>,
+  ): Extract<TranslatedObservation, { kind: "transcript.message" }> {
+    const id = `${this.#namespace}:approval-used:${this.#attachmentId}:${observation.toolCallId}:${observation.approvalId}`;
+    return {
+      id,
+      kind: "transcript.message",
+      occurredAt: observation.occurredAt,
+      threadId: this.#threadId,
+      branchId: this.#branchId,
+      attemptId: `attempt:${id}`,
+      turnId: null,
+      message: {
+        id,
+        role: "user",
+        parts: [{ type: "text", text: `Allowed by your earlier approval: ${observation.summary}` }],
+        metadata: sessionHostNoticeMetadata({
+          kind: "approval-used",
+          approvalId: observation.approvalId,
+          summary: observation.summary,
+          asked: observation.asked,
+        }),
+      },
+    };
+  }
+
   #activityObservation(
     observation: RuntimeActivityObservation,
   ): Extract<TranslatedObservation, { kind: "transcript.message" }> {
@@ -754,7 +822,7 @@ export class RuntimeObservationTranslator {
       message: {
         id: messageId,
         role: "assistant",
-        parts: [activityPart(observation)],
+        parts: [activityPart(observation, this.#attachmentId)],
       },
     };
   }
@@ -782,12 +850,29 @@ export class RuntimeObservationTranslator {
       kind: "attention.raised",
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
-      attention: {
-        id: attentionId,
-        kind: ATTENTION_KINDS[observation.reason],
-        detail: observation.message,
-        diagnostic: null,
-      },
+      // Only a run that failed carries a reset, and a marker written before the
+      // field existed says nothing about one.
+      attention:
+        observation.reason === "runtime-failure"
+          ? {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
+              diagnostic: null,
+              resetsAt: observation.resetsAt ?? null,
+            }
+          : {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
+              diagnostic: null,
+            },
     };
   }
 
@@ -912,12 +997,18 @@ function activityPartKey(activityId: string): string {
   return `activity:${activityId}`;
 }
 
-function activityPart(observation: RuntimeActivityObservation): DynamicToolPart {
+function activityPart(
+  observation: RuntimeActivityObservation,
+  attachmentId: string,
+): DynamicToolPart {
   const base = {
     type: "dynamic-tool" as const,
     toolName: ACTIVITY_TOOL_NAME,
     toolCallId: observation.activityId,
-    toolMetadata: { [ACTIVITY_METADATA_KEY]: observation.descriptor } as ToolMetadata,
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: observation.descriptor,
+      [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: { attachmentId, turnId: observation.turnId },
+    } as ToolMetadata,
   };
   switch (observation.state) {
     case "started":

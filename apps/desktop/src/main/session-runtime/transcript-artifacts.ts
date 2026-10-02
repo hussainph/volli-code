@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
-import { link, lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from "node:fs";
+import { link, lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gunzipSync, gzip } from "node:zlib";
@@ -18,6 +18,30 @@ const LEGACY_ARTIFACT_NAME = /^([a-f0-9]{64})\.json$/;
 const GZIP_MAGIC = Buffer.from([0x1f, 0x8b]);
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
+
+/**
+ * How a stored artifact is opened for reading (CodeQL #23/#24).
+ *
+ * The reads used to `lstat` a path to refuse anything but a regular file and
+ * then `readFile` the same PATH, which resolves it a second time: a symlink
+ * swapped in between the two was followed by a read that had already been told
+ * the path was safe. Now the path is resolved exactly once, by this open, and
+ * every later question — is it a regular file, what are its bytes, which inode
+ * is it — is asked of the descriptor that open returned.
+ *
+ * `O_NOFOLLOW` refuses a symlink AT the path (`ELOOP`), which is what the
+ * `lstat` used to catch. `O_NONBLOCK` keeps a FIFO planted at the path from
+ * parking the open until some writer appears — the `lstat` used to refuse it
+ * before any open happened, and `fstat` can only refuse it once the open has
+ * returned. On a regular file it changes nothing.
+ */
+const STORED_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+
+/** One stored file, read whole through the descriptor whose identity `info` reports. */
+interface StoredFile {
+  stored: Buffer;
+  info: Stats;
+}
 
 /**
  * A content-addressed, append-only store for durable transcript artifacts.
@@ -101,13 +125,13 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     const digest = validateReference(reference);
     const { compressed, legacy } = this.pathsFor(reference.id);
     try {
-      return await this.readAndVerify(compressed, digest, "gzip");
+      return (await this.readAndVerify(compressed, digest, "gzip")).bytes;
     } catch (error) {
       // A present compressed path is authoritative. Corruption must not be
       // hidden by a valid legacy sibling left behind during an interrupted run.
       if (!isMissing(error)) throw error;
     }
-    return this.readAndVerify(legacy, digest, "plain");
+    return (await this.readAndVerify(legacy, digest, "plain")).bytes;
   }
 
   /** Synchronous verified byte seam for the currently-synchronous bundle writer. */
@@ -143,9 +167,9 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     const legacy = join(this.baseDirectory, name);
     const compressed = join(this.baseDirectory, `${match[1]}.json.gz`);
 
-    const before = await lstat(legacy);
-    if (!before.isFile()) throw new Error("Legacy transcript artifact is not a regular file");
-    const bytes = await this.readAndVerify(legacy, digest, "plain");
+    // `before` is the identity of the file whose bytes were just verified, read
+    // from the same descriptor, so nothing can slip between the two.
+    const { bytes, info: before } = await this.readAndVerify(legacy, digest, "plain");
     // Repair is restricted to repack, where the canonical plain sibling has
     // already verified against the digest-shaped name. Ordinary writes keep
     // strict no-replace behavior for every present compressed path.
@@ -154,12 +178,12 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     // publishCompressed performs the one verified compressed read-back that
     // gates deletion. A live store never overwrites a legacy path, but re-check
     // its identity and bytes before unlinking so an external replacement is
-    // kept, not deleted merely because it inherited a digest-shaped name.
-    const after = await lstat(legacy);
+    // kept, not deleted merely because it inherited a digest-shaped name. One
+    // open answers both, so the bytes verified belong to the identity compared.
+    const { info: after } = await this.readAndVerify(legacy, digest, "plain");
     if (!sameFile(before, after)) {
       throw new Error("Legacy transcript artifact changed during repack");
     }
-    await this.verifyStored(legacy, digest, "plain");
     await unlink(legacy);
     await this.syncDirectory();
   }
@@ -204,20 +228,20 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
       handle = await open(temporary, "wx", 0o600);
       await handle.writeFile(packed);
       await handle.sync();
+      // The identity of the inode we wrote, from the descriptor we wrote it
+      // through rather than from the path afterwards.
+      const temporaryInfo = await handle.stat();
       await handle.close();
       handle = undefined;
-      const temporaryInfo = await lstat(temporary);
 
       // link is an atomic no-replace publish. If another writer won the race,
       // its compressed bytes must independently inflate and verify.
       let linked = false;
-      let existingBefore: Awaited<ReturnType<typeof lstat>> | undefined;
       try {
         await link(temporary, destination);
         linked = true;
       } catch (error) {
         if (!isAlreadyExists(error)) throw error;
-        existingBefore = await lstat(destination);
       }
 
       if (linked) {
@@ -247,18 +271,17 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
         return;
       }
 
+      // Read the winner ONCE: the file diagnosed below is the file whose
+      // identity a repair later compares, never a second resolution of the path.
+      // A symlink or non-file there throws from this read and is never repaired.
+      let existingBefore: Stats | undefined;
       try {
-        await this.verifyStored(destination, expectedDigest, "gzip");
+        const existing = await readStoredFile(destination);
+        existingBefore = existing.info;
+        await verifiedBytes(existing.stored, expectedDigest, "gzip");
         return;
       } catch (error) {
-        if (
-          !repairCorruptExisting ||
-          existingBefore === undefined ||
-          !existingBefore.isFile() ||
-          existingBefore.isSymbolicLink()
-        ) {
-          throw error;
-        }
+        if (!repairCorruptExisting || existingBefore === undefined) throw error;
 
         // Repack alone may replace a compressed path proven bad while a plain
         // sibling proved the canonical bytes. Verify the temporary gzip before
@@ -289,15 +312,9 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     path: string,
     expectedDigest: string,
     form: "gzip" | "plain",
-  ): Promise<Buffer> {
-    const info = await lstat(path);
-    if (!info.isFile()) throw new Error("Transcript artifact path is not a regular file");
-    const stored = await readFile(path);
-    const bytes = await decodeStoredBytes(stored, form);
-    if (digestBytes(bytes) !== expectedDigest) {
-      throw new Error("Transcript artifact path contains bytes for another digest");
-    }
-    return bytes;
+  ): Promise<{ bytes: Buffer; info: Stats }> {
+    const { stored, info } = await readStoredFile(path);
+    return { bytes: await verifiedBytes(stored, expectedDigest, form), info };
   }
 
   private async verifyStored(
@@ -430,6 +447,64 @@ function digestBytes(bytes: Uint8Array): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+/**
+ * Opens `path` once ({@link STORED_READ_FLAGS}) and answers everything from that
+ * descriptor. A missing path still throws `ENOENT` untouched, because callers
+ * read "missing" as "try the other form".
+ */
+async function readStoredFile(path: string): Promise<StoredFile> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, STORED_READ_FLAGS);
+  } catch (error) {
+    throw refusedLink(error);
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw notRegularFile();
+    return { stored: await handle.readFile(), info };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** {@link readStoredFile}, for the synchronous bundle seam. */
+function readStoredFileSync(path: string): Buffer {
+  let fd: number;
+  try {
+    fd = openSync(path, STORED_READ_FLAGS);
+  } catch (error) {
+    throw refusedLink(error);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) throw notRegularFile();
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** `O_NOFOLLOW` reports a symlink as `ELOOP`; say what the store means by it. */
+function refusedLink(error: unknown): unknown {
+  return hasCode(error, "ELOOP") ? notRegularFile(error) : error;
+}
+
+function notRegularFile(cause?: unknown): Error {
+  return new Error("Transcript artifact path is not a regular file", { cause });
+}
+
+async function verifiedBytes(
+  stored: Buffer,
+  expectedDigest: string,
+  form: "gzip" | "plain",
+): Promise<Buffer> {
+  const bytes = await decodeStoredBytes(stored, form);
+  if (digestBytes(bytes) !== expectedDigest) {
+    throw new Error("Transcript artifact path contains bytes for another digest");
+  }
+  return bytes;
+}
+
 async function decodeStoredBytes(stored: Buffer, form: "gzip" | "plain"): Promise<Buffer> {
   if (hasGzipMagic(stored)) {
     try {
@@ -443,9 +518,7 @@ async function decodeStoredBytes(stored: Buffer, form: "gzip" | "plain"): Promis
 }
 
 function readAndVerifySync(path: string, expectedDigest: string, form: "gzip" | "plain"): Buffer {
-  const info = lstatSync(path);
-  if (!info.isFile()) throw new Error("Transcript artifact path is not a regular file");
-  const stored = readFileSync(path);
+  const stored = readStoredFileSync(path);
   let bytes: Buffer;
   if (hasGzipMagic(stored)) {
     try {
@@ -478,10 +551,7 @@ function parseArtifact(bytes: Buffer, id: string): SessionTranscriptArtifact {
   return parsed;
 }
 
-function sameFile(
-  left: Awaited<ReturnType<typeof lstat>>,
-  right: Awaited<ReturnType<typeof lstat>>,
-) {
+function sameFile(left: Stats, right: Stats) {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
@@ -495,18 +565,16 @@ function delay(ms: number): Promise<void> {
 }
 
 function isMissing(error: unknown): error is NodeJS.ErrnoException {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return hasCode(error, "ENOENT");
 }
 
 function isAlreadyExists(error: unknown): error is NodeJS.ErrnoException {
+  return hasCode(error, "EEXIST");
+}
+
+function hasCode(error: unknown, code: string): error is NodeJS.ErrnoException {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as NodeJS.ErrnoException).code === "EEXIST"
+    typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === code
   );
 }
 

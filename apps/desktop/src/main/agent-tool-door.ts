@@ -46,6 +46,7 @@ import type {
   AgentModelTier,
   Automation,
   AuthorityPolicy,
+  ModelSelection,
   Project,
   ReasoningLevel,
   RuntimeAskChoice,
@@ -58,15 +59,14 @@ import type {
 } from "@volli/shared";
 
 import { ticketForDisplayId } from "./agent-dispatch/resolution";
-import { awaitTicketTool } from "./agent-await";
-import type { SubscribeTicketWake } from "./agent-await";
-import { awaitSessionTool } from "./agent-session-await";
-import type { SubscribeSessionWake } from "./session-wake";
 import {
-  currentSessionEventCursor,
-  cursorBeforeSessionCommand,
-  cursorBeforeSessionEvents,
-} from "./db/session-events-cursor-repo";
+  retiredSessionAwaitTool,
+  retiredTicketAwaitTool,
+  watchOpenedSession,
+  watchTool,
+} from "./agent-watch";
+import type { WatchToolPorts } from "./agent-watch";
+import type { Watches } from "./watches";
 import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import { DelegateSessionError } from "./session-runtime/delegate-session";
@@ -146,12 +146,15 @@ export interface AgentToolDoorOptions extends Omit<
    * never came up this launch — the same absence the IPC transport reports.
    */
   automations: () => AutomationToolPort | null;
-  /** The caller's project policy, read per call — `ticket.await` judges its wait when it starts. */
+  /** The caller's project policy, read per call: budgets, and what a watch may be woken by. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
-  /** The post-commit wake bus (`ticket-wake.ts`, VC-85 slice C) `ticket.await` parks on. */
-  subscribeTicketWake: SubscribeTicketWake;
-  /** The post-commit Session wake bus (`session-wake.ts`, VC-324 item 3) `session.await` parks on. */
-  subscribeSessionWake: SubscribeSessionWake;
+  /**
+   * The watch registry (VC-457), resolved per call like the Sessions facade:
+   * what `watch`, the retired awaits, and the watches `session_start`,
+   * `automation_run` and `session_send` arm for their caller all write to.
+   * `null` reads as "no structured runtime this launch".
+   */
+  watches: () => Watches | null;
   /**
    * The supervision operations' ports (VC-86), resolved per call like the
    * Sessions facade: the runtime is composed after this door is. `null` reads
@@ -189,6 +192,18 @@ export type VerbBudgetAsk = (
   request: RuntimeAskRequest,
   signal: AbortSignal,
 ) => Promise<RuntimeAskChoice>;
+
+/**
+ * A model selection as a verb result's `details` carry it: a fresh flat
+ * object, never the caller's own, so nothing else rides into the record.
+ */
+function modelDetails(model: ModelSelection): Readonly<Record<string, string>> {
+  return {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    reasoningLevel: model.reasoningLevel,
+  };
+}
 
 /** The wire name the model called this verb by, read off the registry's own projection. */
 function wireToolName(verb: VerbToolKey): string {
@@ -435,7 +450,6 @@ async function startSessionTool(
     );
   }
 
-  const cursorBeforeStart = currentSessionEventCursor(options.db);
   try {
     const started = await startSessionOperation(
       {
@@ -475,14 +489,23 @@ async function startSessionTool(
       override.choice !== undefined && "tier" in override.choice
         ? ` (${override.choice.tier} tier)`
         : "";
-    const cursor = cursorBeforeSessionEvents(options.db, started.sessionId) ?? cursorBeforeStart;
     return {
+      // The same facts as the prose, as data (VC-471), in the shape the
+      // registry's `resultDetails` declares: a Code Mode program reads the
+      // handle here rather than out of the sentence below.
+      details: {
+        sessionId: started.sessionId,
+        handle,
+        ticket: started.ticketDisplayId,
+        title: started.title,
+        model: modelDetails(started.model),
+        state: started.state === "ready" ? "running" : "needs-recovery",
+      },
       text: [
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
-        `Session cursor: ${cursor}. Pass it to session_await to include every event from this dispatch.`,
         started.state === "ready"
-          ? "It is attached and its kickoff turn has been submitted. It runs on its own from here and does not report back into this Session; use `volli session peek` to look in on it."
+          ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
           : "It was created but its attachment needs recovery, so no kickoff was submitted. A person can retry it from the app.",
       ].join("\n"),
     };
@@ -564,7 +587,7 @@ async function stopSessionTool(
  * (VC-324), so this call costs the caller one delivery rather than the whole of
  * someone else's run. `signal` is honoured for what remains: the send is short
  * now, but a turn that stopped waiting must be told so rather than have its
- * tool call orphaned — the same bargain `ticket.await` keeps, worded as a
+ * tool call orphaned — the same bargain `ask_user` keeps, worded as a
  * refusal here because the message may well have landed.
  */
 async function sendSessionTool(
@@ -586,7 +609,6 @@ async function sendSessionTool(
   const message = requiredText(request.input, "message", "the steering text to deliver.");
   if (!message.ok) return refusal(message.text);
   const operationId = `${session.sessionId}:${request.toolCallId}`;
-  const cursorBeforeSend = currentSessionEventCursor(options.db);
   const withdrawn = sendWithdrawal(signal);
   try {
     const outcome = await Promise.race([
@@ -604,8 +626,6 @@ async function sendSessionTool(
         `This turn stopped waiting before Volli could confirm steering into Session ${handle.value}. The message may still have been delivered; \`volli session peek ${handle.value}\` says whether it was.`,
       );
     }
-    const cursor =
-      cursorBeforeSessionCommand(options.db, outcome.sessionId, operationId) ?? cursorBeforeSend;
     return {
       text: [
         `Delivered into Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, marked as coming from this Session.`,
@@ -616,8 +636,12 @@ async function sendSessionTool(
             : outcome.midTurn === false
               ? "The adapter took it as a new prompt, but did not confirm that a turn opened."
               : "The adapter accepted it but did not report whether it opened or joined a turn.",
-        `Session cursor: ${cursor}. Pass it to session_await to include every event from this dispatch.`,
-        "Nothing reports back into this Session; use `volli session peek` to observe the effect.",
+        await watchOpenedSession(
+          watchPorts(options),
+          session,
+          { sessionId: outcome.sessionId, title: outcome.title },
+          "steered",
+        ),
       ].join(" "),
     };
   } catch (error) {
@@ -791,7 +815,13 @@ async function runAutomationTool(
     text: [
       `Started ${JSON.stringify(found.automation.name)} on ${display} as Session ${shortSessionId(outcome.run.sessionId)}.`,
       `Model: ${model.providerId}/${model.modelId} at reasoning ${model.reasoningLevel}.`,
-      "The Run is recorded with the automation Actor, exactly as one a person starts by hand. It opened a fresh Session that runs on its own and does not report back into this one; use `volli session peek` to look in on it.",
+      "The Run is recorded with the automation Actor, exactly as one a person starts by hand. It opened a fresh Session that runs on its own.",
+      await watchOpenedSession(
+        watchPorts(options),
+        session,
+        { sessionId: outcome.run.sessionId, title: null },
+        "started",
+      ),
     ].join("\n"),
   };
 }
@@ -837,7 +867,6 @@ async function delegateSessionTool(
   const override = readModelOverride(request.input);
   if (!override.ok) return refusal(override.text);
   const modelOverride = startSessionModelOverride(override.choice, override.reasoning);
-  const cursorBeforeDelegate = currentSessionEventCursor(options.db);
   try {
     const outcome = await delegations.delegate({
       operationId: `${session.sessionId}:${request.toolCallId}`,
@@ -849,15 +878,21 @@ async function delegateSessionTool(
     });
     return {
       // The row's link and name, structured, so the transcript never has to
-      // parse the prose below.
-      details: { sessionId: outcome.childSessionId, title: outcome.title },
+      // parse the prose below — and the rest of what a program acts on
+      // (VC-471), in the shape the registry's `resultDetails` declares.
+      details: {
+        sessionId: outcome.childSessionId,
+        handle: outcome.handle,
+        title: outcome.title,
+        model: modelDetails(outcome.model),
+        state: outcome.state,
+      },
       text: [
         `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
-        `Session cursor: ${cursorBeforeSessionEvents(options.db, outcome.childSessionId) ?? cursorBeforeDelegate}. Pass it to session_await to include every event from this dispatch.`,
         outcome.state === "running"
-          ? `It is attached and working on the task in this Session's working directory. Keep working while it runs; if this turn must park, use session_await instead of polling. When its first turn completes, a notice marked as Volli's will arrive in this Session naming it, and \`volli session answer ${outcome.handle}\` reads its final message. \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
-          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; no notice will arrive until then.",
+          ? `It is attached and working on the task in this Session's working directory, with no time limit. Keep working, or end your turn: when it finishes, a notice from Volli arrives in this Session carrying its final message, read mid-turn or opening a new turn. Do not poll for it; \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
+          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; its notice arrives when it has run.",
       ].join("\n"),
     };
   } catch (error) {
@@ -898,38 +933,15 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
   "session.start": startSessionTool,
   "session.stop": stopSessionTool,
   "session.send": sendSessionTool,
-  "ticket.await": (options, session, request, signal) =>
-    awaitTicketTool(
-      {
-        db: options.db,
-        projects: options.projects,
-        authorityPolicy: options.authorityPolicy,
-        subscribeTicketWake: options.subscribeTicketWake,
-      },
-      session,
-      request,
-      signal,
-    ),
+  // Retired (VC-457): bound only for Sessions frozen holding it, and it arms
+  // a watch rather than parking the turn.
+  "ticket.await": (options, session, request) =>
+    retiredTicketAwaitTool(watchPorts(options), session, request),
   "automation.run": runAutomationTool,
   "session.delegate": delegateSessionTool,
-  // Appended last, as the registry appends it: declaration order is the frozen
-  // tool order (VC-324 item 3).
-  "session.await": (options, session, request, signal) =>
-    awaitSessionTool(
-      {
-        db: options.db,
-        projects: options.projects,
-        authorityPolicy: options.authorityPolicy,
-        subscribeSessionWake: options.subscribeSessionWake,
-        // The same engine read `session_send` resolves its targets through, so
-        // "a Session in this project" means one thing across the supervision
-        // tools.
-        sessions: () => options.supervise()?.sessionEngine ?? null,
-      },
-      session,
-      request,
-      signal,
-    ),
+  // Retired on the same terms as `ticket.await` (VC-457).
+  "session.await": (options, session, request) =>
+    retiredSessionAwaitTool(watchPorts(options), session, request),
   // The MCP management family (VC-380), appended after everything already
   // frozen. Each reaches `mcp/verbs.ts`, which owns the preview/apply shape,
   // the confirmation and the durable record; this table only binds the ports.
@@ -943,14 +955,32 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
     mcpPreviewTool(mcpPorts(options), session, request, signal),
   "mcp.install": (options, session, request, signal, budgetAsk) =>
     mcpInstallTool(mcpPorts(options), session, request, signal, budgetAsk),
-  "mcp.refresh": (options, session, request, signal) =>
-    mcpRefreshTool(mcpPorts(options), session, request, signal),
+  // Refresh starts a server the project already holds, so it confirms nothing
+  // — but a server that now needs a sign-in asks the person driving through
+  // the same machinery (VC-470).
+  "mcp.refresh": (options, session, request, signal, budgetAsk) =>
+    mcpRefreshTool(mcpPorts(options), session, request, signal, budgetAsk),
   "mcp.enable": (options, session, request) => mcpEnableTool(mcpPorts(options), session, request),
   "mcp.disable": (options, session, request) => mcpDisableTool(mcpPorts(options), session, request),
   "mcp.tools": (options, session, request) => mcpToolsTool(mcpPorts(options), session, request),
   "mcp.remove": (options, session, request, signal, budgetAsk) =>
     mcpRemoveTool(mcpPorts(options), session, request, signal, budgetAsk),
+  // What replaced the awaits (VC-457), appended last as the registry is.
+  watch: (options, session, request) => watchTool(watchPorts(options), session, request),
 };
+
+/** The watch doors' slice of this door's options, narrowed at the binding. */
+function watchPorts(options: AgentToolDoorOptions): WatchToolPorts {
+  return {
+    db: options.db,
+    projects: options.projects,
+    authorityPolicy: options.authorityPolicy,
+    // The same engine read `session_send` resolves its targets through, so
+    // "a Session in this project" means one thing across the supervision tools.
+    sessions: () => options.supervise()?.sessionEngine ?? null,
+    watches: options.watches,
+  };
+}
 
 /** The MCP family's slice of this door's options, narrowed at the binding. */
 function mcpPorts(options: AgentToolDoorOptions): McpVerbOptions {

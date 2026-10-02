@@ -18,7 +18,7 @@
  * structured executor never attaches under someone else's native identity — a
  * later attach is a fresh binding of its own.
  */
-import type { SessionExecutionVenue, SessionObservation } from "@volli/shared";
+import type { SessionExecutionVenue, SessionInteraction, SessionObservation } from "@volli/shared";
 
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
@@ -35,6 +35,10 @@ export interface BootRecoverySession {
   readonly attachments: readonly BootRecoveryAttachment[];
   /** Whether the durable ledger still has a turn open from the prior process. */
   readonly turnActive: boolean;
+  /** Cards parked in the lost process cannot resume their tool call after boot. */
+  readonly interactions?: {
+    readonly active: readonly Pick<SessionInteraction, "id" | "attachmentId" | "approval">[];
+  };
 }
 
 /** The two Session Engine verbs boot recovery is allowed to reach. */
@@ -69,6 +73,32 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
     const sessions = await options.engine.listSessions({ projectId, scope: "all" });
     for (const projection of sessions) {
       for (const attachment of projection.attachments) {
+        // A local process restart cannot recover the promise that parked a
+        // protection card, even if the turn already interrupted or its sidecar
+        // is lost. No approval is granted by retiring the abandoned request.
+        if (attachment.adapterId === STRUCTURED_ADAPTER_ID && attachment.venue.kind === "local") {
+          for (const interaction of projection.interactions?.active ?? []) {
+            if (interaction.attachmentId !== attachment.id || interaction.approval === undefined)
+              continue;
+            try {
+              await options.engine.observe({
+                id: options.newId(),
+                sessionId: projection.session.id,
+                attachmentId: attachment.id,
+                occurredAt: options.now(),
+                provenance: {
+                  source: { kind: "system", id: "desktop-recovery", detail: null },
+                  venue: attachment.venue,
+                },
+                kind: "interaction.cancelled",
+                interactionId: interaction.id,
+                reason: "abandoned",
+              });
+            } catch (error) {
+              options.onError(attachment.id, error);
+            }
+          }
+        }
         if (needsStructuredTurnRecovery(projection, attachment)) {
           try {
             await options.reconcile({
@@ -125,7 +155,11 @@ function raiseCrashRecoveryAttention(
     attachmentId,
     occurredAt: options.now(),
     provenance: {
-      source: { kind: "system", id: "desktop-recovery", detail: null },
+      source: {
+        kind: "system",
+        id: "desktop-recovery",
+        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+      },
       venue: { id: "local", kind: "local" },
     },
     attention: {
@@ -150,7 +184,11 @@ function closeInterrupted(
     attachmentId,
     occurredAt: options.now(),
     provenance: {
-      source: { kind: "system", id: "desktop-recovery", detail: null },
+      source: {
+        kind: "system",
+        id: "desktop-recovery",
+        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+      },
       venue: { id: "local", kind: "local" },
     },
     outcome: "interrupted",

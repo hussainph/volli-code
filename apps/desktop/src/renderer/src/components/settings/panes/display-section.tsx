@@ -20,6 +20,12 @@
  * developer OTLP export — a reader who went there to stop a dollar figure
  * appearing during a screen-share would be turning off an unrelated subsystem
  * and would still see the figure.
+ *
+ * The auto-mode hints row (VC-498) is that kind of preference too, and the
+ * same argument keeps it out of anything authority-shaped: hiding the "Would
+ * block …" notices from the feed changes what is DRAWN, never what is
+ * enforced, so the control lives among the display choices and says nothing
+ * more than its label.
  */
 import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
 
@@ -41,6 +47,8 @@ export function DisplaySection() {
   const setDiffPresentation = useUiStore((store) => store.setDiffPresentation);
   const costVisible = useUiStore((store) => store.costVisible);
   const setCostVisible = useUiStore((store) => store.setCostVisible);
+  const authorityHintsVisible = useUiStore((store) => store.authorityHintsVisible);
+  const setAuthorityHintsVisible = useUiStore((store) => store.setAuthorityHintsVisible);
 
   return (
     <PrefSection title="Display" icon={MonitorIcon}>
@@ -95,6 +103,18 @@ export function DisplaySection() {
         }
       >
         <Switch id="cost-visible" checked={costVisible} onCheckedChange={setCostVisible} />
+      </PrefRow>
+      {/*
+       * Stated as the POSITIVE, like the cost row above. Display-only
+       * (VC-498): enforcement keeps running either way, and that fact lives in
+       * the store's module doc rather than in a paragraph on this page.
+       */}
+      <PrefRow label="Auto mode hints" htmlFor="authority-hints-visible">
+        <Switch
+          id="authority-hints-visible"
+          checked={authorityHintsVisible}
+          onCheckedChange={setAuthorityHintsVisible}
+        />
       </PrefRow>
     </PrefSection>
   );

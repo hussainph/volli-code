@@ -3,6 +3,7 @@ import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
@@ -13,6 +14,7 @@ import {
   useModelAccessClient,
   type ModelAccessClient,
 } from "@renderer/lib/model-access-client";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { UsageLimitsPopover } from "./usage-limits-popover";
 
@@ -52,6 +54,9 @@ let root: Root | null = null;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The pin persists through the real ui store, whose writes go to main.
+  vi.stubGlobal("api", { appState: { set: vi.fn(async () => ({ ok: true }) as const) } });
+  useUiStore.setState({ usagePin: null });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -82,6 +87,8 @@ function client(inspect: ModelAccessClient["inspect"]): ModelAccessClient {
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
     setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
     pickerView: async () => "all",
     setPickerView: async (view) => view,
     beginSignIn: async () => {
@@ -122,25 +129,77 @@ async function renderPopover(inspect: ModelAccessClient["inspect"]): Promise<voi
   });
 }
 
+/**
+ * The trigger's name is now the READING — "Usage limits, 4% left on xAI
+ * Weekly" — so it is found by the stable head the name keeps, which is the
+ * guarantee VC-376 made when it made the name dynamic.
+ */
 function button(label: string): HTMLButtonElement {
-  const found = document.querySelector(`[aria-label="${label}"]`);
+  const found = document.querySelector(`[aria-label^="${label}"]`);
   if (!(found instanceof HTMLButtonElement)) throw new Error(`${label} button not found`);
   return found;
 }
 
 describe("UsageLimitsPopover", () => {
-  it("inspects on open and forces the header's explicit Refresh", async () => {
+  it("inspects on mount, because the trigger draws the reading", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
+    await renderPopover(inspect);
+
+    // Nobody has opened anything. A surface that first asked when opened would
+    // have nothing to draw until someone opened it, which is the click the
+    // icon exists to save.
+    expect(inspect).toHaveBeenNthCalledWith(1, { refresh: false });
+    // 4% left with two days of a week still to run: amber from the amount AND
+    // from pace. The glyph has no room to draw pace, so the name says it.
+    expect(button("Usage limits").getAttribute("aria-label")).toBe(
+      "Usage limits, 4% left on xAI Weekly, ahead of pace",
+    );
+  });
+
+  it("opens on what it already read, and forces the header's explicit Refresh", async () => {
     const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
     await renderPopover(inspect);
 
     await act(async () => button("Usage limits").click());
-    expect(inspect).toHaveBeenNthCalledWith(1, { refresh: false });
     expect(document.body.textContent).toContain("xAI");
     expect(document.body.textContent).toContain("4% left");
+    // Opening costs no request: the answer it would ask for is the one the
+    // mount is already holding for this revision.
+    expect(inspect).toHaveBeenCalledTimes(1);
 
     await act(async () => button("Refresh usage limits").click());
     expect(inspect).toHaveBeenNthCalledWith(2, { refresh: true });
     expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads when the window is focused, but only once the hold has lapsed", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true });
+    try {
+      await renderPopover(inspect);
+      expect(inspect).toHaveBeenCalledTimes(1);
+
+      // Alt-tabbing back seconds later is not worth a sweep of credential
+      // reads: the providers would answer from their own hold anyway.
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(inspect).toHaveBeenCalledTimes(1);
+
+      // Once the runtime would answer freshly, coming back is the one moment
+      // worth spending a request on — and it skips the renderer's held answer,
+      // which is the only way new numbers can arrive at all.
+      vi.setSystemTime(NOW + 5 * 60_000);
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(inspect).toHaveBeenNthCalledWith(2, { refresh: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says so in the trigger's name when there is nothing to report", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockRejectedValue(new Error("no answer"));
+    await renderPopover(inspect);
+
+    expect(button("Usage limits").getAttribute("aria-label")).toBe("Usage limits, not read");
   });
 
   it("drops a superseded open's late answer instead of overwriting the next open", async () => {
@@ -180,5 +239,67 @@ describe("UsageLimitsPopover", () => {
       await second;
     });
     expect(document.body.textContent).toContain("xAI");
+  });
+
+  it("pins a window from its row, and the glyph reports it until unpinned", async () => {
+    const anthropic: ModelAccessSnapshot["providers"][number] = {
+      ...SNAPSHOT.providers[0]!,
+      id: "anthropic",
+      label: "Anthropic",
+      usageLimits: {
+        checkedAt: NOW,
+        windows: [
+          {
+            id: "five_hour",
+            kind: "session",
+            label: "Session",
+            usedPercent: 37,
+            resetsAt: "2026-03-01T14:13:00.000Z",
+            windowDurationMins: 300,
+          },
+          {
+            id: "seven_day",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 4,
+            resetsAt: "2026-03-07T12:00:00.000Z",
+            windowDurationMins: 10_080,
+          },
+        ],
+      },
+    };
+    const inspect = vi
+      .fn<ModelAccessClient["inspect"]>()
+      .mockResolvedValue({ ...SNAPSHOT, providers: [...SNAPSHOT.providers, anthropic] });
+    await renderPopover(inspect);
+    // Unpinned, xAI is nearer to running out and owns the glyph.
+    expect(button("Usage limits").getAttribute("aria-label")).toMatch(
+      /^Usage limits, 4% left on xAI/,
+    );
+
+    await act(async () => button("Usage limits").click());
+    const trigger = [...document.querySelectorAll("button")].find((node) =>
+      node.textContent?.startsWith("Anthropic"),
+    );
+    await act(async () => trigger?.click());
+    await act(async () => button("Pin Session to the window bar").click());
+
+    expect(useUiStore.getState().usagePin).toEqual({
+      providerId: "anthropic",
+      windowIds: ["five_hour"],
+    });
+    expect(button("Usage limits").getAttribute("aria-label")).toBe(
+      "Usage limits, 63% left on Anthropic Session, pinned, 1 more metered",
+    );
+    expect(button("Unpin Session from the window bar").getAttribute("aria-pressed")).toBe("true");
+    // The collapsed row says which account holds the pin.
+    expect(document.querySelector('[aria-label="Pinned to the window bar"]')).not.toBeNull();
+
+    await act(async () => button("Unpin Session from the window bar").click());
+    expect(useUiStore.getState().usagePin).toBeNull();
+    expect(button("Usage limits").getAttribute("aria-label")).toMatch(
+      /^Usage limits, 4% left on xAI/,
+    );
+    expect(document.querySelector('[aria-label="Pinned to the window bar"]')).toBeNull();
   });
 });

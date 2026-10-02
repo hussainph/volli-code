@@ -111,6 +111,7 @@ function chatSession(
       overrides.role ??
       ((overrides.bornTicketless ?? overrides.ticketId === null) ? "project" : "ticket"),
     parentSessionId: overrides.parentSessionId ?? null,
+    model: overrides.model ?? null,
   };
 }
 
@@ -594,7 +595,11 @@ describe("buildActiveSessionListing — the Active band", () => {
 });
 
 describe("buildActiveSessionListing — who started each Session", () => {
-  const RUN = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const RUN = {
+    kind: "automation",
+    automationRunId: null,
+    automationName: "Nightly sweep",
+  } as const;
   const NOW = 100_000;
 
   /** One live chat and one long-quiet one, so both bands are populated at once. */
@@ -2980,5 +2985,146 @@ describe("buildActiveSessionListing — the harness a row is running", () => {
       now: 100_000 + ACTIVE_QUIET_WINDOW_MS,
     });
     expect(quiet.previous.map((row) => row.harnessId)).toEqual([null]);
+  });
+});
+
+/**
+ * VC-30 × VC-108: unread is its own axis, and what it does to the bands.
+ *
+ * An unread Session is not done with you, so the clock cannot retire it: it
+ * stays in Active past the quiet window, a Previous one comes back, cleanup
+ * never reaches it, and no boundary is named for it — its membership changes
+ * when somebody reads it, not when time passes. The set is optional and its
+ * absence is the resting case, which the first two cases below pin.
+ */
+describe("buildActiveSessionListing — unread membership", () => {
+  const NOW = 10_000_000;
+  const LONG_AGO = NOW - ACTIVE_QUIET_WINDOW_MS - 60_000;
+
+  const listing = (input: Partial<Parameters<typeof buildActiveSessionListing>[0]> = {}) =>
+    buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: NOW,
+      ...input,
+    });
+
+  /** A band with something in each half, to compare whole results against. */
+  const mixed = (input: Partial<Parameters<typeof buildActiveSessionListing>[0]> = {}) =>
+    listing({
+      containers: { t1: container("s1", [paneTab("s1", "Live pane")]) },
+      lastOutputAt: { s1: NOW - 1_000 },
+      records: [record({ id: "s-ended", ticketId: "t1", endedAt: NOW - 120_000 })],
+      chatSessions: [
+        chatSession({ ticketId: "t1", sessionId: "chat-1", title: "Recent", lastActivityAt: NOW }),
+        chatSession({
+          ticketId: "t1",
+          sessionId: "chat-2",
+          title: "Quiet",
+          live: false,
+          lastActivityAt: LONG_AGO,
+        }),
+      ],
+      ...input,
+    });
+
+  it("reproduces today's answer when no set is given", () => {
+    expect(mixed()).toEqual(mixed({ unreadSessionIds: new Set() }));
+  });
+
+  it("ignores a receipt for a Session this band does not hold", () => {
+    expect(mixed({ unreadSessionIds: new Set(["chat-elsewhere"]) })).toEqual(mixed());
+  });
+
+  it("keeps an unread chat in Active past the quiet window, and lets it go once read", () => {
+    const quiet = chatSession({
+      ticketId: "t1",
+      sessionId: "chat-1",
+      title: "Finished while you were away",
+      live: false,
+      lastActivityAt: LONG_AGO,
+    });
+
+    const read = listing({ chatSessions: [quiet] });
+    expect(titles(read.active)).toEqual([]);
+    expect(titles(read.previous)).toEqual(["Finished while you were away"]);
+
+    // The same build, the same clock: the only difference is the receipt, and
+    // the Previous row comes back to Active for it.
+    const unread = listing({ chatSessions: [quiet], unreadSessionIds: new Set(["chat-1"]) });
+    expect(titles(unread.active)).toEqual(["Finished while you were away"]);
+    expect(unread.previous).toEqual([]);
+  });
+
+  it("leaves a working unread row in the working group, above a quiet unread one", () => {
+    const result = listing({
+      chatSessions: [
+        chatSession({
+          ticketId: "t1",
+          sessionId: "chat-quiet",
+          title: "Quiet and unread",
+          live: false,
+          lastActivityAt: LONG_AGO,
+        }),
+        chatSession({
+          ticketId: "t1",
+          sessionId: "chat-busy",
+          title: "Working and unread",
+          activity: "working",
+          lastActivityAt: NOW - 1_000,
+        }),
+      ],
+      unreadSessionIds: new Set(["chat-quiet", "chat-busy"]),
+    });
+
+    expect(titles(result.active)).toEqual(["Working and unread", "Quiet and unread"]);
+  });
+
+  it("never cleans an unread Session away", () => {
+    // A terminal whose ticket has left the board: rule (a), the one cleanup
+    // that fires however fresh the Session is.
+    const orphan = record({
+      id: "s-orphan",
+      ticketId: "t-archived",
+      bornTicketless: false,
+      endedAt: NOW - 120_000,
+    });
+
+    expect(listing({ records: [orphan] }).previous).toEqual([]);
+
+    const kept = listing({ records: [orphan], unreadSessionIds: new Set(["s-orphan"]) });
+    expect(kept.previous.map((row) => ({ id: row.id, cleaned: row.cleaned }))).toEqual([
+      { id: "session:s-orphan", cleaned: false },
+    ]);
+  });
+
+  it("names no boundary for an unread row in either band", () => {
+    const quiet = chatSession({
+      ticketId: "t1",
+      sessionId: "chat-1",
+      title: "Quiet",
+      live: false,
+      lastActivityAt: NOW - 60_000,
+    });
+    const ended = record({ id: "s-ended", ticketId: "t1", endedAt: NOW - 120_000 });
+
+    // Read, both halves have an instant the answer changes on its own: the
+    // Active row ages out, and the Previous row eventually ages away.
+    const read = listing({ chatSessions: [quiet], records: [ended] });
+    expect(read.nextBoundaryAt).toBe(NOW - 60_000 + ACTIVE_QUIET_WINDOW_MS);
+
+    const unread = listing({
+      chatSessions: [quiet],
+      records: [ended],
+      unreadSessionIds: new Set(["chat-1", "s-ended"]),
+    });
+    expect(unread.active).toHaveLength(1);
+    expect(unread.previous).toHaveLength(1);
+    expect(unread.nextBoundaryAt).toBeNull();
   });
 });

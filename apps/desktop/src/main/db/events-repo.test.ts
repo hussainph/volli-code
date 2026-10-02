@@ -1,3 +1,4 @@
+import { projectSession, type Session } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   currentTicketEventCursor,
@@ -7,6 +8,7 @@ import {
   listTicketEvents,
   listTicketStatusEntries,
   recordSessionStartedOnce,
+  recordSessionResumedOnce,
   recordTicketEvent,
 } from "./events-repo";
 import { insertProject } from "./projects-repo";
@@ -510,5 +512,57 @@ describe("recordSessionStartedOnce", () => {
       { kind: "session_started", sessionId: "session-1" },
       { kind: "session_started", sessionId: "session-2" },
     ]);
+  });
+});
+
+describe("recordSessionResumedOnce", () => {
+  it("records every Ticket resume once even when folds coalesce past another turn", () => {
+    const { ticketId } = setup();
+    const session: Session = {
+      id: "s",
+      projectId: "p",
+      ticketId,
+      role: "ticket",
+      parentSessionId: null,
+      title: null,
+      createdAt: 0,
+    };
+    const projection = {
+      ...projectSession(session, []),
+      latestTurnId: "t4",
+      resumedAfterStop: false,
+      resumptions: [
+        { attachmentId: "a1", startedAt: 10, origin: { kind: "user" } as const },
+        {
+          attachmentId: "a2",
+          startedAt: 20,
+          origin: { kind: "session", sessionId: "parent" } as const,
+        },
+        { attachmentId: "a3", startedAt: 30, origin: null },
+      ],
+    };
+    expect(recordSessionResumedOnce(ctx.db, projection)).toBe(true);
+    expect(recordSessionResumedOnce(ctx.db, structuredClone(projection))).toBe(false);
+    expect(listTicketEvents(ctx.db, ticketId)[0]).toMatchObject({
+      actor: "user",
+      createdAt: 10,
+      payload: {
+        kind: "session_resumed",
+        sessionId: "s",
+        attachmentId: "a1",
+        origin: { kind: "user" },
+      },
+    });
+    expect(
+      recordSessionResumedOnce(ctx.db, { ...projection, session: { ...session, ticketId: null } }),
+    ).toBe(false);
+    expect(
+      recordSessionResumedOnce(ctx.db, {
+        ...projection,
+        session: { ...session, id: "child", role: "subagent", parentSessionId: "parent" },
+      }),
+    ).toBe(true);
+    expect(recordSessionResumedOnce(ctx.db, { ...projection, resumptions: [] })).toBe(false);
+    expect(listTicketEvents(ctx.db, ticketId)).toHaveLength(6);
   });
 });

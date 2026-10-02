@@ -112,20 +112,13 @@ const TERMINAL_END = "/* GENERATED TERMINAL FALLBACK TOKENS — END */";
  */
 const NOTES = {
   "--primary":
-    "The accent, derived from the canvas's primary stop on the SAME vibrancy\n" +
-    "   curve the gradient rides — a near-neutral wash still yields near-neutral\n" +
-    "   chrome — but with neither the per-mode gain nor the per-mode cap, which\n" +
-    "   exist to stop a backdrop fighting the ink and have no business holding\n" +
-    "   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly\n" +
-    "   (ember #e8652a for the shipped canvas); the default ships at 0.6, which\n" +
-    "   is why this is a quieter ember rather than the brand hex itself. It is\n" +
-    "   the same hex in BOTH blocks: the accent carries no mode, so a light/dark\n" +
-    "   flip repaints every surface and leaves it exactly where it is.",
-  "--primary-text":
-    "The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.\n" +
-    "   `--primary` is below the floor as copy and cannot simply be brightened —\n" +
-    "   its lightness is what makes it work as a fill. Fills and icons take\n" +
-    "   `--primary`; anything you read takes this.",
+    "The canvas accent fill and label solved together for APCA Lc 60 AND\n" +
+    "   WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields\n" +
+    "   to legibility. The pair is shared by both appearances.",
+  "--primary-text": "The accent solved to APCA Lc 60 on the card for body-sized accent text.",
+  "--ring":
+    "Opaque surface-legible accent ink, re-solved in each appearance. Do not\n" +
+    "   dilute focus indicators: the shipped control surfaces require 3:1.",
   "--destructive":
     "The hue-locked family: green/amber/blue/red mean working, waiting, moved\n" +
     "   and gone by convention, so their HUE never follows the canvas — a red\n" +

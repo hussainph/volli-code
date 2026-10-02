@@ -29,6 +29,7 @@
  * the operand is dropped.
  */
 
+import { lstatSync } from "node:fs";
 import type {
   CodingToolId,
   PolicyCommand,
@@ -85,6 +86,26 @@ export function resolveWorkspaceRoot(workspacePath: string): string {
     throw new Error(`The Session workspace ${workspacePath} has no resolvable real path.`);
   }
   return resolved;
+}
+
+/**
+ * A directory the Session may read outside its workspace, as the rules must
+ * compare against it, or `undefined` while it cannot be one (VC-469).
+ *
+ * Only a real directory qualifies. The root is a grant, and resolving a symlink
+ * in its place would hand the grant to wherever the link points — a link any
+ * process able to write beside the sidecar could plant. A directory that does
+ * not exist yet grants nothing, which costs nothing: nothing has been saved in
+ * it to read.
+ */
+export function resolveReadableRoot(directory: string): string | undefined {
+  try {
+    const entry = lstatSync(directory);
+    if (!entry.isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return resolvePathForPolicy(directory);
 }
 
 export function normalizeToolCall(input: {
@@ -314,11 +335,67 @@ function policySegments(
   const segments: PolicyCommandSegment[] = [];
   for (const lexed of lexCommandLine(commandLine)) {
     const invocation = unwrapPrefixes(splitProgram(lexed.words), 0);
-    segments.push(policySegment(invocation, lexed, workspacePath));
+    segments.push(policySegment(resolveGitPaths(invocation, workspacePath), lexed, workspacePath));
     const script = nestedScript(invocation);
     if (script !== undefined) segments.push(...policySegments(script, workspacePath, depth + 1));
   }
   return segments;
+}
+
+/** Original text for each normalized stage, including wrappers, quoting and redirects. */
+export function describeCommandStages(commandLine: string): string[] {
+  return lexCommandLine(commandLine).flatMap((lexed) => {
+    const script = nestedScript(unwrapPrefixes(splitProgram(lexed.words), 0));
+    return [lexed.text].concat(script === undefined ? [] : describeCommandStages(script));
+  });
+}
+
+/**
+ * Bind git's path options to the filesystem on every call. The raw command
+ * remains untouched for display/exact identity; resolved args make equals-form
+ * flags as symlink-sensitive as spaced ones. Repeated -C is sequential, while
+ * the other paths are interpreted by git after all directory changes.
+ */
+function resolveGitPaths(invocation: Invocation, workspacePath: string): Invocation {
+  if (programName(invocation.program) !== "git") return invocation;
+  const args = [...invocation.args];
+  const options: { index: number; flag: string; value: string; equals: boolean }[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const separator = arg.indexOf("=");
+    const flag = separator === -1 ? arg : arg.slice(0, separator);
+    if (GIT_PATH_FLAGS.has(flag)) {
+      const equals = separator !== -1;
+      const value = equals ? arg.slice(separator + 1) : args[index + 1];
+      // Bare --exec-path is a read-only query, unlike the tree options.
+      if (value === undefined && flag === "--exec-path") continue;
+      if (value === undefined) throw new Error(`Git ${flag} names no path.`);
+      options.push({ index, flag, value, equals });
+      if (!equals) index += 1;
+    } else if (["-c", "--namespace", "--config-env"].includes(arg)) index += 1;
+    else if (!arg.startsWith("-")) break;
+  }
+  const resolve = (value: string, cwd: string): string => {
+    const operand = shellPathTokenToPath(value, cwd);
+    if (operand.kind === "unresolvable") throw new Error(operand.reason);
+    if (operand.kind === "no-location") throw new Error(`Git path "${value}" names no path.`);
+    return realPath(operand.path, value);
+  };
+  const store = (option: (typeof options)[number], path: string) => {
+    args[option.equals ? option.index : option.index + 1] = option.equals
+      ? `${option.flag}=${path}`
+      : path;
+  };
+  let cwd = workspacePath;
+  for (const option of options) {
+    if (option.flag !== "-C") continue;
+    cwd = resolve(option.value, cwd);
+    store(option, cwd);
+  }
+  for (const option of options) {
+    if (option.flag !== "-C") store(option, resolve(option.value, cwd));
+  }
+  return { ...invocation, args };
 }
 
 /** git's flags whose value is a tree, and the only git operands a rule resolves. */

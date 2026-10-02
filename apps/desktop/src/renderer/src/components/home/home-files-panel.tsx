@@ -5,13 +5,25 @@ import { useDirectoryWatch } from "@renderer/hooks/use-directory-watch";
 import { useProjectRootsReady } from "@renderer/hooks/use-project-roots-sync";
 import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
 import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
+import { FilesNavigatorHeader } from "@renderer/components/files/navigator-header";
+import {
+  navigatorScopeKey,
+  useRememberedNavigatorView,
+} from "@renderer/components/files/navigator-scope-state";
 import {
   NewFileRailAction,
-  RailFaultBanner,
-  RailNavigatorHeader,
+  RAIL_PANEL_MARGIN,
+  RailHeadingReadStatus,
   RailPanelSkeleton,
+  RailReadFaultBody,
   railNavigatorMatch,
 } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  railReadCanClaimEmpty,
+  railReadFeedback,
+  type RailReadState,
+} from "@renderer/components/ticket/rail-read-feedback";
+import { cn } from "@renderer/lib/utils";
 import { TicketFilesList } from "@renderer/components/ticket/ticket-files-panel";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -34,6 +46,8 @@ export function HomeFilesList({
   cwd,
   entries,
   controls,
+  canClaimEmpty,
+  emptyLabel,
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
@@ -43,6 +57,9 @@ export function HomeFilesList({
   entries: readonly DirEntry[];
   /** The create/rename/duplicate/delete controller (VC-191); absent in fixtures. */
   controls?: FileNavigatorControls;
+  /** Whether a read has landed — see {@link TicketFilesList}. */
+  canClaimEmpty?: boolean;
+  emptyLabel?: string;
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
   onOpenDirectory(relPath: string): void;
@@ -56,6 +73,8 @@ export function HomeFilesList({
         kind: entry.kind === "dir" ? "directory" : "file",
       }))}
       controls={controls}
+      canClaimEmpty={canClaimEmpty}
+      emptyLabel={emptyLabel}
       onPreviewFile={onPreviewFile}
       onPinFile={onPinFile}
       onOpenDirectory={onOpenDirectory}
@@ -72,7 +91,23 @@ export function HomeFilesList({
  * live through the non-recursive dir-watch seam in
  * `hooks/use-directory-watch.ts` — one level at a time, never a subtree.
  */
-export function HomeFilesPanel({
+export function HomeFilesPanel(props: {
+  project: Project;
+  onPreviewFile(relPath: string): void;
+  onPinFile(relPath: string): void;
+}) {
+  // THE PROJECT IS THE IDENTITY, spent as a `key` so switching projects is one
+  // SYNCHRONOUS swap. `HomeRail` is mounted once and handed the new project
+  // (`home-surface.tsx`), so clearing the rows in an effect left one frame where
+  // the previous checkout's listing, its read state and its fault stood under
+  // the new project's name and its New-file action. A new key is a new instance:
+  // its state starts empty in the same commit, and the old instance's teardown
+  // — the request counter and the directory watch — runs there, so neither a
+  // late listing nor a live watcher can reach the project that replaced it.
+  return <HomeFilesScope key={props.project.id} {...props} />;
+}
+
+function HomeFilesScope({
   project,
   onPreviewFile,
   onPinFile,
@@ -81,12 +116,28 @@ export function HomeFilesPanel({
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
 }) {
-  const [cwd, setCwd] = React.useState("");
+  // The folder, the filter and its words, remembered per project for this run
+  // of the app (`files/navigator-scope-state.ts`) — the rail unmounts this page
+  // on a tab switch, and walking back to the repository root every time was
+  // the audit's low-priority finding against it.
+  const [view, setView] = useRememberedNavigatorView(
+    navigatorScopeKey("files", { projectId: project.id }),
+  );
+  const { cwd, filtering, query } = view;
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
+  const rememberCwd = React.useCallback(
+    (next: string) => setView({ ...viewRef.current, cwd: next }),
+    [setView],
+  );
+
   const [entries, setEntries] = React.useState<DirEntry[]>([]);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loaded, setLoaded] = React.useState(false);
-  const [filtering, setFiltering] = React.useState(false);
-  const [query, setQuery] = React.useState("");
+  const [detail, setDetail] = React.useState<string | null>(null);
+  const [read, setRead] = React.useState<RailReadState>({
+    hasData: false,
+    pending: true,
+    failed: false,
+  });
   // `volli:list-directory` answers only for a path main already knows as a
   // project root, and child effects run before their parent's — so AppShell's
   // own mirror would land AFTER this panel's first listing. The shared hook is
@@ -97,45 +148,49 @@ export function HomeFilesPanel({
   const requestId = React.useRef(0);
 
   const loadDir = React.useCallback(
-    async (nextCwd: string, showLoading = false) => {
+    async (nextCwd: string) => {
       const request = ++requestId.current;
-      if (showLoading) setLoaded(false);
+      setRead((prev) => ({ ...prev, pending: true }));
       try {
         const result = await window.api.fs.listDirectory(absoluteDirectory(project.path, nextCwd));
         if (request !== requestId.current) return;
         if (!result.ok) {
-          setError(result.error);
-          setLoaded(true);
+          setDetail(result.error);
+          // Last-good rows stay; the heading carries the caveat.
+          setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
           return;
         }
-        setError(null);
+        setDetail(null);
         setEntries(result.entries);
-        setCwd(nextCwd);
-        setLoaded(true);
+        setRead({ hasData: true, pending: false, failed: false });
+        rememberCwd(nextCwd);
       } catch (readError) {
         if (request !== requestId.current) return;
-        setError(errorMessage(readError));
-        setLoaded(true);
+        setDetail(errorMessage(readError));
+        setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
       }
     },
-    [project.path],
+    [project.path, rememberCwd],
   );
 
   React.useEffect(() => {
     if (!rootsReady) return;
     requestId.current += 1;
-    setCwd("");
     setEntries([]);
-    setError(null);
-    setLoaded(false);
-    void loadDir("", true);
+    setDetail(null);
+    setRead({ hasData: false, pending: true, failed: false });
+    // Whatever folder THIS project's navigator was left at — read through the
+    // ref so a filter keystroke cannot re-trigger the listing.
+    void loadDir(viewRef.current.cwd);
 
     return () => {
       requestId.current += 1;
     };
-  }, [project.id, loadDir, rootsReady]);
+  }, [loadDir, rootsReady]);
 
-  useDirectoryWatch(project.id, loaded ? cwd : null, () => {
+  // The watch lives and dies with this panel — the remembered folder above is
+  // plain data and keeps nothing alive once the page unmounts.
+  useDirectoryWatch(project.id, read.hasData ? cwd : null, () => {
     void loadDir(cwd);
   });
 
@@ -162,53 +217,60 @@ export function HomeFilesPanel({
 
   function navigateUp() {
     const slash = cwd.lastIndexOf("/");
-    void loadDir(slash === -1 ? "" : cwd.slice(0, slash), true);
+    void loadDir(slash === -1 ? "" : cwd.slice(0, slash));
   }
+
+  const feedback = railReadFeedback(read, "Files");
 
   return (
     <div data-testid="home-files-panel" className="flex min-h-0 flex-1 flex-col">
-      {/* The mono sub-line names the project at the top level — the Main
-          checkout is what Home's navigator is rooted in, the way the ticket's
-          names its branch. */}
-      <RailNavigatorHeader
-        title="Project files"
+      {/* The same one line the ticket navigator draws, minus the paperclip:
+          attachments belong to a Ticket, and this scope has none. */}
+      <FilesNavigatorHeader
+        status={
+          <RailHeadingReadStatus
+            word
+            feedback={feedback}
+            onRetry={() => void loadDir(cwd)}
+            testId="home-files-read-status"
+          />
+        }
+        actions={<NewFileRailAction onNewFile={() => controls.startDraft("file")} />}
         root={project.name}
         cwd={cwd}
         upTestId="home-files-up"
         filtering={filtering}
         query={query}
         onToggleFilter={() =>
-          setFiltering((open) => {
-            if (open) setQuery("");
-            return !open;
-          })
+          setView({ ...view, filtering: !filtering, query: filtering ? "" : query })
         }
-        onQueryChange={setQuery}
+        onQueryChange={(next) => setView({ ...view, query: next })}
         onNavigateUp={navigateUp}
-        actions={<NewFileRailAction onNewFile={() => controls.startDraft("file")} />}
       />
 
-      {error !== null ? (
-        <RailFaultBanner
-          testId="home-files-error"
-          label="Folder unreadable"
-          error={error}
-          onRetry={() => void loadDir(cwd, true)}
-        />
-      ) : null}
-
-      {!loaded ? (
+      {feedback?.place === "body" && feedback.kind === "reading" ? (
         <RailPanelSkeleton label="files" testId="home-files-loading" />
       ) : (
-        <HomeFilesList
-          projectId={project.id}
-          cwd={cwd}
-          entries={visibleEntries}
-          controls={controls}
-          onPreviewFile={onPreviewFile}
-          onPinFile={onPinFile}
-          onOpenDirectory={(relPath) => void loadDir(relPath, true)}
-        />
+        <>
+          <RailReadFaultBody
+            feedback={feedback}
+            detail={detail}
+            onRetry={() => void loadDir(cwd)}
+            testId="home-files-error"
+            className={cn("mb-2 shrink-0", RAIL_PANEL_MARGIN)}
+          />
+          <HomeFilesList
+            projectId={project.id}
+            cwd={cwd}
+            entries={visibleEntries}
+            controls={controls}
+            canClaimEmpty={railReadCanClaimEmpty(read)}
+            emptyLabel={query.trim() === "" ? "Nothing here yet" : "No matches"}
+            onPreviewFile={onPreviewFile}
+            onPinFile={onPinFile}
+            onOpenDirectory={(relPath) => void loadDir(relPath)}
+          />
+        </>
       )}
     </div>
   );

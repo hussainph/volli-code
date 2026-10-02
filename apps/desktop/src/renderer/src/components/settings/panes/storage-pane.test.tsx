@@ -12,6 +12,7 @@ import type {
   WorktreeTrimSweepReport,
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
 
 const INVENTORY: PiSessionOrphanInventory = {
@@ -28,6 +29,7 @@ const INVENTORY: PiSessionOrphanInventory = {
   candidateCount: 1,
   candidateBytes: 1_024,
   skipped: [],
+  toolOutput: { files: 3, bytes: 3 * 1_024 * 1_024, limitBytes: 1_024 * 1_024 * 1_024 },
 };
 
 /** One worktree carrying artifacts and one that is off limits — the two rows the table has. */
@@ -177,6 +179,15 @@ function buttonNamed(name: string): HTMLButtonElement {
   return button;
 }
 
+/** The text of the row that reports saved tool output. */
+function savedOutputRow(): string {
+  return (
+    [...document.querySelectorAll("*")].find((node) =>
+      node.textContent?.startsWith("Saved tool output"),
+    )?.textContent ?? ""
+  );
+}
+
 describe("Settings → Storage Pi session logs", () => {
   it("keeps cleanup disabled until scan, confirms exact paths, and returns the revision", async () => {
     const main = bridge();
@@ -195,6 +206,17 @@ describe("Settings → Storage Pi session logs", () => {
       scanRevision: INVENTORY.revision,
       itemIds: [INVENTORY.candidates[0]!.itemId],
     });
+  });
+
+  it("shows how much tool output is saved, against its bound, once scanned (VC-469)", async () => {
+    bridge();
+    await open();
+
+    expect(savedOutputRow()).toContain("Not scanned");
+    await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
+    expect(savedOutputRow()).toContain(
+      `${formatFileSize(3 * 1_024 * 1_024)} of ${formatFileSize(1_024 ** 3)}`,
+    );
   });
 
   it("renders scan failure with an in-place retry", async () => {

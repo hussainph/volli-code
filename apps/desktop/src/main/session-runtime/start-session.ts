@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 /**
  * Starting a Ticket Session, as one application act with two doors (VC-162).
  *
@@ -42,7 +43,12 @@
  */
 
 import type Database from "better-sqlite3";
-import { displayTicketId, errorMessage, shortSessionId } from "@volli/shared";
+import {
+  displayTicketId,
+  errorMessage,
+  sessionOriginFromActor,
+  shortSessionId,
+} from "@volli/shared";
 import type {
   AgentModelTier,
   ModelSelection,
@@ -87,6 +93,7 @@ export interface StartSessionPorts {
     text: string;
     commandId: string;
     messageId: string;
+    origin?: SessionOrigin;
   }) => Promise<void>;
   refineAutoTitle?: (input: AutoTitleRequest) => void;
   onMutation?: (input: { ticketId: string; projectId: string; kind: "session" }) => void;
@@ -113,6 +120,7 @@ export interface StartSessionInput {
   delegation?: TicketSessionDelegation | undefined;
   /** Derived by the door from what it can honestly know. Never self-declared. */
   actor: TicketEventActor;
+  origin?: SessionOrigin;
 }
 
 export interface StartSessionResult {
@@ -156,7 +164,12 @@ export async function startSessionOperation(
     role: "ticket",
     title,
     actor: input.actor,
+    origin: startOrigin(input),
     ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
+    // The caller's own message is the request an automatic model choice reads
+    // (VC-432); the stock kickoff says nothing about the work, so it offers
+    // none. Ignored whenever the caller named a model, tier or level.
+    ...(typeof input.message === "string" ? { autoSelect: { request: input.message } } : {}),
     ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
   });
   // The kickoff rides only a ready attach — a Session that needs recovery holds
@@ -167,7 +180,12 @@ export async function startSessionOperation(
     const ids = kickoffIds(input.operationId);
     void Promise.resolve()
       .then(() =>
-        ports.submitSessionMessage?.({ sessionId: started.sessionId, text: kickoff, ...ids }),
+        ports.submitSessionMessage?.({
+          sessionId: started.sessionId,
+          text: kickoff,
+          origin: startOrigin(input),
+          ...ids,
+        }),
       )
       .catch((error: unknown) => {
         // The short handle and the bare message, exactly as the socket door
@@ -231,4 +249,8 @@ export function startSessionModelOverride(
   const level = reasoning === undefined ? {} : { reasoningLevel: reasoning };
   if (choice === undefined) return level;
   return "tier" in choice ? { tier: choice.tier, ...level } : { model: choice.model, ...level };
+}
+
+function startOrigin(input: StartSessionInput): SessionOrigin | undefined {
+  return input.origin ?? sessionOriginFromActor(input.actor);
 }

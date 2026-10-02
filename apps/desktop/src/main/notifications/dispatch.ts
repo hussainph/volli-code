@@ -73,6 +73,7 @@ export interface NotificationProducerTargets {
   "run-attention": SessionNotificationTarget;
   "session-watchdog": SessionNotificationTarget;
   "harness-input-needed": SessionNotificationTarget;
+  "scheduled-resume-skipped": SessionNotificationTarget;
   "pull-request-merged": TicketNotificationTarget;
   "worktree-reclaimed": TicketNotificationTarget;
   // No target: one reap can take processes from several Tickets at once, and

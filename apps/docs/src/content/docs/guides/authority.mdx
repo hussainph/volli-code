@@ -1,0 +1,68 @@
+---
+title: Protection
+description: Turn on project Protection, approve actions when asked, and manage remembered approvals.
+sidebar:
+  label: Protection
+---
+
+Open **Configure → Protection** for your project. The switch is **off by
+default**. Off adds no file or command gate: agents behave as before.
+
+Turn it on to check Session file and command calls. An approvable refusal asks
+immediately, without waiting for a denial threshold or a classifier:
+
+- **Allow once** — only this call; nothing is remembered.
+- **Allow for this Session** — remember the action for this Session (and its delegated subagents).
+- **Always allow in this project** — remember the action for future Sessions in this project.
+- **Deny** — carry on without the action.
+- **Deny and steer** — tell the agent what to do instead.
+
+Some commands can only be allowed once or for the Session. Hard refusals, such
+as disabling platform protections or certificate checks, explain why they are
+blocked and have no approval button.
+
+## Approved actions
+
+Remembered approvals appear under **Approved actions**, with the Session,
+Ticket, original request and time. Each covers a narrow operation and target;
+a read approval does not allow writes, and a folder approval does not cover
+exact-only Git hooks or configuration. Matching approvals allow deterministically
+without another card. **Revoke** removes coverage so the next matching call asks
+again. Passed-request counts increase only after successful execution.
+
+An unattended Automation pauses at a card and notifies you. It never invents an
+answer. The notification opens the same Session card; there is no second inbox.
+
+## When changes apply
+
+A live Session attachment pins its Protection state when it opens. Changing the
+switch applies to new attachments, not an attachment already running. Restart
+and recovery retain the pinned state. The ledger stays live, so revocation takes
+effect on the next call even in a running Session.
+
+**Advanced** is collapsed by default and retains the Session transcript-read
+control. Protection inherits the app's built-in off default; there is no separate
+Settings opt-in.
+
+## Existing projects
+
+On upgrade, projects stored as `enforce` show On and retain their policy. All
+others show Off. A one-time, atomic cleanup backs up their raw policy documents
+in app-owned storage before clearing hidden judgment, classifier, fallback,
+budget, other actor and unknown containment/writable-root departures to built-in
+defaults. It retains explicit Off/Observe and the visible Session transcript-read
+setting. Writable roots are **not** converted into approvals. Turning Protection
+off also clears hidden supported departures. This release uses a new cleanup
+marker and backup, so the cleanup also runs for earlier dogfood installs. Their
+original backup is kept unchanged, and the new backup records the policies just
+before this release clears them. Later startups do not rerun the cleanup.
+
+## Know the boundary
+
+Protection is a **file and command rule gate, not a sandbox or credential
+isolation boundary**. Scripts can bypass command-text checks. Scoped containment,
+writable roots and the network ledger are deferred; do not rely on Protection
+to isolate secrets or arbitrary shell side effects.
+
+See [Settings and configuration](/guides/settings/) for app-wide preferences
+and project Configure options.

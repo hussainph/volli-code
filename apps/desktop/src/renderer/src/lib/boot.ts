@@ -1,6 +1,6 @@
 /**
  * App boot: reads the SQLite bootstrap payload, runs the one-time
- * localStorage → SQLite import on first run (docs/CONCEPT.md decision #29),
+ * localStorage → SQLite import on first run,
  * then hydrates the projects/board/ui/workspace stores from it. Kept out of
  * main.tsx so the flow (envelope-unwrap, sanitization, the
  * always-clear-legacy-storage step) is unit-testable without mounting React.
@@ -97,8 +97,7 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  * that a comment no longer repairs it, because a comment no longer reads at
  * all. That repair was a side effect of the read this ticket removed — a dozen
  * agents commenting once a turn cost a dozen whole-board reads a turn — and the
- * three rules above replace it. The measurements are in
- * `docs/research/perf/board-refresh-vc387.md`.
+ * three rules above replace it. VC-387 took the measurements.
  *
  * IT IS ALSO THE VENUE BOUNDARY (VC-286). A `worktree` change is the one kind
  * that moves WHERE a ticket's Session runs — materialized, removed, recreated,

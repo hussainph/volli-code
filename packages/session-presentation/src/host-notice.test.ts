@@ -5,8 +5,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   browserHoldNoticeCopy,
   readHostNotice,
+  shellNoticeCopy,
   subagentNoticeCopy,
+  watchNoticeCopy,
   type SubagentNotice,
+  type WatchNotice,
 } from "./host-notice";
 
 const MODEL_NOTICE =
@@ -290,7 +293,7 @@ describe("host-notice copy", () => {
     expect(subagentNoticeCopy(projected)).toEqual({
       headline: "Find artifact conventions",
       state: "done",
-      note: "Finished its task; its answer is in its own Session.",
+      note: "",
     });
     expect(subagentNoticeCopy({ ...projected, state: "interrupted" }).note).toBe(
       "Its turn ended before it answered.",
@@ -333,5 +336,225 @@ describe("host-notice copy", () => {
       headline: "Documentation",
       note: "You asked the Session to leave; it will release the tab when it is safe.",
     });
+  });
+});
+
+describe("watch notices (VC-457)", () => {
+  const MOVED = {
+    subject: "ticket",
+    id: "ticket-1",
+    label: "VC-12",
+    fact: "ticket-moved",
+    detail: "Needs Review",
+  } as const;
+  const TURN = {
+    subject: "session",
+    id: "ses-12345678",
+    label: "ses-1234",
+    fact: "turn-completed",
+    detail: null,
+  } as const;
+
+  it("projects the facts a watch notice carries", () => {
+    expect(
+      readHostNotice(message(sessionHostNoticeMetadata({ kind: "watch", events: [MOVED, TURN] }))),
+    ).toEqual({ kind: "watch", events: [MOVED, TURN] });
+  });
+
+  it("reads a malformed or empty watch payload as an unknown host notice, never a person", () => {
+    const malformed = [
+      { kind: "watch" },
+      { kind: "watch", events: [] },
+      { kind: "watch", events: ["x"] },
+      { kind: "watch", events: [{ ...MOVED, subject: "board" }] },
+      { kind: "watch", events: [{ ...MOVED, id: "" }] },
+      { kind: "watch", events: [{ ...MOVED, label: 7 }] },
+      { kind: "watch", events: [{ ...MOVED, fact: "ticket-exploded" }] },
+      { kind: "watch", events: [{ ...MOVED, fact: 3 }] },
+      { kind: "watch", events: [{ ...MOVED, detail: "" }] },
+    ];
+    for (const notice of malformed) {
+      expect(
+        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" })),
+      ).toEqual({ kind: "unknown", text: "Volli text" });
+    }
+  });
+
+  it("words one change as its own headline and several as a count", () => {
+    const one: WatchNotice = { kind: "watch", events: [MOVED] };
+    expect(watchNoticeCopy(one)).toEqual({
+      headline: "VC-12 moved (Needs Review)",
+      lines: ["VC-12 moved (Needs Review)"],
+    });
+    const facts = [
+      "turn-completed",
+      "turn-interrupted",
+      "signaled-done",
+      "signaled-blocked",
+      "stopped",
+      "ticket-moved",
+      "ticket-commented",
+      "ticket-signaled",
+    ] as const;
+    const many: WatchNotice = {
+      kind: "watch",
+      events: facts.map((fact) => ({
+        subject: TURN.subject,
+        id: TURN.id,
+        label: TURN.label,
+        fact,
+        detail: TURN.detail,
+      })),
+    };
+    const copy = watchNoticeCopy(many);
+    expect(copy.headline).toBe("8 watched changes");
+    expect(copy.lines).toEqual([
+      "ses-1234 finished its turn",
+      "ses-1234 was interrupted",
+      "ses-1234 signaled done",
+      "ses-1234 signaled blocked",
+      "ses-1234 was stopped",
+      "ses-1234 moved",
+      "ses-1234 has a new comment",
+      "ses-1234 was signaled",
+    ]);
+  });
+});
+
+describe("background shell notices (VC-495)", () => {
+  const EXITED = {
+    kind: "background-shell",
+    event: "exited",
+    shellId: "sh-1",
+    label: "ci run",
+    code: 3,
+    signal: null,
+    runtimeMs: 125_000,
+    byPerson: false,
+  } as const;
+  const MATCHED = {
+    kind: "background-shell",
+    event: "matched",
+    shellId: "sh-2",
+    label: "dev server",
+    pattern: "listening on",
+    regex: false,
+  } as const;
+
+  it("projects an exit and a match from the shared metadata, as Volli's rows rather than a person's turns", () => {
+    expect(readHostNotice(message(sessionHostNoticeMetadata(EXITED)))).toEqual(EXITED);
+    expect(readHostNotice(message(sessionHostNoticeMetadata(MATCHED)))).toEqual(MATCHED);
+    expect(
+      readHostNotice(
+        message(
+          sessionHostNoticeMetadata({ ...EXITED, code: null, signal: "SIGTERM", byPerson: true }),
+        ),
+      ),
+    ).toMatchObject({ code: null, signal: "SIGTERM", byPerson: true });
+  });
+
+  it("reads a malformed or newer payload as an unknown host notice, never a person", () => {
+    const malformed = [
+      { ...EXITED, shellId: "" },
+      { ...EXITED, shellId: 7 },
+      { ...EXITED, label: 7 },
+      { ...EXITED, event: "restarted" },
+      { ...EXITED, code: "3" },
+      { ...EXITED, signal: 9 },
+      { ...EXITED, runtimeMs: "long" },
+      { ...EXITED, runtimeMs: -1 },
+      { ...EXITED, byPerson: "yes" },
+      { ...MATCHED, pattern: "" },
+      { ...MATCHED, regex: "no" },
+    ];
+    for (const notice of malformed) {
+      expect(
+        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" })),
+      ).toEqual({ kind: "unknown", text: "Volli text" });
+    }
+  });
+
+  it("replays a frozen transcript from before shell notices exactly as it was, and guesses nothing from prose", () => {
+    // Sessions are durable: every message below was written by a build that
+    // had never heard of a shell notice, and must still project as it did.
+    const frozen = [
+      message(sessionHostNoticeMetadata(SUBAGENT)),
+      message(undefined, {
+        id: "hold-1",
+        text: "[Volli: the person took Browser Tab tab-1] Your writes",
+      }),
+      message(undefined, { id: "a-turn", text: "please run the tests" }),
+      // A person (or a page) quoting a shell notice's wording is still a person.
+      message(undefined, {
+        id: "quoted",
+        text: '[Volli: background shell sh-1 ("ci run") exited with code 3 after 2m 5s. This notice is from Volli, not your user.]',
+      }),
+    ];
+
+    expect(frozen.map((m) => readHostNotice(m)?.kind ?? null)).toEqual([
+      "subagent",
+      "browser-hold",
+      null,
+      null,
+    ]);
+  });
+
+  it("words every way a shell can end, and what its pattern was", () => {
+    expect(shellNoticeCopy(EXITED)).toEqual({
+      headline: "ci run",
+      state: "exited 3",
+      note: "Ran 2m 5s.",
+    });
+    expect(shellNoticeCopy({ ...EXITED, code: 0, runtimeMs: 900 })).toMatchObject({
+      state: "exited 0",
+      note: "Ran 0s.",
+    });
+    expect(shellNoticeCopy({ ...EXITED, code: null, signal: "SIGKILL", runtimeMs: 4_000 })).toEqual(
+      { headline: "ci run", state: "exited by SIGKILL", note: "Ran 4s." },
+    );
+    expect(
+      shellNoticeCopy({
+        ...EXITED,
+        code: null,
+        signal: "SIGTERM",
+        byPerson: true,
+        runtimeMs: 4_000,
+      }),
+    ).toEqual({
+      headline: "ci run",
+      state: "exited by SIGTERM",
+      note: "You ended it. Ran 4s.",
+    });
+    expect(shellNoticeCopy(MATCHED)).toEqual({
+      headline: "dev server",
+      state: "matched",
+      note: 'Printed "listening on".',
+    });
+    expect(shellNoticeCopy({ ...MATCHED, regex: true, pattern: "FAIL \\d+", label: "" })).toEqual({
+      headline: "Shell sh-2",
+      state: "matched",
+      note: "Printed a line matching /FAIL \\d+/.",
+    });
+  });
+});
+
+describe("ledger-hit host receipts", () => {
+  const notice = {
+    kind: "approval-used",
+    approvalId: "approval",
+    asked: "write /outside",
+    summary: "Write to /outside",
+  } as const;
+  it("projects a receipt without making a person-authored Turn", () => {
+    expect(readHostNotice(message(sessionHostNoticeMetadata(notice)))).toEqual(notice);
+  });
+  it.each([
+    { ...notice, approvalId: "" },
+    { ...notice, summary: null },
+    { ...notice, asked: 1 },
+  ])("keeps malformed receipts noninteractive: %j", (invalid) => {
+    expect(readHostNotice(message({ kind: "session-host-notice", notice: invalid }))).toMatchObject(
+      { kind: "unknown" },
+    );
   });
 });

@@ -470,7 +470,10 @@ export async function runCli(
       return exitCodeForError(error.code);
     }
     dependencies.stdout(
-      renderCliSuccess(invocation.command, response.data, { json: invocation.json }),
+      renderCliSuccess(invocation.command, response.data, {
+        json: invocation.json,
+        full: invocation.args["full"] === true,
+      }),
     );
     return 0;
   } catch (error) {

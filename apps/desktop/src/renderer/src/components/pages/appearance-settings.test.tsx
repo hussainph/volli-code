@@ -1,5 +1,11 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { useUiStore } from "@renderer/stores/ui";
+
+import { DisplaySection } from "@renderer/components/settings/panes/display-section";
 
 import { AppearanceSettings } from "./appearance-settings";
 
@@ -90,5 +96,59 @@ describe("Settings → Appearance", () => {
     expect(html).not.toContain("Search editor themes");
     expect(html).not.toContain("Reset editor theme to the default");
     expect(html).toContain('aria-label="Appearance"');
+  });
+});
+
+describe("Settings → Appearance → Display", () => {
+  it("offers the auto-mode hints switch, on by default", () => {
+    // VC-498. The Display block is the row's only home: hiding the hints is a
+    // display choice, not an authority one. Stated as the positive and drawn
+    // with no hint — the control is the explanation (AGENTS.md: let controls
+    // talk), and the store carries the display-not-enforcement fact.
+    const html = renderToStaticMarkup(<DisplaySection />);
+
+    expect(html).toContain("Auto mode hints");
+    expect(html).toContain('id="authority-hints-visible"');
+    expect(html).toContain('for="authority-hints-visible"');
+    // The persisted default is visible (true), so a fresh install draws the
+    // switch checked.
+    const hintsControl = html.match(/<button\b[^>]*\bid="authority-hints-visible"[^>]*>/)?.[0];
+    expect(hintsControl).toBeDefined();
+    expect(hintsControl).toContain('data-state="checked"');
+  });
+
+  it("draws an off hints choice independently of the cost switch and can enable it", () => {
+    const previous = useUiStore.getState();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    useUiStore.setState({ authorityHintsVisible: false, costVisible: true });
+    try {
+      act(() => root.render(<DisplaySection />));
+      const hints = container.querySelector<HTMLButtonElement>("#authority-hints-visible");
+      expect(hints).not.toBeNull();
+      expect(hints?.getAttribute("aria-checked")).toBe("false");
+      expect(container.querySelector("#cost-visible")?.getAttribute("aria-checked")).toBe("true");
+      act(() => hints?.click());
+      expect(useUiStore.getState().authorityHintsVisible).toBe(true);
+      expect(hints?.getAttribute("aria-checked")).toBe("true");
+      act(() => hints?.click());
+      expect(useUiStore.getState().authorityHintsVisible).toBe(false);
+      expect(hints?.getAttribute("aria-checked")).toBe("false");
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+      useUiStore.setState({
+        authorityHintsVisible: previous.authorityHintsVisible,
+        costVisible: previous.costVisible,
+      });
+    }
+  });
+
+  it("carries no prose under the hints row", () => {
+    const html = renderToStaticMarkup(<DisplaySection />);
+
+    expect(html).not.toContain("enforcement");
+    expect(html).not.toContain("Would block");
   });
 });

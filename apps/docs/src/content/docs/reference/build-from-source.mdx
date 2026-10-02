@@ -1,0 +1,65 @@
+---
+title: Build from source
+description: Install Volli's development dependencies, start the desktop development loop, and rebuild its Electron-native terminal module.
+---
+
+Use these commands to run the desktop app from the repository. You need macOS,
+Git, Node `^24.13.0`, and pnpm `11.10.0`, as pinned in the root `package.json`.
+
+## Start the development app
+
+1. Clone the repository and enter its folder:
+
+   ```sh
+   git clone https://github.com/hussainph/volli-code.git
+   cd volli-code
+   ```
+
+2. Install dependencies:
+
+   ```sh
+   pnpm install
+   ```
+
+3. Start the app:
+
+   ```sh
+   pnpm dev
+   ```
+
+The development loop runs the renderer with hot reload, and rebuilds and
+relaunches Electron after main-process changes.
+
+## Run a built copy
+
+From the repository root:
+
+```sh
+pnpm run build
+pnpm start
+```
+
+## Rebuild the terminal module
+
+`node-pty` must match Electron's ABI. If the terminal fails to load after a
+dependency install, rebuild it:
+
+```sh
+pnpm -C apps/desktop run rebuild:native
+```
+
+The SQLite dependency uses N-API prebuilds, so this command does not rebuild it.
+If dependency installation itself fails, fix the reported install error before
+you try to launch the app.
+
+## Preview the docs
+
+From the repository root:
+
+```sh
+pnpm -C apps/docs dev
+```
+
+For code conventions and focused checks, see
+[CONTRIBUTING.md](https://github.com/hussainph/volli-code/blob/main/CONTRIBUTING.md).
+For problems in an installed app, use [Troubleshooting](/reference/troubleshooting/).

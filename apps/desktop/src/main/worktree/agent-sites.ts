@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "@volli/shared";
 /**
  * What the structured runtime has open inside a worktree — the two questions
  * every destructive worktree action has to ask about agents, and the only place
@@ -37,6 +38,7 @@ import { isInside } from "./paths";
 export interface AgentSiteRuntime extends Pick<HostedSessionRuntime, "openNativeBindings"> {
   projection(input: { sessionId: string }): Promise<{ projection: { turnActive: boolean } }>;
   command(request: {
+    origin?: SessionOrigin;
     commandId: string;
     sessionId: string;
     command: { kind: "adapter.release"; attachmentId: string };
@@ -142,6 +144,7 @@ export async function releaseAgentSites(
     try {
       await runtime.command({
         commandId: deps.newCommandId(),
+        origin: { kind: "volli", reason: "worktree-notice" },
         sessionId: binding.sessionId,
         command: { kind: "adapter.release", attachmentId: binding.attachmentId },
       });

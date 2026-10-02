@@ -61,6 +61,33 @@ const failed: DynamicToolUIPart = {
 const openBundle = () =>
   renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
 
+describe("hard refusal", () => {
+  it("shows the host explanation without opening details or offering approval", () => {
+    const html = renderToStaticMarkup(
+      <ToolRow
+        part={{
+          type: "dynamic-tool",
+          toolName: "execute",
+          toolCallId: "hard-refusal",
+          state: "output-error",
+          input: { command: "curl -k https://example.com" },
+          errorText: "Volli refused this call.\nCertificate verification cannot be disabled.",
+          toolMetadata: {
+            [ACTIVITY_METADATA_KEY]: {
+              ...descriptor,
+              kind: "run-command",
+              nativeToolName: "execute",
+            },
+          } as DynamicToolUIPart["toolMetadata"],
+        }}
+      />,
+    );
+    expect(html).toContain("Certificate verification cannot be disabled.");
+    expect(html).not.toContain("Allow once");
+    expect(html).not.toContain('data-slot="approval-card"');
+  });
+});
+
 describe("ActivityBundle scroll window", () => {
   it("caps the open bundle without trapping the wheel inside it (VC-32)", () => {
     // The cap must stay — an uncapped payload shoves the feed off screen — but
@@ -285,6 +312,73 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
 
     expect(host.textContent).toContain("Typecheck passed");
     expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
+  });
+});
+
+describe("tool-linked authority hints", () => {
+  const review = {
+    sequence: 1,
+    afterMessageId: null,
+    toolCallId: "bash-1",
+    tool: "bash",
+    mode: "shadow" as const,
+    reason: "Outside the request.",
+  };
+
+  it("keeps a hint inside the tool disclosure and removes it on collapse", () => {
+    act(() => root?.render(<ToolRow part={bashRow} authorityReviews={[review]} />));
+    expect(container?.textContent).not.toContain("Would block");
+    const show = container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+    act(() => show?.click());
+    expect(container?.querySelector('[data-slot="authority-review"]')?.textContent).toContain(
+      "Would block bash: Outside the request.",
+    );
+    const hide = container?.querySelector<HTMLButtonElement>('[aria-label="Hide details"]');
+    act(() => hide?.click());
+    expect(container?.querySelector('[data-slot="authority-review"]')).toBeNull();
+  });
+
+  it("gives an otherwise detail-less call a disclosure for its review", () => {
+    const empty: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolCallId: "empty",
+      toolName: "todo-write",
+      state: "output-available",
+      input: {},
+      output: null,
+    };
+    act(() =>
+      root?.render(
+        <ToolRow
+          part={empty}
+          authorityReviews={[{ ...review, toolCallId: "empty", tool: "todo-write" }]}
+        />,
+      ),
+    );
+    const show = container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+    expect(show).not.toBeNull();
+    act(() => show?.click());
+    expect(container?.textContent).toContain("Would block todo-write");
+  });
+
+  it("updates a memoized bundle when reviews arrive after its tool", () => {
+    const rows = [{ kind: "tool" as const, part: failed, key: "read-2" }];
+    act(() => root?.render(<ActivityBundle rows={rows} />));
+    act(() =>
+      root?.render(
+        <ActivityBundle
+          rows={rows}
+          authorityReviews={
+            new Map([
+              [rows[0]!.key, [{ ...review, toolCallId: failed.toolCallId, tool: failed.toolName }]],
+            ])
+          }
+        />,
+      ),
+    );
+    const show = container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+    act(() => show?.click());
+    expect(container?.textContent).toContain(`Would block ${failed.toolName}`);
   });
 });
 

@@ -1,0 +1,427 @@
+---
+title: CLI commands
+description: Look up `volli` commands for tickets, worktrees, Sessions, models, and local installation checks.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+This reference lists shell commands. Run `volli help <command>` for the full
+option table, allowed values, and an example from your installed build.
+
+All public commands accept `--json`. Writes that support `--dry-run` list it in
+command help. See [CLI setup and context](/reference/cli/) for addressing and
+previews, [command effects](/reference/command-effects/) for what a write
+changes, and [CLI errors](/reference/cli-errors/) for recovery.
+
+## Orientation
+
+### volli identify
+
+```sh
+volli identify [--project <name>]
+```
+
+Prints the resolved project, ticket, Session, and tool environment. Run it first
+when a command targets the wrong context, or when a tool cannot be found.
+
+### volli board
+
+```sh
+volli board [--project <name>]
+```
+
+The whole board, grouped by column.
+
+### volli project list
+
+```sh
+volli project list
+```
+
+Every registered project, with its path and ticket prefix.
+
+### volli label list
+
+```sh
+volli label list [--project <name>]
+```
+
+A project's labels. Agents use it to check that a label exists before applying it.
+
+### volli label merge
+
+```sh
+volli label merge --from <name> --into <name> [--apply] [--project <name>]
+```
+
+Folds one label into another. Without `--apply` it previews the affected
+tickets. With `--apply`, every association moves onto the surviving label, and
+the merged-away name becomes an alias that still resolves.
+
+### volli model list
+
+```sh
+volli model list [--all]
+```
+
+Lists signed-in providers, model IDs, and reasoning levels. `--all` also shows
+signed-out providers and unavailable models. A printed `provider/model` value is
+what an Automation's **Runtime** or an agent's `session_start` tool expects.
+
+### volli cost
+
+```sh
+volli cost [--ticket <id>] [--session <handle>] [--project <name>] [--all-projects]
+           [--since <when>] [--group-by ticket|session|model|day|cause]
+```
+
+What Sessions consumed: tokens, cost, and cache class. This is Volli's own
+measurement of its Sessions, not a provider account balance or an invoice. `~`
+marks a catalogue estimate, `+` a total that is only partly priced, and `—` a
+total that nothing could be priced for. `--group-by cause` separates chat
+replies, compaction, utility work such as chat names, and decision-model calls.
+
+## Tickets
+
+### volli ticket list
+
+```sh
+volli ticket list [--status <column>] [--priority low|medium|high]
+                  [--label <name>] [--project <name>] [--limit <n>]
+```
+
+A project's tickets. Filters combine, so `--status doing --priority high`
+returns only tickets matching both.
+
+### volli ticket show
+
+```sh
+volli ticket show <id> [--events <n>] [--comments <n>] [--comments-only] [--full]
+```
+
+The full ticket, optionally with recent history and comments. Comment bodies
+print in full. Other log prose is capped at 1,000 characters; `--full` or `--json`
+returns the rest. Prose stays quoted as untrusted data.
+
+### volli ticket events
+
+```sh
+volli ticket events <id> [--limit <n>] [--full]
+```
+
+The append-only history of a ticket. `--full` lifts text caps; `--json` is always
+uncapped. `session_started` and `session_resumed` print the Session's short
+handle inline, and `by=` names who asked: a person, an Automation with its run
+id, a Session, or Volli itself. A resume with no recorded origin is
+`by=unknown`.
+
+### volli ticket brief
+
+```sh
+volli ticket brief <id>
+```
+
+Prints the Runtime Brief: the exact content an agent receives when it starts on
+this ticket. Check it before you start an agent, to see what it will read.
+
+### volli ticket create
+
+```sh
+volli ticket create --title <text>
+                    [--body <text> | --body-file <path>]
+                    [--priority low|medium|high] [--status <column>]
+                    [--label <name>]... [--project <name>]
+                    [--harness <harness>] [--base <branch>] [--no-worktree]
+                    [--dry-run]
+```
+
+`--title` is required. `--body` and `--body-file` are mutually exclusive, so
+pass one of them. Repeat `--label` to apply more than one.
+
+`--base` sets the branch the ticket's worktree branches from. `--no-worktree`
+skips creating a worktree for the ticket.
+
+### volli ticket update
+
+```sh
+volli ticket update <id> [--title <text>]
+                         [--body <text> | --body-file <path>
+                          | --append <text> | --append-file <path> | --edit <old> <new>]
+                         [--priority low|medium|high]
+                         [--add-label <name>]... [--remove-label <name>]...
+                         [--harness <harness>] [--base <branch>] [--dry-run]
+```
+
+Pass exactly one body mutation. `--append` adds to the end; `--append-file` reads
+that text locally from a file. `--edit` replaces the first occurrence of `<old>`
+with `<new>`. Value options accept `--opt=value`, including values starting with
+`--`: use `--append="--- x"` for a Markdown separator.
+
+### volli ticket move
+
+```sh
+volli ticket move <id> --to <column> [--dry-run]
+```
+
+Columns are `backlog`, `todo`, `doing`, `needs-review` (or `review`), and `done`.
+Case is ignored, and board labels such as `"Needs Review"` and `needs_review`
+work here and in `ticket list --status` and `ticket create --status`. Moving a
+ticket updates the board and picks no model by itself. The move counts as a
+**Deliberate move**, so it starts a Session only when the destination column
+has an armed, enabled Automation.
+
+### volli ticket comment
+
+```sh
+volli ticket comment <id> (-m <text> | --file <path>) [--dry-run]
+```
+
+Adds a comment to the ticket's activity feed, attributed to the Session it ran
+in.
+
+### volli ticket signal
+
+```sh
+volli ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
+```
+
+Records a typed verdict on a ticket: which stage, and how it went. `--kind` is
+`validate`, `implement`, `review`, `merge`, `human-gate`, or `budget`.
+`--verdict` is `pass`, `fail`, or `blocked`. `--detail` carries one line of
+prose for a person, while the verdict is what machines read.
+
+Signals are append-only. The latest signal of each kind supplies its current
+verdict. No signal moves the ticket.
+
+<Aside type="note" title="Archiving is app-only">
+  There is no `volli ticket archive`. Archiving is a person's curation of the
+  board, so it stays in the app; the CLI answers `WRONG_DOOR` instead of
+  pretending the command does not exist.
+</Aside>
+
+## Worktrees
+
+### volli worktree status
+
+```sh
+volli worktree status [<id>]
+```
+
+The ticket's branch, its base, and how far the two have diverged.
+
+### volli worktree diff
+
+```sh
+volli worktree diff [<id>] [--working-tree]
+```
+
+Defaults to the merge-base range against the ticket's base branch, the same
+range a pull request would show. `--working-tree` shows uncommitted changes
+instead.
+
+Neither command writes anything.
+
+### volli worktree sync
+
+```sh
+volli worktree sync [<id>] [--abort] [--dry-run]
+```
+
+Merges the ticket's base branch into its worktree branch and reports what
+happened. This is the one worktree command that writes, and it needs an
+authenticated Session.
+
+It merges `origin/<base>` if a fetch has already created that ref, or the local
+base branch otherwise. It contacts no remote, uses no credential, and returns
+without waiting for checks or CI.
+
+A conflict is an outcome, not an error. The reported `status` is `conflicted`,
+every conflicted path is listed, and the worktree is left conflicted for you to
+resolve and commit. Branch on `status`, not on the exit code. `--abort` undoes a
+merge left in flight; nothing else cleans up after one.
+
+### volli conflicts
+
+```sh
+volli conflicts [--project <name>]
+```
+
+Lists active ticket worktrees that change the same paths, ordered by how much
+they overlap. Use it to find concurrent edits before you merge. It reports
+shared paths, not predicted merge failures: two tickets that edit different
+parts of one file may still merge cleanly. This command is read-only.
+
+## Sessions
+
+### volli session list
+
+```sh
+volli session list [--project <name>] [--ticket <id>]
+                   [--all] [--state <s>[,<s>...]] [--since <when>]
+```
+
+Active and recent terminal and chat Sessions, each with its title and short
+handle. By default: `working`, `waiting`, `interrupted`, terminal `running`,
+or an idle Session with pending subagents at any age, plus activity in the last 24 hours. `--since` replaces that activity
+window with a look-back (`7d`, `24h`, `90m`) or RFC 3339 instant. `--all` removes
+the window. `--state` intersects those filters using the exact printed words:
+`working`, `waiting`, `idle`, `stopped`, `interrupted`, `running`, `exited`.
+Project and ticket filters still apply.
+
+Rows sort by most recent activity. Text ends with an older-row count when the
+activity window omitted rows; JSON keeps `sessions` and adds `hidden` for that
+count, after the explicit project, ticket and state filters. This default filter also
+applies to `--json`. Pending delegated subagents appear on chat rows and in
+`session peek`, even when a child is filtered out. Terminal and chat rows say who
+started them unless a person did, and who last reattached them. Reattachment is
+visible before any new message or turn.
+
+### volli session show
+
+```sh
+volli session show <handle>
+```
+
+Session metadata without a transcript: title, role, ticket, project, state,
+who started it (a person, an Automation with its run id, or a parent Session),
+who last reattached it and its last few successful reattachments. Chat details
+also name the latest turn's sender, parent and children with states, pending
+subagents, model and reasoning/tier. Both include usage/cost and creation/last-activity
+ages. The reattacher and the next message's sender are separate facts. `session show`, `peek`, and `answer` take the same
+short handles.
+
+<Aside type="note" title="Starting a Session is not a shell command">
+  There is no `volli session start` at a terminal. A person starts a Session in
+  the app; an agent starts one through its `session_start` tool, which carries
+  the caller in its binding rather than in a socket request. The CLI answers
+  `WRONG_DOOR` and names the door that works.
+</Aside>
+
+### volli session answer
+
+```sh
+volli session answer <handle>
+```
+
+Prints a chat Session's final message in full. A delegating agent can use it to
+read a subagent's answer. It reports the state of the latest turn (completed,
+running, interrupted, stopped, failed, not-started) and then the last assistant
+message, untruncated and quoted as another Session's prose.
+
+### volli session peek
+
+```sh
+volli session peek <handle> [--lines <n>]
+```
+
+Shows what a Session is doing, from its short handle, so one agent can see
+another's work without attaching to it.
+
+A terminal returns its recent output. A chat returns its activity state, who
+started it and, after a stop, who resumed it, then a compact transcript tail,
+with one line per message and truncated tool calls and text.
+
+`--lines` sets trailing terminal lines (60 by default) or chat messages (12).
+Keep it narrow: a peek is spent out of the asking agent's own context.
+
+### volli session done
+
+```sh
+volli session done [--reason <text>] [--dry-run]
+```
+
+Records that the Session's work is finished. It acts on the Session named by
+`VOLLI_SESSION` without moving the ticket. Run `ticket move` separately when the
+ticket's status needs to change.
+
+If the Session kept a todo list and belongs to a ticket, its last version is
+posted to that ticket as a comment. A Board Session has no ticket to post to,
+and a Session that never used the todo tool leaves no comment.
+
+### volli session blocked
+
+```sh
+volli session blocked [--reason <text>] [--dry-run]
+```
+
+Signals that the Session has stopped and needs a person. Volli raises attention
+on that exact Session, and the `--reason` text is what the person sees.
+
+If the Session kept a todo list and belongs to a ticket, its current list is
+also posted as a ticket comment.
+
+### volli session link
+
+```sh
+volli session link <harness-session-id> [--dry-run]
+```
+
+Records the harness's own session ID so Volli can resume that conversation later.
+
+## Other
+
+### volli notify
+
+```sh
+volli notify -m <text> [--title <text>] [--dry-run]
+```
+
+Sends a native macOS notification.
+
+### volli app launch
+
+```sh
+volli app launch [--timeout <n>]
+```
+
+Starts Volli if it isn't already running.
+
+### volli prompt baseline
+
+```sh
+volli prompt baseline [--ticket <id>] [--project <name>]
+```
+
+Estimates the prompt baseline for a fresh Board Session, broken down by
+section. `--ticket` measures a Ticket Session and includes that ticket's Runtime
+Brief. The estimate excludes tool definitions, the first user message, and
+provider overhead.
+
+### volli doctor
+
+```sh
+volli doctor [--fix] [--dry-run]
+```
+
+Checks the live CLI, wrapper, harness, and shell integration. `--fix`
+regenerates the parts Volli owns and checks again. `--dry-run` only works with
+`--fix`; it previews the repair without changing anything.
+
+### volli help
+
+```sh
+volli help [<command> | <topic>]
+```
+
+Topics: `concepts`, `changes`, `exit-codes`, `addressing`, `json`, `orchestration`.
+
+### volli hook
+
+```sh
+volli hook <harness> <event> [--socket <path>]
+```
+
+Reports one harness event to Volli. The event payload arrives as JSON on stdin,
+or as a trailing argument for harnesses that pass it that way.
+
+Volli configures this itself, on the harnesses it launches. You never need to
+run it, and `volli help` does not list it.
+
+It always exits `0` and prints nothing: outside a Volli session it does no work
+at all, and inside one a failure to reach the app is silent, so it can never
+interrupt a running agent.
+
+`<event>` is one of `session.started`, `session.ended`, `turn.started`,
+`turn.completed`, `input.needed`, `permission.requested`, `tool.started`,
+`subagent.completed`.
+

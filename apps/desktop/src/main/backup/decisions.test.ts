@@ -7,6 +7,7 @@
  * — which is the ticket's actual requirement: new persisted data cannot be
  * added without an explicit include/rebuild/exclude decision.
  */
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { volliRuntimePaths } from "../agent-runtime";
@@ -71,6 +72,10 @@ describe("table decisions", () => {
       "web_access_settings",
       "registered_harnesses",
       "harness_channel",
+      "authority_approvals",
+      "authority_approval_commands",
+      "authority_approval_events",
+      "authority_approval_completions",
     ]) {
       expect(tableBackupDecision(table)?.decision, `${table} must be excluded`).toBe("exclude");
       expect(BACKUP_INCLUDED_TABLES).not.toContain(table);
@@ -217,6 +222,11 @@ describe("profile file decisions", () => {
     expect(byArea.get("pi-sessions")?.decision).toBe("exclude");
     expect(byArea.get("volli.db.backup-v*")?.decision).toBe("exclude");
     expect(byArea.get("volli.db")?.decision).toBe("rebuild");
+  });
+
+  it("never backs up MCP secrets or OAuth tokens (VC-470)", () => {
+    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
+    expect(byArea.get(`${MCP_CREDENTIAL_FILE_NAME}*`)?.decision).toBe("exclude");
   });
 
   it("decides every runtime area the app materialises under the profile root", () => {

@@ -14,8 +14,10 @@ import {
   mergedProjectSessionRows,
   listableChats,
   projectSessionListingPending,
+  sessionReadOf,
   sessionTitleOf,
   subscribeProjectSessionActivity,
+  unreadSessionIds,
   useProjectSessionsStore,
   type ProjectSessionRows,
 } from "./project-sessions";
@@ -60,6 +62,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
 }
@@ -113,6 +116,8 @@ describe("project-sessions store", () => {
       // stored as its own absence, which is what makes an unautomated project
       // cost this map nothing (VC-131).
       provenance: {},
+      // The same sparseness, for the same reason, for unread (VC-30).
+      read: {},
     });
     expect(store.getState().listingState.p1).toBe("loaded");
   });
@@ -122,7 +127,11 @@ describe("project-sessions store", () => {
   // `record.sessionId`, and getting that backwards would file a mark under an id
   // no surface ever asks for — a bolt that silently never draws.
   it("keeps who started each Session, keyed by the id its own shape answers to", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     const child = {
       kind: "session",
       parentSessionId: "session-parent",
@@ -153,7 +162,11 @@ describe("project-sessions store", () => {
   // any baseline fetch has seen it, so the fold has to carry the mark — a push
   // that dropped it would leave the newest Run as the one row with no bolt.
   it("folds a pushed row's provenance in, and leaves the resting case absent", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     stubList([]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
@@ -282,6 +295,7 @@ describe("project-sessions store", () => {
       terminal: [record({ title: "Renamed" }), record({ id: "s2" })],
       chat: [chatRecord({ activity: "working" }), chatRecord({ sessionId: "c2" })],
       provenance: {},
+      read: {},
     });
   });
 
@@ -328,6 +342,7 @@ describe("project-sessions store", () => {
       terminal: [record({ id: "s1" })],
       chat: [],
       provenance: {},
+      read: {},
     });
   });
 
@@ -363,7 +378,12 @@ describe("project-sessions store", () => {
       ),
     );
 
-    expect(store.getState().byProject.p1).toEqual({ terminal: [], chat: [], provenance: {} });
+    expect(store.getState().byProject.p1).toEqual({
+      terminal: [],
+      chat: [],
+      provenance: {},
+      read: {},
+    });
     expect(store.getState().byProject.p2).toBeUndefined();
   });
 
@@ -439,6 +459,20 @@ describe("project-sessions store", () => {
     expect(store.getState().byProject.p1).toBe(patched);
     expect(before).not.toBe(patched);
   });
+
+  it("says nothing about a project with no baseline", async () => {
+    stubList([]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+    const before = store.getState().byProject;
+
+    // An announce can name a project this window has never listed — the harness
+    // notice is app-wide. There is nothing to patch and nothing to invent.
+    store.getState().setActiveHarness("p-unlisted", "s1", "codex");
+
+    expect(store.getState().byProject).toBe(before);
+    expect(store.getState().byProject["p-unlisted"]).toBeUndefined();
+  });
 });
 
 describe("projectSessionListingPending", () => {
@@ -506,7 +540,7 @@ describe("childSessionIds", () => {
         "child-a": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         "child-b": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         cousin: { kind: "session", parentSessionId: "other", parentTitle: null },
-        parent: { kind: "automation", automationName: "Nightly" },
+        parent: { kind: "automation", automationRunId: null, automationName: "Nightly" },
       },
     };
 
@@ -533,7 +567,9 @@ describe("mergedProjectSessionRows", () => {
       p1: {
         terminal: [record({ id: "t-one", projectId: "p1" })],
         chat: [chatRecord({ sessionId: "c-one", projectId: "p1" })],
-        provenance: { "c-one": { kind: "automation", automationName: "Nightly" } },
+        provenance: {
+          "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
+        },
       },
       p2: {
         terminal: [record({ id: "t-two", projectId: "p2" })],
@@ -554,8 +590,217 @@ describe("mergedProjectSessionRows", () => {
     expect(merged.terminal.map((row) => row.id)).toEqual(["t-one", "t-two"]);
     expect(merged.chat.map((row) => row.sessionId)).toEqual(["c-one", "c-two"]);
     expect(merged.provenance).toEqual({
-      "c-one": { kind: "automation", automationName: "Nightly" },
+      "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
       "t-two": { kind: "session", parentSessionId: "c-one", parentTitle: null },
     });
+  });
+});
+
+/** The read door, stubbed beside the roster a refresh will seed the store from. */
+function stubReadDoor(list: SessionListingRow[], impl: () => Promise<unknown>) {
+  const setRead = vi.fn(impl);
+  Object.assign(globalThis, {
+    window: {
+      api: {
+        sessions: { list: vi.fn().mockResolvedValue({ ok: true, sessions: list }), setRead },
+      },
+    },
+  });
+  return setRead;
+}
+
+/**
+ * Unread, as this store keeps it (VC-30): a sparse map beside the records,
+ * exactly like provenance, because the store keeps the two record shapes and
+ * discards the listing wrapper the fact rides on.
+ */
+describe("the unread axis", () => {
+  it("keeps only the Sessions with something to say", async () => {
+    stubList([
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+        read: { unreadSince: 4_000 },
+      },
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c2" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+    ]);
+    const store = createProjectSessionsStore();
+
+    await store.getState().refresh("p1");
+
+    expect(store.getState().byProject.p1?.read).toEqual({ c1: { unreadSince: 4_000 } });
+    expect(sessionReadOf(store.getState().byProject.p1, "c1")).toEqual({ unreadSince: 4_000 });
+    expect(sessionReadOf(store.getState().byProject.p1, "c2")).toEqual({ unreadSince: null });
+    expect(sessionReadOf(undefined, "c1")).toEqual({ unreadSince: null });
+    expect([...unreadSessionIds(store.getState().byProject.p1)]).toEqual(["c1"]);
+    expect(unreadSessionIds(undefined).size).toBe(0);
+    // A map seeded from somewhere other than a refresh (the lab, a restore)
+    // may hold a resting entry rather than omitting it. The set is membership,
+    // so a stored `null` stamp is not a member.
+    expect(
+      unreadSessionIds({
+        terminal: [],
+        chat: [],
+        provenance: {},
+        read: { c1: { unreadSince: null }, c2: { unreadSince: 7_000 } },
+      }),
+    ).toEqual(new Set(["c2"]));
+  });
+
+  it("folds a pushed row's unread state in, and clears it when the row rests", async () => {
+    stubList([
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+    ]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+        read: { unreadSince: 7_000 },
+      }),
+    );
+    expect(store.getState().byProject.p1?.read).toEqual({ c1: { unreadSince: 7_000 } });
+
+    // The row is the whole answer for that Session: a resting one CLEARS the
+    // stamp, rather than leaving the old one standing.
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
+    expect(store.getState().byProject.p1?.read).toEqual({});
+  });
+
+  it("carries the map across a harness announce", async () => {
+    stubList([
+      {
+        kind: "terminal",
+        record: record({ id: "s1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+        read: { unreadSince: 4_000 },
+      },
+    ]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    store.getState().setActiveHarness("p1", "s1", "codex");
+
+    expect(store.getState().byProject.p1?.read).toEqual({ s1: { unreadSince: 4_000 } });
+  });
+
+  it("marks a Session unread ahead of the persist and keeps it when the write sticks", async () => {
+    const setRead = stubReadDoor(
+      [
+        {
+          kind: "chat",
+          record: chatRecord({ sessionId: "c1" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: PERSON_STARTED,
+        },
+      ],
+      () => Promise.resolve({ ok: true, read: { unreadSince: 9_000 } }),
+    );
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    await store.getState().setSessionRead("p1", "c1", true);
+
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "c1", unread: true });
+    // A local stamp, replaced by main's when the push lands — the receipt's
+    // clock is main's, never a window's.
+    expect(store.getState().byProject.p1?.read?.["c1"]?.unreadSince).toEqual(expect.any(Number));
+  });
+
+  it("reverts and toasts when the receipt is refused", async () => {
+    stubReadDoor(
+      [
+        {
+          kind: "chat",
+          record: chatRecord({ sessionId: "c1" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: PERSON_STARTED,
+          read: { unreadSince: 4_000 },
+        },
+      ],
+      () => Promise.resolve({ ok: false, error: "db locked" }),
+    );
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    await store.getState().setSessionRead("p1", "c1", false);
+
+    expect(store.getState().byProject.p1?.read).toEqual({ c1: { unreadSince: 4_000 } });
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't mark the session: db locked",
+      expect.anything(),
+    );
+  });
+
+  it("reverts and toasts when the door throws", async () => {
+    stubReadDoor(
+      [
+        {
+          kind: "chat",
+          record: chatRecord({ sessionId: "c1" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: PERSON_STARTED,
+        },
+      ],
+      () => Promise.reject(new Error("ipc gone")),
+    );
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    await store.getState().setSessionRead("p1", "c1", true);
+
+    expect(store.getState().byProject.p1?.read).toEqual({});
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't mark the session: ipc gone",
+      expect.anything(),
+    );
+  });
+
+  it("says nothing about a project with no baseline", async () => {
+    const setRead = stubReadDoor([], () => Promise.resolve({ ok: true, read: { unreadSince: 1 } }));
+    const store = createProjectSessionsStore();
+
+    await store.getState().setSessionRead("p-unknown", "c1", true);
+
+    // The write still goes through — the receipt is main's and this window's
+    // cache is not the authority on whether the Session exists.
+    expect(setRead).toHaveBeenCalledOnce();
+    expect(store.getState().byProject["p-unknown"]).toBeUndefined();
+  });
+
+  it("merges every named project's unread map", () => {
+    const merged = mergedProjectSessionRows(
+      {
+        p1: { terminal: [], chat: [], provenance: {}, read: { c1: { unreadSince: 1 } } },
+        p2: { terminal: [], chat: [], provenance: {} },
+      },
+      ["p1", "p2"],
+    );
+
+    expect(merged.read).toEqual({ c1: { unreadSince: 1 } });
   });
 });

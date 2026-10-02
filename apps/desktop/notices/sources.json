@@ -113,6 +113,19 @@
       "text": "texts/ai-elements.LICENSE.txt"
     }
   ],
+  "nestedLicences": [
+    {
+      "name": "@earendil-works/pi-mcp",
+      "files": ["LICENSES/modelcontextprotocol-typescript-sdk.txt"],
+      "note": [
+        "Volli's MCP client (VC-470). Its OAuth implementation is adapted from the MIT-licensed",
+        "Model Context Protocol TypeScript SDK, whose licence the package ships under LICENSES/",
+        "rather than at its root, where the dependency walk reads. The walk stays root-only on",
+        "purpose (a licences/ directory is as often test fixtures as terms), so the file is",
+        "named here, reviewed, and read from the installed package."
+      ]
+    }
+  ],
   "fragments": [
     {
       "title": "Bundled editor theme data",

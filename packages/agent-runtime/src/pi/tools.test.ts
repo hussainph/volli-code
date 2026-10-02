@@ -1,12 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import {
+  codeModeSurfaceFor,
   NON_CODING_TOOL_IDS,
   TODO_STATUSES,
+  verbEntry,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -23,6 +25,8 @@ import {
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
+  SAVED_TOOL_OUTPUT_WARNING,
+  verbDetailsSchema,
   WEB_FETCH_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
   type AskUserPort,
@@ -30,6 +34,7 @@ import {
   type WebSearchPort,
 } from "./tools";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
+import { ToolOutputStore } from "./tool-output";
 
 /** What the host was asked, and with which signal, so both can be read back. */
 interface RecordedAsk {
@@ -80,6 +85,42 @@ function resultText(result: AgentToolResult<undefined>): string {
 }
 
 describe("read tool", () => {
+  it("marks a read of saved tool output as untrusted, and no other read (VC-469)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-saved-"));
+    const workspace = join(root, "worktree");
+    await mkdir(workspace);
+    const env = new NodeExecutionEnv({ cwd: workspace });
+    try {
+      await writeFile(join(workspace, "own.txt"), "the Session's own file\n");
+      const output = new ToolOutputStore({
+        directory: join(root, "sidecar.tool-output"),
+        workspacePath: workspace,
+      });
+      const saved = await output.save({ callId: "tc-1", header: "HEADER", text: "server text\n" });
+      const path = (saved as { path: string }).path;
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env, output);
+
+      const savedRead = await read!.execute(
+        "call-1",
+        { path, offset: 3 },
+        new AbortController().signal,
+      );
+      expect(savedRead.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+      expect(JSON.stringify(savedRead.content[1])).toContain("server text");
+
+      const ownRead = await read!.execute(
+        "call-2",
+        { path: "own.txt" },
+        new AbortController().signal,
+      );
+      expect(resultText(ownRead as AgentToolResult<undefined>)).toContain("the Session's own file");
+      expect(JSON.stringify(ownRead.content)).not.toContain("Volli trust notice");
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("compresses a byte-heavy PNG before returning it to the model", async () => {
     const root = await mkdtemp(join(tmpdir(), "volli-read-image-"));
     const env = new NodeExecutionEnv({ cwd: root });
@@ -191,6 +232,26 @@ describe("ask_user tool", () => {
     // ask only about a decision that blocks, and offer a small set of options.
     expect(tool.description).toContain("blocks");
     expect(tool.description).toContain("2-5");
+  });
+
+  it("guides concise questions with choice-specific detail beneath the answer labels", () => {
+    const tool = createAskUserTool(async () => CHOSE_ONE);
+
+    expect(tool.description).toContain("one or two short sentences");
+    expect(tool.description).toContain(
+      "each option's description (the subtitle/body beneath its label)",
+    );
+    expect(tool.description).toContain(
+      "Keep only the context needed to understand the decision in the question",
+    );
+    expect(tool.parameters.properties.question).toMatchObject({
+      description: expect.stringContaining("options[].description"),
+    });
+    expect(tool.parameters.properties.options.items.properties.description).toMatchObject({
+      description: expect.stringContaining(
+        "Supporting context, trade-offs, or consequences for this option, shown beneath its label",
+      ),
+    });
   });
 
   it("declares one required question beside optional options and multiplicity", () => {
@@ -436,19 +497,26 @@ function document(overrides: Partial<RuntimeWebDocument> = {}): RuntimeWebDocume
 }
 
 describe("web_fetch tool", () => {
-  it("offers the model one URL and is named as a non-coding tool the Authority vocabulary knows", () => {
+  it("offers the model a URL, a small batch beside it, and is named as a non-coding tool the Authority vocabulary knows", () => {
     const tool = createWebFetchTool(async () => document());
 
     expect(tool.name).toBe(WEB_FETCH_TOOL_NAME);
     expect(tool.name).toBe("web_fetch");
     expect(tool.parameters.required).toEqual(["url"]);
-    expect(Object.keys(tool.parameters.properties)).toEqual(["url"]);
+    expect(Object.keys(tool.parameters.properties)).toEqual(["url", "urls"]);
+    expect(tool.parameters.properties.urls).toMatchObject({ type: "array", maxItems: 4 });
     // The description is the whole of the model's instruction for this tool, so
-    // the two claims it cannot get from the schema are asserted: this reads one
-    // URL rather than answering a question, and what comes back is not to be
-    // obeyed.
+    // the claims it cannot get from the schema are asserted: this reads URLs
+    // rather than answering a question, what it reads (GitHub and JSON named,
+    // so code research does not go to the shell), that an HTTP error is a fact
+    // to act on, and that what comes back is not to be obeyed.
     expect(tool.description).toContain("does not search");
     expect(tool.description).toContain("untrusted");
+    expect(tool.description).toContain("github.com blob URL returns the raw file");
+    expect(tool.description).toContain("tree URL returns the directory listing");
+    expect(tool.description).toContain("JSON");
+    expect(tool.description).toContain("404");
+    expect(tool.description).toContain("do not fall back to curl");
     // Both names are registered beside the coding bundle, so both must be in
     // the vocabulary a policy will one day judge them by; a tool named here and
     // nowhere else reaches that policy as a name it has never heard of.
@@ -695,6 +763,206 @@ describe("web_fetch tool", () => {
     expect(text).toContain("fetch.address");
   });
 
+  /**
+   * The ticket's headline failure. A 404 on a guessed path was worded as a
+   * policy wall — "refused", "not yours to adjust", "must not be attempted
+   * another way" — and the models that read it gave up or went to `curl`.
+   */
+  it("states an HTTP error as the fact it is, with no policy wall around it", async () => {
+    const tool = createWebFetchTool(async () => {
+      throw new WebFetchRefusal(
+        "fetch.status",
+        "raw.githubusercontent.com has no document at that URL. Check the path, or use web_search to find where it lives.",
+        404,
+      );
+    });
+
+    const text = resultText(
+      await tool.execute("call-40", {
+        url: "https://raw.githubusercontent.com/acme/widgets/main/src/missing.ts",
+      }),
+    );
+
+    expect(text.split("\n")[0]).toBe(
+      "404 Not Found for https://raw.githubusercontent.com/acme/widgets/main/src/missing.ts, and nothing was fetched.",
+    );
+    expect(text).toContain("has no document at that URL");
+    expect(text).toContain("fetch.status");
+    expect(text).toContain("not a Volli policy");
+    expect(text).not.toContain("refused");
+    expect(text).not.toContain("must not be attempted another way");
+    expect(text).not.toContain("not yours to adjust");
+  });
+
+  it("states a failure with no status as what the request met", async () => {
+    const tool = createWebFetchTool(async () => {
+      throw new WebFetchRefusal(
+        "fetch.timeout",
+        "docs.example.com ran out of time before answering.",
+      );
+    });
+
+    const text = resultText(
+      await tool.execute("call-41", { url: "https://docs.example.com/slow" }),
+    );
+
+    expect(text.split("\n")[0]).toBe(
+      "Could not read https://docs.example.com/slow, and nothing was fetched.",
+    );
+    expect(text).toContain("Reported as fetch.timeout.");
+    expect(text).not.toContain("must not be attempted another way");
+  });
+
+  it("keeps the policy wall for a policy, and only there", async () => {
+    const tool = createWebFetchTool(async () => {
+      throw new WebFetchRefusal(
+        "fetch.type",
+        "cdn.example.com served image/png, which is an image.",
+      );
+    });
+
+    const text = resultText(
+      await tool.execute("call-42", { url: "https://cdn.example.com/a.png" }),
+    );
+
+    expect(text).toContain("Volli refused to read https://cdn.example.com/a.png");
+    expect(text).toContain("must not be attempted another way");
+  });
+
+  it("says a GitHub blob was read as its raw file, rather than calling it a redirect", async () => {
+    const tool = createWebFetchTool(async () =>
+      document({
+        requestedUrl: "https://github.com/acme/widgets/blob/main/src/index.ts",
+        finalUrl: "https://raw.githubusercontent.com/acme/widgets/main/src/index.ts",
+        origin: "https://raw.githubusercontent.com",
+        contentType: "text",
+        text: "export const answer = 42;",
+        via: "github-raw-file",
+      }),
+    );
+
+    const text = resultText(
+      await tool.execute("call-43", {
+        url: "https://github.com/acme/widgets/blob/main/src/index.ts",
+      }),
+    );
+    const provenance = text.slice(0, text.indexOf(marker("begin")));
+
+    expect(provenance).toContain(
+      "You asked for the GitHub page https://github.com/acme/widgets/blob/main/src/index.ts; Volli read the file it shows as raw text from https://raw.githubusercontent.com/acme/widgets/main/src/index.ts",
+    );
+    expect(provenance).not.toContain("redirected");
+    // A source file arrives as served; no markup was taken out of it.
+    expect(provenance).toContain("returned it as text, exactly as it was served.");
+    expect(provenance).not.toContain("markup");
+    expect(enveloped(text)).toBe("export const answer = 42;");
+  });
+
+  it("says a GitHub tree was listed through the API, and how to go further", async () => {
+    const tool = createWebFetchTool(async () =>
+      document({
+        requestedUrl: "https://github.com/acme/widgets/tree/main/src",
+        finalUrl: "https://api.github.com/repos/acme/widgets/git/trees/main:src",
+        origin: "https://api.github.com",
+        contentType: "text",
+        text: "1 entry:\nfile       index.ts  (12 bytes)",
+        via: "github-directory-listing",
+      }),
+    );
+
+    const text = resultText(
+      await tool.execute("call-44", { url: "https://github.com/acme/widgets/tree/main/src" }),
+    );
+    const provenance = text.slice(0, text.indexOf(marker("begin")));
+
+    expect(provenance).toContain(
+      "You asked for the GitHub directory https://github.com/acme/widgets/tree/main/src; Volli listed it through GitHub's git trees API",
+    );
+    expect(provenance).toContain("use its blob URL");
+    expect(provenance).toContain("returned its entries as a directory listing");
+    expect(provenance).not.toContain("exactly as it was served");
+    expect(enveloped(text)).toBe("1 entry:\nfile       index.ts  (12 bytes)");
+  });
+
+  it("reads a batch in one call, each URL in its own envelope with its own id", async () => {
+    const reads: string[] = [];
+    const tool = createWebFetchTool(async ({ url }) => {
+      reads.push(url);
+      if (url.endsWith("missing.ts")) {
+        throw new WebFetchRefusal("fetch.status", "GitHub has no file at that path and ref.", 404);
+      }
+      return document({ requestedUrl: url, finalUrl: url, text: `text of ${url}` });
+    });
+
+    const result = await tool.execute("call-45", {
+      url: "https://example.com/a.ts",
+      urls: [
+        "https://example.com/b.ts",
+        "https://example.com/missing.ts",
+        "https://example.com/a.ts",
+      ],
+    });
+
+    // The repeat is read once.
+    expect(reads).toEqual([
+      "https://example.com/a.ts",
+      "https://example.com/b.ts",
+      "https://example.com/missing.ts",
+    ]);
+    const texts = result.content.map((block) => (block.type === "text" ? block.text : ""));
+    expect(texts).toHaveLength(3);
+    expect(texts[0]?.split("\n")[0]).toBe("Result 1 of 3, for https://example.com/a.ts:");
+    expect(enveloped(texts[0] ?? "")).toBe("text of https://example.com/a.ts");
+    expect(enveloped(texts[1] ?? "")).toBe("text of https://example.com/b.ts");
+    expect(texts[2]).toContain("404 Not Found for https://example.com/missing.ts");
+    expect(envelopeId(texts[0] ?? "")).not.toBe(envelopeId(texts[1] ?? ""));
+  });
+
+  it("reads at most five URLs a call and says which were left", async () => {
+    const reads: string[] = [];
+    const tool = createWebFetchTool(async ({ url }) => {
+      reads.push(url);
+      return document({ requestedUrl: url, finalUrl: url });
+    });
+    const urls = Array.from({ length: 7 }, (_, index) => `https://example.com/${index}`);
+
+    const result = await tool.execute("call-46", { url: "https://example.com/first", urls });
+
+    expect(reads).toHaveLength(5);
+    const last = result.content.at(-1);
+    expect(last?.type === "text" ? last.text : "").toBe(
+      "3 more URLs were not read: one call reads at most 5. Call web_fetch again for the rest.",
+    );
+  });
+
+  it("names a single URL left over in the singular", async () => {
+    const tool = createWebFetchTool(async ({ url }) =>
+      document({ requestedUrl: url, finalUrl: url }),
+    );
+    const urls = Array.from({ length: 5 }, (_, index) => `https://example.com/${index}`);
+
+    const result = await tool.execute("call-47", { url: "https://example.com/first", urls });
+
+    const last = result.content.at(-1);
+    expect(last?.type === "text" ? last.text : "").toContain("1 more URL was not read");
+  });
+
+  it("withdraws the rest of a batch when one read cannot be carried out", async () => {
+    const held = holdingBoundary();
+    const tool = createWebFetchTool(async (input) => {
+      if (input.url.endsWith("broken")) throw new Error("no web boundary behind this port");
+      return held.webFetch(input);
+    });
+
+    await expect(
+      tool.execute("call-48", {
+        url: "https://example.com/slow",
+        urls: ["https://example.com/broken"],
+      }),
+    ).rejects.toThrow("no web boundary behind this port");
+    expect(held.reads[0]?.signal.aborted).toBe(true);
+  });
+
   it("fails the call when the boundary could not carry out a read at all", async () => {
     const tool = createWebFetchTool(async () => {
       throw new Error("this Session has no web boundary behind its port");
@@ -849,6 +1117,9 @@ describe("web_search tool", () => {
     expect(tool.description).toContain("web_fetch");
     expect(tool.description).toContain("leaves this machine");
     expect(tool.description).toContain("untrusted");
+    // And that the web tools, not the shell, are how the web is read.
+    expect(tool.description).toContain("GitHub files and directories and JSON APIs");
+    expect(tool.description).toContain("do not search or read it with curl");
     expect(NON_CODING_TOOL_IDS).toContain(WEB_SEARCH_TOOL_NAME);
   });
 
@@ -1106,6 +1377,66 @@ describe("createVerbTool", () => {
     expect((tool.parameters as { required?: string[] }).required).toEqual(["id", "name"]);
   });
 
+  it("keeps historical MCP names byte-identical, while new Sessions avoid the single-underscore mcp_ wire prefix", async () => {
+    const calls: string[] = [];
+    const port = async (request: { verb: string }) => {
+      calls.push(request.verb);
+      return {
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      };
+    };
+    const operations = [
+      "list",
+      "preview",
+      "install",
+      "refresh",
+      "enable",
+      "disable",
+      "tools",
+      "remove",
+    ] as const;
+    for (const operation of operations) {
+      const binding = { verb: `mcp.${operation}` as const, port };
+      const oldTool = createVerbTool(binding);
+      const newTool = createVerbTool(binding, undefined, "server");
+      expect(oldTool.name).toBe(`mcp_${operation}`);
+      expect(newTool.name).toBe(`server_${operation}`);
+      expect(newTool.description).not.toMatch(/\bmcp_(?!_)/);
+      expect(JSON.stringify(newTool.parameters)).not.toMatch(/\bmcp_(?!_)/);
+      expect(oldTool.description).toBe(
+        newTool.description.replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+      expect(JSON.stringify(oldTool.parameters)).toBe(
+        JSON.stringify(newTool.parameters).replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+    }
+    const old = createVerbTool({ verb: "mcp.list", port });
+    const current = createVerbTool({ verb: "mcp.list", port }, undefined, "server");
+    const signal = new AbortController().signal;
+    expect((await old.execute("call-1", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect((await current.execute("call-2", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call server_install, then server_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect(calls).toEqual(["mcp.list", "mcp.list"]);
+    expect(createVerbTool({ verb: "session.start", port }, undefined, "server").name).toBe(
+      "session_start",
+    );
+  });
+
   it("refuses to build a tool for a verb this build does not project", () => {
     // Unreachable from a resolved surface, which is why it is a throw rather
     // than a fallback: the alternative is a nameless tool reaching a provider,
@@ -1226,5 +1557,71 @@ describe("createTodoWriteTool", () => {
     expect(
       createSessionTools({ tools: { tools: ["read"] } }, null as never).map((tool) => tool.name),
     ).toEqual(["read"]);
+  });
+});
+
+describe("createSessionTools with Code Mode (VC-471)", () => {
+  const codeMode = codeModeSurfaceFor({ tools: ["read", "write"] });
+  const spec = {
+    tools: {
+      tools: ["read", "write"] as ("read" | "write")[],
+      codeMode: { ...codeMode, routes: { read: "code" as const, write: "both" as const } },
+    },
+  };
+
+  it("refuses to build a surface that names codemode with no Code Mode host", () => {
+    expect(() => createSessionTools(spec, null as never)).toThrow(
+      "This Session's surface names codemode, but no Code Mode host is wired.",
+    );
+  });
+
+  it("declares the routes' answer and hands Code Mode every other tool, with its durable id", () => {
+    const handed: string[] = [];
+    const declared = createSessionTools(spec, null as never, undefined, (_surface, tools) => {
+      handed.push(...tools.map((entry) => `${entry.id}=${entry.tool.name}`));
+      return {
+        name: "codemode",
+        label: "code",
+        description: "",
+        parameters: {} as never,
+        execute: async () => ({ content: [], details: undefined }),
+      };
+    });
+    expect(declared.map((tool) => tool.name)).toEqual(["write", "codemode"]);
+    expect(handed).toEqual(["read=read", "write=write"]);
+  });
+
+  it("hands Code Mode a verb's declared details schema beside it, and nothing for any other tool", () => {
+    const verbs = ["session.start", "session.stop"] as const;
+    const surface = codeModeSurfaceFor({ tools: ["read", ...verbs] });
+    const handed = new Map<string, Record<string, unknown> | undefined>();
+    createSessionTools(
+      {
+        tools: { tools: ["read"], verbs: [...verbs], codeMode: surface },
+        callVerb: async () => ({ text: "" }),
+      },
+      null as never,
+      undefined,
+      (_surface, tools) => {
+        for (const entry of tools) handed.set(entry.id, entry.detailsSchema);
+        return createTodoWriteTool();
+      },
+    );
+    expect([...handed.keys()]).toEqual(["read", "session.start", "session.stop"]);
+    // The registry's own declaration, read rather than restated.
+    expect(handed.get("session.start")).toBe(verbEntry("session.start")?.tool?.resultDetails);
+    expect(handed.get("session.stop")).toBeUndefined();
+    expect(handed.get("read")).toBeUndefined();
+  });
+});
+
+describe("verbDetailsSchema (VC-471)", () => {
+  it("is the registry's resultDetails for a verb that declares one, and empty otherwise", () => {
+    expect(verbDetailsSchema("watch")).toEqual({
+      detailsSchema: verbEntry("watch")?.tool?.resultDetails,
+    });
+    expect(verbDetailsSchema("session.stop")).toEqual({});
+    // A key this build does not project has nothing to declare either.
+    expect(verbDetailsSchema("ticket.list" as never)).toEqual({});
   });
 });

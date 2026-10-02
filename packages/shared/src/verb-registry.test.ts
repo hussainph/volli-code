@@ -1,3 +1,4 @@
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -13,8 +14,9 @@ import {
   VERB_TOOLS,
   verbEntry,
   verbTier,
+  verbToolWireName,
 } from "./verb-registry";
-import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
+import type { VerbEntry, VerbKey, VerbResultDetailsSchema, VerbTier } from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 
 /**
@@ -46,6 +48,7 @@ const SOCKET_SURFACE = [
   "model.list",
   "cost",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
   "session.done",
@@ -81,6 +84,7 @@ const REFERENCE_SURFACE = [
   "worktree.sync",
   "label.merge",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
   "session.done",
@@ -139,6 +143,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // app-owned policy, and a cap the capped Session could write is decoration.
   cost: "read",
   "session.list": "read",
+  "session.show": "read",
   "session.peek": "read",
   // The whole of a chat's last message (VC-9): a read, like the peek beside it.
   "session.answer": "read",
@@ -178,6 +183,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // — tool-only, Role-gated, never on the socket, because a CLI verb must
   // never wait.
   "session.await": "control",
+  // What replaced both awaits (VC-457): tool-only and Role-gated for the
+  // reason they were — it reaches into its caller's own ledger later, so the
+  // caller must be the bound attachment, never a socket request.
+  watch: "control",
   // MCP management (VC-380). Control tier for the reason the whole family is
   // tool-only: an install starts a process as the user or opens a network
   // relationship on the project's behalf, which is exactly the misuse a
@@ -377,7 +386,7 @@ describe("verbTier", () => {
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
     // VC-9 adds `session.answer`, a read beside the peek.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(19);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
     // VC-310 adds label.merge, the label cleanup write.
@@ -517,9 +526,10 @@ describe("the registry table", () => {
     // schema itself. `automation.run` used to sit beside it, but VC-329 moved
     // it to listed (with the session.start precedent): an agent that could not
     // discover it substituted a hand-written session_start kickoff for the
-    // person's saved Automation. `session.await` remains unlisted because its
-    // cursor contract is discovered through the tool schema that supplies it.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await"]);
+    // person's saved Automation. `session.await` stays unlisted beside it;
+    // both are retired (VC-457). `watch`, which replaced them, is discovered
+    // through its tool schema the same way.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await", "watch"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -614,6 +624,19 @@ describe("the registry table", () => {
     }
   });
 
+  it("describes armed arrival Runs and interruption as ticket-move effects", () => {
+    const effects = verbEntry("ticket.move")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Automatic triggers");
+    expect(effects?.humanVisible.join(" ")).toContain("interrupts");
+    expect(effects?.nonEffects.join(" ")).toContain("Without an enabled, armed Automation");
+  });
+
+  it("locates delegated Sessions in the parent's Activity Island", () => {
+    const effects = verbEntry("session.delegate")?.effects;
+    expect(effects?.humanVisible.join(" ")).toContain("Activity Island");
+    expect(effects?.humanVisible.join(" ")).toContain("no separate Session-list row");
+  });
+
   // VC-134, filed by VC-112 ("The agent's verb") under VC-92 §5's rules. The
   // whole ticket is this entry: one row in this table, in one Role bundle,
   // with no second implementation and no verb surface of its own.
@@ -690,6 +713,44 @@ describe("the registry table", () => {
     expect(tool?.input.map((field) => field.name)).toEqual([
       "ticket",
       "message",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
+  });
+
+  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
+  // gave — "it gives a working session an anchor to the user's preferences for
+  // models and effort". A delegation that names neither a tier nor a model is
+  // anchored to its parent's own, which is why `model` no longer speaks of a
+  // utility default: nothing on a chat path resolves that row.
+  it("lets session_delegate name the same model tiers, and never the Utility row", () => {
+    const tool = verbEntry("session.delegate")?.tool;
+    const tier = tool?.input.find((field) => field.name === "tier");
+    expect(tier).toBeDefined();
+    expect(tier?.required).toBeUndefined();
+    // Written out rather than compared against `AGENT_MODEL_TIERS`, which is
+    // the constant the schema is BUILT from: that comparison holds however the
+    // constant changes, so it could never fail on the one thing this test is
+    // named for. The literal is what refuses `utility` here.
+    expect(tier?.type === "enum" ? tier.values : []).toEqual([
+      "fast",
+      "deep",
+      "visual",
+      "ticket",
+      "global",
+    ]);
+    for (const name of AGENT_MODEL_TIERS) {
+      expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
+    }
+    expect(tier?.description).not.toMatch(/utility/i);
+    expect(tier?.description).toMatch(/instead of `model`/);
+    expect(tool?.input.find((field) => field.name === "model")?.description).not.toMatch(
+      /utility/i,
+    );
+    expect(tool?.input.map((field) => field.name)).toEqual([
+      "task",
       "title",
       "model",
       "tier",
@@ -846,10 +907,19 @@ describe("the MCP management verbs (VC-380)", () => {
     }
   });
 
+  it("freezes management wire names separately from the durable dot-keys", () => {
+    expect(verbToolWireName("mcp.list")).toBe("mcp_list");
+    expect(verbToolWireName("mcp.list", "server")).toBe("server_list");
+    expect(verbToolWireName("session.start")).toBe("session_start");
+    expect(verbToolWireName("mcp.unknown" as never)).toBeUndefined();
+  });
+
   it("projects a wire name a provider accepts, with no caller field in any schema", () => {
     for (const key of MCP_VERBS) {
       const tool = verbEntry(key)!.tool;
-      expect(tool?.name, key).toBe(key.replace(".", "_"));
+      // Management is a native Volli verb, not an MCP-discovered tool. The
+      // single-underscore mcp_ prefix routes Anthropic OAuth to extra usage.
+      expect(tool?.name, key).toBe(key.replace("mcp.", "server_"));
       expect(tool!.description.length, key).toBeGreaterThan(0);
       for (const field of tool!.input) {
         expect(field.name, `${key}.${field.name}`).not.toMatch(/^-/);
@@ -888,7 +958,7 @@ describe("the MCP management verbs (VC-380)", () => {
 
     const remove = verbEntry("mcp.remove")!.tool!.description;
     expect(remove).toMatch(/reattach/i);
-    expect(remove).toContain("mcp_disable");
+    expect(remove).toContain("server_disable");
   });
 
   it("spells args as the array the whole MCP ecosystem spells it as", () => {
@@ -932,9 +1002,113 @@ describe("the MCP management verbs (VC-380)", () => {
 
   it("appends the family after every previously frozen tool position", () => {
     const keys = VERB_TOOLS.map((entry) => entry.key);
-    expect(keys.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // `watch` (VC-457) is appended after the family, for the same reason.
+    expect(keys.slice(-(MCP_VERBS.length + 1), -1)).toEqual([...MCP_VERBS]);
+    expect(keys.at(-1)).toBe("watch");
     // `session.await` was the last tool before this family; nothing may be
     // inserted ahead of it, because declaration order IS the frozen tool order.
-    expect(keys.at(-(MCP_VERBS.length + 1))).toBe("session.await");
+    expect(keys.at(-(MCP_VERBS.length + 2))).toBe("session.await");
+  });
+});
+
+/** One verb's declared result details, failing the test when it declares none. */
+function schemaOf(key: VerbKey): VerbResultDetailsSchema {
+  const schema = verbEntry(key)?.tool?.resultDetails;
+  expect(schema, key).toBeDefined();
+  return schema!;
+}
+
+/** Every key required, every key described, no undeclared key — at every level. */
+function expectClosedAndDescribed(
+  schema: Pick<VerbResultDetailsSchema, "properties" | "required" | "additionalProperties">,
+  path: string,
+): void {
+  expect(schema.additionalProperties, path).toBe(false);
+  expect([...schema.required].toSorted(), path).toEqual(Object.keys(schema.properties).toSorted());
+  for (const [name, field] of Object.entries(schema.properties)) {
+    expect(field.description.trim().length, `${path}.${name}`).toBeGreaterThan(0);
+    if (field.type === "object") expectClosedAndDescribed(field, `${path}.${name}`);
+  }
+}
+
+/**
+ * What a verb's result carries as data (VC-471). A Code Mode program reads
+ * these keys instead of the prose, so the schema is a promise: every key is
+ * there on a successful call, nothing else is, and each one says what it is.
+ */
+describe("verb result details (VC-471)", () => {
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+
+  it("is declared for the verbs a program fans out with, and no others yet", () => {
+    expect(
+      VERB_TOOLS.filter((entry) => entry.tool.resultDetails !== undefined).map(
+        (entry) => entry.key,
+      ),
+    ).toEqual(["session.start", "session.delegate", "watch"]);
+  });
+
+  it("is a strict JSON Schema whose every key is required, described, and closed", () => {
+    for (const entry of VERB_TOOLS) {
+      const schema = entry.tool.resultDetails;
+      if (schema === undefined) continue;
+      // Compiling under Ajv's strict mode refuses any keyword a standard
+      // validator would not recognise, so a renderer reads the same schema.
+      expect(() => ajv.compile(schema), entry.key).not.toThrow();
+      expect(schema.description.trim().length, entry.key).toBeGreaterThan(0);
+      expectClosedAndDescribed(schema, entry.key);
+    }
+  });
+
+  it("gives session_start the handle, Ticket and model a fan-out acts on", () => {
+    const validate = ajv.compile(schemaOf("session.start"));
+    const started = {
+      sessionId: "abcdef12-3456-7890-abcd-ef1234567890",
+      handle: "abcdef12",
+      ticket: "VC-12",
+      title: "Fix the flaky auth test",
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+      state: "running",
+    };
+    expect(validate(started)).toBe(true);
+    const { handle: _handle, ...unhandled } = started;
+    expect(validate(unhandled)).toBe(false);
+    expect(validate({ ...started, state: "ready" })).toBe(false);
+    expect(validate({ ...started, extra: 1 })).toBe(false);
+    expect(validate({ ...started, model: { ...started.model, reasoningLevel: "turbo" } })).toBe(
+      false,
+    );
+    // The handle is the id the other doors accept, and its description is
+    // where a program's author learns that the full id is not.
+    expect(schemaOf("session.start").properties.handle?.description).toMatch(/watch/);
+    expect(schemaOf("session.start").properties.sessionId?.description).toMatch(/handle/);
+  });
+
+  it("keeps the two keys session_delegate's transcript row reads, beside the same fields", () => {
+    const delegate = schemaOf("session.delegate");
+    const start = schemaOf("session.start");
+    expect(delegate.required).toEqual(["sessionId", "handle", "title", "model", "state"]);
+    // One field set, so a program reads a start and a delegation alike.
+    for (const name of delegate.required) {
+      expect(delegate.properties[name], name).toBe(start.properties[name]);
+    }
+    expect(
+      ajv.compile(delegate)({
+        sessionId: "c0ffee00-0000-0000-0000-000000000000",
+        handle: "c0ffee00",
+        title: "Find the auth refresh",
+        model: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "off" },
+        state: "needs-recovery",
+      }),
+    ).toBe(true);
+  });
+
+  it("gives watch the targets it resolved, as lists a program can compare", () => {
+    const validate = ajv.compile(schemaOf("watch"));
+    expect(
+      validate({ action: "watch", sessions: ["abcdef12"], tickets: ["VC-1", "VC-2"], ended: 0 }),
+    ).toBe(true);
+    expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
+    expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
+    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
   });
 });

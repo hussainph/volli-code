@@ -7,6 +7,7 @@
  * sharded smoke that costs minutes. This is the same rule stated where it
  * costs milliseconds.
  */
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { MODEL_TIER_ROWS } from "@volli/shared";
 
@@ -21,7 +22,36 @@ function keywordsFor(key: string): readonly string[] {
   throw new Error(`no settings category ${key}`);
 }
 
+describe("Settings → General", () => {
+  it("offers window preferences, with no app-wide Protection experiment or search entry", () => {
+    const general = settingsGroups()
+      .flatMap((group) => group.categories)
+      .find((category) => category.key === "general");
+    expect(general).toBeDefined();
+    const html = renderToStaticMarkup(general?.content);
+
+    expect(html).toContain("Show the project switcher");
+    expect(html).toContain("Keep the sidebar open");
+    expect(html).not.toContain("Protection");
+    expect(html).not.toContain("experimental");
+    expect(keywordsFor("general").some((term) => term.includes("protection"))).toBe(false);
+  });
+});
+
+describe("auto-mode settings search", () => {
+  it("finds display hints in Appearance and paid shadow review in Models", () => {
+    expect(keywordsFor("appearance")).toContain("auto mode hints");
+    expect(keywordsFor(MODELS_CATEGORY_KEY)).toContain("shadow review");
+  });
+});
+
 describe("the Models category's search index", () => {
+  it("finds the global block reason control and both choices", () => {
+    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+    for (const label of ["Block reason", "Utility model", "Risk category"]) {
+      expect(terms).toContain(label.toLowerCase());
+    }
+  });
   it("finds every default-model row by its own label", () => {
     // The rail matches a lowercased substring, so the stored terms are
     // compared the same way the shell compares them.
@@ -34,6 +64,19 @@ describe("the Models category's search index", () => {
       ).toBe(true);
     }
   });
+
+  it("finds the Code Mode section by its labels and the words someone looks for it by (VC-471)", () => {
+    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+
+    // The section title and switch ("Code Mode"), the row behind Advanced,
+    // and what a person who has only heard of it types.
+    for (const label of ["Code Mode", "Pin a model", "codemode", "sandbox", "javascript"]) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `${label} should find Settings → Models`,
+      ).toBe(true);
+    }
+  });
 });
 
 describe("the Storage category's search index", () => {
@@ -41,6 +84,10 @@ describe("the Storage category's search index", () => {
     const terms = keywordsFor("storage").map((term) => term.toLowerCase());
 
     expect(terms).toContain("orphaned logs");
+  });
+
+  it("finds the saved tool output row by the label on screen (VC-469)", () => {
+    expect(keywordsFor("storage").map((term) => term.toLowerCase())).toContain("saved tool output");
   });
 
   it("finds every label the Running processes section draws (VC-341)", () => {

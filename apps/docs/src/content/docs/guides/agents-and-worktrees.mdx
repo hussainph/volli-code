@@ -5,121 +5,124 @@ sidebar:
   label: Chats and worktrees
 ---
 
-import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli lets you run independent tasks in parallel. Start a Board chat to shape
-a broad idea into tasks, then start a ticket chat for each task that needs code
-changes. In Volli, a task is a ticket.
+Use a **Board chat** to shape project-wide work before it has a ticket. Start a
+**ticket chat** when you know which task to work on. A ticket chat can work in
+its own Git worktree, so changes stay on separate branches. See
+[Use a chat](/guides/sessions/) to start and reopen a chat.
 
 ## Board chats and ticket chats
 
 | Chat | Use it for | Working directory |
 | --- | --- | --- |
-| **Ticket chat** | One task and its brief | That ticket's worktree |
-| **Board chat** | Broad project work before you have a task | The project's main checkout |
+| **Board chat** | Project work that is not scoped to one ticket | The project's main checkout |
+| **Ticket chat** | One ticket and its brief | The ticket's worktree, or the main checkout if you choose **Project checkout** |
 
-Choose a default model in **Settings → Models** before you start either
-kind. Volli records the model for the chat and does not silently switch to a
-different model or account.
+Choose a default model in **Settings → Models** before you start a built-in
+chat. A ticket's destination can be changed between **New worktree** and
+**Project checkout** until its first worktree is created.
+
+Moving a ticket to **Doing** records its status. It starts a Run only if an
+enabled Automation is armed for that column. Starting a chat is always a
+separate action.
 
 ## Ticket worktrees
 
-When a ticket needs isolated repository work, Volli prepares a ticket worktree
-on a branch named `volli/<DISPLAY-ID>-<slug>`, for example
-`volli/VC-12-mcp-server`. Worktrees live under `~/.volli/worktrees/`.
+When a ticket uses a worktree, its first Session creates a separate Git worktree
+on a branch named `volli/<DISPLAY-ID>-<slug>`, such as
+`volli/VC-12-mcp-server`. Volli stores ticket worktrees under
+`~/.volli/worktrees/`.
 
-The project folder you add to Volli remains the main checkout. A ticket's files
-and changes come from its worktree, so parallel tasks can work on separate
-branches.
+The base branch comes from the ticket's setting, the project's
+**Configure → Worktrees** setting, or the branch Volli detects. Creating a
+worktree uses the refs already on your machine; it does not fetch first.
 
-You can inspect a ticket's branch from a terminal companion:
+In **Configure → Worktrees**, **Branch from** sets the default base branch.
+**Then run** sets a setup command, such as `pnpm install`. The setup runs in the
+new worktree before the agent starts, and it does not run again when Volli
+reuses an existing worktree.
+
+Git brings tracked files into a new worktree. Volli also copies selected local
+files from the main checkout. By default, these are `.env*` and
+`.claude/settings.local.json`.
+
+Add your own patterns to a `.worktreeinclude` file in the repository root.
+Later patterns take precedence, and a `!pattern` line excludes a match. Volli
+does not replace a file that already exists in the worktree, nor refresh a
+copied file on later Sessions.
+
+An agent can read the copied local configuration, including credentials in an
+environment file. Review which files get copied before you start work.
+
+For example, add a pattern and exclude a file the defaults would copy:
+
+```text
+config/local.json
+!.env.production
+```
+
+`.worktreeinclude` extends the built-in defaults; it does not replace them.
+
+You can inspect a ticket branch from a terminal companion:
 
 ```sh
 volli worktree status VC-12
 volli worktree diff VC-12
 ```
 
-`worktree diff` compares the ticket branch with its base branch. Add
-`--working-tree` to see uncommitted changes.
+`worktree diff` compares the ticket branch with its base. With `--working-tree`,
+it shows uncommitted changes instead.
 
-When the base has moved on, `volli worktree sync VC-12` merges it into the
-ticket branch and reports what moved, or which paths conflicted. It never waits
-on checks or CI, and it leaves a conflicted merge in place for you to resolve;
-`--abort` undoes one.
+To merge an available base ref into the ticket branch, run
+`volli worktree sync VC-12`. Sync does not fetch, wait for checks, or resolve
+conflicts for you. It leaves a conflicted merge in place;
+`volli worktree sync VC-12 --abort` undoes that merge. See [Review ticket
+changes](/guides/review-changes/) for the Diffs rail and repository actions.
 
-Because parallel tickets work on separate branches, they can also work on the
-same files. `volli conflicts` reports which active worktrees touch the same
-paths, so overlapping work can be scheduled around rather than discovered at
-merge time.
+Separate branches can still change the same files. Run `volli conflicts` to
+find paths touched by multiple active worktrees.
 
 ## Chat history
 
-A chat is not tied to an open tab or terminal pane. Its history remains
-available when you navigate away, when its live connection ends, or when you
-reopen the app. Open the ticket workspace to return to a ticket chat and
-inspect its recorded work.
-
-A chat can reconnect without creating a second conversation history.
+A chat's history remains available when you navigate away or reopen Volli.
+See [Use a chat](/guides/sessions/) to return to an existing Session.
 
 ## Automation Runs and Sessions
 
-An Automation Run is not an existing chat resumed with a new prompt. Every Run
-opens a fresh **Session** and sends the Automation's **Instructions** as its
-first message. A **Ticket enters** Trigger opens a Ticket Session for the ticket
-that arrived; a scheduled Trigger opens a project-level Board Session. Run
-history keeps the resolved model and reasoning beside the Session it created.
-
-Use the [Automations guide](/guides/automations/) to choose whether a Run starts
-by hand, from an armed board column, or on a schedule.
+An Automation Run creates a fresh Session; it does not resume an existing
+chat. See [Automations](/guides/automations/) for Triggers and Run history.
 
 ## Terminal companions
 
-Open a terminal companion when you want a shell or a specific TUI workflow. It
-can run in a project or ticket worktree, but it does not replace Volli's built-in
-chat.
-
-The `volli` CLI is available to supported terminal companions over a local Unix
-socket. It can inspect ticket context and report work to the app. See the
-[CLI reference](/reference/cli/) for its commands.
-
-<Aside type="note">
-  Open a terminal companion explicitly. Configure **Settings → Models** before
-  you start a built-in chat.
-</Aside>
+A terminal companion is a manual shell workflow alongside built-in chat. See
+[Terminal companions](/guides/terminal-companions/) and the [CLI reference](/reference/cli/).
 
 ## Change sets and retained worktrees
 
-A ticket's change set includes committed and uncommitted changes relative to
-its base branch. Volli reads it from git rather than storing a copy.
+A ticket's Change Set includes committed and uncommitted changes relative to
+its base branch. Archiving keeps the worktree. A later cleanup can remove the
+checkout while keeping the branch, ticket, and history.
 
-Archiving a ticket retains its worktree. You can remove a worktree from the
-ticket context menu, or use **Archive & clean** when Volli offers it. A clean
-worktree can also be reclaimed after the ticket has spent the configured
-retention period in Done with no open pull request and no work running there.
-The ticket, branch, commits, and pull-request URL remain.
-
-To remove one yourself after its branch is landed, run:
-
-```sh
-git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
-```
+Follow [Review and publish changes](/guides/review-changes/) to land the work,
+then [Clean up worktrees](/guides/clean-up-worktrees/) for retention and removal.
 
 ## Next steps
 
 <CardGrid>
   <LinkCard
-    title="Ticket workspace"
-    href="/guides/ticket-workspace/"
-    description="Inspect a task's chats, files, diffs, and Now view."
+    title="Start and return to Sessions"
+    href="/guides/sessions/"
+    description="Create Board and ticket chats, then return to their history."
   />
   <LinkCard
-    title="Automations"
-    href="/guides/automations/"
-    description="Start fresh Sessions from saved instructions."
+    title="Review ticket changes"
+    href="/guides/review-changes/"
+    description="Read the Change Set, then commit or publish the branch."
   />
   <LinkCard
-    title="Troubleshooting"
-    href="/reference/troubleshooting/"
-    description="Resolve model, worktree, and local CLI problems."
+    title="Terminal companions"
+    href="/guides/terminal-companions/"
+    description="Open a shell or run an external TUI in a Volli workspace."
   />
 </CardGrid>
