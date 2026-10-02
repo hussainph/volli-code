@@ -525,7 +525,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                           leading slot is the kind glyph, and a bolt wedged
                           between that glyph and the title would break the
                           column every other palette row is scanned down. */}
-                      <SessionProvenanceMark provenance={item.provenance} rowTitle={item.title} />
+                      <SessionProvenanceMark provenance={item.provenance} />
                     </span>
                     <span className="truncate text-label text-muted-foreground">{context}</span>
                   </span>
