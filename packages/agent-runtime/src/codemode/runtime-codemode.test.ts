@@ -8,6 +8,7 @@
  * made directly.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,10 +224,12 @@ async function runTurn(
     interruptWhen?: Promise<void>;
     parallelMcpReads?: boolean;
     executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+    authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
   } = {},
 ) {
   const runtime = createPiAgentRuntime({
     sessionDataDir: h.sessions,
+    authorityShadowReviewEnabled: options.authorityShadowReviewEnabled,
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
@@ -511,7 +514,7 @@ describe("Code Mode through the real Session path", () => {
           },
           { text: "done" },
         ],
-        { executionEnvFactory: f.executionEnvFactory },
+        { executionEnvFactory: f.executionEnvFactory, authorityShadowReviewEnabled: () => true },
       );
       // Even the second review, after the first tool result, sees only the
       // user's request and this call: no script, prior results or prose.
@@ -554,6 +557,87 @@ describe("Code Mode through the real Session path", () => {
         ]);
         expect(resultText(f.h, "cm-1")).toContain("do not work around this block");
       }
+    },
+  );
+
+  it.each(["default", "off", "disabled-live"] as const)(
+    "skips subsequent nested shadow classification when %s",
+    async (setting) => {
+      const f = reviewFixture({ enforcement: "observe", flag: true });
+      const commands = ["printf first", "printf second"];
+      const program =
+        'await tools.bash({ command: "printf first" }); return await tools.bash({ command: "printf second" });';
+      const programDigest = createHash("sha256").update(program).digest("hex").slice(0, 12);
+      const nestedIds = commands.map((_, index) => `cm-1:${programDigest}:${index + 1}`);
+      const order: string[] = [];
+      const observe = f.spec.observer;
+      f.spec.observer = async (observation) => {
+        await observe(observation);
+        if (observation.kind === "authority-review") order.push(`review:${observation.toolCallId}`);
+      };
+      let enabled = setting === "disabled-live";
+      const execute = f.exec.getMockImplementation()!;
+      f.exec.mockImplementation(async (...args) => {
+        order.push(`execute:${args[0]}`);
+        const result = await execute(...args);
+        enabled = false;
+        return result;
+      });
+      await runTurn(
+        f.h,
+        f.spec,
+        [
+          {
+            calls: [{ id: "cm-1", name: "codemode", args: { code: program } }],
+          },
+          { text: "done" },
+        ],
+        {
+          executionEnvFactory: f.executionEnvFactory,
+          ...(setting === "default" ? {} : { authorityShadowReviewEnabled: () => enabled }),
+        },
+      );
+      expect(f.exec.mock.calls.map(([command]) => command)).toEqual(commands);
+      expect(f.calls.map((call) => call.state)).toEqual(
+        setting === "disabled-live"
+          ? [
+              {
+                userMessages: ["Run the fixture task."],
+                call: { tool: "bash", args: { command: commands[0] } },
+              },
+            ]
+          : [],
+      );
+      expect(f.h.observations.filter((o) => o.kind === "authority-review")).toEqual(
+        setting === "disabled-live"
+          ? [
+              expect.objectContaining({
+                toolCallId: nestedIds[0],
+                tool: "bash",
+                mode: "shadow",
+                wouldFlag: true,
+                authoriser: "classifier",
+                missReason: null,
+              }),
+            ]
+          : [],
+      );
+      expect(order).toEqual([
+        ...(setting === "disabled-live" ? [`review:${nestedIds[0]}`] : []),
+        ...commands.map((command) => `execute:${command}`),
+      ]);
+      expect(
+        activities(f.h)
+          .filter((activity) => activity.activityId.startsWith("cm-1:"))
+          .map((activity) => [activity.activityId, activity.state]),
+      ).toEqual(
+        nestedIds.flatMap((id) => [
+          [id, "started"],
+          [id, "completed"],
+        ]),
+      );
+      expect(resultText(f.h, "cm-1")).toContain("2 calls: 2 ok");
+      expect(f.ask).not.toHaveBeenCalled();
     },
   );
 

@@ -207,6 +207,7 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { readAuthorityShadowReviewEnabled } from "./session-runtime/authority-shadow-review";
 import { SecretStore } from "./secrets/store";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
@@ -1595,6 +1596,9 @@ app.whenReady().then(async () => {
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
           authorityReason: (input) => authorityReason(input),
+          // Paid background review is an independent opt-in, read live so an
+          // off switch stops subsequent reviews without restarting Sessions.
+          authorityShadowReviewEnabled: () => readAuthorityShadowReviewEnabled(dbHandle.db),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,

@@ -193,7 +193,7 @@ interface EmitApi {
    */
   thinking(delta: string, signature?: string): void;
   text(delta: string): void;
-  toolCall(name: string, args: JsonObject): void;
+  toolCall(name: string, args: JsonObject, id?: string): void;
   /**
    * A provider diagnostic on the reply, as pi-ai appends them.
    *
@@ -302,8 +302,8 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
         stream.push({ type: "text_end", contentIndex: index, content: delta, partial: message });
         index += 1;
       },
-      toolCall(name, args) {
-        const requested: ToolCall = { type: "toolCall", id: `tc-${index}`, name, arguments: args };
+      toolCall(name, args, id = `tc-${index}`) {
+        const requested: ToolCall = { type: "toolCall", id, name, arguments: args };
         message.content.push(requested);
         message.stopReason = "toolUse";
         stream.push({ type: "toolcall_start", contentIndex: index, partial: message });
@@ -2946,6 +2946,7 @@ describe("startSession", () => {
     const ask = vi.fn(async () => "refuse" as const);
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
+      authorityShadowReviewEnabled: () => true,
       executionEnvFactory: async () =>
         ({
           cwd: attachment.worktreePath,
@@ -3028,6 +3029,7 @@ describe("startSession", () => {
     }));
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
+      authorityShadowReviewEnabled: () => true,
       executionEnvFactory: async () =>
         ({
           cwd: attachment.worktreePath,
@@ -3067,10 +3069,12 @@ describe("startSession", () => {
       missMessage?: string;
       count?: number;
       command?: string;
+      bashCalls?: { id: string; command: string }[];
       skippedRead?: boolean;
       priorDenials?: number;
       ask?: SessionRuntimeSpec["ask"];
       authorityReason?: SessionRuntimeSpec["authorityReason"];
+      authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
       observer?: SessionRuntimeSpec["observer"];
     } = {},
   ) {
@@ -3113,7 +3117,7 @@ describe("startSession", () => {
         });
       },
     };
-    const exec = vi.fn(async () => ({
+    const exec = vi.fn(async (_command: string) => ({
       ok: true as const,
       value: { stdout: "", stderr: "", exitCode: 0 },
     }));
@@ -3121,6 +3125,7 @@ describe("startSession", () => {
     const createRuntime = () =>
       createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
+        authorityShadowReviewEnabled: input.authorityShadowReviewEnabled,
         ...(input.skippedRead
           ? {}
           : {
@@ -3133,12 +3138,20 @@ describe("startSession", () => {
             }),
         models: modelsWithStream(
           scriptedStream([
-            ...Array.from({ length: input.count ?? 1 }, () => (emit: EmitApi) => {
-              if (input.skippedRead)
-                emit.toolCall("read", { path: join(attachment.worktreePath, "MARKER.txt") });
-              else emit.toolCall("bash", { command: input.command ?? "printf hi" });
-              emit.finish();
-            }),
+            ...Array.from(
+              { length: input.bashCalls?.length ?? input.count ?? 1 },
+              (_, index) => (emit: EmitApi) => {
+                if (input.skippedRead)
+                  emit.toolCall("read", { path: join(attachment.worktreePath, "MARKER.txt") });
+                else
+                  emit.toolCall(
+                    "bash",
+                    { command: input.bashCalls?.[index]?.command ?? input.command ?? "printf hi" },
+                    input.bashCalls?.[index]?.id,
+                  );
+                emit.finish();
+              },
+            ),
             (emit, context) => {
               resultContext = context;
               emit.text("Safer route");
@@ -3166,6 +3179,143 @@ describe("startSession", () => {
       context: () => resultContext,
     };
   }
+
+  it.each([
+    { name: "default", read: undefined },
+    { name: "off", read: () => false },
+    {
+      name: "unreadable",
+      read: (): boolean => {
+        throw new Error("settings unavailable");
+      },
+    },
+  ])("skips paid shadow review when $name, even with a configured model", async ({ read }) => {
+    for (const enforcement of ["observe", "enforce"] as const) {
+      const bashCalls = [
+        { id: "shadow-first", command: "printf first" },
+        { id: "shadow-second", command: "printf second" },
+      ];
+      const ask = vi.fn(async () => "refuse" as const);
+      const h = autoReviewHarness({
+        flag: true,
+        bashCalls,
+        ask,
+        authorityShadowReviewEnabled: read,
+      });
+      h.spec.authority = {
+        ...h.spec.authority!,
+        enforcement,
+        judgmentMode: enforcement === "observe" ? "auto" : "ask",
+        classifierModel: "typesafe/jev",
+      };
+      const handle = await h.runtime.startSession(h.spec);
+      await handle.submitUserMessage("Run the calls");
+      await handle.close();
+      expect(h.calls.map((call) => call.state)).toEqual([]);
+      expect(h.exec.mock.calls.map(([command]) => command)).toEqual(
+        bashCalls.map((call) => call.command),
+      );
+      expect(h.attachment.observations.filter((o) => o.kind === "authority-review")).toEqual([]);
+      expect(ask).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reads shadow opt-in live before each call in an existing attachment", async () => {
+    let enabled = false;
+    const read = vi.fn(() => enabled);
+    const bashCalls = [
+      { id: "shadow-first", command: "printf first" },
+      { id: "shadow-middle", command: "printf middle" },
+      { id: "shadow-last", command: "printf last" },
+    ];
+    const ask = vi.fn(async () => "refuse" as const);
+    const h = autoReviewHarness({
+      flag: true,
+      bashCalls,
+      ask,
+      authorityShadowReviewEnabled: read,
+    });
+    h.spec.authority = { ...h.spec.authority!, enforcement: "observe" };
+    const order: string[] = [];
+    const observe = h.spec.observer;
+    h.spec.observer = async (observation) => {
+      await observe(observation);
+      if (observation.kind === "authority-review") order.push(`review:${observation.toolCallId}`);
+    };
+    const execute = h.exec.getMockImplementation()!;
+    h.exec.mockImplementation(async (command) => {
+      order.push(`execute:${command}`);
+      const result = await execute(command);
+      enabled = command === bashCalls[0]!.command;
+      return result;
+    });
+    const handle = await h.runtime.startSession(h.spec);
+    await handle.submitUserMessage("Run the calls");
+    await handle.close();
+    expect(read.mock.results.map((result) => result.value)).toEqual([false, true, false]);
+    expect(h.calls.map((call) => call.state)).toEqual([
+      {
+        userMessages: ["Run the calls"],
+        call: { tool: "bash", args: { command: "printf middle" } },
+      },
+    ]);
+    expect(h.exec.mock.calls.map(([command]) => command)).toEqual(
+      bashCalls.map((call) => call.command),
+    );
+    expect(h.attachment.observations.filter((o) => o.kind === "authority-review")).toEqual([
+      expect.objectContaining({
+        toolCallId: "shadow-middle",
+        tool: "bash",
+        mode: "shadow",
+        wouldFlag: true,
+        authoriser: "classifier",
+        missReason: null,
+      }),
+    ]);
+    expect(order).toEqual([
+      "execute:printf first",
+      "review:shadow-middle",
+      "execute:printf middle",
+      "execute:printf last",
+    ]);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps deterministic ask-mode denials with shadow opt-in=%s",
+    async (enabled) => {
+      const h = autoReviewHarness({
+        command: "git reset --hard",
+        authorityShadowReviewEnabled: () => enabled,
+      });
+      h.spec.authority = { ...h.spec.authority!, judgmentMode: "ask", location: "main-checkout" };
+      const handle = await h.runtime.startSession(h.spec);
+      await handle.submitUserMessage("Run the call");
+      await handle.close();
+      expect(h.exec).not.toHaveBeenCalled();
+      expect(h.attachment.observations).toContainEqual(
+        expect.objectContaining({ kind: "authority", state: "denied" }),
+      );
+      expect(h.calls).toHaveLength(enabled ? 1 : 0);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps automatic classification with shadow disabled (flag=%s)",
+    async (flag) => {
+      const read = vi.fn(() => false);
+      const h = autoReviewHarness({ flag, authorityShadowReviewEnabled: read });
+      const handle = await h.runtime.startSession(h.spec);
+      await handle.submitUserMessage("Run the call");
+      await handle.close();
+      expect(read).not.toHaveBeenCalled();
+      expect(h.calls).toHaveLength(1);
+      expect(h.exec).toHaveBeenCalledTimes(flag ? 0 : 1);
+      expect(h.attachment.observations).toContainEqual(
+        expect.objectContaining({ kind: "authority-review", mode: "auto", wouldFlag: flag }),
+      );
+    },
+  );
 
   it("skips automatic review for native reads without requiring a configured judge", async () => {
     const h = autoReviewHarness({ skippedRead: true, miss: "unset" });
@@ -3398,6 +3548,7 @@ describe("startSession", () => {
     "does not execute an unauditable call even under %s",
     async (enforcement) => {
       const h = autoReviewHarness({
+        authorityShadowReviewEnabled: () => true,
         observer: async (observation) => {
           if (observation.kind === "authority-review")
             throw new Error("review ledger write failed");
@@ -3423,6 +3574,7 @@ describe("startSession", () => {
     const runtime = () =>
       createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
+        authorityShadowReviewEnabled: () => true,
         executionEnvFactory: async () =>
           ({
             cwd: attachment.worktreePath,
@@ -4113,6 +4265,7 @@ describe("startSession", () => {
       });
       const runtime = createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
+        authorityShadowReviewEnabled: () => true,
         executionEnvFactory: async () => containedEnv,
         models: modelsWithStream(
           scriptedStream([
