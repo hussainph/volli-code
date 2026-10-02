@@ -2,10 +2,8 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { deleteAppState, setAppState } from "../db/app-state-repo";
 import { DECISION_MODEL_APP_STATE_KEY } from "../decision/settings";
-import {
-  AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
-  readAuthorityShadowReviewEnabled,
-} from "./authority-shadow-review";
+import { AUTHORITY_SHADOW_REVIEW_ENABLED_KEY } from "../../authority-review-preferences";
+import { readAuthorityShadowReviewEnabled } from "./authority-shadow-review";
 
 let db: Database.Database;
 beforeEach(() => {

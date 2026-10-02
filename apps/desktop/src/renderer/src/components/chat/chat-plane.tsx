@@ -2420,14 +2420,30 @@ export const ChatTurn = React.memo(function ChatTurn({
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const heldReviewsByRow = React.useRef<
+    ReadonlyMap<string, readonly TranscriptLinkedAuthorityReview[]>
+  >(new Map());
   const reviewsByRow = React.useMemo(() => {
-    const indexed = new Map<string, TranscriptAuthorityReview[]>();
+    const indexed = new Map<string, TranscriptLinkedAuthorityReview[]>();
     for (const review of authorityReviews ?? []) {
       const entries = indexed.get(review.toolRowKey) ?? [];
       entries.push(review);
       indexed.set(review.toolRowKey, entries);
     }
-    return indexed;
+    // A new verdict for one call must not invalidate every settled ToolRow.
+    // Like useStableList, retain content-equal groups, not just their entries.
+    const previous = heldReviewsByRow.current;
+    const next = new Map<string, readonly TranscriptLinkedAuthorityReview[]>();
+    let unchanged = previous.size === indexed.size;
+    for (const [key, reviews] of indexed) {
+      const before = previous.get(key);
+      const entries =
+        before === undefined ? reviews : holdList(before, reviews, sameLinkedAuthorityReview);
+      next.set(key, entries);
+      if (entries !== before) unchanged = false;
+    }
+    if (!unchanged) heldReviewsByRow.current = next;
+    return heldReviewsByRow.current;
   }, [authorityReviews]);
 
   // A receipt lands where it happened. Answering an interaction commits a

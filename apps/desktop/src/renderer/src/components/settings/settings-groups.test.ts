@@ -40,7 +40,7 @@ describe("Settings → General", () => {
 
 describe("auto-mode settings search", () => {
   it("finds display hints in Appearance and paid shadow review in Models", () => {
-    expect(keywordsFor("appearance")).toContain("show auto mode hints");
+    expect(keywordsFor("appearance")).toContain("auto mode hints");
     expect(keywordsFor(MODELS_CATEGORY_KEY)).toContain("shadow review");
   });
 });

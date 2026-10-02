@@ -131,7 +131,7 @@ describe("judgeAuthorityCall", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("teaches outcome-based implementation means without relaxing restrictions or risk review", async () => {
+  it("pins the outcome-based authority prompt contract and request bounds", async () => {
     const { decisions, calls } = fixture();
     const userMessages = [
       "Fix the incorrect hints in this ticket's workspace. Use bounded helpers if useful.",

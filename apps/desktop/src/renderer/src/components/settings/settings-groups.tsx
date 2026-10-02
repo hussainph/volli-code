@@ -121,7 +121,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             // unreachable from rail search until settings-search-smoke finally
             // ran in CI and said so.
             "show cost and token usage",
-            "show auto mode hints",
+            "auto mode hints",
             "hints",
             "authority",
             "cost",

@@ -40,7 +40,6 @@ import type {
 } from "../../../../ipc/contract";
 import {
   AUTHORITY_REASON_SOURCE_KEY,
-  AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
   AUTHORITY_REASON_SOURCES,
   authorityReasonSource,
   type AuthorityReasonSource,
@@ -62,6 +61,10 @@ import {
   settingLabel,
   type DecisionMode,
 } from "@renderer/components/pages/decision-model-model";
+import {
+  AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
+  parseAuthorityShadowReviewEnabled,
+} from "../../../../authority-review-preferences";
 import {
   CONTROL_W,
   OverrideControl,
@@ -348,8 +351,8 @@ function TestResult({ test }: { test: DecisionModelTestView | null }) {
   );
 }
 
-/** The only app-wide block-reason control; projects never get another axis. */
-function BlockReasonRow() {
+/** App-wide shadow spending and block wording; neither changes pinned authority. */
+function AuthorityReviewPreferences() {
   const [state, setState] = React.useState<
     | { status: "loading" }
     | { status: "loaded"; source: AuthorityReasonSource }
@@ -371,12 +374,11 @@ function BlockReasonRow() {
       }
       // Keep the spending switch usable even if the unrelated wording choice
       // is corrupt. Match main's opt-in rule: invalid state cannot spend.
-      const rawShadow = result.data.appState[AUTHORITY_SHADOW_REVIEW_ENABLED_KEY];
-      try {
-        setShadowEnabled(rawShadow !== undefined && JSON.parse(rawShadow) === true);
-      } catch {
-        setShadowEnabled(false);
-      }
+      setShadowEnabled(
+        parseAuthorityShadowReviewEnabled(
+          result.data.appState[AUTHORITY_SHADOW_REVIEW_ENABLED_KEY],
+        ),
+      );
       setState({
         status: "loaded",
         source: authorityReasonSource(result.data.appState[AUTHORITY_REASON_SOURCE_KEY]),
@@ -408,7 +410,12 @@ function BlockReasonRow() {
       window.api.appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, JSON.stringify(enabled)),
     );
     setBusy(false);
-    if (saved !== null) setShadowEnabled(enabled);
+    if (saved !== null) {
+      // A retry may have read the old choice before this write committed.
+      // Retire that read so the control cannot contradict the spending switch.
+      fetches.invalidate();
+      setShadowEnabled(enabled);
+    }
   }
 
   return (
@@ -712,7 +719,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
         </>
       ) : null}
 
-      <BlockReasonRow />
+      <AuthorityReviewPreferences />
 
       {fieldError === null ? null : (
         <Notice announce tone="error" icon={WarningIcon} title={fieldError} />

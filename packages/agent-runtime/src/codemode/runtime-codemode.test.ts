@@ -8,6 +8,7 @@
  * made directly.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -559,13 +560,25 @@ describe("Code Mode through the real Session path", () => {
     },
   );
 
-  it.each(["default", "disabled-live"] as const)(
+  it.each(["default", "off", "disabled-live"] as const)(
     "skips subsequent nested shadow classification when %s",
     async (setting) => {
       const f = reviewFixture({ enforcement: "observe", flag: true });
+      const commands = ["printf first", "printf second"];
+      const program =
+        'await tools.bash({ command: "printf first" }); return await tools.bash({ command: "printf second" });';
+      const programDigest = createHash("sha256").update(program).digest("hex").slice(0, 12);
+      const nestedIds = commands.map((_, index) => `cm-1:${programDigest}:${index + 1}`);
+      const order: string[] = [];
+      const observe = f.spec.observer;
+      f.spec.observer = async (observation) => {
+        await observe(observation);
+        if (observation.kind === "authority-review") order.push(`review:${observation.toolCallId}`);
+      };
       let enabled = setting === "disabled-live";
       const execute = f.exec.getMockImplementation()!;
       f.exec.mockImplementation(async (...args) => {
+        order.push(`execute:${args[0]}`);
         const result = await execute(...args);
         enabled = false;
         return result;
@@ -575,15 +588,7 @@ describe("Code Mode through the real Session path", () => {
         f.spec,
         [
           {
-            calls: [
-              {
-                id: "cm-1",
-                name: "codemode",
-                args: {
-                  code: 'await tools.bash({ command: "printf first" }); return await tools.bash({ command: "printf second" });',
-                },
-              },
-            ],
+            calls: [{ id: "cm-1", name: "codemode", args: { code: program } }],
           },
           { text: "done" },
         ],
@@ -592,10 +597,46 @@ describe("Code Mode through the real Session path", () => {
           ...(setting === "default" ? {} : { authorityShadowReviewEnabled: () => enabled }),
         },
       );
-      const expected = setting === "default" ? 0 : 1;
-      expect(f.exec).toHaveBeenCalledTimes(2);
-      expect(f.calls).toHaveLength(expected);
-      expect(f.h.observations.filter((o) => o.kind === "authority-review")).toHaveLength(expected);
+      expect(f.exec.mock.calls.map(([command]) => command)).toEqual(commands);
+      expect(f.calls.map((call) => call.state)).toEqual(
+        setting === "disabled-live"
+          ? [
+              {
+                userMessages: ["Run the fixture task."],
+                call: { tool: "bash", args: { command: commands[0] } },
+              },
+            ]
+          : [],
+      );
+      expect(f.h.observations.filter((o) => o.kind === "authority-review")).toEqual(
+        setting === "disabled-live"
+          ? [
+              expect.objectContaining({
+                toolCallId: nestedIds[0],
+                tool: "bash",
+                mode: "shadow",
+                wouldFlag: true,
+                authoriser: "classifier",
+                missReason: null,
+              }),
+            ]
+          : [],
+      );
+      expect(order).toEqual([
+        ...(setting === "disabled-live" ? [`review:${nestedIds[0]}`] : []),
+        ...commands.map((command) => `execute:${command}`),
+      ]);
+      expect(
+        activities(f.h)
+          .filter((activity) => activity.activityId.startsWith("cm-1:"))
+          .map((activity) => [activity.activityId, activity.state]),
+      ).toEqual(
+        nestedIds.flatMap((id) => [
+          [id, "started"],
+          [id, "completed"],
+        ]),
+      );
+      expect(resultText(f.h, "cm-1")).toContain("2 calls: 2 ok");
       expect(f.ask).not.toHaveBeenCalled();
     },
   );
