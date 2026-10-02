@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import Database from "better-sqlite3";
 import { openVolliDb } from "./index";
+import { beginDatabaseRecovery } from "./recovery-pending";
 
 let dir: string | undefined;
 
@@ -44,6 +46,67 @@ describe("openVolliDb read tuning (VC-355)", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("closes the connection when migration fails before entering degraded recovery", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-failed-open-"));
+    const path = join(dir, "volli.db");
+    const incompatible = new Database(path);
+    incompatible.exec("CREATE TABLE unrelated (id INTEGER); PRAGMA user_version = 1");
+    incompatible.close();
+    const close = vi.spyOn(Database.prototype, "close");
+    try {
+      expect(() => openVolliDb(path)).toThrow();
+      // Preflight, migration-copy verification, and the failed writer all close.
+      // Assert ownership, not a count that depends on the migration safety runner.
+      const closed = close.mock.contexts as Database.Database[];
+      expect(closed.every((handle) => !handle.open)).toBe(true);
+      expect(closed.some((handle) => handle.name === path && !handle.readonly)).toBe(true);
+      expect(closed.some((handle) => handle.name === path && handle.readonly)).toBe(true);
+    } finally {
+      close.mockRestore();
+    }
+  });
+
+  it("preserves malformed startup files before any write-capable open", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-corrupt-open-"));
+    const path = join(dir, "volli.db");
+    const files = ["", "-wal", "-shm"].map(
+      (suffix) => [path + suffix, Buffer.from(`damaged ${suffix} evidence`)] as const,
+    );
+    for (const [file, bytes] of files) writeFileSync(file, bytes);
+    expect(() => openVolliDb(path)).toThrow();
+    for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
+  });
+
+  it("does not create a missing DB after an interrupted recovery", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-interrupted-open-"));
+    const path = join(dir, "volli.db");
+    beginDatabaseRecovery(path, "preserved-original");
+    expect(() => openVolliDb(path)).toThrow("interrupted");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("refuses a zeroed index before overwriting an existing clean migration copy", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-corrupt-migration-"));
+    const path = join(dir, "volli.db");
+    const db = new Database(path);
+    db.exec(
+      "CREATE TABLE integrity_probe (value TEXT); CREATE INDEX integrity_probe_idx ON integrity_probe(value); INSERT INTO integrity_probe VALUES ('saved'); PRAGMA user_version = 1",
+    );
+    const { rootpage } = db
+      .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'integrity_probe_idx'")
+      .get() as { rootpage: number };
+    const pageSize = db.pragma("page_size", { simple: true }) as number;
+    db.close();
+    const clean = readFileSync(path);
+    writeFileSync(`${path}.backup-v1`, clean);
+    const damaged = Buffer.from(clean);
+    damaged.fill(0, (rootpage - 1) * pageSize, rootpage * pageSize);
+    writeFileSync(path, damaged);
+    expect(() => openVolliDb(path)).toThrow();
+    expect(readFileSync(`${path}.backup-v1`)).toEqual(clean);
+    expect(readFileSync(path)).toEqual(damaged);
   });
 
   it("does not rerun ANALYZE on a routine open", () => {

@@ -58,6 +58,8 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  DatabaseRecoveryListResult,
+  DatabaseRecoveryRestoreResult,
   BrowserPictureInput,
   BrowserPictureResult,
   BrowserTracesInput,
@@ -417,6 +419,11 @@ const api = {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+  },
+  databaseRecovery: {
+    list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
+    restore: (): Promise<DatabaseRecoveryRestoreResult> =>
+      invoke("volli:database-recovery-restore"),
   },
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
