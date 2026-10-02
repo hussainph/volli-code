@@ -37,6 +37,17 @@ function message(id: string, text: string): UIMessage {
   return { id, role: "assistant", parts: [{ type: "text", text }] };
 }
 
+function toolPart(id: string): UIMessage["parts"][number] {
+  return {
+    type: "dynamic-tool",
+    toolCallId: id,
+    toolName: "execute",
+    state: "output-available",
+    input: {},
+    output: "done",
+  };
+}
+
 /**
  * One transient emission. `throughSequence` is the durable sequence it was
  * emitted beside — the whole input to the staleness guard — so every helper
@@ -707,6 +718,42 @@ describe("classifier verdict transcript notices", () => {
     expect(authorityReviewNoticeCopy(all.authorityReviews[2]!)).toBe(
       "Blocked execute: Outside the request.",
     );
+  });
+
+  it("links reviews to exact tool calls, not their earlier message anchors", () => {
+    const one = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "First",
+    };
+    const two = { ...one, sequence: 2, toolCallId: "call-2", reason: "Second" };
+    const turns: UIMessage[][] = [
+      [{ id: "user", role: "user", parts: [{ type: "text", text: "Implement it" }] }],
+      [
+        {
+          id: "assistant",
+          role: "assistant",
+          parts: [toolPart("call-2"), toolPart("call-1"), toolPart("call-1")],
+        },
+      ],
+    ];
+    const rows = projectTranscriptRows(turns, [], [], [one, two]);
+    expect(rows).toEqual([
+      { kind: "turn", messages: turns[0] },
+      { kind: "turn", messages: turns[1], authorityReviews: [two, one] },
+    ]);
+    // A verdict may arrive before the tool's transcript part; once the part
+    // lands the fallback notice disappears, rather than leaving a duplicate.
+    expect(projectTranscriptRows([turns[0]!], [], [], [one])[0]?.kind).toBe("authority-review");
+    const more = { ...one, sequence: 3, reason: "Another review" };
+    expect(projectTranscriptRows(turns, [], [], [one, more])[1]).toEqual({
+      kind: "turn",
+      messages: turns[1],
+      authorityReviews: [one, more],
+    });
   });
 
   it("keeps utility wording labelled in the person-facing review notice only", () => {

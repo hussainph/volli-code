@@ -320,6 +320,14 @@ export interface PiRuntimeHostOptions {
    */
   compactionPolicy?: () => CompactionPolicy;
   /**
+   * Opt-in to paid, behavior-neutral authority reviews. Read before each
+   * eligible shadow call, not pinned at attachment, so disabling the setting
+   * stops subsequent reviews in live Sessions. Absent, false or a failed read
+   * skips both the decision request and the authority-review observation.
+   * Automatic enforcement and deterministic Protection are unaffected.
+   */
+  authorityShadowReviewEnabled?: () => boolean;
+  /**
    * Where metadata-only observability events go. A side channel, never a
    * participant: the runtime reduces its own observations and provider
    * attempts to bounded events and hands them here without awaiting, and a
@@ -383,6 +391,7 @@ interface PiRuntimeHost {
   connectivity: ConnectivityPort;
   streamSupervision: StreamSupervisionTiming;
   compactionPolicy: () => CompactionPolicy;
+  authorityShadowReviewEnabled: () => boolean;
   observability: ObservabilitySink;
   /**
    * One holder and one schedule per runtime: a hold the endpoint imposed
@@ -441,6 +450,14 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     connectivity: options.connectivity ?? ALWAYS_ONLINE,
     streamSupervision: options.streamSupervision ?? DEFAULT_STREAM_SUPERVISION,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
+    authorityShadowReviewEnabled: () => {
+      try {
+        return options.authorityShadowReviewEnabled?.() === true;
+      } catch {
+        // An unreadable opt-in never authorizes a paid background request.
+        return false;
+      }
+    },
     observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
     ...(options.usageLimits === undefined
       ? {}
@@ -2531,7 +2548,8 @@ async function attachSession(
         }
         // Protection deliberately uses the deterministic ledger/card funnel,
         // even when an upgraded On project retains a legacy automatic policy.
-        // Legacy attachments keep VC-28's shadow/automatic review unchanged.
+        // Legacy automatic enforcement is unchanged; behavior-neutral shadow
+        // classification requires a separate live host opt-in.
         const protectedCall = spec.approvals !== undefined;
         const auto =
           !protectedCall &&
@@ -2548,7 +2566,7 @@ async function attachSession(
           auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
         let askImmediately = false;
         let personReason: string | undefined;
-        if (!protectedCall && eligible) {
+        if (!protectedCall && eligible && (auto || host.authorityShadowReviewEnabled())) {
           const review = await judgeAuthorityCall({
             decisions: spec.decisions,
             sessionId: spec.identity.sessionId,
