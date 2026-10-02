@@ -320,30 +320,33 @@ describe("live observation translation", () => {
     expect(recorded?.usage.costUsd).toBeNull();
   });
 
-  it("records a compaction that produced nothing as its own fact", async () => {
-    const { translate, sink } = composition();
+  it.each(["marker-4", undefined])(
+    "records a failed compaction with recovery marker %s as its own fact",
+    async (marker) => {
+      const { translate, sink } = composition();
 
-    // No entry to name it by, because none was written — so it falls back to
-    // the executor's marker, exactly as an attention does.
-    await translate({
-      kind: "compaction",
-      state: "failed",
-      reason: "threshold",
-      message: "Summarization failed: the summarizer is unhappy",
-      recoveryCursor: "marker-4",
-    });
-
-    expect(sink.observations).toEqual([
-      {
-        id: `pi:compaction:${ATTACHMENT_ID}:failed:marker-4`,
-        kind: "context.compaction_failed",
-        occurredAt: 1000,
-        cursor: { entryId: "marker-4" },
+      // No summary was written: use its recovery marker when present, or a
+      // live identity when the executor could not supply one.
+      await translate({
+        kind: "compaction",
+        state: "failed",
         reason: "threshold",
-        detail: "Summarization failed: the summarizer is unhappy",
-      },
-    ]);
-  });
+        message: "Summarization failed: the summarizer is unhappy",
+        ...(marker === undefined ? {} : { recoveryCursor: marker }),
+      });
+
+      expect(sink.observations).toEqual([
+        {
+          id: `pi:compaction:${ATTACHMENT_ID}:failed:${marker ?? "live:1"}`,
+          kind: "context.compaction_failed",
+          occurredAt: 1000,
+          ...(marker === undefined ? {} : { cursor: { entryId: marker } }),
+          reason: "threshold",
+          detail: "Summarization failed: the summarizer is unhappy",
+        },
+      ]);
+    },
+  );
 
   it("streams a compaction's live progress without turning it into history", async () => {
     const { translate, sink } = composition();

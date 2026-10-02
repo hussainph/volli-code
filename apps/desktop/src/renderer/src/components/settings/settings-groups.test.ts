@@ -94,6 +94,7 @@ describe("the Storage category's search index", () => {
 describe("retired review settings", () => {
   it("offers no review or display-hint entries while retaining classify", () => {
     expect(keywordsFor("appearance")).not.toContain("show auto mode hints");
+    expect(keywordsFor("appearance")).not.toContain("auto mode hints");
     const terms = keywordsFor(MODELS_CATEGORY_KEY);
     expect(terms).not.toContain("shadow review");
     expect(terms).not.toContain("block reason");

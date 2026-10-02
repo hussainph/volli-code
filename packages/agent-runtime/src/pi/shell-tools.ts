@@ -236,6 +236,19 @@ const startSchema = Type.Object({
   title: Type.Optional(
     Type.String({ description: "A short name for the shell, shown wherever it is listed." }),
   ),
+  notifyOn: Type.Optional(
+    Type.String({
+      maxLength: 200,
+      description:
+        "Also notice me the first time this text appears in a line of the shell's output, once. A plain string unless notifyOnRegex is true.",
+    }),
+  ),
+  notifyOnRegex: Type.Optional(
+    Type.Boolean({
+      description:
+        "Treat notifyOn as a bounded-state regex against the first 1,000 UTF-16 units of each line, including an unfinished line. Supports classes, groups, alternatives, anchors and repeats; no lookaround, backreferences or word boundaries. Patterns over 200 units or 512 expanded states are refused.",
+    }),
+  ),
 });
 
 const outputSchema = Type.Object({
@@ -258,6 +271,7 @@ const DESCRIPTIONS: Record<ShellToolId, string> = {
   shell_start: [
     "Start a command that runs beside the turn instead of holding it: a dev server, a watch build, a long test run, a log tail.",
     "Returns the shell's id and whatever it printed in its first second, so a server's listening line comes back in the same call.",
+    "When it exits, Volli sends you a notice with how it ended and the end of its output, by itself: do not poll or sleep for it. Optional notifyOn adds one notice the first time output matches, even before a newline.",
     "Volli caps how many a Session may hold and kills every one when the Session's attachment ends. Use execute for a command you want to wait on.",
   ].join(" "),
   shell_output: [
@@ -304,6 +318,9 @@ export function createShellTool(
               command: params.command,
               ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
               ...(params.title === undefined ? {} : { title: params.title }),
+              ...(params.notifyOn === undefined
+                ? {}
+                : { notifyOn: { pattern: params.notifyOn, regex: params.notifyOnRegex === true } }),
               signal: withdrawn,
             });
             const at = now();

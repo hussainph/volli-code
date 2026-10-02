@@ -120,6 +120,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Session identity, role and parentage — durable ahead of any executor.",
   },
   {
+    table: "host_notice_outbox",
+    decision: "include",
+    reason:
+      "Sanitized pending notices and terminal delivery ids; omitting them loses notices or resurrects replays.",
+  },
+  {
     table: "session_provenances",
     decision: "include",
     reason:
@@ -391,6 +397,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_events",
   "ticket_event_sequence",
   "sessions",
+  "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",
   "session_delegation_claims",

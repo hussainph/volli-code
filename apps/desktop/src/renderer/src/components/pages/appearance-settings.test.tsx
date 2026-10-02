@@ -101,6 +101,7 @@ describe("Settings → Appearance → Display", () => {
     expect(html).toContain("Zoom");
     expect(html).toContain("Diff layout");
     expect(html).toContain("Show cost and token usage");
-    expect(html).not.toContain("Show Auto mode hints");
+    expect(html).not.toContain("Auto mode hints");
+    expect(html).not.toContain("authority-hints-visible");
   });
 });

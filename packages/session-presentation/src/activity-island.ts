@@ -177,8 +177,10 @@ export interface IslandShell {
   id: string;
   command: string;
   state: "running" | "exited";
-  /** Exit code once exited. */
+  /** Exit code once exited; `null` when a signal ended it. */
   code: number | null;
+  /** The signal that ended it (VC-495), so a killed shell is not read as a clean exit. */
+  signal?: string | null;
 }
 
 /**
@@ -643,9 +645,10 @@ export function shellsHeading(shells: readonly IslandShell[]): string {
     : `Shells${FLASH_SEPARATOR}${shells.length} exited`;
 }
 
-/** `exit 137` once exited; `null` while running. */
+/** `exit 137` or `SIGTERM` once exited; `null` while running. */
 export function shellStateWord(shell: IslandShell): string | null {
-  return shell.state === "exited" ? `exit ${shell.code ?? 0}` : null;
+  if (shell.state !== "exited") return null;
+  return shell.signal ?? `exit ${shell.code ?? 0}`;
 }
 
 /* ---------------------------------------------------------------- summary */

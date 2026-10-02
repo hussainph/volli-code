@@ -118,6 +118,46 @@ describe("createAgentShellPort", () => {
     expect((await shell.output({ shellId: started.shell.shellId, signal })).shells).toHaveLength(1);
   });
 
+  it("hands notifyOn to the host: its match reaches the Session that started the shell, and a pattern the host will not run is refused as shell.pattern (VC-495)", async () => {
+    const notices: { sessionId: string; kind: string; line?: string }[] = [];
+    const host = new BackgroundShellHost({
+      publishState: () => {},
+      publishRemoved: () => {},
+      settleMs: 150,
+      killGraceMs: 200,
+      exitNoticeGraceMs: 40,
+      onNotice: (notice) =>
+        notices.push({
+          sessionId: notice.sessionId,
+          kind: notice.kind,
+          ...(notice.kind === "matched" ? { line: notice.line } : {}),
+        }),
+    });
+    const { port: shell } = port({ host });
+
+    const refused = shell.start({
+      command: "sleep 30",
+      notifyOn: { pattern: "(a)\\1", regex: true },
+      signal,
+    });
+    await expect(refused).rejects.toMatchObject({ rule: "shell.pattern" });
+    expect(host.list("session-1")).toEqual([]);
+
+    await shell.start({
+      command: "sleep 0.3; echo listening on :5173; sleep 30",
+      notifyOn: { pattern: "listening on", regex: false },
+      signal,
+    });
+    const deadline = Date.now() + 4_000;
+    while (notices.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(notices).toEqual([
+      { sessionId: "session-1", kind: "matched", line: "listening on :5173" },
+    ]);
+  });
+
   it("disposes every shell the Session started, and only its own", async () => {
     const { port: mine, host } = port();
     const theirs = createAgentShellPort({

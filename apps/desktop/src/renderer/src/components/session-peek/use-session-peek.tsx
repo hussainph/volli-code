@@ -222,7 +222,8 @@ function peekScrollerOf(list: HTMLElement | null, row: HTMLElement): HTMLElement
  * also the one where a row's own title says least ("Chat", three times). Each is
  * a local fold first, then utility prose while the folder remains on screen.
  * Session cards join the same cache/pending promises. A later glance may retry,
- * never a timer; activity invalidates a folder line just as it does a card.
+ * never a timer. Like an unpinned Session card, each line stays a snapshot
+ * throughout the glance; new activity is folded when the folder is reopened.
  */
 function useFolderSummaries(
   rowIds: readonly string[],
@@ -232,23 +233,25 @@ function useFolderSummaries(
   const [summaries, setSummaries] = React.useState<ReadonlyMap<string, string | null>>(new Map());
   const active = React.useRef<{
     cache: PeekContentCache;
-    entries: Map<string, { token: number; read: PeekContentRead }>;
+    entries: Map<string, PeekContentRead>;
   } | null>(null);
-  const key = JSON.stringify(rowIds.map((rowId) => [rowId, rowOf(rowId)?.at ?? 0]));
+  const latestRowOf = React.useRef(rowOf);
+  latestRowOf.current = rowOf;
+  const key = JSON.stringify(rowIds);
   React.useEffect(() => {
-    const rows: [string, number][] = JSON.parse(key);
+    const rows: string[] = JSON.parse(key);
     const previousGlance = active.current;
-    const entries = new Map<string, { token: number; read: PeekContentRead }>();
+    const entries = new Map<string, PeekContentRead>();
     active.current = { cache, entries };
     setSummaries(new Map());
-    const disposers = rows.flatMap(([rowId, token]) => {
+    const disposers = rows.flatMap((rowId) => {
       const sessionId = peekSessionId(rowId);
       if (sessionId === null) return [];
+      const token = latestRowOf.current(rowId)?.at ?? 0;
       const held = previousGlance?.cache === cache ? previousGlance.entries.get(rowId) : undefined;
-      // Another row changing is not a new glance at this one. Retain its
-      // readable fold even after expiry; reacquire on activity or reopening.
-      const read = held?.token === token ? held.read : cache.get(sessionId, token);
-      entries.set(rowId, { token, read });
+      // Membership changes are not a new glance at the remaining lines.
+      const read = held ?? cache.get(sessionId, token);
+      entries.set(rowId, read);
       return [
         observePeekContent(read, true, (entry) => {
           const line = entry.content == null ? null : peekSummaryLine(entry.content);
@@ -351,13 +354,11 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     () => new PeekContentCache(ports.readContent),
     [ports.readContent],
   );
-  const content = usePeekContent(
-    sessionId,
-    ports.readContent,
-    subjectRow?.at ?? 0,
-    state.pinned === null && subjectRow?.kind === "chat",
-    contentCache,
-  );
+  const content = usePeekContent(sessionId, ports.readContent, subjectRow?.at ?? 0, {
+    refine: state.pinned === null && subjectRow?.kind === "chat",
+    sharedCache: contentCache,
+    refreshOnActivity: state.pinned !== null,
+  });
 
   /**
    * A peek's subject can leave the listing under it: the Session ends and moves

@@ -227,7 +227,7 @@ describe("useActivityIsland", () => {
 
     const { model, actions } = probe.latest();
     expect(model.shells).toEqual([
-      { id: "sh-1", command: "pnpm lab", state: "running", code: null },
+      { id: "sh-1", command: "pnpm lab", state: "running", code: null, signal: null },
     ]);
     actions.openShell("sh-1");
     expect(openShellOutput).toHaveBeenCalledWith("sh-1");

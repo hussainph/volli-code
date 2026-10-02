@@ -10,6 +10,7 @@
  * the new rollback point.
  */
 import { copyFileSync } from "node:fs";
+import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
@@ -2639,6 +2640,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 55,
     name: "approval completion and command history (VC-480)",
     sql: MIGRATION_055_APPROVAL_HISTORY,
+  },
+  {
+    version: 56,
+    name: "host notice outbox — persist sanitized delivery before submission (VC-495)",
+    sql: HOST_NOTICE_OUTBOX_MIGRATION,
   },
 ];
 

@@ -17,3 +17,4 @@ export type {
   SessionPresentationProjection,
   SessionStartResult,
 } from "@volli/shared";
+export type { HostNotice, HostNoticeOutbox, HostNoticeReceipt } from "./host-notice-outbox";

@@ -484,6 +484,18 @@ describe("shells", () => {
 
   it("reads a missing exit code as 0 rather than printing `exit null`", () => {
     expect(shellStateWord(shell({ state: "exited", code: null }))).toBe("exit 0");
+    expect(shellStateWord(shell({ state: "exited", code: null, signal: null }))).toBe("exit 0");
+  });
+
+  it("names the signal that ended a shell instead of calling a killed shell a clean exit (VC-495)", () => {
+    expect(shellStateWord(shell({ state: "exited", code: null, signal: "SIGTERM" }))).toBe(
+      "SIGTERM",
+    );
+    expect(shellStateWord(shell({ state: "exited", code: null, signal: "SIGKILL" }))).toBe(
+      "SIGKILL",
+    );
+    // A running shell has no exit state, whatever a stale signal field says.
+    expect(shellStateWord(shell({ state: "running", signal: "SIGTERM" }))).toBeNull();
   });
 });
 
