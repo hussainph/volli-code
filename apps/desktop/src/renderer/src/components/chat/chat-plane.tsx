@@ -87,6 +87,7 @@ import {
   type MessageDelivery,
   type QueuedMessage,
   type TranscriptRow,
+  type TranscriptAuthorityReview,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -2324,6 +2325,17 @@ export function ChatTranscriptRow({
   live: boolean;
   onOpenSession?(sessionId: string): void;
 }) {
+  const hintsVisible = useUiStore((store) => store.authorityHintsVisible);
+  const authorityReviews = useStableList<TranscriptAuthorityReview>(
+    React.useMemo(
+      () =>
+        row.kind === "turn"
+          ? (row.authorityReviews ?? []).filter((review) => hintsVisible || review.mode === "auto")
+          : [],
+      [row, hintsVisible],
+    ),
+    Object.is,
+  );
   switch (row.kind) {
     case "host-notice":
       return (
@@ -2337,14 +2349,31 @@ export function ChatTranscriptRow({
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
     case "authority-review":
+      if (!hintsVisible && row.review.mode === "shadow") return null;
+      // Until the matching call arrives (or in incomplete older history), the
+      // record still has a disclosure rather than an uncollapsible feed line.
       return (
-        <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
-          <WarningIcon aria-hidden className="size-3.5 shrink-0" />
-          <p>{authorityReviewNoticeCopy(row.review)}</p>
-        </div>
+        <details
+          className="not-prose text-ui text-muted-foreground"
+          open={row.review.mode === "auto"}
+        >
+          <summary className="cursor-default select-none">
+            {row.review.mode === "shadow" ? "Would block" : "Blocked"} {row.review.tool}
+          </summary>
+          <p className="py-1 whitespace-pre-wrap break-words">
+            {authorityReviewNoticeCopy(row.review)}
+          </p>
+        </details>
       );
     case "turn":
-      return <ChatTurn messages={row.messages} context={context} live={live} />;
+      return (
+        <ChatTurn
+          messages={row.messages}
+          context={context}
+          live={live}
+          authorityReviews={authorityReviews}
+        />
+      );
   }
 }
 
@@ -2362,14 +2391,25 @@ export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
   live,
+  authorityReviews,
 }: {
   messages: readonly UIMessage[];
+  authorityReviews?: readonly TranscriptAuthorityReview[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const reviewsByCall = React.useMemo(() => {
+    const indexed = new Map<string, TranscriptAuthorityReview[]>();
+    for (const review of authorityReviews ?? []) {
+      const entries = indexed.get(review.toolCallId) ?? [];
+      entries.push(review);
+      indexed.set(review.toolCallId, entries);
+    }
+    return indexed;
+  }, [authorityReviews]);
 
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
@@ -2453,7 +2493,9 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
+                <div key={segment.key}>
+                  {renderSegment(segment, role, context, live, reviewsByCall)}
+                </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
@@ -2528,6 +2570,7 @@ function renderSegment(
   role: UIMessage["role"],
   context: TurnContext,
   live: boolean,
+  authorityReviews: ReadonlyMap<string, readonly TranscriptAuthorityReview[]>,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
@@ -2540,12 +2583,19 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
+          authorityReviews={authorityReviews}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
         />
       );
     case "attention":
-      return <GatedCall part={segment.part} context={context} />;
+      return (
+        <GatedCall
+          part={segment.part}
+          context={context}
+          authorityReviews={authorityReviews.get(segment.part.toolCallId)}
+        />
+      );
     default:
       return null;
   }
@@ -2562,13 +2612,26 @@ function renderSegment(
  * No card when nothing correlates: a gate we cannot pair with a question must
  * not invent one, and `footInteraction` draws it at the foot instead.
  */
-function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
+function GatedCall({
+  part,
+  context,
+  authorityReviews,
+}: {
+  part: DynamicToolUIPart;
+  context: TurnContext;
+  authorityReviews?: readonly TranscriptAuthorityReview[];
+}) {
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
     // The id is on the row so a notification click can scroll to THIS question
     // (VC-295): it is the one card the foot slot never draws.
     <div className="space-y-1" data-interaction-id={interaction?.id}>
-      <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
+      <ToolRow
+        part={part}
+        authorityReviews={authorityReviews}
+        onOpenFile={context.onOpenFile}
+        onOpenSession={context.onOpenSession}
+      />
       {interaction ? (
         <InteractionCard
           key={interaction.id}

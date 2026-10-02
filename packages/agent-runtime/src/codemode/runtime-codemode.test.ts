@@ -223,10 +223,12 @@ async function runTurn(
     interruptWhen?: Promise<void>;
     parallelMcpReads?: boolean;
     executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+    authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
   } = {},
 ) {
   const runtime = createPiAgentRuntime({
     sessionDataDir: h.sessions,
+    authorityShadowReviewEnabled: options.authorityShadowReviewEnabled,
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
@@ -511,7 +513,7 @@ describe("Code Mode through the real Session path", () => {
           },
           { text: "done" },
         ],
-        { executionEnvFactory: f.executionEnvFactory },
+        { executionEnvFactory: f.executionEnvFactory, authorityShadowReviewEnabled: () => true },
       );
       // Even the second review, after the first tool result, sees only the
       // user's request and this call: no script, prior results or prose.
@@ -554,6 +556,47 @@ describe("Code Mode through the real Session path", () => {
         ]);
         expect(resultText(f.h, "cm-1")).toContain("do not work around this block");
       }
+    },
+  );
+
+  it.each(["default", "disabled-live"] as const)(
+    "skips subsequent nested shadow classification when %s",
+    async (setting) => {
+      const f = reviewFixture({ enforcement: "observe", flag: true });
+      let enabled = setting === "disabled-live";
+      const execute = f.exec.getMockImplementation()!;
+      f.exec.mockImplementation(async (...args) => {
+        const result = await execute(...args);
+        enabled = false;
+        return result;
+      });
+      await runTurn(
+        f.h,
+        f.spec,
+        [
+          {
+            calls: [
+              {
+                id: "cm-1",
+                name: "codemode",
+                args: {
+                  code: 'await tools.bash({ command: "printf first" }); return await tools.bash({ command: "printf second" });',
+                },
+              },
+            ],
+          },
+          { text: "done" },
+        ],
+        {
+          executionEnvFactory: f.executionEnvFactory,
+          ...(setting === "default" ? {} : { authorityShadowReviewEnabled: () => enabled }),
+        },
+      );
+      const expected = setting === "default" ? 0 : 1;
+      expect(f.exec).toHaveBeenCalledTimes(2);
+      expect(f.calls).toHaveLength(expected);
+      expect(f.h.observations.filter((o) => o.kind === "authority-review")).toHaveLength(expected);
+      expect(f.ask).not.toHaveBeenCalled();
     },
   );
 

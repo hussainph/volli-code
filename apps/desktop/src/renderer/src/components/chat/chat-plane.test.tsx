@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The transcript half of VC-49's contract, rendered.
  *
@@ -9,7 +10,10 @@
 import { sessionHostNoticeMetadata, type RendererSessionInteraction } from "@volli/shared";
 import { approvalAnswerFailures, projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { useUiStore } from "@renderer/stores/ui";
 import type { UIMessage } from "ai";
 
 import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
@@ -28,7 +32,87 @@ function turn(message: UIMessage): string {
   return renderToStaticMarkup(<ChatTurn messages={[message]} context={context} live={false} />);
 }
 
+afterEach(() => useUiStore.setState({ authorityHintsVisible: true }));
+
 describe("the desktop transcript-row mapping", () => {
+  it("hides shadow fallback hints but never hides an actual block", () => {
+    useUiStore.setState({ authorityHintsVisible: false });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      for (const mode of ["shadow", "auto"] as const) {
+        const review = {
+          sequence: 1,
+          afterMessageId: null,
+          toolCallId: "x",
+          tool: "execute",
+          mode,
+          reason: "Outside the request.",
+        };
+        act(() =>
+          root.render(
+            <ChatTranscriptRow
+              row={{ kind: "authority-review", review }}
+              context={context}
+              live={false}
+            />,
+          ),
+        );
+        expect(container.textContent?.includes("Outside the request.")).toBe(mode === "auto");
+      }
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+  it("hides linked shadow details live while retaining the tool and its real error", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const review = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "Classifier concern.",
+    };
+    const messages: UIMessage[] = [
+      {
+        id: "a",
+        role: "assistant",
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolCallId: "call-1",
+            toolName: "execute",
+            state: "output-error",
+            input: { command: "pnpm test" },
+            errorText: "Actual command failure",
+          },
+        ],
+      },
+    ];
+    const [row] = projectTranscriptRows([messages], [], [], [review]);
+    if (row === undefined) throw new Error("expected a turn");
+    try {
+      act(() => root.render(<ChatTranscriptRow row={row} context={context} live={false} />));
+      const show = container.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+      expect(show).not.toBeNull();
+      act(() => show?.click());
+      expect(container.textContent).toContain("Classifier concern.");
+      act(() => useUiStore.getState().setAuthorityHintsVisible(false));
+      expect(container.textContent).not.toContain("Classifier concern.");
+      expect(container.textContent).toContain("Actual command failure");
+      act(() => useUiStore.getState().setAuthorityHintsVisible(true));
+      expect(container.textContent).toContain("Classifier concern.");
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reports the actual allow-once outcome when saving a standing approval failed", () => {
     const interaction: RendererSessionInteraction = {
       id: "ask:c",
@@ -161,7 +245,7 @@ describe("the desktop transcript-row mapping", () => {
   );
 
   it.each(["shadow", "auto"] as const)(
-    "draws a %s classifier verdict quietly, never as a message bubble",
+    "gives an unmatched %s classifier verdict a disclosure, never a message bubble",
     (mode) => {
       const [row] = projectTranscriptRows(
         [],
@@ -186,6 +270,8 @@ describe("the desktop transcript-row mapping", () => {
         `${mode === "shadow" ? "Would block" : "Blocked"} execute: Outside the request.`,
       );
       expect(html).toContain("text-muted-foreground");
+      expect(html).toContain("<details");
+      expect(/<details[^>]* open=""/.test(html)).toBe(mode === "auto");
       expect(html).not.toContain("is-user");
       expect(html).not.toContain("is-assistant");
       expect(html).not.toContain('aria-label="Copy"');
