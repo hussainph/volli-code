@@ -2,7 +2,7 @@
 
 ## What gates a build
 
-VC-522 established **47 gating smokes**, down from 51 active gates (74 files). VC-532 returns browser-tab for **48 gates**, without deleting a smoke or assertion. New `*-smoke.mjs` files still join automatically unless explicitly excluded for credentials, an existing runner limitation, or measured quarantine. Extended journeys are **not** broadly switched off.
+VC-522 established **47 gating smokes**, down from 51 active gates (74 files). VC-532 returns browser-tab and VC-530 returns automations-picker for **49 gates**, without deleting a smoke or assertion. New `*-smoke.mjs` files still join automatically unless explicitly excluded for credentials, an existing runner limitation, or measured quarantine. Extended journeys are **not** broadly switched off.
 
 **Core e2e** is the nine-probe `CORE_E2E` set in `apps/desktop/scripts/run-smokes.mjs`. It gates every desktop-relevant PR and runs on main after merges:
 
@@ -15,7 +15,7 @@ VC-522 established **47 gating smokes**, down from 51 active gates (74 files). V
 | Degraded DB / last-clean restore / fresh launch | database-recovery |
 | Live tokens, appearance, inheritance, persistence | canvas-theming |
 
-The other 39 probes gate desktop PRs in three rest shards. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
+The other 40 probes gate desktop PRs in three rest shards. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
 
 No sole core journey is quarantined based on historical flakes. Board and theming exceed the screening threshold but stay gating; DB recovery's sample is too small. The existing DB shutdown-grace fix remains; graceful-exit assertions are not weakened.
 
@@ -38,12 +38,13 @@ Screen initial workflow opportunities only: at least **50 observations**, at lea
 | Non-gating probe | Initial confirmed recovery | Backlog fix ticket / likely boundary |
 |---|---:|---|
 | browser-recovery | 59/225 (26.2%) | VC-523 — lost click result / preview recovery and settling |
-| automations-picker | 15/227 (6.6%) | VC-524 — picker/drag/Option-key readiness; first cause unknown |
 | bare-path-env | 16/227 (7.0%) | VC-525 — harness startup readiness marker capture |
 
 They still execute daily at **04:31 UTC** and on manual dispatch in `.github/workflows/smoke-quarantine.yml`. This workflow is separate from `CI gate`; its observation step uses `continue-on-error`, keeping smoke flakes from producing failed-workflow emails. The step's raw outcome, failed rows, logs and quiet-window verdict are visible in the summary/artifact. Build/setup/upload failures can still make that workflow red. No GitHub notification settings, required checks, rulesets or auto-merge settings change.
 
-**Return:** fix the root cause, preserve all assertions, then record at least **50 post-fix fresh-profile opportunities across 3+ SHAs with no FAIL/FLAKY**, including CI observations; remove only the quarantine entry. Restart the evidence window after the fix. The legacy deny-list/credential exclusions are unchanged and are not newly certified stable or included in this three-probe lane.
+**Return:** fix the root cause, preserve all assertions, then record at least **50 post-fix fresh-profile opportunities across 3+ SHAs with no FAIL/FLAKY**, including CI observations; remove only the quarantine entry. Restart the evidence window after the fix. The legacy deny-list/credential exclusions are unchanged and are not newly certified stable or included in this two-probe lane.
+
+**VC-530 picker return (replaces VC-524):** the owner explicitly substituted **10 serial fresh-profile local passes plus three branch dispatches of Smoke quarantine with no picker FAIL/FLAKY** for the 50-opportunity/3-SHA bar, for this probe only. The completed proof is **10/10 local plus 12/12 concurrent CI picker passes across three executed dispatches**; run links and censoring are in the [post-census investigation](smoke-flakes-2026-10.md#vc-530-picker-post-census-investigation-and-return) and [PR #693](https://github.com/hussainph/volli-code/pull/693). A temporary observation input ran four simultaneous picker profiles per dispatch and was removed, with its sole helper, after recording proof at the owner's direction; the shared workflow is unchanged. Ongoing proof is the restored rest-tier gate on every desktop PR, with all Offered/Option aiming/digit pinning/Move only/Escape/empty-column assertions retained. Default nightly membership remains the two entries above; this exception does not change other probes' return criteria.
 
 **VC-532 return exception (owner approved):** browser-tab (formerly VC-526; pre-fix 16/226, 7.1%) returns to the rest gate after its label pin moved from hold/boot time to the cursor drawing acknowledgement, with every assertion retained. The owner waived 50 opportunities/3 SHAs in favour of **10/10 serial local fresh-profile passes** and **3/3 first-attempt branch quarantine passes**, with no FAIL/FLAKY: [37071384643](https://github.com/hussainph/volli-code/actions/runs/37071384643), [37071599558](https://github.com/hussainph/volli-code/actions/runs/37071599558), [37071864839](https://github.com/hussainph/volli-code/actions/runs/37071864839), all on fix SHA `47a7c5aab`. The quarantine entry stayed in place during those dispatches and was removed afterward in the same PR. [Diagnosis and proof](smoke-flakes-2026-10.md#vc-532-browser-tab-holdcursor-repair).
 
