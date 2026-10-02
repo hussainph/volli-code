@@ -12,16 +12,15 @@
  * below, and nothing outside reads it as global order. Durable IDs are UUIDs
  * minted by the core, never rowids.
  *
- * The transaction is serialized the way the Automations ledger serializes its
- * own — a promise tail plus an explicit `BEGIN IMMEDIATE` — because
- * better-sqlite3 transactions are synchronous and the core's work functions are
- * async. Reads are transactional too, so a projection can never observe a half
- * written run.
+ * The connection's shared transaction gate serializes this ledger with the
+ * Session and Automation ledgers, including across awaited work. Reads are
+ * transactional too, so a projection can never observe a half-written run.
  */
 import type Database from "better-sqlite3";
 import type { OrphanCleanupReceipt, OrphanCleanupRejectionCode } from "@volli/shared";
 
 import { prepared } from "../db/prepared";
+import { getTransactionGate } from "../db/transaction-gate";
 import type {
   OrphanCleanupCommand,
   OrphanCleanupFact,
@@ -181,33 +180,13 @@ class SqliteOrphanCleanupTransaction implements OrphanCleanupLedgerTransaction {
 
 /** The single-writer, serialized SQLite ledger the desktop composition uses. */
 export class SqliteOrphanCleanupLedger implements OrphanCleanupLedger {
-  #tail: Promise<void> = Promise.resolve();
-
   constructor(private readonly db: Database.Database) {}
 
-  async transaction<T>(
+  transaction<T>(
     work: (transaction: OrphanCleanupLedgerTransaction) => T | Promise<T>,
   ): Promise<T> {
-    const previous = this.#tail;
-    let release!: () => void;
-    this.#tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    let began = false;
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
-      began = true;
-      const result = await work(new SqliteOrphanCleanupTransaction(this.db));
-      this.db.exec("COMMIT");
-      began = false;
-      return result;
-    } catch (error) {
-      if (began) this.db.exec("ROLLBACK");
-      throw error;
-    } finally {
-      // A failed BEGIN must not strand every later command behind this queue.
-      release();
-    }
+    return getTransactionGate(this.db).transaction(() =>
+      work(new SqliteOrphanCleanupTransaction(this.db)),
+    );
   }
 }
