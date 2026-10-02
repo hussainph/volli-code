@@ -17,7 +17,6 @@ import {
   allocateFamilyUnits,
   attachmentClosedPayload,
   attachmentOpenedPayload,
-  authoritySnapshot,
   eventsInUnits,
   modelSelectedPayload,
   orderFamilyUnits,
@@ -533,7 +532,7 @@ async function createEvents(db, preset, seed, artifactStore, assertSessionEvent)
         venue: { id: "local:perf", kind: "local" },
         continuity: "fresh",
         native: { id: `fixture-native-${sessionIndex + 1}`, detail: { fixture: true } },
-        authority: authoritySnapshot(["read", "execute", "edit", "write"]),
+        authority: null,
       };
       const contextFor = (sequence, unitIndex, unitKey) => ({
         sessionId: id,

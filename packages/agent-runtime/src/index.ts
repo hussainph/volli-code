@@ -30,11 +30,7 @@ export {
   type DecisionConnectionTest,
   type LocalClassifierOptions,
 } from "./pi/classifier";
-export {
-  createDecisionService,
-  type DecisionAuditFact,
-  type DecisionServiceOptions,
-} from "./decision/service";
+export { createDecisionService, type DecisionServiceOptions } from "./decision/service";
 export {
   CLASSIFY_DESCRIPTION,
   createClassifyTool,

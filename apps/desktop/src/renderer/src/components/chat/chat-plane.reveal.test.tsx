@@ -2,14 +2,9 @@
 /**
  * A notification click landing in a mounted chat plane (VC-295 round 5).
  *
- * Two places a Session's item can be drawn, and a click has to reach both:
- *
- *  - a FAILURE draws on the blocker row above the composer, which a person may
- *    have dismissed — a click naming that failure is a louder ask than the
- *    dismissal, so the row comes back;
- *  - a GATED CALL's question draws on its own transcript row, which the foot
- *    slot never takes — so "select that question" for it is a scroll, not a
- *    reorder.
+ * A failure draws on the blocker row above the composer. A click naming that
+ * failure overrides its dismissal. Remaining permission requests use the
+ * ordinary composer card, not a per-call transcript row.
  *
  * The whole plane, mounted, against a bridge that refuses everything (see
  * `chat-plane.island.test.tsx` for why that is the honest fixture): the seam
@@ -21,8 +16,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { DynamicToolUIPart, UIMessage } from "ai";
-import { askInteractionId, type RendererSessionInteraction } from "@volli/shared";
+import type { UIMessage } from "ai";
+import { type RendererSessionInteraction } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import {
   releaseSessionItemReveal,
@@ -43,7 +38,6 @@ vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 const SESSION = "s1";
 const PROJECT = "p1";
 const ATTENTION = "attention-1";
-const TOOL_CALL = "bash-1";
 
 const REFUSED = { ok: false, error: "not stubbed" } as const;
 
@@ -65,49 +59,6 @@ function refusingBridge(): unknown {
   return node([]);
 }
 
-const PERMISSION_OPTIONS = [
-  { id: "once", label: "Allow once", description: null },
-  { id: "always", label: "Allow always", description: null },
-  { id: "reject", label: "Reject", description: null },
-];
-
-/** The permission a gated call is waiting on, correlated by the frozen `ask:` derivation. */
-function gatedPermission(): RendererSessionInteraction {
-  return {
-    id: askInteractionId(TOOL_CALL),
-    attachmentId: "attach-1",
-    kind: "permission",
-    title: "rm -rf node_modules",
-    detail: "bash",
-    options: PERMISSION_OPTIONS,
-    multiple: false,
-    prompts: [
-      {
-        id: "prompt:0",
-        label: "rm -rf node_modules",
-        detail: "bash",
-        options: PERMISSION_OPTIONS,
-        multiple: false,
-        custom: false,
-      },
-    ],
-    native: { id: null, detail: null },
-  };
-}
-
-/** The transcript row that call draws on. */
-function gatedTurn(): UIMessage {
-  const part: DynamicToolUIPart = {
-    type: "dynamic-tool",
-    toolName: "bash",
-    toolCallId: TOOL_CALL,
-    state: "approval-requested",
-    input: { command: "rm -rf node_modules" },
-    approval: { id: "approval-1" },
-  };
-  return { id: "a1", role: "assistant", parts: [part] };
-}
-
 const disconnected = {
   id: ATTENTION,
   kind: "adapter_disconnected",
@@ -118,10 +69,8 @@ const disconnected = {
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
-let scrolled: Element[];
 
 beforeEach(() => {
-  scrolled = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -141,7 +90,7 @@ beforeEach(() => {
   // jsdom lays nothing out and implements no scrolling; what the plane asks
   // to scroll is the whole of the assertion.
   Element.prototype.scrollIntoView = function (this: Element) {
-    scrolled.push(this);
+    // No transcript row owns a live permission card.
   };
   MotionGlobalConfig.skipAnimations = true;
   useBrowserTabsStore.setState({ byId: {}, hydratedProjects: new Set([PROJECT]) });
@@ -188,7 +137,6 @@ function chatStore(input: {
           attention: { active: attention, primary: attention.at(-1) ?? null },
           interactions: { active: input.interactions ?? [], resolved: [] },
           liveExecutor: null,
-          authority: null,
         },
         transcript: {
           ...EMPTY_TRANSCRIPT,
@@ -259,47 +207,24 @@ describe("a click naming a failure", () => {
   });
 });
 
-describe("a click naming a gated call's question", () => {
-  it("scrolls to the row that question draws on, once", async () => {
-    await mountPlane(chatStore({ messages: [gatedTurn()], interactions: [gatedPermission()] }));
-    const row = container?.querySelector(`[data-interaction-id="${askInteractionId(TOOL_CALL)}"]`);
-    expect(row).not.toBeNull();
-    expect(scrolled).toEqual([]);
-
-    await act(async () => {
-      requestSessionItemReveal(SESSION, {
-        interactionId: askInteractionId(TOOL_CALL),
-        attentionId: null,
-      });
-    });
-
-    expect(scrolled).toEqual([row]);
-  });
-
-  it("scrolls again for a second click on the same question", async () => {
-    await mountPlane(chatStore({ messages: [gatedTurn()], interactions: [gatedPermission()] }));
-    const item = { interactionId: askInteractionId(TOOL_CALL), attentionId: null };
-    await act(async () => {
-      requestSessionItemReveal(SESSION, item);
-    });
-    await act(async () => {
-      requestSessionItemReveal(SESSION, item);
-    });
-
-    expect(scrolled).toHaveLength(2);
-  });
-
-  it("scrolls nowhere for a question that has since been answered", async () => {
-    // The row is gone with the interaction; the click's own toast says so.
-    await mountPlane(chatStore({ messages: [gatedTurn()], interactions: [] }));
-
-    await act(async () => {
-      requestSessionItemReveal(SESSION, {
-        interactionId: askInteractionId(TOOL_CALL),
-        attentionId: null,
-      });
-    });
-
-    expect(scrolled).toEqual([]);
+describe("remaining permission requests", () => {
+  it("shows a budget ask above the composer without a tool-call approval row", async () => {
+    const ask: RendererSessionInteraction = {
+      id: "budget-ask:delegate-1",
+      attachmentId: "attach-1",
+      kind: "permission",
+      title: "Allow another subagent?",
+      detail: "The delegation allowance is exhausted.",
+      multiple: false,
+      native: { id: null, detail: null },
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+    };
+    await mountPlane(chatStore({ interactions: [ask] }));
+    expect(container?.textContent).toContain("Allow another subagent?");
+    expect(container?.querySelector('[data-slot="composer-interaction-drawer"]')).not.toBeNull();
+    expect(container?.querySelector('[data-slot="approval-card"]')).toBeNull();
   });
 });

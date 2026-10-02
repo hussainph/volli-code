@@ -1,4 +1,3 @@
-import type { ApprovalUsedObservation } from "./approval-observation";
 /**
  * Product-owned Session and model policy consumed by the Agent Runtime, and the
  * Agent Runtime contracts themselves.
@@ -21,23 +20,15 @@ import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
-  AuthorityDenialCause,
-  AuthorityJudgeDenialCause,
-  AuthoritySnapshot,
+  BudgetCauseId,
   CodingToolId,
+  ConfirmCauseId,
   NonCodingToolId,
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
-import type {
-  DecisionAnswer,
-  DecisionAnswered,
-  DecisionMiss,
-  DecisionMissReason,
-  DecisionPort,
-} from "./decision-model";
+import type { DecisionAnswered, DecisionMiss } from "./decision-model";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
-import { projectRememberable, type ApprovalDecision, type ApprovalScope } from "./approvals";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -367,135 +358,15 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
   workspacePath: string;
 }
 
-/**
- * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
- * `budget`, the fact that no denial accrued at all.
- *
- * Worth naming rather than collapsing, because the three mean different things
- * to the person answering: a run of refusals back to back means the policy is
- * in the way of one line of work, a total across the Session means it is in
- * the way of the Session, and a budget means nothing was refused yet — an
- * allowance ran out and the call is waiting on "a little more" (VC-204).
- * `budget` asks are raised by a verb's own door rather than by the escalation
- * counter, so they never advance either {@link AuthorityFallback} threshold:
- * the person already answered, and counting that answer as friction would
- * escalate twice over one decision.
- *
- * `confirm` is the fourth, and it is not a refusal at all (VC-380). Nothing
- * denied the call and no allowance ran out: the operation is simply one that
- * asks before it acts, because it starts a process as the user or breaks
- * reattachment for older Sessions. It shares `budget`'s standing with the
- * escalation counter — it advances no threshold — but it must not borrow
- * `budget`'s name, or the denial ledger would count a confirmation as a spent
- * allowance and escalate a Session that was never refused anything. The same
- * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
- */
-export type RuntimeAskTrip =
-  | "consecutive"
-  | "session"
-  | "budget"
-  | "confirm"
-  | "approval"
-  | "classifier";
-
-/** What an approval card is about (VC-480). */
-export interface RuntimeApprovalAsk {
-  /** The call as the card shows it: the command, or the tool and its path. */
-  asked: string;
-  /**
-   * A compound shell command's stages, in order, when it has more than one
-   * (`a && b && rm x`). The card shows the whole line with the held stage —
-   * `scopes[].stage` — highlighted.
-   */
-  stages?: readonly string[];
-  /** The rule that stopped it, in its own words, for the card's details. */
-  reason?: string;
-  /** Every uncovered rule, so an aggregate card explains all the consent it asks for. */
-  objections?: readonly { cause: AuthorityDenialCause; reason: string }[];
-  /**
-   * What "allow for this Session" and "always allow" would remember, one scope
-   * each. Empty when the refusal cannot be narrowed, so only "allow once" is
-   * offered beside the denials.
-   */
-  scopes: readonly ApprovalScope[];
-}
-
-/**
- * The remembered approvals a Session reads (VC-480).
- *
- * A read port and nothing more, which is the point: rows are written by main,
- * from the person's answer, and the runtime has no way to author one.
- */
-export interface RuntimeApprovals {
-  /**
-   * The approval that covers this scope right now, or null. Read live on every
-   * call, never cached, so a revoke applies from the very next call. Lookup
-   * alone is not a use: the call may still be denied or abandoned.
-   */
-  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
-  /**
-   * Records who authorised one gated call. Called BEFORE the call runs, once
-   * per decision. A host that cannot persist it must throw: execution fails
-   * closed without a pre-execution decision record.
-   */
-  decided(decision: ApprovalDecision): void;
-  /** Counts ledger use only after successful execution, never during lookup. */
-  completed?(toolCallId: string): void;
-}
-
-/** A remembered approval that allowed a scope. */
-export interface RuntimeApprovalHit {
-  approvalId: string;
-  summary: string;
-}
-
-/**
- * One escalation: a question the runtime blocks on because its own policy keeps
- * refusing.
- *
- * Deliberately a port and not an observation. An observation states what
- * happened and expects no reply; this needs an answer before the tool call it
- * belongs to can proceed either way. Keeping it a typed port is also what keeps
- * `@volli/agent-runtime` free of ledger types — the host owns the interaction
- * record, and the runtime owns only the question.
- */
+/** Questions the runtime may ask for an exhausted budget or existing confirmation. */
+export type RuntimeAskTrip = "budget" | "confirm";
 export interface RuntimeAskRequest {
-  /** The rule that refused, or `call.unreadable` when the gate refused before any ran. */
-  cause: AuthorityDenialCause;
-  /** The runtime tool name as requested, which may not be a tool Volli offers. */
+  cause: BudgetCauseId | ConfirmCauseId;
   tool: string;
-  /**
-   * The runtime's own id for the call being judged.
-   *
-   * Carried so a producer can correlate the question to the activity row it is
-   * about. Without it an ask can only ever be shown at the foot of the
-   * transcript, never against the call that raised it.
-   */
   toolCallId: string;
-  /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** Person-facing refusal explanation; may include labelled model prose, never an agent result. */
   reason: string;
   trip: RuntimeAskTrip;
-  /**
-   * Present on a protection ask (VC-480): what the call wants to do and what
-   * a "remember this" answer would store. Absent on every other ask.
-   */
-  approval?: RuntimeApprovalAsk;
-  /**
-   * Whether a person may overrule this refusal.
-   *
-   * Not "could the call run if this layer stood aside" — for the hard-deny rules
-   * that is true and is exactly why they are not overridable. See
-   * {@link OVERRIDABLE_AUTHORITY_RULES}, which keeps the two reasons apart: some
-   * refusals an override could not honour anyway, because the tool is not
-   * loaded; the rest are perfectly grantable and must not be granted, because a
-   * login item or a disabled certificate check outlives the Session that asked
-   * for it.
-   *
-   * The runtime enforces this rather than trusting it: a host that answers
-   * `allow` to a refusal that is not overridable is not obeyed.
-   */
   overridable: boolean;
 }
 
@@ -510,16 +381,7 @@ export interface RuntimeAskRequest {
  * reserves both of those for the durable Session Interaction vocabulary, and
  * this is the runtime's private reading of a decision that is recorded there.
  */
-export type RuntimeAskChoice =
-  | "allow"
-  | "refuse"
-  | "stop"
-  /** Allow, and the host has already remembered it for this Session (VC-480). */
-  | "allow-session"
-  /** Allow, and the host has already remembered it for the project (VC-480). */
-  | "allow-project"
-  /** Deny, and tell the agent what to do instead (VC-480). */
-  | { kind: "steer"; message: string };
+export type RuntimeAskChoice = "allow" | "refuse" | "stop";
 
 /** What one escalation puts in front of a person. */
 export interface RuntimeAskOffer {
@@ -552,7 +414,6 @@ const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
   if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
-  if (request.approval !== undefined) return approvalOffer(request.approval);
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
     kind: "permission",
@@ -572,13 +433,7 @@ export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
 export function askChoice(
   request: RuntimeAskRequest,
   optionIds: readonly string[],
-  response: string | null = null,
 ): RuntimeAskChoice {
-  if (request.approval !== undefined) {
-    const choice = decodeApprovalConsent(askOffer(request).options, optionIds, response);
-    /* v8 ignore next -- askOffer never declares ledger; it is only a host-authored historical receipt. */
-    return choice === "ledger" ? "refuse" : choice;
-  }
   // Refusal is read first, so an answer carrying both a grant and a refusal
   // resolves toward the state the call was already in. A multi-select that
   // accumulated `once` and `reject` together is incoherent, and resolving an
@@ -589,92 +444,6 @@ export function askChoice(
     return chosen.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
   }
   return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
-}
-
-/** The ids an approval card's rows answer with. */
-export const APPROVAL_OPTION_IDS = {
-  once: "once",
-  session: "session",
-  project: "project",
-  deny: "reject",
-  steer: "steer",
-} as const;
-
-/** The five choices of the approval card, fewer when nothing can be remembered. */
-function approvalOffer(approval: RuntimeApprovalAsk): RuntimeAskOffer {
-  const what = approval.scopes.map((scope) => scope.summary).join("; ");
-  const remembers = approval.scopes.length > 0;
-  return {
-    kind: "permission",
-    options: [
-      { id: APPROVAL_OPTION_IDS.once, label: "Allow once", description: "Just this call" },
-      ...(remembers
-        ? [
-            {
-              id: APPROVAL_OPTION_IDS.session,
-              label: "Allow for this Session",
-              description: `${what} for the rest of this Session`,
-            },
-          ]
-        : []),
-      // Only where a safe scope exists: a path, or a git shape. A command Volli
-      // cannot read inside is never remembered project-wide.
-      ...(projectRememberable(approval.scopes)
-        ? [
-            {
-              id: APPROVAL_OPTION_IDS.project,
-              label: "Always allow in this project",
-              description: `${what} for every Session`,
-            },
-          ]
-        : []),
-      {
-        id: APPROVAL_OPTION_IDS.deny,
-        label: "Deny",
-        description: "The agent is told no and carries on",
-      },
-      {
-        id: APPROVAL_OPTION_IDS.steer,
-        label: "Deny and steer\u2026",
-        description: "Tell the agent what to do instead",
-      },
-    ],
-  };
-}
-
-/**
- * The shared consent decoder for execution and scrollback. Consent is exactly
- * one declared choice, never an inferred meaning of an undeclared/stale id.
- * Denial wins over consent; declared steering carries the person's words.
- * `ledger` is a host-authored historical answer, never a runtime grant.
- */
-export function decodeApprovalConsent(
-  options: readonly { id: string }[],
-  optionIds: readonly string[],
-  response: string | null = null,
-): RuntimeAskChoice | "ledger" {
-  const offered = new Set(options.map((option) => option.id.toLowerCase()));
-  const chosen = optionIds.map((id) => id.toLowerCase());
-  if (offered.has(APPROVAL_OPTION_IDS.steer) && chosen.includes(APPROVAL_OPTION_IDS.steer)) {
-    const message = (response ?? "").trim();
-    return message === "" ? "refuse" : { kind: "steer", message };
-  }
-  if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
-  if (chosen.length !== 1 || !offered.has(chosen[0]!)) return "refuse";
-  switch (chosen[0]) {
-    case APPROVAL_OPTION_IDS.once:
-      return "allow";
-    case APPROVAL_OPTION_IDS.session:
-      return "allow-session";
-    case APPROVAL_OPTION_IDS.project:
-      return "allow-project";
-    case "ledger":
-      return "ledger";
-    case SESSION_ESCALATION_STOP_ID:
-      return "stop";
-    default:
-      return "refuse";
-  }
 }
 
 /** One answer the model thought worth offering. */
@@ -1307,27 +1076,6 @@ export interface SessionRuntimeSpec {
   workspacePath: string;
   venue: ExecutionVenue;
   model: ModelSelection;
-  /**
-   * The policy every tool call is checked against — when the Session was given
-   * one at all.
-   *
-   * Optional, and the optionality carries meaning that a value could not.
-   * Absence means off: no gate is installed. An observe Snapshot installs
-   * reasoning-blind shadow review but never changes what executes. Enforce
-   * binds the rule pack; judgmentMode chooses ask or automatic review.
-   * The desktop pins this Snapshot on the attachment so replay keeps its
-   * original posture rather than picking up a project edit mid-attachment.
-   */
-  authority?: AuthoritySnapshot;
-  /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
-  decisions?: DecisionPort;
-  /** Optional person-facing wording only. Never insert its output into agent context. */
-  authorityReason?: (input: {
-    sessionId: string;
-    tool: string;
-    cause: AuthorityJudgeDenialCause;
-    signal?: AbortSignal;
-  }) => Promise<string>;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -1356,24 +1104,9 @@ export interface SessionRuntimeSpec {
   carryUnreadable?: string;
   signal?: AbortSignal;
   /**
-   * Refusals this Session already accrued, before this attachment existed.
+   * Ask a person about an exhausted budget or an existing confirmation.
    *
-   * Carried beside {@link AuthoritySnapshot} rather than inside it because a
-   * count is live machine state and not policy — the snapshot's own rule is that
-   * the facts its rules read stay live while the policy is pinned. The per-
-   * Session half of {@link AuthorityFallback} is a fact about the Session, so a
-   * counter starting from zero on every attach would never reach its threshold;
-   * the consecutive half has no equivalent, since an allowed call is not an
-   * event and only a live runtime sees both answers.
-   */
-  priorAuthorityDenials?: number;
-  /**
-   * Ask a person, and block until they answer.
-   *
-   * Optional, and its absence is a working configuration rather than a
-   * degradation: with no host to ask, the fallback thresholds have nothing to
-   * escalate to and every refusal stays silent, which is exactly what shipped
-   * before this port existed.
+   * Optional: without a host to ask, the operation stays refused.
    *
    * There is no timeout, invented or otherwise — an unanswered question parks
    * the turn for as long as it takes. `signal` is how the wait ends without an
@@ -1393,14 +1126,6 @@ export interface SessionRuntimeSpec {
    * mid-wait loses the question while the runtime is still blocked on it.
    */
   ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
-  /**
-   * Protection mode (VC-480). Present, and the gate changes shape: a refusal a
-   * person may clear is looked up here first and, when no approval covers it,
-   * put to a person on the first hit; a refusal no one may clear is explained
-   * and never asked about. Absent, every ask follows the fallback thresholds
-   * exactly as before.
-   */
-  approvals?: RuntimeApprovals;
   /**
    * Let the model ask a person, and block its call until they answer.
    *
@@ -1719,7 +1444,7 @@ export type SessionToolBinding =
  *
  * The one derivation, and the reason there is only one. Two lists used to state
  * the same fact — the array the runtime builds, and the tool list on the
- * {@link AuthoritySnapshot} — kept equal by a caller remembering to keep them
+ * a separate policy tool list — kept equal by a caller remembering to keep them
  * equal. A caller that forgot did not produce a misconfiguration; it produced a
  * Session whose own policy refused its own tools, which is the failure VC-3 was
  * filed for. Deriving both from here is what makes that unrepresentable, and it
@@ -1826,7 +1551,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
 }
 
 /**
- * The same surface as names alone — what a durable {@link AuthoritySnapshot}
+ * The same surface as names alone — what durable Session input
  * records, and what a Role bundle and a rule pack would spell.
  */
 export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
@@ -1874,24 +1599,7 @@ export interface SettledAssistantMessage {
   usage?: SanitizedUsage;
 }
 
-export interface AuthorityReviewObservation {
-  kind: "authority-review";
-  turnId: string | null;
-  toolCallId: string;
-  tool: string;
-  mode: "shadow" | "auto";
-  authoriser: "classifier";
-  wouldFlag: boolean | null;
-  reason: string;
-  category: string | null;
-  answers: Readonly<Record<string, DecisionAnswer>> | null;
-  missReason: DecisionMissReason | null;
-  thresholds: { allow: number; flag: number };
-}
-
 export type RuntimeObservation =
-  | ApprovalUsedObservation
-  | AuthorityReviewObservation
   | AttachmentObservation
   | TurnObservation
   | CompactionProgressObservation
@@ -1901,7 +1609,6 @@ export type RuntimeObservation =
   | SettledMessageObservation
   | UsageObservation
   | RuntimeActivityObservation
-  | AuthorityObservation
   | AttentionObservation
   | InteractionObservation;
 
@@ -1955,42 +1662,6 @@ export interface ProviderReasoningDroppedObservation {
   occurredAt?: number;
   recoveryCursor?: string;
 }
-
-/**
- * The Session's authority decided whether one tool call could run.
- *
- * A denial is durable Session history, so it keeps the model-visible tool and
- * reason for the normal translation path. An allowance is observability-only:
- * the runtime reduces it straight to the metadata side channel rather than
- * making a durable fact or waiting on the Session observer. `toolCallId` is an
- * opaque local join key for that reducer; it must never leave it.
- */
-export type AuthorityObservation =
-  | {
-      kind: "authority";
-      state: "allowed";
-      /** Null before the first turn opens, which a decision need not wait for. */
-      turnId: string | null;
-      /** Pi's local tool-call id, used only to join a wait to its activity. */
-      toolCallId?: string;
-      /** Time waiting for a person, when the authority gate measured it. */
-      waitDurationMs?: number;
-      occurredAt?: number;
-    }
-  | {
-      kind: "authority";
-      state: "denied";
-      /** Null before the first turn opens, which a refusal need not wait for. */
-      turnId: string | null;
-      /** Pi's local tool-call id, used only to join a wait to its activity. */
-      toolCallId?: string;
-      /** Time waiting for a person, when the authority gate measured it. */
-      waitDurationMs?: number;
-      tool: string;
-      cause: AuthorityDenialCause;
-      reason: string;
-      occurredAt?: number;
-    };
 
 export interface AttachmentObservation {
   kind: "attachment";

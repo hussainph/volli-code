@@ -38,7 +38,6 @@ const PROJECTION: SessionPresentationProjection = {
   },
   status: "open",
   liveExecutor: { id: "child-attachment" },
-  authority: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,

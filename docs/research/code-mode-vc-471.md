@@ -74,8 +74,8 @@ than by copy:
   instance** the `Agent` holds (`sessionGate` in `runtime.ts`). So the rule pack,
   the path and command normalization, the denial ledger, the escalation
   counters, the `ask` port and the observability record are one Session's, not
-  two. The auto-mode classifier (VC-28) is not built yet; when it is, it lives in
-  that gate and nested calls get it for free.
+  two. This is historical prototype behavior: VC-504 removes the per-call
+  gate. Nested calls retain Session-bound tools and deterministic guards.
 - The tool reached is the Session's own `AgentTool`, bound to the same execution
   environment (and so the same sandbox profile, VC-266's when it lands), the same
   ports, the same host handlers, and the same Session identity — which is closed

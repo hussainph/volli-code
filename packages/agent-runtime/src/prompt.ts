@@ -16,7 +16,7 @@
  * and resource set — a Cache Prefix two Sessions can share (VC-164). The
  * product version is the version of these literals and composers, not request
  * data. Nothing that varies per session or per turn reaches them: not Session
- * identity, an Authority Snapshot, the workspace path, a measured fact about
+ * identity, the workspace path, a measured fact about
  * that workspace, or a date. Volatile facts are Turn Reminders beside the
  * Brief. The split is structural rather than remembered — {@link
  * SystemPromptInput} carries exactly the other three data terms, so a prompt
@@ -331,29 +331,10 @@ const AUTHORITY_SOURCES: Record<RuntimeSessionRole, string> = {
  * its first command reads as negotiable; a norm it can hold is the better
  * footing against injected instructions.
  *
- * The asymmetry is deliberate and load-bearing. Reads open up because the
- * legitimate need is real — sibling worktrees, app data, the reference-only
- * main checkout — and the allowance is anchored to the task and the user:
- * file content never creates the need, which is what lets a Session refuse a
- * poisoned README without a hard rule. Writes and destructive commands stay
- * instructed against because this instruction is still effectively the only
- * layer: containment is off, and the authority gate defaults to `observe`, which
- * pins a Snapshot and refuses nothing
- * (the two-axis authority rearchitecture). Loosening the write side
- * waits for that plan's slices 1–2, so instruction-loosening and enforcement
- * land as a pair. The credentials sentence previews slice 1's secrets
- * denylist, so instruction and future enforcement converge on one shape.
- *
- * The read sentence is also the sharpest reason `enforce` is not yet the
- * default. It names the reference-only main checkout and sibling worktrees as
- * legitimate reads, and `path.outside-workspace` refuses exactly those — so a
- * project that turns enforcement on today has a system prompt and a rule pack
- * that contradict each other. Slice 1 resolves it by giving both layers one read
- * policy; until then the contradiction is confined to a posture nobody is on by
- * default.
- *
- * Every line below the first is byte-identical to the prose that shipped: this
- * layer lost a path, not a norm.
+ * Reads outside the workspace are task-anchored; writes and destructive
+ * commands stay inside. This is prompt guidance, not a per-call approval
+ * policy. ScopedExecutionEnv supplies deterministic path checks when a host
+ * injects that environment; ordinary Sessions run host-native tools.
  */
 function workspaceLayer(role: RuntimeSessionRole): string {
   return [
@@ -421,23 +402,9 @@ function shellLayer(): readonly string[] {
 }
 
 /**
- * This layer states only the Role and tool bundle. An Authority Snapshot is
- * Session policy enforced at the tool boundary; turning it into prompt prose
- * would create a fifth, session-varying Cache Prefix term without adding
- * enforcement. The prompt therefore names the stable grant and no policy mode.
- *
- * "Bounded to" states a grant, and the grant is real: these tools and no others,
- * this workspace and no other. What *holds* a Session to that grant is a
- * separate question, and this prompt no longer answers it in either direction.
- * It used to answer wrongly — it described a sandbox that has since been
- * removed — and the fix is to drop the claim, not to invert it. Saying "a path
- * outside resolves and succeeds" would be true and would still be a mistake: it
- * reads to a model as a capability on offer, and the workspace norm below it —
- * work lands in the workspace, reads elsewhere only where the task calls for
- * them — is the behaviour we actually want. Nothing here is false; the
- * absence of enforcement is simply not advertised. `shellLayer` carries the
- * one fact that does change how a careful agent should behave — that commands
- * land on a real machine.
+ * Names only the stable Role and tool bundle. Workspace and credential
+ * guidance is stated separately, without claiming host-native tools are a
+ * sandbox or advertising paths as capabilities.
  */
 function authorityLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
   const toolNames = tools.tools.length > 0 ? tools.tools.join(", ") : "none";
@@ -479,7 +446,7 @@ const RESOURCES_LAYER = [
  *
  * These are the three data terms allowed to vary its bytes: Role, bundle and
  * resource set. Product version is embodied by this code. Full Session
- * identity, Authority Snapshot, workspace path and workspace environment are
+ * identity, workspace path and workspace environment are
  * deliberately absent rather than merely unused — see {@link
  * composeTurnReminderBlock}, which is where a volatile fact goes instead.
  */

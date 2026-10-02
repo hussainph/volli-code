@@ -25,19 +25,14 @@ import {
   decisionMiss,
   decisionTargetFor,
   isDecisionPurpose,
-  isSensitiveKey,
   readDecisionAnswers,
-  redactPayloadSecrets,
   type DecisionAnswered,
   type DecisionCall,
   type DecisionMiss,
-  type DecisionJson,
   type DecisionModelSetting,
   type DecisionPort,
   type DecisionPurpose,
   type DecisionPurposePolicy,
-  type DecisionRequest,
-  type DecisionState,
   type DecisionTarget,
   type SessionUsage,
 } from "@volli/shared";
@@ -47,15 +42,6 @@ import {
   type ClassifierCallResult,
   type DecisionClassifier,
 } from "../pi/classifier";
-
-/** What one audited decision leaves behind (VC-28's authority verdicts will need it). */
-export interface DecisionAuditFact {
-  purpose: DecisionPurpose;
-  sessionId: string | null;
-  target: DecisionTarget;
-  request: DecisionRequest;
-  outcome: { kind: "answered"; answered: DecisionAnswered } | { kind: "miss"; miss: DecisionMiss };
-}
 
 export interface DecisionServiceOptions {
   /**
@@ -79,18 +65,7 @@ export interface DecisionServiceOptions {
     purpose: DecisionPurpose;
     usage: SessionUsage;
   }): void | Promise<void>;
-  /**
-   * Records one audited purpose's decision durably. Absent, every audited
-   * purpose is refused as `unaudited` — a verdict nobody can later account
-   * for is worse than none.
-   */
-  recordDecision?(fact: DecisionAuditFact): void | Promise<void>;
-  /**
-   * Where a failure to record goes. Usage is metered in the background and a
-   * decision never waits on it; an audited purpose's decision does wait on
-   * its audit write (and falls back as `unaudited` if it fails), and the
-   * failure is reported here as well.
-   */
+  /** Where a background usage-recording failure goes; the decision does not wait on it. */
   onRecordFailure?(error: unknown): void;
   now?(): number;
   /** Calls in flight at once, per purpose. Defaults to {@link DECISION_MAX_CONCURRENT}. */
@@ -101,13 +76,7 @@ export interface DecisionServiceOptions {
    * {@link SLOT_GRACE_MS}.
    */
   slotGraceMs?: number;
-  /** How long an audited decision waits for its audit write. Defaults to {@link AUDIT_WAIT_MS}. */
-  auditWaitMs?: number;
-  /**
-   * The policy each purpose runs under. Defaults to
-   * {@link DECISION_PURPOSE_POLICY}; a test overrides a deadline it cannot
-   * wait out, or an audit rule no shipped purpose has yet.
-   */
+  /** The purpose policy; tests may override deadlines they cannot wait out. */
   policyFor?(purpose: DecisionPurpose): DecisionPurposePolicy;
 }
 
@@ -170,43 +139,16 @@ class Slots {
  */
 const SLOT_GRACE_MS = 5_000;
 
-/** The longest an audited decision waits for its audit write before it is `unaudited`. */
-const AUDIT_WAIT_MS = 5_000;
-
 function describeTarget(target: DecisionTarget): DecisionAnswered["model"] {
   return target.where === "local"
     ? { where: "local", providerId: LOCAL_DECISION_PROVIDER_ID, modelId: target.modelId }
     : { where: "cloud", providerId: target.providerId, modelId: target.modelId };
 }
 
-/**
- * Only a state already held to the raw JSON bounds reaches this walk. Build a
- * separate snapshot: neither transport nor the durable audit can retain the
- * caller's raw object, and secret text in object keys is scrubbed as well.
- */
-function redactAuthorityValue(value: DecisionJson): DecisionJson {
-  if (typeof value === "string") return redactPayloadSecrets(value);
-  if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(redactAuthorityValue);
-  const result: Record<string, DecisionJson> = {};
-  for (const [key, child] of Object.entries(value)) {
-    const safeKey = redactPayloadSecrets(key);
-    // Silently dropping a colliding field would give the policy reader an
-    // incomplete call. Refuse it instead, before transport or persistence.
-    if (Object.hasOwn(result, safeKey)) throw new Error("redacted key collision");
-    Object.defineProperty(result, safeKey, {
-      value: isSensitiveKey(key) ? "[redacted]" : redactAuthorityValue(child),
-      enumerable: true,
-    });
-  }
-  return result;
-}
-
 /** The decision service, as every caller holds it. */
 export function createDecisionService(options: DecisionServiceOptions): DecisionPort {
   const now = options.now ?? Date.now;
-  // One queue per purpose, so a purpose with a deadline of seconds (VC-28's
-  // authority judge) never waits behind another purpose's slow calls.
+  // One queue per purpose so independent callers never share a slow queue.
   const queues = new Map<DecisionPurpose, Slots>();
   const slotsFor = (purpose: DecisionPurpose): Slots => {
     const existing = queues.get(purpose);
@@ -217,7 +159,7 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
   };
 
   const recordSafely = (work: () => void | Promise<void>): void => {
-    // Metering and audit never hold the caller: a decision already made is
+    // Metering never holds the caller: a decision already made is
     // the caller's whether or not its bill landed. A failure is reported to
     // the host, which logs it — nobody is waiting on this to toast.
     void (async () => {
@@ -242,16 +184,7 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
       const policy = options.policyFor?.(purpose) ?? DECISION_PURPOSE_POLICY[purpose];
       const checked = checkDecisionRequest({ state: call.state, questions: call.questions });
       if (!checked.ok) return miss(decisionMiss("invalid-request", checked.problem));
-      let request = checked.value;
-      if (purpose === "authority.judge") {
-        try {
-          request = { ...request, state: redactAuthorityValue(request.state) as DecisionState };
-        } catch {
-          return miss(
-            decisionMiss("invalid-request", "The authority state could not be redacted."),
-          );
-        }
-      }
+      const request = checked.value;
 
       // One deadline for the whole call — reading the setting, queueing and
       // asking: a caller is promised an answer or its fallback within its
@@ -297,51 +230,8 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
         const routed = decisionTargetFor(setting, purpose);
         if (!routed.ok) return miss(routed.miss);
         const target = routed.target;
-        if (policy.audit && options.recordDecision === undefined) {
-          return miss(
-            decisionMiss("unaudited", "This decision needs an audit trail, and none is recorded."),
-          );
-        }
-        /**
-         * What an audited purpose's verdict waits on: the audit write has
-         * landed. A write that fails, or is still pending after
-         * {@link AUDIT_WAIT_MS}, leaves a verdict nobody can account for, so
-         * the caller gets its fallback as `unaudited` instead. It is not
-         * raced against the call's own deadline: a decision that timed out or
-         * was withdrawn is exactly one the trail must still record. An
-         * unaudited purpose writes nothing and is never held up.
-         */
-        const audit = async (outcome: DecisionAuditFact["outcome"]): Promise<boolean> => {
-          const record = options.recordDecision;
-          if (!policy.audit || record === undefined) return true;
-          let waitTimer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            const written = await Promise.race([
-              Promise.resolve().then(async () => {
-                await record({ purpose, sessionId, target, request, outcome });
-                return true;
-              }),
-              new Promise<false>((resolve) => {
-                waitTimer = setTimeout(() => resolve(false), options.auditWaitMs ?? AUDIT_WAIT_MS);
-              }),
-            ]);
-            return written;
-          } catch (error) {
-            options.onRecordFailure?.(error);
-            return false;
-          } finally {
-            clearTimeout(waitTimer);
-          }
-        };
-        const unaudited = (): T =>
-          miss(
-            decisionMiss("unaudited", "This decision could not be recorded in its audit trail."),
-          );
-        const audited = async (value: DecisionMiss): Promise<T> =>
-          (await audit({ kind: "miss", miss: value })) ? miss(value) : unaudited();
-
         const slots = slotsFor(purpose);
-        if (!(await slots.acquire(withdraw.signal))) return audited(late());
+        if (!(await slots.acquire(withdraw.signal))) return miss(late());
         // Freed when the call settles, not when the caller stops waiting: a
         // call still in flight is still load on the model. The cap frees it
         // regardless if the classifier never settles.
@@ -375,11 +265,11 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
         // Raced against the deadline as well as signalled: a classifier
         // that ignores its signal still cannot hold the caller past it.
         const result = await Promise.race([asked, gaveUp]);
-        if (result === null) return audited(late());
-        if (!result.ok) return audited(result.miss);
+        if (result === null) return miss(late());
+        if (!result.ok) return miss(result.miss);
         const answers = readDecisionAnswers(request.questions, result.answers);
         if (answers === null) {
-          return audited(
+          return miss(
             decisionMiss(
               "malformed-answer",
               "The decision model's answer did not answer every question asked.",
@@ -391,16 +281,13 @@ export function createDecisionService(options: DecisionServiceOptions): Decision
           model: describeTarget(target),
           elapsedMs: Math.max(0, now() - started),
         };
-        let value: T;
         try {
-          value = call.use(answered);
+          return call.use(answered);
         } catch {
-          // The caller fell back, so that is what the record says happened.
-          return audited(
+          return miss(
             decisionMiss("malformed-answer", "The caller could not act on the decision's answer."),
           );
         }
-        return (await audit({ kind: "answered", answered })) ? value : unaudited();
       } finally {
         clearTimeout(timer);
         call.signal?.removeEventListener("abort", onCallerAbort);

@@ -2,8 +2,8 @@
  * The opt-in, fixture-only MCP benchmark: the app-side composition (VC-444,
  * re-based onto the real Session path in VC-454).
  *
- * The Pi-facing half — `createPiAgentRuntime` with a scripted provider, the
- * Authority gate and the Agent Tool Surface — comes from the package's bench
+ * The Pi-facing half — `createPiAgentRuntime` with a scripted provider and the
+ * Agent Tool Surface — comes from the package's bench
  * surface (`@volli/agent-runtime/bench/mcp-parallel`). This file composes its
  * MCP side with main's own `desktopMcpDispatch`, fed an environment the way
  * main is: the parallel arm sets `VOLLI_DEV_MCP_PARALLEL`, the sequential arm

@@ -40,20 +40,20 @@ Select your project, then open **Configure**.
 | **Skills** | Available Skills and their prompt budget |
 | **Commands** | Project slash-command templates |
 | **MCP Servers** | Server connections and tools offered to new Sessions |
-| **Protection** | Default-off protection switch and Approved actions |
+| **Secrets** | Supply, replace, and revoke project credentials |
 | **Sessions** | Project Session defaults and instruction precedence |
 | **Appearance** | Project overrides for the app, editor, and terminal |
 | **Worktrees** | Base branch and setup command for new ticket worktrees |
 
 See [Skills and commands](/guides/skills-and-commands/), [MCP
-servers](/guides/mcp-servers/), and [Protection](/guides/authority/) for
+servers](/guides/mcp-servers/), and [Agent authority](/guides/authority/) for
 agent configuration. [Chats and worktrees](/guides/agents-and-worktrees/)
 explains base branches, setup, and `.worktreeinclude`.
 
 A project appearance override can inherit or replace an app-wide value. A
-Session's tools and authority have their own recorded lifetimes, so changing a
-setting does not necessarily change an existing Session. Check the relevant
-guide before relying on a policy change.
+Session's tools are recorded when it starts, so changing a tool setting does
+not add tools to an existing Session. Check the relevant guide before relying
+on a configuration change.
 
 ## Web Search
 

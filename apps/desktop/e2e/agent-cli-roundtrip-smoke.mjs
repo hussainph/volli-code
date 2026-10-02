@@ -116,9 +116,8 @@ async function main() {
 
     // === 0c. A person widens the policy, through the app's own door =========
     // The agent must never be able to author the policy that governs it, so
-    // there is no verb for this and no socket path to it: the Configure
-    // Authority pane is the whole surface. Driving the same preload API the
-    // pane does is how this probe plays the person.
+    // there is no verb for this and no socket path to it. Driving the app-only
+    // actor-policy preload API is how this probe plays the person.
     await attempt(
       0.75,
       "the app grants unauthenticated callers this project's writes",

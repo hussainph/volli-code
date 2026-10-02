@@ -47,7 +47,6 @@ function projectionWith(
     modelTier: null,
     turnActive: false,
     lastTurnOutcome: null,
-    authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: true,

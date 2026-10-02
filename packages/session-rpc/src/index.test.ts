@@ -10,8 +10,6 @@ import type {
   SessionStreamOverlay,
 } from "@volli/session-engine";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   CODE_MODE_POLICY_MODELS_MAX,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
@@ -81,21 +79,6 @@ function attachmentWithRecovery(): SessionAttachmentProjection {
     outcome: null,
     failure: null,
     exitCode: null,
-  };
-}
-
-/** The whole Snapshot, as the host holds it — most of which must not cross. */
-function pinnedAuthority(): NonNullable<SessionAttachmentProjection["authority"]> {
-  return {
-    mode: "auto",
-    location: "worktree",
-    enforcement: "observe",
-    judgmentMode: "ask",
-    tools: ["read", "edit", "write", "execute"],
-    rulePackId: BUILTIN_RULE_PACK_ID,
-    rulePackHash: BUILTIN_RULE_PACK_HASH,
-    classifierModel: null,
-    fallback: { consecutiveDenials: 3, sessionDenials: 20 },
   };
 }
 
@@ -263,7 +246,6 @@ function snapshot(): SessionRuntimeSnapshot {
       modelTier: null,
       turnActive: false,
       lastTurnOutcome: null,
-      authorityDenials: 0,
       usage: EMPTY_SESSION_USAGE_SUMMARY,
       lastActivityAt: 10,
       bornTicketless: true,
@@ -557,7 +539,6 @@ describe("Session tRPC router", () => {
 
     expect(Object.keys(resolved.projection).toSorted()).toEqual([
       "attention",
-      "authority",
       "bornTicketless",
       "interactions",
       "lastActivityAt",
@@ -581,123 +562,6 @@ describe("Session tRPC router", () => {
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
   });
 
-  /*
-   * VC-285. The renderer may say what the live attachment was pinned to, and
-   * only that: the outcome and the pack's version. The rest of the Snapshot —
-   * the frozen tool surface, the classifier, the thresholds, the tree it runs
-   * in — stays host-side, so this edge sends a summary rather than the
-   * attachment it was read from.
-   */
-  it("publishes the live attachment's saved policy as a summary, not as the Snapshot", async () => {
-    const fixture = runtimeFixture();
-    const serverSnapshot = snapshotWithRecovery();
-    const live = { ...attachmentWithRecovery(), authority: pinnedAuthority() };
-    const runtime: SessionRuntime = {
-      ...fixture.runtime,
-      projection: async () => ({
-        projection: { ...serverSnapshot.projection, attachments: [live], liveExecutor: live },
-        throughSequence: serverSnapshot.throughSequence,
-      }),
-    };
-    const caller = createSessionRouter().createCaller({
-      runtime,
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    const resolved = await caller.session.projection({ sessionId: "session-1" });
-
-    expect(resolved.projection.authority).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: {
-        enforcement: "observe",
-        rulePackId: BUILTIN_RULE_PACK_ID,
-        rulePackHash: BUILTIN_RULE_PACK_HASH,
-      },
-    });
-  });
-
-  /*
-   * An attachment that opened under `enforcement: "off"` pins no Snapshot, and
-   * neither does one written before VC-44. Both are the same durable fact, and
-   * the edge reports it rather than substituting today's project policy — which
-   * it could not read here anyway, and must not appear to.
-   */
-  it("reports a live attachment with no saved Snapshot as having none", async () => {
-    const fixture = runtimeFixture();
-    const serverSnapshot = snapshotWithRecovery();
-    const caller = createSessionRouter().createCaller({
-      runtime: {
-        ...fixture.runtime,
-        projection: async () => ({
-          projection: serverSnapshot.projection,
-          throughSequence: serverSnapshot.throughSequence,
-        }),
-      },
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    const resolved = await caller.session.projection({ sessionId: "session-1" });
-
-    expect(resolved.projection.authority).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: null,
-    });
-  });
-
-  /*
-   * One Session, several attachments, several policies — which is the case
-   * pinning exists for. A Session that reattached after a Configure edit has
-   * genuinely run under all of them, so the summary must follow the LIVE
-   * attachment rather than the first, last, or anything folded across them.
-   */
-  it("follows the live attachment when a Session has run under several policies", async () => {
-    const fixture = runtimeFixture();
-    const serverSnapshot = snapshotWithRecovery();
-    const closedBefore = {
-      ...attachmentWithRecovery(),
-      id: "attachment-0",
-      status: "closed" as const,
-      authority: { ...pinnedAuthority(), enforcement: "enforce" as const },
-    };
-    const live = { ...attachmentWithRecovery(), authority: pinnedAuthority() };
-    const closedAfter = {
-      ...attachmentWithRecovery(),
-      id: "attachment-2",
-      status: "closed" as const,
-      authority: null,
-    };
-    const caller = createSessionRouter().createCaller({
-      runtime: {
-        ...fixture.runtime,
-        projection: async () => ({
-          projection: {
-            ...serverSnapshot.projection,
-            attachments: [closedBefore, live, closedAfter],
-            liveExecutor: live,
-          },
-          throughSequence: serverSnapshot.throughSequence,
-        }),
-      },
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    const resolved = await caller.session.projection({ sessionId: "session-1" });
-
-    expect(resolved.projection.authority?.attachmentId).toBe(resolved.projection.liveExecutor?.id);
-    expect(resolved.projection.authority?.snapshot?.enforcement).toBe("observe");
-  });
-
-  it("has no authority to report while nothing is attached", async () => {
-    const caller = createSessionRouter().createCaller({
-      runtime: runtimeFixture().runtime,
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    const resolved = await caller.session.projection({ sessionId: "session-1" });
-
-    expect(resolved.projection.authority).toBeNull();
-  });
-
   it("removes runtime identity and recovery locators from snapshot projections and replay frames", async () => {
     const fixture = runtimeFixture();
     const serverSnapshot = { ...snapshotWithRecovery(), frames: attachmentFrames() };
@@ -712,7 +576,6 @@ describe("Session tRPC router", () => {
 
     expect(Object.keys(resolved.projection).toSorted()).toEqual([
       "attention",
-      "authority",
       "bornTicketless",
       "interactions",
       "lastActivityAt",

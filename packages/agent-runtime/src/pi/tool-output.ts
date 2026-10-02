@@ -38,10 +38,11 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import { lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { containsPath, errorMessage, MCP_RESULT_MAX_BYTES } from "@volli/shared";
-import { normalizeToolCall, resolveReadableRoot } from "../authority/normalize";
+import { normalizeToolPath } from "./tool-path";
 
 /** The suffix that turns a sidecar's path into the path of its saved output. */
 export const TOOL_OUTPUT_DIRECTORY_SUFFIX = ".tool-output";
@@ -470,7 +471,7 @@ export class ToolOutputStore {
    * one of {@link readableDirectories}, or in any attachment's `.tool-output`
    * directory under the data directory.
    *
-   * Resolved the way the read tool and the authority gate resolve it — Pi's
+   * Resolved the way the read tool resolves it — Pi's
    * own path normalization, the workspace as the base, symlinks followed — and
    * compared against a directory only while that is a real directory, so a
    * link planted in its place marks nothing.
@@ -478,20 +479,17 @@ export class ToolOutputStore {
   holds(path: unknown): boolean {
     let read: string;
     try {
-      read = normalizeToolCall({
-        tool: "read",
-        args: { path },
-        workspacePath: this.#workspacePath,
-      }).reads[0]!;
+      if (typeof path !== "string") return false;
+      read = realpathSync(resolve(this.#workspacePath, normalizeToolPath(path)));
     } catch {
       return false;
     }
     for (const directory of this.readableDirectories) {
-      const root = resolveReadableRoot(directory);
+      const root = savedOutputRoot(directory);
       if (root !== undefined && containsPath(root, read)) return true;
     }
     const data =
-      this.#dataDirectory === undefined ? undefined : resolveReadableRoot(this.#dataDirectory);
+      this.#dataDirectory === undefined ? undefined : savedOutputRoot(this.#dataDirectory);
     return data !== undefined && isSavedOutputPath(data, read, 3);
   }
 }
@@ -531,4 +529,13 @@ export function toolOutputCut(cut: MiddleCut, save: ToolOutputSave): ToolOutputC
     fullOutputPath: save.saved ? save.path : null,
     savedBytes: save.saved ? save.savedBytes : 0,
   };
+}
+
+/** A real directory, never a symlink standing in for a saved-output root. */
+function savedOutputRoot(directory: string): string | undefined {
+  try {
+    return lstatSync(directory).isDirectory() ? realpathSync(directory) : undefined;
+  } catch {
+    return undefined;
+  }
 }

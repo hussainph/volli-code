@@ -46,7 +46,6 @@ class Executor implements NativeHarnessAdapter {
     this.sink = sink;
     return {
       native: { id: "native-1", detail: null },
-      authority: null,
       dispatch: async (command) => {
         this.commands.push(command);
         if (command.kind === "executor.retry") await this.retryGate;

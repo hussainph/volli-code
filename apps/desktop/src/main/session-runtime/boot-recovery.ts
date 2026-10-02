@@ -37,7 +37,7 @@ export interface BootRecoverySession {
   readonly turnActive: boolean;
   /** Cards parked in the lost process cannot resume their tool call after boot. */
   readonly interactions?: {
-    readonly active: readonly Pick<SessionInteraction, "id" | "attachmentId" | "approval">[];
+    readonly active: readonly Pick<SessionInteraction, "id" | "attachmentId" | "kind">[];
   };
 }
 
@@ -74,11 +74,11 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
     for (const projection of sessions) {
       for (const attachment of projection.attachments) {
         // A local process restart cannot recover the promise that parked a
-        // protection card, even if the turn already interrupted or its sidecar
-        // is lost. No approval is granted by retiring the abandoned request.
+        // host permission question, even if the turn already interrupted or its
+        // sidecar is lost. Retiring it grants no allowance or confirmation.
         if (attachment.adapterId === STRUCTURED_ADAPTER_ID && attachment.venue.kind === "local") {
           for (const interaction of projection.interactions?.active ?? []) {
-            if (interaction.attachmentId !== attachment.id || interaction.approval === undefined)
+            if (interaction.attachmentId !== attachment.id || interaction.kind !== "permission")
               continue;
             try {
               await options.engine.observe({

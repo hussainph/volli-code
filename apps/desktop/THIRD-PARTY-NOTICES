@@ -12863,15 +12863,15 @@ SOFTWARE.
 
 
 =========================================================================================================
-Source: pi-automode path canonicalization and shell lexer
-Paths: packages/agent-runtime/src/authority/vendor/paths.ts, packages/agent-runtime/src/authority/vendor/shell.ts
+Source: pi-automode shell lexer
+Paths: packages/agent-runtime/src/shell/lexer.ts
 Declared by: @volli/agent-runtime
 Upstream: https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)
 SPDX: MIT
 Evidence:
-  src/authority/vendor/README.md pins the upstream repository, revision and tag, and
-  lists file-by-file what was taken and what diverges. The licence text is upstream's
-  LICENSE.md at that revision.
+  src/shell/UPSTREAM.md pins the upstream repository, revision and tag, and documents
+  the retained lexer and its divergences. The licence text is upstream's LICENSE.md at
+  that revision.
 ---------------------------------------------------------------------------------------------------------
 # MIT License
 

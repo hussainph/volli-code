@@ -64,14 +64,13 @@
   "volli": {
     "notices": [
       {
-        "title": "pi-automode path canonicalization and shell lexer",
+        "title": "pi-automode shell lexer",
         "covers": [
-          "src/authority/vendor/paths.ts",
-          "src/authority/vendor/shell.ts"
+          "src/shell/lexer.ts"
         ],
         "upstream": "https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)",
         "spdx": "MIT",
-        "evidence": "src/authority/vendor/README.md pins the upstream repository, revision and tag, and lists file-by-file what was taken and what diverges. The licence text is upstream's LICENSE.md at that revision.",
+        "evidence": "src/shell/UPSTREAM.md pins the upstream repository, revision and tag, and documents the retained lexer and its divergences. The licence text is upstream's LICENSE.md at that revision.",
         "text": "notices/pi-automode.LICENSE.txt"
       },
       {

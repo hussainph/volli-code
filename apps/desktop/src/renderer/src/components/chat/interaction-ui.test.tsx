@@ -25,45 +25,6 @@ import {
   QuestionSentReceipt,
 } from "./interaction-ui";
 
-describe("Protection approval stages", () => {
-  it("shows all redirect-bearing stages and the held writers even without a legacy held index", () => {
-    const interaction: RendererSessionInteraction = {
-      id: "ask:compound",
-      attachmentId: "a",
-      kind: "permission",
-      title: "Allow writing outside this workspace?",
-      detail: null,
-      multiple: false,
-      native: { id: null, detail: null },
-      options: [{ id: "once", label: "Allow once", description: null }],
-      approval: {
-        asked: "echo harmless > /outside/first && echo harmless > /outside/second",
-        because: "outside",
-        reason: "Writes outside the workspace need approval.",
-        stages: ["echo harmless > /outside/first", "echo harmless > /outside/second"],
-        held: null,
-        heldStages: [1],
-      },
-    };
-    const html = renderToStaticMarkup(
-      <InteractionCard
-        interaction={interaction}
-        onResolve={() => Promise.resolve(true)}
-        resolving={false}
-      />,
-    );
-    expect(html).toContain('aria-label="Command stages"');
-    const stages = html.match(/<li[\s\S]*?<\/li>/gu) ?? [];
-    expect(stages).toHaveLength(2);
-    expect(stages[0]).toContain("/outside/first");
-    expect(stages[0]).not.toContain("bg-primary/10");
-    expect(stages[1]).toContain("/outside/second");
-    expect(stages[1]).toContain("bg-primary/10");
-    expect(stages.join("")).not.toContain("truncate");
-    expect(html).not.toContain("gap-0.5");
-  });
-});
-
 const PERMISSION_OPTIONS = [
   { id: "once", label: "Allow once", description: null },
   { id: "always", label: "Allow always", description: null },

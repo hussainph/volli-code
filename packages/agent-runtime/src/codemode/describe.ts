@@ -213,7 +213,7 @@ export function describeCodeMode(input: {
         : "The tools below are reachable only this way, so one call is a one-line program."
     }`,
     "`code` is an async function body: `await tools.<name>(args)`; run independent calls together with `Promise.all` or `Promise.allSettled` (reads overlap, other calls run one at a time in order); print with `text(value)` or `console.log`; `return` a value. There is no `require`, `fs`, `process`, network or timers — only the tools.",
-    "Each call is checked exactly as a direct call. One that needs a person's approval pauses the program; a refused or failed call throws its reason.",
+    "Each call is checked exactly as a direct call. One that asks a person pauses the program; a refused or failed call throws its reason.",
     "Results: `bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; MCP tools → { text, structuredContent?, isError, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; other tools → their text. No images.",
     `Per run: ${input.limits.maxNestedCalls} calls, ${seconds} s of running time (waiting on a person is free), ${formatBytes(input.limits.maxOutputBytes)} of output (the rest is saved). A first line \`// @options: {"timeout_ms": 30000, "max_output_tokens": 2000}\` lowers them. The program is checked whole before anything runs.`,
     "A run that called a web, Browser or MCP tool, or read another agent's words, returns its output inside untrusted-content markers.",

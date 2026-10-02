@@ -121,9 +121,6 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             // unreachable from rail search until settings-search-smoke finally
             // ran in CI and said so.
             "show cost and token usage",
-            "auto mode hints",
-            "hints",
-            "authority",
             "cost",
             "token",
             "tokens",
@@ -193,12 +190,6 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "available to connect",
             // The Decision model section (VC-478), every label it can draw.
             "decision model",
-            "shadow review",
-            "shadow mode",
-            "auto mode",
-            "block reason",
-            "utility model",
-            "risk category",
             "classifier",
             "classify",
             "jev",

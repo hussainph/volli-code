@@ -1402,7 +1402,7 @@ function selfTestLiveDeclarations() {
   );
   assert.ok(
     owned.documents.length + owned.vendored.length >= 2,
-    "shared declares APCA; agent-runtime declares the vendored pi-automode helpers",
+    "shared declares APCA; agent-runtime declares the retained shell lexer",
   );
   assert.ok(
     owned.vendored.some((entry) => /APCA/i.test(entry.title ?? "")),

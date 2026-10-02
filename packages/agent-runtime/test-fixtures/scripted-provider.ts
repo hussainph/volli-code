@@ -1,4 +1,4 @@
-/** Script only the provider; integration fixtures exercise Pi, its hooks and actual tools. */
+/** Script only the provider; integration fixtures exercise Pi and actual tools. */
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
@@ -13,7 +13,7 @@ export interface ScriptedReply {
   tool?: { name: string; args: JsonObject };
   text?: string;
 }
-export function protectionScript(replies: ScriptedReply[]) {
+export function scriptedProvider(replies: ScriptedReply[]) {
   let call = 0;
   const requests: readonly Message[][] = [];
   const seen = requests as Message[][];
@@ -46,7 +46,7 @@ export function protectionScript(replies: ScriptedReply[]) {
     } else if (reply.tool !== undefined) {
       const toolCall = {
         type: "toolCall" as const,
-        id: `protection-call-${call}`,
+        id: `scripted-call-${call}`,
         name: reply.tool.name,
         arguments: reply.tool.args,
       };
@@ -67,7 +67,7 @@ export function protectionScript(replies: ScriptedReply[]) {
   };
   const faux = fauxProvider({
     api: "anthropic-messages",
-    provider: "protection-fixture",
+    provider: "scripted-fixture",
     models: [{ id: "scripted" }],
   });
   const models = createModels();

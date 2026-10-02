@@ -216,31 +216,6 @@ describe("observabilitySpan — product events", () => {
     expect(failed.attributes["error.type"]).toBe("tool_failed");
   });
 
-  it("records allowed and denied authority decisions as working policy, not faults", () => {
-    const denied = observabilitySpan({
-      kind: "authority",
-      outcome: "denied",
-      cause: "call.unreadable",
-    });
-    const allowed = observabilitySpan({
-      kind: "authority",
-      outcome: "allowed",
-      waitDurationMs: 120,
-    });
-
-    expect(denied.failed).toBe(false);
-    expect(denied.attributes).toEqual({
-      "volli.authority.outcome": "denied",
-      "volli.authority.cause": "call.unreadable",
-    });
-    expect(allowed).toMatchObject({
-      name: "volli.agent.authority",
-      durationMs: 120,
-      failed: false,
-      attributes: { "volli.authority.outcome": "allowed" },
-    });
-  });
-
   it("carries compaction token counts only on the arm that measured them", () => {
     for (const reason of COMPACTION_REASONS) {
       expect(
@@ -429,13 +404,12 @@ describe("observabilityMetrics", () => {
     ).toBe("unknown");
   });
 
-  it("counts and times tools, authority decisions, compactions, and drops", () => {
+  it("counts and times tools, compactions, and drops", () => {
     const tool = observabilityMetrics({
       kind: "tool",
       activityKind: "read-file",
       outcome: "failed",
       durationMs: 240,
-      waitDurationMs: 60,
       runId: "run-1",
     });
     // No `toolId` on this event, so the name falls back to the capability
@@ -460,24 +434,8 @@ describe("observabilityMetrics", () => {
         value: 0.24,
         attributes: labels,
       },
-      {
-        name: "volli.agent.tool.wait.duration",
-        instrument: "histogram",
-        unit: "s",
-        value: 0.06,
-        attributes: labels,
-      },
     ]);
 
-    expect(observabilityMetrics({ kind: "authority", outcome: "allowed" })).toEqual([
-      {
-        name: "volli.agent.authority.decision.count",
-        instrument: "counter",
-        unit: "{decision}",
-        value: 1,
-        attributes: { "volli.authority.outcome": "allowed" },
-      },
-    ]);
     expect(
       observabilityMetrics({ kind: "compaction", outcome: "compacted", reason: "threshold" }),
     ).toEqual([
@@ -576,7 +534,6 @@ describe("observabilitySpan — the export boundary", () => {
       attempt,
       { kind: "turn", outcome: "completed", durationMs: 1 },
       { kind: "tool", activityKind: "search", outcome: "failed", durationMs: 2 },
-      { kind: "authority", outcome: "denied", cause: "call.unreadable" },
       { kind: "compaction", outcome: "compacted", reason: "threshold", tokensBefore: 5 },
       { kind: "compaction", outcome: "failed", reason: "overflow", durationMs: 7 },
       { kind: "turn-queue", queuedMs: 3, runId: "run-1" },

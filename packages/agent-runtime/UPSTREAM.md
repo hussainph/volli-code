@@ -40,7 +40,8 @@ owns that investigation. Desktop's independent `pi-mcp` pin is not changed.
 
 ## Process sandbox runtime
 
-Direct dependency, pinned exactly to `0.0.71`, required before Pi bash runs:
+Direct dependency, pinned exactly to `0.0.74`, used by the injectable
+`ScopedExecutionEnv`:
 
 - `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
   Apache-2.0, maintained macOS Seatbelt process boundary used by Claude Code.
@@ -48,16 +49,19 @@ Direct dependency, pinned exactly to `0.0.71`, required before Pi bash runs:
   Volli. This is the smallest maintained Node-seam dependency that supplies the
   approved Claude Code-style boundary without building a custom sandbox.
 
-Session 3 divergence: Volli supplies the canonical Ticket worktree and a
-sanitized environment, uses SRT's immutable maintained policy for
-worktree-only writes, user-home denial outside that worktree, and no network,
-and fails closed before advertising execution when the runtime or policy is
-unavailable. Its sanitized PATH intentionally retains fixed system/global
-toolchain roots (`/opt/homebrew`, `/usr/local`, and system paths) so ordinary
-build/test commands work; user-home toolchains and credentials are excluded,
-and explicit user-home grants remain deferred. Host process-group abort,
-timeout, and close are best-effort lifecycle hygiene only; they do not promise
-cleanup of daemonized or reparented descendants.
+When explicitly injected, `ScopedExecutionEnv` supplies a canonical worktree
+and sanitized environment, uses SRT's policy for worktree-only writes,
+user-home denial outside that worktree and no network, and fails closed when
+the runtime or policy is unavailable. Its sanitized PATH retains fixed
+system/global toolchain roots (`/opt/homebrew`, `/usr/local`, and system paths);
+user-home toolchains and credentials are excluded.
+
+Ordinary desktop Sessions do not inject this environment. They use
+`piExecutionEnv`'s host-native file and command tools, with credential-file
+safeguards and a filtered subprocess environment, not filesystem containment.
+The working directory is not a sandbox. Host process-group abort, timeout and
+close are best-effort lifecycle hygiene only; they do not promise cleanup of
+daemonized or reparented descendants.
 
 Upgrade checks: review SRT's exact version, license, macOS Seatbelt policy and
 its inheritance by shell children; rerun outside-worktree/user-home write and
@@ -107,20 +111,19 @@ the patched hunk moved or landed upstream. Regenerate through
 
 ## Replicated Pi code
 
-`src/authority/pi-tool-path.ts` reproduces `normalizeToolPath` from
+`src/pi/tool-path.ts` reproduces `normalizeToolPath` from
 `dist/harness/tools/path-utils.js`: it collapses the Unicode spaces
 `U+00A0`, `U+2000`–`U+200A`, `U+202F`, `U+205F` and `U+3000` to an ASCII
 space and strips one leading `@`. Every Pi
-file tool runs its `path` through it before opening anything, so policy that
-reads the raw argument judges a different file than the tool touches —
-`write { path: "@.git/hooks/pre-commit" }` lands on `.git/hooks/pre-commit`.
+file tool runs its `path` through it before opening anything, so saved-output trust marking must use the same normalization as the
+read tool. This replica no longer feeds an authority gate.
 
 Originally copied because the normalization helper was module-private. In Pi
 1.0 the four tool implementations are now owned under `src/pi/vendor/pi-harness`;
-the policy-side replica remains pure and separately tested.
+the output-trust replica remains pure and separately tested.
 
 A copy is a divergence waiting to happen, so it is not trusted on inspection:
-`pi-tool-path.test.ts` drives the retained `createWriteTool`/`createEditTool`
+`tool-path.test.ts` drives the retained `createWriteTool`/`createEditTool`
 against a stub `ExecutionEnv` that records the string Pi passes to
 `absolutePath`, and asserts the replica agrees for every transformation. Changes
 to the owned normalization code must preserve this agreement.
@@ -206,8 +209,8 @@ tarballs:
   data as compact JSON unless a text block already carries it; see
   `docs/mcp.md`, "What a call returns".
 - **`runToolCall`** runs one call through argument preparation, validation and
-  both hooks without emitting events. Not used yet; it is the seam a nested
-  caller (VC-471's Code Mode) needs so authority still judges each call.
+  both hooks without emitting events. Used by Code Mode for each nested call, preserving argument validation and
+  the same bound host tool implementation as direct calls.
 - **`thinkingLevel` on assistant messages.** The agent loop now stamps the
   requested level on every assistant message, so new sidecar entries carry it
   and entries written by 0.87.1 do not. Nothing here reads it.
@@ -321,17 +324,18 @@ Exact pin, no ranges. Version bumps are deliberate and recorded in the commit
 that makes them, together with the tag and commit hash above. Forking or
 vendoring Pi requires a concrete, documented need.
 
-## Deliberate Session 3 boundary
+## Injectable workspace boundary
 
-Session 3 loads Pi core's `read`, `edit`, and `write` as guarded host-native
-operations, and adds Bash only after the pinned SRT boundary preflights. This
-matches Claude Code's Bash-only containment scope: SRT protects Bash and its
-subprocesses, not the native file tools. Those tools retain Volli's component
-name-check and direct-symlink guard. Direct-symlink rejection tests compensate
-for, but do not eliminate, its accepted TOCTOU limit: an external process with
-write access to the worktree could replace a validated component with a symlink
-before Pi's delegated filesystem operation opens it. Descriptor-relative
-`O_NOFOLLOW` operations are deferred hardening to close that host-level race.
+`ScopedExecutionEnv` loads the retained `read`, `edit` and `write` tools as
+guarded host-native operations, and adds Bash only after the pinned SRT
+boundary preflights. SRT protects Bash and its subprocesses, not the native
+file tools. Those tools retain Volli's resolved-path/component checks and
+direct-symlink guard. Direct-symlink rejection tests compensate for, but do not
+eliminate, the accepted TOCTOU limit: an external process with write access to
+the worktree could replace a validated component with a symlink before the
+delegated filesystem operation opens it. Descriptor-relative `O_NOFOLLOW`
+operations are deferred hardening. This optional boundary is not the default
+desktop execution path.
 
 ## License
 

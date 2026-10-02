@@ -553,14 +553,14 @@ describe("volli:project-authority-policy", () => {
 
     const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
       id,
-      override: { enforcement: "enforce" },
+      override: { budgets: { delegationExceeded: "refuse" } },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // The DEPARTURES ride back, not the resolved document — the pane needs to
     // tell a chosen value from an inherited one.
-    expect(result.project.authorityPolicy).toEqual({ enforcement: "enforce" });
+    expect(result.project.authorityPolicy).toEqual({ budgets: { delegationExceeded: "refuse" } });
   });
 
   it("REFUSES an unknown field, naming it, rather than storing a document that governs nothing", () => {
@@ -583,7 +583,10 @@ describe("volli:project-authority-policy", () => {
 
     const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
       id,
-      override: { enforcement: "sideways", fallback: { sessionDenials: 0 } },
+      override: {
+        budgets: { delegationExceeded: "sideways" },
+        actors: { session: { nope: true } },
+      },
     });
 
     expect(result.ok).toBe(false);
@@ -593,7 +596,10 @@ describe("volli:project-authority-policy", () => {
 
   it("clears every departure on null", () => {
     const id = createProject();
-    invoke("volli:project-authority-policy", { id, override: { enforcement: "off" } });
+    invoke("volli:project-authority-policy", {
+      id,
+      override: { budgets: { delegationExceeded: "refuse" } },
+    });
 
     const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
       id,

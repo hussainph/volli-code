@@ -1250,9 +1250,7 @@ function buildTranscript(turnCount: number): UIMessage[] {
 
 /* ------------------------------------------------------------- transcript */
 
-const EMPTY_OPEN: readonly RendererSessionInteraction[] = [];
 const EMPTY_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
-const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 const MESSAGE_GAP = "flex flex-col gap-3";
 
 /** `chat-plane.tsx`'s `useStableList`, over its exported `holdList`. */
@@ -1294,19 +1292,12 @@ function TranscriptPane({
   working: boolean;
 }) {
   const onOpenFile = React.useCallback(() => {}, []);
-  // The benchmark never opens an interaction, so nothing calls this. It answers
-  // "delivered" because the alternative reads as a failed decision.
-  const onResolve = React.useCallback(() => Promise.resolve(true), []);
-
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
       interactions: EMPTY_INDEX,
-      open: EMPTY_OPEN,
-      resolving: EMPTY_RESOLVING,
-      onResolve,
     }),
-    [onOpenFile, onResolve],
+    [onOpenFile],
   );
 
   const turns = useStableList(

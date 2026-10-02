@@ -19,7 +19,6 @@ import {
   peakConcurrency,
   runOnce,
   runRepeated,
-  sleep,
   type ScriptedReply,
   type ToolSample,
 } from "./harness";
@@ -144,76 +143,6 @@ describe("Pi tool execution modes", () => {
     expect(guarded.peakConcurrency, "one sequential tool poisons the whole batch").toBe(1);
     expect(unguarded.peakConcurrency).toBe(4);
     expect(guarded.elapsedMs).toBeGreaterThan(unguarded.elapsedMs);
-  });
-
-  it("serializes the approval gate, so a batch never raises two prompts at once", async () => {
-    // Volli's `beforeToolCall` parks on a question. Pi runs preflight in a
-    // sequential loop even in parallel mode, so approvals cannot stack up.
-    let livePrompts = 0;
-    let maxLivePrompts = 0;
-
-    const result = await runOnce({
-      mode: "parallel",
-      providerLatencyMs: 0,
-      tools: [{ name: "session_start", latencyMs: 20 }],
-      replies: [
-        {
-          toolCalls: [
-            { name: "session_start", args: { n: 0 } },
-            { name: "session_start", args: { n: 1 } },
-            { name: "session_start", args: { n: 2 } },
-          ],
-        },
-        { text: "done" },
-      ],
-      gate: async () => {
-        livePrompts += 1;
-        maxLivePrompts = Math.max(maxLivePrompts, livePrompts);
-        await sleep(30);
-        livePrompts -= 1;
-      },
-    });
-
-    expect(maxLivePrompts, "at most one approval prompt may be live at a time").toBe(1);
-    expect(result.toolCalls).toBe(3);
-  });
-
-  it("holds every call in a batch until the slowest approval answers", async () => {
-    // The cost of that serialization, stated as a fact rather than left to be
-    // discovered: preflight for the whole batch completes before ANY call in
-    // it starts, so one slow approval delays calls that were already allowed.
-    const approvalMs = 200;
-    const result = await runOnce({
-      mode: "parallel",
-      providerLatencyMs: 0,
-      tools: [{ name: "read", latencyMs: 5 }],
-      replies: [
-        {
-          toolCalls: [
-            { name: "read", args: { n: 0 } },
-            { name: "read", args: { n: 1 } },
-          ],
-        },
-        { text: "done" },
-      ],
-      gate: async ({ toolCallId }) => {
-        // Only the SECOND call needs a person; the first is allowed instantly.
-        if (toolCallId.endsWith("-1")) await sleep(approvalMs);
-      },
-    });
-
-    const first = result.samples.find((sample) => sample.toolCallId.endsWith("-0"));
-    expect(first).toBeDefined();
-    // The instantly-allowed call still did not begin until the slow approval
-    // for its batch-mate had settled.
-    //
-    // `startedAt` is measured from the start of THIS run, which is what makes
-    // the comparison mean anything: against an absolute clock this read ~4×10⁹
-    // and the assertion passed regardless of what the scheduler did.
-    expect(first!.startedAt).toBeGreaterThanOrEqual(approvalMs - 25);
-    // And it is bounded above, so a run that never gated at all fails here
-    // rather than sailing through the lower bound.
-    expect(first!.startedAt).toBeLessThan(approvalMs * 3);
   });
 });
 

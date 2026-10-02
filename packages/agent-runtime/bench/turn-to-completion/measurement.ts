@@ -49,12 +49,11 @@ import {
   teeObservationsToSink,
 } from "../../src/pi/observability";
 
-export const FIXTURE_VERSION = "vc441-turn-critical-path-v3";
+export const FIXTURE_VERSION = "vc441-turn-critical-path-v4";
 const DEFAULT_CONCURRENCIES = [1, 5, 15, 20] as const;
 const DEFAULT_REPETITIONS = 20;
 const WARMUP_WAVES = 1;
 const DISPATCH_DELAY_MS = 2;
-const AUTHORITY_WAIT_MS = 12;
 const RETRY_BACKOFF_MS = 6;
 const COMPACTION_WORK_UNITS = 18_000;
 const PRIVATE_CONTENT_CANARY = "fixture-private-prompt-and-tool-output-canary";
@@ -99,7 +98,6 @@ export interface RecordedFixtureEvent {
 export interface TurnExpectations {
   modelAttempts: number;
   toolsByName: Readonly<Record<string, number>>;
-  authorityWaits: number;
   compactions: number;
   retries: number;
   /** `turn-queue` envelopes: one when the turn's queue time was measured. */
@@ -126,13 +124,11 @@ export interface TurnSample {
   toolRoundCount: number;
   toolCallCount: number;
   toolsByName: Record<string, { count: number; durationMs: number | null }>;
-  authorityWaitCount: number;
-  authorityWaitMs: number | null;
   compactionCount: number;
   /** Summed compaction envelope durations; null when any compaction was untimed. */
   compactionDurationMs: number | null;
   retryCount: number | null;
-  /** Runtime turn minus provider, tool, authority-wait and compaction time. */
+  /** Runtime turn minus provider, tool, compaction time. */
   unaccountedGapMs: number | null;
   /** First message → completion minus the same spans plus the turn-queue span. */
   firstMessageUnaccountedGapMs: number | null;
@@ -173,14 +169,13 @@ export interface Distribution {
 const EXPECTED: TurnExpectations = {
   modelAttempts: ATTEMPT_PLAN.length,
   toolsByName: { read: 1, bash: 1, "fetch-url": 1 },
-  authorityWaits: 1,
   compactions: 1,
   retries: 1,
   turnQueues: 1,
 };
 
 type StreamFunction = NonNullable<AgentOptions["streamFn"]>;
-const LOCAL_TIMER_KINDS = ["dispatch", "ttft", "completion", "mcp-batch", "authority"] as const;
+const LOCAL_TIMER_KINDS = ["dispatch", "ttft", "completion", "mcp-batch"] as const;
 type LocalTimerKind = (typeof LOCAL_TIMER_KINDS)[number];
 export interface TimerLateness {
   kind: LocalTimerKind;
@@ -232,7 +227,6 @@ function eventIntervalMs(
     let duration: number | undefined;
     if (event.kind === "provider-attempt") duration = event.durationMs;
     else if (event.kind === "tool") duration = event.durationMs;
-    else if (event.kind === "authority") duration = event.waitDurationMs;
     else if (event.kind === "compaction") duration = event.durationMs;
     else if (event.kind === "turn-queue") duration = event.queuedMs;
     if (!finiteNonNegative(duration) || duration === 0) return [];
@@ -285,17 +279,9 @@ function safeRawEvent(entry: RecordedFixtureEvent, origin: number): SafeRawEvent
         kind: event.kind,
         recordedAtOffsetMs,
         durationMs: event.durationMs ?? null,
-        waitDurationMs: event.waitDurationMs ?? null,
         outcome: event.outcome,
         toolId: event.toolId ?? null,
         activityKind: event.activityKind,
-      };
-    case "authority":
-      return {
-        kind: event.kind,
-        recordedAtOffsetMs,
-        durationMs: event.waitDurationMs ?? null,
-        outcome: event.outcome,
       };
     case "compaction":
       return {
@@ -325,7 +311,7 @@ function safeRawEvent(entry: RecordedFixtureEvent, origin: number): SafeRawEvent
 /**
  * Checks the sink's emission order (by `order`) against the turn's causal
  * shape: timestamps never go backwards; the turn-queue envelope comes before
- * anything the turn did; tool and authority envelopes belong to a tool round
+ * anything the turn did; tool envelopes belong to a tool round
  * opened by a `toolUse` provider attempt; nothing follows the terminal turn
  * envelope. Tool rounds are derived from that shape, not assumed.
  */
@@ -355,7 +341,7 @@ export function checkEventOrder(events: readonly RecordedFixtureEvent[]): {
       if (roundHasTools) toolRoundCount += 1;
       inToolRound = event.stopReason === "toolUse";
       roundHasTools = false;
-    } else if (event.kind === "tool" || event.kind === "authority") {
+    } else if (event.kind === "tool") {
       if (!inToolRound) violations += 1;
       else if (event.kind === "tool") roundHasTools = true;
     } else if (event.kind === "turn" && event.outcome !== "interrupted") {
@@ -439,15 +425,6 @@ export function analyzeTurn(input: {
         : null,
     };
   }
-  const authority = input.events.flatMap(({ event }) =>
-    event.kind === "authority" && event.waitDurationMs !== undefined ? [event] : [],
-  );
-  const authorityWaitComplete =
-    authority.length === expected.authorityWaits &&
-    authority.every(({ waitDurationMs }) => finiteNonNegative(waitDurationMs));
-  const authorityWaitMs = authorityWaitComplete
-    ? round(authority.reduce((sum, entry) => sum + entry.waitDurationMs!, 0))
-    : null;
   const compactions = input.events.flatMap(({ event }) =>
     event.kind === "compaction" ? [event] : [],
   );
@@ -469,7 +446,6 @@ export function analyzeTurn(input: {
     input.turnStartedAt !== null &&
     providerDurationsComplete &&
     toolDurationsCompleteByName.every(Boolean) &&
-    authorityWaitComplete &&
     compactionDurationsComplete &&
     turnQueueComplete &&
     retryCount === expected.retries;
@@ -506,8 +482,6 @@ export function analyzeTurn(input: {
     toolRoundCount,
     toolCallCount: tools.length,
     toolsByName,
-    authorityWaitCount: authority.length,
-    authorityWaitMs,
     compactionCount,
     compactionDurationMs,
     retryCount,
@@ -613,27 +587,12 @@ async function scriptedTool(input: {
   toolId: (typeof TOOL_IDS)[number];
   sessionIndex: number;
   turnId: string;
-  runId: string;
-  reducer: ObservabilityReducer;
-  sink: ObservabilitySink;
   timerLateness: TimerLateness[];
   observe: ReturnType<typeof teeObservationsToSink>;
 }): Promise<void> {
-  const { toolId, sessionIndex, turnId, runId, reducer, sink, timerLateness, observe } = input;
+  const { toolId, sessionIndex, turnId, timerLateness, observe } = input;
   const callId = `fixture-call-${sessionIndex}-${toolId}`;
   const startedAt = performance.now();
-  if (toolId === "read") {
-    const waitStartedAt = performance.now();
-    await scheduledTimer(waitStartedAt + AUTHORITY_WAIT_MS, "authority", timerLateness);
-    const waitDurationMs = performance.now() - waitStartedAt;
-    recordObservationToSink(reducer, sink, runId, {
-      kind: "authority",
-      state: "allowed",
-      turnId,
-      toolCallId: callId,
-      waitDurationMs,
-    });
-  }
   let checksum: number;
   if (toolId === "mcp-batch") {
     // Three concurrent in-memory timers model a latency-bound batched MCP
@@ -724,9 +683,6 @@ export async function runScriptedTurn(input: {
       toolId,
       sessionIndex: input.sessionIndex,
       turnId,
-      runId,
-      reducer,
-      sink,
       timerLateness,
       observe,
     });
@@ -769,7 +725,6 @@ export async function runScriptedTurn(input: {
     Object.entries(EXPECTED.toolsByName).some(
       ([toolId, count]) => sample.toolsByName[toolId]?.count !== count,
     ) ||
-    sample.authorityWaitCount !== EXPECTED.authorityWaits ||
     sample.compactionCount !== EXPECTED.compactions ||
     sample.compactionDurationMs === null ||
     sample.submissionToTurnStartMs === null ||
@@ -862,8 +817,6 @@ function armSummary(
     toolRoundsPerTurn: summarize(samples.map(({ toolRoundCount }) => toolRoundCount)),
     toolCallsPerTurn: summarize(samples.map(({ toolCallCount }) => toolCallCount)),
     toolsByName,
-    authorityWaitsPerTurn: summarize(samples.map(({ authorityWaitCount }) => authorityWaitCount)),
-    authorityWaitMs: summarize(samples.map(({ authorityWaitMs }) => authorityWaitMs)),
     compactionsPerTurn: summarize(samples.map(({ compactionCount }) => compactionCount)),
     compactionDurationMs: summarize(
       samples.map(({ compactionDurationMs }) => compactionDurationMs),
@@ -912,12 +865,6 @@ function fmt(distribution: Distribution | null): string {
     : `${distribution.p50} / ${distribution.p95} ms (n=${distribution.n})`;
 }
 
-function fmtSigned(distribution: Distribution | null): string {
-  return distribution === null
-    ? "n/a"
-    : `${distribution.min} / ${distribution.p50} / ${distribution.p95}`;
-}
-
 function armReportMarkdown(arm: Record<string, unknown>): string {
   const summary = arm as {
     concurrency: number;
@@ -929,7 +876,6 @@ function armReportMarkdown(arm: Record<string, unknown>): string {
     providerAttemptDurationMs: Distribution | null;
     ttftMs: Distribution | null;
     toolsByName: Record<string, { perTurnTotal: Distribution | null }>;
-    authorityWaitMs: Distribution | null;
     compactionDurationMs: Distribution | null;
     unaccountedGapMs: Distribution | null;
     firstMessageUnaccountedGapMs: Distribution | null;
@@ -945,7 +891,7 @@ function armReportMarkdown(arm: Record<string, unknown>): string {
   const cpu = summary.host.processCpuPercentOfOneCore;
   const rssMb = round(summary.host.rssPeakBytes / (1024 * 1024));
   return [
-    `| ${summary.concurrency} | ${summary.turnSampleCount} | ${summary.wavesMeasured} | ${fmt(summary.firstMessageToCompletionMs)} | ${fmt(summary.runtimeTurnMs)} | ${fmt(summary.submissionToTurnStartMs)} | ${fmt(summary.providerAttemptDurationMs)} | ${fmt(summary.ttftMs)} | ${fmt(summary.toolsByName.read?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName.bash?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName["fetch-url"]?.perTurnTotal ?? null)} | ${fmt(summary.authorityWaitMs)} | ${fmt(summary.compactionDurationMs)} | ${fmt(summary.unaccountedGapMs)} | ${fmt(summary.firstMessageUnaccountedGapMs)} | ${summary.host.eventLoopDelayMs.p95Ms ?? "n/a"} / ${summary.host.eventLoopDelayMs.maxMs ?? "n/a"} | ${fmtSigned(summary.localTimerLatenessMsByKind.authority)} | ${cpu === null ? "n/a" : round(cpu)} | ${load ?? "n/a"} | ${rssMb} |`,
+    `| ${summary.concurrency} | ${summary.turnSampleCount} | ${summary.wavesMeasured} | ${fmt(summary.firstMessageToCompletionMs)} | ${fmt(summary.runtimeTurnMs)} | ${fmt(summary.submissionToTurnStartMs)} | ${fmt(summary.providerAttemptDurationMs)} | ${fmt(summary.ttftMs)} | ${fmt(summary.toolsByName.read?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName.bash?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName["fetch-url"]?.perTurnTotal ?? null)} | ${fmt(summary.compactionDurationMs)} | ${fmt(summary.unaccountedGapMs)} | ${fmt(summary.firstMessageUnaccountedGapMs)} | ${summary.host.eventLoopDelayMs.p95Ms ?? "n/a"} / ${summary.host.eventLoopDelayMs.maxMs ?? "n/a"} | ${cpu === null ? "n/a" : round(cpu)} | ${load ?? "n/a"} | ${rssMb} |`,
   ].join("");
 }
 
@@ -965,14 +911,14 @@ function formatMarkdown(report: {
     `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}.\n\n` +
     `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../performance-results/vc-441-agent-turn-time --repetitions ${repetitions} --concurrencies ${concurrencies.join(",")}\`.\n\n` +
     `"Concurrent" is the number of scripted turns in flight at once in one Node process, each standing in for one working Session. No Volli Session, Session runtime queue, ledger, or agent loop is created. The runner starts ${repetitions} measured waves after ${WARMUP_WAVES} discarded warm-up wave(s) at each concurrency. Summary values use individual completed turns as samples; turns in a wave share one host interval and are not independent. Percentiles are nearest-rank, using rank ceil(0.95 × n) for p95.\n\n` +
-    `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Fixture dispatch → turn start (turn-queue, synthetic) p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Compaction p50 / p95 | Unaccounted gap (runtime turn) p50 / p95 | Unaccounted gap (first message) p50 / p95 | Event-loop delay p95 / max (ms) | Authority timer lateness min / p50 / p95 (ms, signed) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
+    `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Fixture dispatch → turn start (turn-queue, synthetic) p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Compaction p50 / p95 | Unaccounted gap (runtime turn) p50 / p95 | Unaccounted gap (first message) p50 / p95 | Event-loop delay p95 / max (ms) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
     `## Method and limits\n\n` +
     `- Each scripted turn uses the real VC-119 \`instrumentStreamFn\`, \`ObservabilityReducer\`, and \`teeObservationsToSink\`. The provider stand-in is an in-process Pi event stream driven by fixed local timers; it opens no socket and makes no provider request. The same script runs at concurrency ${concurrencies.join(", ")}.\n` +
-    `- Each turn scripts ${ATTEMPT_PLAN.length} model attempts (${attemptShape}; the error is a synthetic invalid request), ${TOOL_IDS.length} tools in one tool round (CPU-fixture \`read\` and \`bash\`, plus a latency-bound MCP-like batch whose children wait ${MCP_BATCH_LATENCIES_MS.join("/")} ms concurrently on in-memory timers), a ${AUTHORITY_WAIT_MS} ms authority wait, one overflow-compaction event, a ${RETRY_BACKOFF_MS} ms retry backoff, and a ${DISPATCH_DELAY_MS} ms dispatch timer. The batch's unknown native name is reported only as the bounded \`fetch-url\` activity class. Attempt, tool, tool-round, wait, compaction, and retry counts and the causal event order are checked against the script.\n` +
+    `- Each turn scripts ${ATTEMPT_PLAN.length} model attempts (${attemptShape}; the error is a synthetic invalid request), ${TOOL_IDS.length} tools in one tool round (CPU-fixture \`read\` and \`bash\`, plus a latency-bound MCP-like batch whose children wait ${MCP_BATCH_LATENCIES_MS.join("/")} ms concurrently on in-memory timers), one overflow-compaction event, a ${RETRY_BACKOFF_MS} ms retry backoff, and a ${DISPATCH_DELAY_MS} ms dispatch timer. The batch's unknown native name is reported only as the bounded \`fetch-url\` activity class. Attempt, tool, tool-round, compaction, and retry counts and the causal event order are checked against the script.\n` +
     `- The MCP-like batch is not a proxy for real MCP/serverless quotas or a browser-backed app tool; do not extrapolate the \`read\`/\`bash\` figures to those tools.\n` +
     `- Provider-attempt duration and TTFT are the runtime instrument's measurements of the stand-in. Timer lateness is signed per timer (negative = Node fired it before its \`performance.now()\` target) and reported per timer kind in \`benchmark.json\`; it and Node's event-loop-delay histogram are local host-delay indicators and are not subtracted from provider duration. CPU, RSS, and heap are for the benchmark runner process—not Electron or a production Session.\n` +
     `- Compaction time is the VC-119 compaction envelope's \`durationMs\` (VC-455): the real reducer times the overflow compaction from its \`compaction-progress\` marker to its outcome. Fixture dispatch → turn start is the VC-119 \`turn-queue\` envelope's \`queuedMs\`, built by the same \`turnQueueEvent\` the Session runtime emits it with; because this fixture has no Session runtime, the queue it times is only its own ${DISPATCH_DELAY_MS} ms dispatch timer, not Volli's admission queue or an attach (VC-456 runs the real path).\n` +
-    `- Unaccounted gap (runtime turn) is runtime-turn wall time minus the union of known provider, tool-execution, authority-wait and compaction intervals, so retry backoff and orchestration are what remain. Unaccounted gap (first message) is first message → completion minus the same union plus the turn-queue interval. Missing spans make both incomplete; absent values are null, never zero.\n` +
+    `- Unaccounted gap (runtime turn) is runtime-turn wall time minus the union of known provider, tool-execution, compaction intervals, so retry backoff and orchestration are what remain. Unaccounted gap (first message) is first message → completion minus the same union plus the turn-queue interval. Missing spans make both incomplete; absent values are null, never zero.\n` +
     `- The request context, stream deltas, error message, tool subject, input and output all carry a private-content canary; none of it reaches the output. The telemetry exporter stays off; no Session database, collector, or person’s profile is read.\n` +
     `- These results describe only this synthetic timer/CPU workload on the recorded host. They cannot establish real provider inference time, remote/provider queueing, quotas/rate limits, network variation, production Session resource costs, or how real tool commands scale.\n\n` +
     `Environment: Node ${String(env["nodeVersion"])} · ${String(env["platform"])} ${String(env["osRelease"])} · ${String(env["cpuModel"])} · ${String(env["logicalCores"])} logical cores · ${String(env["totalMemoryBytes"])} bytes RAM · initial load avg ${JSON.stringify(env["initialLoadAverage"])} · commit ${String(env["gitSha"])} (dirty=${String(env["dirty"])}).\n`
@@ -1158,11 +1104,9 @@ export async function runConcurrencyBenchmark(input: {
         (sum, value) => sum + value,
         0,
       ),
-      expectedAuthorityWaitsPerTurn: EXPECTED.authorityWaits,
       expectedCompactionsPerTurn: EXPECTED.compactions,
       expectedRetriesPerTurn: EXPECTED.retries,
       dispatchDelayMs: DISPATCH_DELAY_MS,
-      standInAuthorityWaitMs: AUTHORITY_WAIT_MS,
       standInRetryBackoffMs: RETRY_BACKOFF_MS,
       mcpLikeConcurrentChildLatenciesMs: MCP_BATCH_LATENCIES_MS,
       attemptPlan: ATTEMPT_PLAN.map(({ stopReason, serviceMs, ttftMs, errorMessage }) => ({

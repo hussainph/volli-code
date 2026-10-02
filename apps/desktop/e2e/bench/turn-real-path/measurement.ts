@@ -36,10 +36,10 @@ import {
   type RealTurnSample,
   type TurnSummary,
 } from "./analysis";
-import { AUTHORITY_THINK_MS, type SubscriberMode } from "./constants";
+import type { SubscriberMode } from "./constants";
 import { createRealPathComposition, type ArtifactStoreKind } from "./harness";
 
-export const FIXTURE_VERSION = "vc456-turn-real-path-v2";
+export const FIXTURE_VERSION = "vc456-turn-real-path-v3";
 const DEFAULT_CONCURRENCIES = [1, 5, 15, 20] as const;
 const DEFAULT_REPETITIONS = 20;
 const WARMUP_WAVES = 1;
@@ -354,7 +354,7 @@ function timingRow(arm: ArmReport): string {
 
 function attributionRow(arm: ArmReport): string {
   const s = arm.summary;
-  return `| ${arm.concurrency} | ${fmt(s.providerPerTurnMs)} | ${fmt(s.toolsByName["read"])} | ${fmt(s.toolsByName["bash"])} | ${fmt(s.authorityWaitMs)} | ${fmt(s.questionDeliveryMs)} | ${fmt(s.answerCommandMs)} | ${fmt(s.compactionDurationMs)} | ${fmt(s.unaccountedGapMs)} | ${fmt(s.artifactWriteMs)} | ${fmt(s.artifactWriteTotalPerTurnMs)} | ${fmt(s.ledgerReadsPerTurn, 0)} | ${fmt(s.ledgerTransactionsPerTurn, 0)} | ${fmt(s.ledgerServicePerTurnMs, 2)} | ${fmt(s.ledgerTransactionWaitMs, 2)} |`;
+  return `| ${arm.concurrency} | ${fmt(s.providerPerTurnMs)} | ${fmt(s.toolsByName["read"])} | ${fmt(s.toolsByName["bash"])} | ${fmt(s.compactionDurationMs)} | ${fmt(s.unaccountedGapMs)} | ${fmt(s.artifactWriteMs)} | ${fmt(s.artifactWriteTotalPerTurnMs)} | ${fmt(s.ledgerReadsPerTurn, 0)} | ${fmt(s.ledgerTransactionsPerTurn, 0)} | ${fmt(s.ledgerServicePerTurnMs, 2)} | ${fmt(s.ledgerTransactionWaitMs, 2)} |`;
 }
 
 function checkRow(arm: ArmReport): string {
@@ -386,7 +386,7 @@ export function formatMarkdown(report: {
   const timingHeader =
     "| In flight | Turns | Submit → accepted | Submit → turn start (`queuedMs`) | `turn-queue` → `turn.started` committed | Runtime turn (VC-119) | First message → completion | Submit → `command()` resolved | Commit → subscriber (`turn.completed`) | Loop delay p95 / max (ms) | Process CPU per turn (ms) | Process CPU (% one core) | Load 1m after |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const attributionHeader =
-    "| In flight | Provider per turn (VC-119) | `read` ×2 per turn | `bash` | Authority wait | Wait start → question seen | `interaction.resolve` round trip | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+    "| In flight | Provider per turn (VC-119) | `read` | `bash` | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const shape = report.arms[0]?.summary.ledgerShapes[0]?.shape ?? "n/a";
   const sections = [
     `# Agent turn critical path on the real Session path (VC-456)\n`,
@@ -404,7 +404,7 @@ export function formatMarkdown(report: {
     sections.push(sectionTitle(first.artifactStore, first.subscribers));
     if (first.artifactStore === "memory") {
       sections.push(
-        `Everything else identical: SQLite ledger, Pi sidecars, tools, gate, subscribers. Not a product configuration; it isolates what durable artifact publication costs.\n`,
+        `Everything else identical: SQLite ledger, Pi sidecars, tools, subscribers. Not a product configuration; it isolates what durable artifact publication costs.\n`,
       );
     }
     sections.push(
@@ -428,7 +428,7 @@ export function formatMarkdown(report: {
   }
   sections.push(
     `## Accounting and cross-checks\n`,
-    `| Section | Artifact store | Subscribers | Deltas | In flight | Complete turns | VC-119 order violations | Turns with all 6 facts paired | Envelope/ledger order inversions | Causality violations | Commits ≠ SQLite read-back | Live stream ≠ SQLite read-back | Distinct ledger shapes | Network attempts |\n| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
+    `| Section | Artifact store | Subscribers | Deltas | In flight | Complete turns | VC-119 order violations | Turns with all 5 facts paired | Envelope/ledger order inversions | Causality violations | Commits ≠ SQLite read-back | Live stream ≠ SQLite read-back | Distinct ledger shapes | Network attempts |\n| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
     ...report.arms.map(checkRow),
     ``,
     `Ledger shape of a turn, \`command.recorded\` → \`turn.completed\`: \`${shape}\`.\n`,
@@ -439,17 +439,16 @@ export function formatMarkdown(report: {
     ``,
     `## Method\n`,
     `- Composition: \`SessionRuntime\` + the desktop Pi adapter over \`createPiAgentRuntime\` + the desktop \`SqliteSessionLedger\` on a migrated \`volli.db\` opened by \`openVolliDb\`, the file transcript-artifact store, and one VC-119 sink shared by the Session runtime and the Pi runtime, as \`createDesktopSessionRuntime\` composes them. Differences: an Electron-free location resolver answering a fixed directory, a fixed \`resolveRuntimeContext\`, and no connectivity, compaction-policy, execution-environment, web, browser, shell or MCP host options (Pi's defaults apply).\n`,
-    `- Script per turn (${report.parameters.deltasPerReply} text deltas per reply): a tool round (\`read\` inside the workspace, \`read\` outside it, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
+    `- Script per turn (${report.parameters.deltasPerReply} text deltas per reply): a tool round (\`read\` inside the workspace, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
       REAL_PATH_REQUEST_PLAN,
     )
       .map((plan) => `${plan.kind} ${plan.serviceMs} ms (first event ${plan.ttftMs} ms)`)
       .join(
         ", ",
-      )}. Expected per turn: ${REAL_PATH_EXPECTED.modelAttempts} provider attempts, ${Object.values(REAL_PATH_EXPECTED.toolsByName).reduce((sum, count) => sum + count, 0)} tools, ${REAL_PATH_EXPECTED.authorityWaits} authority wait, ${REAL_PATH_EXPECTED.compactions} compaction, ${REAL_PATH_EXPECTED.retries} retry, ${REAL_PATH_EXPECTED.turnQueues} \`turn-queue\`.\n`,
-    `- Authority: \`enforcement: "enforce"\` with a one-refusal fallback (the shipped default is \`observe\`, which installs no gate). The outside read is refused by \`path.outside-workspace\` and escalated; a stand-in person answers \`once\` via \`interaction.resolve\` ${AUTHORITY_THINK_MS} ms after the question reaches them — from their live stream when subscribed, when \`interaction.opened\` commits otherwise.\n`,
+      )}. Expected per turn: ${REAL_PATH_EXPECTED.modelAttempts} provider attempts, ${Object.values(REAL_PATH_EXPECTED.toolsByName).reduce((sum, count) => sum + count, 0)} tools, ${REAL_PATH_EXPECTED.compactions} compaction, ${REAL_PATH_EXPECTED.retries} retry, ${REAL_PATH_EXPECTED.turnQueues} \`turn-queue\`.\n`,
     `- Clocks: \`queuedMs\` and every VC-119 duration come from the product's own \`Date.now\` clocks, so they have 1 ms resolution. Submit, commit, frame arrival and envelope record times are the harness's \`performance.now()\`.\n`,
     `- Accepted is this command's \`command.recorded\` committed: the engine call that wrote it resolved. It is not the runtime's Receipt, which for a \`message.submit\` settles only after the turn ends. Commit times are read when \`SessionEngine.observe\` / \`submit\` resolve and are checked against the SQLite read-back. \`turn-queue\` → \`turn.started\` committed is one fact's durable write; commit → subscriber is its publish. Artifact and ledger timings wrap the real store and ledger and are filed per Session through \`AsyncLocalStorage\`, which also joins VC-119 envelopes to turns.\n`,
-    `- Cross-check facts (VC-119 envelope ↔ ledger event): turn start (\`turn-queue\` ↔ \`turn.started\`), first attempt (first \`provider-attempt\` ↔ first \`usage.recorded\`), authority answer (wait-bearing \`authority\` ↔ \`interaction.resolved\`), compaction (\`compaction\` ↔ \`context.compacted\`), final attempt (last of each), turn end (\`turn\` ↔ \`turn.completed\`). Any inversion, causality violation, read-back mismatch or second ledger shape refuses publication.\n`,
+    `- Cross-check facts (VC-119 envelope ↔ ledger event): turn start (\`turn-queue\` ↔ \`turn.started\`), first attempt (first \`provider-attempt\` ↔ first \`usage.recorded\`), compaction (\`compaction\` ↔ \`context.compacted\`), final attempt (last of each), turn end (\`turn\` ↔ \`turn.completed\`). Any inversion, causality violation, read-back mismatch or second ledger shape refuses publication.\n`,
     `- Process CPU is user + system time for the whole process, the libuv thread pool included, over the measured phases only.\n`,
     `- ${control === "none" ? "No diagnostic control arm ran." : "The control arms swap only the transcript-artifact store for the in-memory one."}\n`,
     `Environment: Node ${env.nodeVersion} · ${env.platform} ${env.osRelease} · ${env.cpuModel} · ${env.logicalCores} logical cores · ${env.totalMemoryBytes} bytes RAM · UV_THREADPOOL_SIZE ${env.uvThreadpoolSize} · initial load ${JSON.stringify(env.initialLoadAverage)} · commit ${env.gitSha} (dirty=${String(env.dirty)}).\n`,
@@ -538,7 +537,6 @@ export async function runBenchmark(input: {
     parameters: {
       ...parameters,
       warmupWaves: WARMUP_WAVES,
-      authorityThinkMs: AUTHORITY_THINK_MS,
       expected: REAL_PATH_EXPECTED,
       requestPlan: REAL_PATH_REQUEST_PLAN,
     },

@@ -72,7 +72,7 @@ const value = await decisions.port.decide({
 
 **The fallback is the contract.** A call cannot be written without one, and
 the port answers with it for every way a decision does not happen: `unset`,
-`not-opted-in`, `needs-setup`, `unaudited`, `invalid-request`, `timeout`,
+`not-opted-in`, `needs-setup`, `invalid-request`, `timeout`,
 `aborted`, `provider-error`, `malformed-answer`. `decide` never rejects for a
 decision that was not made. A `use` that throws (an answer the caller cannot
 act on) also falls back.
@@ -101,21 +101,10 @@ An answer that lands after its caller gave up is still billed — the provider
 charged for it. Cloud usage is Pi's catalog estimate; a local call is one
 request that cost $0 with unknown tokens. A call with no Session is not
 metered by the service — its caller attributes it once there is a Session.
-With one purpose, cause `decision` is that purpose; when a second ships,
-`purpose` should join the usage index (`session_usage`) so `volli cost` can
-group by it — today it is in each fact's provenance only.
-
-**Audit.** A purpose marked `audit: true` must leave a durable, attributed
-fact per decision, through `recordDecision`: the answer the caller acted on,
-or the miss it fell back on (an answer whose `use` threw is recorded as that
-miss). Misses before any model was chosen — unset, not opted in — have no
-target and leave no fact; VC-28 may record those itself. With no recorder
-wired, an audited purpose is refused as `unaudited`. The verdict **waits for
-the audit write**: the caller gets its answer only once the fact has landed,
-and gets its fallback as `unaudited` if the write fails or is still pending
-after five seconds. (A decision that timed out is still recorded; the audit
-wait is not part of the call's own deadline.) `agent.classify` is not audited:
-routine agent calls get usage records, not per-call ledger facts.
+Both `agent.classify` and `model.select` use cause `decision`; `purpose` is
+stored in each fact's provenance, not indexed for cost grouping. These calls
+leave usage records, not per-call audit verdicts, and never wait on a usage
+write.
 
 ### Automatic model choice (`model.select`, VC-432)
 
@@ -164,23 +153,16 @@ Not built here: per-effort variants of one model beyond what a tier row saves,
 the measurement of auto-picked against default (owner: after release), and a
 local backend.
 
-### Adding a purpose (VC-28, VC-432)
+### Adding a purpose
 
 1. Add the name to `DECISION_PURPOSES` and its row to
    `DECISION_PURPOSE_POLICY`: a label, what it `sends` (read out in the
-   opt-in), a `timeoutMs`, and `audit`.
-   - `authority.judge` (VC-28): audited, a timeout of a few seconds, and a
-     fallback of "ask the person" — never allow.
-   - `model.select` (VC-432): not audited, a short timeout, and a fallback of
-     the configured default. Built; see above.
-2. For an audited purpose, wire `recordDecision` in `desktop.ts` to a durable
-   Session fact.
-3. Call `port.decide({ purpose, … })` with a fallback. Existing cloud opt-ins
+   opt-in), and a `timeoutMs`.
+2. Call `port.decide({ purpose, … })` with a fallback. Existing cloud opt-ins
    do not cover the new purpose, so it is refused as `not-opted-in` until the
    person opts in again. A purpose outside `DECISION_BASE_PURPOSES` is asked
    for by its own switch, once, which extends the opt-in
-   (`withDecisionPurpose`); `model.select` is the first. VC-28 can add its row
-   the same way.
+   (`withDecisionPurpose`); `model.select` uses this path.
 
 ## The `classify` tool
 

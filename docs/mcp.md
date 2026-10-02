@@ -661,7 +661,7 @@ VOLLI_DEV_MCP_PARALLEL='{
   other call in the same reply — a file edit, a shell command, a verb, a browser
   action, an unmarked MCP tool — makes the whole reply run one call at a time,
   in order.
-- Approval happens for the whole reply before any call in it starts.
+- Every dispatched call retains its Session identity and deterministic host checks.
 - `limits` replaces the shared bound for the named servers; set it to what the
   server can actually handle. `maxStarts` left out means no start-rate limit;
   `windowMs` defaults to one second.

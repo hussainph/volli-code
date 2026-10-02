@@ -268,21 +268,7 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
           // the only one a call with no allowlisted name still has.
           [`${VOLLI}.tool.kind`]: event.activityKind,
           [`${VOLLI}.tool.outcome`]: event.outcome,
-          [`${VOLLI}.tool.wait_duration_ms`]: event.waitDurationMs,
           ...(event.outcome === "failed" ? { [ERROR_TYPE]: "tool_failed" } : {}),
-        }),
-      };
-    case "authority":
-      return {
-        name: "volli.agent.authority",
-        kind: "internal",
-        durationMs: safeDurationMs(event.waitDurationMs),
-        // An allowance or refusal is the policy working. Neither is a fault.
-        failed: false,
-        attributes: present({
-          ...runId,
-          [`${VOLLI}.authority.outcome`]: event.outcome,
-          ...(event.outcome === "denied" ? { [`${VOLLI}.authority.cause`]: event.cause } : {}),
         }),
       };
     case "compaction":
@@ -375,8 +361,6 @@ const METRIC = {
   cost: "volli.agent.cost.usage",
   toolCalls: "volli.agent.tool.call.count",
   toolExecutionDuration: "volli.agent.tool.execution.duration",
-  toolWaitDuration: "volli.agent.tool.wait.duration",
-  authorityDecisions: "volli.agent.authority.decision.count",
   compactions: "volli.agent.compaction.count",
   compactionDuration: "volli.agent.compaction.duration",
   turnQueueDuration: "volli.agent.turn.queue.duration",
@@ -540,26 +524,8 @@ export function observabilityMetrics(event: ObservabilityEvent): readonly Observ
           seconds(event.durationMs),
           attributes,
         ),
-        ...metric(
-          METRIC.toolWaitDuration,
-          "histogram",
-          "s",
-          seconds(event.waitDurationMs),
-          attributes,
-        ),
       ];
     }
-    case "authority":
-      return metric(
-        METRIC.authorityDecisions,
-        "counter",
-        "{decision}",
-        1,
-        present({
-          [`${VOLLI}.authority.outcome`]: event.outcome,
-          ...(event.outcome === "denied" ? { [`${VOLLI}.authority.cause`]: event.cause } : {}),
-        }),
-      );
     case "compaction": {
       const attributes = present({
         [`${VOLLI}.compaction.outcome`]: event.outcome,

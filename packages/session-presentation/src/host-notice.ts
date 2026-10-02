@@ -20,7 +20,6 @@ import {
   formatShellRuntime,
   shellStanding,
   shortSessionId,
-  type ApprovalUsedHostNotice,
   type BackgroundShellHostNotice,
   type SubagentNoticeReason,
   type SubagentNoticeState,
@@ -64,7 +63,6 @@ export type TranscriptHostNotice =
   | BrowserHoldNotice
   | WatchNotice
   | UnknownHostNotice
-  | ApprovalUsedHostNotice
   | BackgroundShellHostNotice;
 
 /**
@@ -97,23 +95,9 @@ export function readHostNotice(
 
 function readSharedNotice(
   value: unknown,
-):
-  | SubagentNotice
-  | BrowserHoldNotice
-  | WatchNotice
-  | ApprovalUsedHostNotice
-  | BackgroundShellHostNotice
-  | null {
+): SubagentNotice | BrowserHoldNotice | WatchNotice | BackgroundShellHostNotice | null {
   const notice = recordOf(value);
   if (notice?.kind === "background-shell") return readShellNotice(notice);
-  if (notice?.kind === "approval-used") {
-    const approvalId = nonEmptyString(notice.approvalId);
-    return approvalId !== null &&
-      typeof notice.summary === "string" &&
-      typeof notice.asked === "string"
-      ? { kind: "approval-used", approvalId, summary: notice.summary, asked: notice.asked }
-      : null;
-  }
   if (notice?.kind === "watch") {
     if (!Array.isArray(notice.events)) return null;
     const events = notice.events.map(watchEvent);
