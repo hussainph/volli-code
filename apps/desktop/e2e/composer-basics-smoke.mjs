@@ -50,6 +50,7 @@ import {
   makeGitRepo,
   makeScratch,
   readSeededProjects,
+  readMonacoText,
   seedProjects,
   sleep,
   typeIntoMonaco,
@@ -95,6 +96,22 @@ async function openComposerViaHeader(page) {
     );
   }
   return opened;
+}
+
+/** Observe the product's reset + focus handoff; never focus the title for it. */
+async function waitForCreateMoreReset(page) {
+  return waitUntil(
+    "Create-more composer to reset title/description and return title focus",
+    async () =>
+      (await composer(page).count()) === 1 &&
+      (await titleInput(page).isEditable()) &&
+      (await titleInput(page).inputValue()) === "" &&
+      (await readMonacoText(composer(page))).trim() === "" &&
+      (await titleInput(page).evaluate((el) => el === document.activeElement)),
+    { timeout: 4000 },
+  )
+    .then(() => true)
+    .catch(() => false);
 }
 
 /** Close the composer and wait until no Radix dialog remains, so the next flow starts clean. */
@@ -376,32 +393,35 @@ async function main() {
         const before = (await ticketsFor(page, alphaId)).length;
 
         const first = "Create-more first";
+        const firstBody = "First ticket body";
         await titleInput(page).fill(first);
+        await typeIntoMonaco(composer(page), firstBody);
         await createOnlyTicket(page);
-        // Dialog must STAY open and reset.
-        const stayedOpen = await waitUntil(
-          "dialog stays open + title resets after first create",
-          async () =>
-            (await composer(page).count()) === 1 && (await titleInput(page).inputValue()) === "",
-          { timeout: 4000 },
-        )
-          .then(() => true)
-          .catch(() => false);
+        // The title becoming blank alone is not readiness: Monaco must finish
+        // clearing and the product must return focus before the next entry.
+        const stayedOpen = await waitForCreateMoreReset(page);
         const focusedTitle = await titleInput(page).evaluate((el) => el === document.activeElement);
 
         const second = "Create-more second";
+        const secondBody = "Second ticket body";
         await titleInput(page).fill(second);
+        await typeIntoMonaco(composer(page), secondBody);
         await createOnlyTicket(page);
-        await sleep(500);
+        const secondReset = await waitForCreateMoreReset(page);
         await closeAnyDialog(page);
 
-        const titles = (await ticketsFor(page, alphaId)).map((t) => t.title);
+        const tickets = await ticketsFor(page, alphaId);
+        const titles = tickets.map((t) => t.title);
         const bothCreated = titles.includes(first) && titles.includes(second);
+        const bodiesCorrect =
+          tickets.find((t) => t.title === first)?.body === firstBody &&
+          tickets.find((t) => t.title === second)?.body === secondBody;
         const countGrew = titles.length === before + 2;
-        const ok = stayedOpen && focusedTitle && bothCreated && countGrew;
+        const ok =
+          stayedOpen && focusedTitle && secondReset && bothCreated && bodiesCorrect && countGrew;
         return {
           ok,
-          detail: `stayedOpen=${stayedOpen} focusedTitle=${focusedTitle} both=${bothCreated} count ${before}->${titles.length}`,
+          detail: `stayedOpen=${stayedOpen} focusedTitle=${focusedTitle} secondReset=${secondReset} both=${bothCreated} bodies=${bodiesCorrect} count ${before}->${titles.length}`,
         };
       },
     );

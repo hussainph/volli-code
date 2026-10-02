@@ -67,6 +67,23 @@ describe("in-memory transcript artifacts", () => {
     await expect(artifacts.read(first)).resolves.toEqual(canonicalEquivalent);
   });
 
+  it("rejects non-plain objects nested in message parts", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const badValues = [new Date("2025-01-01T00:00:00.000Z"), new Map([["key", "value"]])];
+
+    for (const [index, value] of badValues.entries()) {
+      const message = {
+        id: `message-${index}`,
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: value } }],
+      } as unknown as UIMessage;
+
+      await expect(artifacts.write(artifact(message))).rejects.toThrowError(
+        new TypeError("Cannot serialize a non-plain object in a transcript artifact"),
+      );
+    }
+  });
+
   it("uses JSON-compatible undefined and key-order semantics", () => {
     expect(canonicalJson({ z: undefined, b: 1, a: [undefined, 2] })).toBe('{"a":[null,2],"b":1}');
   });

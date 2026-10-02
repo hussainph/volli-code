@@ -1391,7 +1391,16 @@ export interface ListSessionStartsQuery {
   sinceMs: number;
 }
 
-/** One project-wide, bounded sidebar read over explicit Session outcome facts. */
+/**
+ * One project-wide, bounded sidebar read over explicit Session outcome facts.
+ *
+ * "Latest" is the signal this ledger ACCEPTED last, in local ledger order —
+ * never the largest `occurred_at`, which is what a source claimed and can move
+ * backwards with a clock (VC-512). Local ledger order is provisional
+ * (docs/BOUNDARIES.md standing rule 2): it is what this host learned last, not
+ * a global order, and a relay replaces it with server-assigned order or
+ * explicit supersession.
+ */
 export interface ListLatestTicketSignalsQuery {
   projectId: string;
 }
@@ -2249,7 +2258,10 @@ export interface SessionLedgerTransaction {
    * across every project — see {@link ListSessionStartsQuery}.
    */
   listSessionStarts(query: ListSessionStartsQuery): readonly number[];
-  /** Latest explicit outcome per ticket, selected by occurred time then Session id. */
+  /**
+   * Latest explicit outcome per ticket, selected by this ledger's local
+   * acceptance order — see {@link ListLatestTicketSignalsQuery}.
+   */
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,
   ): readonly import("./ticket-events").LatestSessionSignal[];

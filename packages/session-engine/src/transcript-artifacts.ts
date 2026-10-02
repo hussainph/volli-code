@@ -78,6 +78,10 @@ function encodeJson(value: unknown, ancestors: Set<object>): string | undefined 
     if (Array.isArray(value)) {
       return `[${Array.from({ length: value.length }, (_, index) => encodeJson(value[index], ancestors) ?? "null").join(",")}]`;
     }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("Cannot serialize a non-plain object in a transcript artifact");
+    }
     return `{${Object.keys(value)
       .toSorted(compareJsonKeys)
       .flatMap((property) => {
