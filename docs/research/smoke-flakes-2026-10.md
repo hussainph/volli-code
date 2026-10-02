@@ -176,7 +176,7 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 |---|---:|---:|---:|---|
 | browser-recovery | 59/225 | 26.2% (20.9–32.3%) | 59 | Non-gating candidate; preserve navigation/hold/CLI browser integration elsewhere. Investigate post-click snapshot/preview settling; final replays show lost click result and failed preview recovery. |
 | automations-picker | 15/227 | 6.6% (4.0–10.6%) | 15 | Non-gating candidate, **not** the whole automation family. Keep deterministic arming/provenance/schedule journey coverage. Internal first-failure cause is unavailable. |
-| bare-path-env | 16/227 | 7.0% (4.4–11.1%) | 16 | Non-gating candidate while preserving ordinary boot and CLI round-trip. Investigate startup readiness capture / the 12s marker wait; do not suppress actual wrapper-generation errors. |
+| bare-path-env | 16/227 | 7.0% (4.4–11.1%) | 16 | Historical non-gating candidate; **returned to the rest-tier gate by VC-531** after fixing pre-attachment readiness capture. Assertions and 12s bound preserved; post-fix proof below. |
 | browser-tab | 16/226 | 7.1% (4.4–11.2%) | 16 | Non-gating candidate only with tab ownership/refusal kept in deterministic tests and a stable browser journey. Final failures include check 8's cursor/hold UI assertion; inspect lost first attempts before attributing all flakes. |
 | vc418-contrast | 28/223 | 12.6% (8.8–17.5%) | 28 | Prefer the cheap focus-settling fix; otherwise non-gating extended contrast candidate, **not** removal of core theming or accessibility assertions. |
 | canvas-theming | 50/224 | 22.3% (17.4–28.2%) | 50 | Meets statistical threshold but **protected core: keep gating**, repair transition synchronization. If splitting, only incidental motion timing may move; tokens, mode, inheritance and persistence remain gating. |
@@ -185,7 +185,7 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 
 Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, interval 1.6–5.7%) does not meet the lower-bound threshold. Agent CLI relaunch (5/229), browser-page-navigation (8/226), done-flow (7/224), and retention (7/223) are watch-list items, not justified quarantine decisions under this threshold. Settings-search, automations-rail and automations-smoke must not be quarantined merely for related final failures.
 
-These are recommendations, **not implemented moves**. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
+The original census recommendations did not implement moves; the VC-531 follow-up records bare-path-env's later return. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
 
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
@@ -230,7 +230,17 @@ Nine focused regressions in `src/main/bare-path-boot-capture.test.ts` cover earl
 
 **Local proof:** `node apps/desktop/e2e/bare-path-env-smoke.mjs` ran **10/10 PASS, 0 FAIL, 0 retries**, serially with `VOLLI_CONCURRENCY_HINT=1` and inherited `VOLLI_SMOKE_DIR` removed for every fresh profile. `vp test run src/main/bare-path-boot-capture.test.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"` passed **9/9**, and the shared smoke-kit's focused Node tests passed **22/22**; `vp check`, desktop typecheck, build/packed-require checks and `git diff --check` passed. A disposable packaged-loader fixture (`app.isPackaged=true`, using this worktree's built app) also passed both smoke checks; this is loader compatibility evidence, not a release-packaging test. No full local suite or smoke matrix ran.
 
-Quarantine proof is recorded with the gate-return change below; VC-531 supersedes VC-525. The owner approved staged pushes, including an extra validation revision to preserve packaged support, so the three dispatches execute the final capture implementation while its quarantine selection still exists, before removing that selection. The owner waived the original 50-opportunity/3-SHA return bar in favor of 10 serial fresh-profile local runs and three clean quarantine dispatches.
+**Quarantine proof:** all three serial `gh workflow run "Smoke quarantine" --ref volli/VC-531-deflake-bare-path-harness-readiness-smoke` dispatches ran the final capture implementation on SHA `789152b0d09279b9e250e20c9ed12e033dd04e0a`. Their retained `results.json` and first-attempt logs were checked for the exact SHA, completed lane, one exit-0 attempt and both passing assertions:
+
+| Run | bare-path-env result | Attempts | Runtime |
+|---|---|---:|---:|
+| [37074905945](https://github.com/hussainph/volli-code/actions/runs/37074905945) | PASS | 1 | 16.685s |
+| [37076961740](https://github.com/hussainph/volli-code/actions/runs/37076961740) | PASS | 1 | 22.178s |
+| [37077768440](https://github.com/hussainph/volli-code/actions/runs/37077768440) | PASS | 1 | 24.950s |
+
+**3/3 first-attempt PASS, 0 FAIL, 0 FLAKY.** The validation revision's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37074913101) also passed. Only bare-path-env's `SMOKE_QUARANTINE` entry is removed by the gate-return commit; core, other quarantine and legacy exclusions are unchanged. The final PR-head CI remains the owner's merge gate.
+
+VC-531 supersedes VC-525. The owner approved staged pushes, including an extra validation revision to preserve packaged support, so the three dispatches actually executed the final capture implementation before removing its quarantine selection. The owner waived the original 50-opportunity/3-SHA return bar in favor of 10 serial fresh-profile local runs and three clean quarantine dispatches.
 
 ## Verification performed (VC-522 census)
 
