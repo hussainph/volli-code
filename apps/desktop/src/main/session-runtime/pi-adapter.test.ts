@@ -2516,7 +2516,9 @@ describe("Pi native adapter dispatch", () => {
 describe("Pi native adapter host permissions", () => {
   it("never opens a live permission interaction for a retired rule-refusal request", async () => {
     const { runtime, sink } = await attached();
-    expect(await ask(runtime, { cause: "path.outside-workspace" })).toEqual({
+    expect(
+      await ask(runtime, { cause: "path.outside-workspace" as RuntimeAskRequest["cause"] }),
+    ).toEqual({
       failed: "This host request is not a budget extension or confirmation.",
     });
     expect(sink.observations).toEqual([]);

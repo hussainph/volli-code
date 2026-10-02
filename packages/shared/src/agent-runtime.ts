@@ -19,7 +19,13 @@ import type { SessionStopDetail } from "./session-stop";
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
-import type { CodingToolId, NonCodingToolId, SessionToolId } from "./authority";
+import type {
+  BudgetCauseId,
+  CodingToolId,
+  ConfirmCauseId,
+  NonCodingToolId,
+  SessionToolId,
+} from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { DecisionAnswered, DecisionMiss } from "./decision-model";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
@@ -355,7 +361,7 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
 /** Questions the runtime may ask for an exhausted budget or existing confirmation. */
 export type RuntimeAskTrip = "budget" | "confirm";
 export interface RuntimeAskRequest {
-  cause: string;
+  cause: BudgetCauseId | ConfirmCauseId;
   tool: string;
   toolCallId: string;
   turnId: string | null;

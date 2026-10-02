@@ -27,7 +27,11 @@ import {
 import { type AutomationRunAttendance, type SessionProjection } from "@volli/shared";
 
 import type { NotificationRequest } from "../notifications/dispatch";
-import { createRunAttentionWatch } from "./run-attention";
+import {
+  createRunAttentionWatch,
+  runAttentionNotification,
+  runAttentionTarget,
+} from "./run-attention";
 
 const SESSION_ID = "session-1";
 
@@ -383,5 +387,62 @@ describe("createRunAttentionWatch", () => {
       console.warn = original;
     }
     expect(warnings).toHaveLength(1);
+  });
+});
+
+describe("runAttentionNotification", () => {
+  it("distinguishes an open question from a failure", () => {
+    expect(runAttentionNotification("waiting", { id: "s", title: "Review" }).title).not.toBe(
+      runAttentionNotification("error", { id: "s", title: "Review" }).title,
+    );
+  });
+
+  it("names the work through the Session's own title", () => {
+    expect(runAttentionNotification("waiting", { id: "s", title: "Nightly sweep" }).body).toContain(
+      "Nightly sweep",
+    );
+  });
+
+  it("falls back to the short Session id rather than guessing a name", () => {
+    const notification = runAttentionNotification("error", {
+      id: "0f9c2b71-1111-2222-3333-444455556666",
+      title: null,
+    });
+    expect(notification.body).toContain("Session 0f9c2b71");
+  });
+});
+
+describe("runAttentionTarget", () => {
+  it("names the Session and the open question a waiting Run is blocked on", () => {
+    expect(runAttentionTarget("waiting", state("waiting"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("names the failing Attention for a Run that broke", () => {
+    expect(runAttentionTarget("error", state("error"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: null,
+      attentionId: "a1",
+    });
+  });
+
+  it("still points at the Session when there is no item to name", () => {
+    expect(runAttentionTarget("waiting", state("idle"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: null,
+      attentionId: null,
+    });
   });
 });
