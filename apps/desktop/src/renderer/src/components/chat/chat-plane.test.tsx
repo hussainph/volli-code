@@ -18,9 +18,6 @@ import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from ".
 const context: TurnContext = {
   onOpenFile: () => undefined,
   interactions: new Map(),
-  open: [],
-  resolving: new Set(),
-  onResolve: () => Promise.resolve(true),
 };
 
 const SKILL_BODY = "# Hussain Sol\n\nThe fifteen kilobytes the chip stands for.";
@@ -28,7 +25,6 @@ const SKILL_BODY = "# Hussain Sol\n\nThe fifteen kilobytes the chip stands for."
 function turn(message: UIMessage): string {
   return renderToStaticMarkup(<ChatTurn messages={[message]} context={context} live={false} />);
 }
-
 
 describe("the desktop transcript-row mapping", () => {
   it("draws a projected host notice without entering the user-message component", () => {

@@ -1751,4 +1751,3 @@ describe("the durable answer in scrollback", () => {
     ).toEqual({ interactionId: "question:q1", resolution: { optionIds: [], response: null } });
   });
 });
-

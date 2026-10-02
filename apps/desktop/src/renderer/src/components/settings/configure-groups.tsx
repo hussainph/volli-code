@@ -114,7 +114,6 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           ],
           content: <SecretsPane project={project} />,
         },
-
       ],
     },
     {

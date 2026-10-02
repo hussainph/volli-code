@@ -7,9 +7,7 @@ import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/sha
 import type { DecisionModelResult, DecisionModelSettingsView } from "../../../../ipc/contract";
 import type { Project } from "@volli/shared";
 
-import {
-  cloudSetting,
-} from "./decision-model-model";
+import { cloudSetting } from "./decision-model-model";
 
 import {
   CloudOptInDialog,
@@ -286,10 +284,11 @@ describe("Pick models automatically (VC-432)", () => {
     );
   });
 
-  it("extends and withdraws model selection without changing authority consent", async () => {
+  it("extends and withdraws model selection while preserving classify consent", async () => {
     const { set } = stubApi(cloudSetting(ZEN, 1));
     await render(<DecisionModelSettings onSignIn={() => undefined} />);
-    expect(disclosure()).toContain("bare tool call");
+    expect(disclosure()).toContain("classify tool");
+    expect(disclosure()).not.toContain("bare tool call");
     expect(disclosure()).not.toContain("first message of a new chat");
     await act(async () => switchEl().click());
     expect(extensionDialog()?.textContent).toContain("first message of a new chat");
@@ -313,7 +312,8 @@ describe("Pick models automatically (VC-432)", () => {
         optIn: expect.objectContaining({ purposes: ["agent.classify"] }),
       }),
     );
-    expect(disclosure()).toContain("bare tool call");
+    expect(disclosure()).toContain("classify tool");
+    expect(disclosure()).not.toContain("bare tool call");
     expect(disclosure()).not.toContain("first message of a new chat");
   });
 

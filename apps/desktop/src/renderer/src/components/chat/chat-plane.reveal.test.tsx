@@ -2,14 +2,9 @@
 /**
  * A notification click landing in a mounted chat plane (VC-295 round 5).
  *
- * Two places a Session's item can be drawn, and a click has to reach both:
- *
- *  - a FAILURE draws on the blocker row above the composer, which a person may
- *    have dismissed — a click naming that failure is a louder ask than the
- *    dismissal, so the row comes back;
- *  - a GATED CALL's question draws on its own transcript row, which the foot
- *    slot never takes — so "select that question" for it is a scroll, not a
- *    reorder.
+ * A failure draws on the blocker row above the composer. A click naming that
+ * failure overrides its dismissal. Remaining permission requests use the
+ * ordinary composer card, not a per-call transcript row.
  *
  * The whole plane, mounted, against a bridge that refuses everything (see
  * `chat-plane.island.test.tsx` for why that is the honest fixture): the seam
@@ -142,7 +137,6 @@ function chatStore(input: {
           attention: { active: attention, primary: attention.at(-1) ?? null },
           interactions: { active: input.interactions ?? [], resolved: [] },
           liveExecutor: null,
-          authority: null,
         },
         transcript: {
           ...EMPTY_TRANSCRIPT,
@@ -213,6 +207,24 @@ describe("a click naming a failure", () => {
   });
 });
 
-describe("a click naming a gated call's question", () => {
-
+describe("remaining permission requests", () => {
+  it("shows a budget ask above the composer without a tool-call approval row", async () => {
+    const ask: RendererSessionInteraction = {
+      id: "budget-ask:delegate-1",
+      attachmentId: "attach-1",
+      kind: "permission",
+      title: "Allow another subagent?",
+      detail: "The delegation allowance is exhausted.",
+      multiple: false,
+      native: { id: null, detail: null },
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+    };
+    await mountPlane(chatStore({ interactions: [ask] }));
+    expect(container?.textContent).toContain("Allow another subagent?");
+    expect(container?.querySelector('[data-slot="composer-interaction-drawer"]')).not.toBeNull();
+    expect(container?.querySelector('[data-slot="approval-card"]')).toBeNull();
+  });
 });

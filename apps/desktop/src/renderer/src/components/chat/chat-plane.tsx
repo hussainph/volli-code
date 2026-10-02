@@ -1118,10 +1118,11 @@ export function ChatPlane({
 
   // Questions, budget asks and confirmations share the existing composer slot.
   // Secret requests retain their dedicated person-only card.
-  const pending = preferRevealedInteraction(
-    interactions.filter((interaction) => interaction.credential === undefined),
-    revealed?.interactionId ?? null,
-  )[0] ?? null;
+  const pending =
+    preferRevealedInteraction(
+      interactions.filter((interaction) => interaction.credential === undefined),
+      revealed?.interactionId ?? null,
+    )[0] ?? null;
 
   // The Session's most recent reply — what `/copy` copies. Held in a ref as
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
@@ -1354,18 +1355,8 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
-      open: interactions,
-      resolving,
-      onResolve: answer,
     }),
-    [
-      answer,
-      interactions,
-      onOpenFile,
-      onOpenSession,
-      resolving,
-      session.openedInteractions,
-    ],
+    [onOpenFile, onOpenSession, session.openedInteractions],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1380,12 +1371,7 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () =>
-      projectTranscriptRows(
-        turns,
-        session.compactions,
-        session.reasoningDrops,
-      ),
+    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
     [session.compactions, session.reasoningDrops, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
@@ -1939,12 +1925,6 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
-  /** Mutation receipts for standing grants that could only be allowed once. */
-  /** The ones still open, so a gated row can draw the card it is waiting on. */
-  open: readonly RendererSessionInteraction[];
-  /** The ids with a decision in flight — one card in flight is not all of them. */
-  resolving: ReadonlySet<string>;
-  onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
 }
 
 /**
@@ -2278,13 +2258,7 @@ export function ChatTranscriptRow({
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
     case "turn":
-      return (
-        <ChatTurn
-          messages={row.messages}
-          context={context}
-          live={live}
-        />
-      );
+      return <ChatTurn messages={row.messages} context={context} live={live} />;
   }
 }
 
@@ -2386,9 +2360,7 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>
-                  {renderSegment(segment, role, context, live)}
-                </div>
+                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>

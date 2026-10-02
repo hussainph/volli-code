@@ -89,9 +89,7 @@ export function readHostNotice(
   return readHistoricalSubagent(text) ?? unknownNotice(text);
 }
 
-function readSharedNotice(
-  value: unknown,
-): SubagentNotice | BrowserHoldNotice | WatchNotice | null {
+function readSharedNotice(value: unknown): SubagentNotice | BrowserHoldNotice | WatchNotice | null {
   const notice = recordOf(value);
   if (notice?.kind === "watch") {
     if (!Array.isArray(notice.events)) return null;

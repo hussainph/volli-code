@@ -1,9 +1,6 @@
 import type { UIMessage } from "ai";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
-import type {
-  TranscriptCompaction,
-  TranscriptReasoningDrop,
-} from "./transcript";
+import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
 
 /** What every Session client draws from the portable transcript projection. */
 export type TranscriptRow =

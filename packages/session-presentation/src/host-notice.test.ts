@@ -422,9 +422,18 @@ describe("watch notices (VC-457)", () => {
 
 describe("retired host notices", () => {
   it("keeps old saved-grant metadata a plain, noninteractive note", () => {
-    expect(readHostNotice(message({
-      kind: "session-host-notice",
-      notice: { kind: "approval-used", approvalId: "old", asked: "write /outside", summary: "Write" },
-    }))).toMatchObject({ kind: "unknown" });
+    expect(
+      readHostNotice(
+        message({
+          kind: "session-host-notice",
+          notice: {
+            kind: "approval-used",
+            approvalId: "old",
+            asked: "write /outside",
+            summary: "Write",
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "unknown" });
   });
 });

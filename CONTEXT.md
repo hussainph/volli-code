@@ -75,11 +75,13 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role, model policy, frozen tools, and deterministic workspace
-and host-API boundaries. Reconnect,
-restart, and recovery may replace its live executor attachment without changing
-that identity. A model change is an explicit recorded action, never a silent
-fallback. A Session begins at its first message, not at the gesture that opened
+Each Session has a Role, model policy, frozen tools, credential safeguards, and
+host-API actor boundaries. It starts in its recorded workspace, but ordinary
+desktop execution is host-native, not a filesystem sandbox. Deterministic
+workspace scoping remains available through an injected execution environment.
+Reconnect, restart, and recovery may replace its live executor attachment
+without changing that identity. A model change is an explicit recorded action,
+never a silent fallback. A Session begins at its first message, not at the gesture that opened
 the composer — see **Chat Draft**.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab,
 chat draft, provisional session, empty session
@@ -234,11 +236,13 @@ _Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
-Session Role, work location, model policy, prompt resources, and scoped tools;
-it enforces deterministic workspace and secret boundaries and emits runtime
-observations and tool requests without owning
-durable Session or Ticket state. Pi is its initial acknowledged substrate, but
-Pi types and events never become renderer or Session contracts. The package may
+Session Role, work location, model policy, prompt resources, and frozen tools;
+it enforces credential safeguards and its supplied execution environment's
+checks, and emits runtime observations and tool requests without owning durable
+Session or Ticket state. Ordinary desktop Sessions use host-native execution;
+`ScopedExecutionEnv` is retained for hosts that explicitly inject workspace
+scoping. Pi is its initial acknowledged substrate, but Pi types and events never
+become renderer or Session contracts. The package may
 depend on Node but never Electron or DOM APIs, so Electron main can host it
 locally and a future worker can host the same package elsewhere.
 _Avoid_: harness adapter, provider runtime, Electron service, renderer client

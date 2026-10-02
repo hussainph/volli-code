@@ -1,6 +1,6 @@
 ---
 title: Agent authority
-description: Workspace boundaries, secret handling, and actor permissions in Volli.
+description: Session execution, secret handling, and actor permissions in Volli.
 sidebar:
   label: Agent authority
 ---
@@ -9,14 +9,16 @@ Volli checks deterministic boundaries around a Session's tools and the host API.
 It does not review each tool call with a model or ask you to approve ordinary
 file and command calls.
 
-## Workspace boundaries
+## Workspace and execution
 
-A Session runs in its recorded workspace. File tools check resolved paths,
-including symlink targets, against that workspace. Scoped execution retains its
-workspace boundary for commands. A prompt cannot widen these checks.
+A Session starts in its recorded worktree or main checkout. Ordinary desktop
+Sessions use host-native file and command tools: the working directory is not
+a filesystem sandbox.
 
-These checks are not a claim that arbitrary agent code or other processes
-running as your macOS user are isolated from your machine.
+The runtime also retains an injectable `ScopedExecutionEnv`, whose file checks
+resolve paths and symlink targets against the workspace. Hosts can select that
+environment; desktop Sessions do not use it by default. Neither environment
+isolates arbitrary processes running as your macOS user.
 
 ## Secrets
 

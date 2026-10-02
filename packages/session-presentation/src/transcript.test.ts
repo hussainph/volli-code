@@ -24,7 +24,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { projectTranscriptMessages } from "./message-projection";
 
-
 import {
   appendFrames,
   EMPTY_TRANSCRIPT,
@@ -639,4 +638,3 @@ describe("a kind this build does not know", () => {
     expect(caughtUp.throughSequence).toBe(6);
   });
 });
-
