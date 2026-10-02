@@ -193,7 +193,7 @@ describe("pruneMigrationBackups", () => {
       "volli.db.backup-v10": { sizeBytes: 100 },
     });
 
-    const report = pruneMigrationBackups("/profile/volli.db", 2, fs.deps);
+    const report = pruneMigrationBackups("/profile/volli.db", 10, fs.deps);
 
     expect(report).toEqual({
       kept: [
@@ -342,4 +342,34 @@ describe("pruneMigrationBackups", () => {
       expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v55"]);
     },
   );
+  it("classifies corrupt history even when this run's copy is missing, without pruning clean history", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v54": { sizeBytes: 54, integrityError: new Error("malformed") },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v51"]);
+    expect(report.quarantined).toHaveLength(1);
+    expect(report.failed.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v55",
+      "volli.db.backup-v54",
+    ]);
+  });
+
+  it("keeps the newest earlier clean copy as well as a clean future-version copy after restore", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v50": { sizeBytes: 50 },
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+      "volli.db.backup-v56": { sizeBytes: 56 },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v51",
+      "volli.db.backup-v55",
+      "volli.db.backup-v56",
+    ]);
+    expect(fs.removeAttempts).toEqual(["volli.db.backup-v50"]);
+  });
 });

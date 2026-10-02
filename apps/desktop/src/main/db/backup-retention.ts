@@ -95,15 +95,15 @@ export function pruneMigrationBackups(
   const candidatePattern = migrationBackupCandidatePattern(dbPath);
 
   let candidates: MigrationBackupCandidate[];
-  const quarantinedBaseNames = new Set<string>();
+  const preservedBaseNames = new Set<string>();
   try {
     const names = fs.readDirectory(directory);
-    const quarantinePattern = new RegExp(
-      `^${escapeRegExp(dbBasename)}\\.backup-v\\d+\\.corrupt-[\\da-f-]+$`,
+    const preservedPattern = new RegExp(
+      `^${escapeRegExp(dbBasename)}\\.backup-v\\d+\\.(?:corrupt|preserved)-[\\da-f-]+$`,
     );
     for (const name of names) {
-      if (quarantinePattern.test(name))
-        quarantinedBaseNames.add(name.replace(/\.corrupt-[\da-f-]+$/, ""));
+      if (preservedPattern.test(name))
+        preservedBaseNames.add(name.replace(/\.(?:corrupt|preserved)-[\da-f-]+$/, ""));
     }
     candidates = names
       .flatMap((name) => {
@@ -133,14 +133,12 @@ export function pruneMigrationBackups(
     (candidate) => candidate.name === currentBackupName && candidate.sidecar === undefined,
   );
   if (currentBackup === undefined) {
-    report.kept = candidates.map((candidate) => reportEntry(candidate, fs));
     report.failed.push({
       operation: "verify",
       name: currentBackupName,
       sizeBytes: "unknown",
       error: "this run's safety copy is missing",
     });
-    return report;
   }
 
   const unsafeNames = new Set<string>();
@@ -215,12 +213,21 @@ export function pruneMigrationBackups(
 
   // An unreadable or corrupt new copy must never authorize deletion. Still
   // check the older copies so failed checks are not logged as rollback points.
-  const currentIsClean = verify(currentBackup);
+  const currentIsClean = currentBackup !== undefined && verify(currentBackup);
 
   let newestOtherBase: MigrationBackupCandidate | undefined;
+  let newestOlderBase: MigrationBackupCandidate | undefined;
   for (const candidate of candidates) {
     if (candidate.sidecar !== undefined || candidate.name === currentBackupName) continue;
     if (!verify(candidate)) continue;
+    if (
+      candidate.version < BigInt(currentVersion) &&
+      (newestOlderBase === undefined ||
+        candidate.version > newestOlderBase.version ||
+        (candidate.version === newestOlderBase.version && candidate.name > newestOlderBase.name))
+    ) {
+      newestOlderBase = candidate;
+    }
     if (
       newestOtherBase === undefined ||
       candidate.version > newestOtherBase.version ||
@@ -239,6 +246,9 @@ export function pruneMigrationBackups(
 
   const keptBaseNames = new Set([currentBackupName]);
   if (newestOtherBase !== undefined) keptBaseNames.add(newestOtherBase.name);
+  // After a restore, a future-version copy must not displace the newest
+  // earlier clean recovery point. This only adds a third copy on that path.
+  if (newestOlderBase !== undefined) keptBaseNames.add(newestOlderBase.name);
   const keptVersions = new Set(
     candidates
       .filter((candidate) => candidate.sidecar === undefined && keptBaseNames.has(candidate.name))
@@ -251,9 +261,9 @@ export function pruneMigrationBackups(
       candidate.sidecar === undefined
         ? keptBaseNames.has(candidate.name)
         : keptVersions.has(candidate.version.toString()) ||
-          // A partial quarantine/rollback may leave a sidecar at its original
-          // name. Preserve it for recovery alongside the quarantined base.
-          quarantinedBaseNames.has(candidate.name.slice(0, -candidate.sidecar.length));
+          // A partial preservation/quarantine may leave a sidecar at its
+          // original name. Keep it for recovery alongside the base held aside.
+          preservedBaseNames.has(candidate.name.slice(0, -candidate.sidecar.length));
     if (keep) {
       report.kept.push(reportEntry(candidate, fs));
       continue;

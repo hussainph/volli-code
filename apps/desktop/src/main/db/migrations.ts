@@ -3245,17 +3245,6 @@ export function migrate(
       throw new Error(`Migration refused: WAL checkpoint did not complete. ${recovery}`);
     }
     const backupPath = `${dbPath}.backup-v${currentVersion}`;
-    // Never attach an existing WAL/journal to a newly verified base file.
-    // Preserve the whole old family rather than overwrite only its base.
-    if (
-      ["-wal", "-shm", "-journal"].some(
-        (suffix) => lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false }) !== undefined,
-      )
-    ) {
-      throw new Error(
-        "Migration refused: existing safety copy has sidecars. Recovery action: quit Volli and preserve the existing backup family separately before retrying the upgrade.",
-      );
-    }
     // Stage separately so a failed copy/check cannot overwrite an existing
     // clean rollback point at the same version (e.g. after a failed upgrade).
     const stagedPath = `${backupPath}.pending-${randomUUID()}`;
@@ -3282,7 +3271,50 @@ export function migrate(
     // Readonly WAL verification can create empty WAL/SHM files. These belong
     // only to our unique staged snapshot, not to any existing backup family.
     for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
-    renameSync(stagedPath, backupPath);
+    // A verified backup's readonly check can leave WAL/SHM behind. Preserve
+    // the entire old family before publishing, including on restore/re-upgrade.
+    // Never attach an old WAL or journal to the newly verified base file.
+    const preservedPath = `${backupPath}.preserved-${randomUUID()}`;
+    const moved: string[] = [];
+    try {
+      const existingSuffixes = ["", "-wal", "-shm", "-journal"].filter((suffix) => {
+        const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
+        if (info === undefined) return false;
+        if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
+        return true;
+      });
+      if (existingSuffixes.length > 0 && existingSuffixes[0] !== "") {
+        throw new Error("existing safety copy family is missing its base");
+      }
+      for (const suffix of existingSuffixes) {
+        renameSync(`${backupPath}${suffix}`, `${preservedPath}${suffix}`);
+        moved.push(suffix);
+      }
+      renameSync(stagedPath, backupPath);
+    } catch (error) {
+      // Restore sidecars before the base; on rollback failure leave the base
+      // aside, not at a rollback name with an incomplete family.
+      for (const suffix of moved.toReversed()) {
+        try {
+          renameSync(`${preservedPath}${suffix}`, `${backupPath}${suffix}`);
+          moved.pop();
+        } catch (rollbackError) {
+          console.error(BACKUP_RETENTION_LOG_PREFIX, {
+            action: "failed",
+            operation: "preserve",
+            name: preservedPath,
+            error: rollbackError,
+          });
+          break;
+        }
+      }
+      throw new Error(
+        `Migration refused: could not preserve and publish the safety copy. Recovery action: quit Volli and recover the complete backup family kept beside ${backupPath} before retrying.`,
+        { cause: error },
+      );
+    }
+    if (moved.length > 0)
+      console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preservedPath });
   }
 
   const applyPendingMigrations = db.transaction(() => {
