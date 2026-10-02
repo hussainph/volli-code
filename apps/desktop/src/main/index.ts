@@ -154,6 +154,7 @@ import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
@@ -843,6 +844,19 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: describeDbOpenFailure(error, { dev: isDev }) };
     console.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
+  registerDatabaseRecoveryIpcHandlers({
+    dbPath,
+    userData: app.getPath("userData"),
+    degraded: !dbHandle.ok,
+    restart: () => {
+      // Let the IPC reply paint success before restarting the entire service
+      // graph; degraded handlers must not be replaced with partially live ones.
+      setTimeout(() => {
+        app.relaunch();
+        app.quit();
+      }, 750);
+    },
+  });
   // The one Session Engine in the process, wrapped once so every durable write
   // anywhere downstream — the runtime's turns, the agent socket's commands, the
   // IPC handlers' retitles — re-publishes the affected Session's listing row to

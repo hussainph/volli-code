@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import Database from "better-sqlite3";
 import { openVolliDb } from "./index";
 
 let dir: string | undefined;
@@ -43,6 +44,21 @@ describe("openVolliDb read tuning (VC-355)", () => {
       expect(row?.count).toBe(1);
     } finally {
       db.close();
+    }
+  });
+
+  it("closes the connection when migration fails before entering degraded recovery", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-failed-open-"));
+    const path = join(dir, "volli.db");
+    const incompatible = new Database(path);
+    incompatible.exec("CREATE TABLE unrelated (id INTEGER); PRAGMA user_version = 1");
+    incompatible.close();
+    const close = vi.spyOn(Database.prototype, "close");
+    try {
+      expect(() => openVolliDb(path)).toThrow();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      close.mockRestore();
     }
   });
 

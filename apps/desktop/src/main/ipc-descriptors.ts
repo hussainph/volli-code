@@ -404,6 +404,18 @@ export const ORPHAN_PROCESS_CHANNELS = Object.keys(
   ORPHAN_PROCESS_IPC,
 ) as readonly OrphanProcessIpcChannel[];
 
+// Recovery deliberately remains callable while every DB-backed surface is degraded.
+export const DATABASE_RECOVERY_IPC = {
+  "volli:database-recovery-list": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-restore": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+};
+
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
 // compile-checked in both directions). `DATA_CHANNELS` derives from its keys,
