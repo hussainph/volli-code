@@ -22,20 +22,10 @@ name: Release
 # trigger further workflow runs (GitHub's loop-prevention rule). A `prepare`
 # job that only tagged would therefore sit there having released nothing. The
 # same rule is what stops this workflow from re-entering itself, so exactly
-# one release happens per press.
-#
-# The bump COMMIT and the TAG are pushed with different actors, on purpose
-# (VC-463). main requires the `CI gate` check — the "Required CI" ruleset —
-# and that ruleset's only bypass is a GitHub App installed on this repository,
-# so the branch push must ride the app's short-lived installation token: a
-# GITHUB_TOKEN push can never carry the check, and on a user-owned repository
-# GitHub refuses the Actions integration as a bypass actor. The branch push
-# being a non-GITHUB_TOKEN actor is harmless — it only starts the ordinary
-# main-push runs of ci.yml and codeql.yml. A TAG push is not: IF ANYONE EVER
-# SWAPS THE TAG PUSH TO A PAT, THE APP, OR A DEPLOY KEY, door 2 starts firing
-# on the pushed tag and every button press produces TWO release runs racing
-# for the same release — see the header of the pre-create step for what that
-# race does.
+# one release happens per press. IF ANYONE EVER SWAPS THE PUSH TO A PAT OR A
+# DEPLOY KEY, door 2 starts firing on the pushed tag and every button press
+# produces TWO release runs racing for the same release — see the header of
+# the pre-create step for what that race does.
 #
 # All signing/notarization/staple mechanics live in
 # apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
@@ -65,12 +55,6 @@ name: Release
 # after it does, so there is nothing to retire.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   RELEASE_APP_CLIENT_ID    Client ID of the GitHub App installed on this
-#                        repository that pushes the bump COMMIT to main: the
-#                        "Required CI" ruleset bypasses this app and nothing
-#                        else, and its installation token is minted per run
-#                        by the mint step in `prepare`.
-#   RELEASE_APP_PRIVATE_KEY  PEM private key generated for that app.
 #   MAC_CERT_P12_BASE64  "Developer ID Application: Hussain Phalasiya
 #                        (Y54F649NH4)" cert + private key, exported from the
 #                        login keychain as a password-protected .p12, then
@@ -84,9 +68,7 @@ name: Release
 # A preflight step fails the run if any are missing: electron-builder would
 # otherwise fall back to ad-hoc signing and the dmg staple hook would skip
 # silently, shipping a build Gatekeeper rejects and Squirrel.Mac refuses to
-# apply as an update. The app secrets have no preflight of their own: the
-# token is minted before anything is committed or pushed, so a missing or
-# malformed app secret fails the run with nothing pushed and no tag.
+# apply as an update.
 #
 # Channels and release states (plan agreed on VC-24):
 #   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3). The version
@@ -140,8 +122,8 @@ on:
 
 permissions:
   # The publish step uploads dmg + zip + latest-mac.yml to the GitHub Release
-  # using GH_TOKEN, and `prepare` pushes the release TAG with it too — the
-  # bump COMMIT rides the app token minted in that job, not this one.
+  # using GH_TOKEN. `prepare` additionally pushes the release commit and tag to
+  # main with it.
   contents: write
 
 jobs:
@@ -156,18 +138,13 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      # persist-credentials is FALSE: both pushes below carry their own actor
-      # in the push URL (app token for the commit, GITHUB_TOKEN for the tag),
-      # so no stored credential can be picked up in place of either. The
-      # checkout's default GITHUB_TOKEN staying persisted is the trap — it
-      # would be the wrong actor for the commit push, which "Required CI"
-      # rejects once every push to main must carry `CI gate`.
+      # persist-credentials stays TRUE here, unlike every other checkout in
+      # this repo: this job's whole purpose is to push back to main.
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
 
       # Refuse to release a red or unproven commit. This is the guard that
       # replaces "build it locally first": the evidence is the CI run that
@@ -233,20 +210,6 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "$current -> $version"
 
-      # The app whose installation token the commit push rides (see the
-      # header): it is the "Required CI" ruleset's only bypass actor, so
-      # minting here is what keeps the Release button working once main
-      # requires `CI gate`. This fails before the commit is made or pushed,
-      # so a missing app, a revoked installation or a rotated key costs
-      # nothing but a rerun.
-      - name: Mint app token for the main push
-        id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: write
-
       # Both files move together, so the drift that left root stuck at 0.1.0
       # through two releases cannot recur. --indent 2 reproduces these files
       # byte-for-byte apart from the value, so the diff stays one line each.
@@ -254,8 +217,6 @@ jobs:
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
           TAG: ${{ steps.resolve.outputs.tag }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           for f in package.json apps/desktop/package.json; do
@@ -270,18 +231,11 @@ jobs:
           git commit -m "chore(release): $VERSION"
           git tag "$TAG"
           # Push the branch first: if main moved while this job ran, this is a
-          # non-fast-forward and "Main Protection" rejects it, so the run
-          # fails here having pushed no tag and released nothing. Re-run to
-          # pick up the new head.
-          #
-          # Branch push: the app's installation token — the only actor the
-          # "Required CI" ruleset bypasses, so this direct push to main can
-          # land while main requires `CI gate` (the header explains why).
-          git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
-          # Tag push: GITHUB_TOKEN — deliberately NOT the app token, because a
-          # tag pushed with any other actor starts door 2 as well and every
-          # press would produce two racing release runs (see the header).
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
+          # non-fast-forward and the ruleset rejects it, so the run fails here
+          # having pushed no tag and released nothing. Re-run to pick up the
+          # new head.
+          git push origin HEAD:main
+          git push origin "$TAG"
 
   release:
     name: Sign, notarize, publish

@@ -77,7 +77,7 @@ CI runs the full test suite, every coverage threshold and the desktop smoke matr
 - Push once, when the work is done, not after every commit. Each push starts a fresh CI run of several minutes and cancels the one in flight.
 - Watch CI with one blocking `gh pr checks <pr> --watch --fail-fast`, bounded by your shell tool's timeout or started in a background shell. Never poll with a `sleep` loop. When it returns, act on the result: on red, read only the failing job's log (`gh run view <run-id> --log-failed`), fix that, and push once.
 - Hand off when the PR opens. Move the ticket to review and name the PR; do not hold the ticket in Doing waiting for green. If CI goes red afterwards, fix it on the same branch.
-- Arm auto-merge only when the owner asks for it on that Ticket: `gh pr merge <pr> --auto --merge`. Merge commits are this repository's method, and GitHub merges the PR once `CI gate` passes. If GitHub refuses to enable auto-merge, say so and stop; never fall back to a plain `gh pr merge`.
+- Merge only when the owner asks for it, and only once `CI gate` is green on the PR's current head: `gh pr merge <pr> --merge --match-head-commit <sha>`. Merge commits are this repository's method. This repository does not use GitHub auto-merge, so never arm `--auto`.
 - If the same CI step fails on two unrelated PRs, treat it as a breakage on `main`. Say so in the ticket, and keep the fix out of your ticket's diff.
 
 ## Session environment

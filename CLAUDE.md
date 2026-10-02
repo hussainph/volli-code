@@ -66,7 +66,7 @@ CI owns the full suite, every coverage threshold and the smoke matrix. Local run
 - **Push once, when the work is done** — not after every commit. Every push starts a fresh multi-minute run and cancels the one in flight.
 - **Watching CI: never a `sleep` loop.** One blocking `gh pr checks <pr> --watch --fail-fast`, bounded by your shell tool's timeout or run in a background shell, then act on the result. On red, pull only the failing job's log (`gh run view <run-id> --log-failed`), fix just that, push once.
 - **Hand off at PR-open.** Once the PR is open, move the ticket to review and name the PR; don't hold it in Doing waiting for green. If CI goes red later, fix it on the same branch.
-- **Auto-merge only on request.** Arm it only when the owner asks on that Ticket: `gh pr merge <pr> --auto --merge` (merge commits are this repo's method); GitHub merges once `CI gate` passes. If GitHub refuses to enable it, say so and stop — never fall back to a plain `gh pr merge`.
+- **Merge only on request, only on green.** Merge when the owner asks and `CI gate` is green on the PR's current head: `gh pr merge <pr> --merge --match-head-commit <sha>` (merge commits are this repo's method). No GitHub auto-merge — never arm `--auto`.
 - **Red main rule.** The same CI step failing on two unrelated PRs is a `main` breakage: say so in the ticket, and don't try to fix it in your ticket's diff.
 
 ## Session environment
