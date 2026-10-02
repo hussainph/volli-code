@@ -13,6 +13,8 @@ interface FakeEntry {
   kind?: "file" | "directory";
   statError?: Error;
   removeError?: Error;
+  integrityError?: Error;
+  quarantineError?: Error;
 }
 
 function fakeFilesystem(initial: Record<string, FakeEntry>) {
@@ -26,6 +28,18 @@ function fakeFilesystem(initial: Record<string, FakeEntry>) {
       if (entry === undefined) throw new Error(`ENOENT: ${name}`);
       if (entry.statError !== undefined) throw entry.statError;
       return { sizeBytes: entry.sizeBytes, isFile: entry.kind !== "directory" };
+    },
+    verifyIntegrity: (path) => {
+      const entry = entries.get(basename(path));
+      if (entry?.integrityError) throw entry.integrityError;
+    },
+    quarantineFile: (path, destination) => {
+      const name = basename(path);
+      const entry = entries.get(name);
+      if (!entry) throw new Error(`ENOENT: ${name}`);
+      if (entry.quarantineError) throw entry.quarantineError;
+      entries.set(basename(destination), entry);
+      entries.delete(name);
     },
     removeFile: (path) => {
       const name = basename(path);
@@ -89,6 +103,7 @@ describe("pruneMigrationBackups", () => {
         { name: "volli.db.backup-v1", sizeBytes: 10 },
         { name: "volli.db.backup-v9", sizeBytes: 90 },
       ],
+      quarantined: [],
       removed: [],
       failed: [
         {
@@ -113,12 +128,12 @@ describe("pruneMigrationBackups", () => {
     expect(fs.removeAttempts).toEqual([]);
     expect(fs.names()).toEqual(["volli.db.backup-v1", "volli.db.backup-v2", "volli.db.backup-v9"]);
     expect(report.failed).toEqual([
-      {
+      expect.objectContaining({
         operation: "verify",
         name: "volli.db.backup-v2",
-        sizeBytes: 64,
-        error: "this run's safety copy is not a regular file",
-      },
+        error: "Error: safety copy is not a regular file",
+      }),
+      expect.objectContaining({ operation: "quarantine", name: "volli.db.backup-v2" }),
     ]);
   });
 
@@ -146,6 +161,7 @@ describe("pruneMigrationBackups", () => {
         { name: "volli.db.backup-v2", sizeBytes: 20 },
         { name: "volli.db.backup-v2-wal", sizeBytes: 21 },
       ],
+      quarantined: [],
       removed: [
         { name: "volli.db.backup-v11-shm", sizeBytes: 111 },
         { name: "volli.db.backup-v3", sizeBytes: 30 },
@@ -165,12 +181,11 @@ describe("pruneMigrationBackups", () => {
     ]);
   });
 
-  it("reports an unreadable removal failure, continues, and logs from the report structure", () => {
+  it("reports a removal failure, continues, and logs from the report structure", () => {
     const removalError = new Error("permission denied");
     const fs = fakeFilesystem({
       "volli.db.backup-v1": {
         sizeBytes: 10,
-        statError: new Error("stat denied"),
         removeError: removalError,
       },
       "volli.db.backup-v1-wal": { sizeBytes: 11 },
@@ -178,19 +193,20 @@ describe("pruneMigrationBackups", () => {
       "volli.db.backup-v10": { sizeBytes: 100 },
     });
 
-    const report = pruneMigrationBackups("/profile/volli.db", 2, fs.deps);
+    const report = pruneMigrationBackups("/profile/volli.db", 10, fs.deps);
 
     expect(report).toEqual({
       kept: [
         { name: "volli.db.backup-v10", sizeBytes: 100 },
         { name: "volli.db.backup-v2", sizeBytes: 20 },
       ],
+      quarantined: [],
       removed: [{ name: "volli.db.backup-v1-wal", sizeBytes: 11 }],
       failed: [
         {
           operation: "remove",
           name: "volli.db.backup-v1",
-          sizeBytes: "unknown",
+          sizeBytes: 10,
           error: "Error: permission denied",
         },
       ],
@@ -209,8 +225,151 @@ describe("pruneMigrationBackups", () => {
       action: "failed",
       operation: "remove",
       name: "volli.db.backup-v1",
-      sizeBytes: "unknown",
+      sizeBytes: 10,
       error: "Error: permission denied",
     });
+  });
+  it("never prunes a clean older copy when the new copy is corrupt", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v54": { sizeBytes: 54 },
+      "volli.db.backup-v55": { sizeBytes: 55, integrityError: new Error("malformed") },
+      "volli.db.backup-v55-wal": { sizeBytes: 5 },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v51",
+      "volli.db.backup-v54",
+    ]);
+    expect(report.quarantined.map((entry) => entry.name)).toEqual([
+      expect.stringMatching(/^volli\.db\.backup-v55\.corrupt-/),
+      expect.stringMatching(/^volli\.db\.backup-v55\.corrupt-.*-wal$/),
+    ]);
+    expect(fs.names()).not.toContain("volli.db.backup-v55");
+    const logger = { info: vi.fn(), error: vi.fn() };
+    logMigrationBackupRetention(report, logger);
+    expect(logger.error).toHaveBeenCalledWith(
+      BACKUP_RETENTION_LOG_PREFIX,
+      expect.objectContaining({ action: "quarantined" }),
+    );
+  });
+
+  it("keeps backup-v51 when newer historical copies are corrupt, even with a clean new copy", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v50": { sizeBytes: 50 },
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v54": { sizeBytes: 54, integrityError: new Error("malformed") },
+      "volli.db.backup-v54-shm": { sizeBytes: 4 },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+      "volli.db.backup-v53.corrupt-existing": { sizeBytes: 53 },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v51",
+      "volli.db.backup-v55",
+    ]);
+    expect(fs.removeAttempts).toEqual(["volli.db.backup-v50"]);
+    expect(fs.names()).toContain("volli.db.backup-v53.corrupt-existing");
+    expect(report.quarantined).toHaveLength(2);
+  });
+
+  it("keeps unverifiable copies and their sidecars if quarantine fails", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": {
+        sizeBytes: 51,
+        integrityError: new Error("malformed"),
+        quarantineError: new Error("denied"),
+      },
+      "volli.db.backup-v51-wal": { sizeBytes: 5, quarantineError: new Error("denied") },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v55"]);
+    expect(report.failed.map((entry) => entry.operation)).toEqual(["verify", "quarantine"]);
+  });
+  it("leaves the base outside the rollback allowlist if restoring a sidecar fails", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": {
+        sizeBytes: 51,
+        integrityError: new Error("transient check failure"),
+      },
+      "volli.db.backup-v51-shm": { sizeBytes: 5 },
+      "volli.db.backup-v51-wal": { sizeBytes: 6 },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+    });
+    const rename = fs.deps.quarantineFile;
+    fs.deps.quarantineFile = (path, destination) => {
+      if (path.endsWith(".backup-v51-wal") || destination.endsWith(".backup-v51-shm"))
+        throw new Error("denied");
+      rename(path, destination);
+    };
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(fs.names()).not.toContain("volli.db.backup-v51");
+    expect(fs.names()).toContain("volli.db.backup-v51-wal");
+    expect(report.quarantined).toHaveLength(2);
+    expect(report.failed.some((entry) => entry.error.includes("quarantine rollback failed"))).toBe(
+      true,
+    );
+    const later = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(later.kept.map((entry) => entry.name)).toContain("volli.db.backup-v51-wal");
+  });
+
+  it.each(["base", "sidecar"])(
+    "preserves the whole family after a %s-only quarantine failure",
+    (failure) => {
+      const fs = fakeFilesystem({
+        "volli.db.backup-v51": {
+          sizeBytes: 51,
+          integrityError: new Error("transient check failure"),
+          quarantineError: failure === "base" ? new Error("base denied") : undefined,
+        },
+        "volli.db.backup-v51-shm": { sizeBytes: 5 },
+        "volli.db.backup-v51-wal": {
+          sizeBytes: 6,
+          quarantineError: failure === "sidecar" ? new Error("WAL denied") : undefined,
+        },
+        "volli.db.backup-v55": { sizeBytes: 55 },
+      });
+      const before = fs.names();
+      const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+      expect(fs.names()).toEqual(before);
+      expect(fs.removeAttempts).toEqual([]);
+      expect(report.quarantined).toEqual([]);
+      expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v55"]);
+    },
+  );
+  it("classifies corrupt history even when this run's copy is missing, without pruning clean history", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v54": { sizeBytes: 54, integrityError: new Error("malformed") },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v51"]);
+    expect(report.quarantined).toHaveLength(1);
+    expect(report.failed.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v55",
+      "volli.db.backup-v54",
+    ]);
+  });
+
+  it("keeps the newest earlier clean copy as well as a clean future-version copy after restore", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v50": { sizeBytes: 50 },
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+      "volli.db.backup-v56": { sizeBytes: 56 },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps);
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v51",
+      "volli.db.backup-v55",
+      "volli.db.backup-v56",
+    ]);
+    expect(fs.removeAttempts).toEqual(["volli.db.backup-v50"]);
   });
 });
