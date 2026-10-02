@@ -2009,6 +2009,10 @@ describe("agent command service", () => {
             ticket: "VC-1",
             title: "Codex session",
             harness: "claude-code",
+            startedBy: { kind: "user" },
+            latestAttachment: { origin: null, reattached: false },
+            latestTurn: null,
+            pendingSubagents: [],
             // A Session that never called a model through Volli: null cost and
             // an unavailable basis, never `0` — unmeasured is not free.
             costUsd: null,
@@ -2640,7 +2644,15 @@ describe("agent command service", () => {
     expect(peek).toEqual({
       v: 1,
       ok: true,
-      data: { session: "abcdef12", status: "idle", output: "line one\nline two" },
+      data: {
+        session: "abcdef12",
+        status: "idle",
+        output: "line one\nline two",
+        startedBy: { kind: "user" },
+        latestAttachment: { origin: null, reattached: false },
+        latestTurn: null,
+        pendingSubagents: [],
+      },
     });
     // Full UUIDs are not public session handles — only the short id resolves.
     expect(byUuid).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
