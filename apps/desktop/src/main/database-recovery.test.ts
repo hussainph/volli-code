@@ -15,13 +15,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DatabaseRecoveryListResult, DatabaseRecoveryRestoreResult } from "../ipc/contract";
 
+function fullDiskFailure() {
+  return Object.assign(new Error("injected full disk"), { code: "ENOSPC" });
+}
+
 const { handlers, faults } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  faults: { dbPath: "", publish: false, rollback: false, moveWal: false },
+  faults: { dbPath: "", publish: false, rollback: false, moveWal: false, finish: false },
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  const fail = () => Object.assign(new Error("injected full disk"), { code: "ENOSPC" });
   return {
     ...fs,
     linkSync: (...args: Parameters<typeof fs.linkSync>) => {
@@ -31,11 +34,16 @@ vi.mock("node:fs", async (importOriginal) => {
         ((faults.publish && source.includes(".restore-")) ||
           (faults.rollback && source.includes(".damaged-")))
       )
-        throw fail();
+        throw fullDiskFailure();
       return fs.linkSync(...args);
     },
+    unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
+      if (faults.finish && String(args[0]) === `${faults.dbPath}.recovery-pending`)
+        throw fullDiskFailure();
+      return fs.unlinkSync(...args);
+    },
     renameSync: (...args: Parameters<typeof fs.renameSync>) => {
-      if (faults.moveWal && String(args[0]) === `${faults.dbPath}-wal`) throw fail();
+      if (faults.moveWal && String(args[0]) === `${faults.dbPath}-wal`) throw fullDiskFailure();
       return fs.renameSync(...args);
     },
   };
@@ -63,7 +71,7 @@ let recovery: DatabaseRecovery;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "volli-recovery-test-"));
   dbPath = join(directory, "volli.db");
-  Object.assign(faults, { dbPath, publish: false, rollback: false, moveWal: false });
+  Object.assign(faults, { dbPath, publish: false, rollback: false, moveWal: false, finish: false });
   const damaged = new Database(dbPath);
   damaged.exec(
     "CREATE TABLE damaged_probe(value TEXT); CREATE INDEX damaged_probe_idx ON damaged_probe(value); INSERT INTO damaged_probe VALUES ('evidence')",
@@ -289,7 +297,11 @@ describe("DatabaseRecovery", () => {
     const original = bundle();
     expect(recovery.list()[0]?.integrity).toBe("clean");
     expect(() => recovery.restore()).toThrow("Restore failed");
-    expect(bundle()).toEqual(original);
+    const after = bundle();
+    // Only the stable coordination lock is new; no source/recovery data changed.
+    expect(existsSync(`${dbPath}.open-lock`)).toBe(true);
+    delete after["volli.db.open-lock"];
+    expect(after).toEqual(original);
   });
 
   it("refuses out-of-userData paths and linked current databases", () => {
@@ -354,6 +366,78 @@ describe("DatabaseRecovery", () => {
       expect(readFileSync(path)).toEqual(backupBytes);
     },
   );
+
+  it("refuses a malformed header without letting SQLite delete its WAL or SHM", () => {
+    const path = backup(1);
+    writeFileSync(dbPath, "damaged header evidence");
+    writeFileSync(`${dbPath}-wal`, "WAL evidence");
+    writeFileSync(`${dbPath}-shm`, "SHM evidence");
+    const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, path].map(
+      (file) => [file, readFileSync(file)] as const,
+    );
+    expect(() => recovery.restore()).toThrow("Restore failed");
+    for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+  });
+
+  it("does not undo a verified publication when marker cleanup fails", () => {
+    const path = backup(1);
+    const original = readFileSync(dbPath);
+    faults.finish = true;
+    expect(() => recovery.restore()).toThrow("restored and checked");
+    expect(existsSync(dbPath)).toBe(true);
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+    const restored = database.openVolliDb(dbPath, { allowPendingRecovery: true });
+    expect(
+      restored.prepare("SELECT value FROM app_state WHERE key = 'recovery-test'").get(),
+    ).toEqual({ value: "saved" });
+    restored.close();
+    expect(readFileSync(join(preservedDirectory(), "before-checkpoint", "volli.db"))).toEqual(
+      original,
+    );
+    expect(existsSync(path)).toBe(true);
+    faults.finish = false;
+    expect(recovery.restore()).toBe("volli.db.backup-v1");
+  });
+
+  it("blocks restoration while another boot has a dormant uninitialized DB handle", () => {
+    backup(1);
+    rmSync(dbPath);
+    const seeded = database.openVolliDb(dbPath);
+    seeded
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("current-only", "original", 1);
+    seeded.close();
+    const pragma = Database.prototype.pragma;
+    let intercepted = false;
+    const spy = vi
+      .spyOn(Database.prototype, "pragma")
+      .mockImplementation(function (this: Database.Database, source, options) {
+        if (
+          !intercepted &&
+          !this.readonly &&
+          this.name === dbPath &&
+          source === "journal_mode = WAL"
+        ) {
+          // Constructor has returned, but the current handle has not executed its
+          // first SQLite operation. The adjacent startup mutex is already held.
+          intercepted = true;
+          expect(() => recovery.restore()).toThrow("Close other Volli instances");
+        }
+        return pragma.call(this, source, options);
+      });
+    try {
+      const booted = database.openVolliDb(dbPath);
+      expect(intercepted).toBe(true);
+      expect(
+        booted.prepare("SELECT value FROM app_state WHERE key = 'current-only'").get(),
+      ).toEqual({ value: "original" });
+      booted.close();
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 15000);
 
   it("refuses an idle existing writer, not just an active WAL reader", () => {
     backup(1);

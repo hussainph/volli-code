@@ -14,8 +14,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSafetyCopy } from "../ipc/contract";
-import { openVolliDb } from "./db";
+import { assertDatabaseHeader, openVolliDb } from "./db";
 import { migrationBackupCandidatePattern } from "./db/backup-retention";
+import { acquireDatabaseOpenLock } from "./db/open-lock";
 import {
   beginDatabaseRecovery,
   finishDatabaseRecovery,
@@ -138,6 +139,24 @@ export class DatabaseRecovery {
   restore(): string {
     const selected = this.list().find((backup) => backup.integrity === "clean");
     if (selected === undefined) throw new Error(NO_CLEAN_BACKUP);
+    let openLock: Database.Database;
+    try {
+      openLock = acquireDatabaseOpenLock(this.options.dbPath);
+    } catch (error) {
+      if ((error as { code?: string }).code === "SQLITE_BUSY")
+        throw new RecoveryFailure(
+          "The database is being opened by another Volli instance. Close other Volli instances before restoring.",
+        );
+      throw error;
+    }
+    try {
+      return this.restoreCopy(selected);
+    } finally {
+      openLock.close();
+    }
+  }
+
+  private restoreCopy(selected: DatabaseSafetyCopy): string {
     const { dbPath, userData } = this.options;
     const name = basename(dbPath);
     const stageDirectory = mkdtempSync(join(userData, `${name}.restore-`));
@@ -185,6 +204,9 @@ export class DatabaseRecovery {
       // SQLite's exclusive file ownership through preservation and publication.
       // If corruption prevents ownership, refuse rather than detach a live writer.
       if (existsSync(dbPath)) {
+        // Failed SQLite ownership acquisition can delete malformed WAL/SHM on
+        // close. A non-SQLite header must fail before creating that connection.
+        assertDatabaseHeader(dbPath);
         damaged = new Database(dbPath, { fileMustExist: true });
         damaged.pragma("busy_timeout = 5000");
         damaged.pragma("locking_mode = EXCLUSIVE");
@@ -286,7 +308,7 @@ export class DatabaseRecovery {
 
   private checkpoint(db: Database.Database): void {
     const rows = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
-    if (rows.some((row) => row.busy !== 0))
+    if (rows.length !== 1 || rows[0]?.busy !== 0)
       throw new RecoveryFailure(
         "The database is in use. Close other Volli instances before restoring.",
       );

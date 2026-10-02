@@ -57,8 +57,12 @@ describe("openVolliDb read tuning (VC-355)", () => {
     const close = vi.spyOn(Database.prototype, "close");
     try {
       expect(() => openVolliDb(path)).toThrow();
-      // Both the read-only preflight and the failed writer are closed.
-      expect(close).toHaveBeenCalledTimes(2);
+      // Preflight, migration-copy verification, and the failed writer all close.
+      // Assert ownership, not a count that depends on the migration safety runner.
+      const closed = close.mock.contexts as Database.Database[];
+      expect(closed.every((handle) => !handle.open)).toBe(true);
+      expect(closed.some((handle) => handle.name === path && !handle.readonly)).toBe(true);
+      expect(closed.some((handle) => handle.name === path && handle.readonly)).toBe(true);
     } finally {
       close.mockRestore();
     }

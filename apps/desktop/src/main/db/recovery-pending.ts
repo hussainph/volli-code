@@ -32,7 +32,13 @@ export function syncRecoveryPath(path: string): void {
 }
 
 export function beginDatabaseRecovery(dbPath: string, preservedDirectory: string): void {
-  if (hasPendingDatabaseRecovery(dbPath)) return;
+  if (hasPendingDatabaseRecovery(dbPath)) {
+    // A retry may inherit a marker whose first directory fsync failed. Re-fence
+    // BOTH its existence and this attempt's new preservation directory entry.
+    syncRecoveryPath(recoveryPendingPath(dbPath));
+    syncRecoveryPath(dirname(dbPath));
+    return;
+  }
   const fd = openSync(recoveryPendingPath(dbPath), "wx", 0o600);
   try {
     writeSync(fd, JSON.stringify({ preservedDirectory }));
