@@ -4,6 +4,7 @@ import {
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  shortSessionId,
   sanitizeSessionInteraction,
   turnQueueEvent,
 } from "@volli/shared";
@@ -38,6 +39,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine";
+import { stopSessionById, type StopSessionOutcome } from "./session-stop";
 import type {
   BindingHandle,
   DeliveryReceipt,
@@ -177,6 +179,7 @@ export type SessionClientCommand =
   /** `tier`: the named tier this selection resolved from, when a start named one (VC-259). */
   /** `auto`: the decision model's pick and why, when it chose this selection at birth (VC-432). */
   | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
+  | { kind: "session.stop"; reason?: string }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string | null }
@@ -213,6 +216,9 @@ type MessageCommandRequest = ExistingSessionCommandRequest & {
 };
 type SelectModelCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "model.select" }>;
+};
+type StopCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<SessionClientCommand, { kind: "session.stop" }>;
 };
 type InterruptCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.interrupt" }>;
@@ -331,6 +337,8 @@ export interface SessionRuntimeCommandResult {
    * command, a rejection, any command that is not a submit.
    */
   turnOpened?: boolean;
+  /** Runtime acts following the durable stop, including any best-effort failures. */
+  stop?: StopSessionOutcome;
 }
 type DeliveredSessionRuntimeCommandResult = SessionRuntimeCommandResult & {
   receipt: CommandReceipt;
@@ -983,6 +991,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       };
     }
 
+    // A stop owns its own named refusals and must not depend on workspace resolution.
+    if (request.command.kind === "session.stop") {
+      return this.#stop(request as StopCommandRequest);
+    }
     const projection = await this.#requireSession(request.sessionId);
     const location = await this.ports.locations.resolve(projection.session);
     const existed = this.#commandExists(projection, request.commandId);
@@ -1019,6 +1031,95 @@ class DefaultSessionRuntime implements SessionRuntime {
       case "resume.settle":
         return this.#scheduledResume(request as ScheduledResumeCommandRequest, location, existed);
     }
+  }
+
+  async #stop(request: StopCommandRequest): Promise<SessionRuntimeCommandResult> {
+    const prior = await this.ports.engine.getSession({ sessionId: request.sessionId });
+    if (prior?.commands.some((candidate) => candidate.id === request.commandId)) {
+      // Validate the idempotency key against durable intent even when the stop
+      // already closed its own attachment. A lost reply must not turn acceptance
+      // into a not-live refusal, nor let a changed reason reuse the same key.
+      const replay = await this.ports.engine.submit({
+        commandId: request.commandId,
+        sessionId: request.sessionId,
+        intent: {
+          kind: "session.stop",
+          reason: request.command.reason ?? null,
+          by: { kind: "user" },
+        },
+        provenance: {
+          source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      if (replay.receipt?.status !== "completed") {
+        throw new SessionRuntimeConflictError("Stop command has no completed receipt");
+      }
+      const released = prior.receipts.some(
+        (receipt) =>
+          receipt.commandId === `${request.commandId}:release` && receipt.status === "completed",
+      );
+      if (
+        released ||
+        prior.attachments.findLast((attachment) => attachment.adapterId !== "terminal")?.status !==
+          "open"
+      ) {
+        // No executor work is attempted on a closed replay. Report only the
+        // successful child acts evidenced by durable receipts, not guessed
+        // transient outcomes from the response that was lost.
+        const accepted = (commandId: string) =>
+          prior.receipts.some(
+            (receipt) =>
+              receipt.commandId === commandId &&
+              (receipt.status === "accepted" || receipt.status === "completed"),
+          );
+        return {
+          ...(await this.#result(request.sessionId, replay.command, replay.receipt)),
+          stop: {
+            sessionId: request.sessionId,
+            handle: shortSessionId(request.sessionId),
+            title: prior.session.title,
+            previouslyStopped: true,
+            interrupted: accepted(`${request.commandId}:interrupt`),
+            released: accepted(`${request.commandId}:release`),
+            failures: [],
+          },
+        };
+      }
+    }
+    const stop = await stopSessionById(
+      {
+        sessionEngine: {
+          getSession: (query) => this.ports.engine.getSession(query),
+          submit: async (input) => {
+            const projection = await this.#requireSession(request.sessionId);
+            const submitted = await this.ports.engine.submit(input);
+            await this.#publishSubmit(submitted, this.#commandExists(projection, input.commandId));
+            return submitted;
+          },
+        },
+        runtime: this,
+      },
+      {
+        operationId: request.commandId,
+        sessionId: request.sessionId,
+        ...(request.command.reason === undefined ? {} : { reason: request.command.reason }),
+      },
+    );
+    // A previously-stopped, still-live target retries only the runtime acts.
+    // Return its durable stop acceptance, not a fabricated new stop receipt.
+    const projection = await this.#requireSession(request.sessionId);
+    const command =
+      projection.commands.find((candidate) => candidate.id === request.commandId) ??
+      projection.commands.findLast((candidate) => candidate.intent.kind === "session.stop");
+    /* v8 ignore next 2 -- SessionEngine commits the stop command, fact and completed receipt atomically. */
+    if (command === undefined)
+      throw new SessionRuntimeConflictError("Stopped Session has no stop command");
+    const receipt = projection.receipts.findLast((candidate) => candidate.commandId === command.id);
+    /* v8 ignore next 2 -- a durable stopped projection always includes its atomic completed receipt. */
+    if (receipt === undefined)
+      throw new SessionRuntimeConflictError("Stopped Session has no stop receipt");
+    return { ...(await this.#result(request.sessionId, command, receipt)), stop };
   }
 
   /**

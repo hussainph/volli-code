@@ -3,6 +3,7 @@ import type { JsonUnsafeProcedures } from "./json-safe";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
 import {
   isSessionStreamFrame,
+  SuperviseSessionError,
   type ModelAccessSnapshot,
   type SessionClientCommand,
   type SessionRuntime,
@@ -47,6 +48,7 @@ export type RendererSessionCommand =
   | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
   | Extract<
       SessionClientCommand,
+      | { kind: "session.stop" }
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
@@ -64,7 +66,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence" | "refusal"
+  "sessionId" | "receipt" | "throughSequence" | "refusal" | "stop"
 >;
 
 /**
@@ -576,6 +578,10 @@ const interactionResolutionSchema = z
 
 const commandSchema = z.discriminatedUnion("kind", [
   z.object({
+    kind: z.literal("session.stop"),
+    reason: z.string().trim().min(1).max(4000).optional(),
+  }),
+  z.object({
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
     ticketId: nullableString,
@@ -1004,9 +1010,16 @@ export function createSessionRouter() {
               message: "Use the product Session start and recovery routes.",
             });
           }
-          return rendererCommandResult(
-            await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
-          );
+          try {
+            return rendererCommandResult(
+              await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
+          }
         }),
       // A pending interaction the user walked away from. The reason is fixed
       // here rather than taken as input: this transport is the user seam, and
@@ -1083,6 +1096,7 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     // Nullable rather than optional, so the field survives every transport
     // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
     refusal: result.refusal,
+    ...(result.stop === undefined ? {} : { stop: result.stop }),
   };
 }
 

@@ -18,3 +18,5 @@ export type {
   SessionStartResult,
 } from "@volli/shared";
 export type { HostNotice, HostNoticeOutbox, HostNoticeReceipt } from "./host-notice-outbox";
+
+export * from "./session-stop";

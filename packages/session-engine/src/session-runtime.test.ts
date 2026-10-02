@@ -5828,3 +5828,179 @@ it("commits stop facts from the executor through the observation codec into the 
     snapshot.frames.find(({ event }) => event.payload.kind === "turn.interrupted")?.event.payload,
   ).toMatchObject({ stopDetail });
 });
+
+describe("SessionRuntime person's stop command", () => {
+  it("commits the user stop before runtime release and returns its durable receipt", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const result = await runtime.command({
+      commandId: "stop",
+      sessionId,
+      command: { kind: "session.stop", reason: "Runaway" },
+    });
+    expect(result.stop).toMatchObject({ released: true, interrupted: false, failures: [] });
+    expect(result.receipt?.status).toBe("completed");
+    expect((await engine.getSession({ sessionId }))?.stopped).toMatchObject({
+      by: { kind: "user" },
+      reason: "Runaway",
+    });
+    expect(adapter.releases).toBe(1);
+    await runtime.close();
+  });
+
+  it("keeps the first receipt when a still-live stopped executor needs another release", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    adapter.releaseFailure = new Error("release failed");
+    const first = await runtime.command({
+      commandId: "stop",
+      sessionId,
+      command: { kind: "session.stop" },
+    });
+    expect(first.stop?.failures).toEqual(["The executor did not release: release failed."]);
+    adapter.releaseFailure = null;
+    const retry = await runtime.command({
+      commandId: "retry-stop",
+      sessionId,
+      command: { kind: "session.stop" },
+    });
+    expect(retry.stop).toMatchObject({ previouslyStopped: true, released: true });
+    expect(retry.receipt).toEqual(first.receipt);
+    expect(
+      (await engine.getSession({ sessionId }))?.commands.filter(
+        (command) => command.intent.kind === "session.stop",
+      ),
+    ).toHaveLength(1);
+    await runtime.close();
+  });
+});
+
+it("replays a completed stop after release and across a runtime restart without touching an executor", async () => {
+  const { runtime, engine, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = {
+    commandId: "stop",
+    sessionId,
+    command: { kind: "session.stop" as const, reason: "Runaway" },
+  };
+  const first = await runtime.command(request);
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({
+    previouslyStopped: true,
+    interrupted: false,
+    released: true,
+    failures: [],
+  });
+  expect(adapter.releases).toBe(1);
+  await expect(
+    runtime.command({ ...request, command: { ...request.command, reason: "Changed" } }),
+  ).rejects.toThrow("different intent");
+  await expect(runtime.command({ ...request, commandId: "new-stop" })).rejects.toThrow(
+    "is not live",
+  );
+  await runtime.command({
+    commandId: "reattach",
+    sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+  expect((await runtime.command(request)).receipt).toEqual(first.receipt);
+  expect(adapter.releases).toBe(1);
+  await runtime.close();
+  const cold = composition({ engine });
+  expect((await cold.runtime.command(request)).receipt).toEqual(first.receipt);
+  expect(cold.adapter.attaches).toBe(0);
+  expect(cold.adapter.releases).toBe(0);
+  await cold.runtime.close();
+});
+
+it("replays durable stop intent but retries the still-open runtime acts", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  adapter.releaseFailure = new Error("failed once");
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  adapter.releaseFailure = null;
+  const retry = await runtime.command(request);
+  expect(retry.receipt).toEqual(first.receipt);
+  expect(retry.stop).toMatchObject({ previouslyStopped: true, released: true });
+  expect(adapter.releases).toBe(2);
+  await runtime.close();
+});
+
+it("replays the accepted interrupt and completed release receipts without dispatching again", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  await adapter.emit({ kind: "turn", state: "started", turnId: "active-stop", occurredAt: 150 });
+  const request = {
+    commandId: "active-stop",
+    sessionId,
+    command: { kind: "session.stop" as const },
+  };
+  const first = await runtime.command(request);
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({ interrupted: true, released: true, failures: [] });
+  expect(adapter.commands.filter((command) => command.kind === "executor.interrupt")).toHaveLength(
+    1,
+  );
+  await runtime.close();
+});
+
+it("does not replay an unconfirmed stop receipt as success", async () => {
+  const { runtime, engine } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  await runtime.command(request);
+  const durableSubmit = engine.submit.bind(engine);
+  engine.submit = async (input) => ({ ...(await durableSubmit(input)), receipt: null });
+  await expect(runtime.command(request)).rejects.toThrow("no completed receipt");
+  await runtime.close();
+});
+
+it("does not label a rejected child act successful when replaying a closed stop", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  await adapter.emit({ kind: "turn", state: "started", turnId: "stop", occurredAt: 150 });
+  adapter.dispatchReceipt = {
+    commandId: "stop:interrupt",
+    status: "rejected",
+    code: "refused",
+    detail: "interrupt refused",
+    native: null,
+  };
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  expect(first.stop?.failures).toHaveLength(1);
+  expect((await runtime.command(request)).stop).toMatchObject({
+    interrupted: false,
+    released: true,
+  });
+  expect(adapter.releases).toBe(1);
+  await runtime.close();
+});
+
+it("replays a stop if its failed release was subsequently closed by another actor", async () => {
+  const { runtime, engine, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  adapter.releaseFailure = new Error("release failed");
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  const attachmentId = (await engine.getSession({ sessionId }))!.attachments.at(-1)!.id;
+  await engine.observe({
+    id: "closed-elsewhere",
+    sessionId,
+    attachmentId,
+    commandId: null,
+    occurredAt: 300,
+    provenance: { source: { kind: "system", id: "test", detail: null }, venue },
+    kind: "attachment.closed",
+    outcome: "completed",
+  });
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({ released: false, failures: [] });
+  expect(adapter.releases).toBe(1);
+  adapter.releaseFailure = null;
+  await runtime.close();
+});
