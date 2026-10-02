@@ -30,13 +30,23 @@ let root: Root;
 let container: HTMLDivElement;
 let latest: PeekContentState;
 const read = vi.fn<ReadPeekContent>();
-function Probe({ id, token, refine }: { id: string | null; token: number; refine: boolean }) {
-  latest = usePeekContent(id, read, token, refine);
+function Probe({
+  id,
+  token,
+  refine,
+  live,
+}: {
+  id: string | null;
+  token: number;
+  refine: boolean;
+  live: boolean;
+}) {
+  latest = usePeekContent(id, read, token, refine, undefined, live);
   return null;
 }
-async function render(id: string | null, token = 1, refine = true) {
+async function render(id: string | null, token = 1, refine = true, live = !refine) {
   await act(async () => {
-    root.render(<Probe id={id} token={token} refine={refine} />);
+    root.render(<Probe id={id} token={token} refine={refine} live={live} />);
   });
 }
 beforeEach(() => {
@@ -154,19 +164,48 @@ describe("two-stage peek content", () => {
     expect(latest.content).toBe(REFINED);
   });
 
-  it("late old-activity refinement cannot overwrite a fresher card or its cache", async () => {
+  it("holds an unpinned snapshot through activity and cooldown, then refreshes on reopening", async () => {
+    await render("s");
+    expect(latest.content).toBe(REFINED);
+    read.mockImplementation(() => new Promise(() => {}));
+    await act(async () => vi.advanceTimersByTime(SESSION_PEEK_REFRESH_MS));
+    for (const token of [2, 3, 4]) {
+      await render("s", token);
+      expect(latest).toEqual({ content: REFINED, loading: false, failed: false });
+    }
+    expect(read).toHaveBeenCalledTimes(2);
+    await render(null);
+    await render("s", 4);
+    expect(read.mock.calls.at(-1)).toEqual(["s", false]);
+    expect(latest.loading).toBe(true);
+  });
+
+  it("holds local-only unpinned peeks too, without starting utility work", async () => {
+    await render("s", 1, false, false);
+    await render("s", 2, false, false);
+    expect(latest).toEqual({ content: CONTENT, loading: false, failed: false });
+    expect(read.mock.calls).toEqual([["s", false]]);
+    await render(null);
+    await render("s", 2, false, false);
+    expect(read.mock.calls).toEqual([
+      ["s", false],
+      ["s", false],
+    ]);
+  });
+
+  it("late old-activity refinement cannot overwrite a fresher pinned card or its cache", async () => {
     const old = Promise.withResolvers<SessionPeekContent | null>();
     read.mockImplementationOnce(async () => CONTENT).mockReturnValueOnce(old.promise);
     await render("s");
     const fresh = { ...REFINED, lastActivityAt: 2, summary: "New activity" };
     read.mockResolvedValue(fresh);
-    await render("s", 2);
+    await render("s", 2, false);
     await act(async () => old.resolve(REFINED));
     expect(latest.content).toBe(fresh);
     await render(null);
-    await render("s", 2);
+    await render("s", 2, false);
     expect(latest.content).toBe(fresh);
-    expect(read).toHaveBeenCalledTimes(4);
+    expect(read).toHaveBeenCalledTimes(3);
   });
 
   it("a late reply for another Session never changes the visible one", async () => {

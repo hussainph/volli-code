@@ -33,6 +33,8 @@ export function usePeekContent(
   activityToken: number,
   refine = true,
   sharedCache?: PeekContentCache,
+  /** Pinned cards may read new local activity; hovering always holds a snapshot. */
+  live = false,
 ): PeekContentState {
   const cache = React.useMemo(() => sharedCache ?? new PeekContentCache(read), [read, sharedCache]);
   const active = React.useRef<{
@@ -50,10 +52,12 @@ export function usePeekContent(
       return;
     }
     const previous = active.current;
-    // Pinning is not a new glance: keep its fold even after the cooldown.
+    // An unpinned peek is a snapshot, not a live feed. Tool/output churn must
+    // not replace prose with skeletons or buy another refinement mid-glance.
+    // Pinning retains the fold, but later pinned activity may pull local data.
     const entry =
       previous?.sessionId === sessionId &&
-      previous.activityToken === activityToken &&
+      (!live || previous.activityToken === activityToken) &&
       previous.cache === cache
         ? previous.entry
         : cache.get(sessionId, activityToken);
@@ -65,7 +69,7 @@ export function usePeekContent(
         failed: current.failed || current.content === null,
       });
     });
-  }, [activityToken, cache, refine, sessionId]);
+  }, [activityToken, cache, live, refine, sessionId]);
 
   return state;
 }
