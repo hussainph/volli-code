@@ -39,48 +39,31 @@ import {
 } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
+import { getTransactionGate } from "../db/transaction-gate";
 
 type SqlRow = Record<string, unknown>;
 
 /**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
- * synchronous, a Session Engine transaction may await host work, so this queue
- * holds BEGIN IMMEDIATE ownership across that await and never lets a second
- * ledger operation observe a partial fact set.
+ * synchronous, a Session Engine transaction may await host work. The shared
+ * connection gate holds transaction ownership across that await, so no ledger
+ * on this handle observes a partial fact set.
  */
 export class SqliteSessionLedger implements SessionLedger {
-  #tail: Promise<void> = Promise.resolve();
-
   constructor(private readonly db: Database.Database) {}
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T> {
-    const run = async (): Promise<T> => {
-      this.db.exec("BEGIN IMMEDIATE");
+    return getTransactionGate(this.db).transaction(async () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
       try {
         const value = await work(transaction);
         transaction.assertReceiptEventPairs();
-        this.db.exec("COMMIT");
         return value;
-      } catch (error) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {
-          // The original failure carries the useful error. A failed rollback
-          // only happens after SQLite already abandoned the transaction.
-        }
-        throw error;
       } finally {
         open = false;
       }
-    };
-    const queued = this.#tail.then(run, run);
-    this.#tail = queued.then(
-      () => undefined,
-      () => undefined,
-    );
-    return queued;
+    });
   }
 }
 

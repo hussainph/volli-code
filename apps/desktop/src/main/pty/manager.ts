@@ -771,7 +771,7 @@ export class PtyManager {
       }
 
       const onDestroyed = (): void => {
-        this.kill(sessionId);
+        this.killSession(sessionId);
       };
       // A window teardown must not leave an orphaned shell behind.
       webContents.once("destroyed", onDestroyed);
@@ -1016,15 +1016,30 @@ export class PtyManager {
   }
 
   /**
+   * The session this caller may drive, or `undefined`.
+   *
+   * The terminal surface's single ownership check (VC-509): a session is
+   * controllable only by the webContents it was created for. {@link ack} and
+   * {@link setVisible} have always applied it, and every mutating handler now
+   * shares it, so a second surface naming another window's session gets no
+   * more than it would from an unknown id: an unknown session and a foreign
+   * one answer identically, and neither reveals that the other's exists.
+   */
+  private ownedSession(sender: WebContents, sessionId: string): Session | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return undefined;
+    return session.webContents === sender ? session : undefined;
+  }
+
+  /**
    * Renderer flow-control ack: `chars` of output were consumed. Only honored
    * from the session's owning webContents — the same window-scoping stance as
    * the output events themselves. The pause/resume accounting lives in the
    * session's output pipeline.
    */
   ack(sender: WebContents, sessionId: string, chars: number): void {
-    const session = this.sessions.get(sessionId);
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return;
-    if (session.webContents !== sender) return;
     session.output.ack(chars);
   }
 
@@ -1078,22 +1093,30 @@ export class PtyManager {
   /**
    * Parks a session (SIGSTOP its whole tree — issue #51 warm tier). Delegates to
    * the {@link ParkController}, which owns the guards, mid-park death races, and
-   * fork-rescan rounds; the manager keeps this signature because the CLI/IPC and
-   * the equivalence benchmark drive park through it.
+   * fork-rescan rounds; this IPC-facing entry point first honors the session
+   * only for its owning webContents (VC-509).
    */
   park(
+    sender: WebContents,
     sessionId: string,
     opts: { manual: boolean; activityBaseline?: number },
   ): Promise<TerminalIoResult> {
+    if (this.ownedSession(sender, sessionId) === undefined) {
+      return Promise.resolve({ ok: false, error: "Unknown terminal session" });
+    }
     return this.parkController.park(sessionId, opts);
   }
 
   /**
    * Wakes a parked session (SIGCONT its tree in reverse). Synchronous so
    * before-quit teardown and the wake-before-write/kill/interrupt call sites can
-   * use it off the stored pid list. Delegates to the {@link ParkController}.
+   * use it off the stored pid list. Delegates to the {@link ParkController} for
+   * an owning caller; the manager's own wake paths call the controller directly.
    */
-  wake(sessionId: string): TerminalIoResult {
+  wake(sender: WebContents, sessionId: string): TerminalIoResult {
+    if (this.ownedSession(sender, sessionId) === undefined) {
+      return { ok: false, error: "Unknown terminal session" };
+    }
     return this.parkController.wake(sessionId);
   }
 
@@ -1103,16 +1126,15 @@ export class PtyManager {
    * parked session immediately.
    */
   setVisible(sender: WebContents, sessionId: string, visible: boolean): void {
-    const session = this.sessions.get(sessionId);
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return;
-    if (session.webContents !== sender) return;
     session.visible = visible;
     if (visible && session.parkedPids !== null) this.parkController.wake(sessionId);
   }
 
   /** User pin: excludes a session from auto-park, waking it if already parked. */
-  setKeepAwake(sessionId: string, keepAwake: boolean): TerminalIoResult {
-    const session = this.sessions.get(sessionId);
+  setKeepAwake(sender: WebContents, sessionId: string, keepAwake: boolean): TerminalIoResult {
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return { ok: false, error: "Unknown terminal session" };
     session.keepAwake = keepAwake;
     if (keepAwake && session.parkedPids !== null) this.parkController.wake(sessionId);
@@ -1258,8 +1280,9 @@ export class PtyManager {
     return interrupted;
   }
 
-  write(sessionId: string, data: string): TerminalIoResult {
-    const session = this.sessions.get(sessionId);
+  /** Sends user input to a session the caller's window owns (VC-509), waking it if parked. */
+  write(sender: WebContents, sessionId: string, data: string): TerminalIoResult {
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) {
       return { ok: false, error: "Unknown terminal session" };
     }
@@ -1289,8 +1312,12 @@ export class PtyManager {
    * these: the slot holds one run, and a second line typed into a shell that
    * is mid-install would land in the install's own stdin.
    */
-  async runCommand(sessionId: string, command: string): Promise<TerminalCommandResult> {
-    const session = this.sessions.get(sessionId);
+  async runCommand(
+    sender: WebContents,
+    sessionId: string,
+    command: string,
+  ): Promise<TerminalCommandResult> {
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return { ok: false, error: "Unknown terminal session" };
     if (session.setupRun !== null) {
       return { ok: false, error: "This terminal is already running a command for Volli" };
@@ -1317,7 +1344,7 @@ export class PtyManager {
     // Through `write`, not `pty.write`: a parked session has to be woken
     // before its shell can consume anything, and this command arrives long
     // after the session was created.
-    const written = this.write(sessionId, `${run.commandLine}\r`);
+    const written = this.write(sender, sessionId, `${run.commandLine}\r`);
     if (!written.ok) {
       session.setupRun = null;
       this.commandRuns.delete(sessionId);
@@ -1326,8 +1353,8 @@ export class PtyManager {
     return { ok: true, exitCode: (await settled.promise).exitCode };
   }
 
-  resize(sessionId: string, cols: number, rows: number): TerminalIoResult {
-    const session = this.sessions.get(sessionId);
+  resize(sender: WebContents, sessionId: string, cols: number, rows: number): TerminalIoResult {
+    const session = this.ownedSession(sender, sessionId);
     if (session === undefined) {
       return { ok: false, error: "Unknown terminal session" };
     }
@@ -1339,7 +1366,20 @@ export class PtyManager {
     }
   }
 
-  kill(sessionId: string): TerminalIoResult {
+  /**
+   * Kills a session the calling window owns (VC-509). Teardown paths already
+   * past the ownership question — the owning window's own `destroyed` listener
+   * and {@link killAll} on quit — call {@link killSession} directly.
+   */
+  kill(sender: WebContents, sessionId: string): TerminalIoResult {
+    if (this.ownedSession(sender, sessionId) === undefined) {
+      return { ok: false, error: "Unknown terminal session" };
+    }
+    return this.killSession(sessionId);
+  }
+
+  /** The kill body, without the ownership gate — see {@link kill}. */
+  private killSession(sessionId: string): TerminalIoResult {
     const session = this.sessions.get(sessionId);
     if (session === undefined) {
       return { ok: false, error: "Unknown terminal session" };
@@ -1348,7 +1388,7 @@ export class PtyManager {
     // continued, so a parked session must be SIGCONT'd before pty.kill or the
     // shell (and its tree) would never die and would leak as an orphan. wake()
     // is synchronous and needs the session still in the map, so it runs before
-    // forget(). killAll() inherits this via kill().
+    // forget(). killAll() inherits this via killSession().
     if (session.parkedPids !== null) this.parkController.wake(sessionId);
     // Forget first so the pty's own onExit (which also calls forget) is a
     // no-op, and so a kill() that throws still drops the session. Token
@@ -1366,10 +1406,10 @@ export class PtyManager {
 
   /** Kills every live session. Wired to `before-quit`. */
   killAll(): void {
-    // Snapshot the ids first: kill() mutates the map as it forgets sessions.
+    // Snapshot the ids first: killSession() mutates the map as it forgets sessions.
     const sessionIds = Array.from(this.sessions.keys());
     for (const sessionId of sessionIds) {
-      this.kill(sessionId);
+      this.killSession(sessionId);
     }
   }
 

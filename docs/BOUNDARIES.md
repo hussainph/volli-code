@@ -62,6 +62,32 @@ review, not a project to execute — none of them asks anyone to build sync.
    already work. The existing raw channels migrate opportunistically when a
    surface is touched — never as a big-bang rewrite.
 
+## SQLite transaction ownership
+
+The desktop's Session, Automation and orphan-cleanup ledgers share **one async
+transaction gate per SQLite handle** (`apps/desktop/src/main/db/transaction-gate.ts`).
+It owns `BEGIN IMMEDIATE` through COMMIT/ROLLBACK, including while host work is
+awaited. New ledger adapters must use `getTransactionGate(db).transaction(work)`;
+a private promise queue is not sufficient on a shared handle. Separate handles
+have separate gates; SQLite, not this in-process queue, arbitrates their locks.
+
+**Known limit (VC-511): this gate is cooperative.** Existing synchronous repo
+calls, `db.transaction`, prepared statements and direct `db.exec` calls do not
+implicitly acquire it. An independent repo write on a handle with an open async
+transaction silently joins that transaction and is lost if it rolls back; a
+read can see uncommitted state. This change does not migrate those legacy
+callers or make the entire desktop a single safe writer. Before a second
+host/client is introduced, independent writes and consistent reads must enter
+the gate (for example, `await getTransactionGate(db).transaction(() =>
+insertProject(db, project))`) or use an appropriately isolated connection.
+Repo work intentionally part of an existing transaction remains direct; never
+await another ledger/gate transaction on the same handle from inside its work,
+since it queues behind itself. Host work that needs another ledger transaction
+must be split at the commit boundary.
+
+`apps/desktop/src/main/db/transaction-gate.test.ts` reproduces both cross-ledger
+serialization and the remaining ungated-write rollback hazard.
+
 ## The chosen path, for context
 
 When multiplayer becomes a product decision, the path is a

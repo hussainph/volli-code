@@ -1958,8 +1958,9 @@ CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
  * sidecar copies verbatim, and deliberately NOT `payload`: nothing in the
  * product ever updates a `session_events` row, and `sqlite-ledger.test.ts`
  * rewrites a payload on purpose to prove the read path tolerates corruption.
- * The `kind` copy is therefore what the event was COMMITTED as, which is the
- * fact a wake reports.
+ * Originally the `kind` copy was what the event was COMMITTED as. Migration
+ * 057 supersedes that policy: repairs synchronize this derived kind with the
+ * canonical payload without changing the event's cursor.
  */
 const MIGRATION_044_SESSION_EVENT_SEQUENCE = `
 CREATE TABLE session_event_sequence (
@@ -2359,6 +2360,34 @@ CREATE TABLE IF NOT EXISTS authority_approval_events (
 );
 `;
 
+/**
+ * Migration 057: the await kind index follows canonical event repairs (VC-513).
+ *
+ * Like 049's checkpoints, the kind is a projection, not a second opinion on
+ * the log. Repair existing drift and synchronize future payload updates in
+ * the same transaction, including updates made by later repair migrations.
+ * Only the derived kind is rebuilt: the fleet sequence and AUTOINCREMENT
+ * high-water mark are durable cursor identity and must never be reassigned.
+ */
+const MIGRATION_057_SESSION_EVENT_KIND_REPAIR = `
+UPDATE session_event_sequence
+   SET kind = (SELECT json_extract(e.payload, '$.kind')
+                 FROM session_events e
+                WHERE e.id = session_event_sequence.event_id)
+ WHERE kind IS NOT (SELECT json_extract(e.payload, '$.kind')
+                     FROM session_events e
+                    WHERE e.id = session_event_sequence.event_id);
+
+CREATE TRIGGER IF NOT EXISTS session_event_sequence_kind_updated
+AFTER UPDATE OF payload ON session_events
+WHEN json_extract(OLD.payload, '$.kind') IS NOT json_extract(NEW.payload, '$.kind')
+BEGIN
+  UPDATE session_event_sequence
+     SET kind = json_extract(NEW.payload, '$.kind')
+   WHERE event_id = NEW.id;
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2651,6 +2680,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 56,
     name: "host notice outbox — persist sanitized delivery before submission (VC-495)",
     sql: HOST_NOTICE_OUTBOX_MIGRATION,
+  },
+  {
+    version: 57,
+    name: "session event kind index — synchronize canonical-prefix repairs (VC-513)",
+    sql: MIGRATION_057_SESSION_EVENT_KIND_REPAIR,
   },
 ];
 

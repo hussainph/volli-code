@@ -30,10 +30,12 @@
  * renderer — runtime identity (`adapterId`) and adapter-native detail
  * (recovery locators, diagnostics, provenance internals) stay behind it — and
  * {@link RendererSessionEventPayload} is **derived from the scrub return
- * types**, so the published renderer type and the runtime scrub cannot
- * disagree. That derivation replaces a mapped type the edge once kept beside
- * a hand-written switch, whose quiet divergence is exactly the failure mode
- * this table exists to make impossible.
+ * types**. A type-level check also requires each `decodeRenderer` return to
+ * match that same kind's scrub return, so the published renderer type, the
+ * runtime scrub, and the renderer decoder cannot disagree. That derivation
+ * replaces a mapped type the edge once kept beside a hand-written switch,
+ * whose quiet divergence is exactly the failure mode this table exists to
+ * make impossible.
  */
 
 import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "./session-stop";
@@ -136,7 +138,8 @@ interface SessionEventKindCodec<Kind extends SessionEventKind, Safe = unknown> {
    * renderer's side of the edge. Only needed when the scrub *removes* keys —
    * `decode` then rejects the scrubbed JSON — so most kinds omit it and the
    * renderer parse runs `scrub(decode(…))` instead, which both validates the
-   * shape and re-nulls anything an unscrubbed value could be leaking.
+   * shape and re-nulls anything an unscrubbed value could be leaking. The
+   * table checks its return against this kind's own scrub result.
    */
   decodeRenderer?(record: JsonRecord, context: string): Safe;
 }
@@ -479,15 +482,43 @@ const codecs = {
   },
 } satisfies { [Kind in SessionEventKind]: SessionEventKindCodec<Kind> };
 
+/** Structural assignability permits extra object keys, so check both shape and safety. */
+type RendererReturnMatchesScrub<Decoded, Safe> = Decoded extends unknown
+  ? [Decoded] extends [Safe]
+    ? Exclude<keyof Decoded, keyof Safe> extends never
+      ? true
+      : false
+    : false
+  : never;
+
+type CheckRendererDecoderAgainstScrub<Codecs> = {
+  [Kind in keyof Codecs]: Codecs[Kind] extends {
+    scrub: (...args: infer _ScrubArgs) => infer Safe;
+    decodeRenderer: (...args: infer _RendererArgs) => infer Decoded;
+  }
+    ? RendererReturnMatchesScrub<Decoded, Safe> extends true
+      ? Codecs[Kind]
+      : never
+    : Codecs[Kind];
+};
+
+type CodecForKind<Kind extends SessionEventKind> = SessionEventKindCodec<
+  Kind,
+  ReturnType<(typeof codecs)[Kind]["scrub"]>
+>;
+
+type AnySessionEventKindCodec = {
+  [Kind in SessionEventKind]: CodecForKind<Kind>;
+}[SessionEventKind];
+
 /**
- * The table again, viewed by an arbitrary string kind. The widening is sound —
- * each entry's decode returns its own arm of the union and each scrub one arm
- * of the derived renderer union — and it is what lets an unknown kind be
- * answered with the distinct error instead of a type hole.
+ * The table again, viewed by an arbitrary string kind. Its widened entries
+ * retain the corresponding kind-specific scrub return for `decodeRenderer` —
+ * never the renderer union — while still letting unknown kinds raise the
+ * distinct error instead of opening a type hole.
  */
-const codecByKind: Partial<
-  Record<string, SessionEventKindCodec<SessionEventKind, RendererSessionEventPayload>>
-> = codecs;
+const codecByKind: Partial<Record<string, AnySessionEventKindCodec>> =
+  codecs satisfies CheckRendererDecoderAgainstScrub<typeof codecs>;
 
 /* ------------------------------------------------------- renderer-safe form */
 
@@ -554,6 +585,12 @@ export type RendererSessionEventPayload = {
   [Kind in SessionEventKind]: ReturnType<(typeof codecs)[Kind]["scrub"]>;
 }[SessionEventKind];
 
+/** Dynamic dispatch erases the kind correlation after the per-kind table check. */
+type DynamicSessionEventKindCodec = SessionEventKindCodec<
+  SessionEventKind,
+  RendererSessionEventPayload
+>;
+
 export type RendererSessionEvent = Omit<SessionEvent, "provenance" | "payload"> & {
   provenance: RendererSessionEventProvenance;
   payload: RendererSessionEventPayload;
@@ -565,7 +602,7 @@ export function scrubSessionEventPayload(
 ): RendererSessionEventPayload {
   // Present for every kind the union can name; only an untyped caller could
   // miss, and the parse owns that path.
-  return codecByKind[payload.kind]!.scrub(payload);
+  return (codecByKind[payload.kind]! as DynamicSessionEventKindCodec).scrub(payload);
 }
 
 /** One whole event made renderer-safe: provenance and payload scrubbed together. */
@@ -690,7 +727,7 @@ export function decodeRendererSessionEventPayload(
   const kind = readString(record.kind, `${context}.kind`);
   const legacy = legacyPayload(record);
   if (legacy !== null) return legacy;
-  const codec = codecByKind[kind];
+  const codec = codecByKind[kind] as DynamicSessionEventKindCodec | undefined;
   if (codec === undefined) throw new UnknownSessionEventKindError(kind, context);
   // `scrub(decode(…))` where the scrubbed JSON is still durable-decodable:
   // one parse per kind, and re-scrubbing on read means an unscrubbed leak is
@@ -895,7 +932,7 @@ export function decodeSessionEventPayload(value: unknown, context: string): Sess
   const kind = readString(record.kind, `${context}.kind`);
   const legacy = legacyPayload(record);
   if (legacy !== null) return legacy;
-  const codec = codecByKind[kind];
+  const codec = codecByKind[kind] as DynamicSessionEventKindCodec | undefined;
   if (codec === undefined) throw new UnknownSessionEventKindError(kind, context);
   return codec.decode(record, context);
 }

@@ -212,6 +212,29 @@ describe("firstMatchingSessionEventAfter", () => {
     });
   });
 
+  it("matches the repaired kind, not the kind originally committed, without moving cursors", () => {
+    setup(["s-one"]);
+    const id = append("s-one", { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
+    const start = encodeSessionEventCursor(0);
+    const original = firstMatchingSessionEventAfter(db(), ["s-one"], ["turn.completed"], start);
+    const highWater = currentSessionEventCursor(db());
+
+    db()
+      .prepare("UPDATE session_events SET payload = ? WHERE id = ?")
+      .run(JSON.stringify({ kind: "turn.interrupted", attachmentId: "a", turnId: "t1" }), id);
+
+    expect(
+      firstMatchingSessionEventAfter(db(), ["s-one"], ["turn.completed"], start),
+    ).toBeUndefined();
+    expect(
+      firstMatchingSessionEventAfter(db(), ["s-one"], ["turn.interrupted"], start),
+    ).toMatchObject({
+      cursor: original!.cursor,
+      event: { id, payload: { kind: "turn.interrupted" } },
+    });
+    expect(currentSessionEventCursor(db())).toBe(highWater);
+  });
+
   it("replays an event committed between two calls, which is the lossless promise", () => {
     setup(["s-one"]);
     const cursor = currentSessionEventCursor(db());

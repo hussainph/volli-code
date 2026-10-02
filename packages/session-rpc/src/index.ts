@@ -388,7 +388,9 @@ const skillSlugs = z
   .array(nonEmptyString.refine((value) => /^[A-Za-z0-9_:-]+$/.test(value), "Expected a skill slug"))
   .max(20)
   .optional();
-const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
+const uiMessageSchema = z
+  .custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage")
+  .refine(isJsonSafeUiMessage, "UIMessage payloads must contain only JSON-safe values");
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
   modelId: nonEmptyString,
@@ -1277,6 +1279,44 @@ function isUiMessage(value: unknown): value is RpcUiMessage {
     return false;
   }
   return value.parts.every((part) => isRecord(part) && typeof part.type === "string");
+}
+
+/** Preserve transcript serialization's established undefined-slot semantics while checking opaque values. */
+function isJsonSafeUiMessage(value: unknown): boolean {
+  return isJsonSafeValue(value, new Set());
+}
+
+function isJsonSafeValue(value: unknown, ancestors: Set<object>): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || ancestors.has(value)) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return Object.keys(value).every((key) => {
+        const index = Number(key);
+        return (
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < value.length &&
+          `${index}` === key &&
+          isJsonSafeValue(value[index], ancestors)
+        );
+      });
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return (
+      (prototype === Object.prototype || prototype === null) &&
+      Object.keys(value).every((key) =>
+        isJsonSafeValue((value as Record<string, unknown>)[key], ancestors),
+      )
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function isUiRole(value: unknown): value is RpcUiMessage["role"] {
