@@ -21,7 +21,7 @@
  * with a genuinely bare PATH does, which is exactly what this probe drives.
  *
  * A FAILURE here is a finding about that chain. Main output is captured before
- * the app entry runs: Playwright drains the pipes during launch(), so attaching
+ * boot readiness work: Playwright drains the pipes during launch(), so attaching
  * listeners only after launch resolves can miss a completed boot entirely.
  * On failure this captures the Electron main process's own
  * stdout/stderr (console.error lines live there, not in the renderer) plus
@@ -36,14 +36,13 @@
  */
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import bootCapture from "./lib/bare-path-boot-capture.cjs";
-
+import {
+  readBootCapture,
+  wrapperGenerationOutcome,
+  WRAPPER_READY_MARKER,
+} from "../src/main/bare-path-boot-capture.ts";
 import { createRunner, evidenceDir, launch, makeScratch, waitUntil } from "./lib/smoke-kit.mjs";
-
-const { readBootCapture, wrapperGenerationOutcome, WRAPPER_READY_MARKER } = bootCapture;
-const MAIN_PRELOAD = fileURLToPath(new URL("./lib/bare-path-boot-capture.cjs", import.meta.url));
 
 const { userDataDir, dbPath, cleanup } = await makeScratch("bare-path-env-");
 const { attempt, summarize } = createRunner();
@@ -103,7 +102,6 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    mainPreload: MAIN_PRELOAD,
     extraEnv: { PATH: BARE_PATH, VOLLI_BARE_PATH_CAPTURE_DIR: captureDir },
   });
   const rendererConsole = [];
@@ -124,7 +122,7 @@ async function main() {
           }
           const match = await waitUntil(
             "main-process login-shell PATH outcome",
-            // The preload marks the ACTUAL browser-window-created event, not
+            // Main marks the ACTUAL browser-window-created event, not
             // when Playwright eventually returns that window to this client.
             // Keep descriptors separate so interleaved chunks cannot split a line.
             () => {
