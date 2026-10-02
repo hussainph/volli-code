@@ -1559,7 +1559,7 @@ describe("Pi native adapter attach", () => {
   it("hands the runtime host the Code Mode sandbox location when main supplies one (VC-471)", () => {
     const seen: unknown[] = [];
     createPiRuntimeHost({
-      sessionDataDir: "/tmp/volli-codemode-host",
+      sessionDataDir: join(import.meta.dirname, "../../../../../.bench-tmp/volli-codemode-host"),
       codeModeSandbox: { wasmPath: "/opt/quickjs.wasm" },
       createRuntime: (options) => {
         seen.push(options.codeModeSandbox);

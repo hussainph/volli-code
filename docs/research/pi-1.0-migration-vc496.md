@@ -230,3 +230,27 @@ samples, threshold changes or unrelated production optimizations.
 The owner explicitly accepted this unresolved timing limitation and authorized
 merge **only after CI is green**. The acceptance does not turn the variance
 failures into passing measurements or change any coverage/benchmark threshold.
+
+First pushed CI attempt (`37035745801`) passed Check + Build, all package and
+desktop shards, desktop coverage, boot smoke and smoke shards 2/3 and 3/3, but
+smoke shard 1/3 failed, so the CI gate was not green. CodeQL analysis executed
+successfully but its security check reported two temporary-file alerts. SARIF
+traces for both originate solely in the existing mocked Code Mode host test's
+fixed `/tmp/volli-codemode-host` input, despite its injected `FakeRuntime`.
+That fixture now uses a workspace-local `.bench-tmp` path instead of a global
+predictable temporary path. No production filesystem semantics or security
+check was suppressed. All **159 Pi adapter tests** plus changed-file lint and
+formatting pass. The source change requires fresh CI/CodeQL, not an assumption
+that the previous analysis job's success meant the security check passed.
+
+Read-only smoke triage identified `bare-path-env-smoke.mjs` check 2: its
+12-second wrapper-ready wait expired without a ready or failure marker. The
+watched boot chain is unchanged from the rebased main; the same shard passed
+on two other PRs immediately before this run. The failure is consistent with
+runner contention, so no unrelated production code or smoke assertion was
+changed. A fresh CI run must actually pass it. Local attempts with 12-second
+and diagnostic 60-second waits also saw no marker, so they are **not passing
+evidence**; this deep worktree's workspace-local scratch profile exceeds the
+Unix socket path budget and does not match CI's short temporary profile.
+Logs remain `ci-smoke-shard1-failure.log`, `local-bare-path-env-smoke.log` and
+`local-bare-path-env-diagnostic.log` in the ignored evidence folder.
