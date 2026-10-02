@@ -1,0 +1,45 @@
+[
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "text",
+        "text": "The conversation history before this point was compacted into the following summary:\n\n<summary>\nPortable 0.99.2 summary: preserve the saved task.\n</summary>"
+      }
+    ],
+    "timestamp": 1800000000000
+  },
+  {
+    "role": "user",
+    "content": "Retained tail: continue the saved task with héllo 日本語 🙂.",
+    "timestamp": 1800000000002
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "Retained answer from 0.99.2."
+      }
+    ],
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+      "input": 11,
+      "output": 7,
+      "cacheRead": 2,
+      "cacheWrite": 0,
+      "totalTokens": 20,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "stopReason": "stop",
+    "timestamp": 1800000000003
+  }
+]

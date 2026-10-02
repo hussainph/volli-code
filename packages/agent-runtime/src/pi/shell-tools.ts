@@ -25,7 +25,7 @@
  * terminal, not this.
  */
 
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/node";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import {
   shellCommandLine,

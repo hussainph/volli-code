@@ -1,7 +1,7 @@
 import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { COMPACTION_SUMMARY_PREFIX } from "@earendil-works/pi-agent-core";
+import { COMPACTION_SUMMARY_PREFIX } from "./harness-compaction";
 import {
   ANTHROPIC_COMPACT_MIN_TRIGGER_TOKENS,
   compactProviderNative,

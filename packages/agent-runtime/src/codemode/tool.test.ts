@@ -18,7 +18,7 @@ import {
   type McpToolDefinition,
   type ToolRoute,
 } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { MCP_UNTRUSTED_DATA_WARNING, SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
 import { currentCallScope } from "../pi/call-scope";
 import { ToolOutputStore } from "../pi/tool-output";
@@ -155,6 +155,21 @@ async function run(
 }
 
 describe("the sandbox", () => {
+  it("uses Pi 1.0's safe membership check and diagnoses missing computed members without making a call", async () => {
+    const execute = vi.fn(() => "hi");
+    const f = fixture({ tools: [textTool("echo", execute)] });
+    const membership = await run(
+      f,
+      'return { present: "echo" in tools, absent: "typo" in tools };',
+    );
+    expect(membership.isError).toBe(false);
+    expect(membership.text).toContain('Returned: {"present":true,"absent":false}');
+    const missing = await run(f, 'const name = "typo"; return tools[name];', "missing");
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain("tools.typo does not exist");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("offers a program nothing but its tools: no Node, no env, no files, no network, no timers", async () => {
     const f = fixture({ tools: [textTool("echo", () => "hi")] });
     const probe = `

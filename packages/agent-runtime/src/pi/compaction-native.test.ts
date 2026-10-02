@@ -1,9 +1,7 @@
+import { MemorySessionRepo } from "../../test-fixtures/pi-0.99.2-memory";
 import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  MemorySessionRepo,
-  type Entry,
-} from "@earendil-works/pi-agent-core";
+import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
+import { type Entry } from "./harness-session";
 import {
   createModels,
   fauxProvider,

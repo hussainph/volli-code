@@ -1,15 +1,15 @@
+import { MemorySessionRepo } from "../../test-fixtures/pi-0.99.2-memory";
+import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
 import {
-  DEFAULT_COMPACTION_SETTINGS,
-  MemorySessionRepo,
-  type AgentMessage,
   type Branch,
   type CompactionEntry,
   type CustomEntry,
   type Entry,
-  type JsonValue,
   type MessageEntry,
   type Session,
-} from "@earendil-works/pi-agent-core";
+} from "./harness-session";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type JsonValue } from "@earendil-works/chord";
 import {
   createAssistantMessageEventStream,
   createModels,

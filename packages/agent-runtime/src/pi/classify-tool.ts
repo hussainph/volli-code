@@ -21,7 +21,8 @@
  * itself, which is the agent's deterministic fallback.
  */
 
-import type { AgentTool, AgentToolResult, JsonValue } from "@earendil-works/pi-agent-core/node";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { JsonValue } from "@earendil-works/chord";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import {
   DECISION_LIMITS,

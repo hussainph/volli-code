@@ -10,19 +10,21 @@ import {
   compact,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
+  shouldCompact,
+  type CompactionSettings,
+} from "./harness-compaction";
+import {
   insertEntry,
   setValue,
-  shouldCompact,
-  type AgentMessage,
   type CompactionEntry,
-  type CompactionSettings,
   type CustomEntry,
   type Entry,
   type MessageEntry,
-  type JsonValue,
   type NewEntry,
   type Session,
-} from "@earendil-works/pi-agent-core";
+} from "./harness-session";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type JsonValue } from "@earendil-works/chord";
 import type { Api, Model, Models, Tool, Usage } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
 import { prepareModelCompaction } from "./compaction-preparation";

@@ -1,9 +1,5 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
-import {
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "@earendil-works/pi-agent-core/node";
+import { BACKGROUND_CONTEXT } from "../pi/harness-env";
+import { createEditTool, createReadTool, createWriteTool } from "../pi/harness-env";
 import { describe, expect, it } from "vite-plus/test";
 import { normalizeToolPath } from "./tool-path";
 

@@ -18,7 +18,7 @@ import {
   type Context,
   type ExecutionEnv,
   type ShellExecOptions,
-} from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
 import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
 
 /**

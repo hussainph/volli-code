@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT } from "./harness-env";
 import sharp from "sharp";
 import { describe, expect, it } from "vite-plus/test";
 import {
