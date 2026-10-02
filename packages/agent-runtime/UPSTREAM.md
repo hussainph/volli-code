@@ -6,20 +6,20 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.99.2`. The 0.84.x
-  split VC-117 tracked is gone; keep the two aligned on every bump.
+- Pinned releases: `pi-agent-core`, `pi-ai` and `pi-codemode` at `1.0.0`.
+  Keep these aligned on every bump.
 - Node floor: `>=22.19.0`. ESM only.
 
 ## Packages consumed
 
 Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` `0.99.2` — `Agent`, JSONL Session
-  persistence, context-injected coding tools, and the Node execution
-  environment
-- `@earendil-works/pi-ai` `0.99.2` — model catalog, provider streams, and
+- `@earendil-works/pi-agent-core` `1.0.0` — only `Agent`, the agent loop
+  (including `runToolCall`) and their types. The removed harness is owned
+  locally; see `src/pi/vendor/pi-harness/README.md`.
+- `@earendil-works/pi-ai` `1.0.0` — model catalog, provider streams, and
   message types
-- `@earendil-works/pi-codemode` `0.99.2` (VC-471) — the Code Mode sandbox: a
+- `@earendil-works/pi-codemode` `1.0.0` (VC-471) — the Code Mode sandbox: a
   QuickJS VM (WebAssembly, from its one dependency `quickjs-wasi` 3.6.2, MIT) in
   a worker per run, whose only capability is calling the tools it is handed.
   Standalone: no Pi dependency and no Pi extension API. Used through
@@ -29,17 +29,14 @@ Direct dependencies, pinned exactly:
   `pi-agent-core`. Volli's layer over it is `src/codemode/`, and the design is
   `docs/research/code-mode-vc-471.md`.
 
-`@earendil-works/pi-telemetry` and `@earendil-works/chord` arrive transitively
-(both were already dependencies of `pi-agent-core` at 0.87.1) and neither is
-imported here. Telemetry sends nothing in this embedding: `pi-telemetry` is span
-contracts plus a no-op and an in-memory context, with no exporter and no network
-code; Pi reaches it only through an optional `telemetryContext` in a harness
-context or stream options, which this runtime never sets, so every span goes to
-`NOOP_TELEMETRY_CONTEXT`. `chord` is Pi's context, delta and service runtime,
-also with no network code. Both re-checked at the 0.99.2 bump (VC-469):
-`pi-telemetry`'s JavaScript is unchanged from 0.87.1 apart from source maps.
-The coding-agent TUI, client, and protocol packages are intentionally absent,
-as is `@earendil-works/pi-mcp`, which VC-470 adopts in the desktop app.
+`@earendil-works/chord` and `@earendil-works/pi-telemetry` are now direct,
+exact-pinned `1.0.0` dependencies for the owned compatibility modules.
+Cancellation uses chord's `Context`, `BACKGROUND_CONTEXT` and `withAbortSignal`.
+Telemetry remains a no-op in this embedding: no exporter or network code is
+added. `diff@8.0.4` and `typebox@1.3.27` are exact baseline dependencies of the
+copied edit/tool contracts. The coding-agent TUI, client and protocol packages
+remain absent. No `@earendil-works/pi-durable` dependency is introduced; VC-497
+owns that investigation. Desktop's independent `pi-mcp` pin is not changed.
 
 ## Process sandbox runtime
 
@@ -69,52 +66,31 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-Two patch files, declared in `pnpm-workspace.yaml` under `patchedDependencies`
-and stored in `patches/` at the repo root.
+One Pi patch remains, declared in `pnpm-workspace.yaml` and stored in
+`patches/` at the repo root:
 
-- `@earendil-works/pi-codemode@0.99.2` (VC-471) — adds `maxOutputChars` to
-  `CodemodeSandboxOptions` (`dist/runtime/host.js`, `dist/types.d.ts`). Upstream
-  bounds the VM's heap but not the output items the host accumulates from it,
-  so a program that called `text()` in a loop could grow Electron main's memory
-  for its whole deadline. Past the bound the execution fails as a `script`
-  error and the worker is terminated; absent, upstream behavior. Small enough to
-  offer upstream as-is.
+- `@earendil-works/pi-codemode@1.0.0` — rebased unchanged from 0.99.2;
+  upstream still lacks `maxOutputChars` and `maxCallChars`. Host/worker bounds
+  cover text, console/image output, return values, error text and serialized
+  call arguments before an oversized worker message reaches Electron main.
+  Defaults and failure text remain identical. `src/codemode/tool.test.ts`
+  covers each bound and the host/worker path.
 
-The `pi-agent-core` patch carries two independent changes, and both rebased
-unchanged onto 0.99.2 (VC-469): 0.99.2's
-`dist/harness/compaction/compaction.{js,d.ts}` and
-`dist/harness/session/jsonl/storage.js` are byte-identical to 0.87.1's, so the
-patch file and its hash are the 0.87.1 ones under the new version's name.
+The deleted `pi-agent-core@0.99.2` patch is folded into owned TypeScript:
 
-- `@earendil-works/pi-agent-core@0.99.2` — adds an optional `estimateMessage`
-  parameter to `prepareCompaction` and `findCutPoint` in
-  `dist/harness/compaction/compaction.{js,d.ts}`. Upstream hardcodes pi's own
-  `estimateTokens` at both the cut-point scan and the `tokensBefore` total, so
-  the cut point is chosen on a different estimate than the one the runtime
-  budgets against. `prepareModelCompaction` passes the model-aware counter
-  (`estimateMessageTokens` ∘ `withoutReasoning`); a caller that passes nothing
-  gets upstream behavior unchanged, which is what keeps the patch small and the
-  seam additive. Upstream ships no equivalent hook as of 0.99.2. At the 0.87.1
-  bump (VC-421) the patch rebased unchanged:
-  `dist/harness/compaction/compaction.{js,d.ts}` are byte-identical between
-  0.85.1 and 0.87.1 apart from the patched hunks; the 0.86/0.87
-  transcript-context work did not touch the harness compaction module.
-- `@earendil-works/pi-agent-core@0.99.2` (VC-462) — re-opening a JSONL sidecar
-  (`JsonlStorage.openV4` in `dist/harness/session/jsonl/storage.js`) no longer
-  holds the event loop for the whole file. Upstream reads the file as one
-  string, splits it, then parses and replays every line in one synchronous
-  pass: about 190 ms of blocked Electron main for a 47 MB sidecar (VC-445). The
-  patch reads the bytes (`readBinaryFile`, already on Pi's `FileSystem`),
-  decodes newline-terminated batches of at most 256 KiB, and parses and replays
-  line by line, yielding (`setImmediate`, else `setTimeout(0)`) whenever a slice
-  has run 8 ms. It also drops `storage.js`'s `sourceMappingURL`, since the
-  shipped map describes the unpatched file. Recovered state, torn-tail repair
-  and the `line N` error are unchanged; `src/pi/sidecar-load.test.ts` pins
-  that against a large sidecar and runs Pi's `SessionRepo` conformance on the
-  patched repo. The write-up
-  that could go upstream as-is is in
-  `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`. Upstream ships no
-  equivalent as of 0.99.2; drop the hunk once it does.
+- `vendor/pi-harness/compaction/compaction.ts`: optional `estimateMessage`
+  in `findCutPoint` and `prepareCompaction`; the model-aware estimator prices
+  both cuts and `tokensBefore`. Omitted, upstream behavior. Covered by
+  `src/pi/compaction-preparation.test.ts`.
+- `vendor/pi-harness/session/jsonl/storage.ts`: V4 binary/newline-batched replay
+  yields after 8 ms, preserving recovered state, UTF-8/BOM, torn-tail repair,
+  and corrupt-line numbering. Covered by `src/pi/sidecar-load.test.ts` and
+  retained SessionRepo conformance tests. The original write-up remains
+  `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`.
+
+All paths above are under `src/pi/`. See the vendor README for npm/source-map
+provenance, MIT notice, every retained module and the omitted harness paths.
+Session Engine remains the durability authority; JSONL format does not change.
 
 Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
 (`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale
@@ -139,16 +115,15 @@ file tool runs its `path` through it before opening anything, so policy that
 reads the raw argument judges a different file than the tool touches —
 `write { path: "@.git/hooks/pre-commit" }` lands on `.git/hooks/pre-commit`.
 
-Copied rather than imported because the package `exports` map is closed to `.`,
-`./node` and `./session/testing`, and the function is module-private within a
-file none of those re-export.
+Originally copied because the normalization helper was module-private. In Pi
+1.0 the four tool implementations are now owned under `src/pi/vendor/pi-harness`;
+the policy-side replica remains pure and separately tested.
 
 A copy is a divergence waiting to happen, so it is not trusted on inspection:
-`pi-tool-path.test.ts` drives Pi's real `createWriteTool`/`createEditTool`
+`pi-tool-path.test.ts` drives the retained `createWriteTool`/`createEditTool`
 against a stub `ExecutionEnv` that records the string Pi passes to
-`absolutePath`, and asserts the replica agrees for every transformation. Bumping
-the pin fails that test if Pi changes the normalization. Re-check it, and this
-section, on every version bump.
+`absolutePath`, and asserts the replica agrees for every transformation. Changes
+to the owned normalization code must preserve this agreement.
 
 `src/pi/tool-output.ts` restates a format, not code: the middle cut that
 `pi-coding-agent` 0.99's MCP extension applies to long results (Codex's
@@ -268,6 +243,42 @@ tarballs:
 
 The 0.99.2 built-in model catalog was generated 2026-09-30 and lists 42
 providers (adding `typesafe`, which serves only classifier models).
+
+## The 1.0 bump (VC-496)
+
+Audited all entries after 0.99.2 in the release-tag changelogs for
+[agent](https://github.com/earendil-works/pi/blob/v1.0.0/packages/agent/CHANGELOG.md),
+[AI](https://github.com/earendil-works/pi/blob/v1.0.0/packages/ai/CHANGELOG.md), and
+[codemode](https://github.com/earendil-works/pi/blob/v1.0.0/packages/codemode/CHANGELOG.md):
+
+- **Core breaking removal:** `./node`, `./harness/*`, and `./experimental/pico3`
+  are gone. All production/test imports now use the root for Agent/loop types,
+  chord for cancellation, or the three owned harness facades. Harness events
+  were only used to name compaction reasons; these are now a local union of
+  the unchanged reasons. `runToolCall`, `AgentContext` and `AgentLoopConfig`
+  survive. `convertToLlm` does not: its existing transcript conversion is
+  retained locally. Removed orchestration, skills, prompt loader, search,
+  telemetry schemas and pico3 were never used and are not copied. The three
+  pure prompt grammar functions are a frozen, test-only oracle, not a product
+  dependency on deleted exports.
+- **AI:** no breaking changes in this interval. Anthropic OAuth gains a
+  copy-code choice through the existing login prompt bridge; OAuth browser
+  pages change their logo. OpenAI Responses now drops an incompatible `fc_`
+  item ID when replaying grammar calls as `custom_tool_call` (which requires
+  `ctc_`). `src/pi/pi-1.0-compat.test.ts` exercises same-provider and gateway
+  replay, including the corresponding output. No transcript rewrite is needed.
+- **Codemode:** new `renderToolOutputType()` is additive; Volli's existing
+  declaration renderer stays. Reading a missing tool/global member now throws
+  a diagnostic rather than returning `undefined`; supported membership tests
+  use `"name" in tools`. Static tool names still fail Volli's admission check
+  before execution; computed reads reach the new diagnostic, cannot call a
+  tool, and are covered by `src/codemode/tool.test.ts`. The store-size message
+  is clearer; limits/host authority are unchanged.
+- **Unreleased is not 1.0.0:** upstream main's "Selected model is at capacity"
+  retry fix is under `[Unreleased]`, and the published 1.0.0 classifier does
+  not contain it. This migration does not claim that fix shipped or silently
+  substitute a main-branch build for the exact release pin. The unreleased
+  inline-Anthropic-tool beta change is likewise not taken.
 
 ## Credentials
 

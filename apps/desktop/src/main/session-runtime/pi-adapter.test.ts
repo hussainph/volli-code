@@ -4149,6 +4149,23 @@ describe("Protection mode (VC-480)", () => {
 });
 
 /** Real observation/protection stores; only the model executor is a test double. */
+async function durableApprovalCard(
+  f: { host: ReturnType<typeof createSessionRuntime> },
+  sessionId: string,
+) {
+  // A durable card can require artifact I/O. Bound elapsed time, not event
+  // loop turns: twenty immediate ticks can finish before that I/O settles.
+  return vi.waitFor(
+    async () => {
+      await flush();
+      const active = (await f.host.snapshot({ sessionId })).projection.interactions.active;
+      if (active.length === 0) throw new Error("no durable approval card");
+      return active[0]!;
+    },
+    { timeout: 2_000, interval: 10 },
+  );
+}
+
 describe("Protection across the durable observation boundary", () => {
   let db: TestDb;
   let clock = 10_000;
@@ -4255,20 +4272,6 @@ describe("Protection across the durable observation boundary", () => {
     });
   }
 
-  async function card(f: ReturnType<typeof launch>, sessionId: string) {
-    // A durable card can require artifact I/O. Bound elapsed time, not event
-    // loop turns: twenty immediate ticks can finish before that I/O settles.
-    return vi.waitFor(
-      async () => {
-        await flush();
-        const active = (await f.host.snapshot({ sessionId })).projection.interactions.active;
-        if (active.length === 0) throw new Error("no durable approval card");
-        return active[0]!;
-      },
-      { timeout: 2_000, interval: 10 },
-    );
-  }
-
   async function answer(
     f: ReturnType<typeof launch>,
     sessionId: string,
@@ -4290,7 +4293,7 @@ describe("Protection across the durable observation boundary", () => {
     const f = fixture();
     const sessionId = await start(f);
     const pending = run(f, [writeScope("/outside/docs/a.md"), writeScope("/outside/.git/config")]);
-    const interaction = await card(f, sessionId);
+    const interaction = await durableApprovalCard(f, sessionId);
     expect(interaction.approval?.reason).toBe("outside; git internals");
     expect((await answer(f, sessionId, interaction.id)).receipt?.status).toBe("accepted");
     expect(await pending).toEqual({ outcome: "allow" });
@@ -4303,7 +4306,7 @@ describe("Protection across the durable observation boundary", () => {
     const f = fixture();
     const sessionId = await start(f);
     const pending = run(f, [{ ...writeScope("/outside/a.md"), stage: 0 }]);
-    const interaction = await card(f, sessionId);
+    const interaction = await durableApprovalCard(f, sessionId);
     expect(interaction.approval?.held).toBeNull();
     await answer(f, sessionId, interaction.id, "reject");
     expect(await pending).toMatchObject({ outcome: "deny" });
@@ -4332,10 +4335,10 @@ describe("Protection across the durable observation boundary", () => {
     });
     const [row] = listApprovals(db.db, "project-1");
     const pending = run(f, [first, second]);
-    const initial = await card(f, sessionId);
+    const initial = await durableApprovalCard(f, sessionId);
     revokeApproval(db.db, row.id, clock++);
     await answer(f, sessionId, initial.id);
-    const retry = await card(f, sessionId);
+    const retry = await durableApprovalCard(f, sessionId);
     expect(retry.id).not.toBe(initial.id);
     expect(retry.id).toMatch(/^approval-retry:1:/u);
     expect(
@@ -4359,7 +4362,7 @@ describe("Protection across the durable observation boundary", () => {
       if (decision.outcome === "allow") execute();
     });
     const failure = expect(pending).rejects.toThrow("no such table");
-    const interaction = await card(f, sessionId);
+    const interaction = await durableApprovalCard(f, sessionId);
     await answer(f, sessionId, interaction.id);
     await failure;
     expect(execute).not.toHaveBeenCalled();
@@ -4371,7 +4374,7 @@ describe("Protection across the durable observation boundary", () => {
     db.db.exec(`CREATE TRIGGER fail_grant BEFORE INSERT ON authority_approvals
       BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     const pending = run(f);
-    const interaction = await card(f, sessionId);
+    const interaction = await durableApprovalCard(f, sessionId);
     const result = await answer(f, sessionId, interaction.id, "project");
     expect(result.receipt).toMatchObject({
       status: "rejected",
@@ -4387,7 +4390,7 @@ describe("Protection across the durable observation boundary", () => {
     const prior = fixture();
     const sessionId = await start(prior);
     const first = run(prior);
-    const initialCard = await card(prior, sessionId);
+    const initialCard = await durableApprovalCard(prior, sessionId);
     await answer(prior, sessionId, initialCard.id, "session");
     expect(await first).toEqual({ outcome: "allow" });
     const attachmentId = (await prior.host.snapshot({ sessionId })).projection.liveExecutor!.id;
@@ -4434,7 +4437,7 @@ describe("Protection across the durable observation boundary", () => {
       )
       .toEqual([]);
     const pending = run(restarted, [writeScope("/another/a.md")]);
-    const newCard = await card(restarted, sessionId);
+    const newCard = await durableApprovalCard(restarted, sessionId);
     await answer(restarted, sessionId, newCard.id, "session");
     expect(await pending).toEqual({ outcome: "allow" });
     expect(listApprovals(db.db, "project-1")).toHaveLength(2);
@@ -4445,7 +4448,7 @@ describe("Protection across the durable observation boundary", () => {
     const prior = fixture();
     const sessionId = await start(prior);
     void run(prior); // no answer, no release: the old process loses this parked promise
-    const oldCard = await card(prior, sessionId);
+    const oldCard = await durableApprovalCard(prior, sessionId);
     const attachmentId = (await prior.host.snapshot({ sessionId })).projection.liveExecutor!.id;
     expect(listApprovals(db.db, "project-1")).toEqual([]);
     db.db.close();
@@ -4484,7 +4487,7 @@ describe("Protection across the durable observation boundary", () => {
 
     await restarted.model.observe({ kind: "turn", state: "started", turnId: "turn-retry" });
     const retried = run(restarted);
-    const newCard = await card(restarted, sessionId);
+    const newCard = await durableApprovalCard(restarted, sessionId);
     expect(newCard.id).not.toBe(oldCard.id);
     await answer(restarted, sessionId, newCard.id, "session");
     expect(await retried).toEqual({ outcome: "allow" });
@@ -4493,7 +4496,7 @@ describe("Protection across the durable observation boundary", () => {
     expect(row.provenance.interactionId).toBe(newCard.id);
     revokeApproval(db.db, row.id, clock++);
     const revoked = run(restarted);
-    const revokedCard = await card(restarted, sessionId);
+    const revokedCard = await durableApprovalCard(restarted, sessionId);
     await answer(restarted, sessionId, revokedCard.id, "reject");
     expect(await revoked).toMatchObject({ outcome: "deny" });
   });

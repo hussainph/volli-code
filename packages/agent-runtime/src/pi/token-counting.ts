@@ -8,7 +8,8 @@
 import { Buffer } from "node:buffer";
 import { countTokens as countO200k } from "gpt-tokenizer/encoding/o200k_base";
 import { countTokens as countCl100k } from "gpt-tokenizer/encoding/cl100k_base";
-import { calculateContextTokens, type AgentMessage } from "@earendil-works/pi-agent-core";
+import { calculateContextTokens } from "./harness-compaction";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   getCurrentTools,
   getSystemMessageText,

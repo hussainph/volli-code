@@ -1,4 +1,4 @@
-import { branchTip, value as sessionValue } from "@earendil-works/pi-agent-core";
+import { branchTip, value as sessionValue } from "./harness-session";
 
 /** The one Pi branch Volli reads and writes. */
 export const MAIN_BRANCH = "main";

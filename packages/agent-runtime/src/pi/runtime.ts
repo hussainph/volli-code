@@ -11,25 +11,25 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
+  type CompactionSettings,
+} from "./harness-compaction";
+import {
   type AgentEvent,
   type AgentMessage,
   type AgentOptions,
-  type Branch,
-  type CompactionSettings,
-  type HarnessEvent,
-  type CustomEntry,
-  type Entry,
-  type JsonValue,
-  type MessageEntry,
-  type Session,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
 import {
-  Agent,
-  JsonlSessionRepo,
-  NodeExecutionEnv,
-  type ExecutionEnv,
-} from "@earendil-works/pi-agent-core/node";
+  type Branch,
+  type CustomEntry,
+  type Entry,
+  type MessageEntry,
+  type Session,
+} from "./harness-session";
+import { type JsonValue } from "@earendil-works/chord";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { JsonlSessionRepo } from "./harness-session";
+import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
   getSupportedThinkingLevels,
   type AssistantMessage,
@@ -218,20 +218,12 @@ function withOpenCodeGoSessionHeader(
  * rather than a divergence nobody notices. The list is also what validates a
  * persisted marker on recovery.
  *
- * Pi 0.85.0 deleted the named `CompactionReason` type. The three words did not
- * change — they are still `manual`, `threshold` and `overflow` — but they now
- * exist only as an inline union inside the harness event payloads, so the type
- * has to be recovered from one of those rather than imported by name. Doing it
- * this way rather than restating the union keeps the check honest: it still
- * fails to compile if Pi ever drops or renames one of the three.
- *
- * The check is one-directional now, and deliberately. Volli names a fourth
- * reason — `checkpoint`, a provider-native checkpoint this Session can no
- * longer use — that Pi has no producer for and no word for, so the assertion
- * is that each of PI's reasons is still one of VOLLI's rather than that the
- * two lists are equal.
+ * Pi 1.0 removed the harness event types. These are now Volli-owned legacy
+ * sidecar reasons, not an upstream event contract. Keep their three spellings
+ * for existing observations. Volli also names `checkpoint`, a provider-native
+ * checkpoint this Session can no longer use, so the assertion stays one-way.
  */
-type PiCompactionReason = Extract<HarnessEvent, { type: "compaction_start" }>["reason"];
+type PiCompactionReason = "manual" | "threshold" | "overflow";
 const PI_COMPACTION_REASONS = [
   "manual",
   "threshold",

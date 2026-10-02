@@ -8,17 +8,16 @@
  * the root barrel reaches `node:` builtins through `@earendil-works/pi-ai`.
  * That header explains the why; this file is the enforcement.
  *
- * This package CAN import Pi (it is the Agent Runtime's own dependency), so the
- * two implementations are run side by side over a corpus that covers every
- * placeholder form and every quoting edge. A Pi upgrade that changes the
- * grammar fails here rather than silently sending a differently-expanded prompt
- * months later.
+ * Pi 1.0 removed these helpers with the harness. A frozen, test-only copy of
+ * 0.99.2's last grammar is now the compatibility oracle. The two implementations
+ * run side by side over every placeholder form and quoting edge without keeping
+ * an unused filesystem template loader in the product.
  */
 import {
   formatPromptTemplateInvocation as piFormatPromptTemplateInvocation,
   parseCommandArgs as piParseCommandArgs,
   substituteArgs as piSubstituteArgs,
-} from "@earendil-works/pi-agent-core";
+} from "../test-fixtures/pi-0.99.2-prompt-templates";
 import { formatPromptTemplateInvocation, parseCommandArgs, substituteArgs } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 

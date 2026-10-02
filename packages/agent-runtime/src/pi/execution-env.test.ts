@@ -6,7 +6,7 @@ import {
   executeShellWithCapture,
   type ExecutionEnv,
   type ShellCaptureOptions,
-} from "@earendil-works/pi-agent-core";
+} from "./harness-env";
 import { describe, expect, it } from "vite-plus/test";
 import { piExecutionEnv, scopedEnvironment, sessionCommandEnvironment } from "./execution-env";
 
