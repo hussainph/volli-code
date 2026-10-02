@@ -17,8 +17,11 @@ import {
   SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
   SUBAGENT_NOTICE_STATES,
   WATCH_NOTICE_FACTS,
+  formatShellRuntime,
+  shellStanding,
   shortSessionId,
   type ApprovalUsedHostNotice,
+  type BackgroundShellHostNotice,
   type SubagentNoticeReason,
   type SubagentNoticeState,
   type WatchNoticeEvent,
@@ -61,7 +64,8 @@ export type TranscriptHostNotice =
   | BrowserHoldNotice
   | WatchNotice
   | UnknownHostNotice
-  | ApprovalUsedHostNotice;
+  | ApprovalUsedHostNotice
+  | BackgroundShellHostNotice;
 
 /**
  * Read one transcript message as a host notice.
@@ -93,8 +97,15 @@ export function readHostNotice(
 
 function readSharedNotice(
   value: unknown,
-): SubagentNotice | BrowserHoldNotice | WatchNotice | ApprovalUsedHostNotice | null {
+):
+  | SubagentNotice
+  | BrowserHoldNotice
+  | WatchNotice
+  | ApprovalUsedHostNotice
+  | BackgroundShellHostNotice
+  | null {
   const notice = recordOf(value);
+  if (notice?.kind === "background-shell") return readShellNotice(notice);
   if (notice?.kind === "approval-used") {
     const approvalId = nonEmptyString(notice.approvalId);
     return approvalId !== null &&
@@ -143,6 +154,46 @@ function readSharedNotice(
     };
   }
   return null;
+}
+
+/** A background shell's notice (VC-495); anything this build cannot fully read is unknown, not a person. */
+function readShellNotice(notice: Record<string, unknown>): BackgroundShellHostNotice | null {
+  const shellId = nonEmptyString(notice.shellId);
+  if (shellId === null || typeof notice.label !== "string") return null;
+  if (notice.event === "matched") {
+    const pattern = nonEmptyString(notice.pattern);
+    return pattern === null || typeof notice.regex !== "boolean"
+      ? null
+      : {
+          kind: "background-shell",
+          event: "matched",
+          shellId,
+          label: notice.label,
+          pattern,
+          regex: notice.regex,
+        };
+  }
+  if (notice.event !== "exited") return null;
+  const { code, signal, runtimeMs, byPerson } = notice;
+  if (
+    (code !== null && typeof code !== "number") ||
+    (signal !== null && typeof signal !== "string") ||
+    typeof runtimeMs !== "number" ||
+    !(runtimeMs >= 0) ||
+    typeof byPerson !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    kind: "background-shell",
+    event: "exited",
+    shellId,
+    label: notice.label,
+    code,
+    signal,
+    runtimeMs,
+    byPerson,
+  };
 }
 
 function readHistoricalSubagent(text: string): SubagentNotice | null {
@@ -334,6 +385,33 @@ export function watchNoticeCopy(notice: WatchNotice): WatchNoticeCopy {
   return {
     headline: lines.length === 1 ? lines[0]! : `${lines.length} watched changes`,
     lines,
+  };
+}
+
+export interface ShellNoticeCopy {
+  headline: string;
+  /** `exited 3`, `exited by SIGTERM`, or `matched`. */
+  state: string;
+  note: string;
+}
+
+/** The words a person reads for a background shell's notice (VC-495). */
+export function shellNoticeCopy(notice: BackgroundShellHostNotice): ShellNoticeCopy {
+  const label = notice.label.trim();
+  const headline = label.length > 0 ? label : `Shell ${notice.shellId.slice(0, 8)}`;
+  if (notice.event === "matched") {
+    return {
+      headline,
+      state: "matched",
+      note: notice.regex
+        ? `Printed a line matching /${notice.pattern}/.`
+        : `Printed ${JSON.stringify(notice.pattern)}.`,
+    };
+  }
+  return {
+    headline,
+    state: shellStanding({ state: "exited", code: notice.code, signal: notice.signal }),
+    note: `${notice.byPerson ? "You ended it. " : ""}Ran ${formatShellRuntime(notice.runtimeMs)}.`,
   };
 }
 

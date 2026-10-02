@@ -159,7 +159,8 @@ import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
-  createDesktopSessionEngine,
+  createCheckpointFailureReporter,
+  createSqliteSessionLedger,
   createScheduledResumeHost,
   createSessionReadWatch,
   createSessionWatchdog,
@@ -178,7 +179,9 @@ import {
 } from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
-import { sessionRootThreadId } from "@volli/session-engine";
+import { createSessionEngine, sessionRootThreadId } from "@volli/session-engine";
+import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
+import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
@@ -371,8 +374,9 @@ import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { OrphanProcessService } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
-import { BackgroundShellHost } from "./shell/background-shell-host";
+import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
+import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -942,6 +946,13 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // One transaction queue for Session facts AND host notices. put() must
+  // commit before submission, never ride inside another writer's transaction.
+  const sessionLedger = watchedDb === null ? null : createSqliteSessionLedger(watchedDb);
+  const hostNoticeOutbox =
+    watchedDb === null || sessionLedger === null
+      ? null
+      : createSqliteHostNoticeOutbox(watchedDb, sessionLedger);
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
@@ -983,8 +994,17 @@ app.whenReady().then(async () => {
   // is the only place the engine is made, so no caller can hold an unwatched
   // one. See `session-wake.ts`.
   const sessionWakeBus =
-    watchedDb !== null
-      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+    watchedDb !== null && sessionLedger !== null
+      ? createSessionWakeBus(
+          createSessionEngine({
+            ledger: sessionLedger,
+            clock: { now: Date.now },
+            ids: { next: () => randomUUID() },
+            onProjectionCheckpointFailure: createCheckpointFailureReporter(),
+            yieldToHost: () => new Promise<void>((resolve) => setImmediate(resolve)),
+          }),
+          { db: watchedDb },
+        )
       : null;
   // Unread, decided here because main is the only process that sees every turn
   // boundary AND honestly knows which window is focused and what it is showing
@@ -1508,8 +1528,15 @@ app.whenReady().then(async () => {
    * is built here beside the tokens rather than in the ready path; its
    * renderer doors are registered there, once a window can receive them.
    */
+  // Where a background shell's exit or match is steered into the Session that
+  // started it (VC-495): the same delivery path a watch notice rides. Composed
+  // below, once the Session runtime exists; a shell that speaks before then, or
+  // in a build with no runtime, has nobody to tell.
+  let relayShellNotice: ((notice: BackgroundShellNotice) => void) | null = null;
   const backgroundShells = new BackgroundShellHost({
     redactOutput: (text) => secrets.store.redact(text),
+    redactNoticeOutput: (text) => secrets.store.redactPartial(text),
+    onNotice: (notice) => relayShellNotice?.(notice),
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     // One row per started shell (VC-341). A background shell is the door a
@@ -2556,6 +2583,31 @@ app.whenReady().then(async () => {
     });
     return watches;
   };
+  // Shell notices are the first durable producer. Other notice producers
+  // retain their optional ports and can adopt this same mechanism separately.
+  const shellHostNotices =
+    sessionRuntime === null || hostNoticeOutbox === null
+      ? null
+      : createHostNoticeDelivery({
+          runtime: sessionRuntime,
+          outbox: hostNoticeOutbox,
+          ...(sessionWakeBus === null
+            ? {}
+            : {
+                subscribeEvents: (listener) =>
+                  sessionWakeBus.subscribe(({ event }) => listener(event)),
+              }),
+          report: (message) => console.error(`[volli] ${message}`),
+        });
+  if (sessionRuntime !== null && shellHostNotices !== null) {
+    const relay = relayShellNotices({
+      runtime: sessionRuntime,
+      delivery: shellHostNotices,
+      report: (message) => console.error(`[volli] ${message}`),
+    });
+    // The relay resolves, never rejects: a notice it could not deliver is in the log.
+    relayShellNotice = (notice) => void relay(notice);
+  }
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
   // rest: the project list grows, and the facade is built further down this
@@ -2751,6 +2803,7 @@ app.whenReady().then(async () => {
     shutdownNativeSessions: async () => {
       sessionWatchdog?.stop();
       scheduledResumeHost?.stop();
+      shellHostNotices?.close();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
@@ -2894,6 +2947,13 @@ app.whenReady().then(async () => {
         console.error("[volli] failed to recover delegations:", errorMessage(error));
       }
     }
+  }
+  // After stale attachments are reconciled and all executor ports exist.
+  // recover() only reconstructs delivery; it never waits for an idle turn.
+  try {
+    await shellHostNotices?.recover();
+  } catch (error) {
+    console.error("[volli] failed to recover host notices:", errorMessage(error));
   }
   // A quit before the activity watch's 60ms flush must not lose Ticket history.
   // Off the boot critical path; the indexed kind scan only folds resume candidates.

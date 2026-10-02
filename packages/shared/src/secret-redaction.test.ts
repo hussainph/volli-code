@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isSensitiveKey, redactPayloadSecrets } from "./secret-redaction";
+import {
+  isSensitiveKey,
+  payloadSecretSpans,
+  pemSecretSpans,
+  redactPayloadSecrets,
+  type PayloadSecretSpan,
+} from "./secret-redaction";
 
 // Every credential in this file is an inert, deliberately fake fixture.
 const AWS_KEY = "AKIA0123456789ABCDEF";
 const AWS_SESSION_KEY = "ASIA0123456789ABCDEF";
 const JWT = "eyJhbGciOiJub25lIn0.eyJmaXh0dXJlIjp0cnVlfQ.ZHVtbXk";
+
+function maskSpans(value: string, spans: PayloadSecretSpan[]): string {
+  const characters = value.split("");
+  for (const { start, end } of spans) {
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThanOrEqual(start);
+    expect(end).toBeLessThanOrEqual(value.length);
+    characters.fill(" ", start, end);
+  }
+  return characters.join("");
+}
 
 describe("sensitive object keys", () => {
   it.each([
@@ -58,6 +75,10 @@ describe("credential text", () => {
     "-----BEGIN CERTIFICATE-----\nZHVtbXk=\n-----END CERTIFICATE-----",
   ])("scrubs a standalone fixture without its surrounding text: %s", (secret) => {
     expect(redactPayloadSecrets(`before ${secret} after`)).toBe("before [redacted] after");
+    const raw = `🔐 before ${secret} after`;
+    expect(maskSpans(raw, payloadSecretSpans(raw))).toBe(
+      `🔐 before ${" ".repeat(secret.length)} after`,
+    );
   });
 
   it("scrubs multiple, nested, and overlapping PEM blocks without leaking bodies or command tails", () => {
@@ -75,6 +96,30 @@ describe("credential text", () => {
     // An unmatched outer label must not hide a complete inner block.
     expect(redactPayloadSecrets(`${a}${b}dummy${endB}${tail}`)).toBe(`${a}[redacted]${tail}`);
     expect(redactPayloadSecrets(`token budget ${endA}`)).toBe(`token budget ${endA}`);
+  });
+
+  it("exposes original complete and unfinished PEM spans for live redaction", () => {
+    const a = "-----BEGIN A-----body-----END A-----";
+    expect(pemSecretSpans(a)).toEqual([{ start: 0, end: a.length }]);
+    expect(pemSecretSpans(`${a}\nready`, true)).toEqual([{ start: 0, end: a.length }]);
+    expect(pemSecretSpans("safe\n", true)).toEqual([]);
+    const partial = "safe\n-----BEGIN PRIVATE";
+    expect(pemSecretSpans(partial, true)).toEqual([{ start: 5, end: partial.length }]);
+    const nested = "-----BEGIN A----------BEGIN B-----body-----END B-----";
+    expect(pemSecretSpans(nested, true)).toEqual([
+      { start: 0, end: nested.length },
+      { start: 17, end: nested.length },
+    ]);
+    const crossing = "-----BEGIN A-----\n-----BEGIN B-----\n-----END A-----\nOPAQUE_BODY\n";
+    expect(pemSecretSpans(crossing, true)).toEqual([
+      { start: 0, end: crossing.indexOf("\nOPAQUE_BODY") },
+      { start: 18, end: crossing.length },
+    ]);
+    const several = `${a}\n${a}\n-----BEGIN C-----pending`;
+    expect(pemSecretSpans(several, true).at(-1)).toEqual({
+      start: (a.length + 1) * 2,
+      end: several.length,
+    });
   });
 
   it.each([
@@ -237,6 +282,7 @@ describe("preservation and repeatability", () => {
     "-----BEGIN PRIVATE KEY----- without an end",
   ])("returns a near miss unchanged: %s", (clean) => {
     expect(redactPayloadSecrets(clean)).toBe(clean);
+    expect(payloadSecretSpans(clean)).toEqual([]);
   });
 
   it("never truncates command tails or changes long credential-free arguments", () => {
@@ -278,4 +324,123 @@ it.each([
   expect(safe).not.toContain("dummy");
   expect(safe).not.toContain("/private");
   expect(safe).toContain("rm -rf /important");
+});
+
+it("scans long cookie-attribute whitespace and near misses without backtracking", () => {
+  const tabs = "\t".repeat(50_000);
+  const raw = `Cookie: session=dummy;${tabs}csrf${tabs}= ${tabs}second; HttpOnly; Secure; Partitioned; echo tail`;
+  expect(redactPayloadSecrets(raw)).toBe("Cookie: [redacted]; echo tail");
+  expect(maskSpans(raw, payloadSecretSpans(raw))).not.toContain("second");
+  expect(redactPayloadSecrets(`Cookie: session=dummy;${tabs}near_miss${tabs}; echo tail`)).toBe(
+    `Cookie: [redacted];${tabs}near_miss${tabs}; echo tail`,
+  );
+});
+
+describe("original-source payload spans", () => {
+  it.each([
+    ["https://alice:dummy@example.com/path", "://alice:dummy@"],
+    ["ftp://dummy@example.com/path", "://dummy@"],
+    ["curl -u alice:dummy", "alice:dummy"],
+    ["curl --proxy-user='alice:dummy password'", "'alice:dummy password'"],
+    ["Authorization: Basic ZHVtbXk=", "Authorization: Basic ZHVtbXk="],
+    ["Authorization: Bearer dummy-secret", "Authorization: Bearer dummy-secret"],
+    ["Bearer dummy.foo.bar", "Bearer dummy.foo.bar"],
+    ["Basic ZHVtbXk6c2VjcmV0", "Basic ZHVtbXk6c2VjcmV0"],
+    [
+      "Cookie: session=dummy; csrf=second; HttpOnly",
+      "Cookie: session=dummy; csrf=second; HttpOnly",
+    ],
+    [
+      "Set-Cookie: session=dummy; Path=/private; Secure",
+      "Set-Cookie: session=dummy; Path=/private; Secure",
+    ],
+    ["TOKEN='dummy with spaces'", "TOKEN='dummy with spaces'"],
+    ["password: dummy", "password: dummy"],
+    ["CLIENT_SECRET=", "CLIENT_SECRET="],
+    ["api key = dummy", "api key = dummy"],
+  ])("covers %s at unchanged UTF-16 offsets", (form, protectedText) => {
+    const raw = `🔐 before ${form}; echo tail`;
+    const start = raw.indexOf(protectedText);
+    const spans = payloadSecretSpans(raw);
+    expect(spans).toContainEqual({ start, end: start + protectedText.length });
+    const masked = maskSpans(raw, spans);
+    expect(masked.slice(start, start + protectedText.length)).toBe(
+      " ".repeat(protectedText.length),
+    );
+    expect(masked).toContain("🔐 before ");
+    expect(masked).toContain("; echo tail");
+  });
+
+  it("retains offsets across every pass and repeated calls", () => {
+    const pem = "-----BEGIN A-----\nbody\n-----END A-----";
+    const forms = [
+      pem,
+      "https://user:dummy@host/path",
+      "curl -u alice:dummy",
+      "Cookie: session=dummy",
+      "ghp_dummy",
+      AWS_KEY,
+      JWT,
+      "Authorization: Bearer dummy",
+      "Basic ZHVtbXk=",
+      "TOKEN='dummy value'",
+    ];
+    const raw = `🔐 ${forms.join("; ")}; echo tail`;
+    const spans = payloadSecretSpans(raw);
+    const masked = maskSpans(raw, spans);
+    for (const secret of [
+      "body",
+      "user:dummy",
+      "alice:dummy",
+      "session=dummy",
+      "ghp_dummy",
+      AWS_KEY,
+      JWT,
+      "Bearer dummy",
+      "ZHVtbXk=",
+      "dummy value",
+    ]) {
+      expect(masked).not.toContain(secret);
+    }
+    expect(masked).toContain("host/path");
+    expect(masked).toContain("; echo tail");
+    expect(payloadSecretSpans(raw)).toEqual(spans);
+    const safe = redactPayloadSecrets(raw);
+    expect(redactPayloadSecrets(safe)).toBe(safe);
+  });
+
+  it.each([
+    'TOKEN=ghp_dummy"remaining secret"; echo tail',
+    "TOKEN=sk-dummy'other secret'; echo tail",
+    "Bearer ghp_dummy.sensitive-suffix; echo tail",
+    'curl -u alice:ghp_dummy"remaining secret"; echo tail',
+    'Cookie: session=ghp_dummy"remaining secret"; csrf=second; echo tail',
+    "-----BEGIN A-----'-----END A----- TOKEN='remaining secret'; echo tail",
+    "-----BEGIN A-----'-----END A----- TOKEN=ghp_dummy'remaining secret'; echo tail",
+    "-----BEGIN A----------BEGIN B-----body-----END A-----rest-----END B----- TOKEN=dummy; echo tail",
+  ])("covers overlapping shared forms without losing word or quote syntax: %s", (raw) => {
+    const masked = maskSpans(raw, payloadSecretSpans(raw));
+    expect(masked).not.toMatch(/dummy|secret|sensitive|second|body|rest/);
+    expect(masked).toContain("; echo tail");
+  });
+
+  it.each([
+    ["Bearer dummy-sensitive; echo tail", "Bearer"],
+    ["sk-dummy-sensitive; echo tail", "-"],
+    ["ghp_dummy_sensitive; echo tail", "ghp_"],
+    ["stored-prefix\nBearer dummy-sensitive; echo tail", "stored-prefix\nBearer"],
+    ["Bearer dummy-sensitive\nstored-suffix; echo tail", "dummy-sensitive\nstored-suffix"],
+  ])("unions original exact spans even when %s overlaps %s", (raw, stored) => {
+    const start = raw.indexOf(stored);
+    const spans = [...payloadSecretSpans(raw), { start, end: start + stored.length }];
+    const safe = redactPayloadSecrets(maskSpans(raw, spans));
+    expect(safe).not.toMatch(/dummy|sensitive|stored/);
+    expect(safe).toContain("; echo tail");
+  });
+
+  it("leaves incomplete PEM collection to the live-preview API", () => {
+    const raw = "before -----BEGIN PRIVATE KEY----- pending";
+    expect(payloadSecretSpans(raw)).toEqual([]);
+    expect(pemSecretSpans(raw, true)).toEqual([{ start: 7, end: raw.length }]);
+  });
 });

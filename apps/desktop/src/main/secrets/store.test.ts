@@ -372,6 +372,120 @@ describe("redaction", () => {
   });
 });
 
+describe("live output redaction", () => {
+  it("withholds a trailing prefix until a multiline credential is complete", () => {
+    store.put({
+      name: "MULTILINE",
+      value: "Ready ALMOND123\nWALNUT456",
+      scope: "session",
+      sessionId: "s",
+    });
+    expect(store.redactPartial("log\nReady ALMOND")).toBe("log\n‹secret:MULTILINE›");
+    expect(store.redactPartial("log\nReady ALMOND123\nWAL")).toBe("log\n‹secret:MULTILINE›");
+    expect(store.redactPartial("log\nReady ALMOND123\nWALNUT456")).toBe("log\n‹secret:MULTILINE›");
+    expect(store.redactPartial("log\nReady elsewhere")).toBe("log\nReady elsewhere");
+  });
+
+  it("uses the longest trailing prefix and handles repeated overlapping characters", () => {
+    store.put({ name: "SHORT", value: "abc", scope: "session", sessionId: "s" });
+    store.put({ name: "LONG", value: "ababaX", scope: "session", sessionId: "s" });
+    expect(store.redactPartial("done ababa")).toBe("done ‹secret:LONG›");
+    store.put({ name: "REPEATED", value: "AAA", scope: "session", sessionId: "s" });
+    expect(store.redactPartial("AAAA")).toBe("‹secret:REPEATED›");
+  });
+
+  it("retains revoked values without recursively rewriting generated markers", () => {
+    const secret = store.put({ name: "TOKEN", value: "secret", scope: "session", sessionId: "s" });
+    store.revoke(secret.id);
+    expect(store.redactPartial("secret sec")).toBe("‹secret:TOKEN› ‹secret:TOKEN›");
+    expect(store.redactPartial("")).toBe("");
+    store.put({ name: "ONE", value: "x", scope: "session", sessionId: "s" });
+    expect(store.redactPartial("x")).toBe("‹secret:ONE›");
+  });
+
+  it("never scans generated marker endings as credential prefixes", () => {
+    store.put({ name: "TOKEN", value: "opaque-value", scope: "session", sessionId: "s" });
+    store.put({ name: "OTHER", value: "TOKEN›\nsecond-line", scope: "session", sessionId: "s" });
+    expect(store.redactPartial("opaque-value")).toBe("‹secret:TOKEN›");
+  });
+
+  it("protects an incomplete multiline value that overlaps a shorter complete value", () => {
+    store.put({ name: "SHORT", value: "abc", scope: "session", sessionId: "s" });
+    store.put({ name: "LONG", value: "abc\nnext-line", scope: "session", sessionId: "s" });
+    expect(store.redactPartial("safe abc\n")).toBe("safe ‹secret:LONG›");
+  });
+
+  it.each([
+    ["Bearer", "ready Bearer SYNTHETIC_CREDENTIAL\n", "SYNTHETIC_CREDENTIAL"],
+    ["Basic", "ready Basic SYNTHETIC_CREDENTIAL\n", "SYNTHETIC_CREDENTIAL"],
+    ["TOKEN", "ready TOKEN=SYNTHETIC_CREDENTIAL\n", "SYNTHETIC_CREDENTIAL"],
+    ["Cookie", "ready Cookie: name=SYNTHETIC_CREDENTIAL\n", "SYNTHETIC_CREDENTIAL"],
+    ["ghp_", "ready ghp_SYNTHETIC_CREDENTIAL\n", "SYNTHETIC_CREDENTIAL"],
+    ["://", "ready https://alice:SYNTHETIC_CREDENTIAL@example.test/path\n", "SYNTHETIC_CREDENTIAL"],
+  ])("protects shared source context before a stored %s can erase it", (value, text, body) => {
+    store.put({ name: "TOKEN", value, scope: "session", sessionId: "s" });
+    expect(store.redactPartial(text)).not.toContain(body);
+    expect(store.redactPartial(text)).toContain("ready");
+  });
+
+  it("protects the suffix of a multiline exact value overlapping a shared token", () => {
+    store.put({
+      name: "TOKEN",
+      value: "ghp_SYNTHETIC_CREDENTIAL\nOPAQUE_SUFFIX",
+      scope: "session",
+      sessionId: "s",
+    });
+    expect(store.redactPartial("ready ghp_SYNTHETIC_CREDENTIAL\nOPAQUE_SUFFIX\n")).not.toContain(
+      "OPAQUE_SUFFIX",
+    );
+    expect(store.redactPartial("ready ghp_SYNTHETIC_CREDENTIAL\nOPAQUE")).not.toContain("OPAQUE");
+  });
+
+  it("protects original PEM bodies when exact credentials erase their delimiters", () => {
+    store.put({ name: "SHORT", value: "-", scope: "session", sessionId: "s" });
+    const opening = "TOKEN=-----BEGIN PRIVATE KEY-----\nSYNTHETIC_BODY\n";
+    expect(store.redactPartial(opening)).not.toContain("SYNTHETIC_BODY");
+    expect(store.redactPartial(`${opening}-----END PRIVATE KEY-----\nready\n`)).toBe(
+      "[redacted]\nready\n",
+    );
+  });
+
+  it("does not lose an unmatched PEM merely because another overlapping label closed", () => {
+    const text = "safe\n-----BEGIN A-----\n-----BEGIN B-----\n-----END A-----\nOPAQUE_BODY\n";
+    expect(store.redactPartial(text)).toBe("safe\n[redacted]");
+  });
+
+  it("merges overlapping exact-value and PEM spans from original text", () => {
+    const pem = "-----BEGIN PRIVATE KEY-----\nSYNTHETIC_BODY\n-----END PRIVATE KEY-----";
+    store.put({
+      name: "TOKEN",
+      value: `prefix ${pem}\nOPAQUE_SUFFIX`,
+      scope: "session",
+      sessionId: "s",
+    });
+    expect(store.redactPartial(`prefix ${pem}\nOPAQUE_SUFFIX\nready`)).toBe(
+      "‹secret:TOKEN›\nready",
+    );
+    expect(store.redactPartial(`prefix ${pem}\nOPAQUE`)).toBe("‹secret:TOKEN›");
+  });
+
+  it("scans complete repetitive credentials and overlapping occurrences linearly", () => {
+    store.put({ name: "LONG", value: "A".repeat(40_000), scope: "session", sessionId: "s" });
+    expect(store.redact(`prefix ${"A".repeat(100_000)} suffix`)).toBe(
+      "prefix ‹secret:LONG› suffix",
+    );
+  });
+
+  it("handles a long repeated credential prefix with a linear overlap scan", () => {
+    store.put({ name: "LONG", value: `${"a".repeat(40_000)}b`, scope: "session", sessionId: "s" });
+    expect(store.redactPartial(`log ${"a".repeat(30_000)}`)).toBe("log ‹secret:LONG›");
+  });
+
+  it("leaves output unchanged when no credentials exist", () => {
+    expect(store.redactPartial("listening on :5173")).toBe("listening on :5173");
+  });
+});
+
 describe("validation and non-disclosure", () => {
   it.each(["TOKEN", "API_KEY_2", `A${"X".repeat(127)}`])("accepts credential name %s", (name) => {
     expect(isSecretName(name)).toBe(true);
