@@ -70,7 +70,7 @@ Paths below are relative to this directory. Renames are explicit.
 | `session/jsonl/storage.ts`                                                 | Existing v4 replay, append, sequence and torn-tail behavior, including the event-loop-yield patch.                                                                                                        |
 | `session/jsonl/repo.ts`                                                    | Existing sidecar discovery/open/create/close and filename/directory rules.                                                                                                                                |
 | `session/jsonl/fork.ts`                                                    | Streaming fork implementation required by repo/conformance behavior.                                                                                                                                      |
-| `session/testing/types.ts`, `session/testing/conformance/session-repo.ts`  | **Test only**: existing repo conformance used by `sidecar-load.test.ts`. No production import reaches these.                                                                                              |
+| `test-fixtures/pi-0.99.2-session-conformance.ts` (outside this directory)  | **Test only**: existing repo conformance used by `sidecar-load.test.ts`, including close-isolation and the existing skipped unsupported race case. No production import reaches it.                       |
 | `test-fixtures/pi-0.99.2-memory.ts` (outside this directory)               | **Test only**: old memory repo supporting compaction tests, rather than shipping an unused production backend.                                                                                            |
 | `test-fixtures/pi-0.99.2-prompt-templates.ts` (outside this directory)     | **Test only**: the three pure grammar functions, frozen as the oracle for the existing renderer-safe port in `@volli/shared`. No template loader is copied.                                               |
 
@@ -92,7 +92,24 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    BOM, torn-tail repair and `line N` errors retain the patched 0.99.2 behavior.
 4. Only needed exports/types remain; a few narrow lint suppressions preserve
    upstream control flow rather than changing it to satisfy repository lint.
-   File/shell/tool executable code was checked for emitted-JavaScript parity.
+   Initial file/shell/tool code was checked for emitted-JavaScript parity;
+   subsequent pruning removes demonstrably unused exports or unreachable guards,
+   with retained contracts tested directly. Removed exports include seven unused
+   operation/pending value-address helpers, `createCustomMessage`,
+   `materializeCommittedEntry`, `operationScopeOf`, `getLastAssistantUsage`,
+   `generateSummary`, `generateSummaryWithUsage`, and grep-only `truncateLine`.
+   Message conversion, committed-entry materialization, summary requests and all
+   legacy address decoding remain. Bounds-checked image reads, synchronous edit
+   cancellation, output prefix/trim invariants, filtered compaction/legacy entry
+   projections and single-settlement process listeners replace unreachable guards.
+   Nonempty spill chunks receive an explicitly initialized stream. Test-only
+   conformance code lives beside the old memory fixture, not in production `src`;
+   unused conformance aggregation wrappers, callback options and `StorageFixture`
+   are omitted. JSONL cleanup/capture queues are always fulfilled, storage versions
+   are validated before repo publication, and once-only close callbacks cannot
+   delete a replacement handle; duplicate unreachable guards are omitted while
+   failed commits and competing publications remain covered. Coverage thresholds
+   and production source inclusion are unchanged.
 5. The copied core patch is deleted; ownership now lives here. Codemode is not
    vendored: its output/call-size patch is retained on 1.0.0 because upstream
    still lacks those limits.
@@ -103,13 +120,23 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
 installed build before upgrading. It is a **synthetic, credential-free profile**,
 not a copied user's profile: v4/storageVersion 1, both branch tips, signed
 assistant content, custom entry, retained-tail compaction, opaque details,
-identity, list values and a usage row. The storage test reopens and continues it;
-`pi-0.99.2-reattach.test.ts` also attaches through the new runtime, submits a
-scripted-provider turn and verifies append-only preservation of its original
-bytes (only the workspace path is relocated). The older genuine 0.87.1 runtime
-fixture remains in the suite.
+identity, list values and a usage row. Storage preserves its unknown details;
+its invalid product checkpoint and incomplete settlement marker are explicitly
+asserted as recovery cases, not successful compaction replay.
 
-A manual workspace-only check additionally copied the 0.99.2 profile, opened it
-using the new repo, appended a message, closed/reopened it, and confirmed the
-original JSONL prefix stayed byte-identical. Live authenticated Electron smoke
-verification is separate; it must not be inferred from these scripted checks.
+Additional portable, native and isolated malformed-checkpoint fixtures were
+written through the old harness's compaction operation. The committed generator
+and fixture README disclose that native blocks and product markers are synthetic
+inputs, not real provider responses. Captured old-build contexts independently
+check valid summary/tail replay, exclusion of summarized history and siblings,
+native wire projection, and exactly-once failed-checkpoint recovery. Runtime
+continuations across restart preserve the recovery locator, inode and original
+byte prefix. The older genuine 0.87.1 runtime fixture remains in the suite.
+
+The initial workspace-only manual check copied the 0.99.2 profile, appended
+through the new repo and reopened it with the original byte prefix intact.
+Authenticated Electron smoke is separately verified: ticket chat, project chat
+and Session-host lifecycle all pass. See
+[`migration verification`](../../../../../../docs/research/pi-1.0-migration-vc496.md)
+for follow-up commands and evidence; live smoke success is not inferred from
+synthetic fixtures.

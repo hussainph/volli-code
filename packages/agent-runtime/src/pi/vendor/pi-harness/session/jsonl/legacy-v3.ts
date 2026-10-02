@@ -271,8 +271,10 @@ function resolveBranchSummaryFromId(
   return legacyFromId === "root" ? null : resolveLegacyId(legacyFromId);
 }
 
+type LegacyV3ContextEntry = Exclude<RetainedLegacyV3Entry, LegacyV3CustomEntry>;
+
 function projectContextMessage(
-  entry: LegacyV3Entry,
+  entry: LegacyV3ContextEntry,
   resolveLegacyId: ResolveLegacyId,
 ): AgentMessage | undefined {
   switch (entry.type) {
@@ -290,13 +292,6 @@ function projectContextMessage(
         : undefined;
     case "compaction":
       return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
-    case "custom":
-    case "model_change":
-    case "thinking_level_change":
-    case "active_tools_change":
-    case "session_info":
-    case "label":
-      return undefined;
   }
 }
 
@@ -652,7 +647,9 @@ export class LegacyV3Source {
     const tailMessagesByLegacyId = new Map<string, AgentMessage>();
     for await (const { entry, indexed } of this.readCapturedEntries(context)) {
       if (requiredTailMessageIds.has(entry.id)) {
-        const message = projectContextMessage(entry, this.resolveLegacyId);
+        // collectRequiredTailMessageIds includes only retained context-bearing
+        // records; readCapturedEntries verifies their captured types on replay.
+        const message = projectContextMessage(entry as LegacyV3ContextEntry, this.resolveLegacyId);
         if (message !== undefined) tailMessagesByLegacyId.set(entry.id, message);
       }
       if (!isRetainedEntry(indexed) || !isRetainedEntry(entry)) continue;

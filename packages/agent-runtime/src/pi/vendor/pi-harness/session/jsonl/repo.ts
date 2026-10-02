@@ -109,7 +109,8 @@ export class JsonlSessionRepo implements SessionRepo<
       );
       return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, key);
     } catch (error) {
-      await storage?.close(context).catch(() => undefined);
+      // Concrete JsonlStorage.close only drains its recovered (always-fulfilled) commit queue.
+      await storage?.close(context);
       if (path !== undefined) await this.fileSystem.remove(path, { force: true }, context);
       throw error;
     } finally {
@@ -243,7 +244,8 @@ export class JsonlSessionRepo implements SessionRepo<
         destinationKey,
       );
     } catch (error) {
-      await storage?.close(context).catch(() => undefined);
+      // Concrete JsonlStorage.close only drains its recovered (always-fulfilled) commit queue.
+      await storage?.close(context);
       if (path !== undefined) await this.fileSystem.remove(path, { force: true }, context);
       throw error;
     } finally {
@@ -425,7 +427,9 @@ export class JsonlSessionRepo implements SessionRepo<
     if (this.openSessions.has(key)) throw new Error(`Session is already open: ${metadata.id}`);
     const session = new StorageBackedSession(metadata, storage, {
       onClose: () => {
-        if (this.openSessions.get(key) === storage) this.openSessions.delete(key);
+        // Publication never overwrites an occupied key; this is its only deletion path.
+        // Session.close invokes onClose once, synchronously, before another open can publish.
+        this.openSessions.delete(key);
       },
     });
     this.openSessions.set(key, storage);
@@ -460,11 +464,8 @@ export class JsonlSessionRepo implements SessionRepo<
       if (storage.header.id !== metadata.id || storage.header.cwd !== metadata.cwd) {
         throw new Error(`Session identity does not match header: ${metadata.id}`);
       }
-      if (storage.header.storageVersion !== JSONL_STORAGE_VERSION) {
-        throw new Error(
-          `Session ${metadata.id} uses unsupported storage version ${storage.header.storageVersion}`,
-        );
-      }
+      // JsonlStorage.open validates v4's storageVersion; v3 normalization always emits
+      // JSONL_STORAGE_VERSION. The fresh storage cannot reach this point with another version.
       return storage;
     } catch (error) {
       await storage.close(context);

@@ -43,8 +43,8 @@ export async function withFileMutationQueue<T>(
     const key = await getMutationQueueKey(env, path, context);
     const currentQueue = state.queues.get(key) ?? Promise.resolve();
 
-    // eslint-disable-next-line unicorn/consistent-function-scoping -- Preserve the upstream per-registration release placeholder.
-    let releaseNext = () => {};
+    // The Promise executor synchronously initializes the release function.
+    let releaseNext!: () => void;
     const nextQueue = new Promise<void>((resolve) => {
       releaseNext = resolve;
     });

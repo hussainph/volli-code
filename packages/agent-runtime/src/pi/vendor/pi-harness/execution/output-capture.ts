@@ -221,7 +221,9 @@ function updateFrom(
 }
 
 function suffixPrefixOverlap(before: string, after: string, scan: number): number {
-  if (before.length === 0 || after.length === 0 || scan === 0) return 0;
+  // The caller already handled equal and growing-prefix views; a nonempty
+  // current view therefore always has a nonempty previous view and scan.
+  if (after.length === 0) return 0;
   const tail = before.length > scan ? before.slice(before.length - scan) : before;
   for (const probeLength of [Math.min(64, after.length), 1]) {
     const probe = after.slice(0, probeLength);
@@ -249,16 +251,16 @@ function countNewlines(text: string): number {
 }
 
 function trimToLastUtf8Bytes(text: string, maxBytes: number): string {
+  // #appendText calls this only when the buffer exceeds twice this guard.
   const bytes = textEncoder.encode(text);
-  if (bytes.length <= maxBytes) return text;
   let start = bytes.length - maxBytes;
   while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start++;
   return textDecoder.decode(bytes.subarray(start));
 }
 
 function trimToFirstUtf8Bytes(text: string, maxBytes: number): string {
+  // #appendText calls this only when the buffer exceeds twice this guard.
   const bytes = textEncoder.encode(text);
-  if (bytes.length <= maxBytes) return text;
   let end = maxBytes;
   while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return textDecoder.decode(bytes.subarray(0, end));

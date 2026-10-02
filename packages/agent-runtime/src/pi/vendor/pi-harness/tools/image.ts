@@ -15,7 +15,7 @@ export function encodeBase64(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let output = "";
   for (let index = 0; index < bytes.length; index += 3) {
-    const first = bytes[index] ?? 0;
+    const first = bytes[index];
     const second = bytes[index + 1];
     const third = bytes[index + 2];
     output += alphabet[first >> 2];
@@ -42,7 +42,7 @@ function isAnimatedPng(buffer: Uint8Array): boolean {
     if (startsWithAscii(buffer, chunkTypeOffset, "acTL")) return true;
     if (startsWithAscii(buffer, chunkTypeOffset, "IDAT")) return false;
     const nextOffset = offset + 8 + chunkLength + 4;
-    if (nextOffset <= offset || nextOffset > buffer.length) return false;
+    if (nextOffset > buffer.length) return false;
     offset = nextOffset;
   }
   return false;
@@ -72,25 +72,26 @@ function isBmp(buffer: Uint8Array): boolean {
   return colorPlanes === 1 && [1, 4, 8, 16, 24, 32].includes(bitsPerPixel);
 }
 
+// The format checks above establish bounds before reading fixed-width fields.
 function readUint16LE(buffer: Uint8Array, offset: number): number {
-  return (buffer[offset] ?? 0) + ((buffer[offset + 1] ?? 0) << 8);
+  return buffer[offset] + (buffer[offset + 1] << 8);
 }
 
 function readUint32BE(buffer: Uint8Array, offset: number): number {
   return (
-    (buffer[offset] ?? 0) * 0x1000000 +
-    ((buffer[offset + 1] ?? 0) << 16) +
-    ((buffer[offset + 2] ?? 0) << 8) +
-    (buffer[offset + 3] ?? 0)
+    buffer[offset] * 0x1000000 +
+    (buffer[offset + 1] << 16) +
+    (buffer[offset + 2] << 8) +
+    buffer[offset + 3]
   );
 }
 
 function readUint32LE(buffer: Uint8Array, offset: number): number {
   return (
-    (buffer[offset] ?? 0) +
-    ((buffer[offset + 1] ?? 0) << 8) +
-    ((buffer[offset + 2] ?? 0) << 16) +
-    (buffer[offset + 3] ?? 0) * 0x1000000
+    buffer[offset] +
+    (buffer[offset + 1] << 8) +
+    (buffer[offset + 2] << 16) +
+    buffer[offset + 3] * 0x1000000
   );
 }
 

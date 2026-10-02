@@ -320,10 +320,9 @@ export class JsonlStorage implements Storage {
   captureForkNextSeq(_context: Context): Promise<number> {
     if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
     const result = this.commitQueue.then(() => this.storageState.getNextSeq());
-    this.commitQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
+    // commit recovers both outcomes into this queue, and getNextSeq only reads a field.
+    // This boundary cannot reject, unlike an actual commit that performs filesystem I/O.
+    this.commitQueue = result.then(() => undefined);
     return result;
   }
 

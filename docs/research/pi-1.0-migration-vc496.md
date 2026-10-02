@@ -23,11 +23,15 @@ The release-by-release API/behavior audit is in
 - Codemode patch retained on 1.0.0: patch content and patched host/worker/types
   are identical to the saved patched baseline; upstream still lacks output
   and serialized-call limits.
-- Genuine 0.99.2-generated sidecar: synthetic, credential-free fixture with
-  v4/storageVersion 1, sequences 1–16, two branch tips, assistant signatures,
-  custom/compaction entries, identity, list and usage. See the fixture README.
-  Storage coverage verifies non-mutating reads and sequence-17 continuation;
-  runtime coverage reattaches and submits a scripted-provider turn.
+- Genuine 0.99.2-generated sidecars: synthetic, credential-free fixtures. The
+  original v4/storageVersion 1 capture verifies non-mutating reads, sequence-17
+  continuation, signatures and unknown details; its invalid product checkpoint
+  and incomplete settlement marker are explicitly tested as recovery cases.
+  New captures generated through the old harness's compaction operation prove
+  valid portable/native summary and retained-tail replay across two continuations
+  and restart. Native data is structurally valid but synthetic hook input, not
+  a real provider response. Captured old-build contexts are independent oracles.
+  See the fixture README and committed generation script.
 - Manual check: copied that synthetic profile inside the ticket workspace,
   opened it through the owned repo, appended a user message, closed and
   reopened it. The continuation remained readable and the original JSONL
@@ -38,7 +42,7 @@ The release-by-release API/behavior audit is in
   focused tests. Capacity retry is still **Unreleased** upstream, not claimed
   as part of the published 1.0.0 release.
 
-## Checks on the integrated tree
+## Initial implementation checks (before review fixes)
 
 - `pnpm typecheck`: passed (root and all workspace typechecks).
 - `pnpm build`: passed, including standalone preload and packed-require checks.
@@ -55,9 +59,9 @@ The release-by-release API/behavior audit is in
   six skipped. Earlier full runs hit the same desktop approval-card timing
   assumption; its helper now waits for the durable condition instead of a
   fixed number of mock ticks.
-- `pnpm smoke:pi`: build passed, live smoke aborted before the turn because
-  isolated HOME had no Pi credentials. A secure credential request was
-  declined. The owner must run this with their working login; it is not green.
+- Initial `pnpm smoke:pi`: build passed, live smoke aborted before the turn
+  because isolated HOME had no Pi credentials. This initial acceptance blocker
+  was closed by the authenticated follow-up below.
 
 ## Benchmark evidence
 
@@ -92,3 +96,78 @@ Both runs passed 4/4 work-count assertions. The apparent activity gap fell from
 regression observed in that path. Context projection still exceeds the bench's
 20% RSD threshold in both arms, so the strict whole-benchmark acceptance
 criterion remains unverified rather than being reported green.
+
+## Review follow-up
+
+- Rebased onto `origin/main` (`eacc3faaa`); the ancestry check now passes.
+  The desktop conflict preserves main's elapsed-time-bounded durable-card wait
+  and the migration branch's shared helper. Its seven protection tests pass.
+- `TMPDIR="$PWD/.tmp/pi" pnpm smoke:pi`: **passed**, including the build and
+  all three authenticated Electron probes: ticket chat 10/10, project chat
+  7/7, Session-host lifecycle 8/8. The ticket turn completed its real `sleep 60`
+  call in 67 seconds; both chat probes verified durable history after relaunch.
+  The existing helper copied the login file opaquely into each isolated HOME;
+  no credential contents were inspected or printed. Staged credentials were
+  removed by the helper's exit cleanup.
+- Standalone copied-profile runtime check passed with an isolated HOME and
+  fresh workspace-local profile:
+  `HOME="$PWD/.bench-tmp/pi-migration-vc496/followup-home" FOLLOWUP_MANUAL_ROOT="$PWD/.bench-tmp/pi-migration-vc496/followup-manual-profile-final" node .bench-tmp/pi-migration-vc496/followup-run-manual.mjs`.
+  Two fresh
+  Agent Runtime instances reattached the same 0.99.2 sidecar and completed one
+  scripted-provider turn each, with the first continuation present in the second
+  request. Both retained the exact recovery locator and original byte prefix;
+  no replacement sidecar or network request occurred. This manually driven
+  non-test-framework check covers actual runtime continuation, while the new
+  valid-compaction fixtures separately cover successful summary/tail replay.
+  The original fixture's malformed-checkpoint recovery is disclosed in the log.
+- The benchmark follow-up repeated the original published arm and an explicitly
+  labelled 400× arm with unchanged fixtures, operations, assertions and all
+  samples retained. Larger equal batches stabilized context measurements:
+  Node 24.18 p50 12.7→13.4 µs, RSD 5.6%→3.9%. Other metrics still exceeded
+  20% variance under shared-machine load, so this partial evidence does not
+  close whole-benchmark acceptance. A quiet paired run remains required; full
+  commands, all six runs and baseline provenance are retained in ignored
+  `.bench-tmp/pi-migration-vc496/followup-evidence.md`.
+- Strengthened grammar replay asserts both correlation IDs independently equal
+  `call_saved`, the result is `Returned: 7`, and the incompatible item ID is
+  omitted. The three affected compatibility test files pass 44 tests with one
+  existing conformance-race skip. Runtime typecheck and scoped formatting/lint
+  also pass.
+- A first workspace-local smoke attempt used an excessively long temporary
+  directory and hit the preserved sidecar directory-name limit before a turn.
+  Using the shorter workspace-local `.tmp/pi` path fixed the test setup without
+  changing storage naming or format. The passing log is retained in ignored
+  `.bench-tmp/pi-migration-vc496/followup-live-smoke-short-path.log`.
+
+## Coverage repair and independent review
+
+Review follow-up added **261 substantive tests**: 104 tool/edit-diff cases,
+75 Node environment cases, 53 vendor contract/output/compaction/storage/tool
+cases and 29 JSONL validation/failure/fork/lifecycle cases. Assertions cover
+exact errors, byte-preserving replay and publication, queue recovery,
+cancellation, output bounds, spill files and backpressure rather than simply
+calling uncovered functions. No coverage threshold or production source
+exclusion was changed.
+
+Unused compatibility exports and provably unreachable private guards were
+removed; the vendor README lists the divergences. Test-only conformance moved
+to `test-fixtures/pi-0.99.2-session-conformance.ts`, keeping the negative
+close-isolation assertion and existing skipped unsupported race. Its unused
+fixture type and aggregation wrappers were removed; notices were regenerated
+with the new path.
+
+Independent tool-test review found no defects in the 104 tool cases. An
+independent production-pruning review found no actionable defects and verified
+single child settlement, nonempty spill dispatch, image bounds, synchronous
+cancellation, output prefix/trim invariants, filtered compaction/legacy tails
+and unchanged conformance case bodies. Its focused run passed 271 tests with
+one existing skip and reached 100% in all four metrics for the eleven reviewed
+executable files. The separate JSONL focused run passed 71 tests with one
+existing skip and reached 100% for all five modules.
+
+Final workspace `pnpm typecheck`, changed-file formatting/lint,
+`pnpm check:notices`, `pnpm check:workspace-licenses`, `git diff --check` and the
+base-ancestry check pass. Neighboring shared, Session Engine, Session RPC and
+CLI coverage suites pass: **3,872 + 344 + 354 + 84 tests**, each at 100% in all
+four metrics. Detailed ignored logs are under `.bench-tmp/pi-migration-vc496/`;
+CI and whole-runtime final results are recorded separately below when complete.

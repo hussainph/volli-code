@@ -124,8 +124,8 @@ export function createEditTool<
             edits,
             path,
           );
-          if (context.abortSignal?.aborted) throw new Error("Operation aborted");
-
+          // No asynchronous boundary occurs between the cancellation check after
+          // readTextFile and this write; the next check follows the write await.
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
           const writeResult = await env.writeFile(absolutePath, finalContent, context);
           if (!writeResult.ok) throw editAccessError(path, writeResult.error);

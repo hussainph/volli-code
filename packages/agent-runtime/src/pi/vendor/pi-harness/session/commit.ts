@@ -97,10 +97,6 @@ export function commitWrite(write: Write, seq: number, timestamp: number): Commi
   }
 }
 
-export function materializeCommittedEntry(entry: NewEntry, seq: number, timestamp: number): Entry {
-  return { ...entry, seq, timestamp };
-}
-
 export function prepareStorageCommit(
   writes: Write[],
   firstSeq: number,

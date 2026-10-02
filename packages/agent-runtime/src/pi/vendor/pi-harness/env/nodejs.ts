@@ -336,7 +336,7 @@ function waitForChildProcess(
       child.stderr?.removeListener("data", onData);
     };
     const finalize = (): void => {
-      if (settled) return;
+      // Cleanup synchronously removes every finalization listener and timer.
       settled = true;
       cleanup();
       child.stdout?.destroy();
@@ -365,7 +365,7 @@ function waitForChildProcess(
       maybeFinalizeAfterExit();
     };
     const onError = (error: Error): void => {
-      if (settled) return;
+      // The once-listener is removed by either settlement path before another event.
       settled = true;
       cleanup();
       reject(error);
@@ -511,7 +511,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
     }
 
     return await new Promise((resolvePromise) => {
-      let settled = false;
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
       let spillError: ExecutionError | undefined;
@@ -546,8 +545,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
       }
 
       const settle = (result: Result<ShellExecResult, ExecutionError>) => {
-        if (settled) return;
-        settled = true;
+        // Spawn failure returns before registering the wait; otherwise exactly one
+        // wait-promise handler settles, and each success-handler branch returns.
         if (timeoutId) clearTimeout(timeoutId);
         if (signal) signal.removeEventListener("abort", onAbort);
         if (child?.pid) this.activeChildPids.delete(child.pid);
@@ -575,19 +574,19 @@ export class NodeExecutionEnv implements ExecutionEnv {
         spillBackpressured = false;
         onAbort();
       };
-      const writeSpill = (chunk: SpillChunk): void => {
-        if (spillStream === undefined || chunk.length === 0) return;
-        if (spillStream.write(chunk) || spillBackpressured) return;
+      const writeSpill = (stream: WriteStream, chunk: SpillChunk): void => {
+        // feed rejects empty chunks; direct/queued calls follow stream assignment.
+        if (stream.write(chunk) || spillBackpressured) return;
         spillBackpressured = true;
         pauseOutput();
-        spillStream.once("drain", () => {
+        stream.once("drain", () => {
           spillBackpressured = false;
           resumeOutput();
         });
       };
       const startSpill = (chunk: SpillChunk): void => {
         if (spillStream !== undefined) {
-          writeSpill(chunk);
+          writeSpill(spillStream, chunk);
           return;
         }
         spillQueue.push(chunk);
@@ -606,7 +605,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
             highWaterMark: SPILL_HIGH_WATER_MARK,
           });
           spillStream.on("error", failSpill);
-          for (const queued of spillQueue) writeSpill(queued);
+          for (const queued of spillQueue) writeSpill(spillStream, queued);
           spillQueue.length = 0;
         })()
           .catch(failSpill)

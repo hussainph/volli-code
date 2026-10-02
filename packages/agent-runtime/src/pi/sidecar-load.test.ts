@@ -53,7 +53,7 @@ import {
   createSessionRepoMessageConformance,
   createSessionRepoOwnershipConformance,
   createSessionRepoStreamingForkConformance,
-} from "./vendor/pi-harness/session/testing/conformance/session-repo";
+} from "../../test-fixtures/pi-0.99.2-session-conformance";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 const context = BACKGROUND_CONTEXT;
@@ -252,7 +252,7 @@ async function onlyMetadata(repo: JsonlSessionRepo): Promise<JsonlSessionMetadat
 }
 
 describe("Pi 0.99.2 disk compatibility through the vendored session facade (VC-496)", () => {
-  it("reopens and continues a real 0.99.2 sidecar without rewriting its history", async () => {
+  it("round-trips unknown compaction details in a real 0.99.2 sidecar without rewriting its history", async () => {
     const fixtureUrl = new URL("./fixtures/pi-0.99.2-sidecar.jsonl", import.meta.url);
     const bytes = readFileSync(fixtureUrl);
     const header = JSON.parse(bytes.toString("utf8").split("\n")[0]!) as {
@@ -300,6 +300,9 @@ describe("Pi 0.99.2 disk compatibility through the vendored session facade (VC-4
       details: { providerCompaction: { opaque: "compat-opaque" } },
     });
     expect((await reopened.getStats(context)).usage.totalTokens).toBe(20);
+    // The storage facade preserves unknown details; it does not validate product-native
+    // checkpoints. pi-0.99.2-reattach.test.ts separately checks this malformed shape's
+    // explicit recovery receipt and the VALID compacted fixtures' runtime context.
     const modelContext = await buildSessionContext(mainEntries, undefined, context);
     expect(modelContext).toHaveLength(2);
     expect(modelContext[1]).toMatchObject({ role: "user", content: "Retained tail" });

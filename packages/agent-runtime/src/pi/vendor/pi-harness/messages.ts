@@ -104,23 +104,6 @@ export function createCompactionSummaryMessage(
   };
 }
 
-export function createCustomMessage(
-  customType: string,
-  content: string | (TextContent | ImageContent)[],
-  display: boolean,
-  details: unknown | undefined,
-  timestamp: string | number,
-): CustomMessage {
-  return {
-    role: "custom",
-    customType,
-    content,
-    display,
-    details,
-    timestamp: typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime(),
-  };
-}
-
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages
     .map((m): Message | undefined => {

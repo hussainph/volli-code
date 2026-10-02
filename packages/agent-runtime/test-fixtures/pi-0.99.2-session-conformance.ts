@@ -1,7 +1,7 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import type { AssistantMessage, StopReason } from "@earendil-works/pi-ai";
-import { BACKGROUND_CONTEXT } from "../../../context";
-import { insertEntry, insertUsage } from "../../commit";
+import { BACKGROUND_CONTEXT } from "../src/pi/vendor/pi-harness/context";
+import { insertEntry, insertUsage } from "../src/pi/vendor/pi-harness/session/commit";
 import type {
   JsonValue,
   LaneConfiguration,
@@ -10,7 +10,7 @@ import type {
   SessionMetadata,
   SessionRepo,
   UsageRow,
-} from "../../types";
+} from "../src/pi/vendor/pi-harness/session/types";
 import {
   appendList,
   branchTip,
@@ -28,8 +28,13 @@ import {
   sessionName,
   setValue,
   value,
-} from "../../values";
-import type { ConformanceCase } from "../types";
+} from "../src/pi/vendor/pi-harness/session/values";
+/** A runner-independent conformance case that can be registered with any test framework. */
+export interface ConformanceCase {
+  readonly group: string;
+  readonly name: string;
+  run(): Promise<void>;
+}
 
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
 const CHILD_ID = "00000000-0000-7000-8000-000000000002";
@@ -105,17 +110,12 @@ function usageRow(): Omit<UsageRow, "seq"> {
 
 interface RepoCaseContext<TRepo> {
   repo: TRepo;
-  close?: () => void | Promise<void>;
 }
 
 function prepareRepoCaseFactory<TRepo>(
   factory: () => Promise<TRepo>,
-  onClose?: () => void | Promise<void>,
 ): () => Promise<RepoCaseContext<TRepo>> {
-  return async () => ({
-    repo: await factory(),
-    ...(onClose === undefined ? {} : { close: onClose }),
-  });
+  return async () => ({ repo: await factory() });
 }
 
 function createCase<TRepo>(
@@ -129,11 +129,7 @@ function createCase<TRepo>(
     name,
     async run() {
       const context = await factory();
-      try {
-        await test(context);
-      } finally {
-        await context.close?.();
-      }
+      await test(context);
     },
   };
 }
@@ -144,9 +140,8 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
   backendFactory: () => Promise<
     Pick<SessionRepo<TMetadata>, "create" | "open" | "list" | "delete">
   >,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -241,9 +236,8 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 /** Creates exclusive-open cases for repositories that own active session handles. */
 export function createSessionRepoOwnershipConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "open">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -265,9 +259,8 @@ export function createSessionRepoOwnershipConformance<TMetadata extends SessionM
 /** Creates message cases for repositories that support session creation. */
 export function createSessionRepoMessageConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -327,9 +320,8 @@ export function createSessionRepoMessageConformance<TMetadata extends SessionMet
 /** Creates fork-content cases that do not require concurrent repository coordination. */
 export function createSessionRepoForkBehaviorConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "list" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -829,21 +821,18 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 /** WP08 cases enabled for Memory and JSONL while SQLite's streaming fork implementation is pending. */
 export function createSessionRepoStreamingForkConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  // Merge into createSessionRepoForkConformance once SQLite supports these cases.
   return [
-    ...createSessionRepoForkApplicationListConformance(backendFactory, onClose),
-    ...createSessionRepoBranchForkApplicationStateConformance(backendFactory, onClose),
-    ...createSessionRepoForkLaneValidationConformance(backendFactory, onClose),
+    ...createSessionRepoForkApplicationListConformance(backendFactory),
+    ...createSessionRepoBranchForkApplicationStateConformance(backendFactory),
+    ...createSessionRepoForkLaneValidationConformance(backendFactory),
   ];
 }
 
 function createSessionRepoForkLaneValidationConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -894,9 +883,8 @@ function createSessionRepoForkLaneValidationConformance<TMetadata extends Sessio
 /** Creates application-list fork cases. */
 function createSessionRepoForkApplicationListConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   // oxlint-disable-next-line oxc/no-map-spread -- Keep upstream conformance case construction unchanged.
   return (["open", "closed"] as const).flatMap((sourceState) => [
     createCase(
@@ -1107,9 +1095,8 @@ function createSessionRepoForkApplicationListConformance<TMetadata extends Sessi
 /** Creates branch application-state cases. */
 function createSessionRepoBranchForkApplicationStateConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return (["open", "closed"] as const).flatMap((sourceState) => [
     createCase(
       factory,
@@ -1228,9 +1215,8 @@ export function createSessionRepoForkDestinationReservationConformance<
   TMetadata extends SessionMetadata,
 >(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -1270,9 +1256,8 @@ export function createSessionRepoForkDestinationReservationConformance<
 /** Creates fork cases that require a snapshot boundary on an active source storage queue. */
 export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends SessionMetadata>(
   backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
-  const factory = prepareRepoCaseFactory(backendFactory, onClose);
+  const factory = prepareRepoCaseFactory(backendFactory);
   return [
     createCase(
       factory,
@@ -1334,40 +1319,5 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
         await Promise.all([source.close(BACKGROUND_CONTEXT), forked.close(BACKGROUND_CONTEXT)]);
       },
     ),
-  ];
-}
-
-/** Creates every fork coordination case. */
-export function createSessionRepoForkCoordinationConformance<TMetadata extends SessionMetadata>(
-  backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
-  onClose?: () => void | Promise<void>,
-): readonly ConformanceCase[] {
-  return [
-    ...createSessionRepoForkDestinationReservationConformance(backendFactory, onClose),
-    ...createSessionRepoForkSourceSnapshotConformance(backendFactory, onClose),
-  ];
-}
-
-/** Creates every fork conformance case. */
-export function createSessionRepoForkConformance<TMetadata extends SessionMetadata>(
-  backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "list" | "fork">>,
-  onClose?: () => void | Promise<void>,
-): readonly ConformanceCase[] {
-  return [
-    ...createSessionRepoForkBehaviorConformance(backendFactory, onClose),
-    ...createSessionRepoForkCoordinationConformance(backendFactory, onClose),
-  ];
-}
-
-/** Creates every SessionRepo conformance case. */
-export function createSessionRepoConformance<TMetadata extends SessionMetadata>(
-  factory: () => Promise<SessionRepo<TMetadata>>,
-  onClose?: () => void | Promise<void>,
-): readonly ConformanceCase[] {
-  return [
-    ...createSessionRepoLifecycleConformance(factory, onClose),
-    ...createSessionRepoOwnershipConformance(factory, onClose),
-    ...createSessionRepoMessageConformance(factory, onClose),
-    ...createSessionRepoForkConformance(factory, onClose),
   ];
 }

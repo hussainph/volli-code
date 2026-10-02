@@ -10,7 +10,6 @@
 
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
-export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
 
 export interface TruncationResult {
   /** The truncated content */
@@ -334,18 +333,4 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
   const output = str.slice(start);
   return needsReplacement ? replaceUnpairedSurrogates(output) : output;
-}
-
-/**
- * Truncate a single line to max characters, adding [truncated] suffix.
- * Used for grep match lines.
- */
-export function truncateLine(
-  line: string,
-  maxChars: number = GREP_MAX_LINE_LENGTH,
-): { text: string; wasTruncated: boolean } {
-  if (line.length <= maxChars) {
-    return { text: line, wasTruncated: false };
-  }
-  return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
 }

@@ -342,15 +342,6 @@ export type OperationState =
 
 export type OperationAt = OperationState["at"];
 
-/** Copy only the uniform operation scope when constructing a successor leaf. */
-export function operationScopeOf(state: OperationState): OperationScope {
-  return {
-    control: state.control,
-    settings: state.settings,
-    latestAssistantEntryId: state.latestAssistantEntryId,
-  };
-}
-
 export type Operation = { meta: OperationMeta; state: OperationState };
 
 export interface LaneState {

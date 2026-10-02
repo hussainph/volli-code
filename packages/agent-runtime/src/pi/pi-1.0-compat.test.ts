@@ -54,10 +54,15 @@ describe("Pi 1.0 grammar tool replay", () => {
       expect(call).toMatchObject({
         type: "custom_tool_call",
         name: "codemode",
+        call_id: "call_saved",
         input: "return 7;",
       });
       expect(call?.id).toBeUndefined();
-      expect(result).toMatchObject({ type: "custom_tool_call_output", call_id: call?.call_id });
+      expect(result).toMatchObject({
+        type: "custom_tool_call_output",
+        call_id: "call_saved",
+        output: "Returned: 7",
+      });
     },
   );
 });

@@ -14,11 +14,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Context, getTelemetryContext } from "../context";
-import {
-  convertToLlm,
-  createBranchSummaryMessage,
-  createCompactionSummaryMessage,
-} from "../messages";
+import { convertToLlm, createBranchSummaryMessage } from "../messages";
 import { buildContextEntries, sessionEntryToContextMessages } from "../session/context";
 import type { CompactionEntry, Entry, JsonValue } from "../session/types";
 import { CompactionError, err, ok, type Result } from "../types";
@@ -86,17 +82,9 @@ function getMessageFromEntry(entry: Entry): AgentMessage | undefined {
   if (entry.type === "branch_summary") {
     return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
   }
-  if (entry.type === "compaction") {
-    return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
-  }
+  // prepareCompaction substitutes the latest compaction's retained tail and
+  // slices away everything through that entry before reaching this helper.
   return undefined;
-}
-
-function getMessageFromEntryForCompaction(entry: Entry): AgentMessage | undefined {
-  if (entry.type === "compaction") {
-    return undefined;
-  }
-  return getMessageFromEntry(entry);
 }
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
@@ -182,18 +170,6 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
       calculateContextTokens(assistantMsg.usage) > 0
     ) {
       return assistantMsg.usage;
-    }
-  }
-  return undefined;
-}
-
-/** Return usage from the last valid assistant message in session entries. */
-export function getLastAssistantUsage(entries: Entry[]): Usage | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (entry.type === "message") {
-      const usage = getAssistantUsage(entry.message as AgentMessage);
-      if (usage) return usage;
     }
   }
   return undefined;
@@ -514,64 +490,6 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
-/** Generate or update a conversation summary for compaction. */
-export async function generateSummary(
-  currentMessages: AgentMessage[],
-  models: Models,
-  model: Model<Api>,
-  reserveTokens: number,
-  customInstructions: string | undefined,
-  previousSummary: string | undefined,
-  thinkingLevel: ThinkingLevel | undefined,
-  retry: RetryPolicy | undefined,
-  callbacks: RetryCallbacks | undefined,
-  context: Context,
-): Promise<Result<string, CompactionError>> {
-  const result = await generateSummaryWithUsage(
-    currentMessages,
-    models,
-    model,
-    reserveTokens,
-    customInstructions,
-    previousSummary,
-    thinkingLevel,
-    retry,
-    callbacks,
-    context,
-  );
-  return result.ok ? ok(result.value.text) : err(result.error);
-}
-
-/** Generate or update a conversation summary and return its provider usage. */
-export function generateSummaryWithUsage(
-  currentMessages: AgentMessage[],
-  models: Models,
-  model: Model<Api>,
-  reserveTokens: number,
-  customInstructions: string | undefined,
-  previousSummary: string | undefined,
-  thinkingLevel: ThinkingLevel | undefined,
-  retry: RetryPolicy | undefined,
-  callbacks: RetryCallbacks | undefined,
-  context: Context,
-): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
-  return generateSummaryWithRequest(
-    currentMessages,
-    { model, reserveTokens, customInstructions, previousSummary, thinkingLevel },
-    (aiContext, options, requestContext) =>
-      completeSimpleWithRetries(
-        models,
-        model,
-        aiContext,
-        options,
-        retry,
-        callbacks,
-        requestContext,
-      ),
-    context,
-  );
-}
-
 export interface SummaryGenerationOptions {
   model: Model<Api>;
   reserveTokens: number;
@@ -709,19 +627,19 @@ export function prepareCompaction(
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [];
   for (let i = 0; i < historyEnd; i++) {
-    const msg = getMessageFromEntryForCompaction(compactableEntries[i]);
+    const msg = getMessageFromEntry(compactableEntries[i]);
     if (msg) messagesToSummarize.push(msg);
   }
   const turnPrefixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const msg = getMessageFromEntryForCompaction(compactableEntries[i]);
+      const msg = getMessageFromEntry(compactableEntries[i]);
       if (msg) turnPrefixMessages.push(msg);
     }
   }
   const retainedTail: AgentMessage[] = [];
   for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
-    const msg = getMessageFromEntryForCompaction(compactableEntries[i]);
+    const msg = getMessageFromEntry(compactableEntries[i]);
     if (msg) retainedTail.push(msg);
   }
   const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
