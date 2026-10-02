@@ -2,9 +2,27 @@
 import type { EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
 import { EMPTY_ACTIVITY_SUBJECT, type RuntimeObservation } from "@volli/shared";
 
-export const turnIdFor = (id: number) => `durable-submission-${id}`;
+export const turnIdFor = (sessionId: string, id: number) =>
+  JSON.stringify([sessionId, "submission", id]);
+export const cursorFor = (sessionId: string, position: number) =>
+  JSON.stringify(["vc497", sessionId, position]);
+export function cursorPosition(sessionId: string, cursor: string | null): number {
+  if (!cursor) return 0;
+  const value: unknown = JSON.parse(cursor);
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    value[0] !== "vc497" ||
+    value[1] !== sessionId ||
+    !Number.isSafeInteger(value[2]) ||
+    value[2] < 0
+  )
+    throw new Error("Invalid spike projection cursor");
+  return value[2] as number;
+}
 
 export function projectRecords(
+  sessionId: string,
   entries: readonly EntryRecord[],
   submissions: readonly SubmissionRecord[],
 ) {
@@ -15,7 +33,7 @@ export function projectRecords(
     .toSorted((a, b) => (a.entry ?? 0) - (b.entry ?? 0));
   const receipts: { commandId: string; acceptedAt: number }[] = [];
   for (const [index, input] of inputs.entries()) {
-    const turnId = turnIdFor(input.id);
+    const turnId = turnIdFor(sessionId, input.id);
     const start = ordered.find((e) => e.id === input.entry)?.model?.[0]?.timestamp ?? 0;
     const slice = ordered.filter(
       (e) => e.id > (input.entry ?? 0) && e.id < (inputs[index + 1]?.entry ?? Infinity),
@@ -46,7 +64,7 @@ export function projectRecords(
               kind: "message-settled",
               turnId,
               message: {
-                entryId: `durable-${entry.id}`,
+                entryId: JSON.stringify([sessionId, "entry", entry.id]),
                 role: "assistant",
                 text,
                 reasoning,
@@ -61,7 +79,7 @@ export function projectRecords(
           observations.push({
             kind: "activity",
             turnId,
-            activityId: message.toolCallId,
+            activityId: JSON.stringify([sessionId, "call-result", entry.id]),
             descriptor: {
               kind: message.toolName === "read" ? "read-file" : "write-file",
               nativeToolName: message.toolName,
@@ -92,6 +110,12 @@ export function projectRecords(
         occurredAt: slice.at(-1)?.model?.[0]?.timestamp ?? start,
         recoveryCursor: `${turnId}:end`,
       });
+  }
+  // This sequential-input spike has an append-only observation prefix. Every
+  // live fact and the reconciliation response use this SAME cursor format.
+  for (const [index, observation] of observations.entries()) {
+    if ("recoveryCursor" in observation)
+      observation.recoveryCursor = cursorFor(sessionId, index + 1);
   }
   return { observations, receipts };
 }

@@ -20,6 +20,7 @@ pnpm -C packages/agent-runtime typecheck
 pnpm -C packages/agent-runtime exec vp test run --config vite.bench.config.ts \
   bench/pi-durable/durability.bench.test.ts \
   bench/pi-durable/compaction.bench.test.ts \
+  bench/pi-durable/review-regressions.bench.test.ts \
   bench/pi-durable/overhead.bench.test.ts \
   bench/pi-durable/watch.bench.test.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"
 ```
@@ -28,7 +29,7 @@ Optional `VC497_REPORT` and `VC497_WATCH_REPORT` paths save timing JSON inside t
 
 ## Crash and exactly-once results
 
-`durability.bench.test.ts` bundles an owned child, waits for committed output (`api.details()` flush) or the first committed stream update, kills it, and opens the same SQLite file in a new process. The original submit caller never received its turn-end reply. Reopen resumes without new user input; the repeated Command reacquires the original submission.
+`durability.bench.test.ts` bundles an owned child, waits for committed output (`api.details()` flush) or the first committed stream update, kills it, and opens the same SQLite file in a new process. The original submit caller never received its turn-end reply. On reopen the child awaits the observer's completed Turn **before any repeated submit**; explicit `harness.resume()` must therefore progress work without a new submission. The repeated Command subsequently reacquires the original submission.
 
 | Death point | External execution after reopen | Committed result / model sees | Product projection in test |
 | --- | --- | --- | --- |
@@ -67,7 +68,7 @@ One Durable root maps to the Session's root agent thread for this spike. Pi's **
 
 There is no cross-store transaction. Proposed production rule: Durable commits execution facts first; an incremental bridge delivers stable entry/task/submission-keyed observations; Engine commits events plus content-addressed artifacts, then persists the projection acknowledgment. Crash before acknowledgment repeats evidence and Engine IDs dedupe it. Checkpoint commits must never assert product stop/approval/attention state without the Engine. Resume is authorized only after the Engine attaches an eligible, fenced owner; reconciliation must be safe to read without scheduling.
 
-The current adapter uses `watchEvents()` as a wake-up and rescans immutable history plus submissions on the harness mutation line. It acknowledges in memory only **after the observer resolves**. Reconciliation uses an O(history) JSON key-set cursor, returned but never stored in product formats. This proves stable IDs/repair, **not** a scalable outbox or full sink-failure protocol. Shipping that cursor or rescanning whole history per commit would be a mistake. VC-500 owns the durable handshake and failure windows.
+The current adapter uses `watchEvents()` as a wake-up and rescans immutable history plus submissions on the harness mutation line. It acknowledges in memory only **after the observer resolves**. Reconciliation and live observations now share a Session-scoped, versioned JSON positional cursor over the narrow sequential-input projection. Native identities include the Session identity, because store-local numeric IDs alone collide across Session stores. The cursor is returned but never stored in product formats. This proves stable IDs/repair, **not** a scalable outbox or full sink-failure protocol. Rescanning whole history per commit or generalizing this sequential-input cursor to forks/steering would be a mistake. VC-500 owns the durable handshake and failure windows.
 
 ### watch / presentation
 
@@ -78,13 +79,13 @@ The current adapter uses `watchEvents()` as a wake-up and rescans immutable hist
 
 ## Tool surface and authority mapping
 
-`tools.ts` demonstrates `defineTool` plus `hook(ToolTask, { beforeTool })`, ordered frozen names and `authorityVerdict` against a copied **attachment-pinned authority snapshot**. Tool membership/grants are frozen at Session birth; authority is pinned when an attachment opens and replayed on recovery, not re-resolved from current settings. A grant mismatch on reopen refuses attachment. The installed registry is local code, not authority to add tools.
+`tools.ts` demonstrates `defineTool` plus `hook(ToolTask, { beforeTool })`, ordered frozen names and `authorityVerdict` against a copied **attachment-pinned authority snapshot**. Tool membership/grants are frozen at Session birth; authority is pinned when an attachment opens and replayed on recovery, not re-resolved from current settings. A grant mismatch on reopen refuses attachment by comparing the **stored AgentDoc tool array before registry resolution**; resolved tools alone hide unavailable stored names. The extension preserves the requested frozen ordering. The installed registry is local code, not authority to add tools.
 
 | Volli boundary | Durable mechanism | Fit / missing work |
 | --- | --- | --- |
 | Frozen `sessionToolBindings` and grants | Explicit `agent.tools`, selected extension names | Resolve only birth-granted bindings in exactly the persisted order. Stock CodingTools includes `bash`, not Volli's `execute`, and is not equivalent. Existing `authority/normalize.ts` recognizes **`bash`** for command analysis; blindly passing a new tool called `execute` yields empty operands/command. Preserve the normalization mapping explicitly. No registry hot reload may widen birth grants. |
 | Deterministic authority | `beforeTool` block/rewrite | Good pre-intent seam. **Safe recovery skips this hook**, entering ToolTask's `execute` checkpoint; fresh execute/env checks are mandatory. Shadow review, denial/audit observations and classifier/approval semantics are not implemented here. |
-| Filesystem/path scope | Wrapped tool + scoped `ExecutionEnv` | `cwd` alone is not confinement. Prototype performs realpath/symlink checks twice and intentionally forbids outside reads; it is stricter than Volli's task-anchored external-read policy. Not an OS sandbox and not hardened against filesystem TOCTOU races. Port credential exclusions and every FS/shell operation, not just arguments. Remote path resolution and enforcement must run on the **tool host**, not against the harness machine's filesystem. |
+| Filesystem/path scope | Wrapped tool + scoped `ExecutionEnv` | `cwd` alone is not confinement. Prototype performs realpath/symlink checks twice, rejects dangling write links with `lstat`, uses no-follow file opens against final-component replacement, and intentionally forbids outside reads; it is stricter than Volli's task-anchored external-read policy. Not an OS sandbox and not hardened against filesystem TOCTOU races. Port credential exclusions and every FS/shell operation, not just arguments. Remote path resolution and enforcement must run on the **tool host**, not against the harness machine's filesystem. |
 | Protection approvals / ask_user | Hook/task `memo` plus Engine interaction port | Memo should retain a stable Engine interaction/approval reference, not a second approval truth. Answer committed to Engine before resolving/memoing. Crash between open/answer/memo must join the existing interaction, not ask again. Remembered approval eligibility/revocation stays live; a memo is not permanent permission. Selectively replace boot's current abandoned-card cancellation only for proven resumable waits. Not tested as production approvals. |
 | Browser | Host-provided tools, not filesystem env | Snapshot generation refs and holds are live host state. Mutations default unsafe; snapshot/screenshot/console cannot blindly replay against old generations. Reacquire current eligibility or return interrupted. Durable has no Browser host. |
 | Web / MCP / classifier | `defineTool` adapters to existing ports | Preserve SSRF/address policy, untrusted framing, budgets, frozen catalog and error semantics. Read-only is not enough to declare safe if the call spends money or changes host state. |
@@ -95,26 +96,26 @@ The safe-revoked crash test demonstrates why authority belongs in execution as w
 
 ## Measured overhead
 
-Darwin arm64, Apple M1, Node **v24.18.0**, `VOLLI_CONCURRENCY_HINT=1`, 2 paired warmups and 20 paired short-turn samples, alternating current/Durable order. Existing `bench/turn-to-completion/measurement.ts` supplies distributions; fixtures use zero-delay faux model → one real short read → final answer. Sink is awaited/no-op: **no production ledger cost, provider latency or cloud network**.
+Darwin arm64, Apple M1, Node **v24.18.0**, `VOLLI_CONCURRENCY_HINT=1`, 2 paired warmups and 20 paired short-turn samples, alternating current/Durable order. Existing `bench/turn-to-completion/measurement.ts` supplies distributions; fixtures use zero-delay faux model → one real short read → final answer. Sink is awaited and records observations in memory: **no production ledger cost, provider latency or cloud network**. Each arm additionally asserts two model calls, a successful read result and the expected settled answer; delivery alone would not prove equivalent work.
 
 | Measure | Current Agent-loop + JSONL p50 / p95 | Durable SQLite adapter p50 / p95 |
 | --- | --- | --- |
-| New attachment open | 0.962 / 1.646 ms | 2.270 / 2.901 ms |
-| Full short read turn | 2.139 / 4.453 ms | 5.668 / 7.010 ms |
+| New attachment open | 2.383 / 5.791 ms | 3.641 / 5.249 ms |
+| Full short read turn | 6.274 / 56.433 ms | 8.297 / 46.623 ms |
 | Closed execution-store bytes | 7,157 / 7,158 | 126,976 / 126,976 |
 | Observer calls per turn/attachment | 12 / 12 | 4 / 4 |
 
-Durable adds about **1.31 ms open and 3.53 ms short-turn p50** in this fixture; SQLite's fixed schema/page overhead dominates small-session disk size (~17.7× here). This is a comparison of two runtime implementations, **not an isolated durability tax**: the current runtime does more prompt/tool normalization, activity/delta and usage work; the prototype drops substantial parity work. Four observer calls do not mean better batching. Shared-machine timing and tiny histories cannot establish a production latency/memory budget.
+Durable adds about **1.26 ms open and 2.02 ms short-turn p50** in the final recorded run. Shared-machine tail jitter was large (current max 112.586 ms, Durable max 89.958 ms); p95 must not be read as Durable being faster. An earlier run before review fixes measured 2.139 versus 5.668 ms short-turn p50, illustrating the sensitivity of tiny fixtures to load and adapter revision. SQLite's fixed schema/page overhead dominates small-session disk size (~17.7× here). This is a comparison of two runtime implementations, **not an isolated durability tax**. In particular, the current runtime does more prompt/tool normalization, activity/delta and usage work; the prototype drops substantial parity work. Four observer calls do not mean better batching. Shared-machine timing and tiny histories cannot establish a production latency/memory budget.
 
 Raw SQLite no-tool turn, separate watch probe (2 warmups + 20 samples per arm):
 
 | Attached readers | p50 / p95 ms | Delivered callbacks across 20 turns |
 | --- | --- | --- |
-| None | 1.567 / 2.093 | 0 |
-| `watchEvents` | 1.518 / 2.840 | 40 |
-| Two structural `watch` clients | 1.393 / 1.922 | 120 |
+| None | 4.138 / 8.329 | 0 |
+| `watchEvents` | 2.580 / 9.930 | 40 |
+| Two structural `watch` clients | 2.166 / 6.774 | 120 |
 
-The structural clients received 37,666 JSON characters of ops in aggregate. The watchEvents arm had an 18.520 ms max outlier (mean 2.550 ms). These differences are below the useful ranking/noise level and arms are sequential: **no claim that watching speeds execution up**. This bounds a tiny fixture, not large outputs, slow-client backpressure, remote transport or 10 concurrent Sessions. SQLite uses synchronous `node:sqlite`; main-thread stall/reopen costs need worker-host and large-store measurements in VC-502.
+The structural clients received 37,664 JSON characters of ops in aggregate. The watchEvents arm had a 28.522 ms max outlier (mean 4.976 ms). These differences are below the useful ranking/noise level and arms are sequential: **no claim that watching speeds execution up**. This bounds a tiny fixture, not large outputs, slow-client backpressure, remote transport or 10 concurrent Sessions. SQLite uses synchronous `node:sqlite`; main-thread stall/reopen costs need worker-host and large-store measurements in VC-502.
 
 ## Compaction parity
 
@@ -170,4 +171,6 @@ Primary evidence is the installed, exact-pinned 1.0.0 README and dist declaratio
 - [Examples](https://github.com/earendil-works/pi/tree/main/packages/durable/test/examples): 05 watches, 06 harness, 13 recovery, 25 compaction
 - Local: `CONTEXT.md`; `docs/crash-recovery.md`; reference-only main checkout's `docs/ROADMAP.md` (absent from this branch base); `packages/shared/src/agent-runtime.ts`; `packages/session-engine/src/{session-engine,session-runtime,observation-translation}.ts`; `apps/desktop/src/main/session-runtime/boot-recovery.ts`; current compaction/token-counting/authority source; VC-198 and VC-320.
 
-Focused verification: package typecheck and all four new benchmark test files (10 tests); format/lint check. No full workspace suite, Electron smoke, real-provider crash, hosted deployment, power-loss, distributed fencing or production approval recovery was run. Those are explicitly follow-up gates, not unexplained successes.
+Independent prototype review found and prompted fixes for cross-Session fact-ID collisions, incompatible live/reconcile cursor formats, registry-hidden grant removals/order, dangling/final-replaced write symlinks, and backlog deltas attributed to newer Turns. `review-regressions.bench.test.ts` covers two stores in one Engine ledger, reconciliation from the last **live** cursor, birth membership/order changes, dangling/final-component write replacement without an authority snapshot, and delayed observers across two successive Turns. Late deltas already covered by a settled row are suppressed, not mislabeled or emitted after settlement. Parent-directory TOCTOU, slow-client snapshot reset semantics and the real binding sink commit/ack matrix remain follow-up gates.
+
+Focused verification: package typecheck and all five new benchmark test files (15 tests); format/lint check. No full workspace suite, Electron smoke, real-provider crash, hosted deployment, power-loss, distributed fencing or production approval recovery was run. Those are explicitly follow-up gates, not unexplained successes.

@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
+  AgentDoc,
   ConversationBusy,
   createRegistry,
   Harness,
@@ -19,7 +20,13 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import type { Models } from "pi-durable-ai/models";
 import type { AgentRuntime, RuntimeAttachmentHandle, SessionRuntimeSpec } from "@volli/shared";
 import { composeSystemPrompt } from "../../src/prompt.ts";
-import { observationKey, projectRecords, turnIdFor } from "./projection.ts";
+import {
+  cursorFor,
+  cursorPosition,
+  observationKey,
+  projectRecords,
+  turnIdFor,
+} from "./projection.ts";
 import { spikeTools, type SpikeToolProbe } from "./tools.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -102,8 +109,11 @@ async function openAttachment(
       },
     });
     // root() ignores options after reopen: fail closed if a caller changed frozen membership.
-    const agent = await root.agent(context);
-    if (JSON.stringify(agent.tools.map((t) => t.name)) !== JSON.stringify(spec.tools.tools)) {
+    const storedAgent = await harness.snapshot(AgentDoc, root.id, context);
+    if (
+      !Array.isArray(storedAgent?.tools) ||
+      JSON.stringify(storedAgent.tools) !== JSON.stringify(spec.tools.tools)
+    ) {
       throw new Error("Checkpoint's frozen tools disagree with Session birth surface");
     }
     const events = await watchEvents(harness, root.id, context);
@@ -135,42 +145,70 @@ async function openAttachment(
           submissions.push(...page.items);
           cursor = page.next;
         } while (cursor);
-        return projectRecords(entries, submissions);
+        return projectRecords(spec.identity.sessionId, entries, submissions);
       }, context);
     let deliveryLine = Promise.resolve();
+    const closedTurns = new Set<string>();
+    const settledPartials = new Set<string>();
+    let batchInput = events.snapshot.run?.inputs[0];
+    let partialTimestamp = events.snapshot.generation?.message?.timestamp;
+    const flushNow = async () => {
+      const projection = await records();
+      for (const observation of projection.observations) {
+        const key = observationKey(observation);
+        if (key && seen.has(key)) continue;
+        await spec.observer(observation);
+        if (key) seen.add(key); // acknowledge only AFTER the product sink commits
+        if (observation.kind === "turn" && observation.state !== "started")
+          closedTurns.add(observation.turnId);
+        if (observation.kind === "message-settled")
+          settledPartials.add(`${observation.turnId}:${observation.occurredAt}`);
+      }
+    };
     const flush = () => {
-      deliveryLine = deliveryLine.then(async () => {
-        const projection = await records();
-        for (const observation of projection.observations) {
-          const key = observationKey(observation);
-          if (key && seen.has(key)) continue;
-          await spec.observer(observation);
-          if (key) seen.add(key); // acknowledge only AFTER the product sink commits
-        }
-      });
+      deliveryLine = deliveryLine.then(flushNow);
       return deliveryLine;
     };
     events.start(async (batch) => {
       options.onEvents?.(batch.map((e) => e.type));
-      try {
-        await flush();
-        const snapshot = await harness.inspect(context);
-        const active = snapshot.submissions.find(
-          (s) => s.type === "input" && s.status === "placed",
-        );
-        if (active)
-          for (const event of batch) {
-            if (event.type !== "message_update") continue;
+      deliveryLine = deliveryLine.then(async () => {
+        // Track identity from this serialized batch, never from newer live state.
+        // Whole-history repair may have already settled an old batch's message:
+        // suppress its late deltas instead of emitting after the settled row.
+        for (const event of batch) {
+          if (event.type === "snapshot") {
+            batchInput = event.run?.inputs[0];
+            partialTimestamp = event.generation?.message?.timestamp;
+          } else if (event.type === "run_start") batchInput = event.inputs[0];
+          else if (event.type === "message_start" && event.message.role === "assistant")
+            partialTimestamp = event.message.timestamp;
+          else if (
+            event.type === "message_update" &&
+            batchInput !== undefined &&
+            partialTimestamp !== undefined
+          ) {
+            const turnId = turnIdFor(spec.identity.sessionId, batchInput);
+            if (closedTurns.has(turnId) || settledPartials.has(`${turnId}:${partialTimestamp}`))
+              continue;
             for (const change of event.changes)
               if (change.type === "text_delta" || change.type === "thinking_delta") {
                 await spec.observer({
                   kind: "delta",
-                  turnId: turnIdFor(active.id),
+                  turnId,
                   channel: change.type === "text_delta" ? "text" : "reasoning",
                   text: change.delta,
                 });
               }
+          } else if (event.type === "message_end") partialTimestamp = undefined;
+          else if (event.type === "run_end") {
+            batchInput = undefined;
+            partialTimestamp = undefined;
           }
+        }
+        await flushNow();
+      });
+      try {
+        await deliveryLine;
       } catch (error) {
         failed = error;
         throw error;
@@ -269,16 +307,14 @@ async function openAttachment(
       },
       reconcile: async (cursor) => {
         const projection = await records();
-        const prior = new Set<string>(cursor ? (JSON.parse(cursor) as string[]) : []);
-        const observations = projection.observations.filter(
-          (o) => !prior.has(observationKey(o) ?? ""),
-        );
-        for (const observation of observations) {
-          const key = observationKey(observation);
-          if (key) prior.add(key);
-        }
-        // Branch-only O(history) ack-set, NOT a proposed shipped cursor format.
-        return { cursor: JSON.stringify([...prior]), observations, receipts: projection.receipts };
+        const position = cursorPosition(spec.identity.sessionId, cursor);
+        if (position > projection.observations.length)
+          throw new Error("Cursor exceeds spike history");
+        return {
+          cursor: cursorFor(spec.identity.sessionId, projection.observations.length),
+          observations: projection.observations.slice(position),
+          receipts: projection.receipts,
+        };
       },
     };
   } catch (error) {

@@ -1,5 +1,6 @@
 /** VC-497: deliberately small, frozen read/write surface, not the production tools. */
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
 import { Type } from "pi-durable-ai";
@@ -51,14 +52,13 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
       throw new Error("Outside spike workspace");
     // A pre-existing write target may itself be a symlink.
     if (name === "write") {
-      let existing: string | undefined;
       try {
-        existing = await realpath(target);
+        // realpath returns ENOENT for a dangling symlink, not just an absent file.
+        if ((await lstat(target)).isSymbolicLink())
+          throw new Error("Symlink write is outside spike scope");
       } catch (error) {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       }
-      if (existing && existing !== canonical)
-        throw new Error("Symlink write is outside spike scope");
     }
     if (authority?.enforcement === "enforce") {
       const verdict = authorityVerdict({ tool: name, args, authority, workspacePath: root });
@@ -75,7 +75,13 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
       // Recovery goes straight to execute, bypassing beforeTool: recheck live paths here.
       const path = await check("read", args);
       await probe?.beforeEffect?.("read");
-      const text = await readFile(path, "utf8");
+      const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let text: string;
+      try {
+        text = await file.readFile("utf8");
+      } finally {
+        await file.close();
+      }
       api.output("read started\n");
       await probe?.afterEffect?.("read", () => api.details({ checkpoint: true }, context));
       return { content: [{ type: "text", text }] };
@@ -88,13 +94,24 @@ export function spikeTools(spec: SessionRuntimeSpec, probe?: SpikeToolProbe) {
     execute: async (args, api, context) => {
       const path = await check("write", args);
       await probe?.beforeEffect?.("write");
-      await writeFile(path, args.content);
+      // Final-component replacement between check and effect must not follow a link.
+      const file = await open(
+        path,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await file.writeFile(args.content);
+      } finally {
+        await file.close();
+      }
       api.output("write effect committed externally\n");
       await probe?.afterEffect?.("write", () => api.details({ checkpoint: true }, context));
       return { content: [{ type: "text", text: "written" }] };
     },
   });
-  const tools = [read, write].filter((tool) => names.includes(tool.name as "read" | "write"));
+  if (new Set(names).size !== names.length) throw new Error("Duplicate frozen spike tools");
+  const tools = names.map((name) => (name === "read" ? read : write));
   return defineExtension({
     name: "volli-spike-frozen-tools",
     tools,

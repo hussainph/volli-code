@@ -8,6 +8,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
+import type { RuntimeObservation } from "@volli/shared";
 import { createPiAgentRuntime } from "../../src/pi/runtime.ts";
 import { summarize } from "../turn-to-completion/measurement.ts";
 import { createDurableSpikeRuntime } from "./runtime.ts";
@@ -39,11 +40,12 @@ describe("VC-497 paired short-turn runtime overhead", () => {
           const at = join(directory, `${sample}-${arm}`);
           await import("node:fs/promises").then((fs) => fs.mkdir(at));
           await writeFile(join(at, "input.txt"), "safe read result");
-          let observations = 0;
-          const spec = fixtureSpec(at, async () => {
-            observations++;
+          const emitted: RuntimeObservation[] = [];
+          const spec = fixtureSpec(at, async (o) => {
+            emitted.push(o);
           });
           let runtime;
+          let modelCalls: () => number;
           if (arm === "current") {
             const faux = fauxProvider({
               models: [{ id: "spike", contextWindow: 200_000, maxTokens: 4096 }],
@@ -57,13 +59,15 @@ describe("VC-497 paired short-turn runtime overhead", () => {
             ]);
             const models = createModels();
             models.setProvider(faux.provider);
+            modelCalls = () => faux.state.callCount;
             runtime = createPiAgentRuntime({
               sessionDataDir: join(at, "execution"),
               models,
               compactionPolicy: () => ({ autoCompaction: false }),
             });
           } else {
-            const { models } = fixtureModels("safe");
+            const { models, faux } = fixtureModels("safe");
+            modelCalls = () => faux.state.callCount;
             runtime = createDurableSpikeRuntime({
               enabled: true,
               fallback,
@@ -84,11 +88,28 @@ describe("VC-497 paired short-turn runtime overhead", () => {
           } finally {
             await handle.close();
           }
+          expect(modelCalls()).toBe(2);
+          expect(
+            emitted.some(
+              (o) =>
+                o.kind === "activity" &&
+                o.state === "completed" &&
+                o.descriptor.nativeToolName === "read" &&
+                JSON.stringify(o.output).includes("safe read result"),
+            ),
+          ).toBe(true);
+          expect(
+            emitted.some(
+              (o) =>
+                o.kind === "message-settled" &&
+                o.message.text === "observed result: safe read result",
+            ),
+          ).toBe(true);
           if (sample >= 0) {
             samples[arm].open.push(opened);
             samples[arm].turn.push(turn);
             samples[arm].bytes.push(await bytes(join(at, "execution")));
-            samples[arm].observations.push(observations);
+            samples[arm].observations.push(emitted.length);
           }
         }
       const report = {

@@ -47,14 +47,20 @@ const runtime = createDurableSpikeRuntime({
     },
   },
 });
+let completed!: () => void;
+const resumedCompletion = new Promise<void>((resolve) => {
+  completed = resolve;
+});
 const spec = fixtureSpec(directory, async (observation) => {
   await translator.translate(observation, async (fact) => {
     facts.push(fact);
     await appendFile(join(directory, `product-${phase}.jsonl`), `${JSON.stringify(fact)}\n`);
   });
+  if (observation.kind === "turn" && observation.state === "completed") completed();
 });
 const handle = await runtime.startSession(spec);
-await handle.submitUserMessage(`run ${scenario}`, "queue", "command-497");
+if (first) await handle.submitUserMessage(`run ${scenario}`, "queue", "command-497");
+else await resumedCompletion; // Explicit resume must work BEFORE any repeated submit.
 const once = await handle.reconcile(null);
 const again = await handle.reconcile(once.cursor);
 // Simulate an accepted Command whose receipt reply was lost; same key MUST not ask twice.
