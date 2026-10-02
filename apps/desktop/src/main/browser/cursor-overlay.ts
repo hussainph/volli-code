@@ -152,8 +152,10 @@ interface TabCursorState {
   point: { x: number; y: number } | null;
   gesture: SessionCursorGesture;
   pressKey: number;
-  /** Epoch ms until which the label stays pinned; 0 for not pinned. */
-  labelPinnedUntil: number;
+  /** Epoch ms until which the label stays pinned; null until its first drawing is acknowledged. */
+  labelPinnedUntil: number | null;
+  /** Latest pinned drawing awaiting acknowledgement; stale pushes cannot start a new hold's pin. */
+  labelPinSeq: number | null;
   /** Exiting: fading (release, turn end) or handing off (takeover). */
   exit: "fade" | "handoff" | null;
   /** The holder last drawn, so an exit keeps the colour of the hold that ended. */
@@ -193,6 +195,7 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
         gesture: null,
         pressKey: 0,
         labelPinnedUntil: 0,
+        labelPinSeq: null,
         exit: null,
         lastHolder: undefined,
       };
@@ -299,6 +302,7 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     );
     lastPlaced = { x: bounds.x, y: bounds.y };
     seq += 1;
+    if (state.labelPinnedUntil === null && state.exit === null) state.labelPinSeq = seq;
     const pushed: CursorOverlayState = {
       seq,
       color: holder.color,
@@ -306,7 +310,7 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
       present: state.exit === null,
       gesture: state.gesture,
       pressKey: state.pressKey,
-      labelPinned: state.labelPinnedUntil > Date.now(),
+      labelPinned: state.labelPinnedUntil === null || state.labelPinnedUntil > Date.now(),
       handoff: state.exit === "handoff",
       reducedMotion,
     };
@@ -332,6 +336,21 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     const resolve = acks.get(args[0]);
     acks.delete(args[0]);
     resolve?.();
+    for (const [tabId, state] of states) {
+      if (
+        state.labelPinSeq !== args[0] ||
+        state.labelPinnedUntil !== null ||
+        state.exit !== null ||
+        !deps.host.isOnScreen(tabId)
+      ) {
+        continue;
+      }
+      // Boot/subscription readiness is not a drawing. Start the whole pin
+      // only once the page acknowledges a state that actually shows it.
+      state.labelPinSeq = null;
+      state.labelPinnedUntil = Date.now() + SESSION_CURSOR_LABEL_PIN_MS;
+      later(SESSION_CURSOR_LABEL_PIN_MS, () => render());
+    }
   };
   const onSize = (event: { sender: { id: number } }, ...args: unknown[]): void => {
     if (!fromOverlay(event)) return;
@@ -346,11 +365,10 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     const firstReport = !ready;
     ready = true;
     size = { width: Math.ceil(reported.width), height: Math.ceil(reported.height) };
-    // Resize in place: the tip does not move, only how much of the page the
-    // view covers. The first report skips it and lets {@link onReady}'s own
-    // render place the view, so the page is not moved twice for one message.
+    // The first report proves the page subscribed. Replay the current state:
+    // all pre-boot pushes were lost. Its drawing ACK starts the label pin.
     if (firstReport) {
-      onReady();
+      render();
       return;
     }
     if (view !== null && attachedTo !== null && lastPlaced !== null) {
@@ -358,33 +376,6 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     }
   };
 
-  /**
-   * The page's first word, and the first moment a state push can reach it.
-   *
-   * The overlay's view is built lazily inside the first `render()`, which then
-   * sends the state straight at a page that has not loaded — and a `send`
-   * before the renderer is listening goes nowhere. The label is pinned for
-   * {@link SESSION_CURSOR_LABEL_PIN_MS} from the moment the hold was taken, so
-   * on any machine where the page takes longer than that to boot, every push
-   * it can actually hear already says `labelPinned: false`: the person is
-   * never told which Session took their tab, and the view never grows past the
-   * bare arrow. A dev Mac boots inside the pin and a CI runner does not, which
-   * is why this only ever showed up there.
-   *
-   * So the pin runs from when it could first be SEEN. A pin still live is left
-   * alone — the fast path already worked — and a hold that has since ended
-   * gets nothing but the render it was owed.
-   */
-  const onReady = (): void => {
-    const target = drawable();
-    if (target !== null && target.state.exit === null && target.state.labelPinnedUntil > 0) {
-      if (target.state.labelPinnedUntil <= Date.now()) {
-        target.state.labelPinnedUntil = Date.now() + SESSION_CURSOR_LABEL_PIN_MS;
-        later(SESSION_CURSOR_LABEL_PIN_MS, () => render());
-      }
-    }
-    render();
-  };
   // Both controls act on the tab the overlay is DRAWING, which is the one the
   // person is looking at when they press them — not merely one that is up.
   const onTakeOver = (event: { sender: { id: number } }): void => {
@@ -411,6 +402,8 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
       return;
     }
     state.exit = exit;
+    state.labelPinSeq = null;
+    state.labelPinnedUntil = 0;
     state.gesture = null;
     render();
     later(EXIT_MS, () => {
@@ -424,8 +417,10 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
       case "taken": {
         const state = stateOf(event.tabId);
         state.exit = null;
-        state.labelPinnedUntil = Date.now() + SESSION_CURSOR_LABEL_PIN_MS;
-        later(SESSION_CURSOR_LABEL_PIN_MS, () => render());
+        // No deadline while the page is booting, hidden, or has yet to draw.
+        // A non-answering overlay still never extends the action's ACK bound.
+        state.labelPinnedUntil = null;
+        state.labelPinSeq = null;
         render();
         return;
       }
