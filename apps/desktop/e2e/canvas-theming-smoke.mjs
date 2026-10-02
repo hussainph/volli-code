@@ -38,7 +38,7 @@
  * from the deleted smoke close to verbatim — those surfaces were meant to
  * survive the migration untouched, so proving they did is the point.
  *
- * MANUALLY RUN (needs a display + the built app); CI does not run it:
+ * CORE E2E in CI (needs the built app + macOS display); targeted local run:
  *
  *   pnpm -w run build
  *   node apps/desktop/e2e/canvas-theming-smoke.mjs
@@ -188,12 +188,8 @@ const ABANDONED_HEX = "#7a2ea8";
  */
 const OVERLAY_FONT_SIZE = 14;
 
-/**
- * Comfortably past the 300ms crossfade (renderer/src/theme/scope-transition.ts).
- * Spent only to prove the view transition has torn itself down, so a generous
- * margin costs one wait per use.
- */
-const SCOPE_SETTLE_MS = 700;
+/** Keep the no-scope-change check recording long enough to catch a delayed, unwanted swap. */
+const NO_SCOPE_CHANGE_OBSERVE_MS = 700;
 
 /**
  * `--theme-scope-crossfade` at rest and under reduced motion (globals.css).
@@ -630,9 +626,10 @@ async function watchScopeRepaint(page) {
   await page.evaluate(() => {
     cancelAnimationFrame(window.volliRepaint?.raf ?? 0);
     const started = performance.now();
-    const state = { runs: [], anims: [] };
+    const state = { runs: [], anims: [], frames: 0 };
     let wasActive = false;
     const tick = () => {
+      state.frames += 1;
       const active = document.documentElement.matches(":active-view-transition");
       // The rising edge only: one entry per swap, however many frames it spans.
       if (active && !wasActive) state.runs.push(Math.round(performance.now() - started));
@@ -651,8 +648,7 @@ async function watchScopeRepaint(page) {
       }
       window.volliRepaint.raf = requestAnimationFrame(tick);
     };
-    window.volliRepaint = { state, raf: 0 };
-    tick();
+    window.volliRepaint = { state, raf: requestAnimationFrame(tick) };
   });
 }
 
@@ -677,6 +673,31 @@ const readScopeRepaint = (page) =>
       },
     };
   });
+
+/** Wait for the RAF sampler, not just the token write inside the update callback. */
+async function observedScopeRepaint(page) {
+  await page.waitForFunction(() => (window.volliRepaint?.state.runs.length ?? 0) > 0, undefined, {
+    timeout: 5000,
+  });
+  return readScopeRepaint(page);
+}
+
+/** Wait for engine teardown and a fresh sampled frame; a stuck transition still fails. */
+async function settledScopeRepaint(page, { observeMs = 0 } = {}) {
+  const boundary = await page.evaluate(
+    (ms) => ({ frames: window.volliRepaint.state.frames, deadline: performance.now() + ms }),
+    observeMs,
+  );
+  await page.waitForFunction(
+    ({ frames, deadline }) =>
+      window.volliRepaint.state.frames > frames &&
+      performance.now() >= deadline &&
+      !document.documentElement.matches(":active-view-transition"),
+    boundary,
+    { timeout: 5000 },
+  );
+  return readScopeRepaint(page);
+}
 
 /** Did the swap actually run a view transition? */
 const crossfaded = (trace) => trace.runs.length >= 1;
@@ -954,9 +975,8 @@ try {
     await watchScopeRepaint(page);
     await segment(page, "appearance-mode", "dark").click();
     await waitForToken(page, "--background", DARK["--background"]);
-    const during = await readScopeRepaint(page);
-    await sleep(SCOPE_SETTLE_MS);
-    const after = await readScopeRepaint(page);
+    const during = await observedScopeRepaint(page);
+    const after = await settledScopeRepaint(page);
     return {
       ok:
         crossfaded(during) &&
@@ -979,9 +999,8 @@ try {
     await watchScopeRepaint(page);
     await segment(page, "appearance-mode", "light").click();
     await waitForToken(page, "--background", LIGHT["--background"]);
-    const during = await readScopeRepaint(page);
-    await sleep(SCOPE_SETTLE_MS);
-    const after = await readScopeRepaint(page);
+    const during = await observedScopeRepaint(page);
+    const after = await settledScopeRepaint(page);
     await page.emulateMedia({ reducedMotion: null });
     return {
       ok:
@@ -1250,9 +1269,8 @@ cursor-style = block
     await watchScopeRepaint(page);
     await selectProject(page, PROJECT_B);
     const applied = await waitForToken(page, "--background", globalBackground, { timeout: 8000 });
-    const during = await readScopeRepaint(page);
-    await sleep(SCOPE_SETTLE_MS);
-    const after = await readScopeRepaint(page);
+    const during = await observedScopeRepaint(page);
+    const after = await settledScopeRepaint(page);
     return {
       ok: applied === globalBackground && crossfaded(during) && after.active === false,
       detail: `--background=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
@@ -1316,10 +1334,10 @@ cursor-style = block
           ? stored.canvas
           : null;
       });
-      await sleep(SCOPE_SETTLE_MS);
-
+      // This negative assertion needs an observation window, not an expected
+      // rising edge. Keep recording through that window and wait for real idle.
+      const armed = await settledScopeRepaint(page, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
       const paints = await readBackgroundPaints(page);
-      const armed = await readScopeRepaint(page);
       const stored = await storedTheme(page);
       // At most ONE excursion is tolerated, and measured runs show zero. The
       // editor's every-edit-previews-first contract (canvas-editor.tsx)

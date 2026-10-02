@@ -344,7 +344,10 @@ describe("BackgroundShellHost", () => {
       host,
       "printenv VOLLI_SESSION_TOKEN; printenv HOME; printenv VOLLI_HOST_ONLY; echo end",
     );
-    expect(started.output).toBe("tok-shared\nend\n");
+    // Environment isolation is an assertion on the whole command, not on how
+    // many printenv processes managed to finish inside start's 150ms window.
+    await until(() => host.tailOf(started.shell.shellId)?.shell.state === "exited");
+    expect(host.tailOf(started.shell.shellId)?.output).toBe("tok-shared\nend\n");
   });
 
   it("gives the renderer every shell's chrome and tail, and lets the person kill one", async () => {

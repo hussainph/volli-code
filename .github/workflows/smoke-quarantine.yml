@@ -1,0 +1,66 @@
+name: Smoke quarantine
+
+# Non-gating observation lane, not deleted coverage. Repeat-flake threshold,
+# evidence and return criteria: docs/research/smoke-flakes-2026-10.md and
+# docs/research/smoke-suite-policy.md. Each entry has a Backlog fix ticket.
+# A smoke red is visible in the summary/artifact but does not make this workflow
+# red (or send failed-smoke emails). Infrastructure/build failures still do.
+# Never include this workflow in CI gate or enable auto-merge here.
+on:
+  schedule:
+    - cron: "31 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-quarantine-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quarantine:
+    name: Quarantined smoke observations (non-gating)
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Observe quarantined smokes (failure reported, not gating)
+        id: observe
+        continue-on-error: true
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier quarantine --jobs 4
+
+      - name: Mark non-gating observation outcome
+        if: always()
+        env:
+          OUTCOME: ${{ steps.observe.outcome }}
+        run: |
+          echo "### Quarantine lane (non-gating): $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          echo "Probe failures are observations, not green assertions. See both-attempt artifacts and Backlog fix tickets VC-523–VC-526." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload quarantine smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-quarantine-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30

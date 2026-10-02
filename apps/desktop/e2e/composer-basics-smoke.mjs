@@ -74,8 +74,27 @@ const titleInput = (page) => composer(page).getByPlaceholder("Ticket title");
 /** Click the header "New ticket" button; return whether the COMPOSER (not the old dialog) opened. */
 async function openComposerViaHeader(page) {
   await page.getByRole("button", { name: "New ticket", exact: true }).click();
-  await sleep(350);
-  return (await composer(page).count()) === 1;
+  const opened = await waitUntil(
+    "composer to open with an editable title",
+    async () =>
+      (await composer(page).count()) === 1 &&
+      (await titleInput(page).isVisible()) &&
+      (await titleInput(page).isEditable()),
+    { timeout: 3000 },
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (opened) {
+    // Monaco and Radix finish mounting asynchronously. Deliver keyboard actions
+    // to the ready title, not to whichever element owned focus before the open.
+    await titleInput(page).focus();
+    await waitUntil(
+      "composer title to receive focus",
+      () => titleInput(page).evaluate((el) => el === document.activeElement),
+      { timeout: 3000 },
+    );
+  }
+  return opened;
 }
 
 /** Close the composer and wait until no Radix dialog remains, so the next flow starts clean. */
@@ -425,11 +444,14 @@ async function main() {
 
     // === 9. Escape closes the dialog (passes against today's dialog too) ======
     await attempt(9, "Escape closes the open dialog", async () => {
-      await page.getByRole("button", { name: "New ticket", exact: true }).click();
-      await sleep(300);
+      await openComposerViaHeader(page);
       const openCount = await page.getByRole("dialog").count();
       await page.keyboard.press("Escape");
-      await sleep(300);
+      await waitUntil(
+        "dialog to close after Escape",
+        async () => (await page.getByRole("dialog").count()) === 0,
+        { timeout: 3000 },
+      );
       const closedCount = await page.getByRole("dialog").count();
       return {
         ok: openCount === 1 && closedCount === 0,

@@ -19,9 +19,10 @@
  * port, no shared path, nothing to collide.
  *
  * Usage:
- *   node apps/desktop/scripts/run-smokes.mjs                  # everything
- *   node apps/desktop/scripts/run-smokes.mjs --tier boot      # the fail-fast tier
- *   node apps/desktop/scripts/run-smokes.mjs --tier rest      # everything else
+ *   node apps/desktop/scripts/run-smokes.mjs                  # every gating probe
+ *   node apps/desktop/scripts/run-smokes.mjs --tier core      # core e2e (boot is an alias)
+ *   node apps/desktop/scripts/run-smokes.mjs --tier rest      # extended gating journeys
+ *   node apps/desktop/scripts/run-smokes.mjs --tier quarantine # nightly observations
  *   node apps/desktop/scripts/run-smokes.mjs --shard 1/3      # one shard of a matrix
  *   node apps/desktop/scripts/run-smokes.mjs --jobs 4         # concurrency (default 4)
  *   node apps/desktop/scripts/run-smokes.mjs --list           # print, run nothing
@@ -30,9 +31,11 @@
  * fresh machine, `ensure:electron`.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { createSmokeReporter, runWithRetry, smokeAttemptEnvironment } from "./smoke-results.mjs";
 
 const E2E_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "e2e");
 const REPO_ROOT = resolve(E2E_DIR, "..", "..", "..");
@@ -40,8 +43,9 @@ const REPO_ROOT = resolve(E2E_DIR, "..", "..", "..");
 /**
  * Probes this lane will not run, each with the reason it cannot.
  *
- * Anything NOT listed here runs. Adding a name is a deliberate act: it means
- * the probe cannot work on a clean CI runner, not that it is inconvenient.
+ * Anything NOT listed here, credential-gated or in SMOKE_QUARANTINE gates by
+ * default. This legacy deny-list is distinct from the measured nightly lane.
+ * Adding a name is deliberate, not a way to hide an inconvenient red.
  */
 const DENY = new Map([
   // NOTE: probes that need real Pi credentials are NOT listed here. They are
@@ -168,17 +172,43 @@ const DENY = new Map([
 ]);
 
 /**
- * The fail-fast tier: if the app cannot boot, these say so in about a minute
- * instead of letting a full shard matrix spend ten proving it repeatedly.
- * Chosen because each one boots the app through a different door — board,
- * composer, terminal, worktree, and the agent socket.
+ * Clearly named core e2e: gates every desktop PR AND runs after each main merge.
+ * Boot/board, session/composer, terminal/worktree, CLI round-trip, DB recovery
+ * and theming. Extended journeys stay gating in the rest shards.
+ * `boot` remains a CLI alias for `core`, not a smaller hidden selection.
  */
-const BOOT_TIER = new Set([
+export const CORE_E2E = new Set([
   "board-smoke.mjs",
   "composer-basics-smoke.mjs",
   "terminal-smoke.mjs",
   "worktree-smoke.mjs",
   "agent-socket-smoke.mjs",
+  "session-rpc-transport-smoke.mjs",
+  "agent-cli-roundtrip-smoke.mjs",
+  "database-recovery-smoke.mjs",
+  "canvas-theming-smoke.mjs",
+]);
+
+/**
+ * Measured repeat flakers, NOT silent exclusions. Run nightly with artifacts;
+ * each has a Backlog owner and a measured return condition. Selection/threshold
+ * evidence: docs/research/smoke-flakes-2026-10.md. Never quarantine sole core
+ * coverage, deterministic related failures, or credential-dependent probes.
+ */
+export const SMOKE_QUARANTINE = new Map([
+  [
+    "browser-recovery-smoke.mjs",
+    "VC-523: 59/225 confirmed recoveries; lost click result / preview recovery",
+  ],
+  [
+    "automations-picker-smoke.mjs",
+    "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
+  ],
+  ["bare-path-env-smoke.mjs", "VC-525: 16/227 confirmed recoveries; harness readiness marker"],
+  [
+    "browser-tab-smoke.mjs",
+    "VC-526: 16/226 confirmed recoveries; hold/cursor UI readiness hypothesis",
+  ],
 ]);
 
 /**
@@ -218,7 +248,7 @@ const SERIAL = new Set([
  */
 const EXTRA = new Set(["agent-cli-token-bench.mjs"]);
 
-function parseArgs(argv) {
+export function parseArgs(argv, concurrencyHint = process.env.VOLLI_CONCURRENCY_HINT) {
   const args = { tier: "all", shard: null, jobs: 4, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -228,12 +258,15 @@ function parseArgs(argv) {
     else if (arg === "--shard") args.shard = argv[(i += 1)];
     else throw new Error(`unknown argument: ${arg}`);
   }
-  if (!["all", "boot", "rest"].includes(args.tier)) {
-    throw new Error(`--tier must be all | boot | rest (got ${args.tier})`);
+  if (!["all", "core", "boot", "rest", "quarantine"].includes(args.tier)) {
+    throw new Error(`--tier must be all | core | boot | rest | quarantine (got ${args.tier})`);
   }
   if (!Number.isInteger(args.jobs) || args.jobs < 1) {
     throw new Error(`--jobs must be a positive integer (got ${args.jobs})`);
   }
+  const budget = Number(concurrencyHint);
+  if (Number.isInteger(budget) && budget > 0) args.jobs = Math.min(args.jobs, budget);
+  if (args.tier === "boot") args.tier = "core";
   return args;
 }
 
@@ -247,16 +280,32 @@ function parseArgs(argv) {
  * discovered by watching CI abort. The call is the requirement, so the call is
  * what this reads. Run them locally with `pnpm smoke:pi`.
  */
-function needsPiCredentials(name) {
-  return readFileSync(join(E2E_DIR, name), "utf8").includes("ensurePiAuthInto(");
+function needsPiCredentials(name, e2eDir) {
+  return readFileSync(join(e2eDir, name), "utf8").includes("ensurePiAuthInto(");
 }
 
-/** Every runnable probe, sorted, with denied and credential-gated names removed. */
-function discover() {
-  const found = readdirSync(E2E_DIR)
+/** New probes join the gate by default; quarantine is an explicit separate lane. */
+export function selectSmokes(args, e2eDir = E2E_DIR) {
+  let names = readdirSync(e2eDir)
     .filter((name) => name.endsWith("-smoke.mjs") || EXTRA.has(name))
-    .toSorted();
-  return found.filter((name) => !DENY.has(name) && !needsPiCredentials(name));
+    .toSorted()
+    .filter((name) => !DENY.has(name) && !needsPiCredentials(name, e2eDir));
+  if (args.tier === "quarantine") {
+    for (const name of SMOKE_QUARANTINE.keys()) {
+      if (!names.includes(name))
+        throw new Error(`quarantined smoke missing or unrunnable: ${name}`);
+    }
+    names = names.filter((name) => SMOKE_QUARANTINE.has(name));
+  } else {
+    names = names.filter((name) => !SMOKE_QUARANTINE.has(name));
+    if (args.tier === "core" || args.tier === "boot") {
+      for (const name of CORE_E2E) {
+        if (!names.includes(name)) throw new Error(`core e2e smoke missing or unrunnable: ${name}`);
+      }
+      names = names.filter((name) => CORE_E2E.has(name));
+    } else if (args.tier === "rest") names = names.filter((name) => !CORE_E2E.has(name));
+  }
+  return args.shard ? applyShard(names, args.shard) : names;
 }
 
 /**
@@ -276,136 +325,158 @@ function applyShard(names, spec) {
   return names.filter((_, i) => i % total === index - 1);
 }
 
-/**
- * Run one probe, and give a FAILURE exactly one second chance.
- *
- * These are GUI end-to-end probes driving a real Electron app on shared CI
- * hardware, where a lost frame or a slow window is not a defect in the thing
- * under test. Without this, one such blip turns a subsequent PR red and
- * teaches everyone to ignore the lane — which costs more than it would ever
- * catch.
- *
- * One retry, not many: a genuine failure still fails twice and still reports,
- * so nothing is swallowed. A probe that passes only on the retry is announced
- * as FLAKY, so the fact stays visible rather than being smoothed away.
- */
-async function runWithRetry(name) {
-  const first = await runOne(name);
-  if (first.code === 0) return first;
-  const second = await runOne(name);
-  const ms = first.ms + second.ms;
-  return second.code === 0 ? { ...second, flaky: true, ms } : { ...second, ms };
-}
-
-/** Run one probe to completion, capturing its output for ordered replay. */
-function runOne(name) {
+/** A fresh probe process per attempt; logs persist as bytes arrive, even on cancellation. */
+export function runOne(
+  name,
+  number,
+  {
+    reporter,
+    children = new Set(),
+    e2eDir = E2E_DIR,
+    repoRoot = REPO_ROOT,
+    environment = process.env,
+  } = {},
+) {
+  const evidence = reporter?.startAttempt(name, number);
   return new Promise((resolvePromise) => {
     const started = Date.now();
-    // ELECTRON_RUN_AS_NODE leaks in from some parents and makes the built app
-    // boot as plain Node, which fails every probe confusingly. Delete the key
-    // outright — assigning `undefined` can arrive as the STRING "undefined".
-    // (`smoke:docs-shots` in package.json does the same with `env -u`.)
-    const childEnv = { ...process.env };
-    delete childEnv.ELECTRON_RUN_AS_NODE;
-    // The shared launcher also defaults this for its Electron child, but the
-    // probe process must carry it too: app-launch tests can spawn a second app
-    // generation through the generated CLI rather than through smoke-kit.
-    childEnv.VOLLI_QUIET_WINDOWS = childEnv.VOLLI_QUIET_WINDOWS === "0" ? "0" : "1";
-    const child = spawn(process.execPath, [join(E2E_DIR, name)], {
-      cwd: REPO_ROOT,
+    const child = spawn(process.execPath, [join(e2eDir, name)], {
+      cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
-      env: childEnv,
+      env: smokeAttemptEnvironment(environment),
     });
+    children.add(child);
     let output = "";
-    child.stdout.on("data", (chunk) => (output += chunk));
-    child.stderr.on("data", (chunk) => (output += chunk));
-    child.on("error", (error) => {
-      resolvePromise({
-        name,
-        code: 1,
-        output: `${output}\nspawn failed: ${error.message}`,
-        ms: Date.now() - started,
-      });
+    let settled = false;
+    const collect = (chunk) => {
+      output += chunk;
+      evidence?.output(chunk);
+    };
+    const finish = (code, signal = null) => {
+      if (settled) return;
+      settled = true;
+      children.delete(child);
+      const result = { name, number, code, signal, output, ms: Date.now() - started };
+      evidence?.finish(result);
+      resolvePromise(result);
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.once("error", (error) => {
+      collect(`\nspawn failed: ${error.message}\n`);
+      finish(1);
     });
-    child.on("close", (code) => {
-      resolvePromise({ name, code: code ?? 1, output, ms: Date.now() - started });
-    });
+    child.once("close", (code, signal) => finish(code ?? 1, signal));
   });
 }
 
-/** A fixed-size worker pool over `names`. */
-async function runPool(names, jobs) {
+/** A fixed-size worker pool over `names`; never schedule retries after interruption. */
+async function runPool(names, jobs, { reporter, children, isInterrupted }) {
   const queue = [...names];
   const results = [];
   const workers = Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-      const result = await runWithRetry(next);
+    for (let next = queue.shift(); next !== undefined && !isInterrupted(); next = queue.shift()) {
+      const result = await runWithRetry(
+        next,
+        (name, number) => runOne(name, number, { reporter, children }),
+        isInterrupted,
+      );
       results.push(result);
-      const status = result.code !== 0 ? "FAIL" : result.flaky ? "FLAKY" : "PASS";
-      process.stdout.write(`  ${status}  ${result.name} (${(result.ms / 1000).toFixed(1)}s)\n`);
+      reporter.recordResult(result);
+      process.stdout.write(
+        `  ${result.status}  ${result.name} (${(result.ms / 1000).toFixed(1)}s)\n`,
+      );
     }
   });
   await Promise.all(workers);
   return results;
 }
 
-const args = parseArgs(process.argv.slice(2));
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const names = selectSmokes(args);
+  if (args.list) {
+    for (const name of names) process.stdout.write(`${name}\n`);
+    return;
+  }
+  if (names.length === 0) throw new Error("no smokes selected (refusing an empty green lane)");
 
-let names = discover();
-if (args.tier === "boot") names = names.filter((name) => BOOT_TIER.has(name));
-else if (args.tier === "rest") names = names.filter((name) => !BOOT_TIER.has(name));
-if (args.shard) names = applyShard(names, args.shard);
-
-if (args.list) {
-  for (const name of names) process.stdout.write(`${name}\n`);
-  process.exit(0);
+  const scratchRoot = join(REPO_ROOT, ".tmp");
+  mkdirSync(scratchRoot, { recursive: true });
+  const reportDir =
+    process.env.VOLLI_SMOKE_REPORT_DIR ?? mkdtempSync(join(scratchRoot, "smoke-results-"));
+  const reporter = createSmokeReporter({
+    reportDir,
+    summaryPath: process.env.GITHUB_STEP_SUMMARY,
+    names,
+    metadata: {
+      ...args,
+      runId: process.env.GITHUB_RUN_ID ?? null,
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+      sha: process.env.GITHUB_SHA ?? null,
+      event: process.env.GITHUB_EVENT_NAME ?? null,
+    },
+  });
+  const children = new Set();
+  let interruptedBy = null;
+  const interrupt = (signal) => {
+    interruptedBy = signal;
+    for (const child of children) child.kill(signal);
+  };
+  const onInterrupt = () => interrupt("SIGINT");
+  const onTerminate = () => interrupt("SIGTERM");
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onTerminate);
+  const execution = { reporter, children, isInterrupted: () => interruptedBy !== null };
+  const startedAt = Date.now();
+  try {
+    const concurrent = names.filter((name) => !SERIAL.has(name));
+    const exclusive = names.filter((name) => SERIAL.has(name));
+    const label = `tier=${args.tier}${args.shard ? ` shard=${args.shard}` : ""} jobs=${args.jobs}`;
+    process.stdout.write(`Running ${names.length} smoke(s) — ${label}\nEvidence: ${reportDir}\n`);
+    if (exclusive.length > 0)
+      process.stdout.write(`  (exclusive, after the rest: ${exclusive.join(", ")})\n`);
+    if (args.tier !== "quarantine") {
+      process.stdout.write("Quarantined to nightly Smoke quarantine (not deleted):\n");
+      for (const [name, reason] of SMOKE_QUARANTINE)
+        process.stdout.write(`  - ${name}: ${reason}\n`);
+    }
+    if (args.tier !== "core") {
+      process.stdout.write(`Skipped ${DENY.size} by legacy deny-list:\n`);
+      for (const [name, reason] of DENY) process.stdout.write(`  - ${name}: ${reason}\n`);
+    }
+    // Fully drain concurrent probes before terminal's exclusive pass.
+    const results = await runPool(concurrent, args.jobs, execution);
+    results.push(...(await runPool(exclusive, 1, execution)));
+    const failures = results.filter((result) => result.code !== 0);
+    const flaky = results.filter((result) => result.flaky);
+    for (const result of results.filter((candidate) => candidate.code !== 0 || candidate.flaky)) {
+      for (const attempt of result.attempts) {
+        process.stdout.write(
+          `\n::group::${result.status === "FAIL" ? "FAILED" : "FLAKY"} ${result.name} attempt ${attempt.number} (exit ${attempt.code}${attempt.signal ? `, ${attempt.signal}` : ""})\n${attempt.output}\n::endgroup::\n`,
+        );
+      }
+    }
+    process.stdout.write(
+      `\n${results.length - failures.length}/${names.length} passed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s\n`,
+    );
+    if (flaky.length)
+      process.stdout.write(
+        `FLAKY (passed on retry): ${flaky.map((result) => result.name).join(", ")}\n`,
+      );
+    if (failures.length)
+      process.stdout.write(`FAILED: ${failures.map((result) => result.name).join(", ")}\n`);
+    if (failures.length || interruptedBy || results.length !== names.length) process.exitCode = 1;
+  } finally {
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
+    reporter.finish(interruptedBy);
+  }
 }
 
-if (names.length === 0) {
-  process.stdout.write("no smokes selected\n");
-  process.exit(0);
-}
-
-const concurrent = names.filter((name) => !SERIAL.has(name));
-const exclusive = names.filter((name) => SERIAL.has(name));
-
-const label = `tier=${args.tier}${args.shard ? ` shard=${args.shard}` : ""} jobs=${args.jobs}`;
-process.stdout.write(`Running ${names.length} smoke(s) — ${label}\n`);
-if (exclusive.length > 0) {
-  process.stdout.write(
-    `  (${exclusive.length} run exclusively, after the rest: ${exclusive.join(", ")})\n`,
-  );
-}
-if (DENY.size > 0 && args.tier !== "boot") {
-  process.stdout.write(`Skipped ${DENY.size} by deny-list:\n`);
-  for (const [name, reason] of DENY) process.stdout.write(`  - ${name}: ${reason}\n`);
-}
-
-const startedAt = Date.now();
-// The concurrent pass must fully drain before the exclusive pass starts — that
-// is the entire point of the exclusive set.
-const results = await runPool(concurrent, args.jobs);
-results.push(...(await runPool(exclusive, 1)));
-const failures = results.filter((result) => result.code !== 0);
-
-// Failures replay last and in full: in a concurrent run the interleaved live
-// output is unreadable, and the thing a reader came for is the failure.
-for (const failure of failures) {
-  process.stdout.write(`\n::group::FAILED ${failure.name}\n${failure.output}\n::endgroup::\n`);
-}
-
-const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-const flaky = results.filter((result) => result.flaky);
-process.stdout.write(
-  `\n${results.length - failures.length}/${results.length} passed in ${elapsed}s\n`,
-);
-if (flaky.length > 0) {
-  // Surfaced rather than smoothed over: passing only on the retry is a fact
-  // about the probe, worth acting on before it becomes a failure nobody trusts.
-  process.stdout.write(`FLAKY (passed on retry): ${flaky.map((r) => r.name).join(", ")}\n`);
-}
-
-if (failures.length > 0) {
-  process.stdout.write(`FAILED: ${failures.map((failure) => failure.name).join(", ")}\n`);
-  process.exit(1);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main().catch((error) => {
+    console.error(`smoke runner failed: ${error?.stack ?? error}`);
+    process.exitCode = 1;
+  });
 }

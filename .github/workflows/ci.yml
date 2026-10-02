@@ -34,7 +34,19 @@ name: CI
 #     once. They are safely parallel because lib/smoke-kit.mjs mkdtemp's a
 #     fresh scratch dir, database and --user-data-dir per run, and the agent
 #     socket resolves under that user-data dir.
-#   - The BOOT TIER runs BESIDE the smoke shards, not before them. It used to
+#   - CORE E2E (run-smokes.mjs --tier core) gates every desktop PR and main
+#     merge: board, composer-basics, terminal, worktree, agent-socket,
+#     session-rpc-transport, agent-cli-roundtrip, database-recovery, canvas-theming.
+#     Extended journeys still gate in 3 rest shards. New probes join by default.
+#     Four measured repeat flakers run instead in smoke-quarantine.yml (nightly,
+#     non-gating, visibly reported): browser-recovery (VC-523), automations-picker
+#     (VC-524), bare-path-env (VC-525), browser-tab (VC-526). No smoke is deleted.
+#     Threshold/history: docs/research/smoke-flakes-2026-10.md. Core coverage is
+#     never blanket-quarantined; cheap contrast/animation/readiness fixes stay
+#     gating. Every failed smoke retries ONCE in a fresh profile. Retry-green
+#     is FLAKY in the job summary; both attempts/exit/signal/timing/native-window
+#     evidence are uploaded on success or failure with 30-day retention.
+#   - CORE E2E runs BESIDE the smoke shards, not before them. It used to
 #     gate them, so that an app that cannot start was reported in a minute and
 #     the shards never spent their time proving it again. That ordering put
 #     the boot tier's whole job (a median 3.6 min, most of it checkout,
@@ -165,8 +177,12 @@ jobs:
 
       # The live kickoff smoke needs credentials; its ledger/selection predicates
       # and card-opening helper are deterministic and must still run on every PR.
-      - name: Test kickoff smoke helpers
-        run: node --test apps/desktop/e2e/lib/kickoff-support.test.mjs
+      - name: Test smoke runner policy, reporting and helpers
+        run: >-
+          node --test apps/desktop/scripts/run-smokes.test.mjs
+          apps/desktop/scripts/smoke-quiet-check.test.mjs
+          apps/desktop/e2e/lib/kickoff-support.test.mjs
+          apps/desktop/e2e/lib/focus-ring-probe.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -486,13 +502,13 @@ jobs:
           --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
           test:coverage --maxWorkers=$(nproc)
 
-  # Five probes that each boot the app through a different door (board,
-  # composer, terminal, worktree, agent socket), plus the macOS-only licence
-  # assertions. It runs BESIDE the shard matrix rather than gating it — see
+  # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
+  # theming, plus the macOS-only licence assertions. It runs BESIDE the shard
+  # matrix rather than gating it — see
   # the header for why and for what that costs — so it is no longer what
   # stops the shards on a broken boot, only the quickest place to read one.
   smoke-boot:
-    name: Smoke (boot tier)
+    name: Smoke (core e2e)
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
     runs-on: macos-15
@@ -559,13 +575,24 @@ jobs:
           test -f "$resources/app.asar.unpacked/node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js"
           test -f "$resources/app.asar.unpacked/node_modules/quickjs-wasi/quickjs.wasm"
 
-      - name: Run boot tier and verify quiet native windows
-        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4
+      - name: Run core e2e and verify quiet native windows
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier core --jobs 4
 
-  # Everything else, sharded three ways and run four-at-a-time inside each
-  # shard. The runner script globs apps/desktop/e2e/*-smoke.mjs and subtracts a
-  # commented deny-list, so a smoke added in a PR runs in that same PR — no
-  # registration step to forget.
+      - name: Upload core smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-core-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Extended gating journeys, sharded three ways and four-at-a-time inside
+  # each shard. The runner globs apps/desktop/e2e/*-smoke.mjs and subtracts core,
+  # credential/legacy exclusions and measured nightly quarantine. A new smoke
+  # joins the gate in the same PR — no registration step to forget.
   #
   # Only on pull_request: a push to main has already been gated by its PR, and
   # holding three more macOS jobs against the 5-job concurrency cap would queue
@@ -602,7 +629,18 @@ jobs:
           vp run --filter @volli/desktop ensure:electron
 
       - name: Run shard ${{ matrix.shard }} of 3 and verify quiet native windows
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
+
+      - name: Upload shard smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-rest-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30
 
   # The one check a ruleset should require. It waits on every lane, including
   # ones that failed or were cancelled (`always()`), and passes only when each
@@ -662,6 +700,6 @@ jobs:
           expect "Test (desktop shards)" "$TEST_DESKTOP" success
           expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
           expect "Test (packages)" "$TEST_PACKAGES" success
-          expect "Smoke (boot tier)" "$SMOKE_BOOT" "$boot"
+          expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
           expect "Smoke (shards)" "$SMOKE_REST" "$rest"
           exit "$status"
