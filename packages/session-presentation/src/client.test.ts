@@ -91,7 +91,6 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     // Derived from the same attachment the edge reads it from (VC-285): an
     // attached Session that saved no Snapshot is running at the runtime's own
     // defaults, which is a fact rather than a gap.
-    authority: attachmentId === null ? null : { attachmentId, snapshot: null },
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
@@ -811,7 +810,6 @@ describe("stream folding", () => {
 
     expect(rpc.projectionQueries).toBe(1);
     expect(slice()!.projection?.liveExecutor?.id).toBe("attach-1");
-    expect(slice()!.projection?.authority?.attachmentId).toBe("attach-1");
   });
 
   it("asks for no projection on a transcript reference", async () => {

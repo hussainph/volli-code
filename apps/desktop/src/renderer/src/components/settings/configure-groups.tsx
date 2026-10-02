@@ -1,5 +1,5 @@
 /**
- * The Configure rail: two groups, eight categories, this project always.
+ * The Configure rail: two groups, seven categories, this project always.
  *
  * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
  * skills a repo's agents can reach and which commands it defines. Putting it
@@ -8,8 +8,6 @@
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
  *
- * Protection replaces Authority (VC-480). The category keeps its existing key
- * so stored selections and deep links still reach this project's policy.
  */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
@@ -17,7 +15,6 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import type { Project } from "@volli/shared";
 
@@ -25,39 +22,10 @@ import { ProjectAppearanceSettings } from "@renderer/components/pages/project-ap
 import type { PrefGroup } from "@renderer/components/settings/kit";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
-import { ProtectionPane } from "./configure/protection-pane";
 import { SessionsPane } from "./configure/sessions-pane";
 import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
-
-/** The rail matches a lowercased substring, including every label the page draws. */
-const PROTECTION_KEYWORDS: readonly string[] = [
-  "authority",
-  "permission",
-  "permissions",
-  "policy",
-  "enforce",
-  "observe",
-  "sandbox",
-  "guardrail",
-  "approval",
-  "escalation",
-  "denial",
-  "transcript",
-  "peek",
-
-  "protection",
-  "protect",
-  "protection is on",
-  "protection is off",
-  "approved actions",
-  "approvals",
-  "ledger",
-  "revoke",
-  "advanced",
-  "transcripts a session can read",
-];
 
 export function configureGroups(project: Project): readonly PrefGroup[] {
   return [
@@ -145,18 +113,6 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "refresh",
           ],
           content: <SecretsPane project={project} />,
-        },
-        {
-          // Agent, not Project: this is what this repo's agents are ALLOWED to
-          // do, which is the same question Skills and Commands answer about
-          // what they can reach. It is also the only surface in the product
-          // that writes authority policy — no agent verb projects it, by
-          // design (VC-172).
-          key: "authority",
-          label: "Protection",
-          icon: ShieldCheckIcon,
-          keywords: PROTECTION_KEYWORDS,
-          content: <ProtectionPane key={project.id} project={project} />,
         },
       ],
     },

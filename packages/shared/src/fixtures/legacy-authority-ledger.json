@@ -1,0 +1,627 @@
+{
+  "session": {
+    "id": "legacy-session",
+    "projectId": "project-1",
+    "ticketId": null,
+    "role": "project",
+    "parentSessionId": null,
+    "title": "Recorded Protection Session",
+    "createdAt": 100
+  },
+  "events": [
+    {
+      "id": "recorded-1",
+      "sessionId": "legacy-session",
+      "sequence": 1,
+      "occurredAt": 100,
+      "recordedAt": 100,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "session.created",
+        "session": {
+          "id": "legacy-session",
+          "projectId": "project-1",
+          "ticketId": null,
+          "role": "project",
+          "parentSessionId": null,
+          "title": "Recorded Protection Session",
+          "createdAt": 100
+        }
+      }
+    },
+    {
+      "id": "recorded-2",
+      "sessionId": "legacy-session",
+      "sequence": 2,
+      "occurredAt": 101,
+      "recordedAt": 101,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "attachment.opened",
+        "attachment": {
+          "id": "attachment-1",
+          "sessionId": "legacy-session",
+          "adapterId": "pi",
+          "venue": {
+            "id": "local",
+            "kind": "local"
+          },
+          "continuity": "native_resume",
+          "native": {
+            "id": "native-1",
+            "detail": null
+          },
+          "authority": {
+            "mode": "auto",
+            "location": "worktree",
+            "enforcement": "enforce",
+            "protection": true,
+            "judgmentMode": "auto",
+            "tools": ["read", "execute"],
+            "rulePackId": "builtin-v1",
+            "rulePackHash": "recorded-hash",
+            "classifierModel": "cloud/model",
+            "fallback": {
+              "consecutiveDenials": 3,
+              "sessionDenials": 20
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "recorded-3",
+      "sessionId": "legacy-session",
+      "sequence": 3,
+      "occurredAt": 102,
+      "recordedAt": 102,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "authority.denied",
+        "attachmentId": "attachment-1",
+        "turnId": "turn-1",
+        "tool": "execute",
+        "cause": "path.git-internals",
+        "reason": "Repository plumbing"
+      }
+    },
+    {
+      "id": "recorded-4",
+      "sessionId": "legacy-session",
+      "sequence": 4,
+      "occurredAt": 103,
+      "recordedAt": 103,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "authority.reviewed",
+        "attachmentId": "attachment-1",
+        "turnId": "turn-1",
+        "toolCallId": "call-1",
+        "tool": "execute",
+        "mode": "shadow",
+        "authoriser": "classifier",
+        "wouldFlag": true,
+        "reason": "Would block git push",
+        "category": "remote-write",
+        "answers": {
+          "safe": {
+            "type": "bool",
+            "value": false,
+            "confidence": 0.9,
+            "probability": 0.1
+          }
+        },
+        "missReason": null,
+        "thresholds": {
+          "allow": 0.85,
+          "flag": 0.85
+        }
+      }
+    },
+    {
+      "id": "recorded-5",
+      "sessionId": "legacy-session",
+      "sequence": 5,
+      "occurredAt": 104,
+      "recordedAt": 104,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.opened",
+        "interaction": {
+          "id": "ask:call-1",
+          "attachmentId": "attachment-1",
+          "kind": "permission",
+          "title": "Allow this action?",
+          "detail": "Protection refused this call",
+          "approval": {
+            "asked": "git push",
+            "because": "it changes the remote",
+            "reason": "git internals",
+            "stages": ["git push"],
+            "held": 0
+          },
+          "options": [
+            {
+              "id": "once",
+              "label": "Allow once",
+              "description": null
+            },
+            {
+              "id": "session",
+              "label": "Allow for this Session",
+              "description": null
+            },
+            {
+              "id": "reject",
+              "label": "Deny",
+              "description": null
+            }
+          ],
+          "multiple": false,
+          "native": {
+            "id": "native-1",
+            "detail": null
+          }
+        }
+      }
+    },
+    {
+      "id": "recorded-6",
+      "sessionId": "legacy-session",
+      "sequence": 6,
+      "occurredAt": 105,
+      "recordedAt": 105,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.resolved",
+        "attachmentId": "attachment-1",
+        "interactionId": "ask:call-1",
+        "resolution": {
+          "optionIds": ["session"],
+          "response": null
+        }
+      }
+    },
+    {
+      "id": "recorded-7",
+      "sessionId": "legacy-session",
+      "sequence": 7,
+      "occurredAt": 106,
+      "recordedAt": 106,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.opened",
+        "interaction": {
+          "id": "approval-retry:1:call-1",
+          "attachmentId": "attachment-1",
+          "kind": "permission",
+          "title": "Allow this action?",
+          "detail": "Protection refused this call",
+          "approval": {
+            "asked": "git push",
+            "because": "it changes the remote",
+            "reason": "git internals",
+            "stages": ["git push"],
+            "held": 0
+          },
+          "options": [
+            {
+              "id": "once",
+              "label": "Allow once",
+              "description": null
+            },
+            {
+              "id": "session",
+              "label": "Allow for this Session",
+              "description": null
+            },
+            {
+              "id": "reject",
+              "label": "Deny",
+              "description": null
+            }
+          ],
+          "multiple": false,
+          "native": {
+            "id": "native-1",
+            "detail": null
+          }
+        }
+      }
+    },
+    {
+      "id": "recorded-8",
+      "sessionId": "legacy-session",
+      "sequence": 8,
+      "occurredAt": 107,
+      "recordedAt": 107,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.cancelled",
+        "attachmentId": "attachment-1",
+        "interactionId": "approval-retry:1:call-1",
+        "reason": "abandoned"
+      }
+    },
+    {
+      "id": "recorded-9",
+      "sessionId": "legacy-session",
+      "sequence": 9,
+      "occurredAt": 108,
+      "recordedAt": 108,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.opened",
+        "interaction": {
+          "id": "ask:unanswered",
+          "attachmentId": "attachment-1",
+          "kind": "permission",
+          "title": "Allow this action?",
+          "detail": "Protection refused this call",
+          "approval": {
+            "asked": "git push",
+            "because": "it changes the remote",
+            "reason": "git internals",
+            "stages": ["git push"],
+            "held": 0
+          },
+          "options": [
+            {
+              "id": "once",
+              "label": "Allow once",
+              "description": null
+            },
+            {
+              "id": "session",
+              "label": "Allow for this Session",
+              "description": null
+            },
+            {
+              "id": "reject",
+              "label": "Deny",
+              "description": null
+            }
+          ],
+          "multiple": false,
+          "native": {
+            "id": "native-1",
+            "detail": null
+          }
+        }
+      }
+    },
+    {
+      "id": "recorded-10",
+      "sessionId": "legacy-session",
+      "sequence": 10,
+      "occurredAt": 109,
+      "recordedAt": 109,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "adapter.observed",
+        "attachmentId": "attachment-1",
+        "name": "approval-used",
+        "native": {
+          "kind": "approval-used",
+          "approvalId": "approval-1",
+          "summary": "Run git push",
+          "asked": "git push"
+        }
+      }
+    },
+    {
+      "id": "recorded-11",
+      "sessionId": "legacy-session",
+      "sequence": 11,
+      "occurredAt": 110,
+      "recordedAt": 110,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "adapter.observed",
+        "attachmentId": "attachment-1",
+        "name": "approval.revoked",
+        "native": {
+          "kind": "approval.revoked",
+          "approvalId": "approval-1"
+        }
+      }
+    },
+    {
+      "id": "recorded-12",
+      "sessionId": "legacy-session",
+      "sequence": 12,
+      "occurredAt": 111,
+      "recordedAt": 111,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "adapter.observed",
+        "attachmentId": "attachment-1",
+        "name": "approval.restored",
+        "native": {
+          "kind": "approval.restored",
+          "approvalId": "approval-1"
+        }
+      }
+    },
+    {
+      "id": "recorded-13",
+      "sessionId": "legacy-session",
+      "sequence": 13,
+      "occurredAt": 112,
+      "recordedAt": 112,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "adapter.observed",
+        "attachmentId": "attachment-1",
+        "name": "approval.revoke",
+        "native": {
+          "commandId": "old-approval.revoke",
+          "kind": "approval.revoke",
+          "approvalId": "approval-1"
+        }
+      }
+    },
+    {
+      "id": "recorded-14",
+      "sessionId": "legacy-session",
+      "sequence": 14,
+      "occurredAt": 113,
+      "recordedAt": 113,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "adapter.observed",
+        "attachmentId": "attachment-1",
+        "name": "approval.restore",
+        "native": {
+          "commandId": "old-approval.restore",
+          "kind": "approval.restore",
+          "approvalId": "approval-1"
+        }
+      }
+    },
+    {
+      "id": "recorded-15",
+      "sessionId": "legacy-session",
+      "sequence": 15,
+      "occurredAt": 114,
+      "recordedAt": 114,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "interaction.opened",
+        "interaction": {
+          "id": "ask:pre-protection",
+          "attachmentId": "attachment-1",
+          "kind": "permission",
+          "title": "Allow this action?",
+          "detail": "Protection refused this call",
+          "options": [
+            {
+              "id": "once",
+              "label": "Allow once",
+              "description": null
+            },
+            {
+              "id": "session",
+              "label": "Allow for this Session",
+              "description": null
+            },
+            {
+              "id": "reject",
+              "label": "Deny",
+              "description": null
+            }
+          ],
+          "multiple": false,
+          "native": {
+            "id": "native-1",
+            "detail": null
+          }
+        }
+      }
+    },
+    {
+      "id": "recorded-16",
+      "sessionId": "legacy-session",
+      "sequence": 16,
+      "occurredAt": 116,
+      "recordedAt": 116,
+      "provenance": {
+        "source": {
+          "kind": "system",
+          "id": "desktop",
+          "detail": null
+        },
+        "venue": {
+          "id": "local",
+          "kind": "local"
+        }
+      },
+      "payload": {
+        "kind": "transcript.referenced",
+        "attachmentId": "attachment-1",
+        "turnId": null,
+        "reference": {
+          "id": "recorded-approval-notice",
+          "mediaType": "application/vnd.volli.ui-message+json",
+          "digest": null
+        }
+      }
+    }
+  ],
+  "artifact": {
+    "version": 1,
+    "threadId": "thread:legacy-session:root",
+    "branchId": "branch:legacy-session:main",
+    "attemptId": "attempt:pi:approval-used:attachment-1:call-1:approval-1",
+    "turnId": null,
+    "message": {
+      "id": "pi:approval-used:attachment-1:call-1:approval-1",
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Allowed by your earlier approval: Run git push"
+        }
+      ],
+      "metadata": {
+        "kind": "session-host-notice",
+        "notice": {
+          "kind": "approval-used",
+          "approvalId": "approval-1",
+          "summary": "Run git push",
+          "asked": "git push"
+        }
+      }
+    }
+  }
+}

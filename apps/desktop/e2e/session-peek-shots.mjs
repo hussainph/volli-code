@@ -734,7 +734,7 @@ async function seedLedger(projectPath) {
             {
               kind: "interaction.opened",
               interaction: {
-                id: `ask:${session.id}-call`,
+                id: `ask-user:${session.id}-call`,
                 attachmentId,
                 kind: "question",
                 title: QUESTION.title,

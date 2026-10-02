@@ -964,17 +964,6 @@ const api = {
     set: (enabled: boolean, endpoint: string): Promise<AgentObservabilityResult> =>
       invoke("volli:agent-observability-set", enabled, endpoint),
   },
-  /**
-   * Protection's remembered approvals (VC-480). List and
-   * revoke only: a row is written in main, from a person's answer on a card.
-   */
-  protection: {
-    approvals: (projectId: string) => invoke("volli:protection-approvals", projectId),
-    revoke: (approvalId: string, commandId: string) =>
-      invoke("volli:protection-revoke", approvalId, commandId),
-    restore: (approvalId: string, commandId: string) =>
-      invoke("volli:protection-restore", approvalId, commandId),
-  },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),

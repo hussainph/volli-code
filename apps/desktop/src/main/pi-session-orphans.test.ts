@@ -100,6 +100,34 @@ describe("PiSessionOrphanService inventory", () => {
     expect(report.candidates.map((candidate) => candidate.path)).not.toContain(locatorPath);
   });
 
+  it("keeps sidecars referenced by an old enforce-posture attachment", async () => {
+    const protectedPath = writePiSession("legacy-enforce");
+    bindPi("legacy-enforce");
+    const row = ctx.db
+      .prepare(
+        "SELECT id, payload FROM session_events WHERE json_extract(payload, '$.kind') = 'attachment.opened'",
+      )
+      .get() as { id: string; payload: string };
+    const payload = JSON.parse(row.payload);
+    payload.attachment.authority = {
+      mode: "auto",
+      enforcement: "enforce",
+      protection: true,
+      judgmentMode: "auto",
+      location: "worktree",
+      tools: ["execute"],
+      rulePackId: "legacy",
+      rulePackHash: "legacy",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+    };
+    ctx.db
+      .prepare("UPDATE session_events SET payload = ? WHERE id = ?")
+      .run(JSON.stringify(payload), row.id);
+    expect((await new PiSessionOrphanService(ctx.db, root).scan()).candidates).toEqual([]);
+    expect(existsSync(protectedPath)).toBe(true);
+  });
+
   it("reports symlinks, malformed headers, and unrelated jsonl without proposing them", async () => {
     const directory = join(root, piSessionDirectoryName(cwd));
     mkdirSync(directory, { recursive: true });

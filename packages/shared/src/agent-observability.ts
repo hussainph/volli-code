@@ -19,7 +19,7 @@
  */
 
 import type { ActivityKind } from "./session-activity";
-import { NON_CODING_TOOL_IDS, type AuthorityDenialCause } from "./authority";
+import { NON_CODING_TOOL_IDS } from "./authority";
 import type {
   CompactionReason,
   ReasoningDropCause,
@@ -218,34 +218,8 @@ export interface ToolEvent {
   outcome: "completed" | "failed";
   /** Time Pi spent executing the tool, excluding a wait for a person. */
   durationMs?: number;
-  /** Time this call was parked on an authority question, when the runtime measured it. */
-  waitDurationMs?: number;
   runId?: string;
 }
-
-/**
- * The Session's authority decided whether a call could run.
- *
- * The allowed arm is the denominator for a refusal rate. Neither arm carries
- * the model-supplied tool name or the reason prose: a refusal only carries the
- * fixed rule that made it.
- */
-export type AuthorityEvent =
-  | {
-      kind: "authority";
-      outcome: "allowed";
-      /** Time parked on a person before this decision, when the runtime measured it. */
-      waitDurationMs?: number;
-      runId?: string;
-    }
-  | {
-      kind: "authority";
-      outcome: "denied";
-      cause: AuthorityDenialCause;
-      /** Time parked on a person before this decision, when the runtime measured it. */
-      waitDurationMs?: number;
-      runId?: string;
-    };
 
 /** A context compaction that landed, or the attempt that failed to. */
 export interface CompactionEvent {
@@ -319,7 +293,6 @@ export type ObservabilityEvent =
   | TurnEvent
   | TurnQueueEvent
   | ToolEvent
-  | AuthorityEvent
   | CompactionEvent
   | ProviderReasoningDroppedEvent
   | AttachmentEvent
@@ -352,12 +325,6 @@ export const NOOP_OBSERVABILITY_SINK: ObservabilitySink = {
  */
 export class ObservabilityReducer {
   #turnStartedAt = new Map<string, number>();
-  /**
-   * Pi's tool-call ids are local correlation only. They are used exactly long
-   * enough to subtract an approval wait from the corresponding activity, and
-   * never leave this reducer.
-   */
-  #authorityWaitByActivityId = new Map<string, number>();
   /**
    * When the first `compaction-progress` for each reason arrived. Keyed by
    * reason because that is all a progress observation carries, and the runtime
@@ -398,12 +365,10 @@ export class ObservabilityReducer {
       case "turn": {
         if (observation.state === "started") {
           this.#turnStartedAt.set(observation.turnId, this.#now());
-          this.#authorityWaitByActivityId.clear();
           return null;
         }
         const startedAt = this.#turnStartedAt.get(observation.turnId);
         this.#turnStartedAt.delete(observation.turnId);
-        this.#authorityWaitByActivityId.clear();
         // Through the same guard as every other duration: a clock that stepped
         // backwards between the two readings must not become a negative span.
         const durationMs =
@@ -421,36 +386,14 @@ export class ObservabilityReducer {
           startedAt === null || endedAt === null
             ? undefined
             : measuredDuration(endedAt - startedAt);
-        const waitDurationMs = this.#authorityWaitByActivityId.get(observation.activityId);
-        this.#authorityWaitByActivityId.delete(observation.activityId);
-        const durationMs = executionTimeExcludingWait(elapsed, waitDurationMs);
         const toolId = observedToolId(observation.descriptor.nativeToolName);
         return {
           kind: "tool",
           activityKind: observation.descriptor.kind,
           ...(toolId === undefined ? {} : { toolId }),
           outcome: observation.state,
-          ...(durationMs === undefined ? {} : { durationMs }),
-          ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+          ...(elapsed === undefined ? {} : { durationMs: elapsed }),
         };
-      }
-      case "authority": {
-        const waitDurationMs = measuredDuration(observation.waitDurationMs);
-        if (waitDurationMs !== undefined && observation.toolCallId !== undefined) {
-          this.#authorityWaitByActivityId.set(observation.toolCallId, waitDurationMs);
-        }
-        return observation.state === "allowed"
-          ? {
-              kind: "authority",
-              outcome: "allowed",
-              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            }
-          : {
-              kind: "authority",
-              outcome: "denied",
-              cause: observation.cause,
-              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            };
       }
       case "compaction": {
         const startedAt = this.#compactionStartedAt.get(observation.reason);
@@ -513,9 +456,6 @@ export class ObservabilityReducer {
         };
       case "attention":
         return { kind: "attention", phase: observation.state, reason: observation.reason };
-      // Durable classifier verdicts carry calibration data, never exporter content.
-      case "approval-used":
-      case "authority-review":
       case "delta":
       case "message-settled":
       case "interaction":
@@ -546,22 +486,4 @@ export class ObservabilityReducer {
  */
 export function measuredDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-/**
- * Tool execution time with any approval wait taken back out.
- *
- * The wait is time a person spent deciding, and leaving it in would make a tool
- * that was approved slowly look like a tool that ran slowly. A wait longer than
- * the whole measured span means the two clocks disagree about a call this
- * reducer only ever saw the ends of — so the execution time is reported as
- * unmeasured rather than as a number derived from a contradiction.
- */
-function executionTimeExcludingWait(
-  elapsed: number | undefined,
-  waitDurationMs: number | undefined,
-): number | undefined {
-  if (elapsed === undefined) return undefined;
-  if (waitDurationMs === undefined) return elapsed;
-  return elapsed >= waitDurationMs ? elapsed - waitDurationMs : undefined;
 }

@@ -26,7 +26,6 @@ import {
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
-  scrubSessionAuthority,
   scrubSessionEvent,
   scrubSessionInteraction,
   type CodeModePolicy,
@@ -1136,7 +1135,6 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
     // surface shows and the policy it shows beside it can never be about two
     // different attachments (VC-285). The codec owns what may cross; this edge
     // only composes it, as it does for every other scrubbed field here.
-    projection.authority = scrubSessionAuthority(source.liveExecutor);
   }
   // Derived from the Session's own commands and receipts, which never cross
   // this edge themselves: the surface gets the one schedule it may draw.

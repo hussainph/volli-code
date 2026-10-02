@@ -27,7 +27,6 @@
  */
 
 import type {
-  AuthorityReviewObservation,
   SessionStopDetail,
   AttentionObservation,
   CompactionObservation,
@@ -46,11 +45,7 @@ import type {
   TranscriptDeltaObservation,
   UsageObservation,
 } from "@volli/shared";
-import {
-  ACTIVITY_METADATA_KEY,
-  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
-  sessionHostNoticeMetadata,
-} from "@volli/shared";
+import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { TranscriptDelta } from "./transcript-overlay";
 
@@ -190,22 +185,6 @@ export type TranslatedObservation =
       turnId: string | null;
       usage: SessionUsage;
     })
-  /**
-   * The Session's authority refused a call. The executor reports it rather than
-   * minting it: only the runtime sees the call, and only the Session Engine owns
-   * the attachment the fact belongs to.
-   */
-  | (TranslatedObservationBase & {
-      kind: "authority.denied";
-      turnId: string | null;
-      tool: string;
-      cause: string;
-      reason: string;
-    })
-  | (TranslatedObservationBase &
-      Omit<AuthorityReviewObservation, "kind"> & {
-        kind: "authority.reviewed";
-      })
   | (TranslatedObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;
@@ -317,42 +296,7 @@ export class RuntimeObservationTranslator {
   #closedActivityTurns = new Set<string>();
   /** Assistant overlays already opened in the current turn; the id's last segment. */
   #messageSequence = 0;
-  /**
-   * Transient and synthetic observations carry no native identity, so a counter
-   * is the whole of it.
-   *
-   * **A fresh translator restarts this at zero, and three durable id families
-   * are minted from it** — `…:authority:<attachment>:<n>`,
-   * `…:attachment:<attachment>:failed:<n>`, and the `live:<n>` fallback an
-   * attention event takes when the executor offers no `recoveryCursor`. Two
-   * translators over one attachment therefore re-mint one id for two different
-   * facts, and the ledger's response to that is not a duplicate but a throw:
-   * `was already recorded with different evidence`, raised back through the
-   * executor's own observer. For a refusal that is the exact ordering
-   * {@link RuntimeObservationTranslator.#translateAuthority} exists to prevent —
-   * the model told, the ledger silent.
-   *
-   * What contains it, and what does not:
-   *
-   * - **Within one process, nothing restarts the counter.** A translator's
-   *   lifetime is one attach; the binding record is only ever dropped once the
-   *   attachment is closed or failed, and `#bindingForAttachment` rehydrates
-   *   only on a miss. So one open attachment has exactly one translator.
-   * - **Across a relaunch it is not contained for the structured executor.**
-   *   The boot sweep (`boot-recovery.ts`) retires stale open attachments, but
-   *   deliberately skips the structured adapter so it can rehydrate from its own
-   *   sidecar — which is the adapter that mints these ids. A rehydrated
-   *   attachment translates on a counter that starts again at zero.
-   * - **Two of the three families cannot collide anyway.** `attachment.failed`
-   *   closes the attachment, so no rehydrate can follow the run that wrote one;
-   *   and the runtime stamps every attention marker with its sidecar entry id,
-   *   so the `live:<n>` fallback has no producer today.
-   *
-   * That leaves refusals, whose numbering depends on how many transient deltas
-   * preceded them in each run. Do not narrow the containment above without
-   * replacing it: the fix is a per-attachment id that survives a relaunch —
-   * durable high-water mark or executor-supplied identity — not a longer counter.
-   */
+  /** Counter identity for synthetic failures and cursorless live attention. */
   #sequence = 0;
 
   constructor(spec: ObservationTranslationSpec) {
@@ -400,22 +344,8 @@ export class RuntimeObservationTranslator {
         return emit(this.#usageObservation(observation));
       case "activity":
         return this.#translateActivity(observation, emit);
-      case "authority":
-        return this.#translateAuthority(observation, emit);
-      case "authority-review": {
-        const { kind: _kind, ...review } = observation;
-        return emit({
-          ...review,
-          // Durable id derivation: frozen on ship, like authority.denied.
-          id: `${this.#namespace}:authority-review:${this.#attachmentId}:${++this.#sequence}`,
-          kind: "authority.reviewed",
-          occurredAt: this.#now(),
-        });
-      }
       case "attention":
         return emit(this.#attentionObservation(observation));
-      case "approval-used":
-        return emit(this.#approvalUsedObservation(observation));
       case "interaction":
         return emit(this.#interactionObservation(observation));
     }
@@ -464,49 +394,12 @@ export class RuntimeObservationTranslator {
           : [this.#activityObservation(observation)];
       case "attention":
         return [this.#attentionObservation(observation)];
-      case "approval-used":
-        return [this.#approvalUsedObservation(observation)];
       case "interaction":
         return [this.#interactionObservation(observation)];
       case "attachment":
       case "delta":
         return [];
-      // A refusal never lands in an executor's own recovery history: it is
-      // committed through the live observer only, because the durable fact
-      // belongs to the Session's ledger rather than to the executor's replay
-      // log. Reconcile therefore never actually offers one — the case exists so
-      // this switch stays exhaustive against the type it is honestly wider than.
-      case "authority":
-      case "authority-review":
-        return [];
     }
-  }
-
-  /**
-   * A refusal reaches the Session before it reaches the model.
-   *
-   * `observer` resolves only at the consumer boundary, so a refusal that
-   * reached the sink and then dropped would leave the model told and the ledger
-   * silent — the one ordering this must never produce.
-   */
-  async #translateAuthority(
-    observation: Extract<RuntimeObservation, { kind: "authority" }>,
-    emit: TranslatedObservationSink,
-  ): Promise<void> {
-    // An allowance is a metrics denominator, not Session history. It travels
-    // only through the runtime's passive observability recorder, but accepting
-    // this arm here keeps a direct observer harmless if a future executor uses
-    // the broader shared vocabulary.
-    if (observation.state === "allowed") return;
-    await emit({
-      id: `${this.#namespace}:authority:${this.#attachmentId}:${++this.#sequence}`,
-      kind: "authority.denied",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      turnId: observation.turnId,
-      tool: observation.tool,
-      cause: observation.cause,
-      reason: observation.reason,
-    });
   }
 
   async #translateAttachment(
@@ -638,7 +531,7 @@ export class RuntimeObservationTranslator {
         op: "part.upsert",
         key: activityPartKey(observation.activityId),
         index: 0,
-        part: activityPart(observation, this.#attachmentId),
+        part: activityPart(observation),
       });
       return;
     }
@@ -780,32 +673,6 @@ export class RuntimeObservationTranslator {
     };
   }
 
-  #approvalUsedObservation(
-    observation: Extract<RuntimeObservation, { kind: "approval-used" }>,
-  ): Extract<TranslatedObservation, { kind: "transcript.message" }> {
-    const id = `${this.#namespace}:approval-used:${this.#attachmentId}:${observation.toolCallId}:${observation.approvalId}`;
-    return {
-      id,
-      kind: "transcript.message",
-      occurredAt: observation.occurredAt,
-      threadId: this.#threadId,
-      branchId: this.#branchId,
-      attemptId: `attempt:${id}`,
-      turnId: null,
-      message: {
-        id,
-        role: "user",
-        parts: [{ type: "text", text: `Allowed by your earlier approval: ${observation.summary}` }],
-        metadata: sessionHostNoticeMetadata({
-          kind: "approval-used",
-          approvalId: observation.approvalId,
-          summary: observation.summary,
-          asked: observation.asked,
-        }),
-      },
-    };
-  }
-
   #activityObservation(
     observation: RuntimeActivityObservation,
   ): Extract<TranslatedObservation, { kind: "transcript.message" }> {
@@ -822,7 +689,7 @@ export class RuntimeObservationTranslator {
       message: {
         id: messageId,
         role: "assistant",
-        parts: [activityPart(observation, this.#attachmentId)],
+        parts: [activityPart(observation)],
       },
     };
   }
@@ -997,18 +864,12 @@ function activityPartKey(activityId: string): string {
   return `activity:${activityId}`;
 }
 
-function activityPart(
-  observation: RuntimeActivityObservation,
-  attachmentId: string,
-): DynamicToolPart {
+function activityPart(observation: RuntimeActivityObservation): DynamicToolPart {
   const base = {
     type: "dynamic-tool" as const,
     toolName: ACTIVITY_TOOL_NAME,
     toolCallId: observation.activityId,
-    toolMetadata: {
-      [ACTIVITY_METADATA_KEY]: observation.descriptor,
-      [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: { attachmentId, turnId: observation.turnId },
-    } as ToolMetadata,
+    toolMetadata: { [ACTIVITY_METADATA_KEY]: observation.descriptor } as ToolMetadata,
   };
   switch (observation.state) {
     case "started":

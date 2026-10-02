@@ -180,7 +180,6 @@ function chatStore(
           attention: { active: [], primary: null },
           interactions: { active: [], resolved: [] },
           liveExecutor: null,
-          authority: null,
         },
         transcript: {
           ...EMPTY_TRANSCRIPT,

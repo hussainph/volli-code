@@ -12,10 +12,8 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
-  gatedToolCallId,
   bestEffortSubject,
   bundleNeedsAttention,
-  gatedToolCallIds,
   bundleSummary,
   compactSignature,
   describeActivity,
@@ -250,26 +248,6 @@ describe("segmentMessageParts", () => {
     expect(bundleOf(segments)).toHaveLength(1);
   });
 
-  it("breaks a gated call out of the bundle", () => {
-    const segments = segmentMessageParts(
-      [tool("read-file"), tool("run-command", { state: "approval-requested" })],
-      "m3",
-    );
-    // The one thing that leaves. It blocks the reader and it needs controls, so
-    // it must not sit behind a disclosure — and its decision draws under it,
-    // beside the command it is about.
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
-    expect(bundleOf(segments)).toHaveLength(1);
-  });
-
-  it("closes the bundle around it rather than reordering the turn", () => {
-    const segments = segmentMessageParts(
-      [tool("read-file"), tool("run-command", { state: "approval-requested" }), tool("search")],
-      "m3b",
-    );
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention", "bundle"]);
-  });
-
   it("keeps failures and denials inside the bundle", () => {
     for (const state of ["output-error", "output-denied"] as const) {
       const segments = segmentMessageParts([tool("read-file"), tool("read-file", { state })], "m4");
@@ -465,6 +443,31 @@ describe("bundleSummary", () => {
     ]);
   });
 
+  it("does not count a legacy not-run row among the work that happened", () => {
+    // The one claim the summary must never make: `Ran 1 command` for a call
+    // that produced no execution result. What did not run is its own clause.
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("run-command"), tool("run-command", { state: "approval-requested" })],
+        "s11",
+      ),
+    );
+    expect(bundleSummary(rows)).toEqual([
+      { text: "Ran 1 command", tone: "neutral" },
+      { text: "1 not run", tone: "muted" },
+    ]);
+  });
+
+  it("says only what did not run when the bundle holds nothing else", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("read-file", { state: "approval-responded", approved: true })],
+        "s12",
+      ),
+    );
+    expect(summaryText(rows)).toEqual(["1 not run"]);
+  });
+
   it("names a single file without a joining word", () => {
     const rows = bundleOf(segmentMessageParts([named("edit-file", "activity.ts")], "s9"));
     expect(summaryText(rows)).toEqual(["Edited activity.ts"]);
@@ -566,41 +569,29 @@ describe("bundle state", () => {
     const clean = bundleOf(segmentMessageParts([tool("read-file")], "b4"));
     expect(bundleNeedsAttention(clean)).toBe(false);
   });
-});
 
-describe("the decision a call is gated on", () => {
-  it("reads the tool call id off the gated state and nowhere else", () => {
-    const gated = tool("run-command", { state: "approval-requested" });
-    expect(gatedToolCallId(gated)).toBe(gated.toolCallId);
-    expect(gatedToolCallId(tool("run-command", { state: "output-denied" }))).toBe(null);
-    expect(gatedToolCallId(tool("run-command"))).toBe(null);
-  });
-
-  it("collects every gate the transcript is already showing", () => {
-    // What the foot slot subtracts. An interaction drawn on its row and again
-    // under the composer is one question asked twice.
-    const gated = tool("run-command", { state: "approval-requested" });
-    const messages = [
-      message("m1", [tool("read-file"), gated]),
-      message("m2", [{ type: "text", text: "waiting" }]),
-    ];
-    expect([...gatedToolCallIds(messages)]).toEqual([gated.toolCallId]);
-    expect(gatedToolCallIds([message("m3", [tool("read-file")])]).size).toBe(0);
+  it("is not streaming for a legacy row whose call never ran", () => {
+    // A retired approval state is history, not live work: it must not hold the
+    // ellipsis open or claim a verb it never earned.
+    const rows = bundleOf(
+      segmentMessageParts([tool("run-command", { state: "approval-requested" })], "b5"),
+    );
+    expect(isBundleStreaming(rows)).toBe(false);
   });
 });
 
 describe("activityStatus", () => {
-  it("separates approval from running", () => {
+  it("keeps retired permission states noninteractive", () => {
     expect(activityStatus(tool("run-command", { state: "input-available" }))).toBe("running");
-    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("approval");
+    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("not-run");
     expect(activityStatus(tool("run-command", { state: "input-streaming" }))).toBe("pending");
     expect(activityStatus(tool("run-command", { state: "output-error" }))).toBe("failed");
   });
 
-  it("resumes running once a gated call is approved, or stays denied", () => {
+  it("reads an old answered permission as not run unless it was refused", () => {
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: true })),
-    ).toBe("running");
+    ).toBe("not-run");
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: false })),
     ).toBe("denied");
@@ -628,6 +619,22 @@ describe("activityStatus", () => {
 });
 
 describe("presenters", () => {
+  it("keeps a never-executed row's recorded object but replaces the verb's claim", () => {
+    const row = describeActivity(
+      tool("run-command", {
+        state: "approval-responded",
+        approved: true,
+        input: { command: "pnpm test" },
+        descriptor: { subject: { label: "pnpm test", path: null, lineRange: null } },
+      }),
+    );
+    expect(row.status).toBe("not-run");
+    expect(row.verb).toBe("Not run");
+    expect(row.object).toBe("pnpm test");
+    // Not settled, so no receipt: no duration, no exit, no diff stat.
+    expect(row.meta).toBe(null);
+  });
+
   it("derives the verb from the kind and never echoes the result sentence", () => {
     const row = describeActivity(
       tool("run-command", {

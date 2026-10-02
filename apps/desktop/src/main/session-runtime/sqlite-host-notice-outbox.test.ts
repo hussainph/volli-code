@@ -10,9 +10,9 @@ import {
   type HostNoticeOutbox,
   type HostedSessionRuntime,
 } from "@volli/session-engine";
-import { DEFAULT_AUTHORITY_POLICY, sessionHostNoticeMetadata } from "@volli/shared";
+import { sessionHostNoticeMetadata } from "@volli/shared";
 import { readHostNotice } from "@volli/session-presentation";
-import { protectionScript } from "../../../../../packages/agent-runtime/test-fixtures/protection-script";
+import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createSessionWakeBus } from "../session-wake";
 import { insertProject } from "../db/projects-repo";
@@ -59,7 +59,7 @@ function launch(
     { db: handle },
   );
   const engine = wakeBus.engine;
-  const script = protectionScript([{ text: "I read the shell notice." }]);
+  const script = scriptedProvider([{ text: "I read the shell notice." }]);
   const executor = createPiNativeAdapter({
     sessionDataDir: join(dirname(directory), "pi"),
     models: script.models,
@@ -71,14 +71,11 @@ function launch(
     },
     resolveRuntimeContext: async (sessionId) => ({
       role: "project",
-      location: "main-checkout",
       projectId: "project",
       ticketId: null,
       rootThreadId: sessionRootThreadId(sessionId),
       brief: "Legacy frozen Session",
-      authorityPolicy: { ...DEFAULT_AUTHORITY_POLICY, enforcement: "off" },
-      priorAuthorityDenials: 0,
-      model: { providerId: "protection-fixture", modelId: "scripted", reasoningLevel: "off" },
+      model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
       // A pre-shell frozen surface. The notice is content, not a new tool or
       // prompt mutation; a reconstructed Pi adapter must still accept it.
       toolSurface: ["read"],

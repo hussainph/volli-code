@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
@@ -614,17 +613,6 @@ describe("piOwnedModels", () => {
         workspacePath: scratch(),
         venue: "local",
         model: { providerId: "openai-codex", modelId: "not-a-model", reasoningLevel: "off" },
-        authority: {
-          mode: "auto",
-          location: "worktree",
-          enforcement: "enforce",
-          judgmentMode: "ask",
-          tools: [],
-          rulePackId: BUILTIN_RULE_PACK_ID,
-          rulePackHash: BUILTIN_RULE_PACK_HASH,
-          classifierModel: null,
-          fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-        },
         brief: { text: "brief" },
         tools: { tools: [] },
         observer: async () => undefined,

@@ -1,68 +1,53 @@
 ---
-title: Protection
-description: Turn on project Protection, approve actions when asked, and manage remembered approvals.
+title: Agent authority
+description: Session execution, secret handling, and actor permissions in Volli.
 sidebar:
-  label: Protection
+  label: Agent authority
 ---
 
-Open **Configure → Protection** for your project. The switch is **off by
-default**. Off adds no file or command gate: agents behave as before.
+Volli checks deterministic boundaries around a Session's tools and the host API.
+It does not review each tool call with a model or ask you to approve ordinary
+file and command calls.
 
-Turn it on to check Session file and command calls. An approvable refusal asks
-immediately, without waiting for a denial threshold or a classifier:
+## Workspace and execution
 
-- **Allow once** — only this call; nothing is remembered.
-- **Allow for this Session** — remember the action for this Session (and its delegated subagents).
-- **Always allow in this project** — remember the action for future Sessions in this project.
-- **Deny** — carry on without the action.
-- **Deny and steer** — tell the agent what to do instead.
+A Session starts in its recorded worktree or main checkout. Ordinary desktop
+Sessions use host-native file and command tools: the working directory is not
+a filesystem sandbox.
 
-Some commands can only be allowed once or for the Session. Hard refusals, such
-as disabling platform protections or certificate checks, explain why they are
-blocked and have no approval button.
+The runtime also retains an injectable `ScopedExecutionEnv`, whose file checks
+resolve paths and symlink targets against the workspace. Hosts can select that
+environment; desktop Sessions do not use it by default. Neither environment
+isolates arbitrary processes running as your macOS user.
 
-## Approved actions
+## Secrets
 
-Remembered approvals appear under **Approved actions**, with the Session,
-Ticket, original request and time. Each covers a narrow operation and target;
-a read approval does not allow writes, and a folder approval does not cover
-exact-only Git hooks or configuration. Matching approvals allow deterministically
-without another card. **Revoke** removes coverage so the next matching call asks
-again. Passed-request counts increase only after successful execution.
+Credentials use a dedicated, person-only field rather than the chat composer.
+Secret values are kept out of prompts, transcripts, and Session events; tool
+output is redacted before it reaches the model or the transcript. Generic
+question answers cannot submit credentials.
 
-An unattended Automation pauses at a card and notifies you. It never invents an
-answer. The notification opens the same Session card; there is no second inbox.
+See [Local data and network access](/reference/data-and-privacy/) for storage
+and network boundaries.
 
-## When changes apply
+## Actor permissions
 
-A live Session attachment pins its Protection state when it opens. Changing the
-switch applies to new attachments, not an attachment already running. Restart
-and recovery retain the pinned state. The ledger stays live, so revocation takes
-effect on the next call even in a running Session.
+The host derives who made a request from its authenticated connection, not an
+actor name supplied by a caller. Per-actor policy controls coordination verbs,
+which Sessions can be awaited, and how much another Session's transcript may
+be disclosed. Unauthenticated socket callers are read-only by default.
 
-**Advanced** is collapsed by default and retains the Session transcript-read
-control. Protection inherits the app's built-in off default; there is no separate
-Settings opt-in.
+A Session's frozen tool list is a separate boundary: instructions cannot grant
+a tool it does not hold. See the [agent operating
+model](/reference/agent-operating-model/).
 
-## Existing projects
+## Questions and limits
 
-On upgrade, projects stored as `enforce` show On and retain their policy. All
-others show Off. A one-time, atomic cleanup backs up their raw policy documents
-in app-owned storage before clearing hidden judgment, classifier, fallback,
-budget, other actor and unknown containment/writable-root departures to built-in
-defaults. It retains explicit Off/Observe and the visible Session transcript-read
-setting. Writable roots are **not** converted into approvals. Turning Protection
-off also clears hidden supported departures. This release uses a new cleanup
-marker and backup, so the cleanup also runs for earlier dogfood installs. Their
-original backup is kept unchanged, and the new backup records the policies just
-before this release clears them. Later startups do not rerun the cleanup.
+Agents can still ask ordinary questions and existing confirmations. The
+subagent allowance also remains: reaching its cap can refuse further
+delegation or ask through the existing permission card. An unattended Run
+never invents an answer.
 
-## Know the boundary
-
-Protection is a **file and command rule gate, not a sandbox or credential
-isolation boundary**. Scripts can bypass command-text checks. Scoped containment,
-writable roots and the network ledger are deferred; do not rely on Protection
-to isolate secrets or arbitrary shell side effects.
-
-See [Settings and configuration](/guides/settings/) for app-wide preferences
-and project Configure options.
+[Decision models](/guides/models/#decision-model) and the `classify` tool are
+independent helpers, not permission judges. Older Session history remains
+readable, but old review records and saved grants do not authorize new calls.

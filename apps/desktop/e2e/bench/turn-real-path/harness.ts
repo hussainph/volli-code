@@ -3,7 +3,7 @@
  *
  * VC-441 (`packages/agent-runtime/bench/turn-to-completion/measurement.ts`) ran
  * its turns straight against VC-119's instrumentation, so no Session runtime,
- * input queue, agent loop, authority gate or ledger was on the path, and a queue
+ * input queue, agent loop or ledger was on the path, and a queue
  * in any of them was absent by construction. This composition puts every one of
  * them back, in one Node process with no Electron:
  *
@@ -21,11 +21,6 @@
  *   `instrumentStreamFn`, the real `read` and `bash` tools, and overflow
  *   compaction through Pi's own summarizer. Only the provider is a stand-in:
  *   `realPathProvider` from `@volli/agent-runtime/bench/turn-to-completion`.
- * - **Authority gate.** The attachment runs with `enforcement: "enforce"` and a
- *   one-refusal fallback, so a read outside the workspace is refused by the
- *   built-in rule pack, escalated, and parked on a Session interaction. The
- *   stand-in for the person is a live subscriber that answers `once` through
- *   `interaction.resolve` after a fixed think time.
  * - **Ledger.** A disposable profile directory holding a migrated `volli.db`
  *   opened by the production `openVolliDb`, a transcript directory and Pi's
  *   session sidecars. The directory is deleted when the composition closes.
@@ -54,13 +49,7 @@ import {
   type SessionLocationResolver,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import {
-  DEFAULT_AUTHORITY_POLICY,
-  type AuthorityPolicy,
-  type ObservabilityEvent,
-  type ObservabilitySink,
-  type SessionLedger,
-} from "@volli/shared";
+import { type ObservabilityEvent, type ObservabilitySink, type SessionLedger } from "@volli/shared";
 
 import { openVolliDb } from "../../../src/main/db";
 import { insertProject } from "../../../src/main/db/projects-repo";
@@ -74,24 +63,11 @@ import {
 } from "../../../src/main/session-runtime/pi-adapter";
 import { createFileTranscriptArtifactStore } from "../../../src/main/session-runtime/transcript-artifacts";
 
-import { AUTHORITY_THINK_MS, PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
+import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
-export { AUTHORITY_THINK_MS, PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
-
-/** The option id the auto-answerer picks: allow this one call. */
-const ALLOW_ONCE_OPTION_ID = "once";
+export { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
 const FIXTURE_TOOL_SURFACE = ["read", "edit", "write", "execute"] as const;
-
-/**
- * The shipped policy, switched to enforce and to escalate on the first refusal.
- * The shipped default is `observe`, under which Pi installs no gate at all.
- */
-const ENFORCING_POLICY: AuthorityPolicy = {
-  ...DEFAULT_AUTHORITY_POLICY,
-  enforcement: "enforce",
-  fallback: { consecutiveDenials: 1, sessionDenials: 20 },
-};
 
 /** Which transcript-artifact store the composition runs on. */
 export type ArtifactStoreKind = "file" | "memory";
@@ -107,10 +83,8 @@ export interface RealPathOptions {
   deltasPerReply?: number;
   /**
    * `all` (the default): every Session has a live subscriber, as a chat open
-   * in a tab does, and the stand-in person answers from that stream. `none`:
-   * nobody subscribes, as for Sessions working in the background, and the
-   * stand-in answers when the question is durably recorded, as a notification
-   * would reach them.
+   * in a tab does. `none`: nobody subscribes, as for Sessions working in the
+   * background.
    */
   subscribers?: SubscriberMode;
 }
@@ -151,7 +125,7 @@ export interface LedgerFrame {
 }
 
 export interface TimerSample {
-  kind: "ttft" | "completion" | "authority";
+  kind: "ttft" | "completion";
   /** Signed: negative when Node fired the timer before its target. */
   latenessMs: number;
 }
@@ -168,20 +142,6 @@ export interface LedgerTransaction {
   waitMs: number;
   /** The work itself, which runs synchronously on the event loop. */
   serviceMs: number;
-}
-
-/** What the auto-answerer did for one question. */
-export interface AnswerRecord {
-  /**
-   * `performance.now()` when the question reached it: the `interaction.opened`
-   * frame when it subscribes, the fact's commit when it does not.
-   */
-  seenAt: number;
-  /** When it sent `interaction.resolve`, after its think time. */
-  sentAt: number;
-  /** When that command resolved. */
-  resolvedAt: number;
-  status: string | null;
 }
 
 /** Everything one measured turn left behind, before analysis. */
@@ -202,7 +162,6 @@ export interface RawTurn {
   frames: LedgerFrame[];
   /** The same Session's ledger, read back from SQLite after the wave settled. */
   ledger: Array<{ sequence: number; kind: string; commandId: string | null }>;
-  answers: AnswerRecord[];
   /**
    * Session Engine calls made for this turn, by method. Counts, not times, so
    * they survive a loaded host: `listEvents` is one ledger read transaction.
@@ -218,7 +177,7 @@ export interface RawTurn {
 /** One wave: its turns, and what its measured phase cost the process. */
 export interface WaveResult {
   turns: RawTurn[];
-  /** From the first submit to the last turn's `command()` resolving and its answer settling. */
+  /** From the first submit to the last turn's `command()` resolving. */
   measuredWallMs: number;
   /** Process CPU (user + system) over the same window: every Session's work on the one loop. */
   measuredCpuMs: number;
@@ -228,8 +187,8 @@ export interface RealPathComposition {
   readonly artifactStore: ArtifactStoreKind;
   readonly subscribers: SubscriberMode;
   /**
-   * `around` wraps only the measured phase (every submit, until every turn and
-   * answer settled), so a diagnostic can profile it without setup or teardown.
+   * `around` wraps only the measured phase (every submit, until every turn
+   * settled), so a diagnostic can profile it without setup or teardown.
    */
   runWave(input: {
     concurrency: number;
@@ -309,13 +268,6 @@ function writtenEvents(written: unknown): WrittenEvent[] {
 
 const doNothing = (): void => undefined;
 
-function interactionIdOf(payload: Record<string, unknown>): string | null {
-  const interaction = payload["interaction"];
-  if (typeof interaction !== "object" || interaction === null) return null;
-  const id = (interaction as Record<string, unknown>)["id"];
-  return typeof id === "string" ? id : null;
-}
-
 export async function createRealPathComposition(
   options: RealPathOptions = {},
 ): Promise<RealPathComposition> {
@@ -343,16 +295,13 @@ async function compose(
   const artifactStore = options.artifactStore ?? "file";
   const subscribers = options.subscribers ?? "all";
   const workspace = join(profile, "workspace");
-  const outside = join(profile, "outside");
   const sessionDataDir = join(profile, "pi-sessions");
   const transcriptDirectory = join(profile, "transcripts");
-  for (const directory of [workspace, outside, sessionDataDir, transcriptDirectory]) {
+  for (const directory of [workspace, sessionDataDir, transcriptDirectory]) {
     mkdirSync(directory, { recursive: true });
   }
   const insideFile = join(workspace, "fixture-inside.txt");
-  const outsideFile = join(outside, "fixture-outside.txt");
   writeFileSync(insideFile, `${PRIVATE_CONTENT_CANARY}\n`.repeat(8));
-  writeFileSync(outsideFile, `${PRIVATE_CONTENT_CANARY}\n`.repeat(8));
 
   // Nothing on this path may reach a network; a call here fails the run.
   let networkAttempts = 0;
@@ -391,9 +340,6 @@ async function compose(
     replyText: PRIVATE_CONTENT_CANARY,
     toolCalls: [
       { name: "read", arguments: { path: insideFile } },
-      // Outside the workspace: refused by `path.outside-workspace`, which is
-      // overridable, so the one-refusal fallback asks.
-      { name: "read", arguments: { path: outsideFile } },
       { name: "bash", arguments: { command: "printf vc456" } },
     ],
     // Fired inside the stand-in's timer callbacks, which inherit the scope of
@@ -428,9 +374,6 @@ async function compose(
     brief: "VC-456 fixture Session. Run the scripted turn.",
     model: { providerId: provider.providerId, modelId: provider.modelId, reasoningLevel: "off" },
     toolSurface: [...FIXTURE_TOOL_SURFACE],
-    location: "main-checkout",
-    authorityPolicy: ENFORCING_POLICY,
-    priorAuthorityDenials: 0,
     promptResources: [],
   });
 
@@ -493,10 +436,6 @@ async function compose(
   });
   // Counts each engine call under the Session it was made for, and files the
   // facts each write committed, with when its call resolved.
-  const onCommit = new Map<
-    string,
-    (commit: LedgerCommit, payload: Record<string, unknown>) => void
-  >();
   const engine = new Proxy(desktopEngine, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -523,7 +462,6 @@ async function compose(
               committedAt,
             };
             filed.commits.push(commit);
-            onCommit.get(sessionId)?.(commit, event.payload);
           }
           return written;
         });
@@ -586,8 +524,6 @@ async function compose(
         };
         evidence.set(sessionId, filed);
         const frames: LedgerFrame[] = [];
-        const answers: AnswerRecord[] = [];
-        const pendingAnswers: Array<Promise<void>> = [];
         const attached = await scope.run(sessionId, async () => {
           await runtime.command({
             commandId: randomUUID(),
@@ -622,33 +558,6 @@ async function compose(
           throw new Error("VC-456 bench: the attach recorded no opened attachment");
         }
         const attachmentId = attachment.payload.attachment.id;
-        // The stand-in person: sees the question, thinks for a fixed moment,
-        // allows the one call.
-        const answer = (interactionId: string, seenAt: number): void => {
-          pendingAnswers.push(
-            scope.run(sessionId, async () => {
-              const target = seenAt + AUTHORITY_THINK_MS;
-              await new Promise((resolvePromise) => setTimeout(resolvePromise, AUTHORITY_THINK_MS));
-              const sentAt = performance.now();
-              filed.timers.push({ kind: "authority", latenessMs: sentAt - target });
-              const answered = await runtime.command({
-                commandId: randomUUID(),
-                sessionId,
-                command: {
-                  kind: "interaction.resolve",
-                  interactionId,
-                  resolution: { optionIds: [ALLOW_ONCE_OPTION_ID], response: null },
-                },
-              });
-              answers.push({
-                seenAt,
-                sentAt,
-                resolvedAt: performance.now(),
-                status: answered.receipt?.status ?? null,
-              });
-            }),
-          );
-        };
         let unsubscribe = doNothing;
         if (subscribers === "all") {
           unsubscribe = await runtime.subscribe(
@@ -664,18 +573,10 @@ async function compose(
                 commandId: emission.event.commandId ?? null,
                 arrivedAt,
               });
-              const interactionId = kind === "interaction.opened" ? interactionIdOf(payload) : null;
-              if (interactionId !== null) answer(interactionId, arrivedAt);
             },
           );
-        } else {
-          onCommit.set(sessionId, (commit, payload) => {
-            const interactionId =
-              commit.kind === "interaction.opened" ? interactionIdOf(payload) : null;
-            if (interactionId !== null) answer(interactionId, commit.committedAt);
-          });
         }
-        return { sessionId, attachmentId, filed, frames, answers, pendingAnswers, unsubscribe };
+        return { sessionId, attachmentId, filed, frames, unsubscribe };
       }),
     );
     // Only the measured turn's evidence counts; setup's is dropped.
@@ -730,7 +631,6 @@ async function compose(
           }),
         ),
       );
-      await Promise.all(sessions.flatMap((session) => session.pendingAnswers));
       measuredWallMs = performance.now() - startedAt;
       const cpu = process.cpuUsage(cpuBefore);
       measuredCpuMs = (cpu.user + cpu.system) / 1_000;
@@ -744,7 +644,6 @@ async function compose(
     for (const entry of measured) {
       const { session } = entry;
       session.unsubscribe();
-      onCommit.delete(session.sessionId);
       const engineCalls = { ...session.filed.engineCalls };
       const commits = [...session.filed.commits];
       const timers = [...session.filed.timers];
@@ -775,7 +674,6 @@ async function compose(
           kind: event.payload.kind,
           commandId: event.commandId ?? null,
         })),
-        answers: session.answers,
         engineCalls,
         commits,
         timers,

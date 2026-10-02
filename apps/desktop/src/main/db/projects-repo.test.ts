@@ -164,14 +164,37 @@ describe("getProjectAuthorityPolicy", () => {
     insertProject(ctx.db, testProject({ id: "p1" }));
     ctx.db
       .prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'")
-      .run(JSON.stringify({ enforcement: "enforce" }));
+      .run(JSON.stringify({ budgets: { delegationExceeded: "refuse" } }));
 
     const policy = getProjectAuthorityPolicy(ctx.db, "p1");
-    expect(policy.enforcement).toBe("enforce");
+    expect(policy.budgets.delegationExceeded).toBe("refuse");
     // Everything unsaid still comes from the defaults, which is what lets a
     // changed default reach every project that never disagreed with it.
-    expect(policy.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
     expect(policy.actors).toEqual(DEFAULT_AUTHORITY_POLICY.actors);
+  });
+
+  it("ignores stored review settings without changing the override or its remaining guards", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    const raw = JSON.stringify({
+      enforcement: "enforce",
+      judgmentMode: "auto",
+      classifierModel: "legacy/model",
+      fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+      budgets: { delegationExceeded: "refuse" },
+      actors: { session: { peek: "project" } },
+    });
+    ctx.db.prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'").run(raw);
+    const policy = getProjectAuthorityPolicy(ctx.db, "p1");
+    expect(policy.budgets.delegationExceeded).toBe("refuse");
+    expect(policy.actors.session.peek).toBe("project");
+    for (const key of ["enforcement", "judgmentMode", "classifierModel", "fallback"]) {
+      expect(policy).not.toHaveProperty(key);
+      expect(getProjectById(ctx.db, "p1")?.authorityPolicy).not.toHaveProperty(key);
+    }
+    expect(ctx.db.prepare("SELECT authority_policy FROM projects WHERE id = 'p1'").get()).toEqual({
+      authority_policy: raw,
+    });
   });
 
   it("splices a project's extra coordination verb onto the defaults", () => {
@@ -214,21 +237,25 @@ describe("updateProjectAuthorityPolicy", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "p1" }));
 
-    const saved = updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+    const saved = updateProjectAuthorityPolicy(
+      ctx.db,
+      "p1",
+      { budgets: { delegationExceeded: "refuse" } },
+      1000,
+    );
 
     // The row carries the DEPARTURE, unresolved — what the editing surface needs.
-    expect(saved?.authorityPolicy).toEqual({ enforcement: "enforce" });
+    expect(saved?.authorityPolicy).toEqual({ budgets: { delegationExceeded: "refuse" } });
     // The attach path gets it resolved, with everything unsaid still inherited.
     const policy = getProjectAuthorityPolicy(ctx.db, "p1");
-    expect(policy.enforcement).toBe("enforce");
-    expect(policy.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
+    expect(policy.budgets.delegationExceeded).toBe("refuse");
     expect(policy.actors).toEqual(DEFAULT_AUTHORITY_POLICY.actors);
   });
 
   it("stores an empty override as NULL, indistinguishable from never having spoken", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "p1" }));
-    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+    updateProjectAuthorityPolicy(ctx.db, "p1", { budgets: { delegationExceeded: "refuse" } }, 1000);
 
     updateProjectAuthorityPolicy(ctx.db, "p1", {}, 2000);
 
@@ -244,7 +271,7 @@ describe("updateProjectAuthorityPolicy", () => {
   it("clears every departure on null, returning the project to the defaults", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "p1" }));
-    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "off" }, 1000);
+    updateProjectAuthorityPolicy(ctx.db, "p1", { budgets: { delegationExceeded: "refuse" } }, 1000);
 
     const cleared = updateProjectAuthorityPolicy(ctx.db, "p1", null, 2000);
 
@@ -262,11 +289,11 @@ describe("updateProjectAuthorityPolicy", () => {
     const saved = updateProjectAuthorityPolicy(
       ctx.db,
       "p1",
-      { enforcement: "enforce", enforcment: "off" } as never,
+      { budgets: { delegationExceeded: "refuse" }, unknownField: "off" } as never,
       1000,
     );
 
-    expect(saved?.authorityPolicy).toEqual({ enforcement: "enforce" });
+    expect(saved?.authorityPolicy).toEqual({ budgets: { delegationExceeded: "refuse" } });
   });
 
   it("survives the round trip that the $defaults splice depends on", () => {
@@ -294,7 +321,7 @@ describe("updateProjectAuthorityPolicy", () => {
       row_version: number;
     };
 
-    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+    updateProjectAuthorityPolicy(ctx.db, "p1", { budgets: { delegationExceeded: "refuse" } }, 1000);
 
     const after = ctx.db
       .prepare("SELECT row_version, updated_at FROM projects WHERE id = 'p1'")

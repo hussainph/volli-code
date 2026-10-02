@@ -197,12 +197,10 @@ describe("OtlpObservabilityExporter", () => {
           activityKind: "read-file",
           outcome: "failed",
           durationMs: 240,
-          waitDurationMs: 60,
           runId: "run-a",
         },
         1000,
       ),
-      at({ kind: "authority", outcome: "allowed", runId: "run-a" }, 1000),
       at({ kind: "compaction", outcome: "compacted", reason: "threshold", runId: "run-a" }, 1000),
       at({ kind: "dropped", reason: "queue-full", count: 3, runId: "run-a" }, 1000),
     ]);
@@ -215,13 +213,11 @@ describe("OtlpObservabilityExporter", () => {
     expect(exported.map((metric) => metric.descriptor.name).toSorted()).toEqual([
       "gen_ai.client.operation.duration",
       "gen_ai.client.token.usage",
-      "volli.agent.authority.decision.count",
       "volli.agent.compaction.count",
       "volli.agent.cost.usage",
       "volli.agent.model.request.count",
       "volli.agent.tool.call.count",
       "volli.agent.tool.execution.duration",
-      "volli.agent.tool.wait.duration",
       "volli.observability.dropped.count",
     ]);
 
@@ -236,9 +232,6 @@ describe("OtlpObservabilityExporter", () => {
         },
         value: 1,
       }),
-    );
-    expect(byName("volli.agent.tool.wait.duration").dataPoints).toContainEqual(
-      expect.objectContaining({ value: expect.objectContaining({ count: 1, sum: 0.06 }) }),
     );
     expect(byName("volli.agent.model.request.count").dataPoints).toContainEqual(
       expect.objectContaining({
@@ -290,7 +283,7 @@ describe("OtlpObservabilityExporter", () => {
   it("gives a point-in-time fact a zero-length span rather than inventing a duration", async () => {
     const memory = new InMemorySpanExporter();
     const exporter = exporterOver(memory);
-    exporter.export([at({ kind: "authority", outcome: "denied", cause: "call.unreadable" }, 5000)]);
+    exporter.export([at({ kind: "attention", phase: "raised", reason: "context" }, 5000)]);
     const [span] = await spansFrom(exporter, memory);
     expect(span?.startTime).toEqual(span?.endTime);
   });

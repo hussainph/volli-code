@@ -13,26 +13,6 @@ import {
   type DecisionModelSetting,
 } from "@volli/shared";
 
-/** One app-wide wording preference; it does not change a block verdict. */
-export const AUTHORITY_REASON_SOURCE_KEY = "volli:authority-reason-source";
-export type AuthorityReasonSource = "utility" | "category";
-export const AUTHORITY_REASON_SOURCES: readonly {
-  key: AuthorityReasonSource;
-  label: string;
-}[] = [
-  { key: "utility", label: "Utility model" },
-  { key: "category", label: "Risk category" },
-];
-
-export function authorityReasonSource(raw: string | undefined): AuthorityReasonSource {
-  if (raw === undefined) return "utility";
-  const value: unknown = JSON.parse(raw);
-  if (value !== "utility" && value !== "category") {
-    throw new Error("The saved block reason choice is invalid.");
-  }
-  return value;
-}
-
 /** The three choices the control offers, in order. */
 export type DecisionMode = "none" | "local" | "cloud";
 
@@ -128,33 +108,6 @@ export function cloudSetting(
     modelId: entry.modelId,
     optIn: { acceptedAt: now, purposes: [...DECISION_BASE_PURPOSES] },
   };
-}
-
-/**
- * A once-only extension prompt, tied to the scope and the existing agreement.
- * Declining changes no authority: this key is only a durable UI receipt.
- * An inherited global agreement is handled in app-wide Settings, never by
- * silently creating a project override.
- */
-export function authorityOptInExtensionKey(
-  setting: DecisionModelSetting | null,
-  projectId: string | null,
-): string | null {
-  if (setting?.kind !== "cloud" || setting.optIn.purposes.includes("authority.judge")) return null;
-  return `volli:decision-opt-in-extension:authority.judge:${JSON.stringify([
-    projectId,
-    setting.providerId,
-    setting.modelId,
-    setting.optIn.acceptedAt,
-  ])}`;
-}
-
-/** Extend only the disclosed purpose, preserving every existing permission. */
-export function extendAuthorityCloudOptIn(
-  setting: Extract<DecisionModelSetting, { kind: "cloud" }>,
-  now: number,
-): DecisionModelSetting {
-  return withDecisionPurpose(setting, "authority.judge", true, now)!;
 }
 
 /** Whether a setting lets a decision model choose models for new Sessions. */

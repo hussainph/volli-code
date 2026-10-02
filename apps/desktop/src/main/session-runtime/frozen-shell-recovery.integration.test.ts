@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  DEFAULT_AUTHORITY_POLICY,
-  type RuntimeShellRecord,
-  type SessionToolId,
-} from "@volli/shared";
+import { type RuntimeShellRecord, type SessionToolId } from "@volli/shared";
 import {
   createSessionEngine,
   createSessionRuntime,
@@ -13,9 +9,9 @@ import {
   type NativeAttachmentSpec,
 } from "@volli/session-engine";
 import {
-  protectionScript,
+  scriptedProvider,
   type ScriptedReply,
-} from "../../../../../packages/agent-runtime/test-fixtures/protection-script";
+} from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
 import { insertProject } from "../db/projects-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
@@ -45,7 +41,7 @@ function fixture(replies: ScriptedReply[]) {
   const sessionDataDir = join(dirname(db.dbPath), "pi");
   mkdirSync(directory);
   insertProject(db.db, testProject({ id: "project-1", path: directory }));
-  const script = protectionScript(replies);
+  const script = scriptedProvider(replies);
   const venue = { id: "local", kind: "local" as const };
   const artifacts = createFileTranscriptArtifactStore(join(dirname(db.dbPath), "transcripts"));
 
@@ -111,14 +107,11 @@ function fixture(replies: ScriptedReply[]) {
         }
         return {
           role: "project",
-          location: "main-checkout",
           projectId: "project-1",
           ticketId: null,
           rootThreadId: sessionRootThreadId(sessionId),
-          authorityPolicy: DEFAULT_AUTHORITY_POLICY,
-          priorAuthorityDenials: 0,
           brief: "Frozen shell recovery task",
-          model: { providerId: "protection-fixture", modelId: "scripted", reasoningLevel: "off" },
+          model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
           toolSurface: input.input.tools,
           promptResources: [],
         };
@@ -202,7 +195,7 @@ async function submit(
   expect(result.receipt?.status, JSON.stringify(result)).toBe("accepted");
 }
 
-function providerTools(request: ReturnType<typeof protectionScript>["requests"][number]) {
+function providerTools(request: ReturnType<typeof scriptedProvider>["requests"][number]) {
   const systems = request.filter((message) => message.role === "system");
   // These small, uncompacted turns must have one declaration and no tool
   // deltas. Read the actual provider request, not sessionToolIds(spec).
@@ -287,8 +280,8 @@ describe("frozen shell surface recovery (VC-495)", () => {
         directory: f.directory,
         continuity: "native_resume",
         native: { id: native.id, detail: locator },
-        pinnedAuthority: attachment.authority,
       });
+      expect(restarted.attachSpecs[0]).not.toHaveProperty("pinnedAuthority");
       expect(readdirSync(f.sessionDataDir, { recursive: true })).toEqual(sidecars);
       const recovered = (await restarted.host.snapshot({ sessionId })).projection;
       expect(recovered.attachments).toHaveLength(1);

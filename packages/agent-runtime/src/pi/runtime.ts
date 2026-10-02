@@ -46,7 +46,6 @@ import {
   errorMessage,
   isActivityKind,
   isMcpToolId,
-  isOverridableAuthorityRule,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -54,9 +53,7 @@ import {
   readPromptResourceBlocks,
   SESSION_USAGE_CAUSES,
   UtilityCompletionError,
-  CODE_MODE_TOOL_ID,
   type AgentRuntime,
-  type AuthoritySnapshot,
   type CompactionObservation,
   type CompactionPolicy,
   type CompactionWorkReason,
@@ -82,13 +79,6 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import {
-  authorityClassifierEligible,
-  authorityVerdict,
-  describeCall,
-  type AuthorityVerdict,
-} from "../authority/gate";
-import { AUTHORITY_JUDGE_THRESHOLDS, judgeAuthorityCall } from "../authority/judge";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
@@ -113,7 +103,6 @@ import {
   readProviderCompaction,
   type NativeRequestObservation,
 } from "./provider-compaction";
-import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import {
   inspectPiModelAccess,
@@ -126,7 +115,6 @@ import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
   providerErrorClassForStatus,
-  recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
 import { failureResetsAt } from "./quota-reset";
@@ -142,7 +130,6 @@ import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-s
 import { createSessionTools, type CodeModeBuilder } from "./tools";
 import { privateSecretExecution } from "./secrets";
 import { CodeModeJournal } from "../codemode/journal";
-import { scopedAsk } from "./call-scope";
 import {
   createCodeModeTool,
   type CodeModeSandboxAssets,
@@ -312,14 +299,6 @@ export interface PiRuntimeHostOptions {
    */
   compactionPolicy?: () => CompactionPolicy;
   /**
-   * Opt-in to paid, behavior-neutral authority reviews. Read before each
-   * eligible shadow call, not pinned at attachment, so disabling the setting
-   * stops subsequent reviews in live Sessions. Absent, false or a failed read
-   * skips both the decision request and the authority-review observation.
-   * Automatic enforcement and deterministic Protection are unaffected.
-   */
-  authorityShadowReviewEnabled?: () => boolean;
-  /**
    * Where metadata-only observability events go. A side channel, never a
    * participant: the runtime reduces its own observations and provider
    * attempts to bounded events and hands them here without awaiting, and a
@@ -383,7 +362,6 @@ interface PiRuntimeHost {
   connectivity: ConnectivityPort;
   streamSupervision: StreamSupervisionTiming;
   compactionPolicy: () => CompactionPolicy;
-  authorityShadowReviewEnabled: () => boolean;
   observability: ObservabilitySink;
   /**
    * One holder and one schedule per runtime: a hold the endpoint imposed
@@ -442,14 +420,6 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     connectivity: options.connectivity ?? ALWAYS_ONLINE,
     streamSupervision: options.streamSupervision ?? DEFAULT_STREAM_SUPERVISION,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
-    authorityShadowReviewEnabled: () => {
-      try {
-        return options.authorityShadowReviewEnabled?.() === true;
-      } catch {
-        // An unreadable opt-in never authorizes a paid background request.
-        return false;
-      }
-    },
     observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
     ...(options.usageLimits === undefined
       ? {}
@@ -852,76 +822,6 @@ interface ContextCarriedMarker {
   entries: JsonValue;
 }
 
-const VOLLI_AUTHORITY_INPUT_MARKER = "volli.authority-user-input";
-
-function authorityUserMessagesIn(entries: readonly Entry[]): string[] {
-  return entries.flatMap((entry) => {
-    if (entry.type !== "custom") return [];
-    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER && isRecord(entry.data)) {
-      // Kept outside the size-bounded model context. Dropping an old constraint
-      // would invent authority; oversized history instead misses closed in judge.
-      const messages = entry.data["userMessages"];
-      if (Array.isArray(messages))
-        return messages.filter((text): text is string => typeof text === "string");
-      return typeof entry.data["text"] === "string" ? [entry.data["text"]] : [];
-    }
-    const marker = recoveredObservation(entry);
-    return marker?.kind === "command-accepted" &&
-      marker.operation === "message.submit" &&
-      typeof marker.authorityUserText === "string"
-      ? [marker.authorityUserText]
-      : [];
-  });
-}
-
-/** The missing-history state is durable and propagates across further carries. */
-function authorityUserHistoryCompleteIn(entries: readonly Entry[]): boolean {
-  let carried = false;
-  let carriedHistory = false;
-  let rawUsers = 0;
-  let directInputs = 0;
-  let inputSeen = false;
-  for (const entry of entries) {
-    // A legacy summary before any authority receipt may conceal constraints;
-    // later user input cannot retroactively make that elision complete.
-    if (entry.type === "compaction" && !inputSeen) return false;
-    if (entry.type === "message" && entry.message.role === "user") rawUsers += 1;
-    if (entry.type !== "custom") continue;
-    if (entry.customType === VOLLI_CONTEXT_MARKER) {
-      // Reasoning elision is not a conversation carry and loses no user text.
-      if (!isRecord(entry.data)) return false;
-      if (entry.data["kind"] === "context-carried") carried = true;
-      else if (entry.data["kind"] !== "reasoning-dropped") return false;
-    }
-    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER) {
-      if (!isRecord(entry.data) || entry.data["historyIncomplete"] === true) return false;
-      const messages = entry.data["userMessages"];
-      if (Array.isArray(messages)) {
-        if (!messages.every((text) => typeof text === "string")) return false;
-        carriedHistory = true;
-      } else if (typeof entry.data["text"] === "string") {
-        directInputs += 1;
-      } else return false;
-      inputSeen = true;
-    }
-    if (entry.customType === VOLLI_OBSERVATION_MARKER) {
-      if (!isRecord(entry.data)) return false;
-      if (
-        entry.data["kind"] === "command-accepted" &&
-        entry.data["operation"] === "message.submit"
-      ) {
-        // The normal marker reader already rejects malformed commands. Legacy
-        // valid markers can still lack separable authority text.
-        if (typeof entry.data["authorityUserText"] !== "string") return false;
-        inputSeen = true;
-      }
-    }
-  }
-  // Commandless deliveries write one separate receipt per native user entry.
-  // Legacy framed messages/markers cannot silently become absent constraints.
-  return rawUsers === directInputs && (!carried || carriedHistory);
-}
-
 const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "message",
   "compaction",
@@ -1183,8 +1083,6 @@ interface AcceptedMessageCommandMarker {
   delivery: "prompt" | "queue" | "steer";
   turnId: string;
   message: UserMessage;
-  /** Unframed user text, never the Runtime Brief or activated skill prose (VC-28). */
-  authorityUserText?: string;
   /** Typed identity for message resources; absent on markers written before VC-181. */
   resources?: readonly PromptResource[];
 }
@@ -1535,8 +1433,6 @@ async function readCarriedConversation(
   context: Context,
 ): Promise<{
   entries: Entry[];
-  authorityUserMessages: string[];
-  authorityHistoryComplete: boolean;
 }> {
   // No legacy-sidecar migration here, unlike a resume: a closed attachment's
   // sidecar was migrated by the attach that last opened it, or predates this
@@ -1556,8 +1452,6 @@ async function readCarriedConversation(
     const entries = await branch.findEntries({ order: "oldestFirst" }, context);
     return {
       entries: carriedConversation(entries, budget),
-      authorityUserMessages: authorityUserMessagesIn(entries),
-      authorityHistoryComplete: authorityUserHistoryCompleteIn(entries),
     };
   } finally {
     await opened.close(piContext()).catch(
@@ -1695,11 +1589,6 @@ async function attachSession(
     host.observability,
     runId,
   );
-  // A permitted authority decision is a metrics denominator, not durable
-  // Session history. It therefore goes through the reducer's passive path and
-  // never awaits the Session observer or changes whether Pi can run the call.
-  const recordObservability = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
-    recordObservationToSink(observabilityReducer, host.observability, runId, observation);
   if (isAborted(spec.signal)) {
     return rejectCancelledAttachment(observe);
   }
@@ -1838,11 +1727,7 @@ async function attachSession(
           carryTokenBudget(model),
           attachContext,
         );
-        if (
-          conversation.entries.length > 0 ||
-          conversation.authorityUserMessages.length > 0 ||
-          !conversation.authorityHistoryComplete
-        ) {
+        if (conversation.entries.length > 0) {
           await mainBranch.appendCustomEntry(
             VOLLI_CONTEXT_MARKER,
             {
@@ -1850,14 +1735,6 @@ async function attachSession(
               fromAttachmentId: spec.carry.attachmentId,
               entries: JSON.parse(JSON.stringify(conversation.entries)) as JsonValue,
             } satisfies ContextCarriedMarker,
-            attachContext,
-          );
-          await mainBranch.appendCustomEntry(
-            VOLLI_AUTHORITY_INPUT_MARKER,
-            {
-              userMessages: conversation.authorityUserMessages,
-              historyIncomplete: !conversation.authorityHistoryComplete,
-            },
             attachContext,
           );
           carried = true;
@@ -1942,20 +1819,6 @@ async function attachSession(
       } => marker.kind !== "command-accepted",
     );
     assertUniqueAcceptedCommands(recoveredMarkers);
-    // Older markers have no separable user input: omit rather than giving the
-    // judge a Runtime Brief, skill instructions or assistant summaries.
-    const authorityUserMessages = authorityUserMessagesIn(recoveredEntries);
-    const authorityUserHistoryComplete =
-      carryFailure === undefined && authorityUserHistoryCompleteIn(recoveredEntries);
-    if (!authorityUserHistoryComplete) {
-      // If this cannot persist, attachment fails rather than returning a live
-      // automatic gate with lost constraints. Recovery never silently clears it.
-      await mainBranch.appendCustomEntry(
-        VOLLI_AUTHORITY_INPUT_MARKER,
-        { historyIncomplete: true },
-        attachContext,
-      );
-    }
     const messageMarkerCounts = new Map<string, number>();
     for (const observation of recoveredObservations) {
       if (observation.kind !== "message-settled") continue;
@@ -2210,8 +2073,7 @@ async function attachSession(
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
-    // answers it, for the reason the gate below is built only for a Session with
-    // a policy: a tool that is absent cannot be called, where one wired to
+    // answers it: a tool that is absent cannot be called, where one wired to
     // nothing would be called and then fail, and the model would learn that from
     // the failure. A Session handed no web boundary is handed no way to ask for
     // one — the absent port is what makes the network unreachable from here, not
@@ -2220,11 +2082,6 @@ async function attachSession(
     // the query to a third party and a read does not, so a Session may be given
     // either, both or neither, and is offered exactly what it was given.
     //
-    // Assembled behind `sessionToolBindings` rather than pushed one by one
-    // here, and the Snapshot's list is `sessionToolIds` over those same
-    // bindings: the array Pi resolves against and the list the Snapshot records
-    // cannot disagree, which is what let the pack drop its rule about tool
-    // identity (VC-3).
     // Selected per Session from its own frozen record (VC-454). Sequential
     // dispatch hands the array back untouched; a Session whose MCP definitions
     // carry host-authored parallel-read marks — honoured only when this
@@ -2232,11 +2089,10 @@ async function attachSession(
     // and schemas, the provider-visible half, never change.
     //
     // Long tool results are cut for the model and saved whole beside this
-    // attachment's sidecar (VC-469), under the runtime-wide bound. The gate
-    // below lets the Session read them, and every other saved-output directory
-    // its own history names: an earlier attachment's results reach this one
-    // through a carry, after a relaunch as much as on the first attach, and
-    // through every link of a chain of carries.
+    // attachment's sidecar (VC-469), under the runtime-wide bound. The store
+    // marks reads of saved output, including directories its history names.
+    // An earlier attachment's results reach this one through a carry, after a
+    // relaunch as much as on the first attach, and through chains of carries.
     const toolOutput = new ToolOutputStore({
       directory: toolOutputDirectoryFor(sidecarMetadata.path),
       namedDirectories: savedOutputDirectoriesIn(
@@ -2250,18 +2106,12 @@ async function attachSession(
         ? {}
         : { redact: (text: string) => credentialRedaction.redact(text) }),
     });
-    // Code Mode (VC-471), for a Session born with it: one more tool, built over
-    // the Session's own tools and reaching them through the gate below — the
-    // same function instance the Agent holds, assigned where the Agent is
-    // built and read only when a program runs. Nested tool events take the
-    // same activity path a direct call's do.
-    let sessionGate: NonNullable<AgentOptions["beforeToolCall"]> | undefined;
+    // Nested calls reach the same tools, environment and host ports as direct calls.
     const codeModeJournal = new CodeModeJournal();
     const buildCodeMode: CodeModeBuilder = (surface, surfaceTools) =>
       createCodeModeTool({
         surface,
         tools: surfaceTools,
-        gate: () => sessionGate,
         observe: (event) => observeToolActivity(event),
         journal: codeModeJournal,
         // The same switch the Agent's own batches obey (VC-454).
@@ -2392,7 +2242,6 @@ async function attachSession(
       operation: "message.submit";
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
-      authorityUserText: string;
       resources: readonly PromptResource[];
     };
     type PendingRetryDelivery = {
@@ -2439,16 +2288,8 @@ async function attachSession(
     ): Promise<boolean> => {
       if (delivery?.operation === "message.submit") {
         rememberResources(delivery.resources);
-        authorityUserMessages.push(delivery.authorityUserText);
       }
       if (!delivery?.commandId) {
-        if (delivery?.operation === "message.submit") {
-          await mainBranch.appendCustomEntry(
-            VOLLI_AUTHORITY_INPUT_MARKER,
-            { text: delivery.authorityUserText },
-            piContext(),
-          );
-        }
         return false;
       }
       if (delivery.operation === "message.submit") {
@@ -2459,7 +2300,6 @@ async function attachSession(
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
           message: durableMessage(delivery.message) as UserMessage,
-          authorityUserText: delivery.authorityUserText,
           // Always present on new markers, including `[]`, so recovery can
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
@@ -2492,198 +2332,6 @@ async function attachSession(
     // constructed, and a definite-assignment `let` says that plainly instead of
     // resting on how a temporal dead zone happens to resolve inside a closure.
     let interruptTurn!: () => void;
-
-    /**
-     * The gate, built only for a Session that was handed a policy to enforce.
-     *
-     * The Snapshot is read once here rather than off the spec per call, because
-     * a Snapshot is pinned for the life of the attachment by its own definition
-     * — the facts its rules read stay live, the policy does not.
-     */
-    const gateToolCalls = (
-      authority: AuthoritySnapshot,
-    ): NonNullable<AgentOptions["beforeToolCall"]> => {
-      const ask = spec.ask;
-      const escalation = new AuthorityEscalation({
-        fallback: authority.fallback,
-        priorDenials: spec.priorAuthorityDenials,
-        // A program's nested call asks through the program's scope, so its
-        // escalations queue behind any other question it has open (VC-471).
-        ...(ask === undefined
-          ? {}
-          : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
-        signal: spec.signal,
-        now: host.now,
-        ...(spec.approvals === undefined ? {} : { approvals: spec.approvals }),
-      });
-      return async ({ toolCall, args }, signal) => {
-        const verdict = authorityVerdict({
-          tool: toolCall.name,
-          args,
-          authority,
-          workspacePath: spec.workspacePath,
-          readableRoots: toolOutput.readableDirectories,
-          ...(spec.approvals === undefined ? {} : { protection: true }),
-          hardDeniesFirst: true,
-        });
-        // Code Mode's isolated program is a container, not an authority act:
-        // each nested call passes this same gate. Never let the container reset
-        // refusals or send its script/results as classifier authority (VC-471).
-        if (toolCall.name === CODE_MODE_TOOL_ID && verdict.outcome === "allow") {
-          recordObservability({
-            kind: "authority",
-            state: "allowed",
-            turnId,
-            toolCallId: toolCall.id,
-          });
-          return undefined;
-        }
-        // Protection deliberately uses the deterministic ledger/card funnel,
-        // even when an upgraded On project retains a legacy automatic policy.
-        // Legacy automatic enforcement is unchanged; behavior-neutral shadow
-        // classification requires a separate live host opt-in.
-        const protectedCall = spec.approvals !== undefined;
-        const auto =
-          !protectedCall &&
-          authority.enforcement === "enforce" &&
-          authority.judgmentMode === "auto";
-        const hardDenied = verdict.outcome === "deny" && !isOverridableAuthorityRule(verdict.cause);
-        const eligible = authorityClassifierEligible({
-          tool: toolCall.name,
-          args,
-          workspacePath: spec.workspacePath,
-          verdict,
-        });
-        let judgedVerdict: AuthorityVerdict =
-          auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
-        let askImmediately = false;
-        let personReason: string | undefined;
-        if (!protectedCall && eligible && (auto || host.authorityShadowReviewEnabled())) {
-          const review = await judgeAuthorityCall({
-            decisions: spec.decisions,
-            sessionId: spec.identity.sessionId,
-            projectId: spec.identity.projectId,
-            // Full user-message history, not compacted assistant summaries or
-            // re-injected resource messages. No tool outputs or descriptions.
-            userMessages: authorityUserMessages,
-            userHistoryComplete: authorityUserHistoryComplete,
-            tool: toolCall.name,
-            args,
-            signal,
-          });
-          const reason = review.kind === "answered" ? review.reason : review.miss.message;
-          if (auto) {
-            if (review.kind === "miss") {
-              judgedVerdict = {
-                outcome: "deny",
-                cause: "classifier.unavailable",
-                reason:
-                  "Automatic review is unavailable. Ask the person before this call runs; do not work around this block.",
-              };
-              askImmediately = true;
-            } else if (review.wouldFlag) {
-              if (spec.authorityReason !== undefined) {
-                try {
-                  const wording = await spec.authorityReason({
-                    sessionId: spec.identity.sessionId,
-                    tool: toolCall.name,
-                    cause: review.denialCause,
-                    signal,
-                  });
-                  // This channel is only for durable UI and the person's ask.
-                  // Neither direct tool results nor Code Mode see model prose.
-                  if (wording !== reason) personReason = `Model-generated explanation: ${wording}`;
-                } catch {
-                  // Wording is optional, permission is not. Keep host text.
-                }
-              }
-              judgedVerdict = {
-                outcome: "deny",
-                cause: "classifier.flagged",
-                reason: `${reason} Find a safer route; do not work around this block.`,
-              };
-            } else {
-              judgedVerdict = { outcome: "allow" };
-            }
-          }
-          const recorded = await observationDelivery.deliverChecked({
-            kind: "authority-review",
-            turnId,
-            toolCallId: toolCall.id,
-            tool: toolCall.name,
-            mode: auto ? "auto" : "shadow",
-            authoriser: "classifier",
-            wouldFlag: review.kind === "answered" ? review.wouldFlag : null,
-            reason: personReason === undefined ? reason : `${reason} ${personReason}`,
-            category: review.kind === "answered" ? review.category : null,
-            answers: review.kind === "answered" ? review.answered.answers : null,
-            missReason: review.kind === "miss" ? review.miss.reason : null,
-            thresholds: {
-              allow: AUTHORITY_JUDGE_THRESHOLDS.authorisedMinProbability,
-              flag: AUTHORITY_JUDGE_THRESHOLDS.riskMaxProbability,
-            },
-          });
-          if (!recorded) {
-            // This is a broken durable host, not a classifier denial. Stop
-            // before an unauditable call runs, in shadow as well as auto.
-            interruptTurn();
-            return {
-              block: true,
-              reason:
-                "Authority review could not be recorded. Stop and ask the person to restore the Session ledger; do not work around this boundary.",
-            };
-          }
-        }
-        // Shadow never changes what ran, including under an observe Snapshot.
-        if (authority.enforcement === "observe") return undefined;
-        // Pi's own per-call signal is passed on rather than dropped: a question
-        // this parks on has to lose to a cancelled run, and Pi re-reads that
-        // signal the instant this callback returns.
-        const disposition = await escalation.resolve({
-          verdict: judgedVerdict,
-          ...(personReason === undefined ? {} : { personReason }),
-          askImmediately,
-          pauseIfUnattended: auto,
-          tool: toolCall.name,
-          toolCallId: toolCall.id,
-          asked: describeCall(toolCall.name, args),
-          turnId,
-          signal,
-        });
-        const waitDurationMs = escalation.consumeWaitDuration(toolCall.id);
-        if (disposition.outcome === "allow") {
-          recordObservability({
-            kind: "authority",
-            state: "allowed",
-            turnId,
-            toolCallId: toolCall.id,
-            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-          });
-          return undefined;
-        }
-        // Recorded before refused, through the same ordered queue as every other
-        // observation: a refusal that overtook the turn it belongs to would be
-        // filed against the wrong turn, and one that raced the activity stream
-        // would print out of order. `commitObservation` resolves at the consumer
-        // boundary and never rejects — a ledger that cannot be written is not a
-        // reason to let the call through, and the failure it holds is consumed at
-        // the next command boundary like any other.
-        if (disposition.record) {
-          await commitObservation({
-            kind: "authority",
-            state: "denied",
-            turnId,
-            toolCallId: toolCall.id,
-            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            tool: toolCall.name,
-            cause: disposition.cause,
-            reason: disposition.reason,
-          });
-        }
-        if (disposition.interrupt) interruptTurn();
-        return { block: true, reason: disposition.reason };
-      };
-    };
 
     /**
      * The output ceiling this request may honestly ask for.
@@ -2780,10 +2428,6 @@ async function attachSession(
       tools,
     );
 
-    // Built once and shared: the Agent judges every direct call with it, and
-    // Code Mode judges every nested call with the same instance, so the
-    // escalation counters and the denial thresholds are one Session's, not two.
-    sessionGate = spec.authority === undefined ? undefined : gateToolCalls(spec.authority);
     const agent = new Agent({
       initialState: {
         model,
@@ -2838,17 +2482,6 @@ async function attachSession(
       // message Pi's own harness sends. Every role Volli already produces
       // converts identically under both.
       convertToLlm,
-      // `terminate` is left unset on purpose: Pi only ends the run early when
-      // every finalized result in the batch asks for it, which is not what one
-      // refused call means. A `stop` answer ends the turn by aborting instead,
-      // which needs no agreement from the rest of the batch — at the cost of the
-      // reason it carries, which Pi drops on that one path because it re-reads
-      // its cancellation before it reads the block.
-      //
-      // The key is absent, not set to a callback that always allows: a Session
-      // with no Snapshot runs Pi's own default path, and the gate, the fallback
-      // thresholds and `ask` are then unreachable rather than quietly permissive.
-      ...(sessionGate === undefined ? {} : { beforeToolCall: sessionGate }),
     });
     // Interrupting, closing and cancelling the attachment all arrive here, which
     // is why one flag answers for all three downstream.
@@ -3493,16 +3126,6 @@ async function attachSession(
 
       try {
         await commitObservation(await persistObservation(activity));
-        if (!event.isError) {
-          try {
-            // The action already succeeded. A lost use count is bookkeeping,
-            // not a failed tool: throwing into Pi here drops the real result
-            // and invites a repeat of an action that has already happened.
-            await spec.approvals?.completed?.(event.toolCallId);
-          } catch (error) {
-            console.error("Approval completion bookkeeping failed", event.toolCallId, error);
-          }
-        }
       } finally {
         activityByToolCallId.delete(event.toolCallId);
       }
@@ -3812,7 +3435,6 @@ async function attachSession(
             operation: "message.submit" as const,
             delivery,
             message,
-            authorityUserText: text,
             resources,
           };
           pendingQueuedDeliveries.set(message, pending);
@@ -3850,7 +3472,6 @@ async function attachSession(
           operation: "message.submit" as const,
           delivery: "prompt" as const,
           message,
-          authorityUserText: text,
           resources,
         };
         const run = async (): Promise<void> => {

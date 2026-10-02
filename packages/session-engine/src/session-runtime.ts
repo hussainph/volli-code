@@ -1239,13 +1239,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
         native: wrapNativeBinding(site.directory, adapter.runtime, handle.native),
-        // The policy this attachment opened under, read off the handle exactly
-        // as `native` is and written down once, here (VC-44). This is the only
-        // place an Authority Snapshot becomes durable, which is what lets a
-        // later `authority.denied` — which carries this `attachmentId` — name
-        // the rule pack that produced it. An adapter that does not answer runs
-        // no policy, and records none.
-        authority: handle.authority ?? null,
+        authority: null,
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -2479,37 +2473,6 @@ class DefaultSessionRuntime implements SessionRuntime {
           paths: observation.paths,
         });
         break;
-      case "authority.denied":
-        event = await this.ports.engine.observe({
-          ...base,
-          kind: observation.kind,
-          turnId: observation.turnId,
-          tool: observation.tool,
-          cause: observation.cause,
-          reason: observation.reason,
-        });
-        break;
-      case "authority.reviewed":
-        event = await this.ports.engine.observe({
-          ...base,
-          provenance: {
-            source: { kind: "system", id: "authority-classifier", detail: null },
-            venue,
-          },
-          kind: observation.kind,
-          turnId: observation.turnId,
-          toolCallId: observation.toolCallId,
-          tool: observation.tool,
-          mode: observation.mode,
-          authoriser: observation.authoriser,
-          wouldFlag: observation.wouldFlag,
-          reason: observation.reason,
-          category: observation.category,
-          answers: observation.answers,
-          missReason: observation.missReason,
-          thresholds: observation.thresholds,
-        });
-        break;
       case "usage.recorded":
         event = await this.ports.engine.observe({
           ...base,
@@ -2784,14 +2747,6 @@ class DefaultSessionRuntime implements SessionRuntime {
       // provider id fails honestly in the adapter; it must never create fresh.
       continuity: "native_resume",
       native: binding.native,
-      // The Snapshot this attachment opened under, replayed rather than
-      // re-resolved (VC-44). `#openAttachment` reads the handle's Snapshot and
-      // writes it onto `attachment.opened`; this is the same fact travelling the
-      // other way, so an attachment rebuilt after a relaunch is governed by the
-      // policy history says governed it. Without this the durable record and the
-      // live gate drift apart the first time anyone edits policy, and the record
-      // is the half that would be wrong.
-      pinnedAuthority: attachment.authority,
     };
     const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;

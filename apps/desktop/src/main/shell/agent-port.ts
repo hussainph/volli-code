@@ -13,9 +13,8 @@
  * Two things the port decides that the host cannot:
  *
  * - **Where a shell runs.** `cwd` defaults to the Session workspace and must
- *   stay inside it, by the same containment rule the authority pack's
- *   `path.outside-workspace` uses (`containsPath`, exported for exactly this
- *   caller). Refused as `shell.cwd` before anything is spawned.
+ *   stay inside it (`containsPath`). Refused as `shell.cwd` before anything
+ *   is spawned.
  *
  * - **What a shell is handed.** The environment is
  *   {@link sessionCommandEnvironment}'s record over the identity the host

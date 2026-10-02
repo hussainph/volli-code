@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "../pi/harness-env";
 import { createEditTool, createReadTool, createWriteTool } from "../pi/harness-env";
 import { describe, expect, it } from "vite-plus/test";
-import { normalizeToolPath } from "./pi-tool-path";
+import { normalizeToolPath } from "./tool-path";
 
 /**
  * The five arguments a 0.85 harness tool takes after its params: the required

@@ -182,8 +182,7 @@ function refusal(text: string): RuntimeVerbResult {
 /**
  * The budget-ask capability one verb call rides in on (VC-204).
  *
- * Supplied by the attachment's own binding — the same parked-question machinery
- * the authority gate escalates through — and absent when the call arrived with
+ * Supplied by the attachment's own parked-question binding, and absent when the call arrived with
  * no way to put a question in front of a person, in which case a spent budget
  * refuses the way it always did. The door never chooses who answers: it states
  * the budget fact, and the binding owns the interaction.

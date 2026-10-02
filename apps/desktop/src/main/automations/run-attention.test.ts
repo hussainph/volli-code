@@ -390,115 +390,14 @@ describe("createRunAttentionWatch", () => {
   });
 });
 
-describe("an approval card in an unattended Run (VC-480)", () => {
-  const card = {
-    id: "ask:call-1",
-    title: "Allow writing outside this workspace?",
-    approval: {
-      asked: "write  /Users/me/code/docs/a.md",
-      because: "because",
-      reason: "reason",
-      stages: [],
-      held: null,
-    },
-    options: [{ id: "once" }, { id: "steer" }],
-  };
-
-  it("does not present model question options as an authority approval", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(state("idle"));
-    h.watch.observe(
-      state("waiting", "Nightly sweep", SESSION_ID, [
-        { ...card, id: "ask-user:model", approval: undefined },
-      ]),
-    );
-    expect(h.notified).toHaveLength(1);
-    expect(h.notified[0]?.title).not.toContain("approval");
-    expect(h.notified[0]?.body).not.toContain("write  /Users/me/code/docs/a.md");
-  });
-
-  it("says what needs approving and that the Run is paused until a person answers", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(state("idle"));
-    h.watch.observe(state("waiting", "Nightly sweep", SESSION_ID, [card]));
-    expect(h.notified.map(({ title, body }) => ({ title, body }))).toEqual([
-      {
-        title: "An Automation needs your approval",
-        body: "Nightly sweep needs approval for writing outside this workspace: write  /Users/me/code/docs/a.md. It's paused until you answer.",
-      },
-    ]);
-    expect(h.notified[0]?.target).toMatchObject({ interactionId: "ask:call-1" });
-  });
-
-  it("notifies an unattended error even while a ledger-hit receipt is open", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observeBirth(SESSION_ID);
-    const failed = state("error");
-    const withReceipt: SessionProjection = {
-      ...failed,
-      interactions: {
-        ...failed.interactions,
-        active: state("waiting", "Nightly sweep", SESSION_ID, [
-          { id: "ledger-hit:call-2", options: [] },
-        ]).interactions.active,
-      },
-    };
-    h.watch.observe(withReceipt);
-    expect(h.notified).toHaveLength(1);
-    expect(h.notified[0]).toMatchObject({
-      title: "An Automation stopped",
-      body: "Nightly sweep could not keep running.",
-      target: { interactionId: null, attentionId: "a1" },
-    });
-    // The cosmetic receipt closing is not another entry into the same error.
-    h.watch.observe(failed);
-    expect(h.notified).toHaveLength(1);
-    expect(h.errors).toEqual([]);
-  });
-
-  it("still targets a real approval alongside a cosmetic ledger-hit receipt", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(
-      state("waiting", "Nightly sweep", SESSION_ID, [
-        { id: "ledger-hit:call-2", options: [] },
-        card,
-      ]),
-    );
-    expect(h.notified).toHaveLength(1);
-    expect(h.notified[0]).toMatchObject({
-      title: "An Automation needs your approval",
-      target: { interactionId: "ask:call-1", attentionId: null },
-    });
-  });
-
-  it("does not read the quiet line a ledger hit leaves as a person being needed", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(state("idle"));
-    h.watch.observe(
-      state("waiting", "Nightly sweep", SESSION_ID, [{ id: "ledger-hit:call-2", options: [] }]),
-    );
-    expect(h.notified).toEqual([]);
-    h.watch.observe(state("waiting", "Nightly sweep", SESSION_ID, [card]));
-    expect(h.notified).toHaveLength(1);
-  });
-});
-
 describe("runAttentionNotification", () => {
-  it("says which of the two errands it is in the title", () => {
-    // They need different things — one is answerable, the other is broken — so
-    // a reader must not have to open the app to find out which.
+  it("distinguishes an open question from a failure", () => {
     expect(runAttentionNotification("waiting", { id: "s", title: "Review" }).title).not.toBe(
       runAttentionNotification("error", { id: "s", title: "Review" }).title,
     );
   });
 
   it("names the work through the Session's own title", () => {
-    // A Run titles its Session after its Automation, so in the ordinary case
-    // this IS the Automation's name.
     expect(runAttentionNotification("waiting", { id: "s", title: "Nightly sweep" }).body).toContain(
       "Nightly sweep",
     );
@@ -526,8 +425,6 @@ describe("runAttentionTarget", () => {
   });
 
   it("names the failing Attention for a Run that broke", () => {
-    // A click on "An Automation stopped" has to land on the failure, not on
-    // whatever question happened to be open before the transport died.
     expect(runAttentionTarget("error", state("error"))).toEqual({
       kind: "session",
       projectId: "project-1",
@@ -539,9 +436,6 @@ describe("runAttentionTarget", () => {
   });
 
   it("still points at the Session when there is no item to name", () => {
-    // `sessionAwaitsUser` also answers `waiting` for a blocking Attention with
-    // no Interaction; the target degrades to the Session rather than inventing
-    // an id that would open the wrong card.
     expect(runAttentionTarget("waiting", state("idle"))).toEqual({
       kind: "session",
       projectId: "project-1",

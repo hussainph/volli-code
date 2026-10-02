@@ -150,9 +150,6 @@ async function runTrial(
     },
     ...run.spec,
   };
-  // No Authority Snapshot: the product default (`observe`) installs no gate,
-  // so this is the path a real Session takes. The gate's own parity is
-  // proven in the unit suite, not measured here.
   // The record main freezes at birth, for the arm's mode.
   const spec: SessionRuntimeSpec =
     arm === "direct"

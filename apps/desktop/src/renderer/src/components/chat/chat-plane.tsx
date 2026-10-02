@@ -16,7 +16,6 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
-import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 
 import { toastError } from "@renderer/lib/toast";
@@ -50,7 +49,7 @@ import {
   type ComposerVerbName,
   type PromptResource,
 } from "@volli/shared";
-import type { DynamicToolUIPart, UIMessage } from "ai";
+import type { UIMessage } from "ai";
 
 import {
   Conversation,
@@ -69,17 +68,12 @@ import { Message, MessageContent } from "@renderer/components/ui/ai-elements/mes
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
-  footInteraction,
-  gatedToolCallId,
-  gatedToolCallIds,
   groupTurns,
-  interactionForApproval,
   isAwaitingFirstOutput,
   isDeliverable,
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
-  authorityReviewNoticeCopy,
   projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
@@ -87,8 +81,6 @@ import {
   type MessageDelivery,
   type QueuedMessage,
   type TranscriptRow,
-  type TranscriptAuthorityReview,
-  type TranscriptLinkedAuthorityReview,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -97,7 +89,7 @@ import {
 import { useActivityIsland } from "@renderer/chat/use-activity-island";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
-import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
 import {
   CompactionBoundary,
   CompactionProgress,
@@ -144,7 +136,6 @@ import {
 } from "@renderer/components/chat/composer-ui";
 import {
   ComposerInteractionStack,
-  InteractionCard,
   InteractionReceiptLine,
 } from "@renderer/components/chat/interaction-ui";
 import {
@@ -314,7 +305,6 @@ export function ChatPlane({
   // off the plane's subtree rather than the document so a split with two
   // chats never hands focus to the other one's island.
   const planeRef = React.useRef<HTMLDivElement>(null);
-  const reducedMotion = useReducedMotion() ?? false;
   const peekReturnFocus = React.useCallback(
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
@@ -1126,36 +1116,13 @@ export function ChatPlane({
     for (const id of settledHeldIds(held, queue, durableMessageIds)) dropHeld(sessionId, id);
   }, [dropHeld, durableMessageIds, held, queue, sessionId]);
 
-  /**
-   * Which decisions the transcript is already showing, and which one is left for
-   * the foot.
-   *
-   * A gated call carries its own card on its own row, where the command and its
-   * detail are. What has no row to stand on — a question, a permission the
-   * harness raised without a call — lands in the composer's slot, oldest first:
-   * two blocking cards stacked there are two things each claiming to be the one
-   * thing to do next.
-   *
-   * Asked only while something is waiting to be asked. `gatedToolCallIds` walks
-   * every part of every message and the list is replaced on every batch, so a
-   * memo on it misses every time; what it answers is only read in a blocked
-   * state, and a blocked Session is not streaming anything to compete with.
-   */
+  // Questions, budget asks and confirmations share the existing composer slot.
+  // Secret requests retain their dedicated person-only card.
   const pending =
-    interactions.length > 0
-      ? footInteraction(
-          // The revealed question takes the slot, when it is still open: the
-          // card stack draws one at a time, so "select that question" is this
-          // ordering and nothing else.
-          preferRevealedInteraction(
-            // Credential questions have their own person-only controls; they
-            // must never reach the generic free-text answer stack.
-            interactions.filter((interaction) => interaction.credential === undefined),
-            revealed?.interactionId ?? null,
-          ),
-          gatedToolCallIds(messages),
-        )
-      : null;
+    preferRevealedInteraction(
+      interactions.filter((interaction) => interaction.credential === undefined),
+      revealed?.interactionId ?? null,
+    )[0] ?? null;
 
   // The Session's most recent reply — what `/copy` copies. Held in a ref as
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
@@ -1388,20 +1355,8 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
-      approvalFailures: session.approvalFailures,
-      open: interactions,
-      resolving,
-      onResolve: answer,
     }),
-    [
-      answer,
-      interactions,
-      onOpenFile,
-      onOpenSession,
-      session.approvalFailures,
-      resolving,
-      session.openedInteractions,
-    ],
+    [onOpenFile, onOpenSession, session.openedInteractions],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1416,14 +1371,8 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () =>
-      projectTranscriptRows(
-        turns,
-        session.compactions,
-        session.reasoningDrops,
-        session.authorityReviews,
-      ),
-    [session.compactions, session.reasoningDrops, session.authorityReviews, turns],
+    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
+    [session.compactions, session.reasoningDrops, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1432,27 +1381,6 @@ export function ChatPlane({
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
   const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
-
-  /**
-   * The other place a question draws (round 5). A gated tool call's question
-   * sits on its own row in the transcript, not at the foot — `footInteraction`
-   * skips it by design — so reordering the foot did nothing for it, and a click
-   * on its alert opened the Session with the card somewhere above the fold. So
-   * a revealed question that is drawn inline is scrolled to, once per reveal
-   * and as soon as its row exists: `rows` is a dependency because the row may
-   * mount a frame after the plane does.
-   */
-  const scrolledReveal = React.useRef<SessionNotificationItem | null>(null);
-  React.useEffect(() => {
-    if (revealed === null || revealed.interactionId === null) return;
-    if (scrolledReveal.current === revealed) return;
-    const row = planeRef.current?.querySelector<HTMLElement>(
-      `[data-interaction-id="${CSS.escape(revealed.interactionId)}"]`,
-    );
-    if (row === null || row === undefined) return;
-    scrolledReveal.current = revealed;
-    row.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-  }, [reducedMotion, revealed, rows]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
@@ -1997,13 +1925,6 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
-  /** Mutation receipts for standing grants that could only be allowed once. */
-  approvalFailures?: ReadonlyMap<string, "once" | "not-delivered">;
-  /** The ones still open, so a gated row can draw the card it is waiting on. */
-  open: readonly RendererSessionInteraction[];
-  /** The ids with a decision in flight — one card in flight is not all of them. */
-  resolving: ReadonlySet<string>;
-  onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
 }
 
 /**
@@ -2309,27 +2230,7 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
-    case "authority-review":
-      return `authority-review:${row.review.sequence}`;
   }
-}
-
-/** Projection adds placement to fresh wrappers; unchanged facts must still memoize. */
-function sameLinkedAuthorityReview(
-  previous: TranscriptLinkedAuthorityReview,
-  next: TranscriptLinkedAuthorityReview,
-): boolean {
-  return (
-    previous.sequence === next.sequence &&
-    previous.afterMessageId === next.afterMessageId &&
-    previous.toolCallId === next.toolCallId &&
-    previous.toolRowKey === next.toolRowKey &&
-    previous.tool === next.tool &&
-    previous.mode === next.mode &&
-    previous.reason === next.reason &&
-    previous.scope?.attachmentId === next.scope?.attachmentId &&
-    previous.scope?.turnId === next.scope?.turnId
-  );
 }
 
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
@@ -2344,17 +2245,6 @@ export function ChatTranscriptRow({
   live: boolean;
   onOpenSession?(sessionId: string): void;
 }) {
-  const hintsVisible = useUiStore((store) => store.authorityHintsVisible);
-  const authorityReviews = useStableList<TranscriptLinkedAuthorityReview>(
-    React.useMemo(
-      () =>
-        row.kind === "turn"
-          ? (row.authorityReviews ?? []).filter((review) => hintsVisible || review.mode === "auto")
-          : [],
-      [row, hintsVisible],
-    ),
-    sameLinkedAuthorityReview,
-  );
   switch (row.kind) {
     case "host-notice":
       return (
@@ -2367,32 +2257,8 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
-    case "authority-review":
-      if (!hintsVisible && row.review.mode === "shadow") return null;
-      // Until the matching call arrives (or in incomplete older history), the
-      // record still has a disclosure rather than an uncollapsible feed line.
-      return (
-        <details
-          className="not-prose text-ui text-muted-foreground"
-          open={row.review.mode === "auto"}
-        >
-          <summary className="cursor-default select-none">
-            {row.review.mode === "shadow" ? "Would block" : "Blocked"} {row.review.tool}
-          </summary>
-          <p className="py-1 whitespace-pre-wrap break-words">
-            {authorityReviewNoticeCopy(row.review)}
-          </p>
-        </details>
-      );
     case "turn":
-      return (
-        <ChatTurn
-          messages={row.messages}
-          context={context}
-          live={live}
-          authorityReviews={authorityReviews}
-        />
-      );
+      return <ChatTurn messages={row.messages} context={context} live={live} />;
   }
 }
 
@@ -2410,42 +2276,14 @@ export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
   live,
-  authorityReviews,
 }: {
   messages: readonly UIMessage[];
-  authorityReviews?: readonly TranscriptLinkedAuthorityReview[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
-  const heldReviewsByRow = React.useRef<
-    ReadonlyMap<string, readonly TranscriptLinkedAuthorityReview[]>
-  >(new Map());
-  const reviewsByRow = React.useMemo(() => {
-    const indexed = new Map<string, TranscriptLinkedAuthorityReview[]>();
-    for (const review of authorityReviews ?? []) {
-      const entries = indexed.get(review.toolRowKey) ?? [];
-      entries.push(review);
-      indexed.set(review.toolRowKey, entries);
-    }
-    // A new verdict for one call must not invalidate every settled ToolRow.
-    // Like useStableList, retain content-equal groups, not just their entries.
-    const previous = heldReviewsByRow.current;
-    const next = new Map<string, readonly TranscriptLinkedAuthorityReview[]>();
-    let unchanged = previous.size === indexed.size;
-    for (const [key, reviews] of indexed) {
-      const before = previous.get(key);
-      const entries =
-        before === undefined ? reviews : holdList(before, reviews, sameLinkedAuthorityReview);
-      next.set(key, entries);
-      if (entries !== before) unchanged = false;
-    }
-    if (!unchanged) heldReviewsByRow.current = next;
-    return heldReviewsByRow.current;
-  }, [authorityReviews]);
-
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
   // it there — whether or not a tool row was ever correlated to the question. An
@@ -2501,14 +2339,8 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (answered) {
     const interaction = context.interactions.get(answered.interactionId);
-    const failure =
-      interaction?.approval === undefined ? undefined : context.approvalFailures?.get(first.id);
-    if (failure === "not-delivered")
-      return <p className="text-ui text-muted-foreground">Answer not delivered</p>;
-    const resolution =
-      failure === "once" ? { optionIds: ["once"], response: null } : answered.resolution;
     return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={resolution} />
+      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
     ) : null;
   }
 
@@ -2528,9 +2360,7 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>
-                  {renderSegment(segment, role, context, live, reviewsByRow)}
-                </div>
+                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
@@ -2605,7 +2435,6 @@ function renderSegment(
   role: UIMessage["role"],
   context: TurnContext,
   live: boolean,
-  authorityReviews: ReadonlyMap<string, readonly TranscriptAuthorityReview[]>,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
@@ -2618,65 +2447,13 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
-          authorityReviews={authorityReviews}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
-        />
-      );
-    case "attention":
-      return (
-        <GatedCall
-          part={segment.part}
-          context={context}
-          authorityReviews={authorityReviews.get(segment.key)}
         />
       );
     default:
       return null;
   }
-}
-
-/**
- * A call and the decision it is waiting on, in the one place both belong.
- *
- * The row is the ordinary row — same glyph, same verb, same mono object, same
- * disclosure onto the input it is about to run — so the command and its detail
- * stay readable while the question sits under them. The card is the real
- * interaction, not a summary of it.
- *
- * No card when nothing correlates: a gate we cannot pair with a question must
- * not invent one, and `footInteraction` draws it at the foot instead.
- */
-function GatedCall({
-  part,
-  context,
-  authorityReviews,
-}: {
-  part: DynamicToolUIPart;
-  context: TurnContext;
-  authorityReviews?: readonly TranscriptAuthorityReview[];
-}) {
-  const interaction = interactionForApproval(context.open, gatedToolCallId(part));
-  return (
-    // The id is on the row so a notification click can scroll to THIS question
-    // (VC-295): it is the one card the foot slot never draws.
-    <div className="space-y-1" data-interaction-id={interaction?.id}>
-      <ToolRow
-        part={part}
-        authorityReviews={authorityReviews}
-        onOpenFile={context.onOpenFile}
-        onOpenSession={context.onOpenSession}
-      />
-      {interaction ? (
-        <InteractionCard
-          key={interaction.id}
-          interaction={interaction}
-          resolving={context.resolving.has(interaction.id)}
-          onResolve={(submission) => context.onResolve(interaction.id, submission)}
-        />
-      ) : null}
-    </div>
-  );
 }
 
 /**

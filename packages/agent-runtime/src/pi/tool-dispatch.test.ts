@@ -80,57 +80,6 @@ describe("applyToolDispatch", () => {
     expect(applyToolDispatch(tools, [read!, mutate!], false).toolExecution).toBe("sequential");
   });
 
-  it("pins Pi's contract: no call in a parallel batch starts until every approval settles", async () => {
-    const log: string[] = [];
-    const [first, second] = withParallelReadEligibility(
-      [definition("first"), definition("second")],
-      new Set([mcpToolKey(definition("first")), mcpToolKey(definition("second"))]),
-    );
-    const { tools, toolExecution } = applyToolDispatch(
-      [tool(first!.providerName, log), tool(second!.providerName, log)],
-      [first!, second!],
-      true,
-    );
-    const approval = Promise.withResolvers<void>();
-    const parked = Promise.withResolvers<void>();
-    const { streamFn } = scriptedProvider([
-      { toolCalls: [{ name: first!.providerName }, { name: second!.providerName }] },
-      { text: "done" },
-    ]);
-    const agent = new Agent({
-      initialState: { systemPrompt: "", model: MODEL, tools, messages: [] },
-      streamFn,
-      toolExecution,
-      beforeToolCall: async ({ toolCall }) => {
-        log.push(`approve:${toolCall.id}`);
-        // The first call waits on a person; nothing may run around it.
-        if (toolCall.id === "tc-1-0") {
-          parked.resolve();
-          await approval.promise;
-        }
-        return undefined;
-      },
-    });
-
-    const run = agent.prompt("go");
-    await parked.promise;
-    // A whole macrotask: anything Pi would start without awaiting the gate
-    // has had every microtask it needs to start by now.
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(log).toEqual(["approve:tc-1-0"]);
-    approval.resolve();
-    await run;
-
-    expect(log).toEqual([
-      "approve:tc-1-0",
-      "approve:tc-1-1",
-      "start:tc-1-0",
-      "start:tc-1-1",
-      "end:tc-1-0",
-      "end:tc-1-1",
-    ]);
-  });
-
   it("never lets a codemode call overlap direct MCP reads in one batch (VC-471)", async () => {
     // `codemode` is not a marked read, so a parallel Session marks it
     // sequential — and Pi runs a batch holding one sequential call one call at

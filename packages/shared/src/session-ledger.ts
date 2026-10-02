@@ -7,7 +7,6 @@ import { readSessionOrigin, type SessionOrigin } from "./session-origin";
 import type { SessionStopDetail } from "./session-stop";
 
 import type {
-  AuthorityReviewObservation,
   CompactionReason,
   CompactionWorkReason,
   ModelSelection,
@@ -15,9 +14,8 @@ import type {
   ReasoningDropCause,
   SessionRole,
 } from "./agent-runtime";
-import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import type { SessionToolId } from "./authority";
 import type { CodeModeSurface } from "./code-mode";
-import type { ApprovalDetail } from "./approvals";
 import type { McpToolDefinition } from "./mcp";
 import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
@@ -202,8 +200,6 @@ export interface SessionInteraction {
   kind: "permission" | "question";
   title: string;
   detail: string | null;
-  /** Approval card metadata written only by the authority adapter, never from model question options. */
-  approval?: ApprovalDetail;
   options: readonly SessionInteractionOption[];
   multiple: boolean;
   /**
@@ -247,59 +243,12 @@ export function promptId(index: number): string {
 /** The prompt id a single-prompt interaction carries. */
 export const DEFAULT_INTERACTION_PROMPT_ID = promptId(0);
 
-/**
- * The interaction id one blocked tool call is asked under.
- *
- * Durable, not live. This string lands inside
- * `pi:interaction:<attachmentId>:<id>:opened` on disk, and every relaunch
- * re-derives that event id from the same data and dedupes it by exact match — so
- * changing how this is built would not fail, it would write a second copy of
- * every question a Session ever asked. Keep the shape, and the `ask:` segment
- * with it.
- *
- * The tool call id is the identity because the runtime blocks exactly one
- * question per call it refuses — and because it is the one identity that
- * survives the product edge: the renderer correlates a gated tool row to its
- * interaction through this derivation, never through `native.id`, which the
- * edge always nulls. Defined here, beside the interaction vocabulary, so the
- * adapter that mints it and the renderer that matches it cannot drift.
- */
-export function askInteractionId(toolCallId: string): string {
-  return `ask:${toolCallId}`;
-}
-
-/**
- * The interaction id one spent-budget question is asked under (VC-204).
- *
- * Durable on the same terms as {@link askInteractionId}, and a third derivation
- * rather than a reuse of `ask:` for a reason that is about collision, not
- * taste: both derive from a tool call id, and one call can raise both
- * questions — the gate may ask about a `session_start` call and, once allowed,
- * the verb's own door may ask about its budget. Under one prefix the second
- * `opened` emit would dedupe against the first inside the same attachment and
- * park a question nobody was ever shown. Today no gate rule judges a verb
- * tool, so the collision cannot happen yet — which is exactly when to keep the
- * segments apart, while it costs a prefix rather than a wedge.
- *
- * No renderer correlation is added on purpose: a budget-asked call is not a
- * gated row, so the card lands at the transcript foot by construction — the
- * same place a model's own `ask-user:` question draws.
- */
+/** Durable id for one spent-budget question. Its segment is frozen for replay. */
 export function budgetAskInteractionId(toolCallId: string): string {
   return `budget-ask:${toolCallId}`;
 }
 
-/**
- * The interaction id one confirmation question is asked under (VC-380).
- *
- * A fourth frozen segment on exactly {@link budgetAskInteractionId}'s
- * reasoning. An MCP install already confirms itself structurally — the plain
- * call previews and only `confirm: "apply"` writes — and this is the question
- * that rides on top of the apply, so a person in front of the Session sees the
- * warning before the command runs. That means one tool call can raise a gate
- * ask and this one, and a shared prefix would let either answer settle the
- * other's wait.
- */
+/** Durable id for an existing operation's confirmation question. */
 export function confirmAskInteractionId(toolCallId: string): string {
   return `confirm-ask:${toolCallId}`;
 }
@@ -320,20 +269,7 @@ export function credentialAskInteractionId(toolCallId: string): string {
   return `credential-ask:${toolCallId}`;
 }
 
-/**
- * The interaction id one `ask_user` call is asked under.
- *
- * Durable on the same terms as {@link askInteractionId}, and a second derivation
- * rather than a widening of it: the `ask-user:` segment is frozen the moment it
- * ships, because `pi:interaction:<attachmentId>:<id>:opened` is re-derived from
- * live data on every relaunch and deduped by exact string match.
- *
- * Separate from `ask:` for a reason that outlives the ids. Both derive from a
- * tool call id, and the two questions are answered differently — an escalation's
- * option ids are read as a verdict, a model's are handed back untouched — so one
- * shared prefix would not collide loudly, it would let either answer settle the
- * other's wait.
- */
+/** Model-authored questions have a separate frozen segment from host confirmations. */
 export function askUserInteractionId(toolCallId: string): string {
   return `ask-user:${toolCallId}`;
 }
@@ -400,25 +336,8 @@ export interface SessionAttachment {
   venue: SessionExecutionVenue;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
-  /**
-   * The policy this attachment ran under, recorded when it opened (VC-44).
-   *
-   * On the attachment rather than on the Session, because that is the unit the
-   * Snapshot is pinned to: policy is frozen for the life of one attachment and
-   * re-resolved at the next, so a Session that reattached after a Settings edit
-   * has genuinely run under two policies and history has to be able to say so.
-   * `authority.denied` already carries `attachmentId`, so a refusal read back
-   * long after the pack changed resolves through this field to the exact
-   * `rulePackId` and `rulePackHash` that produced it — which is the whole of what
-   * pinning was for, and what it could not do while nothing persisted the
-   * Snapshot.
-   *
-   * `null` is a real and permanent answer, not a migration gap. A Session whose
-   * project sets `enforcement: "off"` is handed no Snapshot at all, and every
-   * attachment written before VC-44 has none either; both mean "this ran at the
-   * runtime's own defaults", which is the same fact.
-   */
-  authority: AuthoritySnapshot | null;
+  /** Retired snapshot slot. Legacy input is decoded to null and never reactivated. */
+  authority: null;
 }
 
 /** A local machine, cloud sandbox, or other execution venue. */
@@ -838,33 +757,6 @@ export type SessionEventPayload =
       reason: SessionInteractionCancelReason;
     }
   | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
-  /**
-   * The Session's authority refused one call before it ran.
-   *
-   * A fact of its own rather than a failed activity, because the tool never
-   * executed and nothing went wrong: Volli decided. Recording it durably is what
-   * makes a refusal countable against {@link AuthorityFallback}, readable in the
-   * transcript as Volli's own act, and available to Attention.
-   *
-   * `cause` is a bare string, not {@link AuthorityDenialCause}. History outlives
-   * the rule pack that wrote it, and a decoder that rejected a retired rule id
-   * would make an old Session unreadable rather than merely quaint.
-   */
-  | {
-      kind: "authority.denied";
-      attachmentId: string;
-      turnId: string | null;
-      /** The runtime tool name as requested, which may not be a tool Volli offers. */
-      tool: string;
-      cause: string;
-      /** The refusing rule's own words, as the model received them. */
-      reason: string;
-    }
-  /** A classifier verdict, not a denial: shadow reviews never block a call. */
-  | (Omit<AuthorityReviewObservation, "kind"> & {
-      kind: "authority.reviewed";
-      attachmentId: string;
-    })
   | {
       kind: "adapter.observed";
       attachmentId: string | null;
@@ -915,8 +807,6 @@ export const SESSION_PROJECTION_EVENT_KINDS = [
   "attachment.failed",
   "attachment.native_referenced",
   "attachment.opened",
-  "authority.denied",
-  "authority.reviewed",
   "command.receipt.recorded",
   "command.recorded",
   "context.compacted",
@@ -1068,8 +958,6 @@ type ObservedSessionEventKind =
   | "interaction.opened"
   | "interaction.resolved"
   | "interaction.cancelled"
-  | "authority.denied"
-  | "authority.reviewed"
   | "adapter.observed"
   | "usage.recorded";
 
@@ -1232,31 +1120,6 @@ export function observationPayload(
       };
     case "command.receipt":
       throw new Error("Command receipt observations require Session Engine stamping");
-    case "authority.denied":
-      return {
-        kind: observation.kind,
-        attachmentId: observation.attachmentId,
-        turnId: observation.turnId,
-        tool: observation.tool,
-        cause: observation.cause,
-        reason: observation.reason,
-      };
-    case "authority.reviewed":
-      return {
-        kind: observation.kind,
-        attachmentId: observation.attachmentId,
-        turnId: observation.turnId,
-        toolCallId: observation.toolCallId,
-        tool: observation.tool,
-        mode: observation.mode,
-        authoriser: observation.authoriser,
-        wouldFlag: observation.wouldFlag,
-        reason: observation.reason,
-        category: observation.category,
-        answers: observation.answers,
-        missReason: observation.missReason,
-        thresholds: observation.thresholds,
-      };
     case "adapter.observed":
       return {
         kind: observation.kind,
@@ -1687,18 +1550,6 @@ export interface SessionProjection {
   readonly lastTurnOutcome: SessionTurnOutcome | null;
   readonly lastTurnStopDetail?: SessionStopDetail | null;
   /**
-   * How many calls this Session's authority has refused, over its whole life.
-   *
-   * Projected rather than counted in the runtime because the per-Session half of
-   * {@link AuthorityFallback} is a fact about the Session, not about the
-   * attachment that happens to be live: a Session that was refused nineteen times
-   * yesterday is one refusal from escalating today, and a counter that reset on
-   * every attach would never reach twenty. The consecutive half has no such
-   * projection and cannot have one — an *allowed* call is not an event, so only
-   * the runtime that sees both answers can know a run was broken.
-   */
-  readonly authorityDenials: number;
-  /**
    * What this Session has consumed, over every model operation it recorded.
    *
    * Folded here rather than queried, so the live Session read stays one pass
@@ -1931,7 +1782,6 @@ function foldSessionProjection(
   let turnActive = base?.turnActive ?? false;
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
   let lastTurnStopDetail = base?.lastTurnStopDetail ?? null;
-  let authorityDenials = base?.authorityDenials ?? 0;
   const usage: SessionUsage[] = [];
   let usageCostUsdExact = checkpoint?.usageCostUsdExact ?? 0;
   let lastActivityAt = base?.lastActivityAt ?? session.createdAt;
@@ -2213,16 +2063,12 @@ function foldSessionProjection(
       // transcript's shape, read from the event stream directly;
       // `adapter.observed` is adapter evidence that no projected field is
       // derived from.
-      case "authority.denied":
-        authorityDenials += 1;
-        break;
       // Compaction changes what the *executor* will send next, not anything
       // this projection holds: the Session's history is untouched by it, and a
       // Session is no more or less active for having compacted.
       case "context.compacted":
       case "context.compaction_failed":
       case "context.reasoning_dropped":
-      case "authority.reviewed":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
@@ -2282,7 +2128,6 @@ function foldSessionProjection(
     resumptions,
     lastTurnOutcome,
     ...(lastTurnStopDetail === null ? {} : { lastTurnStopDetail }),
-    authorityDenials,
     // `usageSummary` supplies exact counters, bases and token totals. Money is
     // recomputed from the checkpoint's unrounded accumulator instead of adding
     // the already-rounded public summaries together.

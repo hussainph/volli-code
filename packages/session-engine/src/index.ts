@@ -17,5 +17,4 @@ export type {
   SessionPresentationProjection,
   SessionStartResult,
 } from "@volli/shared";
-export * from "./approval-commands";
 export type { HostNotice, HostNoticeOutbox, HostNoticeReceipt } from "./host-notice-outbox";

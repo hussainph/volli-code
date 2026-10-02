@@ -25,7 +25,6 @@ import {
   FolderIcon,
   GaugeIcon,
   GlobeSimpleIcon,
-  HandPalmIcon,
   ListChecksIcon,
   MagnifyingGlassIcon,
   PencilSimpleIcon,
@@ -34,7 +33,6 @@ import {
   TerminalWindowIcon,
   UsersThreeIcon,
   WrenchIcon,
-  WarningIcon,
   XCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
@@ -46,7 +44,6 @@ import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversati
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
-  authorityReviewNoticeCopy,
   bundleNeedsAttention,
   bundleSummary,
   describeActivity,
@@ -61,7 +58,6 @@ import {
   type NumberedLine,
   type SummarySegment,
   type SummaryTone,
-  type TranscriptAuthorityReview,
 } from "@volli/session-presentation";
 import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
@@ -347,14 +343,13 @@ function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus
 function StatusGlyph({ status }: { status: ActivityStatus }) {
   const className = "size-3.5 shrink-0";
   switch (status) {
+    // Waiting to happen and never happened share the dashed circle: neither
+    // claims an outcome, and neither is owed an alarm.
     case "pending":
+    case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
       return <SpinnerGapIcon aria-hidden className={cn(className, "animate-spin text-primary")} />;
-    // Approval never shares a glyph with running: the state that needs a human
-    // must not look like the state that needs nothing.
-    case "approval":
-      return <HandPalmIcon aria-hidden className={cn(className, "text-primary")} weight="fill" />;
     case "failed":
       return (
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
@@ -417,10 +412,8 @@ export const ToolRow = React.memo(function ToolRow({
   onOpenFile,
   onOpenSession,
   className,
-  authorityReviews,
 }: {
   part: DynamicToolUIPart;
-  authorityReviews?: readonly TranscriptAuthorityReview[];
   onOpenFile?(path: string): void;
   /** Opens a `delegate` row's child Session (VC-9). */
   onOpenSession?(sessionId: string): void;
@@ -439,11 +432,7 @@ export const ToolRow = React.memo(function ToolRow({
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable =
-    row.detail !== null ||
-    row.command !== null ||
-    card !== null ||
-    (authorityReviews?.length ?? 0) > 0;
+  const expandable = row.detail !== null || row.command !== null || card !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -477,18 +466,6 @@ export const ToolRow = React.memo(function ToolRow({
       ) : null}
       {expandable ? (
         <Disclosure open={open}>
-          {authorityReviews?.map((review) => (
-            <p
-              key={review.sequence}
-              data-slot="authority-review"
-              className="flex items-start gap-2 py-1 text-ui text-muted-foreground"
-            >
-              <WarningIcon aria-hidden className="mt-1 size-3 shrink-0" />
-              <span className="whitespace-pre-wrap break-words">
-                {authorityReviewNoticeCopy(review)}
-              </span>
-            </p>
-          ))}
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           <ToolDetail
             kind={row.kind}
@@ -928,10 +905,8 @@ export const ActivityBundle = React.memo(
     rows,
     onOpenFile,
     onOpenSession,
-    authorityReviews,
   }: {
     rows: readonly BundleRow[];
-    authorityReviews?: ReadonlyMap<string, readonly TranscriptAuthorityReview[]>;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
@@ -949,7 +924,6 @@ export const ActivityBundle = React.memo(
           <BundleRowView
             key={row.key}
             row={row}
-            authorityReviews={row.kind === "tool" ? authorityReviews?.get(row.key) : undefined}
             onOpenFile={onOpenFile}
             onOpenSession={onOpenSession}
           />
@@ -994,7 +968,6 @@ export const ActivityBundle = React.memo(
   (previous, next) =>
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
-    previous.authorityReviews === next.authorityReviews &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -1027,24 +1000,15 @@ const BundleRowView = React.memo(function BundleRowView({
   row,
   onOpenFile,
   onOpenSession,
-  authorityReviews,
 }: {
   row: BundleRow;
-  authorityReviews?: readonly TranscriptAuthorityReview[];
   onOpenFile?(path: string): void;
   onOpenSession?(sessionId: string): void;
 }) {
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
-  return (
-    <ToolRow
-      part={row.part}
-      authorityReviews={authorityReviews}
-      onOpenFile={onOpenFile}
-      onOpenSession={onOpenSession}
-    />
-  );
+  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
 });
 
 /**

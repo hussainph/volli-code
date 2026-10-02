@@ -3,10 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   AUTHORITY_ACTOR_KINDS,
   AUTHORITY_DEFAULTS_TOKEN,
-  AUTHORITY_ENFORCEMENTS,
   coordinationVerbAllowed,
   DEFAULT_AUTHORITY_POLICY,
-  JUDGMENT_MODES,
   PEEK_DISCLOSURES,
   isEmptyAuthorityPolicyOverride,
   parseAuthorityPolicyOverride,
@@ -18,18 +16,12 @@ import { TICKET_AWAIT_KINDS } from "./ticket-await";
 import { VERB_REGISTRY, verbTier } from "./verb-registry";
 
 describe("DEFAULT_AUTHORITY_POLICY", () => {
-  it("observes rather than enforces, which is VC-44's recorded day-one posture", () => {
-    // Enforcing the nine-rule pack on day one refuses reads the product itself
-    // asks for: a personal-tier SKILL.md the skills index points at, and the
-    // Main checkout a ticket brief offers as reference. Both are outside the
-    // Session workspace. `observe` pins the Snapshot without re-activating a
-    // pack that has been dormant since the sandbox came out.
-    expect(DEFAULT_AUTHORITY_POLICY.enforcement).toBe("observe");
-  });
-
-  it("asks a person rather than naming a classifier that does not exist yet", () => {
-    expect(DEFAULT_AUTHORITY_POLICY.judgmentMode).toBe("ask");
-    expect(DEFAULT_AUTHORITY_POLICY.classifierModel).toBeNull();
+  it("keeps the actor disclosure vocabulary and validates it", () => {
+    expect(PEEK_DISCLOSURES).toEqual(["none", "own", "project"]);
+    expect(validateAuthorityPolicyOverride({ actors: { user: { peek: "all" } } })).toEqual({
+      ok: false,
+      errors: ["actors.user.peek must be one of: none, own, project."],
+    });
   });
 
   it("asks at a spent delegation allowance rather than refusing outright (VC-204)", () => {
@@ -82,61 +74,23 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
       expect(DEFAULT_AUTHORITY_POLICY.actors[kind]).toBeDefined();
     }
   });
-
-  it("declares each vocabulary it is written against", () => {
-    expect(AUTHORITY_ENFORCEMENTS).toEqual(["off", "observe", "enforce"]);
-    expect(JUDGMENT_MODES).toEqual(["ask", "auto"]);
-    expect(PEEK_DISCLOSURES).toEqual(["none", "own", "project"]);
-  });
 });
 
 describe("resolveAuthorityPolicy", () => {
+  it("resolves budget and actor departures without changing unstated defaults", () => {
+    const policy = resolveAuthorityPolicy({
+      budgets: { delegationExceeded: "refuse" },
+      actors: { session: { peek: "project" } },
+    });
+    expect(policy.budgets.delegationExceeded).toBe("refuse");
+    expect(policy.actors.session.peek).toBe("project");
+    expect(policy.actors.user).toEqual(DEFAULT_AUTHORITY_POLICY.actors.user);
+    expect(policy.actors.unauthenticated).toEqual(DEFAULT_AUTHORITY_POLICY.actors.unauthenticated);
+  });
   it("answers the defaults for a project that states nothing", () => {
     expect(resolveAuthorityPolicy(null)).toEqual(DEFAULT_AUTHORITY_POLICY);
     expect(resolveAuthorityPolicy(undefined)).toEqual(DEFAULT_AUTHORITY_POLICY);
     expect(resolveAuthorityPolicy({})).toEqual(DEFAULT_AUTHORITY_POLICY);
-  });
-
-  it("takes each stated scalar and inherits every field left unsaid", () => {
-    const resolved = resolveAuthorityPolicy({ enforcement: "enforce" });
-    expect(resolved.enforcement).toBe("enforce");
-    expect(resolved.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
-    expect(resolved.fallback).toEqual(DEFAULT_AUTHORITY_POLICY.fallback);
-  });
-
-  it("turns the gate off entirely when a project asks for it", () => {
-    expect(resolveAuthorityPolicy({ enforcement: "off" }).enforcement).toBe("off");
-  });
-
-  it("distinguishes an explicit null classifier from an unstated one", () => {
-    expect(resolveAuthorityPolicy({ classifierModel: null }).classifierModel).toBeNull();
-    expect(resolveAuthorityPolicy({ classifierModel: "haiku" }).classifierModel).toBe("haiku");
-    expect(resolveAuthorityPolicy({}).classifierModel).toBe(
-      DEFAULT_AUTHORITY_POLICY.classifierModel,
-    );
-  });
-
-  it("takes one fallback threshold without disturbing the other", () => {
-    const resolved = resolveAuthorityPolicy({ fallback: { consecutiveDenials: 1 } });
-    expect(resolved.fallback.consecutiveDenials).toBe(1);
-    expect(resolved.fallback.sessionDenials).toBe(DEFAULT_AUTHORITY_POLICY.fallback.sessionDenials);
-  });
-
-  it("takes a judgment mode and a peek disclosure", () => {
-    const resolved = resolveAuthorityPolicy({
-      judgmentMode: "auto",
-      actors: { session: { peek: "project" } },
-    });
-    expect(resolved.judgmentMode).toBe("auto");
-    expect(resolved.actors.session.peek).toBe("project");
-  });
-
-  it("takes a budget posture and inherits it when unsaid", () => {
-    expect(
-      resolveAuthorityPolicy({ budgets: { delegationExceeded: "refuse" } }).budgets
-        .delegationExceeded,
-    ).toBe("refuse");
-    expect(resolveAuthorityPolicy({ enforcement: "off" }).budgets.delegationExceeded).toBe("ask");
   });
 
   it("resolves an actor the override never mentions", () => {
@@ -221,23 +175,6 @@ describe("additive inheritance", () => {
 });
 
 describe("parseAuthorityPolicyOverride", () => {
-  it("reads a document that states everything", () => {
-    const parsed = parseAuthorityPolicyOverride({
-      enforcement: "enforce",
-      judgmentMode: "auto",
-      classifierModel: "haiku",
-      fallback: { consecutiveDenials: 2, sessionDenials: 30 },
-      actors: { unauthenticated: { coordinationVerbs: ["ticket.comment"], peek: "own" } },
-    });
-    expect(parsed).toEqual({
-      enforcement: "enforce",
-      judgmentMode: "auto",
-      classifierModel: "haiku",
-      fallback: { consecutiveDenials: 2, sessionDenials: 30 },
-      actors: { unauthenticated: { coordinationVerbs: ["ticket.comment"], peek: "own" } },
-    });
-  });
-
   it("answers null for anything that is not a document", () => {
     expect(parseAuthorityPolicyOverride(null)).toBeNull();
     expect(parseAuthorityPolicyOverride(undefined)).toBeNull();
@@ -246,51 +183,12 @@ describe("parseAuthorityPolicyOverride", () => {
     expect(parseAuthorityPolicyOverride(7)).toBeNull();
   });
 
-  it("answers an empty override for a document that states nothing legible", () => {
-    expect(parseAuthorityPolicyOverride({})).toEqual({});
-    expect(parseAuthorityPolicyOverride({ enforcement: "yolo" })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ judgmentMode: 3 })).toEqual({});
-  });
-
-  it("drops the unreadable field and keeps the rest of the document", () => {
-    // A misspelled enforcement must not cost a project the per-actor policy
-    // stored beside it.
-    const parsed = parseAuthorityPolicyOverride({
-      enforcement: "ENFORCE",
-      actors: { session: { peek: "project" } },
-    });
-    expect(parsed).toEqual({ actors: { session: { peek: "project" } } });
-  });
-
-  it("keeps an explicit null classifier and rejects a non-string one", () => {
-    expect(parseAuthorityPolicyOverride({ classifierModel: null })).toEqual({
-      classifierModel: null,
-    });
-    expect(parseAuthorityPolicyOverride({ classifierModel: 12 })).toEqual({});
-  });
-
   it("reads a budget posture and drops one outside the vocabulary", () => {
     expect(parseAuthorityPolicyOverride({ budgets: { delegationExceeded: "refuse" } })).toEqual({
       budgets: { delegationExceeded: "refuse" },
     });
     expect(parseAuthorityPolicyOverride({ budgets: { delegationExceeded: "warn" } })).toEqual({});
     expect(parseAuthorityPolicyOverride({ budgets: "refuse" })).toEqual({});
-  });
-
-  it("refuses a threshold that is not a whole number of denials", () => {
-    expect(parseAuthorityPolicyOverride({ fallback: { consecutiveDenials: 0 } })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: { consecutiveDenials: -1 } })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: { sessionDenials: 1.5 } })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: { sessionDenials: Number.NaN } })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: "often" })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: null })).toEqual({});
-    expect(parseAuthorityPolicyOverride({ fallback: [3] })).toEqual({});
-  });
-
-  it("keeps one good threshold beside one bad one", () => {
-    expect(
-      parseAuthorityPolicyOverride({ fallback: { consecutiveDenials: 5, sessionDenials: 0 } }),
-    ).toEqual({ fallback: { consecutiveDenials: 5 } });
   });
 
   it("drops a whole list rather than silently granting less than it says", () => {
@@ -358,19 +256,6 @@ describe("parseAuthorityPolicyOverride", () => {
     expect(parseAuthorityPolicyOverride({ actors: null })).toEqual({});
     expect(parseAuthorityPolicyOverride({ actors: [] })).toEqual({});
   });
-
-  it("round-trips a stored document through resolution", () => {
-    const stored = JSON.stringify({
-      enforcement: "enforce",
-      actors: { session: { peek: "none" } },
-    });
-    const resolved = resolveAuthorityPolicy(parseAuthorityPolicyOverride(JSON.parse(stored)));
-    expect(resolved.enforcement).toBe("enforce");
-    expect(resolved.actors.session.peek).toBe("none");
-    expect(resolved.actors.session.coordinationVerbs).toEqual(
-      DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs,
-    );
-  });
 });
 
 /**
@@ -378,20 +263,26 @@ describe("parseAuthorityPolicyOverride", () => {
  * half drops, so most of what follows is the same input given to both.
  */
 describe("validateAuthorityPolicyOverride", () => {
-  it("accepts a document that states only departures", () => {
-    const result = validateAuthorityPolicyOverride({
-      enforcement: "enforce",
-      fallback: { consecutiveDenials: 5 },
-      actors: { session: { peek: "project" } },
+  it("rejects malformed actor containers and unknown actor fields", () => {
+    for (const actors of [null, "all", []]) {
+      expect(validateAuthorityPolicyOverride({ actors })).toEqual({
+        ok: false,
+        errors: ["actors must be an object."],
+      });
+    }
+    for (const session of [null, "all", []]) {
+      expect(validateAuthorityPolicyOverride({ actors: { session } })).toEqual({
+        ok: false,
+        errors: ["actors.session must be an object."],
+      });
+    }
+    expect(validateAuthorityPolicyOverride({ actors: { session: { peeking: "own" } } })).toEqual({
+      ok: false,
+      errors: ["Unknown field: actors.session.peeking."],
     });
-
-    expect(result).toEqual({
-      ok: true,
-      override: {
-        enforcement: "enforce",
-        fallback: { consecutiveDenials: 5 },
-        actors: { session: { peek: "project" } },
-      },
+    expect(validateAuthorityPolicyOverride({ actors: { robot: {} } })).toEqual({
+      ok: false,
+      errors: ["Unknown field: actors.robot."],
     });
   });
 
@@ -427,66 +318,6 @@ describe("validateAuthorityPolicyOverride", () => {
     });
     const stated = validateAuthorityPolicyOverride({ budgets: { delegationExceeded: "refuse" } });
     expect(stated).toEqual({ ok: true, override: { budgets: { delegationExceeded: "refuse" } } });
-  });
-
-  it("refuses an unknown key nested in fallback or in one actor, naming its path", () => {
-    expect(validateAuthorityPolicyOverride({ fallback: { totalDenials: 4 } })).toEqual({
-      ok: false,
-      errors: ["Unknown field: fallback.totalDenials."],
-    });
-    expect(validateAuthorityPolicyOverride({ actors: { session: { peeking: "own" } } })).toEqual({
-      ok: false,
-      errors: ["Unknown field: actors.session.peeking."],
-    });
-    expect(validateAuthorityPolicyOverride({ actors: { robot: {} } })).toEqual({
-      ok: false,
-      errors: ["Unknown field: actors.robot."],
-    });
-  });
-
-  it("refuses a value outside each enum, listing what was allowed", () => {
-    expect(validateAuthorityPolicyOverride({ enforcement: "enforced" })).toEqual({
-      ok: false,
-      errors: [`enforcement must be one of: ${AUTHORITY_ENFORCEMENTS.join(", ")}.`],
-    });
-    expect(validateAuthorityPolicyOverride({ judgmentMode: "classifier" })).toEqual({
-      ok: false,
-      errors: [`judgmentMode must be one of: ${JUDGMENT_MODES.join(", ")}.`],
-    });
-    expect(validateAuthorityPolicyOverride({ actors: { user: { peek: "all" } } })).toEqual({
-      ok: false,
-      errors: [`actors.user.peek must be one of: ${PEEK_DISCLOSURES.join(", ")}.`],
-    });
-  });
-
-  it("refuses a threshold that is not a whole number of denials, 1 or greater", () => {
-    // `AuthorityEscalation` reads 0 and negatives as "never escalate", so a
-    // stored 0 disables escalation while looking configured. The read path
-    // drops it; this is where someone finds out.
-    for (const bad of [0, -1, 2.5, "3", null]) {
-      expect(validateAuthorityPolicyOverride({ fallback: { sessionDenials: bad } })).toEqual({
-        ok: false,
-        errors: ["fallback.sessionDenials must be a whole number of denials, 1 or greater."],
-      });
-    }
-    expect(validateAuthorityPolicyOverride({ fallback: { sessionDenials: 1 } }).ok).toBe(true);
-  });
-
-  it("treats classifierModel: null as a statement and its absence as inheritance", () => {
-    // `null` MEANS "no classifier" against a default that names one; only
-    // `undefined` inherits. `resolveAuthorityPolicy` tests this field with
-    // `=== undefined` for exactly this reason, so the write must keep the two
-    // distinguishable.
-    const stated = validateAuthorityPolicyOverride({ classifierModel: null });
-    expect(stated.ok && "classifierModel" in stated.override).toBe(true);
-
-    const absent = validateAuthorityPolicyOverride({});
-    expect(absent.ok && "classifierModel" in absent.override).toBe(false);
-
-    expect(validateAuthorityPolicyOverride({ classifierModel: 7 })).toEqual({
-      ok: false,
-      errors: ["classifierModel must be a string or null."],
-    });
   });
 
   it("refuses a list whole when any entry is not a string", () => {
@@ -578,66 +409,12 @@ describe("validateAuthorityPolicyOverride", () => {
     ]);
   });
 
-  it("reports EVERY reason at once rather than the first", () => {
-    // A person fixing one field only to be told about the next is the
-    // interaction a batch exists to avoid.
-    const result = validateAuthorityPolicyOverride({
-      enforcement: "enforced",
-      judgmentMode: "classifier",
-      fallback: { consecutiveDenials: 0 },
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.errors).toHaveLength(3);
-  });
-
-  it("refuses a non-object where a document is expected, naming the slot", () => {
-    // The shapes the parse half answers `{}` for, given to the half that can
-    // say WHERE the document stopped being one. A nested slot that is not an
-    // object is the write-side failure a hand-edited column would hit first.
-    expect(validateAuthorityPolicyOverride({ fallback: "often" })).toEqual({
-      ok: false,
-      errors: ["fallback must be an object."],
-    });
-    expect(validateAuthorityPolicyOverride({ actors: "everyone" })).toEqual({
-      ok: false,
-      errors: ["actors must be an object."],
-    });
-    expect(validateAuthorityPolicyOverride({ actors: { session: "all" } })).toEqual({
-      ok: false,
-      errors: ["actors.session must be an object."],
-    });
-  });
-
   it("refuses anything that is not an object at all", () => {
     for (const bad of [null, [], "enforce", 3]) {
       expect(validateAuthorityPolicyOverride(bad)).toEqual({
         ok: false,
         errors: ["A policy override must be an object."],
       });
-    }
-  });
-
-  it("drops an emptied nested object rather than storing it as a departure", () => {
-    // `{}` under `actors` says nothing, and must not read back as though the
-    // project stated something about its actors.
-    const result = validateAuthorityPolicyOverride({ actors: { session: {} }, fallback: {} });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(isEmptyAuthorityPolicyOverride(result.override)).toBe(true);
-  });
-
-  it("knows every actor kind and every enum member without being told twice", () => {
-    // Guards the enums against drifting from the validator's own tables.
-    for (const kind of AUTHORITY_ACTOR_KINDS) {
-      expect(validateAuthorityPolicyOverride({ actors: { [kind]: { peek: "none" } } }).ok).toBe(
-        true,
-      );
-    }
-    for (const enforcement of AUTHORITY_ENFORCEMENTS) {
-      expect(validateAuthorityPolicyOverride({ enforcement }).ok).toBe(true);
-    }
-    for (const judgmentMode of JUDGMENT_MODES) {
-      expect(validateAuthorityPolicyOverride({ judgmentMode }).ok).toBe(true);
     }
   });
 });

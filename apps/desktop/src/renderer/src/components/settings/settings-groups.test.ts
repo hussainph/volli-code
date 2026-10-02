@@ -38,20 +38,7 @@ describe("Settings → General", () => {
   });
 });
 
-describe("auto-mode settings search", () => {
-  it("finds display hints in Appearance and paid shadow review in Models", () => {
-    expect(keywordsFor("appearance")).toContain("auto mode hints");
-    expect(keywordsFor(MODELS_CATEGORY_KEY)).toContain("shadow review");
-  });
-});
-
 describe("the Models category's search index", () => {
-  it("finds the global block reason control and both choices", () => {
-    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
-    for (const label of ["Block reason", "Utility model", "Risk category"]) {
-      expect(terms).toContain(label.toLowerCase());
-    }
-  });
   it("finds every default-model row by its own label", () => {
     // The rail matches a lowercased substring, so the stored terms are
     // compared the same way the shell compares them.
@@ -101,5 +88,16 @@ describe("the Storage category's search index", () => {
         `${label} is drawn in Settings → Storage but nothing in the rail finds it`,
       ).toBe(true);
     }
+  });
+});
+
+describe("retired review settings", () => {
+  it("offers no review or display-hint entries while retaining classify", () => {
+    expect(keywordsFor("appearance")).not.toContain("show auto mode hints");
+    expect(keywordsFor("appearance")).not.toContain("auto mode hints");
+    const terms = keywordsFor(MODELS_CATEGORY_KEY);
+    expect(terms).not.toContain("shadow review");
+    expect(terms).not.toContain("block reason");
+    expect(terms).toContain("classify");
   });
 });

@@ -83,13 +83,6 @@ export interface WatchHostNotice {
   events: readonly WatchNoticeEvent[];
 }
 
-export interface ApprovalUsedHostNotice {
-  kind: "approval-used";
-  approvalId: string;
-  summary: string;
-  asked: string;
-}
-
 /**
  * A background shell the Session started has something to say (VC-495): it
  * exited on its own, or its output matched the pattern the Session asked to be
@@ -125,7 +118,6 @@ export type SessionHostNotice =
   | SubagentSessionHostNotice
   | BrowserHoldHostNotice
   | WatchHostNotice
-  | ApprovalUsedHostNotice
   | BackgroundShellHostNotice;
 
 /** The durable marker shared by notice writers and Session clients. */
