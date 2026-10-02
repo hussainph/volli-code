@@ -14,13 +14,25 @@ import {
 } from "@volli/shared";
 import { approvalAnswerFailures, projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { useUiStore } from "@renderer/stores/ui";
 import type { UIMessage } from "ai";
 
 import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
+
+const activityBundleRenders = vi.hoisted(() => vi.fn());
+vi.mock("./activity-ui", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./activity-ui")>();
+  return {
+    ...original,
+    ActivityBundle: (props: ComponentProps<typeof original.ActivityBundle>) => {
+      activityBundleRenders(props);
+      return <original.ActivityBundle {...props} />;
+    },
+  };
+});
 
 const context: TurnContext = {
   onOpenFile: () => undefined,
@@ -39,6 +51,58 @@ function turn(message: UIMessage): string {
 afterEach(() => useUiStore.setState({ authorityHintsVisible: true }));
 
 describe("the desktop transcript-row mapping", () => {
+  it("does not rerender settled reviewed tools for unrelated transcript updates", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    activityBundleRenders.mockClear();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const scope = { attachmentId: "attachment-1", turnId: "turn-1" };
+    const messages: UIMessage[] = [
+      {
+        id: "settled",
+        role: "assistant",
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolCallId: "call-1",
+            toolName: "execute",
+            state: "output-available",
+            input: { command: "pnpm test" },
+            output: "Passed",
+            toolMetadata: { [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: scope },
+          },
+        ],
+      },
+    ];
+    const review = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "call-1",
+      scope,
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "Classifier concern.",
+    };
+    const project = (reason = review.reason) =>
+      projectTranscriptRows([messages], [], [], [{ ...review, scope: { ...scope }, reason }])[0]!;
+    try {
+      act(() => root.render(<ChatTranscriptRow row={project()} context={context} live={false} />));
+      expect(activityBundleRenders).toHaveBeenCalledTimes(1);
+      // Real projection produces new linked-review wrappers on each update,
+      // while the settled turn and all of the review's values are unchanged.
+      act(() => root.render(<ChatTranscriptRow row={project()} context={context} live={false} />));
+      expect(activityBundleRenders).toHaveBeenCalledTimes(1);
+      act(() =>
+        root.render(
+          <ChatTranscriptRow row={project("Updated concern.")} context={context} live={false} />,
+        ),
+      );
+      expect(activityBundleRenders).toHaveBeenCalledTimes(2);
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
   it("hides shadow fallback hints but never hides an actual block", () => {
     useUiStore.setState({ authorityHintsVisible: false });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

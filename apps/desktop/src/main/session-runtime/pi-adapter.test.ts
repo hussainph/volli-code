@@ -1656,6 +1656,39 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([unusedExecutionEnvFactory]);
   });
 
+  it("passes the live shadow review opt-in through without sampling it at attach", async () => {
+    let enabled = true;
+    const read = vi.fn(() => enabled);
+    const seen: PiAdapterOptions["authorityShadowReviewEnabled"][] = [];
+    const runtime = new FakeRuntime();
+    const { adapter } = composition({
+      authorityShadowReviewEnabled: read,
+      createRuntime: (options) => {
+        seen.push(options.authorityShadowReviewEnabled);
+        return runtime;
+      },
+    });
+    await adapter.attach(attachmentSpec(), new RecordingSink());
+    expect(read).not.toHaveBeenCalled();
+    expect(seen).toEqual([read]);
+    expect(seen[0]!()).toBe(true);
+    enabled = false;
+    expect(seen[0]!()).toBe(false);
+  });
+
+  it("leaves shadow review opt-in absent when main supplies no reader", async () => {
+    const seen: unknown[] = [];
+    createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push("authorityShadowReviewEnabled" in options);
+        return new FakeRuntime();
+      },
+    });
+    expect(seen).toEqual([false]);
+  });
+
   it("passes the developer parallel-read switch through only when main sets it (VC-454)", async () => {
     const seen: unknown[] = [];
     for (const parallelMcpReads of [undefined, true] as const) {

@@ -39,9 +39,9 @@ describe("Settings → General", () => {
 });
 
 describe("auto-mode settings search", () => {
-  it("finds the display hints control in Appearance", () => {
+  it("finds display hints in Appearance and paid shadow review in Models", () => {
     expect(keywordsFor("appearance")).toContain("show auto mode hints");
-    expect(keywordsFor(MODELS_CATEGORY_KEY)).not.toContain("shadow review");
+    expect(keywordsFor(MODELS_CATEGORY_KEY)).toContain("shadow review");
   });
 });
 

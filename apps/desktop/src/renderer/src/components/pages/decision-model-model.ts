@@ -15,6 +15,8 @@ import {
 
 /** One app-wide wording preference; it does not change a block verdict. */
 export const AUTHORITY_REASON_SOURCE_KEY = "volli:authority-reason-source";
+/** Explicit opt-in; choosing a decision model never enables paid shadow checks. */
+export const AUTHORITY_SHADOW_REVIEW_ENABLED_KEY = "volli:authority-shadow-review-enabled";
 export type AuthorityReasonSource = "utility" | "category";
 export const AUTHORITY_REASON_SOURCES: readonly {
   key: AuthorityReasonSource;

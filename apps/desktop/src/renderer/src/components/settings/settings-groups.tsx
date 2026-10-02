@@ -193,6 +193,9 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "available to connect",
             // The Decision model section (VC-478), every label it can draw.
             "decision model",
+            "shadow review",
+            "shadow mode",
+            "auto mode",
             "block reason",
             "utility model",
             "risk category",

@@ -2314,6 +2314,24 @@ function transcriptRowKey(row: TranscriptRow): string {
   }
 }
 
+/** Projection adds placement to fresh wrappers; unchanged facts must still memoize. */
+function sameLinkedAuthorityReview(
+  previous: TranscriptLinkedAuthorityReview,
+  next: TranscriptLinkedAuthorityReview,
+): boolean {
+  return (
+    previous.sequence === next.sequence &&
+    previous.afterMessageId === next.afterMessageId &&
+    previous.toolCallId === next.toolCallId &&
+    previous.toolRowKey === next.toolRowKey &&
+    previous.tool === next.tool &&
+    previous.mode === next.mode &&
+    previous.reason === next.reason &&
+    previous.scope?.attachmentId === next.scope?.attachmentId &&
+    previous.scope?.turnId === next.scope?.turnId
+  );
+}
+
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
 export function ChatTranscriptRow({
   row,
@@ -2335,7 +2353,7 @@ export function ChatTranscriptRow({
           : [],
       [row, hintsVisible],
     ),
-    Object.is,
+    sameLinkedAuthorityReview,
   );
   switch (row.kind) {
     case "host-notice":
