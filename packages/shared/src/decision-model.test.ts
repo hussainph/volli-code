@@ -47,16 +47,13 @@ describe("purposes", () => {
     expect(isDecisionPurpose(7)).toBe(false);
   });
 
-  it("gives every purpose a timeout, an audit rule and what it sends", () => {
+  it("gives every purpose a timeout and what it sends", () => {
     for (const purpose of DECISION_PURPOSES) {
       const policy = DECISION_PURPOSE_POLICY[purpose];
       expect(policy.timeoutMs).toBeGreaterThan(0);
       expect(policy.sends.length).toBeGreaterThan(0);
     }
-    // Routine agent calls leave usage, never a per-call audit fact.
-    expect(DECISION_PURPOSE_POLICY["agent.classify"].audit).toBe(false);
     // A new Session waits on a model choice, so it gets seconds, not the tool's half minute.
-    expect(DECISION_PURPOSE_POLICY["model.select"].audit).toBe(false);
     expect(DECISION_PURPOSE_POLICY["model.select"].timeoutMs).toBeLessThan(
       DECISION_PURPOSE_POLICY["agent.classify"].timeoutMs,
     );
@@ -246,7 +243,6 @@ describe("where a call goes", () => {
 
   it("derives a miss's status from its reason", () => {
     expect(decisionMiss("needs-setup", "x").status).toBe("unavailable");
-    expect(decisionMiss("unaudited", "x").status).toBe("unavailable");
     expect(decisionMiss("timeout", "x").status).toBe("error");
     expect(decisionMiss("malformed-answer", "x").status).toBe("error");
   });

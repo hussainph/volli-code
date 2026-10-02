@@ -79,13 +79,6 @@ export interface DecisionPurposePolicy {
    * included. Past it the caller gets its fallback.
    */
   timeoutMs: number;
-  /**
-   * Whether every decision of this purpose must leave a durable, attributed
-   * fact. The port refuses an audited purpose
-   * it has nowhere to record — an unrecorded verdict is worse than none.
-   * Routine agent calls are metered as usage and leave no per-call fact.
-   */
-  audit: boolean;
 }
 
 export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionPurposePolicy>> =
@@ -95,7 +88,6 @@ export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionP
       sends:
         "whatever an agent passes the classify tool: Session text, tool results and page content",
       timeoutMs: 30_000,
-      audit: false,
     }),
     // A new Session waits on this one, so it gets seconds, not the tool's
     // half minute; past it the Session starts on its configured default.
@@ -104,7 +96,6 @@ export const DECISION_PURPOSE_POLICY: Readonly<Record<DecisionPurpose, DecisionP
       sends:
         "the first message of a new chat, a delegated task or an Automation run, with the models you have set up",
       timeoutMs: 2_500,
-      audit: false,
     }),
   });
 
@@ -330,8 +321,6 @@ export type DecisionMissReason =
   | "not-opted-in"
   /** The configured model cannot be reached as configured: no credential, gone from the catalog. */
   | "needs-setup"
-  /** This purpose must leave an audit fact and nothing is wired to record one. */
-  | "unaudited"
   /** The request broke a bound or was not well formed. */
   | "invalid-request"
   /** The model did not answer within the purpose's time, queueing included. */
@@ -358,7 +347,6 @@ const UNAVAILABLE_REASONS: ReadonlySet<DecisionMissReason> = new Set([
   "unset",
   "not-opted-in",
   "needs-setup",
-  "unaudited",
 ]);
 
 /** A miss, with its status derived from the reason so the two cannot disagree. */
