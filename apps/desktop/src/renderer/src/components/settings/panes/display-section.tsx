@@ -109,7 +109,7 @@ export function DisplaySection() {
        * (VC-498): enforcement keeps running either way, and that fact lives in
        * the store's module doc rather than in a paragraph on this page.
        */}
-      <PrefRow label="Show Auto mode hints" htmlFor="authority-hints-visible">
+      <PrefRow label="Auto mode hints" htmlFor="authority-hints-visible">
         <Switch
           id="authority-hints-visible"
           checked={authorityHintsVisible}

@@ -184,6 +184,7 @@ import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-
 import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
@@ -207,6 +208,7 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { readAuthorityShadowReviewEnabled } from "./session-runtime/authority-shadow-review";
 import { SecretStore } from "./secrets/store";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
@@ -935,6 +937,19 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: describeDbOpenFailure(error, { dev: isDev }) };
     console.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
+  registerDatabaseRecoveryIpcHandlers({
+    dbPath,
+    userData: app.getPath("userData"),
+    degraded: !dbHandle.ok,
+    restart: () => {
+      // Let the IPC reply paint success before restarting the entire service
+      // graph; degraded handlers must not be replaced with partially live ones.
+      setTimeout(() => {
+        app.relaunch();
+        app.quit();
+      }, 750);
+    },
+  });
   // The one Session Engine in the process, wrapped once so every durable write
   // anywhere downstream — the runtime's turns, the agent socket's commands, the
   // IPC handlers' retitles — re-publishes the affected Session's listing row to
@@ -1595,6 +1610,9 @@ app.whenReady().then(async () => {
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
           authorityReason: (input) => authorityReason(input),
+          // Paid background review is an independent opt-in, read live so an
+          // off switch stops subsequent reviews without restarting Sessions.
+          authorityShadowReviewEnabled: () => readAuthorityShadowReviewEnabled(dbHandle.db),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,

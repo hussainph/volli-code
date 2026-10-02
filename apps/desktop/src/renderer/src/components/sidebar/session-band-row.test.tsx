@@ -255,6 +255,9 @@ describe("the Active row's marks", () => {
       }),
     );
     expect(marked).toContain('aria-label="Started by the Automation Nightly sweep"');
+    expect(new DOMParser().parseFromString(marked, "text/html").body.textContent).not.toContain(
+      "Nightly sweep",
+    );
     expect(render(row())).not.toContain("Started by the Automation");
   });
 });
@@ -325,6 +328,22 @@ describe("a peekable row", () => {
 });
 
 describe("the Previous row", () => {
+  it("keeps a Run's bolt compact beside a renamed title and its age", () => {
+    const markup = renderPrevious(
+      previousRow({
+        endedOrQuietAt: 1,
+        provenance: { kind: "automation", automationRunId: null, automationName: "BE Code Review" },
+      }),
+    );
+    expect(markup).toContain('aria-label="Started by the Automation BE Code Review"');
+    expect(markup).toContain("inline-flex size-3 shrink-0");
+    expect(new DOMParser().parseFromString(markup, "text/html").body.textContent).not.toContain(
+      "BE Code Review",
+    );
+    expect(markup).toContain("Review fixes");
+    expect(markup).toContain("1m");
+  });
+
   it("keeps its one line: identity, title, and the age alone on the right", () => {
     const markup = renderPrevious(previousRow({ endedOrQuietAt: 0 }));
 

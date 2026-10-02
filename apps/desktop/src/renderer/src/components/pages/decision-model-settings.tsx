@@ -62,6 +62,10 @@ import {
   type DecisionMode,
 } from "@renderer/components/pages/decision-model-model";
 import {
+  AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
+  parseAuthorityShadowReviewEnabled,
+} from "../../../../authority-review-preferences";
+import {
   CONTROL_W,
   OverrideControl,
   PrefRow,
@@ -347,13 +351,14 @@ function TestResult({ test }: { test: DecisionModelTestView | null }) {
   );
 }
 
-/** The only app-wide block-reason control; projects never get another axis. */
-function BlockReasonRow() {
+/** App-wide shadow spending and block wording; neither changes pinned authority. */
+function AuthorityReviewPreferences() {
   const [state, setState] = React.useState<
     | { status: "loading" }
     | { status: "loaded"; source: AuthorityReasonSource }
     | { status: "error"; message: string }
   >({ status: "loading" });
+  const [shadowEnabled, setShadowEnabled] = React.useState<boolean | null>(null);
   const [busy, setBusy] = React.useState(false);
   const fetches = useLatestAsync();
   const load = React.useCallback(async () => {
@@ -367,6 +372,13 @@ function BlockReasonRow() {
         setState({ status: "error", message: result.error });
         return;
       }
+      // Keep the spending switch usable even if the unrelated wording choice
+      // is corrupt. Match main's opt-in rule: invalid state cannot spend.
+      setShadowEnabled(
+        parseAuthorityShadowReviewEnabled(
+          result.data.appState[AUTHORITY_SHADOW_REVIEW_ENABLED_KEY],
+        ),
+      );
       setState({
         status: "loaded",
         source: authorityReasonSource(result.data.appState[AUTHORITY_REASON_SOURCE_KEY]),
@@ -387,45 +399,82 @@ function BlockReasonRow() {
       window.api.appState.set(AUTHORITY_REASON_SOURCE_KEY, JSON.stringify(source)),
     );
     setBusy(false);
-    if (saved !== null) setState({ status: "loaded", source });
+    if (saved !== null)
+      setState((current) => (current.status === "loaded" ? { ...current, source } : current));
+  }
+
+  async function saveShadow(enabled: boolean): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    const saved = await writeThrough("save shadow review", () =>
+      window.api.appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, JSON.stringify(enabled)),
+    );
+    setBusy(false);
+    if (saved !== null) {
+      // A retry may have read the old choice before this write committed.
+      // Retire that read so the control cannot contradict the spending switch.
+      fetches.invalidate();
+      setShadowEnabled(enabled);
+    }
   }
 
   return (
-    <PrefRow
-      label="Block reason"
-      testId="authority-reason-source"
-      hint={
-        <>
-          Utility model explains the risk category. Without a utility model, the risk category is
-          used.
-        </>
-      }
-    >
-      {state.status === "loaded" ? (
-        <Segmented
-          ariaLabel="Block reason"
-          value={state.source}
-          options={AUTHORITY_REASON_SOURCES}
-          disabled={busy}
-          onChange={(source) => void save(source)}
-        />
-      ) : state.status === "loading" ? (
-        <span className="text-ui text-muted-foreground">Loading…</span>
-      ) : (
-        <Notice
-          announce
-          tone="error"
-          icon={WarningIcon}
-          title="Couldn't read the block reason choice"
-          detail={state.message}
-          actions={
-            <Button size="xs" variant="outline" onClick={() => void load()}>
-              Retry
-            </Button>
+    <>
+      {shadowEnabled !== null ? (
+        <PrefRow
+          label="Shadow review"
+          htmlFor="authority-shadow-review"
+          hint={
+            <>
+              Uses the decision model to check tool calls without blocking them. May use paid
+              tokens; off stops new shadow checks immediately.
+            </>
           }
-        />
-      )}
-    </PrefRow>
+        >
+          <Switch
+            id="authority-shadow-review"
+            checked={shadowEnabled}
+            disabled={busy}
+            onCheckedChange={(enabled) => void saveShadow(enabled)}
+          />
+        </PrefRow>
+      ) : null}
+      <PrefRow
+        label="Block reason"
+        testId="authority-reason-source"
+        hint={
+          <>
+            Utility model explains the risk category. Without a utility model, the risk category is
+            used.
+          </>
+        }
+      >
+        {state.status === "loaded" ? (
+          <Segmented
+            ariaLabel="Block reason"
+            value={state.source}
+            options={AUTHORITY_REASON_SOURCES}
+            disabled={busy}
+            onChange={(source) => void save(source)}
+          />
+        ) : state.status === "loading" ? (
+          <span className="text-ui text-muted-foreground">Loading…</span>
+        ) : (
+          <Notice
+            announce
+            tone="error"
+            icon={WarningIcon}
+            title="Couldn't read the block reason choice"
+            detail={state.message}
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void load()}>
+                Retry
+              </Button>
+            }
+          />
+        )}
+      </PrefRow>
+    </>
   );
 }
 
@@ -670,7 +719,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
         </>
       ) : null}
 
-      <BlockReasonRow />
+      <AuthorityReviewPreferences />
 
       {fieldError === null ? null : (
         <Notice announce tone="error" icon={WarningIcon} title={fieldError} />

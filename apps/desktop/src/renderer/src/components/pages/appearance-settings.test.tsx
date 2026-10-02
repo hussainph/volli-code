@@ -107,7 +107,7 @@ describe("Settings → Appearance → Display", () => {
     // talk), and the store carries the display-not-enforcement fact.
     const html = renderToStaticMarkup(<DisplaySection />);
 
-    expect(html).toContain("Show Auto mode hints");
+    expect(html).toContain("Auto mode hints");
     expect(html).toContain('id="authority-hints-visible"');
     expect(html).toContain('for="authority-hints-visible"');
     // The persisted default is visible (true), so a fresh install draws the
