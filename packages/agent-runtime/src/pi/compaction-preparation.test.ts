@@ -5,13 +5,9 @@
  * with the tokenizer, and with Pi's own structural rules.
  */
 
-import {
-  findCutPoint,
-  type AgentMessage,
-  type CompactionEntry,
-  type Entry,
-  type MessageEntry,
-} from "@earendil-works/pi-agent-core";
+import { findCutPoint, prepareCompaction, getOrThrow } from "./harness-compaction";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type CompactionEntry, type Entry, type MessageEntry } from "./harness-session";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 import { prepareModelCompaction } from "./compaction-preparation";
@@ -117,6 +113,19 @@ function compactionEntry(summary: string, retainedTail: AgentMessage[]): Compact
 }
 
 describe("prepareModelCompaction", () => {
+  it("preserves the former patch's optional estimator in both budgeting and cut selection", () => {
+    const path = [entry(user("aaaaaaaa")), entry(user("bbbbbbbb")), entry(user("cccccccc"))];
+    const settings = { ...SETTINGS, keepRecentTokens: 3 };
+    const defaultPreparation = getOrThrow(prepareCompaction(path, settings));
+    expect(defaultPreparation?.tokensBefore).toBe(6);
+    expect(defaultPreparation?.retainedTail).toEqual(path.slice(1).map((item) => item.message));
+    const customPreparation = getOrThrow(prepareCompaction(path, settings, () => 10));
+    expect(customPreparation?.tokensBefore).toBe(30);
+    expect(customPreparation?.retainedTail).toEqual([path[2]!.message]);
+    expect(findCutPoint(path, 0, path.length, 3).firstKeptEntryIndex).toBe(1);
+    expect(findCutPoint(path, 0, path.length, 3, () => 10).firstKeptEntryIndex).toBe(2);
+  });
+
   it("is a no-op for an empty path and for a path already ending in a compaction", () => {
     expect(prepareModelCompaction([], SETTINGS, model())).toBeUndefined();
     const path = [entry(user("hello")), compactionEntry("prior summary", [])];

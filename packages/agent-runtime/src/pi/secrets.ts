@@ -1,9 +1,5 @@
-import type {
-  AgentTool,
-  AgentToolResult,
-  ExecutionEnv,
-  ShellExecOptions,
-} from "@earendil-works/pi-agent-core/node";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv, ShellExecOptions } from "./harness-env";
 import { Type } from "@earendil-works/pi-ai";
 import type { NonCodingToolId, SessionRuntimeSpec } from "@volli/shared";
 

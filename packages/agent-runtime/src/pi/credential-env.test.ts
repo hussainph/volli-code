@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "./harness-env";
 import { describe, expect, it } from "vite-plus/test";
 import { refusingCredentialReads } from "./credential-env";
 

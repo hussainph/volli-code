@@ -27,7 +27,7 @@ import {
   type ShellOutputMetadata,
   type ShellOutputUpdate,
   type ShellOutputView,
-} from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
 import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
 import {

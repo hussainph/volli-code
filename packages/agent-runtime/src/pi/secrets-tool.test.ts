@@ -1,11 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  BACKGROUND_CONTEXT,
-  type AgentTool,
-  type AgentToolResult,
-  type ExecutionEnv,
-} from "@earendil-works/pi-agent-core/node";
+import { type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT, type ExecutionEnv } from "./harness-env";
 import { Type } from "@earendil-works/pi-ai";
 import {
   codeModeSurfaceFor,

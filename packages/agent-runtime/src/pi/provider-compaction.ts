@@ -10,11 +10,8 @@
  */
 
 import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
-import {
-  convertToLlm,
-  COMPACTION_SUMMARY_PREFIX,
-  type AgentMessage,
-} from "@earendil-works/pi-agent-core";
+import { convertToLlm, COMPACTION_SUMMARY_PREFIX } from "./harness-compaction";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
   normalizeContext,

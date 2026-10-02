@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import type { ExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type { ExecutionEnv } from "./harness-env";
 
 /** Credential stores are never a structured file-read capability, even with
  * authority enforcement off. Project .env files join this list (VC-481).
