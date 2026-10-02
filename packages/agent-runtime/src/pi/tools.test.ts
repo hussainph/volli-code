@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "./harness-env";
+import { type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT } from "./harness-env";
 import sharp from "sharp";
 import {
   codeModeSurfaceFor,

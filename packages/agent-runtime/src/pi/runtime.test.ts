@@ -11,18 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  branchTip,
-  DEFAULT_COMPACTION_SETTINGS,
-  insertEntry,
-  setValue,
-  type StreamFn,
-} from "@earendil-works/pi-agent-core";
-import {
-  JsonlSessionRepo,
-  NodeExecutionEnv,
-  type ExecutionEnv,
-} from "@earendil-works/pi-agent-core/node";
+import { branchTip, insertEntry, setValue } from "./harness-session";
+import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
+import { type StreamFn } from "@earendil-works/pi-agent-core";
+import { JsonlSessionRepo } from "./harness-session";
+import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
   createAssistantMessageEventStream,
   createModels,

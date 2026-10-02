@@ -10,9 +10,9 @@ import {
   MemoryStorage,
   watchEvents,
 } from "@earendil-works/pi-durable";
-import { createModels } from "pi-durable-ai/models";
-import { fauxAssistantMessage, fauxProvider } from "pi-durable-ai/providers/faux";
-import { estimateMessageTokens as durableEstimate } from "pi-durable-ai/utils/estimate";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { estimateMessageTokens as durableEstimate } from "@earendil-works/pi-ai/utils/estimate";
 import { describe, expect, it } from "vite-plus/test";
 import { estimateMessageTokens as volliEstimate } from "../../src/pi/token-counting.ts";
 import { longContextFixture } from "../parallel-tools/runtime-cost-report.ts";

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, symlink, access } from "node:fs/promises";
 import { join } from "node:path";
-import { createModels } from "pi-durable-ai/models";
-import { fauxProvider, fauxAssistantMessage } from "pi-durable-ai/providers/faux";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { expect, it } from "vite-plus/test";
 import type { RuntimeObservation } from "@volli/shared";
 import {

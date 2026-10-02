@@ -1,6 +1,10 @@
 import type { AgentRuntime, RuntimeObservation, SessionRuntimeSpec } from "@volli/shared";
-import { createModels } from "pi-durable-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "pi-durable-ai/providers/faux";
+import { createModels } from "@earendil-works/pi-ai/models";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 
 export const fallback: AgentRuntime = {
   inspectModelAccess: async () => {

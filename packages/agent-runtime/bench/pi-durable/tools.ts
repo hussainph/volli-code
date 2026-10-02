@@ -3,7 +3,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
-import { Type } from "pi-durable-ai";
+import { Type } from "@earendil-works/pi-ai";
 import type { SessionRuntimeSpec } from "@volli/shared";
 import { authorityVerdict } from "../../src/authority/gate.ts";
 

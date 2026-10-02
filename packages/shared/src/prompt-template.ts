@@ -9,27 +9,16 @@
  *
  * ## Why this file is a port and not an import
  *
- * The substitution grammar is Pi's. `@earendil-works/pi-agent-core` exports
- * `parseCommandArgs` / `substituteArgs` / `formatPromptTemplateInvocation` as
- * pure functions, and importing them would have been the obvious move — but the
- * renderer cannot reach them:
+ * The substitution grammar was Pi's. Before 1.0 its root barrel reached Node
+ * builtins, so the renderer could not import these otherwise pure functions.
+ * Pi 1.0 removed the entire harness, including the template helpers.
  *
- *  - the package's `exports` map publishes only `.`, `./node` and
- *    `./session/testing`, so the deep path
- *    `…/dist/harness/prompt-templates.js` resolves to
- *    `ERR_PACKAGE_PATH_NOT_EXPORTED`;
- *  - the root barrel re-exports the whole harness, which reaches
- *    `@earendil-works/pi-ai`'s `dist/auth/context.js` and its `node:` builtins.
- *    That import does not merely bloat the renderer bundle — it fails to load
- *    in a browser, which is where the UI lab runs.
- *
- * So the four functions below are a verbatim port of
- * `pi-agent-core@0.84.1/dist/harness/prompt-templates.js`, and the drift guard
- * is a real one: `packages/agent-runtime/src/prompt-template-parity.test.ts`
- * imports Pi's own implementations — which it CAN, being a main-side package
- * that already depends on them — and asserts this module agrees with them over
- * a corpus. If Pi changes the grammar, that test fails; it is the reason this
- * duplication is safe rather than the usual kind.
+ * The functions below retain the port from
+ * `pi-agent-core@0.84.1/dist/harness/prompt-templates.js`. The compatibility
+ * guard in `packages/agent-runtime/src/prompt-template-parity.test.ts` compares
+ * this module against a frozen, test-only copy of Pi 0.99.2's final grammar.
+ * The grammar is now product-owned; upgrades no longer require a live harness
+ * import or bring its filesystem template loader into the runtime.
  *
  * Pure string ops only, so the renderer, main and the CLI share one grammar —
  * the same rule `file-ref.ts` follows for `@path`.

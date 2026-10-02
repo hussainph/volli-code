@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness, watchEvents } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createModels } from "pi-durable-ai/models";
-import { fauxAssistantMessage, fauxProvider } from "pi-durable-ai/providers/faux";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { expect, it } from "vite-plus/test";
 import { summarize } from "../turn-to-completion/measurement.ts";
 

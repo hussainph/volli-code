@@ -33,6 +33,7 @@
 
 import { randomUUID } from "node:crypto";
 
+import { type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   createBashTool,
   createEditTool,
@@ -40,12 +41,10 @@ import {
   createWriteTool,
   type AgentHarnessTool,
   type AgentHarnessToolInvocation,
-  type AgentTool,
-  type AgentToolResult,
   type ExecutionEnv,
   type ExecutionToolContext,
   type JsonValue,
-} from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";

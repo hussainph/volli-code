@@ -8,7 +8,7 @@ import {
   BUILTIN_RULE_PACK_ID,
   type RuntimeObservation,
 } from "@volli/shared";
-import { fauxAssistantMessage, fauxToolCall } from "pi-durable-ai/providers/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createDurableSpikeRuntime } from "./runtime.ts";
 import type { TranslatedObservation } from "../../../session-engine/src/observation-translation.ts";
 import { proveEngineProjection } from "./engine-proof.ts";
@@ -53,7 +53,7 @@ describe("VC-497 real process death with SQLite", () => {
           bundle: true,
           platform: "node",
           format: "esm",
-          external: ["@earendil-works/*", "pi-durable-ai", "pi-durable-ai/*"],
+          external: ["@earendil-works/*"],
         });
         let stderr = "";
         const spawn = (phase: string) => {

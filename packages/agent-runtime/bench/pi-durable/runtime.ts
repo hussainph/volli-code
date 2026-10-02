@@ -17,7 +17,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Models } from "pi-durable-ai/models";
+import type { Models } from "@earendil-works/pi-ai/models";
 import type { AgentRuntime, RuntimeAttachmentHandle, SessionRuntimeSpec } from "@volli/shared";
 import { composeSystemPrompt } from "../../src/prompt.ts";
 import {

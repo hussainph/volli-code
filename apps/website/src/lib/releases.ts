@@ -4,11 +4,9 @@
 // needs zero website edits (VC-62). Keep this module free of DOM and fetch:
 // it is unit-tested, the page's script stays a thin renderer.
 //
-// ONE CHANNEL (VC-64). The site used to split Stable and Canary, which for the
-// alpha meant a permanently empty Stable card sitting above the only build that
-// actually exists. The public surface now offers exactly one build — the newest
-// one published — and says plainly whether it is a prerelease. Canary hunting
-// stays possible through the "all releases" link; it is not a website feature.
+// STABLE ONLY (VC-519). The website offers one stable build, never a canary.
+// The page uses GitHub's latest-stable endpoint so a run of canaries cannot
+// push the stable build out of a bounded release-feed response.
 
 export interface ReleaseAsset {
   name: string;
@@ -35,17 +33,11 @@ export interface DownloadArtifact {
   sizeBytes: number;
 }
 
-export interface AlphaBuild {
-  /** Version string without the tag's leading `v`, e.g. `0.1.0-canary.9`. */
+export interface StableBuild {
+  /** Version string without the tag's leading `v`, e.g. `0.2.0`. */
   version: string;
   releaseUrl: string;
   publishedAt: string | null;
-  /**
-   * Whether GitHub marks this release a prerelease. The page states this rather
-   * than hiding it: during the alpha every published build is expected to carry
-   * it, and claiming otherwise would be the contradiction VC-64 exists to end.
-   */
-  prerelease: boolean;
   artifacts: DownloadArtifact[];
 }
 
@@ -99,12 +91,11 @@ function releaseArtifacts(release: Release): DownloadArtifact[] {
   return artifacts;
 }
 
-function toAlphaBuild(release: Release): AlphaBuild {
+function toStableBuild(release: Release): StableBuild {
   return {
     version: release.tag_name.replace(/^v/, ""),
     releaseUrl: release.html_url,
     publishedAt: release.published_at,
-    prerelease: release.prerelease,
     artifacts: releaseArtifacts(release),
   };
 }
@@ -114,21 +105,17 @@ function publishedTime(release: Release): number {
 }
 
 /**
- * Resolve the one build the alpha offers: the newest published, non-draft
- * release that actually carries an installable artifact.
- *
- * Draft and artifact-less releases are skipped rather than presented as an
- * empty download, and the prerelease flag deliberately does NOT filter — during
- * the alpha every build is a prerelease, so filtering them out would leave the
- * page with nothing to offer. The flag is reported instead.
+ * Resolve the newest stable release carrying an installable artifact.
+ * Drafts, prereleases and artifact-less releases never become downloads;
+ * if there is no eligible stable build, return null rather than a canary.
  */
-export function resolveAlphaBuild(releases: Release[]): AlphaBuild | null {
+export function resolveStableBuild(releases: Release[]): StableBuild | null {
   const published = releases
-    .filter((release) => !release.draft)
+    .filter((release) => !release.draft && !release.prerelease)
     .toSorted((a, b) => publishedTime(b) - publishedTime(a));
 
   for (const release of published) {
-    const build = toAlphaBuild(release);
+    const build = toStableBuild(release);
     if (build.artifacts.length === 0) continue;
     return build;
   }
@@ -140,7 +127,7 @@ export function resolveAlphaBuild(releases: Release[]): AlphaBuild | null {
  * there, otherwise the first artifact published. Everything else stays
  * reachable in the secondary list — one primary, never two.
  */
-export function primaryArtifact(build: AlphaBuild): DownloadArtifact | null {
+export function primaryArtifact(build: StableBuild): DownloadArtifact | null {
   return build.artifacts.find((artifact) => artifact.kind === "dmg") ?? build.artifacts[0] ?? null;
 }
 

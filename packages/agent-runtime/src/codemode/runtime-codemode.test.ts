@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { ExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type { ExecutionEnv } from "../pi/harness-env";
 import {
   createAssistantMessageEventStream,
   createModels,
