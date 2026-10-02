@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SESSION_PEEK_REFRESH_MS, type SessionPeekContent } from "@volli/shared";
-import { usePeekContent, type PeekContentState } from "./use-peek-content";
+import { usePeekContent, type PeekContentOptions, type PeekContentState } from "./use-peek-content";
 import type { ReadPeekContent } from "./peek-content-cache";
 
 const CONTENT: SessionPeekContent = {
@@ -30,23 +30,22 @@ let root: Root;
 let container: HTMLDivElement;
 let latest: PeekContentState;
 const read = vi.fn<ReadPeekContent>();
+const PINNED_OPTIONS: PeekContentOptions = { refine: false, refreshOnActivity: true };
 function Probe({
   id,
   token,
-  refine,
-  live,
+  options,
 }: {
   id: string | null;
   token: number;
-  refine: boolean;
-  live: boolean;
+  options: PeekContentOptions;
 }) {
-  latest = usePeekContent(id, read, token, refine, undefined, live);
+  latest = usePeekContent(id, read, token, options);
   return null;
 }
-async function render(id: string | null, token = 1, refine = true, live = !refine) {
+async function render(id: string | null, token = 1, options: PeekContentOptions = {}) {
   await act(async () => {
-    root.render(<Probe id={id} token={token} refine={refine} live={live} />);
+    root.render(<Probe id={id} token={token} options={options} />);
   });
 }
 beforeEach(() => {
@@ -123,10 +122,10 @@ describe("two-stage peek content", () => {
     const local = Promise.withResolvers<SessionPeekContent | null>();
     read.mockReturnValueOnce(local.promise);
     await render("s");
-    await render("s", 1, false);
+    await render("s", 1, PINNED_OPTIONS);
     await act(async () => local.resolve(CONTENT));
     expect(latest.content).toBe(CONTENT);
-    await render("s", 2, false);
+    await render("s", 2, PINNED_OPTIONS);
     expect(read.mock.calls).toEqual([
       ["s", false],
       ["s", false],
@@ -139,10 +138,10 @@ describe("two-stage peek content", () => {
     read.mockImplementation((_id, refine) =>
       refine ? refinement.promise : Promise.resolve(CONTENT),
     );
-    await render("s", 1, false);
+    await render("s", 1, PINNED_OPTIONS);
     expect(latest.content).toBe(CONTENT);
     expect(read.mock.calls).toEqual([["s", false]]);
-    await render("s", 1, true);
+    await render("s", 1, { refine: true });
     expect(latest).toEqual({ content: CONTENT, loading: false, failed: false });
     expect(read.mock.calls).toEqual([
       ["s", false],
@@ -176,7 +175,7 @@ describe("two-stage peek content", () => {
     );
     await render("s");
     await act(async () => vi.advanceTimersByTime(SESSION_PEEK_REFRESH_MS));
-    await render("s", 1, false);
+    await render("s", 1, PINNED_OPTIONS);
     expect(read).toHaveBeenCalledTimes(2);
     await act(async () => refinement.resolve(REFINED));
     expect(latest.content).toBe(REFINED);
@@ -199,12 +198,12 @@ describe("two-stage peek content", () => {
   });
 
   it("holds local-only unpinned peeks too, without starting utility work", async () => {
-    await render("s", 1, false, false);
-    await render("s", 2, false, false);
+    await render("s", 1, { refine: false });
+    await render("s", 2, { refine: false });
     expect(latest).toEqual({ content: CONTENT, loading: false, failed: false });
     expect(read.mock.calls).toEqual([["s", false]]);
     await render(null);
-    await render("s", 2, false, false);
+    await render("s", 2, { refine: false });
     expect(read.mock.calls).toEqual([
       ["s", false],
       ["s", false],
@@ -217,11 +216,11 @@ describe("two-stage peek content", () => {
     await render("s");
     const fresh = { ...REFINED, lastActivityAt: 2, summary: "New activity" };
     read.mockResolvedValue(fresh);
-    await render("s", 2, false);
+    await render("s", 2, PINNED_OPTIONS);
     await act(async () => old.resolve(REFINED));
     expect(latest.content).toBe(fresh);
     await render(null);
-    await render("s", 2, false);
+    await render("s", 2, PINNED_OPTIONS);
     expect(latest.content).toBe(fresh);
     expect(read).toHaveBeenCalledTimes(3);
   });

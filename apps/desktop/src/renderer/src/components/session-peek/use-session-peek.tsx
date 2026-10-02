@@ -354,14 +354,11 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     () => new PeekContentCache(ports.readContent),
     [ports.readContent],
   );
-  const content = usePeekContent(
-    sessionId,
-    ports.readContent,
-    subjectRow?.at ?? 0,
-    state.pinned === null && subjectRow?.kind === "chat",
-    contentCache,
-    state.pinned !== null,
-  );
+  const content = usePeekContent(sessionId, ports.readContent, subjectRow?.at ?? 0, {
+    refine: state.pinned === null && subjectRow?.kind === "chat",
+    sharedCache: contentCache,
+    refreshOnActivity: state.pinned !== null,
+  });
 
   /**
    * A peek's subject can leave the listing under it: the Session ends and moves
