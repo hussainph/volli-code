@@ -443,6 +443,31 @@ describe("bundleSummary", () => {
     ]);
   });
 
+  it("does not count a legacy not-run row among the work that happened", () => {
+    // The one claim the summary must never make: `Ran 1 command` for a call
+    // that produced no execution result. What did not run is its own clause.
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("run-command"), tool("run-command", { state: "approval-requested" })],
+        "s11",
+      ),
+    );
+    expect(bundleSummary(rows)).toEqual([
+      { text: "Ran 1 command", tone: "neutral" },
+      { text: "1 not run", tone: "muted" },
+    ]);
+  });
+
+  it("says only what did not run when the bundle holds nothing else", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("read-file", { state: "approval-responded", approved: true })],
+        "s12",
+      ),
+    );
+    expect(summaryText(rows)).toEqual(["1 not run"]);
+  });
+
   it("names a single file without a joining word", () => {
     const rows = bundleOf(segmentMessageParts([named("edit-file", "activity.ts")], "s9"));
     expect(summaryText(rows)).toEqual(["Edited activity.ts"]);
@@ -544,20 +569,29 @@ describe("bundle state", () => {
     const clean = bundleOf(segmentMessageParts([tool("read-file")], "b4"));
     expect(bundleNeedsAttention(clean)).toBe(false);
   });
+
+  it("is not streaming for a legacy row whose call never ran", () => {
+    // A retired approval state is history, not live work: it must not hold the
+    // ellipsis open or claim a verb it never earned.
+    const rows = bundleOf(
+      segmentMessageParts([tool("run-command", { state: "approval-requested" })], "b5"),
+    );
+    expect(isBundleStreaming(rows)).toBe(false);
+  });
 });
 
 describe("activityStatus", () => {
   it("keeps retired permission states noninteractive", () => {
     expect(activityStatus(tool("run-command", { state: "input-available" }))).toBe("running");
-    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("done");
+    expect(activityStatus(tool("run-command", { state: "approval-requested" }))).toBe("not-run");
     expect(activityStatus(tool("run-command", { state: "input-streaming" }))).toBe("pending");
     expect(activityStatus(tool("run-command", { state: "output-error" }))).toBe("failed");
   });
 
-  it("keeps an old answered permission settled", () => {
+  it("reads an old answered permission as not run unless it was refused", () => {
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: true })),
-    ).toBe("done");
+    ).toBe("not-run");
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: false })),
     ).toBe("denied");
@@ -585,6 +619,22 @@ describe("activityStatus", () => {
 });
 
 describe("presenters", () => {
+  it("keeps a never-executed row's recorded object but replaces the verb's claim", () => {
+    const row = describeActivity(
+      tool("run-command", {
+        state: "approval-responded",
+        approved: true,
+        input: { command: "pnpm test" },
+        descriptor: { subject: { label: "pnpm test", path: null, lineRange: null } },
+      }),
+    );
+    expect(row.status).toBe("not-run");
+    expect(row.verb).toBe("Not run");
+    expect(row.object).toBe("pnpm test");
+    // Not settled, so no receipt: no duration, no exit, no diff stat.
+    expect(row.meta).toBe(null);
+  });
+
   it("derives the verb from the kind and never echoes the result sentence", () => {
     const row = describeActivity(
       tool("run-command", {

@@ -25,7 +25,7 @@
  * total exact regardless.
  */
 
-import { deterministicUuid, hashIndex, largestRemainder, proseBytes } from "./deterministic.mjs";
+import { hashIndex, largestRemainder, proseBytes } from "./deterministic.mjs";
 
 /** Body sizes, in bytes of generated prose, for the text-bearing families. */
 const BODY_BYTES = Object.freeze({

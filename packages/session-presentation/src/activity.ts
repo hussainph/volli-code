@@ -318,25 +318,37 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 
   // A Map iterates in insertion order, and a kind is inserted the first time it
   // appears — so the Map itself is the first-appearance order the sentence needs.
+  // A legacy row whose call never produced an execution result is left out of
+  // the counts: the phrase says what happened, and what did not is confessed
+  // after it, quietly, rather than folded into a verb it never earned.
   const groups = new Map<ActivityKind, DynamicToolUIPart[]>();
+  let notRun = 0;
   for (const row of tools) {
+    if (activityStatus(row.part) === "not-run") {
+      notRun += 1;
+      continue;
+    }
     const kind = activityDescriptor(row.part).kind;
     const group = groups.get(kind);
     if (group) group.push(row.part);
     else groups.set(kind, [row.part]);
   }
 
-  const phrase = [...groups]
-    .map(([kind, parts]) => kindPhrase(kind, parts))
-    .join(", ")
-    .replace(/^./, (character) => character.toUpperCase());
-  const streaming = tools.some((row) => isRowActive(row.part));
-  const segments: SummarySegment[] = [{ text: streaming ? `${phrase}…` : phrase, tone: "neutral" }];
+  const segments: SummarySegment[] = [];
+  if (groups.size > 0) {
+    const phrase = [...groups]
+      .map(([kind, parts]) => kindPhrase(kind, parts))
+      .join(", ")
+      .replace(/^./, (character) => character.toUpperCase());
+    const streaming = tools.some((row) => isRowActive(row.part));
+    segments.push({ text: streaming ? `${phrase}…` : phrase, tone: "neutral" });
+  }
 
   const failed = tools.filter((row) => row.part.state === "output-error").length;
   const denied = tools.filter((row) => row.part.state === "output-denied").length;
   if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
   if (denied > 0) segments.push({ text: `${denied} denied`, tone: "danger" });
+  if (notRun > 0) segments.push({ text: `${notRun} not run`, tone: "muted" });
   return segments;
 }
 
@@ -401,7 +413,13 @@ export function isRowActive(part: DynamicToolUIPart): boolean {
   return status === "pending" || status === "running";
 }
 
-export type ActivityStatus = "pending" | "running" | "done" | "denied" | "failed";
+/**
+ * `not-run` is a legacy row's honest ending: the interaction machinery that
+ * would have driven it further is gone (VC-504), no execution result was ever
+ * recorded, and the row must neither claim success (`done`) nor look alive
+ * (`pending`/`running`). It is not settled — it has no receipt to show.
+ */
+export type ActivityStatus = "pending" | "running" | "done" | "denied" | "failed" | "not-run";
 
 export function activityStatus(part: DynamicToolUIPart): ActivityStatus {
   switch (part.state) {
@@ -409,10 +427,14 @@ export function activityStatus(part: DynamicToolUIPart): ActivityStatus {
       return "pending";
     case "input-available":
       return "running";
+    // Retired AI SDK approval states survive only in transcripts recorded
+    // before the approval machinery was removed. Neither carries an execution
+    // result, so neither may read as `done`; the row stays read-only and says
+    // the call never ran. A recorded refusal keeps its honest `denied`.
     case "approval-requested":
-      return "done";
+      return "not-run";
     case "approval-responded":
-      return part.approval.approved ? "done" : "denied";
+      return part.approval.approved ? "not-run" : "denied";
     case "output-error":
       return "failed";
     case "output-denied":
@@ -691,6 +713,10 @@ function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   const command = context.descriptor.kind === "run-command" ? facts.object : null;
   return {
     ...facts,
+    // A presenter's verb is past tense because the work happened. A legacy row
+    // whose call never executed keeps its recorded object but loses the claim:
+    // `Not run` stands where `Ran` or `Read` would have stood.
+    verb: context.status === "not-run" ? "Not run" : facts.verb,
     kind: context.descriptor.kind,
     status: browseStatus(context),
     nativeToolName: context.descriptor.nativeToolName,

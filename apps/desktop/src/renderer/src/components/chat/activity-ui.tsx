@@ -343,7 +343,10 @@ function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus
 function StatusGlyph({ status }: { status: ActivityStatus }) {
   const className = "size-3.5 shrink-0";
   switch (status) {
+    // Waiting to happen and never happened share the dashed circle: neither
+    // claims an outcome, and neither is owed an alarm.
     case "pending":
+    case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
       return <SpinnerGapIcon aria-hidden className={cn(className, "animate-spin text-primary")} />;
@@ -429,10 +432,7 @@ export const ToolRow = React.memo(function ToolRow({
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable =
-    row.detail !== null ||
-    row.command !== null ||
-    card !== null;
+  const expandable = row.detail !== null || row.command !== null || card !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -1008,13 +1008,7 @@ const BundleRowView = React.memo(function BundleRowView({
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
-  return (
-    <ToolRow
-      part={row.part}
-      onOpenFile={onOpenFile}
-      onOpenSession={onOpenSession}
-    />
-  );
+  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
 });
 
 /**

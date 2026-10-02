@@ -88,6 +88,39 @@ describe("hard refusal", () => {
   });
 });
 
+describe("legacy approval rows", () => {
+  // A row recorded before the approval machinery was removed: the call was
+  // allowed, but no execution result ever followed it.
+  const approvedNeverExecuted: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolName: "bash",
+    toolCallId: "legacy-allowed",
+    state: "approval-responded",
+    input: { command: "pnpm test" },
+    approval: { id: "ask-1", approved: true },
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: {
+        ...descriptor,
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "pnpm test", path: null, lineRange: null },
+      },
+    } as DynamicToolUIPart["toolMetadata"],
+  };
+
+  it("labels a call that was allowed but never executed as not run, still and read-only", () => {
+    const html = renderToStaticMarkup(<ToolRow part={approvedNeverExecuted} />);
+
+    // The verb must not claim the work happened.
+    expect(html).toContain("Not run");
+    expect(html).not.toContain(">Ran<");
+    // Inactive: no spinner, and no approval machinery came back with it.
+    expect(html).not.toContain("animate-spin");
+    expect(html).not.toContain("Allow once");
+    expect(html).not.toContain('data-slot="approval-card"');
+  });
+});
+
 describe("ActivityBundle scroll window", () => {
   it("caps the open bundle without trapping the wheel inside it (VC-32)", () => {
     // The cap must stay — an uncapped payload shoves the feed off screen — but
