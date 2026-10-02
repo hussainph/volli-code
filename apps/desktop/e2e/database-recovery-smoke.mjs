@@ -126,14 +126,17 @@ async function closeRun(run) {
       }
     }),
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
-  const exit = await closeAppBounded(run.app);
+  // The application allows 15s for accepted shutdown work to drain. Do not
+  // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
+  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
-  runs.delete(run);
+  // Retain failed runs so the outer handler prints their stdout/stderr.
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
   assert.ok(
     ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
     "cleanup required a forced signal",
   );
+  runs.delete(run);
 }
 
 async function snapshot(paths) {
