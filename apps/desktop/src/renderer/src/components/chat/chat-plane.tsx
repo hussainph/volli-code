@@ -79,6 +79,7 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
+  authorityReviewNoticeCopy,
   projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
@@ -151,6 +152,7 @@ import {
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
   rememberTranscriptView,
@@ -1143,7 +1145,12 @@ export function ChatPlane({
           // The revealed question takes the slot, when it is still open: the
           // card stack draws one at a time, so "select that question" is this
           // ordering and nothing else.
-          preferRevealedInteraction(interactions, revealed?.interactionId ?? null),
+          preferRevealedInteraction(
+            // Credential questions have their own person-only controls; they
+            // must never reach the generic free-text answer stack.
+            interactions.filter((interaction) => interaction.credential === undefined),
+            revealed?.interactionId ?? null,
+          ),
           gatedToolCallIds(messages),
         )
       : null;
@@ -1379,11 +1386,20 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
+      approvalFailures: session.approvalFailures,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, onOpenSession, resolving, session.openedInteractions],
+    [
+      answer,
+      interactions,
+      onOpenFile,
+      onOpenSession,
+      session.approvalFailures,
+      resolving,
+      session.openedInteractions,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1398,8 +1414,14 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
-    [session.compactions, session.reasoningDrops, turns],
+    () =>
+      projectTranscriptRows(
+        turns,
+        session.compactions,
+        session.reasoningDrops,
+        session.authorityReviews,
+      ),
+    [session.compactions, session.reasoningDrops, session.authorityReviews, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1649,6 +1671,7 @@ export function ChatPlane({
           {/* Overlay on the composer, never in its place. Ask-user cards
               stack above the input so a follow-up can still be typed while
               the card waits. */}
+          <SecretCards sessionId={sessionId} interactions={interactions} />
           <ComposerInteractionStack
             interaction={pending}
             resolving={pending ? resolving.has(pending.id) : false}
@@ -1972,6 +1995,8 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
+  /** Mutation receipts for standing grants that could only be allowed once. */
+  approvalFailures?: ReadonlyMap<string, "once" | "not-delivered">;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
   open: readonly RendererSessionInteraction[];
   /** The ids with a decision in flight — one card in flight is not all of them. */
@@ -2282,6 +2307,8 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
+    case "authority-review":
+      return `authority-review:${row.review.sequence}`;
   }
 }
 
@@ -2309,6 +2336,13 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
+    case "authority-review":
+      return (
+        <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
+          <WarningIcon aria-hidden className="size-3.5 shrink-0" />
+          <p>{authorityReviewNoticeCopy(row.review)}</p>
+        </div>
+      );
     case "turn":
       return <ChatTurn messages={row.messages} context={context} live={live} />;
   }
@@ -2392,8 +2426,14 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (answered) {
     const interaction = context.interactions.get(answered.interactionId);
+    const failure =
+      interaction?.approval === undefined ? undefined : context.approvalFailures?.get(first.id);
+    if (failure === "not-delivered")
+      return <p className="text-ui text-muted-foreground">Answer not delivered</p>;
+    const resolution =
+      failure === "once" ? { optionIds: ["once"], response: null } : answered.resolution;
     return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
+      <InteractionReceiptLine interaction={interaction} resolution={resolution} />
     ) : null;
   }
 

@@ -72,6 +72,10 @@ describe("table decisions", () => {
       "web_access_settings",
       "registered_harnesses",
       "harness_channel",
+      "authority_approvals",
+      "authority_approval_commands",
+      "authority_approval_events",
+      "authority_approval_completions",
     ]) {
       expect(tableBackupDecision(table)?.decision, `${table} must be excluded`).toBe("exclude");
       expect(BACKUP_INCLUDED_TABLES).not.toContain(table);

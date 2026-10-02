@@ -8,6 +8,7 @@
  * model.
  */
 
+import { safeStopMessage } from "./safe-diagnostic";
 import type { AssistantMessage, KnownApi, Usage } from "@earendil-works/pi-ai";
 import type {
   AttentionObservation,
@@ -25,90 +26,12 @@ export type AssistantMessageOutcome =
   | { kind: "failed"; failure: RuntimeFailure };
 
 /**
- * Long enough for a provider's whole refusal, including the sentence that
- * says what to do about it. Anthropic's preserved-thinking 400 runs to about
- * 360 characters once its envelope is off, and the clause that names what
- * changed is the last one; 300 cut it (VC-242).
- */
-const MAX_DIAGNOSTIC_LENGTH = 400;
-
-/** Long opaque runs are how provider keys and bearer tokens look in error text. */
-const OPAQUE_RUN = /[A-Za-z0-9_-]{24,}/g;
-const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
-/**
- * How long a `-` or `_` joined segment may be before the run stops reading as
- * words. `prefix_mismatch_behavior` and `thinking-binding-controls-2026-08-01`
- * are under it in every segment; a key is one long segment, or mixed case, or
- * digits throughout, and the check below asks for all three to be absent.
- */
-const MAX_WORD_SEGMENT = 12;
-
-/**
- * Whether a long run is vocabulary rather than a credential.
- *
- * The opaque-run rule redacted `prefix_mismatch_behavior` (24 characters) and
- * the beta header name (36) out of the one provider message whose whole point
- * is naming them, leaving a person a sentence that says to set `[redacted]` to
- * `"drop_block"` (VC-242). What tells those apart from a key is that they are
- * lowercase words joined by separators: every segment short, at least one of
- * them a plain word. A key has none of that at once — a raw hex or base64
- * token is one long segment, a JWT segment is mixed case, a UUID has no
- * alphabetic segment — so each still redacts.
- */
-function readsAsWords(run: string): boolean {
-  if (run !== run.toLowerCase()) return false;
-  const segments = run.split(/[-_]/);
-  return (
-    segments.every((segment) => segment.length > 0 && segment.length <= MAX_WORD_SEGMENT) &&
-    segments.some((segment) => /^[a-z]+$/.test(segment))
-  );
-}
-
-/**
- * The sentence inside a provider's error envelope, when the text is one.
- *
- * Anthropic's SDK renders a refused request as
- * `400 {"type":"error","error":{"type":"invalid_request_error","message":"…"},"request_id":"…"}`
- * and OpenAI's as `400 {"error":{"message":"…",…}}`. The envelope is for a
- * log; the person waiting on the turn needs the sentence. The status code
- * ahead of the brace is kept, because the auth classifier reads `401`/`403`
- * off it, and anything that is not an envelope is returned as it came.
- */
-function providerSentence(raw: string): string {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start < 0 || end <= start) return raw;
-  let body: Record<string, unknown>;
-  try {
-    // Text that opens with `{` parses to an object or throws; there is no
-    // third case for the cast to be wrong about.
-    body = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return raw;
-  }
-  const message = errorMessageOf(body);
-  if (message === undefined) return raw;
-  const prefix = raw.slice(0, start).trim();
-  return prefix.length > 0 ? `${prefix} ${message}` : message;
-}
-
-/** `error.message`, then `message`, when the parsed body carries either as text. */
-function errorMessageOf(body: Record<string, unknown>): string | undefined {
-  const nested = body["error"];
-  const inner =
-    nested !== null && typeof nested === "object"
-      ? (nested as Record<string, unknown>)["message"]
-      : undefined;
-  const message = typeof inner === "string" && inner.length > 0 ? inner : body["message"];
-  return typeof message === "string" && message.length > 0 ? message : undefined;
-}
-/**
  * The status codes are bounded as whole numbers: a Cloudflare error page or a
  * request id carries hex runs short enough to survive redaction, and one that
  * happened to contain `401` read a 502 as a refused key.
  */
 const AUTH_SIGNAL =
-  /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|\b401\b|\b403\b)/i;
+  /(api[ _-]?key|auth|token refresh|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|\b401\b|\b403\b)/i;
 /**
  * How a provider says the window is spent, across the vocabularies they
  * actually use. Overflow recovery hangs off this classification: a refusal it
@@ -212,27 +135,6 @@ const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["r
   unknown: "runtime-failure",
 };
 
-/**
- * Strip secret-shaped substrings and bound the length. Never returns raw
- * provider text.
- *
- * Unwraps a provider's JSON error envelope first, so what is bounded and
- * redacted is the sentence a person can act on rather than the framing around
- * it. Every 24-character run is still suspect; only one that reads as joined
- * lowercase words is let through, because that is documentation vocabulary
- * and not a key ({@link readsAsWords}).
- */
-export function sanitizeDiagnostic(raw: string): string {
-  const collapsed = providerSentence(raw)
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(PREFIXED_SECRET, "[redacted]")
-    .replace(OPAQUE_RUN, (run) => (readsAsWords(run) ? run : "[redacted]"));
-  return collapsed.length > MAX_DIAGNOSTIC_LENGTH
-    ? `${collapsed.slice(0, MAX_DIAGNOSTIC_LENGTH)}…`
-    : collapsed;
-}
-
 /** Which attention a failure deserves. Auth needs the user; the rest is runtime noise. */
 export function attentionReasonFor(failure: RuntimeFailure): AttentionObservation["reason"] {
   return ATTENTION_REASON[failure.reason];
@@ -271,6 +173,26 @@ export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] 
  * which the next window answers — is retried.
  */
 export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
+  const category = failure.stopDetail?.category;
+  if (
+    category === "provider-refused" ||
+    category === "auth-failed" ||
+    category === "bad-request" ||
+    category === "context-overflow"
+  )
+    return false;
+  if (
+    category === "provider-overloaded" ||
+    category === "network" ||
+    category === "runtime-stopped"
+  )
+    return true;
+  if (
+    ["usage_limit_reached", "usage_not_included", "insufficient_quota", "quota_exceeded"].includes(
+      failure.stopDetail?.providerType ?? "",
+    )
+  )
+    return false;
   if (failure.reason !== "model") return false;
   const text = failure.message;
   if (QUOTA_SIGNAL.test(text)) return false;
@@ -489,13 +411,13 @@ export function classifyAssistantMessage(
       kind: "failed",
       failure: {
         reason: "aborted",
-        message: sanitizeDiagnostic(message.errorMessage ?? "Run interrupted."),
+        message: safeStopMessage(message.errorMessage ?? "Run interrupted."),
       },
     };
   }
 
   if (message.stopReason === "error") {
-    const detail = sanitizeDiagnostic(message.errorMessage ?? "The model run failed.");
+    const detail = safeStopMessage(message.errorMessage ?? "The model run failed.");
     return { kind: "failed", failure: { reason: classifyDiagnostic(detail), message: detail } };
   }
 

@@ -1,13 +1,22 @@
 import type { UIMessage } from "ai";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
-import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
+import type {
+  TranscriptAuthorityReview,
+  TranscriptCompaction,
+  TranscriptReasoningDrop,
+} from "./transcript";
 
 /** What every Session client draws from the portable transcript projection. */
 export type TranscriptRow =
   | { kind: "turn"; messages: readonly UIMessage[] }
   | { kind: "host-notice"; messageId: string; notice: TranscriptHostNotice }
   | { kind: "compaction"; compaction: TranscriptCompaction }
-  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop };
+  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
+  | { kind: "authority-review"; review: TranscriptAuthorityReview };
+
+export function authorityReviewNoticeCopy(review: TranscriptAuthorityReview): string {
+  return `${review.mode === "shadow" ? "Would block" : "Blocked"} ${review.tool}: ${review.reason}`;
+}
 
 function rowFor(messages: readonly UIMessage[]): TranscriptRow {
   const message = messages.length === 1 ? messages[0] : undefined;
@@ -30,7 +39,24 @@ type AnchoredContextNotice =
       sequence: number;
       afterMessageId: string | null;
       value: TranscriptReasoningDrop;
+    }
+  | {
+      kind: "authority-review";
+      sequence: number;
+      afterMessageId: string | null;
+      value: TranscriptAuthorityReview;
     };
+
+function noticeRow(notice: AnchoredContextNotice): TranscriptRow {
+  switch (notice.kind) {
+    case "compaction":
+      return { kind: "compaction", compaction: notice.value };
+    case "reasoning-drop":
+      return { kind: "reasoning-drop", drop: notice.value };
+    case "authority-review":
+      return { kind: "authority-review", review: notice.value };
+  }
+}
 
 /**
  * Projects Turns and host-authored messages into rows, then lays durable
@@ -45,10 +71,17 @@ export function projectTranscriptRows(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
   reasoningDrops: readonly TranscriptReasoningDrop[],
+  authorityReviews: readonly TranscriptAuthorityReview[] = [],
 ): readonly TranscriptRow[] {
   const pending: AnchoredContextNotice[] = [
     ...compactions.map((value) => ({
       kind: "compaction" as const,
+      sequence: value.sequence,
+      afterMessageId: value.afterMessageId,
+      value,
+    })),
+    ...authorityReviews.map((value) => ({
+      kind: "authority-review" as const,
       sequence: value.sequence,
       afterMessageId: value.afterMessageId,
       value,
@@ -66,11 +99,7 @@ export function projectTranscriptRows(
   const takeAnchored = (claims: (notice: AnchoredContextNotice) => boolean) => {
     while (pending.length > 0 && claims(pending[0]!)) {
       const notice = pending.shift()!;
-      rows.push(
-        notice.kind === "compaction"
-          ? { kind: "compaction", compaction: notice.value }
-          : { kind: "reasoning-drop", drop: notice.value },
-      );
+      rows.push(noticeRow(notice));
     }
   };
 
@@ -81,11 +110,7 @@ export function projectTranscriptRows(
     takeAnchored((notice) => notice.afterMessageId !== null && spoken.has(notice.afterMessageId));
   }
   for (const notice of pending) {
-    rows.push(
-      notice.kind === "compaction"
-        ? { kind: "compaction", compaction: notice.value }
-        : { kind: "reasoning-drop", drop: notice.value },
-    );
+    rows.push(noticeRow(notice));
   }
   return rows;
 }

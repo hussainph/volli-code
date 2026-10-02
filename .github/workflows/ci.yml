@@ -163,6 +163,11 @@ jobs:
       - name: Check
         run: vp check
 
+      # The live kickoff smoke needs credentials; its ledger/selection predicates
+      # and card-opening helper are deterministic and must still run on every PR.
+      - name: Test kickoff smoke helpers
+        run: node --test apps/desktop/e2e/lib/kickoff-support.test.mjs
+
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
       #
@@ -533,6 +538,26 @@ jobs:
           vp run --filter @volli/desktop check:notice-inputs
           vp run --filter @volli/desktop check:lgpl-source
           vp run --filter @volli/desktop check:library-validation
+
+      # VC-493: building chunks and booting the unpackaged app never exercise
+      # electron-builder's dependency collector. Package on the same macOS
+      # lane, without any signing/notarization credentials or publishing, so
+      # a broken collector fails ordinary PR/main CI rather than a release.
+      # Keep vp exec (not pnpm exec): a pnpm parent can mask missing package
+      # manager metadata via npm_config_user_agent. The desktop manifest must
+      # identify pnpm itself; the root's packageManager is not searched first.
+      - name: Verify unsigned desktop packaging
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DEBUG: electron-builder
+        run: |
+          vp exec electron-builder --dir --publish never
+          resources="release/mac-arm64/Volli Code.app/Contents/Resources"
+          test -f "$resources/app.asar"
+          test -f "$resources/LICENSES.chromium.html"
+          test -f "$resources/app.asar.unpacked/node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js"
+          test -f "$resources/app.asar.unpacked/node_modules/quickjs-wasi/quickjs.wasm"
 
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4

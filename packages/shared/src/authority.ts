@@ -35,6 +35,8 @@
  * proposed here and is still the wrong thing to do.
  */
 
+export * from "./authority-judge";
+
 import type { JudgmentMode } from "./authority-config";
 import type { McpToolId } from "./mcp";
 import type { VerbToolKey } from "./verb-registry";
@@ -170,6 +172,8 @@ export const NON_CODING_TOOL_IDS = [
    * the Cache Prefix reason every name above was.
    */
   "codemode",
+  /** Requesting a credential outside the chat; the model receives only an outcome (VC-481). */
+  "request_secret",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
@@ -288,6 +292,13 @@ export interface AuthoritySnapshot {
    * v0 gives `observe` a gate that records what it would have refused.
    */
   enforcement: "observe" | "enforce";
+  /**
+   * Whether this attachment uses Protection's approvals and decision audit.
+   * Frozen with the gate, not inferred from current project or app settings on
+   * recovery. Older Snapshots omit it and keep their original gate without
+   * opting into approvals; only an explicit `true` activates Protection.
+   */
+  protection?: boolean;
   /**
    * Who judges a call the deterministic rules cannot settle. Data here,
    * behaviour in VC-28.
@@ -568,6 +579,8 @@ export function isCredentialConfirmCause(
 export type AuthorityDenialCause =
   | AuthorityRuleId
   | "call.unreadable"
+  | "classifier.flagged"
+  | "classifier.unavailable"
   | BudgetCauseId
   | ConfirmCauseId;
 
@@ -628,7 +641,11 @@ export const OVERRIDABLE_AUTHORITY_RULES = [
 
 /** Whether a refusal is one a person can overrule, or one that only reports. */
 export function isOverridableAuthorityRule(cause: AuthorityDenialCause): boolean {
-  return (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause);
+  return (
+    cause === "classifier.flagged" ||
+    cause === "classifier.unavailable" ||
+    (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause)
+  );
 }
 
 export const BUILTIN_RULE_PACK_ID = "volli.builtin";

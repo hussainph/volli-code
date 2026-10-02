@@ -73,6 +73,7 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  approvalCopy,
   askChoice,
   askOffer,
   askInteractionId,
@@ -104,6 +105,9 @@ import {
   type PromptResource,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
+  type ApprovalDecision,
+  type ApprovalScope,
+  type RuntimeApprovalHit,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
@@ -128,6 +132,13 @@ import {
   type UIMessageLike,
   type WorkLocationKind,
 } from "@volli/shared";
+import type { SecretWaitPublisher } from "../secrets/service";
+
+type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
+  withdraw?(interactionId: string): Promise<void>;
+  cancelPending?(): Promise<void>;
+  dispose?(): Promise<void>;
+};
 import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
@@ -211,12 +222,14 @@ function piAuthoritySnapshot(
   policy: AuthorityPolicy,
   location: WorkLocationKind,
   toolSurface: readonly SessionToolId[],
+  protectionEnabled: boolean,
 ): AuthoritySnapshot | null {
   if (policy.enforcement === "off") return null;
   return {
     mode: "auto",
     location,
     enforcement: policy.enforcement,
+    protection: policy.enforcement === "enforce" && protectionEnabled,
     judgmentMode: policy.judgmentMode,
     tools: [...toolSurface],
     rulePackId: BUILTIN_RULE_PACK_ID,
@@ -226,8 +239,40 @@ function piAuthoritySnapshot(
   };
 }
 
+/**
+ * One answer that asks to be remembered (VC-480), as main hands it to the
+ * ledger. Everything the row's provenance needs beyond this is already known
+ * to the port: the Session, its project, its Ticket.
+ */
+export interface PiProtectionGrant {
+  scope: "session" | "project";
+  scopes: readonly ApprovalScope[];
+  rule: string;
+  asked: string;
+  reason: string;
+  interactionId: string;
+}
+
+/**
+ * Protection mode for one attachment (VC-480): the remembered approvals it may
+ * read and the one door that writes them.
+ *
+ * Supplied by main independently of current policy so recovery can replay a
+ * protected attachment. The adapter activates it only from the pinned Snapshot.
+ * `covers` reads live on every call; `remember` runs in main, from the person's
+ * answer, BEFORE the runtime is told — the runtime holds no way to write a row.
+ */
+export interface PiProtection {
+  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
+  decided(decision: ApprovalDecision): void;
+  completed?(toolCallId: string): void;
+  remember(grant: PiProtectionGrant): void;
+}
+
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
+  /** Host capability, available even when current policy is off (VC-480). */
+  protection?: PiProtection;
   projectId: string;
   /**
    * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
@@ -496,6 +541,16 @@ export interface PiAdapterOptions {
    * cannot attach — the record promised a tool this launch cannot answer.
    */
   resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
+  resolveSecretPort?: (scope: {
+    sessionId: string;
+    projectId: string;
+    /** Output filtering is universal; requesting/injection stays frozen membership. */
+    allowInjection: boolean;
+    wait: SecretWaitPublisher;
+  }) => DesktopSecretPort;
+  /** Authority review is host policy, not an agent tool capability. */
+  decisions?: import("@volli/shared").DecisionPort;
+  authorityReason?: SessionRuntimeSpec["authorityReason"];
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -862,10 +917,13 @@ function piNativeAdapter(
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
         }),
+        decisions: options.decisions,
+        authorityReason: options.authorityReason,
         classify: options.resolveClassifyPort?.({
           sessionId: spec.sessionId,
           projectId: context.projectId,
         }),
+        resolveSecretPort: options.resolveSecretPort,
         mcp:
           (context.mcpTools?.length ?? 0) === 0
             ? undefined
@@ -966,6 +1024,9 @@ interface PiBindingOptions {
   shell: DesktopShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
+  resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
+  decisions: import("@volli/shared").DecisionPort | undefined;
+  authorityReason: SessionRuntimeSpec["authorityReason"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
   mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
@@ -975,6 +1036,9 @@ interface PiBindingOptions {
 }
 
 class PiBinding implements BindingHandle {
+  // A revoke while parked can require another card for the same tool call.
+  #approvalRounds = new Map<string, number>();
+  #approvalAnswersInFlight = new Set<string>();
   readonly #spec: NativeAttachmentSpec;
   readonly #sink: ObservationSink;
   readonly #context: PiRuntimeContext;
@@ -985,6 +1049,9 @@ class PiBinding implements BindingHandle {
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
+  readonly #secret: DesktopSecretPort | undefined;
+  readonly #decisions: import("@volli/shared").DecisionPort | undefined;
+  readonly #authorityReason: SessionRuntimeSpec["authorityReason"];
   readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
@@ -1022,6 +1089,49 @@ class PiBinding implements BindingHandle {
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
+    this.#secret = options.resolveSecretPort?.({
+      sessionId: options.spec.sessionId,
+      projectId: options.context.projectId,
+      allowInjection: options.context.toolSurface.includes("request_secret"),
+      wait: {
+        opened: (metadata) =>
+          this.#observe({
+            kind: "interaction",
+            state: "opened",
+            occurredAt: this.#now(),
+            interaction: {
+              id: metadata.id,
+              kind: "question",
+              title: "Credential requested",
+              detail: null,
+              options: [],
+              multiple: false,
+              credential: metadata,
+              native: this.#native,
+            },
+          }),
+        settled: (metadata, outcome) =>
+          this.#observe(
+            outcome === "still missing"
+              ? {
+                  kind: "interaction",
+                  state: "cancelled",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  reason: "withdrawn",
+                }
+              : {
+                  kind: "interaction",
+                  state: "resolved",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  resolution: { optionIds: [outcome], response: null },
+                },
+          ),
+      },
+    });
+    this.#decisions = options.decisions;
+    this.#authorityReason = options.authorityReason;
     this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
@@ -1046,6 +1156,7 @@ class PiBinding implements BindingHandle {
             options.context.authorityPolicy,
             options.context.location,
             options.context.toolSurface,
+            options.context.protection !== undefined,
           );
   }
 
@@ -1081,6 +1192,11 @@ class PiBinding implements BindingHandle {
 
   runtimeSpec(): SessionRuntimeSpec {
     const context = this.#context;
+    // Losing the ledger/audit host must not silently downgrade a protected
+    // attachment to an ordinary authority gate during recovery.
+    if (this.#authority?.protection === true && context.protection === undefined) {
+      throw new Error("Pi requires the Protection approval and audit host for this attachment.");
+    }
     const identity = {
       sessionId: this.#spec.sessionId,
       rootThreadId: context.rootThreadId,
@@ -1183,26 +1299,36 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // The Snapshot reaches the runtime only when it is meant to bind, which
-      // is what makes `enforcement` real rather than advisory (VC-44). Pi
-      // installs `beforeToolCall` on this field's PRESENCE, so:
-      //
-      //   off      → no Snapshot at all      → absent → no gate
-      //   observe  → Snapshot, recorded only → absent → no gate
-      //   enforce  → Snapshot, handed over   → present → gate installs
-      //
-      // `observe` is deliberately absent here rather than present-and-permissive.
-      // A gate that installs and allows everything would still normalize every
-      // call — resolving paths, lexing shells — and could still refuse one it
-      // could not read (`call.unreadable` fails closed by design). That is a real
-      // behaviour change bought for a record nothing writes yet. The Snapshot is
-      // still pinned and still durable, through `authority` above, which is what
-      // this slice owes. VC-28 v0 adds the recording gate that gives `observe`
-      // its second half.
+      // Off installs no gate. Observe installs VC-28's behavior-neutral shadow
+      // review; enforce retains rule-pack gating. The pinned Snapshot records
+      // which posture this attachment uses, independent of tool capability.
       //
       // Spread rather than assigned for `promptResources`' reason: the field must
       // be ABSENT, not set to undefined.
-      ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      ...(this.#authority === null ? {} : { authority: this.#authority }),
+      // Protection mode rides only a gate that binds. `covers` is the read
+      // port and nothing else; the runtime cannot author a row (VC-480).
+      ...(this.#authority?.enforcement === "enforce" &&
+      this.#authority.protection === true &&
+      this.#context.protection !== undefined
+        ? {
+            approvals: {
+              covers: (scope) => this.#context.protection!.covers(scope),
+              decided: (decision) => {
+                this.#context.protection!.decided(decision);
+                if (decision.authoriser === "policy:ledger") void this.#showLedgerHit(decision);
+              },
+              ...(this.#context.protection.completed === undefined
+                ? {}
+                : {
+                    completed: (toolCallId: string) =>
+                      this.#context.protection!.completed!(toolCallId),
+                  }),
+            },
+          }
+        : {}),
+      ...(this.#decisions === undefined ? {} : { decisions: this.#decisions }),
+      ...(this.#authorityReason === undefined ? {} : { authorityReason: this.#authorityReason }),
       // Read on every attach, never pinned: it is the count of refusals history
       // already holds, and the Session's own threshold is measured against it.
       priorAuthorityDenials: this.#context.priorAuthorityDenials,
@@ -1256,6 +1382,10 @@ class PiBinding implements BindingHandle {
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       ...(wantsClassify && this.#classify !== undefined ? { classify: this.#classify } : {}),
+      ...(this.#secret === undefined ? {} : { credentialRedaction: this.#secret }),
+      ...(context.toolSurface.includes("request_secret") && this.#secret !== undefined
+        ? { secret: this.#secret }
+        : {}),
       // The attachment's ask rides into MCP calls (VC-470). Code Mode lends
       // its question scope (VC-471), serializing asks and pausing its clock.
       ...(mcpTools.length === 0
@@ -1393,49 +1523,71 @@ class PiBinding implements BindingHandle {
         if (!this.#awaiting(command.interaction.id)) {
           return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
         }
-        // The answer is announced from here, and it has to be: the Session
-        // Engine writes `interaction.resolved` from THIS observation and from
-        // nowhere else. The delivery receipt this returns is a receipt, not a
-        // fact — `projectSession` folds it into `receipts` and never looks at
-        // its `result` — so a Session whose adapter stayed silent would settle
-        // the parked call, resume the turn, and leave the question active
-        // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
-        // true, and every later question hidden behind it.
-        //
-        // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
-        // which refuses to park on a question the Session could not record. The
-        // same bargain read the other way: an answer the Session could not
-        // record must not be reported as delivered, because the turn would
-        // resume on a decision history has no account of.
-        try {
-          await this.#observe({
-            kind: "interaction",
-            state: "resolved",
-            occurredAt: this.#now(),
-            interactionId: command.interaction.id,
-            resolution: command.resolution,
-          });
-        } catch (error) {
-          // Nothing was claimed, so the question is still parked and still
-          // active: the card stays answerable and pressing it again retries.
-          // That recoverable state is the whole reason the claim happens after
-          // the emit — claiming first would leave the ask unparked AND
-          // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
-          // turn blocked behind a card nothing can ever answer.
+        const protectedAnswer =
+          this.#asked.get(command.interaction.id)?.request.approval !== undefined;
+        if (protectedAnswer && this.#approvalAnswersInFlight.has(command.interaction.id)) {
           return this.#rejected(
             command.commandId,
-            "PI_INTERACTION_NOT_RECORDED",
-            `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
+            "PI_INTERACTION_RESOLVING",
+            "An answer is already being recorded for this approval.",
           );
         }
-        // Lost the claim while the fact was committing — a withdrawal or a
-        // release got here first. History keeps the resolution, which is true:
-        // a person did answer. What is no longer true is that the runtime is
-        // waiting for it, so this reports a decision that reached nobody.
-        if (!this.#settleAnswer(command.interaction.id, command.resolution)) {
-          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        if (protectedAnswer) this.#approvalAnswersInFlight.add(command.interaction.id);
+        try {
+          // The answer is announced from here, and it has to be: the Session
+          // Engine writes `interaction.resolved` from THIS observation and from
+          // nowhere else. The delivery receipt this returns is a receipt, not a
+          // fact — `projectSession` folds it into `receipts` and never looks at
+          // its `result` — so a Session whose adapter stayed silent would settle
+          // the parked call, resume the turn, and leave the question active
+          // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
+          // true, and every later question hidden behind it.
+          //
+          // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
+          // which refuses to park on a question the Session could not record. The
+          // same bargain read the other way: an answer the Session could not
+          // record must not be reported as delivered, because the turn would
+          // resume on a decision history has no account of.
+          try {
+            await this.#observe({
+              kind: "interaction",
+              state: "resolved",
+              occurredAt: this.#now(),
+              interactionId: command.interaction.id,
+              resolution: command.resolution,
+            });
+          } catch (error) {
+            // Nothing was claimed, so the question is still parked and still
+            // active: the card stays answerable and pressing it again retries.
+            // That recoverable state is the whole reason the claim happens after
+            // the emit — claiming first would leave the ask unparked AND
+            // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
+            // turn blocked behind a card nothing can ever answer.
+            return this.#rejected(
+              command.commandId,
+              "PI_INTERACTION_NOT_RECORDED",
+              `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
+            );
+          }
+          // Lost the claim while the fact was committing — a withdrawal or a
+          // release got here first. History keeps the resolution, which is true:
+          // a person did answer. What is no longer true is that the runtime is
+          // waiting for it, so this reports a decision that reached nobody.
+          const settled = this.#settleAnswer(command.interaction.id, command.resolution);
+          if (settled === false) {
+            return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+          }
+          if (typeof settled === "string") {
+            return this.#rejected(
+              command.commandId,
+              "PI_APPROVAL_NOT_REMEMBERED",
+              `The approval could not be saved. Allowed once only; future calls will ask again: ${settled}`,
+            );
+          }
+          return this.#accepted(command.commandId);
+        } finally {
+          if (protectedAnswer) this.#approvalAnswersInFlight.delete(command.interaction.id);
         }
-        return this.#accepted(command.commandId);
       }
     }
   }
@@ -1473,6 +1625,7 @@ class PiBinding implements BindingHandle {
    * record one withdrawal twice.
    */
   async withdrawInteraction(interactionId: string): Promise<void> {
+    await this.#secret?.withdraw?.(interactionId);
     await this.#withdraw(interactionId, false);
   }
 
@@ -1501,8 +1654,9 @@ class PiBinding implements BindingHandle {
     for (const asked of [this.#asked, this.#askedUser]) {
       for (const interactionId of asked.keys()) await this.#withdraw(interactionId, true);
     }
-    this.#released = true;
+    await this.#secret?.cancelPending?.();
     this.#abort.abort();
+    this.#released = true;
     this.#browser?.dispose?.();
     // Before the handle closes: the execution environment's cleanup revokes
     // the attachment's token, and a shell still being SIGTERMed should not
@@ -1510,6 +1664,7 @@ class PiBinding implements BindingHandle {
     this.#shell?.dispose();
     await this.#mcp?.dispose();
     await this.#handle?.close();
+    await this.#secret?.dispose?.();
   }
 
   async #submit(
@@ -1588,22 +1743,42 @@ class PiBinding implements BindingHandle {
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
     const offer = askOffer(request);
+    const approval = request.approval;
+    const stages = approval?.stages ?? [];
+    const heldStages = [
+      ...new Set(
+        (approval?.scopes ?? []).flatMap((scope) =>
+          scope.stage !== undefined && scope.stage >= 0 && scope.stage < stages.length
+            ? [scope.stage]
+            : [],
+        ),
+      ),
+    ];
+    const copy = approvalCopy(request.cause);
+    const objections = approval?.objections ?? [];
+    const title = objections.length > 1 ? "Allow these actions?" : copy.title;
+    const because =
+      objections.length > 1
+        ? objections.map((objection) => approvalCopy(objection.cause).because).join(" Also, ")
+        : copy.because;
     // Three frozen derivations, chosen by cause: a budget question keeps its
     // own `budget-ask:` segment and a confirmation its `confirm-ask:` one, so
     // that a gate ask and either of them about ONE tool call can never mint one
     // interaction id — under a shared prefix the second `opened` emit would
     // dedupe against the first and park a question nobody was shown. See
     // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
-    // A credential question (VC-470) has a fourth, because it can follow a
-    // confirmation on the same tool call: `mcp_install` confirms the install,
-    // then asks the person to sign in.
-    const interactionId = isBudgetCause(request.cause)
-      ? budgetAskInteractionId(request.toolCallId)
-      : isCredentialConfirmCause(request.cause)
-        ? credentialAskInteractionId(request.toolCallId)
-        : isConfirmCause(request.cause)
-          ? confirmAskInteractionId(request.toolCallId)
-          : askInteractionId(request.toolCallId);
+    const round = approval === undefined ? 0 : (this.#approvalRounds.get(request.toolCallId) ?? 0);
+    if (approval !== undefined) this.#approvalRounds.set(request.toolCallId, round + 1);
+    const interactionId =
+      round > 0
+        ? `approval-retry:${round}:${request.toolCallId}`
+        : isBudgetCause(request.cause)
+          ? budgetAskInteractionId(request.toolCallId)
+          : isCredentialConfirmCause(request.cause)
+            ? credentialAskInteractionId(request.toolCallId)
+            : isConfirmCause(request.cause)
+              ? confirmAskInteractionId(request.toolCallId)
+              : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1611,10 +1786,37 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: offer.kind,
-        title: askTitle(request),
+        title: approval === undefined ? askTitle(request) : title,
         detail: request.reason,
+        ...(approval === undefined
+          ? {}
+          : {
+              approval: {
+                asked: approval.asked,
+                because,
+                reason: approval.reason ?? request.reason,
+                stages,
+                held: heldStages[0] ?? null,
+                heldStages,
+              },
+            }),
         options: offer.options,
         multiple: false,
+        // An approval card takes free text: that is what "Deny and steer" sends.
+        ...(approval === undefined
+          ? {}
+          : {
+              prompts: [
+                {
+                  id: DEFAULT_INTERACTION_PROMPT_ID,
+                  label: title,
+                  detail: null,
+                  options: offer.options,
+                  multiple: false,
+                  custom: true,
+                },
+              ],
+            }),
         // `prompts` is left off rather than written out. A record without them
         // is read as the one question its flat fields ask, and stating that
         // single prompt here would be the same derivation made twice — once
@@ -1637,6 +1839,24 @@ class PiBinding implements BindingHandle {
     if (signal.aborted) withdraw();
     else signal.addEventListener("abort", withdraw, { once: true });
     return parked.settle.promise;
+  }
+
+  /** A ledger receipt is a single nonblocking historical fact, never a parked ask. */
+  async #showLedgerHit(decision: ApprovalDecision): Promise<void> {
+    if (decision.approvalId === null) return;
+    try {
+      await this.#observe({
+        kind: "approval-used",
+        occurredAt: this.#now(),
+        toolCallId: decision.toolCallId,
+        approvalId: decision.approvalId,
+        summary: decision.summary,
+        asked: decision.asked,
+      });
+    } catch (error) {
+      // The fail-closed audit already committed; missing cosmetic history cannot undo it.
+      console.warn("[volli] approval receipt:", error);
+    }
   }
 
   /**
@@ -1733,7 +1953,7 @@ class PiBinding implements BindingHandle {
    * verdict, and the model's are the model's own, handed back exactly as a
    * person chose them. False means nothing was still waiting.
    */
-  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean {
+  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean | string {
     const parkedUser = this.#takeUser(interactionId);
     if (parkedUser !== undefined) {
       parkedUser.settle.resolve(resolution);
@@ -1743,7 +1963,28 @@ class PiBinding implements BindingHandle {
     if (parked === undefined) return false;
     // `askChoice` is the runtime's own private reading of a decision the ledger
     // already holds in the person's own option ids.
-    parked.settle.resolve(askChoice(parked.request, resolution.optionIds));
+    const choice = askChoice(parked.request, resolution.optionIds, resolution.response);
+    // Only the winning, durably recorded answer may activate a grant. There is
+    // no await from this claim through the all-or-nothing insert and settlement.
+    if (choice === "allow-session" || choice === "allow-project") {
+      try {
+        this.#context.protection!.remember({
+          scope: choice === "allow-session" ? "session" : "project",
+          scopes: parked.request.approval?.scopes ?? [],
+          rule: parked.request.cause,
+          asked: parked.request.approval?.asked ?? parked.request.tool,
+          reason: parked.request.reason,
+          interactionId,
+        });
+      } catch (error) {
+        // The resolved fact preserves what the person requested. The rejected
+        // mutation receipt surfaces the failure and makes its UI receipt once;
+        // the audit and executor receive only the effective one-time grant.
+        parked.settle.resolve("allow");
+        return errorMessage(error);
+      }
+    }
+    parked.settle.resolve(choice);
     return true;
   }
 

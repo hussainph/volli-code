@@ -106,6 +106,8 @@
  * settle would have. Nothing is re-watched; recovery reports and lets go.
  */
 
+import { sessionStopSummary, type SessionStopDetail } from "@volli/shared";
+
 import {
   sessionHostNoticeMetadata,
   shortSessionId,
@@ -233,6 +235,7 @@ function stoppedByText(by: SessionStopActor | null, parentSessionId: string): st
  */
 export function subagentNotice(input: {
   childSessionId: string;
+  stopDetail?: SessionStopDetail;
   parentSessionId?: string;
   title: string;
   state: SubagentOutcomeState;
@@ -253,7 +256,18 @@ export function subagentNotice(input: {
             interrupted: "was interrupted before it answered",
             failed: "failed before it answered",
           }[input.state];
-  const head = `[Subagent Session ${handle} (${JSON.stringify(input.title)}) ${ended}. This notice is from Volli, not your user.]`;
+  const head = [
+    `[Subagent Session ${handle} (${JSON.stringify(input.title)}) ${ended}. This notice is from Volli, not your user.]`,
+    ...(input.stopDetail === undefined
+      ? []
+      : [
+          `${sessionStopSummary(input.stopDetail)} (${input.stopDetail.category}); retry: ${input.stopDetail.retry}; reset: ${input.stopDetail.resetsAt ?? "not stated"}.`,
+          ...untrustedProseResponseLines({
+            response: "provider stop detail",
+            blocks: [{ label: "provider error", text: JSON.stringify(input.stopDetail) }],
+          }),
+        ]),
+  ].join("\n");
   const answer = input.answer ?? null;
   const text = answer?.text ?? null;
   if (text === null) {
@@ -454,6 +468,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     state: SubagentOutcomeState,
     reason: SubagentNoticeReason | null = null,
     stoppedBy: SessionStopActor | null = null,
+    stopDetail?: SessionStopDetail,
   ): Promise<NoticeDelivery> {
     const answer = await answerOf(entry.childSessionId);
     return deliverHostNotice(delivery, {
@@ -474,6 +489,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         state,
         reason,
         stoppedBy,
+        ...(stopDetail === undefined ? {} : { stopDetail }),
         answer,
       }),
       label: `subagent notice for ${shortSessionId(entry.childSessionId)} to parent ${shortSessionId(entry.parentSessionId)}`,
@@ -484,6 +500,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     entry: LiveDelegation,
     state: SubagentOutcomeState,
     stoppedBy: SessionStopActor | null = null,
+    stopDetail?: SessionStopDetail,
   ): Promise<void> {
     if (entry.settled) return;
     entry.settled = true;
@@ -493,7 +510,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       parentWatches.get(entry.parentSessionId)?.();
       parentWatches.delete(entry.parentSessionId);
     }
-    await deliver(entry, entry.notice, state, null, stoppedBy);
+    await deliver(entry, entry.notice, state, null, stoppedBy, stopDetail);
   }
 
   async function stopChild(entry: LiveDelegation, reason: string): Promise<void> {
@@ -587,7 +604,12 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
             ? "failed"
             : outcomeOf(payload);
         if (outcome === null) return;
-        await settle(state, outcome, payload.kind === "session.stopped" ? payload.by : null);
+        await settle(
+          state,
+          outcome,
+          payload.kind === "session.stopped" ? payload.by : null,
+          payload.kind === "turn.interrupted" ? payload.stopDetail : undefined,
+        );
       },
       (error) => {
         report(

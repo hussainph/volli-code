@@ -4,6 +4,7 @@ import {
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  sanitizeSessionInteraction,
   turnQueueEvent,
 } from "@volli/shared";
 import type {
@@ -1829,12 +1830,25 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const interaction = projection.interactions.active.find(
-      ({ id }) => id === request.command.interactionId,
-    );
+    // A repeat must replay its durable outcome even after the card has settled.
+    // Still submit the full intent below: a reused ID with changed consent is a conflict.
+    const interaction =
+      projection.interactions.active.find(({ id }) => id === request.command.interactionId) ??
+      (existed
+        ? projection.interactions.resolved.find(
+            ({ interaction: settled }) => settled.id === request.command.interactionId,
+          )?.interaction
+        : undefined);
     if (!interaction) {
       throw new SessionRuntimeNotFoundError(
         `Interaction ${request.command.interactionId} is not open`,
+      );
+    }
+    // Reject before writing either a transcript artifact or command intent.
+    // A generic answer may contain secret bytes in any resolution field.
+    if (interaction.credential !== undefined) {
+      throw new SessionRuntimeConflictError(
+        "Credential requests must use person-only credential controls",
       );
     }
     const resolutionArtifact = await this.ports.artifacts.write({
@@ -2424,6 +2438,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           ...base,
           kind: observation.kind,
           turnId: observation.turnId,
+          ...(observation.kind === "turn.interrupted" && observation.stopDetail !== undefined
+            ? { stopDetail: observation.stopDetail }
+            : {}),
         });
         if (observation.kind === "turn.started") {
           const admission = this.#messageAdmissions.get(spec.sessionId);
@@ -2472,6 +2489,27 @@ class DefaultSessionRuntime implements SessionRuntime {
           reason: observation.reason,
         });
         break;
+      case "authority.reviewed":
+        event = await this.ports.engine.observe({
+          ...base,
+          provenance: {
+            source: { kind: "system", id: "authority-classifier", detail: null },
+            venue,
+          },
+          kind: observation.kind,
+          turnId: observation.turnId,
+          toolCallId: observation.toolCallId,
+          tool: observation.tool,
+          mode: observation.mode,
+          authoriser: observation.authoriser,
+          wouldFlag: observation.wouldFlag,
+          reason: observation.reason,
+          category: observation.category,
+          answers: observation.answers,
+          missReason: observation.missReason,
+          thresholds: observation.thresholds,
+        });
+        break;
       case "usage.recorded":
         event = await this.ports.engine.observe({
           ...base,
@@ -2484,7 +2522,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          interaction: { ...observation.interaction, attachmentId: spec.attachmentId },
+          interaction: sanitizeSessionInteraction({
+            ...observation.interaction,
+            attachmentId: spec.attachmentId,
+          }),
         });
         break;
       case "interaction.resolved":

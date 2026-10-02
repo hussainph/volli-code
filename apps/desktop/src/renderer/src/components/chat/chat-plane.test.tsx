@@ -6,8 +6,8 @@
  * `/skill` exactly as typed, and a compact Badge is the whole visible footprint
  * of the body that rode along.
  */
-import { sessionHostNoticeMetadata } from "@volli/shared";
-import { projectTranscriptRows } from "@volli/session-presentation";
+import { sessionHostNoticeMetadata, type RendererSessionInteraction } from "@volli/shared";
+import { approvalAnswerFailures, projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
@@ -29,6 +29,169 @@ function turn(message: UIMessage): string {
 }
 
 describe("the desktop transcript-row mapping", () => {
+  it("reports the actual allow-once outcome when saving a standing approval failed", () => {
+    const interaction: RendererSessionInteraction = {
+      id: "ask:c",
+      attachmentId: "a",
+      kind: "permission",
+      title: "Allow writing outside this workspace?",
+      detail: null,
+      multiple: false,
+      native: { id: null, detail: null },
+      approval: {
+        asked: "write /outside/a",
+        because: "outside",
+        reason: "outside",
+        stages: [],
+        held: null,
+      },
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "session", label: "Allow for this Session", description: null },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        live={false}
+        context={{
+          ...context,
+          interactions: new Map([[interaction.id, interaction]]),
+          approvalFailures: approvalAnswerFailures([
+            {
+              event: {
+                payload: {
+                  kind: "command.receipt.recorded",
+                  receipt: {
+                    id: "receipt",
+                    commandId: "answer",
+                    sequence: 1,
+                    recordedAt: 1,
+                    status: "rejected",
+                    code: "PI_APPROVAL_NOT_REMEMBERED",
+                    detail: "disk full",
+                  },
+                },
+              },
+            },
+          ]),
+        }}
+        messages={[
+          {
+            id: "answer",
+            role: "user",
+            metadata: { interactionId: interaction.id },
+            parts: [
+              {
+                type: "data-interaction-resolution",
+                data: { optionIds: ["session"], response: null },
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("once");
+    expect(html).not.toContain("for this Session");
+  });
+
+  it.each(["PI_INTERACTION_NOT_RECORDED", "PI_INTERACTION_RESOLVING"])(
+    "does not claim a remembered approval for a rejected %s answer",
+    (code) => {
+      const interaction: RendererSessionInteraction = {
+        id: "ask:c",
+        attachmentId: "a",
+        kind: "permission",
+        title: "Allow writing outside this workspace?",
+        detail: null,
+        multiple: false,
+        native: { id: null, detail: null },
+        approval: {
+          asked: "write /outside/a",
+          because: "outside",
+          reason: "outside",
+          stages: [],
+          held: null,
+        },
+        options: [{ id: "project", label: "Always allow in this project", description: null }],
+      };
+      const html = renderToStaticMarkup(
+        <ChatTurn
+          live={false}
+          context={{
+            ...context,
+            interactions: new Map([[interaction.id, interaction]]),
+            approvalFailures: approvalAnswerFailures([
+              {
+                event: {
+                  payload: {
+                    kind: "command.receipt.recorded",
+                    receipt: {
+                      id: "receipt",
+                      commandId: "answer",
+                      sequence: 1,
+                      recordedAt: 1,
+                      status: "rejected",
+                      code,
+                      detail: "delivery failed",
+                    },
+                  },
+                },
+              },
+            ]),
+          }}
+          messages={[
+            {
+              id: "answer",
+              role: "user",
+              metadata: { interactionId: interaction.id },
+              parts: [
+                {
+                  type: "data-interaction-resolution",
+                  data: { optionIds: ["project"], response: null },
+                },
+              ],
+            },
+          ]}
+        />,
+      );
+      expect(html).toContain("Answer not delivered");
+      expect(html).not.toContain("You allowed");
+      expect(html).not.toContain("always in this project");
+    },
+  );
+
+  it.each(["shadow", "auto"] as const)(
+    "draws a %s classifier verdict quietly, never as a message bubble",
+    (mode) => {
+      const [row] = projectTranscriptRows(
+        [],
+        [],
+        [],
+        [
+          {
+            sequence: 1,
+            afterMessageId: null,
+            toolCallId: "call-1",
+            tool: "execute",
+            mode,
+            reason: "Outside the request.",
+          },
+        ],
+      );
+      if (row === undefined) throw new Error("expected a verdict notice");
+      const html = renderToStaticMarkup(
+        <ChatTranscriptRow row={row} context={context} live={false} />,
+      );
+      expect(html).toContain(
+        `${mode === "shadow" ? "Would block" : "Blocked"} execute: Outside the request.`,
+      );
+      expect(html).toContain("text-muted-foreground");
+      expect(html).not.toContain("is-user");
+      expect(html).not.toContain("is-assistant");
+      expect(html).not.toContain('aria-label="Copy"');
+    },
+  );
+
   it("draws a projected host notice without entering the user-message component", () => {
     const modelText =
       '[Subagent Session child-1 ("Review tests") completed its task. Read its answer.]';

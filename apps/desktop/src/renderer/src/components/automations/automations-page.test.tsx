@@ -12,13 +12,26 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
+import {
+  DEFAULT_CODE_MODE_POLICY,
+  DEFAULT_COMPACTION_POLICY,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  NO_AUTOMATION_TRIGGER,
+} from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationSkippedOccurrence,
+  ModelAccessState,
+  ModelSelection,
+  Ticket,
+} from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
 import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
@@ -127,6 +140,67 @@ const doors = {
   setColumnOrder: vi.fn(),
 };
 
+interface CatalogueSeed {
+  modelLabel: string;
+  state?: ModelAccessState;
+  hidden?: boolean;
+}
+
+/**
+ * A model-access client whose catalogue knows ONE model, under a display label
+ * and availability the test chooses. Mounted through the real
+ * {@link ModelAccessProvider} — the context the app shell wraps every page in —
+ * because these tests must prove that the shared name resolves through the
+ * catalogue read, and a stub of the component would prove nothing about that.
+ */
+function catalogueClient({
+  modelLabel,
+  state = "available",
+  hidden = false,
+}: CatalogueSeed): ModelAccessClient {
+  return {
+    inspect: async () => ({
+      observedAt: 1,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state,
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: state === "available",
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          label: modelLabel,
+          state,
+          reasoningLevels: ["medium", "high", "xhigh"],
+          acceptsImageInput: true,
+        },
+      ],
+    }),
+    defaults: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    setDefault: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    hiddenModels: async () => (hidden ? [{ providerId: "anthropic", modelId: "claude-opus" }] : []),
+    setHiddenModels: async (refs) => refs,
+    compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
+    setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
+    pickerView: async () => "all" as const,
+    setPickerView: async (view) => view,
+    beginSignIn: async () => {
+      throw new Error("not under test");
+    },
+    signOut: async () => undefined,
+  };
+}
+
 async function mount(seed: {
   automations?: Automation[];
   runs?: AutomationRun[];
@@ -139,6 +213,8 @@ async function mount(seed: {
     rankedAutomationIds: string[];
     orderedAt: number;
   }[];
+  /** Mount the real model catalogue, even for hidden or unavailable models. */
+  catalogue?: CatalogueSeed;
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
@@ -174,14 +250,24 @@ async function mount(seed: {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => {
+  const page = (
     // The provider the app shell already mounts around every page
     // (`ui/sidebar.tsx`): the lane header's arming bolt is the board's own
     // control, tooltip and all.
+    <TooltipProvider delayDuration={0}>
+      <AutomationsPage />
+    </TooltipProvider>
+  );
+  await act(async () => {
     root?.render(
-      <TooltipProvider delayDuration={0}>
-        <AutomationsPage />
-      </TooltipProvider>,
+      // The model catalogue rides the same context the app shell mounts.
+      // Absent, the page's model names fall back to the stored ids — the
+      // drawing every other test here sees.
+      seed.catalogue === undefined ? (
+        page
+      ) : (
+        <ModelAccessProvider client={catalogueClient(seed.catalogue)}>{page}</ModelAccessProvider>
+      ),
     );
   });
 }
@@ -360,16 +446,25 @@ describe("the page", () => {
     expect(row?.textContent).toContain("Ticket enters Doing, Needs Review");
   });
 
-  it("shows a pinned Runtime as one model-and-reasoning pair", async () => {
+  it("shows a pinned Runtime as the shared model name, and a tier as its row", async () => {
+    // No catalogue in this harness, so what a row can prove anyway is the
+    // honest fallback: the stored id, the provider said beside it (the shared
+    // name always says the provider for a model it cannot list), and the
+    // effort carrying its noun. The catalogue-labelled drawing is the
+    // "the model's display name" describe below.
     await mount({
       automations: [
         automation({
           runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
         }),
+        automation({ id: "automation-tier", runtime: { kind: "tier", tier: "fast" } }),
       ],
     });
 
-    expect(text()).toContain("claude-opus · high");
+    expect(text()).toContain("claude-opus · anthropic · High effort");
+    // A tier names a Settings row, not a model, and keeps its sentence — the
+    // branch between the two drawings runs on the record's own runtime.
+    expect(text()).toContain("Fast");
   });
 
   it("offers the create action and preserves Run history with nothing listed", async () => {
@@ -493,12 +588,14 @@ describe("running by hand", () => {
 });
 
 describe("run history", () => {
-  it("names the Automation and the model and reasoning the Run resolved", async () => {
+  it("names the Automation and the model and effort the Run resolved", async () => {
     await mount({ runs: [run()] });
 
     expect(text()).toContain("Review sweep");
-    expect(text()).toContain("claude-opus · high");
-    expect(hasUiText("claude-opus · high")).toBe(true);
+    // Catalogue-less fallback: the stored id with its provider, the effort as
+    // a noun — `High` alone would read as an adjective on the name beside it.
+    expect(text()).toContain("claude-opus · anthropic · High effort");
+    expect(hasUiText("claude-opus · anthropic · High effort")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -567,6 +664,111 @@ describe("run history", () => {
       projectId: "p1",
       ticketId: null,
     });
+  });
+});
+
+/**
+ * The model's display name (VC-492). The pinned Runtime in the rail and the
+ * resolved model in a Run row are one shared `ResolvedModelName` drawing, and
+ * the catalogue it reads is the app shell's own context — so these mount the
+ * real provider over a client, not a stub of the component. What the catalogue
+ * answers for is the LABEL only: which model a Run used is the pair the Run
+ * stored, and the ids may surface again only as the honest fallback for a
+ * model the catalogue does not list.
+ */
+describe("the model's display name", () => {
+  it("resolves a pin and a Run row through the catalogue's label", async () => {
+    await mount({
+      automations: [
+        automation({
+          runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "xhigh" },
+        }),
+      ],
+      runs: [run()],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+
+    // The Run row prints the catalogue's name for the ids the Run stored.
+    expect(hasUiText("Claude Opus 4.5 · High effort")).toBe(true);
+    // The rail's pin draws the same shared name; `xhigh` is not an identifier
+    // a reader should have to meet.
+    expect(text()).toContain("Extra high effort");
+    // Display-only resolution: the raw id is gone from the screen entirely.
+    expect(text()).not.toContain("claude-opus");
+    const captions = [...document.querySelectorAll('[data-slot="model-name"]')].filter(
+      (node) => node.closest('[data-slot="select-trigger"]') === null,
+    );
+    expect(captions.length).toBeGreaterThanOrEqual(2);
+    for (const caption of captions) {
+      expect(caption.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      // ModelName wraps outside closed Select triggers. Its containers must
+      // not silently clip the caption before its own reveal can see it.
+      expect(caption.closest(".truncate")).toBeNull();
+    }
+  });
+
+  it.each(["unavailable", "authentication-required", "hidden"] as const)(
+    "still names a pin and its Run when the catalogue model is %s",
+    async (availability) => {
+      const pin: ModelSelection = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "xhigh",
+      };
+      const recordedModel: ModelSelection = { ...pin, reasoningLevel: "high" };
+      await mount({
+        automations: [automation({ runtime: pin })],
+        runs: [run({ model: recordedModel })],
+        catalogue: {
+          modelLabel: "Claude Opus 4.5",
+          state: availability === "hidden" ? "available" : availability,
+          hidden: availability === "hidden",
+        },
+      });
+
+      // Identity reads the full catalogue, not the editor's offerable slice.
+      // Scope each assertion so the editor cannot stand in for either caption.
+      const pinCaption = railRow("automation-1").querySelector('[data-slot="model-name"]');
+      const runCaption = historyRun("run-1").querySelector('[data-slot="model-name"]');
+      expect(pinCaption?.textContent).toBe("Claude Opus 4.5 · Extra high effort");
+      expect(runCaption?.textContent).toBe("Claude Opus 4.5 · High effort");
+      for (const caption of [pinCaption!, runCaption!]) {
+        expect(caption.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      }
+      expect(text()).not.toContain("claude-opus");
+      expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(pin);
+      expect(
+        Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model,
+      ).toEqual(recordedModel);
+      expect(doors.update).not.toHaveBeenCalled();
+      expect(doors.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps unknown pin and Run ids instead of borrowing a catalogue neighbour's label", async () => {
+    const selection: ModelSelection = {
+      providerId: "some-gateway",
+      modelId: "vendor/gpt-5-legacy",
+      reasoningLevel: "high",
+    };
+    await mount({
+      automations: [automation({ runtime: selection })],
+      runs: [run({ model: selection })],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+
+    const fallback = "vendor/gpt-5-legacy · some-gateway · High effort";
+    expect(railRow("automation-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
+      fallback,
+    );
+    expect(historyRun("run-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
+      fallback,
+    );
+    expect(text()).not.toContain("Claude Opus 4.5");
+    expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(selection);
+    expect(Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model).toEqual(
+      selection,
+    );
   });
 });
 

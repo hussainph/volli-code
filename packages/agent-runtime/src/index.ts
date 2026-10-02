@@ -62,6 +62,7 @@ export {
   type PromptCacheClass,
   type PromptCachePlacement,
 } from "./prompt-baseline";
+export { refusingCredentialReads } from "./pi/credential-env";
 export {
   piExecutionEnv,
   sessionCommandEnvironment,

@@ -608,7 +608,29 @@ describe("ObservabilityReducer content carriers", () => {
   it("reduces every content-bearing observation kind to null", () => {
     const reducer = new ObservabilityReducer(() => 0);
     const carriers: RuntimeObservation[] = [
+      {
+        kind: "approval-used",
+        toolCallId: "call",
+        approvalId: "row",
+        summary: SENSITIVE,
+        asked: SENSITIVE,
+        occurredAt: 0,
+      },
       { kind: "delta", turnId: "t1", channel: "text", text: SENSITIVE },
+      {
+        kind: "authority-review",
+        turnId: "t1",
+        toolCallId: "call",
+        tool: SENSITIVE,
+        mode: "shadow",
+        authoriser: "classifier",
+        wouldFlag: true,
+        reason: SENSITIVE,
+        category: "external",
+        answers: null,
+        missReason: null,
+        thresholds: { allow: 0.95, flag: 0.05 },
+      },
       { kind: "message-settled", turnId: "t1", message: settledMessage() },
       { kind: "compaction-progress", state: "started", reason: "manual" },
       { kind: "compaction-progress", state: "finished", reason: "manual" },

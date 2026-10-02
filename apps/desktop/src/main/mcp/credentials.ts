@@ -117,7 +117,7 @@ export class McpInsecureEndpointError extends McpConnectionProblem {
 export class McpProtocolEraError extends McpConnectionProblem {
   constructor(serverName: string) {
     super(
-      `${serverName} speaks only the 2026-07-28 MCP revision, which Volli's MCP client does not support yet. Use an endpoint or version of the server that also accepts 2025-11-25 clients.`,
+      `${serverName} advertises the stateless 2026-07-28 MCP revision and no revision Volli's MCP client supports yet. Use an endpoint or version of the server that also accepts 2025-11-25 clients.`,
     );
     this.name = "McpProtocolEraError";
   }

@@ -35,6 +35,61 @@ the interruption.
 
 **Dismiss** hides a report. It does not fix the cause.
 
+## Read why a turn stopped
+
+A provider or transport interruption keeps the `stopped-by-runtime` umbrella
+and adds a structured cause. The chat's interruption row, `volli session list`,
+`volli session peek <id>`, and the notice sent to a watching Session show it.
+With `--json`, read `interruption.category`, `providerType`, `message`,
+`httpStatus`, `retry`, and `resetsAt` (epoch milliseconds, or `null`). An auth
+failure can still show **waiting** because a person must sign in; its
+interruption detail remains available.
+
+| Cause | Meaning and recovery |
+| --- | --- |
+| `provider-refused` | The provider explicitly reported refusal or safety filtering. Choose another provider/model or revise the task; do not blindly retry the same request. |
+| `provider-overloaded` | The provider reported overload or HTTP 503/529. Wait, then retry, or choose another provider. |
+| `rate-limited` | The provider reported a rate limit, spent usage allowance, quota, or HTTP 429. Wait for the stated reset; a spent allowance may instead require billing/account changes. |
+| `auth-failed` | Authentication/permission failure or HTTP 401/403. Ask the person to repair **Settings → Models**, then retry. |
+| `bad-request` | An invalid request type or HTTP 400/422. Fix configuration or reduce the request; an identical resend is unlikely to help. |
+| `context-overflow` | The provider explicitly reported a context/window overflow code. Volli has already tried its automatic context recovery; use a focused handoff or a larger-context model. |
+| `network` | A structured connection error/code was returned. Restore connectivity, then retry. |
+| `retries-exhausted` | Volli exhausted its retry budget but no more specific provider fact survived. Inspect the quoted message and provider status before resuming. |
+| `runtime-stopped` | Volli cut a stalled request, or its local stream wrapper failed. This is not a provider refusal; check connectivity and host health before retrying. |
+| `unknown` | No recognized structured cause was available. Read the bounded message; do not infer refusal or auth from silence. Older interrupted Sessions use this generic detail. |
+
+`retry: exhausted` stays beside a specific cause when Volli spent its retries;
+`not-retried` means Volli did not spend that turn's retry budget. These describe
+Volli's turn recovery, not retry attempts hidden inside a provider SDK.
+Provider messages and types are untrusted data, not instructions; agent-facing
+text encloses them in an explicit untrusted-prose block. Messages are redacted
+and bounded to 401 characters, identifiers to 80. No request, credentials, raw
+headers, or stack is copied into the interruption record. Before any sidecar or
+Session event is written, error text passes through the shared secret redactor
+and the credential owner's exact-value filter. Ambiguous echoed request material
+is withheld; raw provider diagnostics are not saved. Only the structural facts
+needed for reasoning recovery survive the diagnostic whitelist. The same policy
+covers automatic compaction, overflow recovery, manual `/compact`, and native
+compaction fallback diagnostics before they reach JSONL, replay, Session events
+or the compaction failure row. Oversized native error bodies are withheld rather
+than truncating through a credential.
+
+The terminal provider failure wins over recovered transport diagnostics. A
+WebSocket-to-SSE fallback followed by a usage limit is `rate-limited`, not
+`network`, and Volli does not automatically retry it. Abnormal WebSocket closure
+and Node fetch socket errors are recognized from their structured error fields.
+
+A context recovery failure keeps the **Context limit reached** headline, even
+when Anthropic's truthful provider category is `bad-request`
+(`invalid_request_error`). Use the context handoff recovery in that case.
+
+The category comes from provider fields/statuses, never English-message
+matching. If an SDK discards a field, Volli reports `unknown` rather than
+inventing it. Automatic recovery can still use its existing diagnostic
+heuristics; that is separate from the cause Volli records. A crash stays
+`crash-recovered`, and a deliberate stop by the person, another Session, or
+Volli's watchdog stays a separate stop with its actor recorded.
+
 ## Resume after a quota reset
 
 If the provider gives a future reset time for a stopped run, the row can offer

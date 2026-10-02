@@ -1,5 +1,10 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
+import { safeStopMessage } from "./safe-diagnostic";
+
+import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./provider-stop";
+import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
+
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -41,6 +46,7 @@ import {
   errorMessage,
   isActivityKind,
   isMcpToolId,
+  isOverridableAuthorityRule,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -76,7 +82,13 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import { authorityVerdict } from "../authority/gate";
+import {
+  authorityClassifierEligible,
+  authorityVerdict,
+  describeCall,
+  type AuthorityVerdict,
+} from "../authority/gate";
+import { AUTHORITY_JUDGE_THRESHOLDS, judgeAuthorityCall } from "../authority/judge";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
@@ -128,6 +140,7 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { privateSecretExecution } from "./secrets";
 import { CodeModeJournal } from "../codemode/journal";
 import { scopedAsk } from "./call-scope";
 import {
@@ -150,7 +163,6 @@ import {
   isUnreachedAuthFailure,
   recoveryRefFor,
   retryHintMs,
-  sanitizeDiagnostic,
   sessionUsageFrom,
 } from "./transcript";
 import { ALWAYS_ONLINE, type ConnectivityPort } from "./connectivity";
@@ -548,6 +560,7 @@ async function runUtilityCompletion(
       // default-level request. Every other level passes through verbatim.
       ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.maxOutputTokens === undefined ? {} : { maxTokens: input.maxOutputTokens }),
       // OpenCode Go requires one opaque routing identity on every physical
       // provider request. A utility completion has no attachment or sidecar
       // whose id can supply it, and it makes exactly one request, so mint one
@@ -570,7 +583,7 @@ async function runUtilityCompletion(
   );
   if (hasFailedStopReason(message)) {
     throw new UtilityCompletionError(
-      sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."),
+      safeStopMessage(message.errorMessage ?? "The utility completion failed."),
       usage,
     );
   }
@@ -828,6 +841,76 @@ interface ContextCarriedMarker {
   kind: "context-carried";
   fromAttachmentId: string;
   entries: JsonValue;
+}
+
+const VOLLI_AUTHORITY_INPUT_MARKER = "volli.authority-user-input";
+
+function authorityUserMessagesIn(entries: readonly Entry[]): string[] {
+  return entries.flatMap((entry) => {
+    if (entry.type !== "custom") return [];
+    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER && isRecord(entry.data)) {
+      // Kept outside the size-bounded model context. Dropping an old constraint
+      // would invent authority; oversized history instead misses closed in judge.
+      const messages = entry.data["userMessages"];
+      if (Array.isArray(messages))
+        return messages.filter((text): text is string => typeof text === "string");
+      return typeof entry.data["text"] === "string" ? [entry.data["text"]] : [];
+    }
+    const marker = recoveredObservation(entry);
+    return marker?.kind === "command-accepted" &&
+      marker.operation === "message.submit" &&
+      typeof marker.authorityUserText === "string"
+      ? [marker.authorityUserText]
+      : [];
+  });
+}
+
+/** The missing-history state is durable and propagates across further carries. */
+function authorityUserHistoryCompleteIn(entries: readonly Entry[]): boolean {
+  let carried = false;
+  let carriedHistory = false;
+  let rawUsers = 0;
+  let directInputs = 0;
+  let inputSeen = false;
+  for (const entry of entries) {
+    // A legacy summary before any authority receipt may conceal constraints;
+    // later user input cannot retroactively make that elision complete.
+    if (entry.type === "compaction" && !inputSeen) return false;
+    if (entry.type === "message" && entry.message.role === "user") rawUsers += 1;
+    if (entry.type !== "custom") continue;
+    if (entry.customType === VOLLI_CONTEXT_MARKER) {
+      // Reasoning elision is not a conversation carry and loses no user text.
+      if (!isRecord(entry.data)) return false;
+      if (entry.data["kind"] === "context-carried") carried = true;
+      else if (entry.data["kind"] !== "reasoning-dropped") return false;
+    }
+    if (entry.customType === VOLLI_AUTHORITY_INPUT_MARKER) {
+      if (!isRecord(entry.data) || entry.data["historyIncomplete"] === true) return false;
+      const messages = entry.data["userMessages"];
+      if (Array.isArray(messages)) {
+        if (!messages.every((text) => typeof text === "string")) return false;
+        carriedHistory = true;
+      } else if (typeof entry.data["text"] === "string") {
+        directInputs += 1;
+      } else return false;
+      inputSeen = true;
+    }
+    if (entry.customType === VOLLI_OBSERVATION_MARKER) {
+      if (!isRecord(entry.data)) return false;
+      if (
+        entry.data["kind"] === "command-accepted" &&
+        entry.data["operation"] === "message.submit"
+      ) {
+        // The normal marker reader already rejects malformed commands. Legacy
+        // valid markers can still lack separable authority text.
+        if (typeof entry.data["authorityUserText"] !== "string") return false;
+        inputSeen = true;
+      }
+    }
+  }
+  // Commandless deliveries write one separate receipt per native user entry.
+  // Legacy framed messages/markers cannot silently become absent constraints.
+  return rawUsers === directInputs && (!carried || carriedHistory);
 }
 
 const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
@@ -1091,6 +1174,8 @@ interface AcceptedMessageCommandMarker {
   delivery: "prompt" | "queue" | "steer";
   turnId: string;
   message: UserMessage;
+  /** Unframed user text, never the Runtime Brief or activated skill prose (VC-28). */
+  authorityUserText?: string;
   /** Typed identity for message resources; absent on markers written before VC-181. */
   resources?: readonly PromptResource[];
 }
@@ -1163,7 +1248,8 @@ function isRecoverableObservation(value: unknown): boolean {
     case "turn":
       return (
         isOneOf(value["state"], ["started", "completed", "interrupted"]) &&
-        typeof value["turnId"] === "string"
+        typeof value["turnId"] === "string" &&
+        validStopDetail(value["stopDetail"])
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
@@ -1223,7 +1309,8 @@ function isRecoverableObservation(value: unknown): boolean {
           "transport",
         ]) &&
         typeof value["message"] === "string" &&
-        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"])) &&
+        validStopDetail(value["stopDetail"])
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -1437,7 +1524,11 @@ async function readCarriedConversation(
   expected: SidecarIdentity,
   budget: CarryTokenBudget | undefined,
   context: Context,
-): Promise<Entry[]> {
+): Promise<{
+  entries: Entry[];
+  authorityUserMessages: string[];
+  authorityHistoryComplete: boolean;
+}> {
   // No legacy-sidecar migration here, unlike a resume: a closed attachment's
   // sidecar was migrated by the attach that last opened it, or predates this
   // build's whole Pi line and is not worth reopening a conversation from.
@@ -1453,7 +1544,12 @@ async function readCarriedConversation(
   try {
     await assertSidecarIdentity(opened, expected, context);
     const branch = await sidecarBranch(opened, context);
-    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context), budget);
+    const entries = await branch.findEntries({ order: "oldestFirst" }, context);
+    return {
+      entries: carriedConversation(entries, budget),
+      authorityUserMessages: authorityUserMessagesIn(entries),
+      authorityHistoryComplete: authorityUserHistoryCompleteIn(entries),
+    };
   } finally {
     await opened.close(piContext()).catch(
       /* v8 ignore next -- closing a sidecar we only read is best effort. */
@@ -1725,7 +1821,7 @@ async function attachSession(
     let carried = false;
     if (inputRecovery === undefined && spec.carry !== undefined) {
       try {
-        const entries = await readCarriedConversation(
+        const conversation = await readCarriedConversation(
           sidecars,
           host.sessionDataDir,
           spec.carry,
@@ -1733,14 +1829,26 @@ async function attachSession(
           carryTokenBudget(model),
           attachContext,
         );
-        if (entries.length > 0) {
+        if (
+          conversation.entries.length > 0 ||
+          conversation.authorityUserMessages.length > 0 ||
+          !conversation.authorityHistoryComplete
+        ) {
           await mainBranch.appendCustomEntry(
             VOLLI_CONTEXT_MARKER,
             {
               kind: "context-carried",
               fromAttachmentId: spec.carry.attachmentId,
-              entries: JSON.parse(JSON.stringify(entries)) as JsonValue,
+              entries: JSON.parse(JSON.stringify(conversation.entries)) as JsonValue,
             } satisfies ContextCarriedMarker,
+            attachContext,
+          );
+          await mainBranch.appendCustomEntry(
+            VOLLI_AUTHORITY_INPUT_MARKER,
+            {
+              userMessages: conversation.authorityUserMessages,
+              historyIncomplete: !conversation.authorityHistoryComplete,
+            },
             attachContext,
           );
           carried = true;
@@ -1825,6 +1933,20 @@ async function attachSession(
       } => marker.kind !== "command-accepted",
     );
     assertUniqueAcceptedCommands(recoveredMarkers);
+    // Older markers have no separable user input: omit rather than giving the
+    // judge a Runtime Brief, skill instructions or assistant summaries.
+    const authorityUserMessages = authorityUserMessagesIn(recoveredEntries);
+    const authorityUserHistoryComplete =
+      carryFailure === undefined && authorityUserHistoryCompleteIn(recoveredEntries);
+    if (!authorityUserHistoryComplete) {
+      // If this cannot persist, attachment fails rather than returning a live
+      // automatic gate with lost constraints. Recovery never silently clears it.
+      await mainBranch.appendCustomEntry(
+        VOLLI_AUTHORITY_INPUT_MARKER,
+        { historyIncomplete: true },
+        attachContext,
+      );
+    }
     const messageMarkerCounts = new Map<string, number>();
     for (const observation of recoveredObservations) {
       if (observation.kind !== "message-settled") continue;
@@ -2065,7 +2187,7 @@ async function attachSession(
           kind: "compaction",
           state: "failed",
           reason: "checkpoint",
-          message: sanitizeDiagnostic(reason),
+          message: safeStopMessage(reason, spec.credentialRedaction ?? spec.secret),
         });
       }
     }
@@ -2074,7 +2196,8 @@ async function attachSession(
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
     toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
-    const ownedToolEnv = toolEnv;
+    const credentialRedaction = spec.credentialRedaction ?? spec.secret;
+    const ownedToolEnv = privateSecretExecution(toolEnv, credentialRedaction);
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
@@ -2114,6 +2237,9 @@ async function attachSession(
       dataDirectory: host.sessionDataDir,
       ledger: host.toolOutputLedger,
       workspacePath: spec.workspacePath,
+      ...(credentialRedaction === undefined
+        ? {}
+        : { redact: (text: string) => credentialRedaction.redact(text) }),
     });
     // Code Mode (VC-471), for a Session born with it: one more tool, built over
     // the Session's own tools and reaching them through the gate below — the
@@ -2149,7 +2275,7 @@ async function attachSession(
     // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
-    let failure: RuntimeFailure | undefined;
+    let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
     let cancelled = false;
     /**
@@ -2257,6 +2383,7 @@ async function attachSession(
       operation: "message.submit";
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
+      authorityUserText: string;
       resources: readonly PromptResource[];
     };
     type PendingRetryDelivery = {
@@ -2301,8 +2428,20 @@ async function attachSession(
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
     ): Promise<boolean> => {
-      if (delivery?.operation === "message.submit") rememberResources(delivery.resources);
-      if (!delivery?.commandId) return false;
+      if (delivery?.operation === "message.submit") {
+        rememberResources(delivery.resources);
+        authorityUserMessages.push(delivery.authorityUserText);
+      }
+      if (!delivery?.commandId) {
+        if (delivery?.operation === "message.submit") {
+          await mainBranch.appendCustomEntry(
+            VOLLI_AUTHORITY_INPUT_MARKER,
+            { text: delivery.authorityUserText },
+            piContext(),
+          );
+        }
+        return false;
+      }
       if (delivery.operation === "message.submit") {
         await persistObservation({
           kind: "command-accepted",
@@ -2311,6 +2450,7 @@ async function attachSession(
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
           message: durableMessage(delivery.message) as UserMessage,
+          authorityUserText: delivery.authorityUserText,
           // Always present on new markers, including `[]`, so recovery can
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
@@ -2365,6 +2505,7 @@ async function attachSession(
           : { ask: (request, signal) => scopedAsk(() => ask(request, signal)) }),
         signal: spec.signal,
         now: host.now,
+        ...(spec.approvals === undefined ? {} : { approvals: spec.approvals }),
       });
       return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
@@ -2373,13 +2514,12 @@ async function attachSession(
           authority,
           workspacePath: spec.workspacePath,
           readableRoots: toolOutput.readableDirectories,
+          ...(spec.approvals === undefined ? {} : { protection: true }),
+          hardDeniesFirst: true,
         });
-        // The program a `codemode` call carries is not itself an act: every
-        // call it makes is judged on its own, through this same gate (VC-471).
-        // So an allowed `codemode` call does not count as "a call that ran"
-        // and does not reset the run of refusals the fallback counts — or a
-        // model could clear the counter between two refused calls by wrapping
-        // the second one in a program.
+        // Code Mode's isolated program is a container, not an authority act:
+        // each nested call passes this same gate. Never let the container reset
+        // refusals or send its script/results as classifier authority (VC-471).
         if (toolCall.name === CODE_MODE_TOOL_ID && verdict.outcome === "allow") {
           recordObservability({
             kind: "authority",
@@ -2389,13 +2529,114 @@ async function attachSession(
           });
           return undefined;
         }
+        // Protection deliberately uses the deterministic ledger/card funnel,
+        // even when an upgraded On project retains a legacy automatic policy.
+        // Legacy attachments keep VC-28's shadow/automatic review unchanged.
+        const protectedCall = spec.approvals !== undefined;
+        const auto =
+          !protectedCall &&
+          authority.enforcement === "enforce" &&
+          authority.judgmentMode === "auto";
+        const hardDenied = verdict.outcome === "deny" && !isOverridableAuthorityRule(verdict.cause);
+        const eligible = authorityClassifierEligible({
+          tool: toolCall.name,
+          args,
+          workspacePath: spec.workspacePath,
+          verdict,
+        });
+        let judgedVerdict: AuthorityVerdict =
+          auto && !hardDenied && !eligible ? { outcome: "allow" } : verdict;
+        let askImmediately = false;
+        let personReason: string | undefined;
+        if (!protectedCall && eligible) {
+          const review = await judgeAuthorityCall({
+            decisions: spec.decisions,
+            sessionId: spec.identity.sessionId,
+            projectId: spec.identity.projectId,
+            // Full user-message history, not compacted assistant summaries or
+            // re-injected resource messages. No tool outputs or descriptions.
+            userMessages: authorityUserMessages,
+            userHistoryComplete: authorityUserHistoryComplete,
+            tool: toolCall.name,
+            args,
+            signal,
+          });
+          const reason = review.kind === "answered" ? review.reason : review.miss.message;
+          if (auto) {
+            if (review.kind === "miss") {
+              judgedVerdict = {
+                outcome: "deny",
+                cause: "classifier.unavailable",
+                reason:
+                  "Automatic review is unavailable. Ask the person before this call runs; do not work around this block.",
+              };
+              askImmediately = true;
+            } else if (review.wouldFlag) {
+              if (spec.authorityReason !== undefined) {
+                try {
+                  const wording = await spec.authorityReason({
+                    sessionId: spec.identity.sessionId,
+                    tool: toolCall.name,
+                    cause: review.denialCause,
+                    signal,
+                  });
+                  // This channel is only for durable UI and the person's ask.
+                  // Neither direct tool results nor Code Mode see model prose.
+                  if (wording !== reason) personReason = `Model-generated explanation: ${wording}`;
+                } catch {
+                  // Wording is optional, permission is not. Keep host text.
+                }
+              }
+              judgedVerdict = {
+                outcome: "deny",
+                cause: "classifier.flagged",
+                reason: `${reason} Find a safer route; do not work around this block.`,
+              };
+            } else {
+              judgedVerdict = { outcome: "allow" };
+            }
+          }
+          const recorded = await observationDelivery.deliverChecked({
+            kind: "authority-review",
+            turnId,
+            toolCallId: toolCall.id,
+            tool: toolCall.name,
+            mode: auto ? "auto" : "shadow",
+            authoriser: "classifier",
+            wouldFlag: review.kind === "answered" ? review.wouldFlag : null,
+            reason: personReason === undefined ? reason : `${reason} ${personReason}`,
+            category: review.kind === "answered" ? review.category : null,
+            answers: review.kind === "answered" ? review.answered.answers : null,
+            missReason: review.kind === "miss" ? review.miss.reason : null,
+            thresholds: {
+              allow: AUTHORITY_JUDGE_THRESHOLDS.authorisedMinProbability,
+              flag: AUTHORITY_JUDGE_THRESHOLDS.riskMaxProbability,
+            },
+          });
+          if (!recorded) {
+            // This is a broken durable host, not a classifier denial. Stop
+            // before an unauditable call runs, in shadow as well as auto.
+            interruptTurn();
+            return {
+              block: true,
+              reason:
+                "Authority review could not be recorded. Stop and ask the person to restore the Session ledger; do not work around this boundary.",
+            };
+          }
+        }
+        // Shadow never changes what ran, including under an observe Snapshot.
+        if (authority.enforcement === "observe") return undefined;
         // Pi's own per-call signal is passed on rather than dropped: a question
         // this parks on has to lose to a cancelled run, and Pi re-reads that
         // signal the instant this callback returns.
         const disposition = await escalation.resolve({
-          verdict,
+          verdict: judgedVerdict,
+          ...(personReason === undefined ? {} : { personReason }),
+          askImmediately,
+          pauseIfUnattended: auto,
           tool: toolCall.name,
           toolCallId: toolCall.id,
+          asked: describeCall(toolCall.name, args),
           turnId,
           signal,
         });
@@ -2469,10 +2710,28 @@ async function attachSession(
       );
     };
 
+    let providerStop = new ProviderStopCapture(credentialRedaction);
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      const capture = new ProviderStopCapture(credentialRedaction);
+      providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
       return models.streamSimple(requestModel, context, {
         ...options,
+        // Google/Bedrock cannot accept custom fetch. Missing SDK fields on
+        // those routes remain unknown rather than inferred from their prose.
+        ...(!["google-generative-ai", "google-vertex", "bedrock-converse-stream"].includes(
+          requestModel.api,
+        )
+          ? { fetch: capture.fetch(options?.fetch ?? globalThis.fetch, host.now) }
+          : {}),
+        onResponse: async (response, responseModel) => {
+          capture.response(response, host.now());
+          await options?.onResponse?.(response, responseModel);
+        },
+        onProviderStreamEvent: async (event, responseModel) => {
+          capture.event(event);
+          await options?.onProviderStreamEvent?.(event, responseModel);
+        },
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(nativeCompactionState?.kind === "anthropic-messages"
           ? {
@@ -2945,10 +3204,11 @@ async function attachSession(
       const finishProgress = () =>
         commitObservation({ kind: "compaction-progress", state: "finished", reason });
       try {
-        const outcome = await compactSession({
+        const result = await compactSession({
           sidecar,
           path,
           models,
+          credentialRedaction,
           // Compaction is part of this chat's continuity, so its summary is
           // generated by the model currently selected in the chat pane.
           model: agent.state.model,
@@ -2971,6 +3231,12 @@ async function attachSession(
           ...(signal === undefined ? {} : { signal }),
           ...(instructions === undefined ? {} : { customInstructions: instructions }),
         });
+        // Last pre-persistence boundary, shared by threshold, overflow and manual
+        // requests. Return the same redacted outcome that every durable reader sees.
+        const outcome =
+          result.kind === "failed"
+            ? { ...result, message: safeStopMessage(result.message, credentialRedaction) }
+            : result;
         // Pi found nothing to compact — an empty history, or one already ending
         // in a summary. No compaction happened, so no compaction is recorded:
         // there is no summary, no elided context and no spend to file, and a
@@ -3040,7 +3306,12 @@ async function attachSession(
                   tokensBefore: Math.floor(outcome.entry.tokensBefore),
                   tokensAfter: estimatedContextTokens(agent.state.messages, agent.state.model),
                 }
-              : { kind: "compaction", state: "failed", reason, message: outcome.message },
+              : {
+                  kind: "compaction",
+                  state: "failed",
+                  reason,
+                  message: outcome.message,
+                },
           ),
         );
         // A compacted or failed observation is the durable terminal fact. The
@@ -3052,7 +3323,9 @@ async function attachSession(
         // nothing else here can throw — so the marker is always still open and
         // needs an explicit finish before the failure propagates.
         await finishProgress();
-        throw error;
+        // Do not retain the original cause or stack: either may echo credentials.
+        // eslint-disable-next-line preserve-caught-error -- the original exception is untrusted provider text
+        throw new Error(safeStopMessage(errorMessage(error), credentialRedaction));
       }
     };
 
@@ -3101,7 +3374,7 @@ async function attachSession(
             kind: "compaction",
             state: "failed",
             reason: "threshold",
-            message: sanitizeDiagnostic(errorMessage(error)),
+            message: safeStopMessage(errorMessage(error), credentialRedaction),
           }),
         );
         return false;
@@ -3199,6 +3472,7 @@ async function attachSession(
           : event.type === "tool_execution_start"
             ? { turnId, observedAt }
             : { turnId, startedAt, observedAt },
+        credentialRedaction,
       );
 
       if (event.type !== "tool_execution_end") {
@@ -3209,6 +3483,16 @@ async function attachSession(
 
       try {
         await commitObservation(await persistObservation(activity));
+        if (!event.isError) {
+          try {
+            // The action already succeeded. A lost use count is bookkeeping,
+            // not a failed tool: throwing into Pi here drops the real result
+            // and invites a repeat of an action that has already happened.
+            await spec.approvals?.completed?.(event.toolCallId);
+          } catch (error) {
+            console.error("Approval completion bookkeeping failed", event.toolCallId, error);
+          }
+        }
       } finally {
         activityByToolCallId.delete(event.toolCallId);
       }
@@ -3286,11 +3570,25 @@ async function attachSession(
             }
           }
         }
-        const acceptedUserMessage =
-          event.message.role === "user" && acceptedUserMessages.has(event.message);
+        // Capture raw facts privately, then scrub BEFORE any message append or
+        // observation. Downstream ledger, UI and notice consumers see only this
+        // filtered projection, never the SDK's diagnostics/envelope.
+        const providerDetail =
+          event.message.role === "assistant"
+            ? providerStop.detail(event.message as AssistantMessage)
+            : undefined;
+        const message =
+          event.message.role === "assistant"
+            ? safeProviderMessage(
+                event.message as AssistantMessage,
+                credentialRedaction,
+                providerDetail?.category === "provider-refused",
+              )
+            : event.message;
+        const acceptedUserMessage = message.role === "user" && acceptedUserMessages.has(message);
         const entryId = acceptedUserMessage
           ? null
-          : await mainBranch.appendMessage(durableMessage(event.message), piContext());
+          : await mainBranch.appendMessage(durableMessage(message), piContext());
         if (event.message.role !== "assistant") {
           return;
         }
@@ -3314,17 +3612,38 @@ async function attachSession(
         // A tool round can make several provider requests. Hold every drop and
         // publish one complete Turn fact at `agent_end`, after the reply that
         // anchors its transcript notice has settled.
-        const dropped = providerReasoningDropped(event.message as AssistantMessage, turnId);
+        const dropped = providerReasoningDropped(message as AssistantMessage, turnId);
         if (dropped !== undefined) {
           pendingReasoningDrop = mergeProviderReasoningDrop(pendingReasoningDrop, dropped);
         }
-        const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        const classified = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        // Recovery heuristics may inspect the raw sentence in memory; their
+        // output text is scrubbed before it leaves this local branch.
+        const outcome =
+          providerDetail!.category === "provider-refused"
+            ? {
+                kind: "failed" as const,
+                failure: {
+                  reason: "model" as const,
+                  message: providerDetail!.message ?? "The provider refused this turn.",
+                },
+              }
+            : classified;
         if (outcome.kind === "settled") {
           await commitObservation(
             await persistObservation({ kind: "message-settled", turnId, message: outcome.message }),
           );
         } else if (outcome.kind === "failed") {
-          failure = outcome.failure;
+          const stopDetail = providerDetail!;
+          failure = {
+            ...outcome.failure,
+            message:
+              stopDetail.message ?? safeStopMessage(outcome.failure.message, credentialRedaction),
+            stopDetail,
+          };
+          // Structured provider facts outrank recovery heuristics over prose.
+          if (stopDetail.category === "auth-failed") failure.reason = "auth";
+          if (stopDetail.category === "context-overflow") failure.reason = "context";
         }
         return;
       }
@@ -3355,6 +3674,7 @@ async function attachSession(
         );
         return;
       }
+      let stopDetail: SessionStopDetail | undefined;
       // An abort Pi named as one, and an abort only this runtime knows it
       // caused, are the same fact reported two ways: the turn ended because it
       // was asked to. Neither is an unrecoverable failure, and neither deserves
@@ -3408,13 +3728,17 @@ async function attachSession(
                   holder: host.usageLimits?.holder,
                 })
               : null;
+          stopDetail = finalStopDetail(failure.stopDetail, autoRetryAttempts, resetsAt);
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
+            stopDetail,
             message:
-              spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
-            ...(resetsAt === null ? {} : { resetsAt }),
+              spent.length === 0
+                ? safeStopMessage(failure.message, credentialRedaction)
+                : `${safeStopMessage(failure.message, credentialRedaction)} (${spent.join("; ")})`,
+            ...(stopDetail.resetsAt === null ? {} : { resetsAt: stopDetail.resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
@@ -3423,7 +3747,12 @@ async function attachSession(
       // A Stop during a reconnect ends the wait with the turn.
       await clearTransportNotice();
       await commitObservation(
-        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        await persistObservation({
+          kind: "turn",
+          state: "interrupted",
+          turnId,
+          ...(stopDetail === undefined ? {} : { stopDetail }),
+        }),
       );
     });
 
@@ -3473,6 +3802,7 @@ async function attachSession(
             operation: "message.submit" as const,
             delivery,
             message,
+            authorityUserText: text,
             resources,
           };
           pendingQueuedDeliveries.set(message, pending);
@@ -3510,6 +3840,7 @@ async function attachSession(
           operation: "message.submit" as const,
           delivery: "prompt" as const,
           message,
+          authorityUserText: text,
           resources,
         };
         const run = async (): Promise<void> => {
@@ -3720,14 +4051,21 @@ async function attachSession(
             message: "This context is already being compacted.",
           };
         }
-        const outcome = await rewritingTheContext(async () =>
-          compactContext({
-            reason: "manual",
-            path: await conversationBranch(),
-            signal: spec.signal,
-            ...(instructions === undefined ? {} : { instructions }),
-          }),
-        );
+        let outcome: CompactionOutcome;
+        try {
+          outcome = await rewritingTheContext(async () =>
+            compactContext({
+              reason: "manual",
+              path: await conversationBranch(),
+              signal: spec.signal,
+              ...(instructions === undefined ? {} : { instructions }),
+            }),
+          );
+        } catch (error) {
+          // Includes failures reading the branch before compactContext begins.
+          // eslint-disable-next-line preserve-caught-error -- untrusted failure text must not carry its cause or stack
+          throw new Error(safeStopMessage(errorMessage(error), credentialRedaction));
+        }
         if (outcome.kind === "compacted") return { kind: "compacted" };
         return outcome.kind === "skipped"
           ? {
@@ -3863,5 +4201,15 @@ async function attachSession(
       () => undefined,
     );
     throw error;
+  }
+}
+
+function validStopDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  try {
+    decodeSessionStopDetail(value, "Pi stop detail");
+    return true;
+  } catch {
+    return false;
   }
 }

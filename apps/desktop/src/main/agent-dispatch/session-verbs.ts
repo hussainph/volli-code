@@ -23,6 +23,7 @@ import {
   SESSION_LIST_STATES,
   sessionUsageWindowSince,
   sessionInterruptionReason,
+  sessionInterruptionDetail,
   shortSessionId,
   todoListMarkdown,
 } from "@volli/shared";
@@ -265,6 +266,7 @@ export async function sessionListVerb(
       // and hands the caller no second, older reason.
       interruptedReason: interruptedReason(record, projection),
       ...chatOrchestrationCells(projection, chatRecords),
+      interruption: record.activity === "stopped" ? null : sessionInterruptionDetail(projection),
       // Age of the newest durable fact, against the caller's clock — beside
       // `ageMs` (age since creation), which stays for sorting what is old.
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
@@ -603,6 +605,8 @@ export async function sessionPeekVerb(
         }),
         false,
       ),
+      interruption:
+        record.activity === "stopped" ? null : sessionInterruptionDetail(chat.projection),
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
       turns: tail.turns,
       turnDepth: tail.turnDepth,

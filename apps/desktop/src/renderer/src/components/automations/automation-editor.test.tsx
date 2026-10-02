@@ -4,9 +4,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_CODE_MODE_POLICY,
+  DEFAULT_COMPACTION_POLICY,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
   NO_AUTOMATION_TRIGGER,
   SKILL_POLICY_DEFAULT,
   type Automation,
+  type ModelAccessState,
+  type ModelSelection,
   type SkillReference,
 } from "@volli/shared";
 
@@ -17,9 +22,11 @@ vi.mock("./automation-authoring", () => ({ startAutomationAuthoring: vi.fn(async
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { useAutomationsStore } from "@renderer/stores/automations";
+import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+const originalUpdate = useAutomationsStore.getState().update;
 
 const LONG_SKILL: SkillReference = {
   name: "review-every-single-boundary-in-this-extraordinarily-long-automation-skill-name",
@@ -46,7 +53,55 @@ function automation(overrides: Partial<Automation> = {}): Automation {
   };
 }
 
-async function mountEditor(record: Automation | null = null): Promise<void> {
+/** The real catalogue context, including a model the Runtime picker cannot offer. */
+function catalogueClient(state: ModelAccessState = "available", hidden = false): ModelAccessClient {
+  return {
+    inspect: async () => ({
+      observedAt: 1,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state,
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: state === "available",
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          label: "Claude Opus 4.5",
+          state,
+          reasoningLevels: ["medium", "high", "xhigh"],
+          acceptsImageInput: true,
+        },
+      ],
+    }),
+    defaults: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    setDefault: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    hiddenModels: async () => (hidden ? [{ providerId: "anthropic", modelId: "claude-opus" }] : []),
+    setHiddenModels: async (refs) => refs,
+    compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
+    setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
+    pickerView: async () => "all" as const,
+    setPickerView: async (view) => view,
+    beginSignIn: async () => {
+      throw new Error("not under test");
+    },
+    signOut: async () => undefined,
+  };
+}
+
+async function mountEditor(
+  record: Automation | null = null,
+  client?: ModelAccessClient,
+): Promise<void> {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
@@ -74,15 +129,22 @@ async function mountEditor(record: Automation | null = null): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  const editor = (
+    <TooltipProvider>
+      <AutomationEditorPanel
+        projectId="p1"
+        automation={record}
+        history={<div data-slot="run-history">Recent runs</div>}
+      />
+    </TooltipProvider>
+  );
   await act(async () => {
     root?.render(
-      <TooltipProvider>
-        <AutomationEditorPanel
-          projectId="p1"
-          automation={record}
-          history={<div data-slot="run-history">Recent runs</div>}
-        />
-      </TooltipProvider>,
+      client === undefined ? (
+        editor
+      ) : (
+        <ModelAccessProvider client={client}>{editor}</ModelAccessProvider>
+      ),
     );
   });
 }
@@ -134,7 +196,9 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
-  useAutomationsStore.setState({ editor: null });
+  // Tests that observe the save payload replace this action; never let a
+  // neighbour inherit the stub instead of the store's real command door.
+  useAutomationsStore.setState({ editor: null, update: originalUpdate });
   // The draft cache is module-level and shared across tests; a leftover slot
   // would seed the next mount's fields and turn these tests order-dependent.
   clearEditorDraft("p1");
@@ -172,6 +236,88 @@ describe("a tier Runtime", () => {
 
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ runtime: { kind: "tier", tier: "fast" } }),
+    );
+  });
+});
+
+describe("the unavailable Runtime selection's display name", () => {
+  it.each(["unavailable", "authentication-required", "hidden"] as const)(
+    "names a %s pin from the full catalogue and saves its original ids and effort",
+    async (availability) => {
+      const pin: ModelSelection = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "xhigh",
+      };
+      const update = vi.fn(async () => null);
+      useAutomationsStore.setState({ update });
+      const client = catalogueClient(
+        availability === "hidden" ? "available" : availability,
+        availability === "hidden",
+      );
+      const inspect = vi.spyOn(client, "inspect");
+      await mountEditor(automation({ runtime: pin }), client);
+
+      const trigger = document.querySelector('[aria-label="Runtime model"]') as HTMLButtonElement;
+      const caption = trigger.querySelector('[data-slot="model-name"]');
+      expect(caption?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      expect(caption!.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(trigger.textContent).not.toContain("claude-opus");
+      // The picker has no offerable selection, but display identity can still
+      // read it. Both consumers use the actual provider's one held inspection.
+      expect(document.querySelector('[aria-label="Reasoning effort"]')).toBeNull();
+      expect(inspect).toHaveBeenCalledExactlyOnceWith({ refresh: false });
+
+      trigger.focus();
+      await act(async () => {
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      });
+      const selectedOption = document.querySelector('[role="option"][data-state="checked"]');
+      expect(selectedOption?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
+        "Claude Opus 4.5 · Anthropic",
+      );
+      expect(selectedOption!.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      await act(async () => {
+        selectedOption!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      });
+
+      // Changing another field must not turn a pretty label into a new pin,
+      // clear the unavailable selection, or clamp its previously saved effort.
+      await typeName("Renamed sweep");
+      expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
+      await act(async () => buttonContaining("Save changes").click());
+      expect(update).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          automationId: "automation-1",
+          name: "Renamed sweep",
+          runtime: pin,
+        }),
+      );
+    },
+  );
+
+  it("keeps an unknown account's wire ids even when another account lists the same model id", async () => {
+    const pin: ModelSelection = {
+      providerId: "other-account",
+      modelId: "claude-opus",
+      reasoningLevel: "high",
+    };
+    const update = vi.fn(async () => null);
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation({ runtime: pin }), catalogueClient());
+
+    const trigger = document.querySelector('[aria-label="Runtime model"]');
+    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
+      "claude-opus · other-account",
+    );
+    expect(trigger?.textContent).not.toContain("Claude Opus 4.5");
+    await typeName("Keep the unknown pin");
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
+    await act(async () => buttonContaining("Save changes").click());
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ automationId: "automation-1", runtime: pin }),
     );
   });
 });

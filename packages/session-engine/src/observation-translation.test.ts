@@ -1018,6 +1018,38 @@ describe("live observation translation", () => {
     expect(sink.observations).toEqual([]);
   });
 
+  it("translates classifier reviews without touching overlays and propagates write failures", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const review: Extract<RuntimeObservation, { kind: "authority-review" }> = {
+      kind: "authority-review",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow",
+      authoriser: "classifier",
+      wouldFlag: true,
+      reason: "Outside the request.",
+      category: "external",
+      answers: null,
+      missReason: null,
+      thresholds: { allow: 0.95, flag: 0.05 },
+    };
+    await translator.translate(review, sink.emit);
+    expect(sink.observations).toEqual([
+      {
+        ...review,
+        kind: "authority.reviewed",
+        id: "pi:authority-review:attachment-1:1",
+        occurredAt: 1000,
+      },
+    ]);
+    // The Session ledger, not executor-native recovery, replays verdicts.
+    expect(translator.replay(review)).toEqual([]);
+    sink.failNext();
+    await expect(translator.translate(review, sink.emit)).rejects.toThrow("sink unavailable");
+  });
+
   it("translates a denied authority observation into a durable authority.denied fact", async () => {
     const { translate, sink } = composition();
 
@@ -1353,5 +1385,76 @@ describe("cold replay translation", () => {
       [`pi:${ATTACHMENT_ID}:turn-1:0`, "part.upsert"],
       [`pi:${ATTACHMENT_ID}:turn-1:0`, "part.append"],
     ]);
+  });
+});
+
+it("preserves stop facts on live and replayed interruption and Attention without changing old ids", async () => {
+  const stopDetail = {
+    category: "provider-refused" as const,
+    message: "Declined",
+    providerType: "refusal",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  const translator = tickingTranslator();
+  const sink = new Recorder();
+  const turn: RuntimeObservation = {
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    stopDetail,
+    occurredAt: 100,
+    recoveryCursor: "e1",
+  };
+  await translator.translate(turn, sink.emit);
+  expect(sink.of("turn.interrupted")[0]).toEqual(translator.replay(turn)[0]);
+  expect(sink.of("turn.interrupted")[0]).toMatchObject({ id: "pi:turn:t:interrupted", stopDetail });
+  for (const reason of ["runtime-failure", "auth"] as const) {
+    const attention: RuntimeObservation = {
+      kind: "attention",
+      state: "raised",
+      reason,
+      message: "Declined",
+      stopDetail,
+      occurredAt: 100,
+      recoveryCursor: `e-${reason}`,
+    };
+    await translator.translate(attention, sink.emit);
+    expect(sink.of("attention.raised").at(-1)).toEqual(translator.replay(attention)[0]);
+    expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
+  }
+});
+
+describe("ledger-hit historical facts", () => {
+  it("translates one fact to one transcript artifact, with identical cold replay and no interaction", async () => {
+    const translator = fixedTranslator();
+    const sink = new Recorder();
+    const observation = {
+      kind: "approval-used",
+      toolCallId: "call",
+      approvalId: "approval",
+      asked: "write /outside/docs",
+      summary: "Write to /outside/docs",
+      occurredAt: 42,
+    } as const;
+    await translator.translate(observation, sink.emit);
+    expect(sink.kinds()).toEqual(["transcript.message"]);
+    expect(translator.replay(observation)).toEqual(sink.observations);
+    expect(sink.observations[0]).toMatchObject({
+      message: {
+        role: "user",
+        metadata: {
+          kind: "session-host-notice",
+          notice: { kind: "approval-used", approvalId: "approval" },
+        },
+        parts: [{ type: "text", text: "Allowed by your earlier approval: Write to /outside/docs" }],
+      },
+    });
+    sink.failNext();
+    await expect(
+      translator.translate({ ...observation, toolCallId: "second" }, sink.emit),
+    ).rejects.toThrow("sink unavailable");
+    expect(sink.kinds()).toEqual(["transcript.message"]);
   });
 });

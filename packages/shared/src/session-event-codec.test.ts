@@ -9,6 +9,7 @@ import {
   scrubSessionEventPayload,
   scrubSessionEventProvenance,
   scrubSessionInteraction,
+  sanitizeSessionInteraction,
   decodeCommandReceipt,
   decodeSessionCommand,
   decodeSessionCommandIntent,
@@ -20,7 +21,7 @@ import {
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
-import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
+import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
@@ -410,6 +411,21 @@ const payloads = samples(
     },
   },
   {
+    kind: "authority.reviewed",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    toolCallId: "call-1",
+    tool: "execute",
+    mode: "shadow",
+    authoriser: "classifier",
+    wouldFlag: true,
+    reason: "This action exceeds the request.",
+    category: "external",
+    answers: { authorised: { type: "bool", value: false, probability: 0.1, confidence: 0.8 } },
+    missReason: null,
+    thresholds: { allow: 0.95, flag: 0.05 },
+  },
+  {
     kind: "authority.denied",
     attachmentId: "attachment-1",
     turnId: null,
@@ -504,6 +520,100 @@ type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
 
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
+  it("round-trips credential presentation metadata but never extra fields or values", () => {
+    const credential = {
+      id: "credential-1",
+      name: "DEPLOY_TOKEN",
+      sessionId: "session-1",
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const opened = {
+      kind: "interaction.opened" as const,
+      interaction: {
+        ...interaction,
+        kind: "question" as const,
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    };
+    expect(roundTrip(opened)).toEqual(opened);
+    expect(sanitizeSessionInteraction(opened.interaction)).toEqual(opened.interaction);
+    expect(readInteractionPrompts(opened.interaction)).toMatchObject([
+      { options: [], custom: false },
+    ]);
+    expect(
+      roundTrip({
+        ...opened,
+        interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+      }),
+    ).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+    });
+    expect(scrubSessionEventPayload(opened)).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, native: { id: null, detail: null } },
+    });
+    const contaminated = {
+      ...opened,
+      interaction: {
+        ...opened.interaction,
+        value: "outside-secret",
+        unknown: "outside-extra",
+        credential: { ...credential, value: "inside-secret", unknown: "inside-extra" },
+      },
+    };
+    const encoded = encodeSessionJson(contaminated);
+    expect(encoded).not.toMatch(/inside-secret|outside-secret|inside-extra|outside-extra/);
+    expect(roundTrip(contaminated)).toEqual(opened);
+    expect(decodeSessionEventPayload(contaminated, "payload")).toEqual(opened);
+    expect(sanitizeSessionInteraction(contaminated.interaction)).toEqual(opened.interaction);
+    // Checkpoints also serialize interactions, without an event envelope.
+    expect(JSON.parse(encodeSessionJson({ active: [contaminated.interaction] }))).toEqual({
+      active: [opened.interaction],
+    });
+    expect(
+      JSON.parse(encodeSessionJson({ ...contaminated.interaction, kind: "permission" })),
+    ).toEqual({
+      ...opened.interaction,
+      kind: "permission",
+    });
+    expect(encodeSessionJson({ credential: "not-an-interaction" })).toBe(
+      '{"credential":"not-an-interaction"}',
+    );
+    expect(encodeSessionJson({ credential: "not-an-interaction", kind: "diagnostic" })).toBe(
+      '{"credential":"not-an-interaction","kind":"diagnostic"}',
+    );
+    for (const key of Object.keys(credential)) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            ...opened,
+            interaction: { ...opened.interaction, credential: { ...credential, [key]: 123 } },
+          },
+          "payload",
+        ),
+      ).toThrow(`payload.interaction.credential.${key}`);
+    }
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          ...opened,
+          interaction: { ...opened.interaction, credential: null },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.interaction.credential must be an object");
+    expect(scrubSessionInteraction(contaminated.interaction)).toEqual({
+      ...opened.interaction,
+      native: { id: null, detail: null },
+    });
+  });
+
   for (const payload of payloads) {
     it(`round-trips ${payload.kind}${"attention" in payload ? ` (${payload.attention.kind})` : ""}${"receipt" in payload ? ` (${payload.receipt.status})` : ""}`, () => {
       expect(roundTrip(payload)).toEqual(payload);
@@ -1269,6 +1379,24 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     const decoded = openedAttachment({ ...attachment, authority });
 
     expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it.each([true, false])("round-trips pinned Protection mode (%s)", (protection) => {
+    const authority = { ...recordedAuthority, protection };
+    const decoded = openedAttachment({ ...attachment, authority });
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("leaves legacy Snapshots without a Protection mode instead of opting them in", () => {
+    const decoded = openedAttachment({ ...attachment, authority: recordedAuthority });
+    if (decoded.kind !== "attachment.opened") throw new Error("not opened");
+    expect(decoded.attachment.authority).not.toHaveProperty("protection");
+  });
+
+  it("rejects a corrupt pinned Protection mode", () => {
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, protection: "true" } }),
+    ).toThrow("payload.attachment.authority.protection must be a boolean");
   });
 
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
@@ -2162,5 +2290,66 @@ describe("the renderer-side parse", () => {
       reason: "malformed",
       message: "event.payload.attachment is not a valid Session attachment",
     });
+  });
+});
+
+describe("typed approval metadata", () => {
+  const approval = {
+    asked: "printf 'a\u241eb'",
+    because: "why\u241enow",
+    reason: "rule\u241etext",
+    stages: ["echo 'a\u241eb'", "tee /x"],
+    held: 1,
+    heldStages: [0, 1],
+  };
+
+  it.each([null, 1])("round-trips metadata without splitting any field (held=%s)", (held) => {
+    const original = { ...interaction, approval: { ...approval, held } };
+    const payload = { kind: "interaction.opened" as const, interaction: original };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionInteraction(original).approval).toEqual(original.approval);
+    expect(scrubSessionEventPayload(payload)).toMatchObject({
+      interaction: { approval: original.approval },
+    });
+  });
+
+  it("keeps older typed cards with only a single held-stage field", () => {
+    const { heldStages, ...olderApproval } = approval;
+    expect(heldStages).toEqual([0, 1]);
+    const payload = {
+      kind: "interaction.opened" as const,
+      interaction: { ...interaction, approval: olderApproval },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+  });
+
+  it("keeps historical and model questions without approval metadata", () => {
+    const opened = roundTrip({ kind: "interaction.opened", interaction });
+    expect(opened.kind === "interaction.opened" && "approval" in opened.interaction).toBe(false);
+  });
+
+  it.each([
+    null,
+    "forged",
+    { ...approval, asked: 1 },
+    { ...approval, because: null },
+    { ...approval, reason: false },
+    { ...approval, stages: "echo" },
+    { ...approval, stages: [1] },
+    { ...approval, held: "1" },
+    { ...approval, held: -1 },
+    { ...approval, held: 2 },
+    { ...approval, held: 0.5 },
+    { ...approval, heldStages: "0,1" },
+    { ...approval, heldStages: ["0"] },
+    { ...approval, heldStages: [-1] },
+    { ...approval, heldStages: [2] },
+  ])("rejects malformed approval metadata: %j", (invalid) => {
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "interaction.opened", interaction: { ...interaction, approval: invalid } },
+        "payload",
+      ),
+    ).toThrow(/approval/u);
   });
 });

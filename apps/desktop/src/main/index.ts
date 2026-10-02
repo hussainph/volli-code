@@ -9,6 +9,7 @@ import {
   net,
   powerMonitor,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -22,6 +23,7 @@ import { pathToFileURL } from "node:url";
 import {
   acceptsImageInputIn,
   applySkillModes,
+  authorityJudgeDenialReason,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -186,8 +188,12 @@ import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { createModelAutoSelect } from "./decision/auto-select";
 import { createDesktopDecisions } from "./decision/desktop";
+import { createAuthorityReason, type AuthorityReasonInput } from "./decision/authority-reason";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { createProtection } from "./protection/host";
+import { registerProtectionIpcHandlers } from "./protection/ipc";
+import { migrateProtectionPolicies } from "./protection/settings";
 import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -198,6 +204,12 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { SecretStore } from "./secrets/store";
+import { keychainSecretCodec } from "./secrets/codec";
+import { SecretService } from "./secrets/service";
+import { retiresSessionSecrets } from "./secrets/lifetime";
+import { registerSecretIpc } from "./secrets/ipc";
+import { refusingCredentialReads } from "@volli/agent-runtime";
 import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import { createPeekSummarizer } from "./session-control/peek-summary";
@@ -594,6 +606,10 @@ function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
   return input.tools;
 }
 
+async function categoryAuthorityReason(input: AuthorityReasonInput): Promise<string> {
+  return authorityJudgeDenialReason(input.cause);
+}
+
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
 function openExternal(target: string): void {
   if (target.startsWith("http:") || target.startsWith("https:")) {
@@ -896,7 +912,14 @@ app.whenReady().then(async () => {
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    dbHandle = { ok: true, db: openVolliDb(dbPath) };
+    const db = openVolliDb(dbPath);
+    try {
+      migrateProtectionPolicies(db, Date.now());
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
     // is classified here, once: a native-ABI failure names the Node
@@ -1150,6 +1173,31 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           models: piModelAccess.models,
           catalogReady: piModelAccess.catalogReady,
+          recordDecision: async (fact) => {
+            if (sessionEngine === null || fact.sessionId === null) {
+              throw new Error("Authority review has no durable Session ledger.");
+            }
+            // authority.judge's caller redacts the reasoning-blind state BEFORE
+            // decide, so neither cloud transport nor this full-state audit sees
+            // secrets. Renderer scrubbing drops the native audit copy entirely.
+            await sessionEngine.observe({
+              id: `audit:decision:${randomUUID()}`,
+              kind: "adapter.observed",
+              sessionId: fact.sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: {
+                  kind: "system",
+                  id: "authority-classifier",
+                  detail: { purpose: fact.purpose, authoriser: "classifier" },
+                },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              name: "authority.judge.audit",
+              native: JSON.parse(JSON.stringify(fact)),
+            });
+          },
           recordUsage: async (sessionId, usage, purpose) => {
             if (sessionEngine === null) return;
             await sessionEngine.observe({
@@ -1193,6 +1241,24 @@ app.whenReady().then(async () => {
   // the database itself, and never the keychain — see `mcp/credential-store.ts`.
   // Beside `dbPath` rather than under `userData` so a smoke run on its own
   // VOLLI_DB_PATH cannot read or write a real profile's tokens.
+  // Lazy: no keychain access until a stored secret is used or a person saves one.
+  // Session-only storage never needs the keychain. No plaintext fallback.
+  const secrets = new SecretService(
+    new SecretStore(join(dirname(dbPath), "session-secrets.enc"), keychainSecretCodec(safeStorage)),
+  );
+  sessionWakeBus?.subscribe(({ event }) => {
+    if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
+  });
+  registerSecretIpc(secrets, (sender) => {
+    const url = sender.getURL();
+    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
+    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
+    const actual = new URL(url);
+    const expected = new URL(renderer);
+    actual.hash = "";
+    expected.hash = "";
+    return actual.href === expected.href;
+  });
   const mcpCredentials = new FileMcpCredentialStore(
     join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
   );
@@ -1314,6 +1380,7 @@ app.whenReady().then(async () => {
                   // `resolveClassify` answered that at birth, and the record
                   // keeps the answer for the Session's whole life.
                   ...(classify ? (["classify"] as const) : []),
+                  "request_secret",
                   // Code Mode (VC-471), when the setting gives this model a
                   // mode or the Session holds an MCP server too large to
                   // declare. Last, for the Cache Prefix reason every name
@@ -1442,6 +1509,7 @@ app.whenReady().then(async () => {
    * renderer doors are registered there, once a window can receive them.
    */
   const backgroundShells = new BackgroundShellHost({
+    redactOutput: (text) => secrets.store.redact(text),
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     // One row per started shell (VC-341). A background shell is the door a
@@ -1490,6 +1558,7 @@ app.whenReady().then(async () => {
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
+  let authorityReason = categoryAuthorityReason;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -1498,6 +1567,7 @@ app.whenReady().then(async () => {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          authorityReason: (input) => authorityReason(input),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -1544,18 +1614,22 @@ app.whenReady().then(async () => {
             // identity is resolved through the one per-attachment store the
             // shell port resolves through too (VC-270), so both doors export
             // the same token — see `attachment-identity.ts`.
-            return piExecutionEnv(workspacePath, {
-              pathPrefixes: [runtimePaths.binDir],
-              identity: attachmentIdentities.resolve(identity),
-              // This Session's concurrency budget (VC-339), computed at attach
-              // from the Sessions working now — under the identity above, which
-              // is what keeps a machine fact from ever posing as who is running.
-              environment: await sessionConcurrencyEnvFor(identity.sessionId),
-              // The execution environment is owned by this attachment and its
-              // cleanup runs on every close path. Revoke there so a copied
-              // token cannot outlive the structured attachment that held it.
-              onCleanup: () => attachmentIdentities.release(identity.attachmentId),
-            });
+            return refusingCredentialReads(
+              await piExecutionEnv(workspacePath, {
+                pathPrefixes: [runtimePaths.binDir],
+                identity: attachmentIdentities.resolve(identity),
+                // This Session's concurrency budget (VC-339), computed at attach
+                // from the Sessions working now — under the identity above, which
+                // is what keeps a machine fact from ever posing as who is running.
+                environment: await sessionConcurrencyEnvFor(identity.sessionId),
+                secretEnvironment: () => secrets.environment(identity.sessionId),
+                // The execution environment is owned by this attachment and its
+                // cleanup runs on every close path. Revoke there so a copied
+                // token cannot outlive the structured attachment that held it.
+                onCleanup: () => attachmentIdentities.release(identity.attachmentId),
+              }),
+              workspacePath,
+            );
           },
           // The Session's background shells (VC-270): the one host, scoped to
           // the Session, spawning through the same environment record and the
@@ -1577,6 +1651,7 @@ app.whenReady().then(async () => {
               // machine, so it self-limits by the budget that is true when it
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
+              secretEnvironment: () => secrets.environment(scope.sessionId),
             }),
           // The Session's decision port (VC-478), bound to the Session and its
           // project at attach. Membership is the frozen record's; this only
@@ -1584,9 +1659,23 @@ app.whenReady().then(async () => {
           ...(desktopDecisions === null
             ? {}
             : {
+                decisions: desktopDecisions.port,
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
                   desktopDecisions.classifyPort(scope),
               }),
+          resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+            secrets.port(
+              {
+                sessionId,
+                sessionLabel: `Session ${shortSessionId(sessionId)}`,
+                projectId,
+                projectLabel: dbHandle.ok
+                  ? (getProjectById(dbHandle.db, projectId)?.name ?? "Project")
+                  : "Project",
+              },
+              wait,
+              allowInjection,
+            ),
           resolveMcpPort:
             mcpSettings === null
               ? undefined
@@ -1732,6 +1821,7 @@ app.whenReady().then(async () => {
               // settings; the newly recorded backfill is deliberately empty.
               mcpTools = [];
             }
+            const authorityPolicy = getProjectAuthorityPolicy(dbHandle.db, project.id);
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
@@ -1747,7 +1837,32 @@ app.whenReady().then(async () => {
               // never lands mid-turn. A rehydrated attachment ignores this and
               // replays its own recorded Snapshot instead — see
               // `NativeAttachmentSpec.pinnedAuthority`.
-              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              authorityPolicy,
+              // Main always supplies the host. The adapter activates it from
+              // the pinned Snapshot: fresh enforcing attachments use Protection;
+              // an off switch never adds a gate to a running/recovered attachment.
+              protection: createProtection({
+                db: dbHandle.db,
+                now: () => Date.now(),
+                projectId: project.id,
+                sessionId,
+                // A delegated subagent reads its parent's live "this
+                // Session" approvals; nothing it adds ever flows back.
+                inheritedFrom:
+                  attaching.role === "subagent" && attaching.parentSessionId !== null
+                    ? [attaching.parentSessionId]
+                    : [],
+                sessionTitle: attaching.title ?? null,
+                ticketDisplayId: (() => {
+                  const owned =
+                    attaching.ticketId === null
+                      ? undefined
+                      : getTicket(dbHandle.db, attaching.ticketId);
+                  return owned === undefined
+                    ? null
+                    : displayTicketId(project.ticketPrefix, owned.ticketNumber);
+                })(),
+              }),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
               // this one attachment.
@@ -1844,6 +1959,32 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  if (dbHandle.ok && piRuntimeHost !== null && sessionEngine !== null) {
+    authorityReason = createAuthorityReason({
+      db: dbHandle.db,
+      readModelDefaults: () => readModelAccessDefaults(dbHandle.db),
+      completeUtility: (input) => piRuntimeHost.completeUtility(input),
+      recordUsage: async (sessionId, usage) => {
+        await sessionEngine.observe({
+          id: `usage:authority-reason:${randomUUID()}`,
+          kind: "usage.recorded",
+          sessionId,
+          occurredAt: Date.now(),
+          provenance: {
+            source: {
+              kind: "system",
+              id: "authority-reason",
+              detail: { purpose: "authority.judge", reasonSource: "utility" },
+            },
+            venue: { id: "local", kind: "local" },
+          },
+          attachmentId: null,
+          turnId: null,
+          usage,
+        });
+      },
+    });
+  }
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).
@@ -2521,6 +2662,12 @@ app.whenReady().then(async () => {
   // Agent telemetry export (VC-119): its own door beside Web Access, because the
   // instrumented Session RPC wire is not where a switch governing
   // instrumentation belongs.
+  registerProtectionIpcHandlers(
+    dbHandle.ok ? dbHandle.db : null,
+    dbHandle.ok
+      ? undefined
+      : `Protection settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   registerAgentObservabilityIpcHandlers(
     agentObservability,
     dbHandle.ok

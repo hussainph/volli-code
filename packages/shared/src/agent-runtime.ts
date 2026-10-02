@@ -1,3 +1,4 @@
+import type { ApprovalUsedObservation } from "./approval-observation";
 /**
  * Product-owned Session and model policy consumed by the Agent Runtime, and the
  * Agent Runtime contracts themselves.
@@ -14,19 +15,29 @@
  * facts; an executor states what happened and never what to record.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
   AuthorityDenialCause,
+  AuthorityJudgeDenialCause,
   AuthoritySnapshot,
   CodingToolId,
   NonCodingToolId,
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
-import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import type {
+  DecisionAnswer,
+  DecisionAnswered,
+  DecisionMiss,
+  DecisionMissReason,
+  DecisionPort,
+} from "./decision-model";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import { projectRememberable, type ApprovalDecision, type ApprovalScope } from "./approvals";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -379,7 +390,64 @@ export interface RuntimeContextCarry extends RuntimeRecoveryRef {
  * allowance and escalate a Session that was never refused anything. The same
  * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export type RuntimeAskTrip =
+  | "consecutive"
+  | "session"
+  | "budget"
+  | "confirm"
+  | "approval"
+  | "classifier";
+
+/** What an approval card is about (VC-480). */
+export interface RuntimeApprovalAsk {
+  /** The call as the card shows it: the command, or the tool and its path. */
+  asked: string;
+  /**
+   * A compound shell command's stages, in order, when it has more than one
+   * (`a && b && rm x`). The card shows the whole line with the held stage —
+   * `scopes[].stage` — highlighted.
+   */
+  stages?: readonly string[];
+  /** The rule that stopped it, in its own words, for the card's details. */
+  reason?: string;
+  /** Every uncovered rule, so an aggregate card explains all the consent it asks for. */
+  objections?: readonly { cause: AuthorityDenialCause; reason: string }[];
+  /**
+   * What "allow for this Session" and "always allow" would remember, one scope
+   * each. Empty when the refusal cannot be narrowed, so only "allow once" is
+   * offered beside the denials.
+   */
+  scopes: readonly ApprovalScope[];
+}
+
+/**
+ * The remembered approvals a Session reads (VC-480).
+ *
+ * A read port and nothing more, which is the point: rows are written by main,
+ * from the person's answer, and the runtime has no way to author one.
+ */
+export interface RuntimeApprovals {
+  /**
+   * The approval that covers this scope right now, or null. Read live on every
+   * call, never cached, so a revoke applies from the very next call. Lookup
+   * alone is not a use: the call may still be denied or abandoned.
+   */
+  covers(scope: ApprovalScope): RuntimeApprovalHit | null;
+  /**
+   * Records who authorised one gated call. Called BEFORE the call runs, once
+   * per decision. A host that cannot persist it must throw: execution fails
+   * closed without a pre-execution decision record.
+   */
+  decided(decision: ApprovalDecision): void;
+  /** Counts ledger use only after successful execution, never during lookup. */
+  completed?(toolCallId: string): void;
+}
+
+/** A remembered approval that allowed a scope. */
+export interface RuntimeApprovalHit {
+  approvalId: string;
+  summary: string;
+}
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -406,9 +474,14 @@ export interface RuntimeAskRequest {
   toolCallId: string;
   /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** The refusing rule's own words, as the model would otherwise have received them. */
+  /** Person-facing refusal explanation; may include labelled model prose, never an agent result. */
   reason: string;
   trip: RuntimeAskTrip;
+  /**
+   * Present on a protection ask (VC-480): what the call wants to do and what
+   * a "remember this" answer would store. Absent on every other ask.
+   */
+  approval?: RuntimeApprovalAsk;
   /**
    * Whether a person may overrule this refusal.
    *
@@ -437,7 +510,16 @@ export interface RuntimeAskRequest {
  * reserves both of those for the durable Session Interaction vocabulary, and
  * this is the runtime's private reading of a decision that is recorded there.
  */
-export type RuntimeAskChoice = "allow" | "refuse" | "stop";
+export type RuntimeAskChoice =
+  | "allow"
+  | "refuse"
+  | "stop"
+  /** Allow, and the host has already remembered it for this Session (VC-480). */
+  | "allow-session"
+  /** Allow, and the host has already remembered it for the project (VC-480). */
+  | "allow-project"
+  /** Deny, and tell the agent what to do instead (VC-480). */
+  | { kind: "steer"; message: string };
 
 /** What one escalation puts in front of a person. */
 export interface RuntimeAskOffer {
@@ -470,6 +552,7 @@ const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
   if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
+  if (request.approval !== undefined) return approvalOffer(request.approval);
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
     kind: "permission",
@@ -489,7 +572,13 @@ export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
 export function askChoice(
   request: RuntimeAskRequest,
   optionIds: readonly string[],
+  response: string | null = null,
 ): RuntimeAskChoice {
+  if (request.approval !== undefined) {
+    const choice = decodeApprovalConsent(askOffer(request).options, optionIds, response);
+    /* v8 ignore next -- askOffer never declares ledger; it is only a host-authored historical receipt. */
+    return choice === "ledger" ? "refuse" : choice;
+  }
   // Refusal is read first, so an answer carrying both a grant and a refusal
   // resolves toward the state the call was already in. A multi-select that
   // accumulated `once` and `reject` together is incoherent, and resolving an
@@ -500,6 +589,92 @@ export function askChoice(
     return chosen.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
   }
   return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
+}
+
+/** The ids an approval card's rows answer with. */
+export const APPROVAL_OPTION_IDS = {
+  once: "once",
+  session: "session",
+  project: "project",
+  deny: "reject",
+  steer: "steer",
+} as const;
+
+/** The five choices of the approval card, fewer when nothing can be remembered. */
+function approvalOffer(approval: RuntimeApprovalAsk): RuntimeAskOffer {
+  const what = approval.scopes.map((scope) => scope.summary).join("; ");
+  const remembers = approval.scopes.length > 0;
+  return {
+    kind: "permission",
+    options: [
+      { id: APPROVAL_OPTION_IDS.once, label: "Allow once", description: "Just this call" },
+      ...(remembers
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.session,
+              label: "Allow for this Session",
+              description: `${what} for the rest of this Session`,
+            },
+          ]
+        : []),
+      // Only where a safe scope exists: a path, or a git shape. A command Volli
+      // cannot read inside is never remembered project-wide.
+      ...(projectRememberable(approval.scopes)
+        ? [
+            {
+              id: APPROVAL_OPTION_IDS.project,
+              label: "Always allow in this project",
+              description: `${what} for every Session`,
+            },
+          ]
+        : []),
+      {
+        id: APPROVAL_OPTION_IDS.deny,
+        label: "Deny",
+        description: "The agent is told no and carries on",
+      },
+      {
+        id: APPROVAL_OPTION_IDS.steer,
+        label: "Deny and steer\u2026",
+        description: "Tell the agent what to do instead",
+      },
+    ],
+  };
+}
+
+/**
+ * The shared consent decoder for execution and scrollback. Consent is exactly
+ * one declared choice, never an inferred meaning of an undeclared/stale id.
+ * Denial wins over consent; declared steering carries the person's words.
+ * `ledger` is a host-authored historical answer, never a runtime grant.
+ */
+export function decodeApprovalConsent(
+  options: readonly { id: string }[],
+  optionIds: readonly string[],
+  response: string | null = null,
+): RuntimeAskChoice | "ledger" {
+  const offered = new Set(options.map((option) => option.id.toLowerCase()));
+  const chosen = optionIds.map((id) => id.toLowerCase());
+  if (offered.has(APPROVAL_OPTION_IDS.steer) && chosen.includes(APPROVAL_OPTION_IDS.steer)) {
+    const message = (response ?? "").trim();
+    return message === "" ? "refuse" : { kind: "steer", message };
+  }
+  if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
+  if (chosen.length !== 1 || !offered.has(chosen[0]!)) return "refuse";
+  switch (chosen[0]) {
+    case APPROVAL_OPTION_IDS.once:
+      return "allow";
+    case APPROVAL_OPTION_IDS.session:
+      return "allow-session";
+    case APPROVAL_OPTION_IDS.project:
+      return "allow-project";
+    case "ledger":
+      return "ledger";
+    case SESSION_ESCALATION_STOP_ID:
+      return "stop";
+    default:
+      return "refuse";
+  }
 }
 
 /** One answer the model thought worth offering. */
@@ -1106,24 +1281,22 @@ export interface SessionRuntimeSpec {
    * one at all.
    *
    * Optional, and the optionality carries meaning that a value could not.
-   * Absence is not a Snapshot that allows everything: with no Snapshot the
-   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
-   * thresholds and {@link ask} are structurally unreachable rather than merely
-   * permissive. A Snapshot that meant "do not consult me" would still have to
-   * carry a pack id, a pack hash and two thresholds describing rules nobody will
-   * ever run, and the one path that must not reach the gate would depend on
-   * every caller remembering to check.
-   *
-   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
-   * (VC-44), and fills it only when that policy says `enforce`. The two other
-   * postures both arrive here as absence, for different reasons: `off` builds no
-   * Snapshot at all, and `observe` builds one, records it on the attachment, and
-   * deliberately does not hand it over. So a Session whose policy is `observe`
-   * has a durable Snapshot and an unreachable gate at the same time — which is
-   * the state slice 7 wanted, and the reason this field is the seam rather than
-   * a flag inside the Snapshot.
+   * Absence means off: no gate is installed. An observe Snapshot installs
+   * reasoning-blind shadow review but never changes what executes. Enforce
+   * binds the rule pack; judgmentMode chooses ask or automatic review.
+   * The desktop pins this Snapshot on the attachment so replay keeps its
+   * original posture rather than picking up a project edit mid-attachment.
    */
   authority?: AuthoritySnapshot;
+  /** Host decision service for reasoning-blind per-call review, independent of the classify tool. */
+  decisions?: DecisionPort;
+  /** Optional person-facing wording only. Never insert its output into agent context. */
+  authorityReason?: (input: {
+    sessionId: string;
+    tool: string;
+    cause: AuthorityJudgeDenialCause;
+    signal?: AbortSignal;
+  }) => Promise<string>;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -1190,6 +1363,14 @@ export interface SessionRuntimeSpec {
    */
   ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
   /**
+   * Protection mode (VC-480). Present, and the gate changes shape: a refusal a
+   * person may clear is looked up here first and, when no approval covers it,
+   * put to a person on the first hit; a refusal no one may clear is explained
+   * and never asked about. Absent, every ask follows the fallback thresholds
+   * exactly as before.
+   */
+  approvals?: RuntimeApprovals;
+  /**
    * Let the model ask a person, and block its call until they answer.
    *
    * Beside {@link ask} rather than inside it, because the two are different acts
@@ -1213,6 +1394,26 @@ export interface SessionRuntimeSpec {
     request: RuntimeAskUserRequest,
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
+  /**
+   * Request a credential outside the conversation. The host owns its value and
+   * subprocess injection; the runtime receives only an outcome. Redaction is
+   * best-effort exact text matching, not protection against encoded output or
+   * a command deliberately sending a credential elsewhere.
+   */
+  /** Universal output filter, independent of request_secret tool membership. */
+  credentialRedaction?: {
+    redact(text: string): string;
+    hasValues?(): boolean;
+  };
+  secret?: {
+    request(
+      input: { name: string; purpose?: string; toolCallId: string },
+      signal: AbortSignal,
+    ): Promise<"signed in" | "declined" | "still missing">;
+    redact(text: string): string;
+    /** Whether images may carry a credential; absent means fail closed. */
+    hasValues?(): boolean;
+  };
   /**
    * Read one public web document, through a boundary this Session does not own.
    *
@@ -1419,6 +1620,8 @@ export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
   | "tools"
   | "askUser"
+  | "secret"
+  | "credentialRedaction"
   | "webFetch"
   | "webSearch"
   | "browser"
@@ -1442,6 +1645,7 @@ export type SessionToolSpec = Pick<
 export type SessionToolBinding =
   | { tool: CodingToolId }
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
+  | { tool: "request_secret"; port: NonNullable<SessionRuntimeSpec["secret"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
   // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
@@ -1518,6 +1722,8 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
+    request_secret:
+      spec.secret === undefined ? null : { tool: "request_secret", port: spec.secret },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
     browser_tabs: browser === undefined ? null : { tool: "browser_tabs", port: browser },
@@ -1607,6 +1813,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  * it, so it must not be mistaken for a transport fault worth retrying as is.
  */
 export interface RuntimeFailure {
+  stopDetail?: SessionStopDetail;
   reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
@@ -1636,7 +1843,24 @@ export interface SettledAssistantMessage {
   usage?: SanitizedUsage;
 }
 
+export interface AuthorityReviewObservation {
+  kind: "authority-review";
+  turnId: string | null;
+  toolCallId: string;
+  tool: string;
+  mode: "shadow" | "auto";
+  authoriser: "classifier";
+  wouldFlag: boolean | null;
+  reason: string;
+  category: string | null;
+  answers: Readonly<Record<string, DecisionAnswer>> | null;
+  missReason: DecisionMissReason | null;
+  thresholds: { allow: number; flag: number };
+}
+
 export type RuntimeObservation =
+  | ApprovalUsedObservation
+  | AuthorityReviewObservation
   | AttachmentObservation
   | TurnObservation
   | CompactionProgressObservation
@@ -1745,6 +1969,7 @@ export interface AttachmentObservation {
 }
 
 export interface TurnObservation {
+  stopDetail?: SessionStopDetail;
   kind: "turn";
   state: "started" | "completed" | "interrupted";
   turnId: string;
@@ -1945,6 +2170,7 @@ export type RuntimeActivityObservation =
  * nobody is notified about it.
  */
 export interface AttentionObservation {
+  stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
   reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
@@ -2144,6 +2370,8 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /** A small output budget for latency-sensitive utility explanations. */
+  maxOutputTokens?: number;
   /**
    * The caller's deadline. Background work has no one waiting on it, so a
    * provider that never answers must not leave a promise pending for the life

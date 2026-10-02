@@ -18,6 +18,7 @@ import {
   SUBAGENT_NOTICE_STATES,
   WATCH_NOTICE_FACTS,
   shortSessionId,
+  type ApprovalUsedHostNotice,
   type SubagentNoticeReason,
   type SubagentNoticeState,
   type WatchNoticeEvent,
@@ -59,7 +60,8 @@ export type TranscriptHostNotice =
   | SubagentNotice
   | BrowserHoldNotice
   | WatchNotice
-  | UnknownHostNotice;
+  | UnknownHostNotice
+  | ApprovalUsedHostNotice;
 
 /**
  * Read one transcript message as a host notice.
@@ -89,8 +91,18 @@ export function readHostNotice(
   return readHistoricalSubagent(text) ?? unknownNotice(text);
 }
 
-function readSharedNotice(value: unknown): SubagentNotice | BrowserHoldNotice | WatchNotice | null {
+function readSharedNotice(
+  value: unknown,
+): SubagentNotice | BrowserHoldNotice | WatchNotice | ApprovalUsedHostNotice | null {
   const notice = recordOf(value);
+  if (notice?.kind === "approval-used") {
+    const approvalId = nonEmptyString(notice.approvalId);
+    return approvalId !== null &&
+      typeof notice.summary === "string" &&
+      typeof notice.asked === "string"
+      ? { kind: "approval-used", approvalId, summary: notice.summary, asked: notice.asked }
+      : null;
+  }
   if (notice?.kind === "watch") {
     if (!Array.isArray(notice.events)) return null;
     const events = notice.events.map(watchEvent);

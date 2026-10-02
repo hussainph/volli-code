@@ -1,6 +1,8 @@
 import {
   ERROR_RECOVERY,
   formatSessionOrigin,
+  decodeSessionStopDetail,
+  sessionStopSummary,
   isAgentMutationPlan,
   LEGACY_DOCTOR_REMEDY,
   legacyDoctorFailureTitle,
@@ -499,11 +501,14 @@ function sessionStateCell(session: Record<string, unknown>): unknown {
   const status = session["status"];
   const waitingOn = session["waitingOn"];
   const interruptedReason = session["interruptedReason"];
+  const detail = session["interruption"];
+  const category = isRecord(detail) ? detail["category"] : null;
+  const suffix = typeof category === "string" ? `; ${category}` : "";
   const cell =
     typeof waitingOn === "string"
-      ? `${status} on ${waitingOn}`
+      ? `${status} on ${waitingOn}${suffix}`
       : typeof interruptedReason === "string"
-        ? `${status} (${interruptedReason})`
+        ? `${status} (${interruptedReason}${suffix})`
         : status;
   const pending = session["pendingSubagents"];
   return Array.isArray(pending) && pending.length > 0
@@ -609,6 +614,37 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
     `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
   );
   return lines.join("\n");
+  const reason = session["interruptedReason"];
+  const detail = session["interruption"];
+  const category = isRecord(detail) ? detail["category"] : null;
+  const suffix = typeof category === "string" ? `; ${category}` : "";
+  if (typeof waitingOn === "string") return `${status} on ${waitingOn}${suffix}`;
+  if (typeof reason === "string") return `${status} (${reason}${suffix})`;
+  return status;
+}
+
+/** Free-form provider text gets the same trust envelope as another Session's answer. */
+function sessionStopLines(session: Record<string, unknown>): string[] {
+  if (!isRecord(session["interruption"])) return [];
+  const detail = decodeSessionStopDetail(session["interruption"], "interruption");
+  return [
+    `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${detail.resetsAt ?? "not stated"}.`,
+    ...untrustedProseResponseLines({
+      response: "provider stop detail",
+      blocks: [
+        {
+          label: "provider's error",
+          text: terminalSafeInline(
+            JSON.stringify({
+              type: detail.providerType,
+              message: detail.message,
+              httpStatus: detail.httpStatus,
+            }),
+          ),
+        },
+      ],
+    }),
+  ];
 }
 
 /**
@@ -646,7 +682,11 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
       : [terminalSafeInline(`started by ${startedByText(data["startedBy"])}`)]),
     ...(resumedBy === null ? [] : [terminalSafeInline(resumedBy)]),
   ].join("  ");
-  return [header, ...transcript.filter(isRecord).map(transcriptLine)].join("\n");
+  return [
+    header,
+    ...sessionStopLines(data),
+    ...transcript.filter(isRecord).map(transcriptLine),
+  ].join("\n");
 }
 
 /**
@@ -1257,7 +1297,10 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
             usdCell(session),
             terminalSafeInline(usageCountCell(session["tokens"])),
             terminalSafeInline(session["title"]),
-          ].join("  "),
+          ].join("  ") +
+          (sessionStopLines(session).length === 0
+            ? ""
+            : `\n${sessionStopLines(session).join("\n")}`),
         )
         .join("\n") ?? null;
     if (rows === null) return null;

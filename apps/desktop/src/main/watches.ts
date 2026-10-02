@@ -78,6 +78,8 @@
  * Volli's.
  */
 
+import { sessionStopSummary } from "@volli/shared";
+
 import { randomUUID } from "node:crypto";
 import {
   sessionHostNoticeMetadata,
@@ -371,10 +373,27 @@ export function createWatches(ports: WatchesPorts): Watches {
         };
       case "turn.interrupted":
         return {
-          event: { ...base, fact: "turn-interrupted", detail: null },
+          event: {
+            ...base,
+            fact: "turn-interrupted",
+            detail: payload.stopDetail?.category ?? null,
+          },
           lines: [
             `- ${label} was interrupted mid-turn; its work did not finish. session_send can continue it while its executor is available; otherwise a person can reattach it in the app.`,
             ...waiting(),
+            ...(payload.stopDetail === undefined
+              ? []
+              : [
+                  `${sessionStopSummary(payload.stopDetail)} (${payload.stopDetail.category}); retry: ${payload.stopDetail.retry}; reset: ${payload.stopDetail.resetsAt ?? "not stated"}.`,
+                  ...untrustedProse(
+                    "provider stop detail",
+                    JSON.stringify({
+                      type: payload.stopDetail.providerType,
+                      message: payload.stopDetail.message,
+                      httpStatus: payload.stopDetail.httpStatus,
+                    }),
+                  ),
+                ]),
           ],
           answerOf: watch.targetSessionId,
         };

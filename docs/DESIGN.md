@@ -125,6 +125,10 @@ badge is printed against a single menu row. Model and effort appear only for cha
 kickoff; an Automation uses its saved Runtime. Launch mode is per-open and resets
 when retargeting projects; the ticket draft itself still survives closing.
 
+Create & start leaves the current workspace in place while the Session starts.
+Create more only controls whether the composer resets for another ticket or
+closes; opening the new ticket or Session is a separate, explicit action.
+
 **Those three commits are why this tray folds early.** They take ~215px of the
 settings' own line where a chat footer spends ~100px on one send key, so at the
 dialog's own 36rem the model pill, the effort chip and the buttons no longer fit

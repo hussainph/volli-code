@@ -12,11 +12,13 @@
 // is knowledge of Electron, and that package is pure domain code.
 
 import type { ExternalAppId } from "../external-app-ids";
+import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
 
 import type {
   BrowserTrace,
   Appearance,
   ArchivedTicket,
+  AuthorityApproval,
   AutoReapPolicy,
   BrowserTabHolder,
   OrphanProcessCandidate,
@@ -1792,6 +1794,42 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- protection (VC-480) ---------------------------------------------------
+
+/**
+ * Protection's remembered approvals.
+ *
+ * App-only, and the agent has no door to any of it: no verb projects these, the
+ * socket does not carry them, and the rows live in the app-owned database the
+ * governed Session cannot write. The renderer lists and revokes; rows are
+ * WRITTEN only in main, from a person's answer on a card.
+ */
+export interface VolliProtectionIpcContract {
+  /** A project's live remembered approvals, newest first. */
+  "volli:protection-approvals": {
+    args: [projectId: string];
+    result: Result<{ approvals: AuthorityApproval[]; passedRequestCount: number }>;
+  };
+  /** Soft-deletes one row; the next matching call asks again. */
+  "volli:protection-revoke": {
+    args: [approvalId: string, commandId: string];
+    result: Result<{
+      approval: AuthorityApproval;
+      receipt: import("@volli/shared").ApprovalCommandReceipt;
+    }>;
+  };
+  /** Undo of a revoke: the same row, id and provenance. */
+  "volli:protection-restore": {
+    args: [approvalId: string, commandId: string];
+    result: Result<{
+      approval: AuthorityApproval;
+      receipt: import("@volli/shared").ApprovalCommandReceipt;
+    }>;
+  };
+}
+
+export type ProtectionIpcChannel = keyof VolliProtectionIpcContract;
+
 // ---- notifications (VC-295) ------------------------------------------------
 
 /**
@@ -2728,10 +2766,22 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
+/** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */
+export interface VolliSecretIpcContract {
+  "volli:secrets-list": { args: [projectId?: string]; result: SecretsResult };
+  "volli:secret-submit": { args: [input: SecretSubmitInput]; result: Result };
+  "volli:secret-decline": { args: [id: string]; result: Result };
+  "volli:secret-revoke": { args: [id: string]; result: Result };
+  "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
+}
+
+export type SecretIpcChannel = keyof VolliSecretIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
+    VolliSecretIpcContract,
     VolliPiSessionOrphanIpcContract,
     VolliOrphanProcessIpcContract,
     VolliFileIpcContract,
@@ -2742,6 +2792,7 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliProtectionIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
     VolliAutomationIpcContract,
