@@ -7,7 +7,11 @@
  * `/skill` exactly as typed, and a compact Badge is the whole visible footprint
  * of the body that rode along.
  */
-import { sessionHostNoticeMetadata, type RendererSessionInteraction } from "@volli/shared";
+import {
+  sessionHostNoticeMetadata,
+  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
+  type RendererSessionInteraction,
+} from "@volli/shared";
 import { approvalAnswerFailures, projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act } from "react";
@@ -66,47 +70,120 @@ describe("the desktop transcript-row mapping", () => {
       vi.unstubAllGlobals();
     }
   });
-  it("hides linked shadow details live while retaining the tool and its real error", () => {
+  it.each(["shadow", "auto"] as const)(
+    "filters linked %s hints live without hiding a block or runtime error",
+    (mode) => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const container = document.createElement("div");
+      const root = createRoot(container);
+      const review = {
+        sequence: 1,
+        afterMessageId: null,
+        toolCallId: "call-1",
+        tool: "execute",
+        mode,
+        reason: "Classifier concern.",
+      };
+      const messages: UIMessage[] = [
+        {
+          id: "a",
+          role: "assistant",
+          parts: [
+            {
+              type: "dynamic-tool",
+              toolCallId: "call-1",
+              toolName: "execute",
+              state: "output-error",
+              input: { command: "pnpm test" },
+              errorText: "Actual command failure",
+            },
+          ],
+        },
+      ];
+      const [row] = projectTranscriptRows([messages], [], [], [review]);
+      if (row === undefined) throw new Error("expected a turn");
+      try {
+        act(() => root.render(<ChatTranscriptRow row={row} context={context} live={false} />));
+        const show = container.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+        expect(show).not.toBeNull();
+        act(() => show?.click());
+        expect(container.textContent).toContain("Classifier concern.");
+        act(() => useUiStore.getState().setAuthorityHintsVisible(false));
+        expect(container.textContent?.includes("Classifier concern.")).toBe(mode === "auto");
+        expect(container.textContent).toContain("Actual command failure");
+        act(() => useUiStore.getState().setAuthorityHintsVisible(true));
+        expect(container.textContent).toContain("Classifier concern.");
+      } finally {
+        act(() => root.unmount());
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it("uses resolved row keys for reused call ids in bundles and gated calls", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const container = document.createElement("div");
     const root = createRoot(container);
-    const review = {
-      sequence: 1,
-      afterMessageId: null,
-      toolCallId: "call-1",
-      tool: "execute",
-      mode: "shadow" as const,
-      reason: "Classifier concern.",
-    };
+    const earlierScope = { attachmentId: "earlier", turnId: "t" };
+    const laterScope = { attachmentId: "later", turnId: "t" };
     const messages: UIMessage[] = [
       {
-        id: "a",
+        id: "earlier-message",
         role: "assistant",
         parts: [
           {
             type: "dynamic-tool",
-            toolCallId: "call-1",
             toolName: "execute",
+            toolCallId: "reused",
             state: "output-error",
-            input: { command: "pnpm test" },
-            errorText: "Actual command failure",
+            input: { command: "echo earlier" },
+            errorText: "Old error",
+            toolMetadata: { [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: earlierScope },
+          },
+        ],
+      },
+      {
+        id: "later-message",
+        role: "assistant",
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolName: "execute",
+            toolCallId: "reused",
+            state: "approval-requested",
+            input: { command: "echo later" },
+            approval: { id: "approval" },
+            toolMetadata: { [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: laterScope },
           },
         ],
       },
     ];
-    const [row] = projectTranscriptRows([messages], [], [], [review]);
+    const reviews = [earlierScope, laterScope].map((scope, index) => ({
+      sequence: index + 1,
+      afterMessageId: null,
+      toolCallId: "reused",
+      tool: "execute",
+      scope,
+      mode: "shadow" as const,
+      reason: index === 0 ? "Earlier concern" : "Later concern",
+    }));
+    const [row] = projectTranscriptRows([messages], [], [], reviews);
     if (row === undefined) throw new Error("expected a turn");
     try {
       act(() => root.render(<ChatTranscriptRow row={row} context={context} live={false} />));
-      const show = container.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
-      expect(show).not.toBeNull();
-      act(() => show?.click());
-      expect(container.textContent).toContain("Classifier concern.");
-      act(() => useUiStore.getState().setAuthorityHintsVisible(false));
-      expect(container.textContent).not.toContain("Classifier concern.");
-      expect(container.textContent).toContain("Actual command failure");
-      act(() => useUiStore.getState().setAuthorityHintsVisible(true));
-      expect(container.textContent).toContain("Classifier concern.");
+      const disclosures = container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Show details"]',
+      );
+      expect(disclosures).toHaveLength(2);
+      act(() => disclosures[0]!.click());
+      expect(container.textContent).toContain("Earlier concern");
+      expect(container.textContent).not.toContain("Later concern");
+      act(() => disclosures[1]!.click());
+      expect(
+        [...container.querySelectorAll('[data-slot="authority-review"]')].map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(["Would block execute: Earlier concern", "Would block execute: Later concern"]);
     } finally {
       act(() => root.unmount());
       vi.unstubAllGlobals();

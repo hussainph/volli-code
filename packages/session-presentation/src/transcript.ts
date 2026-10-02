@@ -21,6 +21,7 @@ import type {
   RendererSessionEvent,
   RendererSessionEventPayload,
   RendererSessionInteraction,
+  SessionToolCallScope,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -94,6 +95,8 @@ export interface TranscriptAuthorityReview {
   sequence: number;
   afterMessageId: string | null;
   toolCallId: string;
+  /** Null is an uncorrelatable fact; absent is a legacy caller without scope. */
+  scope?: SessionToolCallScope | null;
   tool: string;
   mode: "shadow" | "auto";
   reason: string;
@@ -308,6 +311,10 @@ export function appendFrames(
         sequence: frame.sequence,
         afterMessageId: anchorId,
         toolCallId: payload.toolCallId,
+        scope:
+          payload.turnId === null
+            ? null
+            : { attachmentId: payload.attachmentId, turnId: payload.turnId },
         tool: payload.tool,
         mode: payload.mode,
         reason: payload.reason,

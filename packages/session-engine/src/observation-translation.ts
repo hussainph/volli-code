@@ -46,7 +46,11 @@ import type {
   TranscriptDeltaObservation,
   UsageObservation,
 } from "@volli/shared";
-import { ACTIVITY_METADATA_KEY, sessionHostNoticeMetadata } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
+  sessionHostNoticeMetadata,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { TranscriptDelta } from "./transcript-overlay";
 
@@ -634,7 +638,7 @@ export class RuntimeObservationTranslator {
         op: "part.upsert",
         key: activityPartKey(observation.activityId),
         index: 0,
-        part: activityPart(observation),
+        part: activityPart(observation, this.#attachmentId),
       });
       return;
     }
@@ -818,7 +822,7 @@ export class RuntimeObservationTranslator {
       message: {
         id: messageId,
         role: "assistant",
-        parts: [activityPart(observation)],
+        parts: [activityPart(observation, this.#attachmentId)],
       },
     };
   }
@@ -993,12 +997,18 @@ function activityPartKey(activityId: string): string {
   return `activity:${activityId}`;
 }
 
-function activityPart(observation: RuntimeActivityObservation): DynamicToolPart {
+function activityPart(
+  observation: RuntimeActivityObservation,
+  attachmentId: string,
+): DynamicToolPart {
   const base = {
     type: "dynamic-tool" as const,
     toolName: ACTIVITY_TOOL_NAME,
     toolCallId: observation.activityId,
-    toolMetadata: { [ACTIVITY_METADATA_KEY]: observation.descriptor } as ToolMetadata,
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: observation.descriptor,
+      [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: { attachmentId, turnId: observation.turnId },
+    } as ToolMetadata,
   };
   switch (observation.state) {
     case "started":

@@ -2946,7 +2946,6 @@ describe("startSession", () => {
     const ask = vi.fn(async () => "refuse" as const);
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      authorityShadowReviewEnabled: () => true,
       executionEnvFactory: async () =>
         ({
           cwd: attachment.worktreePath,
@@ -3029,7 +3028,6 @@ describe("startSession", () => {
     }));
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      authorityShadowReviewEnabled: () => true,
       executionEnvFactory: async () =>
         ({
           cwd: attachment.worktreePath,
@@ -3073,7 +3071,6 @@ describe("startSession", () => {
       priorDenials?: number;
       ask?: SessionRuntimeSpec["ask"];
       authorityReason?: SessionRuntimeSpec["authorityReason"];
-      authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
       observer?: SessionRuntimeSpec["observer"];
     } = {},
   ) {
@@ -3124,7 +3121,6 @@ describe("startSession", () => {
     const createRuntime = () =>
       createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
-        authorityShadowReviewEnabled: input.authorityShadowReviewEnabled,
         ...(input.skippedRead
           ? {}
           : {
@@ -3170,94 +3166,6 @@ describe("startSession", () => {
       context: () => resultContext,
     };
   }
-
-  it.each([
-    { name: "default", read: undefined },
-    { name: "off", read: () => false },
-    {
-      name: "unreadable",
-      read: (): boolean => {
-        throw new Error("settings unavailable");
-      },
-    },
-  ])("skips paid shadow review when $name, even with a configured model", async ({ read }) => {
-    for (const enforcement of ["observe", "enforce"] as const) {
-      const h = autoReviewHarness({ flag: true, authorityShadowReviewEnabled: read });
-      h.spec.authority = {
-        ...h.spec.authority!,
-        enforcement,
-        judgmentMode: enforcement === "observe" ? "auto" : "ask",
-        classifierModel: "typesafe/jev",
-      };
-      const handle = await h.runtime.startSession(h.spec);
-      await handle.submitUserMessage("Run the call");
-      await handle.close();
-      expect(h.calls).toHaveLength(0);
-      expect(h.exec).toHaveBeenCalledOnce();
-      expect(kinds(h.attachment.observations)).not.toContain("authority-review");
-    }
-  });
-
-  it("reads shadow opt-in live before each call in an existing attachment", async () => {
-    let enabled = false;
-    const read = vi.fn(() => enabled);
-    const h = autoReviewHarness({ flag: true, count: 3, authorityShadowReviewEnabled: read });
-    h.spec.authority = { ...h.spec.authority!, enforcement: "observe" };
-    const result = { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
-    h.exec.mockImplementationOnce(async () => {
-      enabled = true;
-      return result;
-    });
-    h.exec.mockImplementationOnce(async () => {
-      enabled = false;
-      return result;
-    });
-    const handle = await h.runtime.startSession(h.spec);
-    await handle.submitUserMessage("Run the calls");
-    await handle.close();
-    expect(read).toHaveBeenCalledTimes(3);
-    expect(h.calls).toHaveLength(1);
-    expect(h.exec).toHaveBeenCalledTimes(3);
-    expect(h.attachment.observations.filter((o) => o.kind === "authority-review")).toEqual([
-      expect.objectContaining({ mode: "shadow", wouldFlag: true }),
-    ]);
-  });
-
-  it.each([false, true])(
-    "keeps deterministic ask-mode denials with shadow opt-in=%s",
-    async (enabled) => {
-      const h = autoReviewHarness({
-        command: "git reset --hard",
-        authorityShadowReviewEnabled: () => enabled,
-      });
-      h.spec.authority = { ...h.spec.authority!, judgmentMode: "ask", location: "main-checkout" };
-      const handle = await h.runtime.startSession(h.spec);
-      await handle.submitUserMessage("Run the call");
-      await handle.close();
-      expect(h.exec).not.toHaveBeenCalled();
-      expect(h.attachment.observations).toContainEqual(
-        expect.objectContaining({ kind: "authority", state: "denied" }),
-      );
-      expect(h.calls).toHaveLength(enabled ? 1 : 0);
-    },
-  );
-
-  it.each([false, true])(
-    "keeps automatic classification with shadow disabled (flag=%s)",
-    async (flag) => {
-      const read = vi.fn(() => false);
-      const h = autoReviewHarness({ flag, authorityShadowReviewEnabled: read });
-      const handle = await h.runtime.startSession(h.spec);
-      await handle.submitUserMessage("Run the call");
-      await handle.close();
-      expect(read).not.toHaveBeenCalled();
-      expect(h.calls).toHaveLength(1);
-      expect(h.exec).toHaveBeenCalledTimes(flag ? 0 : 1);
-      expect(h.attachment.observations).toContainEqual(
-        expect.objectContaining({ kind: "authority-review", mode: "auto", wouldFlag: flag }),
-      );
-    },
-  );
 
   it("skips automatic review for native reads without requiring a configured judge", async () => {
     const h = autoReviewHarness({ skippedRead: true, miss: "unset" });
@@ -3490,7 +3398,6 @@ describe("startSession", () => {
     "does not execute an unauditable call even under %s",
     async (enforcement) => {
       const h = autoReviewHarness({
-        authorityShadowReviewEnabled: () => true,
         observer: async (observation) => {
           if (observation.kind === "authority-review")
             throw new Error("review ledger write failed");
@@ -3516,7 +3423,6 @@ describe("startSession", () => {
     const runtime = () =>
       createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
-        authorityShadowReviewEnabled: () => true,
         executionEnvFactory: async () =>
           ({
             cwd: attachment.worktreePath,
@@ -4207,7 +4113,6 @@ describe("startSession", () => {
       });
       const runtime = createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
-        authorityShadowReviewEnabled: () => true,
         executionEnvFactory: async () => containedEnv,
         models: modelsWithStream(
           scriptedStream([

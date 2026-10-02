@@ -40,7 +40,6 @@ import type {
 } from "../../../../ipc/contract";
 import {
   AUTHORITY_REASON_SOURCE_KEY,
-  AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
   AUTHORITY_REASON_SOURCES,
   authorityReasonSource,
   type AuthorityReasonSource,
@@ -355,7 +354,6 @@ function BlockReasonRow() {
     | { status: "loaded"; source: AuthorityReasonSource }
     | { status: "error"; message: string }
   >({ status: "loading" });
-  const [shadowEnabled, setShadowEnabled] = React.useState<boolean | null>(null);
   const [busy, setBusy] = React.useState(false);
   const fetches = useLatestAsync();
   const load = React.useCallback(async () => {
@@ -368,14 +366,6 @@ function BlockReasonRow() {
       if (!result.ok) {
         setState({ status: "error", message: result.error });
         return;
-      }
-      // Keep the spending switch usable even if the unrelated wording choice
-      // is corrupt. Match main's opt-in rule: invalid state cannot spend.
-      const rawShadow = result.data.appState[AUTHORITY_SHADOW_REVIEW_ENABLED_KEY];
-      try {
-        setShadowEnabled(rawShadow !== undefined && JSON.parse(rawShadow) === true);
-      } catch {
-        setShadowEnabled(false);
       }
       setState({
         status: "loaded",
@@ -397,77 +387,45 @@ function BlockReasonRow() {
       window.api.appState.set(AUTHORITY_REASON_SOURCE_KEY, JSON.stringify(source)),
     );
     setBusy(false);
-    if (saved !== null)
-      setState((current) => (current.status === "loaded" ? { ...current, source } : current));
-  }
-
-  async function saveShadow(enabled: boolean): Promise<void> {
-    if (busy) return;
-    setBusy(true);
-    const saved = await writeThrough("save shadow review", () =>
-      window.api.appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, JSON.stringify(enabled)),
-    );
-    setBusy(false);
-    if (saved !== null) setShadowEnabled(enabled);
+    if (saved !== null) setState({ status: "loaded", source });
   }
 
   return (
-    <>
-      {shadowEnabled !== null ? (
-        <PrefRow
-          label="Shadow review"
-          htmlFor="authority-shadow-review"
-          hint={
-            <>
-              Uses the decision model to check tool calls without blocking them. May use paid
-              tokens; off stops new shadow checks immediately.
-            </>
+    <PrefRow
+      label="Block reason"
+      testId="authority-reason-source"
+      hint={
+        <>
+          Utility model explains the risk category. Without a utility model, the risk category is
+          used.
+        </>
+      }
+    >
+      {state.status === "loaded" ? (
+        <Segmented
+          ariaLabel="Block reason"
+          value={state.source}
+          options={AUTHORITY_REASON_SOURCES}
+          disabled={busy}
+          onChange={(source) => void save(source)}
+        />
+      ) : state.status === "loading" ? (
+        <span className="text-ui text-muted-foreground">Loading…</span>
+      ) : (
+        <Notice
+          announce
+          tone="error"
+          icon={WarningIcon}
+          title="Couldn't read the block reason choice"
+          detail={state.message}
+          actions={
+            <Button size="xs" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
           }
-        >
-          <Switch
-            id="authority-shadow-review"
-            checked={shadowEnabled}
-            disabled={busy}
-            onCheckedChange={(enabled) => void saveShadow(enabled)}
-          />
-        </PrefRow>
-      ) : null}
-      <PrefRow
-        label="Block reason"
-        testId="authority-reason-source"
-        hint={
-          <>
-            Utility model explains the risk category. Without a utility model, the risk category is
-            used.
-          </>
-        }
-      >
-        {state.status === "loaded" ? (
-          <Segmented
-            ariaLabel="Block reason"
-            value={state.source}
-            options={AUTHORITY_REASON_SOURCES}
-            disabled={busy}
-            onChange={(source) => void save(source)}
-          />
-        ) : state.status === "loading" ? (
-          <span className="text-ui text-muted-foreground">Loading…</span>
-        ) : (
-          <Notice
-            announce
-            tone="error"
-            icon={WarningIcon}
-            title="Couldn't read the block reason choice"
-            detail={state.message}
-            actions={
-              <Button size="xs" variant="outline" onClick={() => void load()}>
-                Retry
-              </Button>
-            }
-          />
-        )}
-      </PrefRow>
-    </>
+        />
+      )}
+    </PrefRow>
   );
 }
 
