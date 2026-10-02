@@ -11,6 +11,8 @@ import World from "../components/World.astro";
 import { DOCS_URL, ISSUES_URL, RELEASES_URL, REPOSITORY_URL } from "../data/links";
 import Base from "../layouts/Base.astro";
 
+const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
+
 const description =
   "Download Volli for Apple silicon Macs — free and open source, served straight from GitHub Releases.";
 ---
@@ -40,8 +42,8 @@ const description =
           sub="Free for Apple silicon Macs."
         />
         <div class="dl-build" data-slot="build">
-          <p class="dl-status" data-live>Checking the latest build…</p>
-          <p class="dl-status"><a href={RELEASES_URL}>Browse releases on GitHub →</a></p>
+          <p class="dl-status" data-live>Checking the latest stable build…</p>
+          <p class="dl-status"><a href={LATEST_RELEASE_URL}>Latest stable release on GitHub →</a></p>
         </div>
         <p class="dl-platform" data-platform-note hidden>
           Volli runs on Apple silicon Macs.
@@ -96,13 +98,16 @@ const description =
           formatPublishedDate,
           isMacPlatform,
           primaryArtifact,
-          resolveAlphaBuild,
-          type AlphaBuild,
+          resolveStableBuild,
+          type StableBuild,
           type Release,
         } from "../lib/releases";
   
-        const RELEASES_API = "https://api.github.com/repos/hussainph/volli-code/releases?per_page=20";
-        const RELEASES_URL = "https://github.com/hussainph/volli-code/releases";
+        // /latest excludes drafts and prereleases without a bounded feed that
+        // could lose the stable release behind a run of canaries (VC-519).
+        const RELEASES_API = "https://api.github.com/repos/hussainph/volli-code/releases/latest";
+        const LATEST_RELEASE_URL = "https://github.com/hussainph/volli-code/releases/latest";
+        const SOURCE_URL = "https://github.com/hussainph/volli-code";
   
         function el<K extends keyof HTMLElementTagNameMap>(
           tag: K,
@@ -124,14 +129,13 @@ const description =
           return [status, linkLine];
         }
   
-        function buildNodes(build: AlphaBuild): HTMLElement[] {
+        function buildNodes(build: StableBuild): HTMLElement[] {
           const nodes: HTMLElement[] = [];
   
           const meta = el("p", "dl-version");
           meta.append(el("span", "", `v${build.version}`));
           const published = formatPublishedDate(build.publishedAt);
           if (published) meta.append(el("span", "", published));
-          if (build.prerelease) meta.append(el("span", "", "Prerelease"));
           nodes.push(meta);
   
           // One primary press. Every other artifact stays reachable, but only the
@@ -175,27 +179,29 @@ const description =
             const response = await fetch(RELEASES_API, {
               headers: { accept: "application/vnd.github+json" },
             });
-            if (!response.ok) throw new Error(`GitHub API responded ${response.status}`);
-            releases = (await response.json()) as Release[];
+            // GitHub returns 404 when there is no published stable release.
+            if (response.status === 404) releases = [];
+            else {
+              if (!response.ok) throw new Error(`GitHub API responded ${response.status}`);
+              releases = [(await response.json()) as Release];
+            }
           } catch {
             // Rate limit (60 req/hr unauthenticated) or offline — keep a
             // working path to the same builds instead of a dead end.
             render(
-              statusLine("Couldn't reach GitHub just now.", "Get it from GitHub Releases", RELEASES_URL),
+              statusLine("Couldn't reach GitHub just now.", "Latest stable release on GitHub", LATEST_RELEASE_URL),
             );
             return;
           }
   
-          const build = resolveAlphaBuild(releases);
+          const build = resolveStableBuild(releases);
           if (!build) {
             render(
-              statusLine("No build published right now.", "Browse releases on GitHub", RELEASES_URL),
+              statusLine("No stable build published right now.", "Get the source on GitHub", SOURCE_URL),
             );
             return;
           }
   
-          // The version line states what GitHub says, rather than assuming: a
-          // promoted stable tag must not keep wearing "Prerelease".
           render(buildNodes(build));
         }
   
