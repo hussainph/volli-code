@@ -201,10 +201,6 @@ export const SMOKE_QUARANTINE = new Map([
     "VC-523: 59/225 confirmed recoveries; lost click result / preview recovery",
   ],
   ["bare-path-env-smoke.mjs", "VC-525: 16/227 confirmed recoveries; harness readiness marker"],
-  [
-    "browser-tab-smoke.mjs",
-    "VC-526: 16/226 confirmed recoveries; hold/cursor UI readiness hypothesis",
-  ],
 ]);
 
 /**
