@@ -2,7 +2,7 @@
 
 ## What gates a build
 
-At this change: **47 gating smokes**, down from 51 active gates (74 files), without deleting a smoke or assertion. New `*-smoke.mjs` files still join automatically unless explicitly excluded for credentials, an existing runner limitation, or measured quarantine. Extended journeys are **not** broadly switched off.
+After VC-530's picker return: **48 gating smokes** (VC-522 initially reduced 51 active gates to 47), without deleting a smoke or assertion. New `*-smoke.mjs` files still join automatically unless explicitly excluded for credentials, an existing runner limitation, or measured quarantine. Extended journeys are **not** broadly switched off.
 
 **Core e2e** is the nine-probe `CORE_E2E` set in `apps/desktop/scripts/run-smokes.mjs`. It gates every desktop-relevant PR and runs on main after merges:
 
@@ -15,7 +15,7 @@ At this change: **47 gating smokes**, down from 51 active gates (74 files), with
 | Degraded DB / last-clean restore / fresh launch | database-recovery |
 | Live tokens, appearance, inheritance, persistence | canvas-theming |
 
-The other 38 probes gate desktop PRs in three rest shards. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
+The other 39 probes gate desktop PRs in three rest shards. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
 
 No sole core journey is quarantined based on historical flakes. Board and theming exceed the screening threshold but stay gating; DB recovery's sample is too small. The existing DB shutdown-grace fix remains; graceful-exit assertions are not weakened.
 
@@ -38,13 +38,14 @@ Screen initial workflow opportunities only: at least **50 observations**, at lea
 | Non-gating probe | Initial confirmed recovery | Backlog fix ticket / likely boundary |
 |---|---:|---|
 | browser-recovery | 59/225 (26.2%) | VC-523 — lost click result / preview recovery and settling |
-| automations-picker | 15/227 (6.6%) | VC-524 — picker/drag/Option-key readiness; first cause unknown |
 | bare-path-env | 16/227 (7.0%) | VC-525 — harness startup readiness marker capture |
 | browser-tab | 16/226 (7.1%) | VC-526 — hold/cursor renderer readiness; first cause unknown |
 
 They still execute daily at **04:31 UTC** and on manual dispatch in `.github/workflows/smoke-quarantine.yml`. This workflow is separate from `CI gate`; its observation step uses `continue-on-error`, keeping smoke flakes from producing failed-workflow emails. The step's raw outcome, failed rows, logs and quiet-window verdict are visible in the summary/artifact. Build/setup/upload failures can still make that workflow red. No GitHub notification settings, required checks, rulesets or auto-merge settings change.
 
-**Return:** fix the root cause, preserve all assertions, then record at least **50 post-fix fresh-profile opportunities across 3+ SHAs with no FAIL/FLAKY**, including CI observations; remove only the quarantine entry. Restart the evidence window after the fix. The legacy deny-list/credential exclusions are unchanged and are not newly certified stable or included in this four-probe lane.
+**Return:** fix the root cause, preserve all assertions, then record at least **50 post-fix fresh-profile opportunities across 3+ SHAs with no FAIL/FLAKY**, including CI observations; remove only the quarantine entry. Restart the evidence window after the fix. The legacy deny-list/credential exclusions are unchanged and are not newly certified stable or included in this lane.
+
+**VC-530 picker return (replaces VC-524):** the owner explicitly substitutes **10 serial fresh-profile local passes plus three branch dispatches of Smoke quarantine with no picker FAIL/FLAKY** for the 50-opportunity/3-SHA bar, for this probe only. `observe_picker=true` opts into four simultaneous picker profiles per dispatch even after its quarantine entry is removed; default nightly membership remains the three entries above. The picker is again a rest-tier gate, with all Offered/Option aiming/digit pinning/Move only/Escape/empty-column assertions retained. Proof counts and run links are recorded on the VC-530 PR/ticket; this exception does not change other probes' return criteria.
 
 The fifth non-core threshold candidate, **vc418-contrast**, stays gating: the captured defect was literal `"2px"` matching while the focus ring was still interpolating (`1.99963px`). Fix actual readiness rather than discard contrast coverage. Canvas transition completion, composer dialog unmount and the shell unit test's environment read likewise receive synchronization fixes, not weakened assertions.
 

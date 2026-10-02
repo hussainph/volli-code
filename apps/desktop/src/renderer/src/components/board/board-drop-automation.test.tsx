@@ -713,6 +713,59 @@ function loopErrors(): string[] {
 const BUDGET = 60_000;
 
 describe("a released card whose landing column runs an automation", () => {
+  it.each([false, true])(
+    "retains pointer and Option input before drag-start commits (already held: %s)",
+    async (alreadyHeld) => {
+      await mountBoard();
+      const card = columnNamed("todo").querySelector("article")!;
+      const from = centre(card);
+      const doing = centre(columnNamed("doing"));
+      await act(async () => {
+        card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, alreadyHeld));
+        // One browser task: activation, arrival and Option all precede React's
+        // passive effects for the newly active drag. No compensating nudge.
+        document.dispatchEvent(
+          pointerEvent("pointermove", { x: from.x, y: from.y + 6 }, alreadyHeld),
+        );
+        document.dispatchEvent(pointerEvent("pointermove", doing, alreadyHeld));
+        if (!alreadyHeld) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        }
+      });
+      expect(document.querySelector("[data-board-drag]")).not.toBeNull();
+      expect(grown("doing")).toBe(true);
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
+      });
+      expect(grown("doing")).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).not.toBeNull();
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+        );
+      });
+      expect(document.querySelector("[data-board-drag]")).toBeNull();
+      // The permanently mounted listeners must do no hit test or consume
+      // digits at rest, and must never revive the just-ended picker.
+      const hitTest = vi.spyOn(document, "elementsFromPoint");
+      const digit = new KeyboardEvent("keydown", {
+        key: "1",
+        code: "Digit1",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        document.dispatchEvent(pointerEvent("pointermove", doing, true));
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        window.dispatchEvent(digit);
+      });
+      expect(hitTest).not.toHaveBeenCalled();
+      expect(digit.defaultPrevented).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).toBeNull();
+      expect(loopErrors()).toEqual([]);
+    },
+  );
+
   it(
     "lands in the destination column, triggers the automation once, and logs no render loop",
     async () => {

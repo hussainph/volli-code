@@ -35,8 +35,8 @@
  * Automation, is the claim under test.
  *
  * No fixed sleeps for a state: every wait is `waitUntil`/`waitFor` on a real
- * signal. The only bare waits are inside the drag itself, where a pointer has
- * to travel between two moves for dnd-kit's sensor to see it.
+ * signal. Synthetic pointer travel activates dnd-kit's sensor; the picker must
+ * see that travel without a compensating move after the drag-start commit.
  *
  * MANUALLY RUN (needs a display + the built app):
  *
@@ -52,7 +52,6 @@ import {
   makeGitRepo,
   makeScratch,
   seedProjects,
-  sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -182,32 +181,20 @@ async function liftOver(page, displayId, status, { expectPanel = true, dwell = 1
   // look identical from the outside.
   await page.locator("[data-board-drag]").waitFor({ timeout: 10_000 });
   if (expectPanel) {
-    // Nudged on every poll rather than waited out: dnd-kit activates the drag
-    // on the first 4px of travel and the board attaches its pointer listeners
-    // on the commit AFTER that, so a burst of moves can all land before
-    // anything is listening. Each poll is a real one-pixel move, and the
-    // signal is the panel itself — never a sleep.
-    let nudged = 0;
-    await waitUntil(
-      "the column's Offered list to appear under the pointer",
-      async () => {
-        nudged = nudged === 0 ? 3 : 0;
-        await page.mouse.move(dwellX + nudged, dwellY, { steps: 2 });
-        return (await page.locator("[data-offered-panel]").count()) > 0;
-      },
-      { timeout: 10_000, interval: 150 },
-    );
+    // VC-530: the product listens before activation now. Waiting is read-only:
+    // nudging on every poll used to hide the lost-input race at that boundary.
+    await columnFor(page, status).locator("[data-offered-panel]").waitFor({ timeout: 10_000 });
   }
   async function settle() {
-    // The board says which card is in the air, so its absence is this gesture
-    // being over — and waiting for it is what keeps the next drag from starting
-    // into a board still tearing this one down.
+    // The board clears drag state before dnd-kit's retained preview finishes
+    // its drop animation. Both must be gone before the next gesture starts;
+    // absence is the teardown signal, not a fixed animation-duration sleep.
     await waitUntil(
       "the drag to end",
-      async () => (await page.locator("[data-board-drag]").count()) === 0,
+      async () =>
+        (await page.locator("[data-board-drag], [data-ticket-drag-preview]").count()) === 0,
       { timeout: 10_000, interval: 100 },
     );
-    await sleep(200);
   }
   return {
     /** A pointer move that changes nothing but makes the app read ⌥ again. */
