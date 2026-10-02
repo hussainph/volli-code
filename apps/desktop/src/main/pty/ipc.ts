@@ -163,7 +163,10 @@ function isCreateRequest(
  * Registers the terminal IPC handlers and returns the backing manager so the
  * app lifecycle can kill every PTY on quit. Every handler validates its args
  * at runtime — renderer-supplied types are never trusted — and returns a
- * typed result rather than throwing across the IPC boundary.
+ * typed result rather than throwing across the IPC boundary. Mutating handlers
+ * hand `event.sender` to the manager, which honors a session only for the
+ * window that created it (VC-509): a second surface cannot write, run, resize,
+ * kill, park, wake or keep awake another window's PTY.
  */
 export function registerTerminalIpcHandlers(
   handle: DbHandle,
@@ -221,11 +224,11 @@ export function registerTerminalIpcHandlers(
 
   ipcMain.handle(
     "volli:terminal-write" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, data: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, data: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof data !== "string") {
         return { ok: false, error: "Invalid terminal write" };
       }
-      return manager.write(sessionId, data);
+      return manager.write(event.sender, sessionId, data);
     },
   );
 
@@ -234,7 +237,7 @@ export function registerTerminalIpcHandlers(
   // offered and the user accepted (VC-156).
   ipcMain.handle(
     "volli:terminal-run" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
+    (event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
       if (typeof sessionId !== "string" || typeof command !== "string") {
         return Promise.resolve({ ok: false, error: "Invalid terminal command" });
       }
@@ -242,63 +245,64 @@ export function registerTerminalIpcHandlers(
       if (trimmed.length === 0) {
         return Promise.resolve({ ok: false, error: "Invalid terminal command" });
       }
-      return manager.runCommand(sessionId, trimmed);
+      return manager.runCommand(event.sender, sessionId, trimmed);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-resize" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, cols: unknown, rows: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, cols: unknown, rows: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof cols !== "number" || typeof rows !== "number") {
         return { ok: false, error: "Invalid terminal resize" };
       }
-      return manager.resize(sessionId, cols, rows);
+      return manager.resize(event.sender, sessionId, cols, rows);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-kill" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): TerminalIoResult => {
+    (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal kill" };
       }
-      return manager.kill(sessionId);
+      return manager.kill(event.sender, sessionId);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-park" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): Promise<TerminalIoResult> => {
+    (event, sessionId: unknown): Promise<TerminalIoResult> => {
       if (typeof sessionId !== "string") {
         return Promise.resolve({ ok: false, error: "Invalid terminal park" });
       }
       // A user-initiated park bypasses the visible/keep-awake auto-park guards.
-      return manager.park(sessionId, { manual: true });
+      return manager.park(event.sender, sessionId, { manual: true });
     },
   );
 
   ipcMain.handle(
     "volli:terminal-wake" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): TerminalIoResult => {
+    (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal wake" };
       }
-      return manager.wake(sessionId);
+      return manager.wake(event.sender, sessionId);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-keep-awake" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, keepAwake: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, keepAwake: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof keepAwake !== "boolean") {
         return { ok: false, error: "Invalid terminal keep-awake" };
       }
-      return manager.setKeepAwake(sessionId, keepAwake);
+      return manager.setKeepAwake(event.sender, sessionId, keepAwake);
     },
   );
 
   // Fire-and-forget (ipcRenderer.send) — pane visibility flips on every nav and
-  // needs no reply; the sender check mirrors the ack channel's window-scoping.
+  // needs no reply; like every mutating terminal channel it is scoped to the
+  // session's owning window (VC-509).
   ipcMain.on(
     "volli:terminal-set-visible" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {

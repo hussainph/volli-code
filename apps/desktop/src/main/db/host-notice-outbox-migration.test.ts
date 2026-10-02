@@ -6,7 +6,9 @@ import type Database from "better-sqlite3";
 import { createDesktopSessionEngine } from "../session-control";
 import { insertProject } from "./projects-repo";
 import { openRawDb, testProject } from "./test-helpers";
-import { migrate } from "./migrations";
+import { MIGRATIONS, migrate } from "./migrations";
+
+const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
 
 let directory: string | undefined;
 let db: Database.Database | undefined;
@@ -45,7 +47,7 @@ describe("host notice outbox migration", () => {
     const f = await version55();
     const before = await f.engine.getSession({ sessionId: f.sessionId });
     expect(migrate(f.db, f.path)).toBe(true);
-    expect(f.db.pragma("user_version", { simple: true })).toBe(56);
+    expect(f.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(f.db.prepare("SELECT * FROM host_notice_outbox").all()).toEqual([]);
     expect(await f.engine.getSession({ sessionId: f.sessionId })).toEqual(before);
     expect(f.db.pragma("foreign_key_check")).toEqual([]);

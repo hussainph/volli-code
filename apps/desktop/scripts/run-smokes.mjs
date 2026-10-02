@@ -204,10 +204,6 @@ export const SMOKE_QUARANTINE = new Map([
     "automations-picker-smoke.mjs",
     "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
   ],
-  [
-    "browser-tab-smoke.mjs",
-    "VC-526: 16/226 confirmed recoveries; hold/cursor UI readiness hypothesis",
-  ],
 ]);
 
 /**

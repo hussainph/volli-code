@@ -303,27 +303,31 @@ class InMemorySessionLedger implements SessionLedger {
   }
 
   #listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
+    // Ledger ACCEPTANCE order, matching the SQLite adapter's
+    // `session_event_sequence` read: the last signal appended for a ticket
+    // wins, whatever `occurredAt` claims and whatever the Session ids are
+    // (VC-512). The Map's insertion order is this adapter's ledger order, and
+    // `#appendEvent` is its only writer, so it is the same provisional local
+    // order the SQLite side stores. A future relay must supply final order or
+    // explicit supersession (docs/BOUNDARIES.md standing rule 2).
     const byTicket = new Map<string, ConcreteLatestSessionSignal>();
-    for (const session of this.#sessions.values()) {
-      if (session.projectId !== query.projectId || session.ticketId === null) continue;
-      const event = this.#eventsFor(session.id).findLast(isSessionSignalEvent);
-      if (event === undefined) continue;
-      const candidate: ConcreteLatestSessionSignal = {
+    for (const event of this.#events.values()) {
+      if (!isSessionSignalEvent(event)) continue;
+      const session = this.#sessions.get(event.sessionId);
+      if (
+        session === undefined ||
+        session.projectId !== query.projectId ||
+        session.ticketId === null
+      ) {
+        continue;
+      }
+      byTicket.set(session.ticketId, {
         ticketId: session.ticketId,
         sessionId: session.id,
         signal: event.payload.signal,
         reason: event.payload.reason,
         createdAt: event.occurredAt,
-      };
-      const prior = byTicket.get(candidate.ticketId);
-      if (
-        prior === undefined ||
-        candidate.createdAt > prior.createdAt ||
-        (candidate.createdAt === prior.createdAt &&
-          compareSqliteBinaryText(candidate.sessionId, prior.sessionId) > 0)
-      ) {
-        byTicket.set(candidate.ticketId, candidate);
-      }
+      });
     }
     return [...byTicket.values()].toSorted((left, right) =>
       compareSqliteBinaryText(left.ticketId, right.ticketId),

@@ -16,7 +16,7 @@ afterEach(() => {
   ctx.cleanup();
 });
 
-function setup(): {
+function setup(clock?: () => number): {
   ledger: SessionLedger;
   control: ReturnType<typeof createSessionEngine>;
   projectId: string;
@@ -30,7 +30,7 @@ function setup(): {
     ledger,
     control: createSessionEngine({
       ledger,
-      clock: { now: () => 100 + id },
+      clock: clock === undefined ? { now: () => 100 + id } : { now: clock },
       ids: { next: (kind) => `${kind}-${++id}` },
     }),
     projectId: project.id,
@@ -704,6 +704,106 @@ describe("SqliteSessionLedger", () => {
         signal: "blocked",
         reason: "Latest result",
         createdAt: 114,
+      },
+    ]);
+  });
+
+  it("keeps the last accepted signal when a clock regression moves occurred_at backwards (VC-512)", async () => {
+    let now = 200;
+    const { control, projectId } = setup(() => now);
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const beforeRegression = await control.createSession({
+      commandId: "create-signal-before-regression",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Before the clock moved",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-before-regression",
+      sessionId: beforeRegression.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Clock said later" },
+      provenance,
+    });
+    // The clock moves backwards — NTP correction, a VM restore, a person — so
+    // the signal ACCEPTED after the first one carries an EARLIER occurred_at.
+    now = 100;
+    const afterRegression = await control.createSession({
+      commandId: "create-signal-after-regression",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "After the clock moved",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-after-regression",
+      sessionId: afterRegression.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Accepted later" },
+      provenance,
+    });
+
+    // The signal accepted last is the latest state this host knows, whatever
+    // its occurred_at claims; an occurred_at ordering would name the older one.
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: afterRegression.session.id,
+        signal: "done",
+        reason: "Accepted later",
+        createdAt: 100,
+      },
+    ]);
+  });
+
+  it("breaks equal-occurred_at signal ties by acceptance order, not Session id (VC-512)", async () => {
+    const { control, projectId } = setup(() => 150);
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const earlierAccepted = await control.createSession({
+      commandId: "create-signal-tie-earlier",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Accepted first",
+      requestedSessionId: "session-z",
+      provenance,
+    });
+    const laterAccepted = await control.createSession({
+      commandId: "create-signal-tie-later",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Accepted second",
+      requestedSessionId: "session-a",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-tie-earlier",
+      sessionId: earlierAccepted.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Accepted first" },
+      provenance,
+    });
+    // Accepted second, and its Session id sorts LOWER under SQLite BINARY — the
+    // old tie-break would name the first signal "latest" from this alone.
+    await control.submit({
+      commandId: "signal-tie-later",
+      sessionId: laterAccepted.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Accepted second" },
+      provenance,
+    });
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: laterAccepted.session.id,
+        signal: "done",
+        reason: "Accepted second",
+        createdAt: 150,
       },
     ]);
   });

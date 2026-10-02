@@ -187,6 +187,24 @@ Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, int
 
 The original census recommendations did not implement moves; the VC-531 follow-up records bare-path-env's later return. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
 
+### VC-532: browser-tab hold/cursor repair
+
+The census above remains the pre-fix measurement. The retained both-attempt artifact from [quarantine run 37069281453](https://github.com/hussainph/volli-code/actions/runs/37069281453), on the VC-522 merge SHA, was inspected before repair: browser-tab passed its first attempt in 52.1s (`labelSized` 135×49); there was no new failing browser-tab artifact. Historical final replays in runs [36636016591](https://github.com/hussainph/volli-code/actions/runs/36636016591) and [36817860736](https://github.com/hussainph/volli-code/actions/runs/36817860736) isolate check 8's `labelSized=null`: ownership/refusal, holder pill/dot, cursor position and stacking all passed, but the sampled cursor was at its 44×44 default size and the label-size wait observed no growth. Only the former run has an observed same-SHA recovery. The lost internal first failures remain unknown; this repair does not attribute all 16 confirmed recoveries to one cause.
+
+The product still started its 1,600ms label pin at hold acquisition. Its boot-size handler restarted an **expired** pin, but left a nearly expired pin untouched. A renderer subscribing just before that deadline could receive the pinned state and its unpinned replacement before drawing/reporting the label. The deterministic just-before-deadline regression failed against the original product (18 existing tests passed). The pin now starts from the overlay's existing, sender-checked **drawing acknowledgement**, correlated to the latest pinned state of the current hold. Slow boot/off-screen work cannot consume the pin; stale/foreign/released-hold acknowledgements cannot start it. The action's existing acknowledgement bound is unchanged.
+
+The smoke also observes the holder, cursor bounds and transient label-size report concurrently with the first write, rather than spending the label's visible lifetime waiting for another projection. All tab chrome/history, isolation, managed popup, DevTools, ownership/refusal, cursor stacking/size, takeover/hand-back, turn-end and clean teardown assertions remain unchanged; no retry, sleep or longer timeout was added.
+
+Local post-fix proof on the product changes in `47a7c5aab`: **10/10 serial fresh-profile browser-tab opportunities passed**, with `VOLLI_CONCURRENCY_HINT=1`, distinct scratch HOME/user-data directories and no retries. All 198 focused cursor-overlay/page, agent-port and tab-host tests pass, as do the desktop build, desktop typecheck and `vp check`. The owner explicitly replaced the 50-opportunity/3-SHA return bar for VC-532 with these ten serial opportunities plus three fresh branch quarantine dispatches. Three serial `gh workflow run "Smoke quarantine" --ref volli/VC-532-deflake-browser-tab-hold-cursor-ui-smoke` dispatches were completed while its quarantine entry was still present:
+
+| Post-fix quarantine run | SHA | browser-tab outcome | Attempts | Runtime | Native quiet check |
+|---|---|---|---:|---:|---|
+| [37071384643](https://github.com/hussainph/volli-code/actions/runs/37071384643) | `47a7c5aab` | PASS | 1 | 35.1s | PASS |
+| [37071599558](https://github.com/hussainph/volli-code/actions/runs/37071599558) | `47a7c5aab` | PASS | 1 | 41.0s | PASS |
+| [37071864839](https://github.com/hussainph/volli-code/actions/runs/37071864839) | `47a7c5aab` | PASS | 1 | 24.1s | PASS |
+
+Each run's retained `smoke-results-quarantine-attempt-1` artifact was downloaded and checked: browser-tab has exactly one successful attempt, check 8 reports a label-sized 135×49 view, and takeover/turn-end/clean teardown pass. **13/13 requested post-fix opportunities pass, zero FAIL/FLAKY**; the three CI observations share one fix SHA, not three SHAs. The owner approved two staged pushes so this proof could precede removal of only browser-tab's `SMOKE_QUARANTINE` entry. It now joins the gating rest tier; the other quarantine entries are unchanged.
+
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
 A minimum clearly named core set should retain:

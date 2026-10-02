@@ -2134,6 +2134,11 @@ describe("Session tRPC router", () => {
         message: {
           id: "message-1",
           role: "user",
+          metadata: {
+            omitted: undefined,
+            sparse: [undefined],
+            retained: { none: null, count: 1, enabled: true },
+          },
           parts: [{ type: "text", text: "private prompt" }],
         },
       },
@@ -2442,6 +2447,62 @@ describe("Session tRPC router", () => {
     );
     expect(JSON.stringify(failures)).not.toContain("super-secret");
     expect(JSON.stringify(failures)).toContain("[HOME]");
+  });
+
+  it("rejects non-JSON opaque UIMessage payloads before runtime submission", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const circularPayload: Record<string, unknown> = {};
+    circularPayload.self = circularPayload;
+    const invalidMessages = [
+      {
+        id: "date-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: new Date("2025-01-01T00:00:00.000Z") } }],
+      },
+      {
+        id: "map-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: new Map([["key", "value"]]) } }],
+      },
+      {
+        id: "nan-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: Number.NaN } }],
+      },
+      {
+        id: "function-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: () => undefined } }],
+      },
+      {
+        id: "cycle-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: circularPayload } }],
+      },
+      {
+        id: "symbol-key-message",
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: { [Symbol("hidden")]: "value" } } }],
+      },
+    ];
+
+    for (const [index, message] of invalidMessages.entries()) {
+      await expect(
+        Reflect.apply(caller.session.command, caller.session, [
+          {
+            commandId: `invalid-json-message-${index}`,
+            sessionId: "session-1",
+            command: { kind: "message.submit", message },
+          },
+        ]),
+      ).rejects.toThrow("UIMessage payloads must contain only JSON-safe values");
+    }
+
+    expect(fixture.calls.command).toEqual([]);
   });
 
   it("rejects whitespace identifiers and unsafe SSE resume cursors", async () => {

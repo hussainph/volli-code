@@ -39,48 +39,31 @@ import {
 } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
+import { getTransactionGate } from "../db/transaction-gate";
 
 type SqlRow = Record<string, unknown>;
 
 /**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
- * synchronous, a Session Engine transaction may await host work, so this queue
- * holds BEGIN IMMEDIATE ownership across that await and never lets a second
- * ledger operation observe a partial fact set.
+ * synchronous, a Session Engine transaction may await host work. The shared
+ * connection gate holds transaction ownership across that await, so no ledger
+ * on this handle observes a partial fact set.
  */
 export class SqliteSessionLedger implements SessionLedger {
-  #tail: Promise<void> = Promise.resolve();
-
   constructor(private readonly db: Database.Database) {}
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T> {
-    const run = async (): Promise<T> => {
-      this.db.exec("BEGIN IMMEDIATE");
+    return getTransactionGate(this.db).transaction(async () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
       try {
         const value = await work(transaction);
         transaction.assertReceiptEventPairs();
-        this.db.exec("COMMIT");
         return value;
-      } catch (error) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {
-          // The original failure carries the useful error. A failed rollback
-          // only happens after SQLite already abandoned the transaction.
-        }
-        throw error;
       } finally {
         open = false;
       }
-    };
-    const queued = this.#tail.then(run, run);
-    this.#tail = queued.then(
-      () => undefined,
-      () => undefined,
-    );
-    return queued;
+    });
   }
 }
 
@@ -159,6 +142,25 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     );
   }
 
+  /**
+   * Each ticket's latest explicit outcome, in this host's LEDGER order.
+   *
+   * "Latest" is the signal this ledger ACCEPTED last, never the largest
+   * `occurred_at`. `occurred_at` is what a source claimed: a clock that moves
+   * backwards would let an older signal win, and two signals can share a
+   * millisecond, which the previous `session_id` tie-break resolved by id
+   * rather than by causality (VC-512). The accept order is migration 044's
+   * `session_event_sequence` — the append trigger's AUTOINCREMENT total order,
+   * which is never reused. `occurred_at` is still what a row REPORTS as its
+   * time; it just no longer selects the row.
+   *
+   * This is provisional LOCAL order (docs/BOUNDARIES.md standing rule 2): it
+   * says what this host learned last, which is honest for one host and is not
+   * a global order. When a relay makes a second host real, it must supply the
+   * final order (server-assigned sequence) or each signal must explicitly
+   * supersede the one it replaces; this read then orders by that instead of by
+   * `session_event_sequence`.
+   */
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
     this.assertOpen();
     const rows = prepared(
@@ -169,9 +171,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                   json_extract(e.payload, '$.signal') AS signal,
                   json_extract(e.payload, '$.reason') AS reason,
                   e.occurred_at AS occurred_at,
+                  es.sequence AS accepted_sequence,
                   ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
              FROM sessions s
              JOIN session_events e ON e.session_id = s.id
+             JOIN session_event_sequence es ON es.event_id = e.id
             WHERE s.project_id = @projectId
               AND s.ticket_id IS NOT NULL
               AND json_extract(e.payload, '$.kind') = 'session.signaled'
@@ -184,7 +188,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                   occurred_at,
                   ROW_NUMBER() OVER (
                     PARTITION BY ticket_id
-                    ORDER BY occurred_at DESC, session_id COLLATE BINARY DESC
+                    ORDER BY accepted_sequence DESC
                   ) AS ticket_rank
              FROM latest_session_signals
             WHERE session_rank = 1
