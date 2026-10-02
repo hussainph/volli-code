@@ -1351,8 +1351,18 @@ async function main() {
         await sleep(300);
         const paletteOpen = (await page.getByRole("dialog").count()) === 1;
         const composerClosed = (await page.getByPlaceholder("Ticket title").count()) === 0;
+        await search.focus();
+        await waitUntil(
+          "command palette search to receive focus",
+          () => search.evaluate((el) => el === document.activeElement),
+          { timeout: 3000 },
+        );
         await page.keyboard.press("Escape");
-        await sleep(300);
+        await waitUntil(
+          "command palette to unmount after Escape",
+          async () => (await page.locator('[role="dialog"]').count()) === 0,
+          { timeout: 3000 },
+        );
         const ok = paletteOpen && composerClosed;
         return { ok, detail: `paletteOpen=${paletteOpen} composerClosed=${composerClosed}` };
       },
@@ -1361,10 +1371,32 @@ async function main() {
     // === 20. Header "New ticket" button opens the dialog; Escape closes it ===
     await attempt(20, '"New ticket" header button opens the dialog; Escape closes it', async () => {
       await page.getByRole("button", { name: "New ticket", exact: true }).click();
-      await sleep(200);
+      const title = page
+        .locator('[data-testid="new-ticket-composer"]')
+        .getByPlaceholder("Ticket title");
+      await waitUntil(
+        "New-ticket composer to open with an editable title",
+        async () =>
+          (await page.getByRole("dialog").count()) === 1 &&
+          (await title.isVisible()) &&
+          (await title.isEditable()),
+        { timeout: 3000 },
+      );
+      // Monaco and Radix mount asynchronously; send Escape to the ready title,
+      // not to the header button that owned focus before the dialog opened.
+      await title.focus();
+      await waitUntil(
+        "New-ticket composer title to receive focus",
+        () => title.evaluate((el) => el === document.activeElement),
+        { timeout: 3000 },
+      );
       const openCount = await page.getByRole("dialog").count();
       await page.keyboard.press("Escape");
-      await sleep(300);
+      await waitUntil(
+        "New-ticket dialog to unmount after Escape",
+        async () => (await page.locator('[role="dialog"]').count()) === 0,
+        { timeout: 3000 },
+      );
       const closedCount = await page.getByRole("dialog").count();
       const ok = openCount === 1 && closedCount === 0;
       return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };
