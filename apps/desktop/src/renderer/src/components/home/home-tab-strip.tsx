@@ -562,7 +562,7 @@ function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { ta
           status={dot ?? undefined}
           // Between the liveness dot and the label, exactly where the ticket
           // strip and the sidebar put it: one Session, one place to look.
-          badge={<SessionProvenanceMark provenance={provenance} rowTitle={tab.title} />}
+          badge={<SessionProvenanceMark provenance={provenance} />}
           leading={
             // size-3, the same as the chat bubble that shares this slot and the
             // same as the ticket strip's moon — one leading glyph size now that
@@ -662,7 +662,7 @@ function ChatTab({
           )}
           onActivate={onSelect}
           status={status}
-          badge={<SessionProvenanceMark provenance={provenance} rowTitle={title} />}
+          badge={<SessionProvenanceMark provenance={provenance} />}
           // A landing auto-title reveals here word by word (VC-81); terminal
           // and board tabs stay static.
           revealLabel

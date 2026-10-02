@@ -7,10 +7,10 @@ import "./typeset.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { toast } from "sonner";
 
 import App from "./App";
+import { BootErrorPanel } from "./components/boot-error-panel";
 import {
   announcePendingArmedRunSettlement,
   receivePendingArmedRuns,
@@ -35,17 +35,6 @@ import { initTerminalAppearance } from "./terminal/appearance";
 /** Interrupt toasts outlive sonner's ~4s default: an automated de-escalation
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
 const INTERRUPT_TOAST_DURATION_MS = 8000;
-
-/** Full-window failure panel — mirrors the app's empty-state styling (see main-content.tsx's EmptyProjectsState). */
-function BootErrorPanel({ error }: { error: string }) {
-  return (
-    <div className="flex h-svh w-full flex-col items-center justify-center gap-2 bg-background text-center">
-      <WarningCircleIcon className="size-8 text-muted-foreground" />
-      <h2 className="text-heading font-semibold text-foreground">Volli couldn't load its data</h2>
-      <p className="max-w-md text-sm text-muted-foreground">{error}</p>
-    </div>
-  );
-}
 
 async function main() {
   const root = createRoot(document.getElementById("root")!);

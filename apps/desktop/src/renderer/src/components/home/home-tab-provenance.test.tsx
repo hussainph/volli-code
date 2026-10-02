@@ -119,6 +119,7 @@ describe("a Home Session tab's provenance", () => {
     const html = await mount([HOME_BOARD_TAB, CHAT]);
 
     expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
+    expect(tab("Fix the flaky worktree test").textContent).toBe("Fix the flaky worktree test");
     expect(tab("Fix the flaky worktree test").getAttribute("title")).toBe(
       "Fix the flaky worktree test\nAutomation · Nightly sweep",
     );

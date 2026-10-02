@@ -369,7 +369,7 @@ function TicketTab({
         // slot at a time: a File tab has no Session and a Session tab has no
         // worktree badge.
         sessionId !== null ? (
-          <SessionProvenanceMark provenance={provenance} rowTitle={tab.label} />
+          <SessionProvenanceMark provenance={provenance} />
         ) : tab.kind === "browser" ? (
           // A held Browser tab wears its holder's colour here (VC-239), on
           // screen or not: the strip is where a person learns a Session is
