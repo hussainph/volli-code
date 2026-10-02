@@ -1,5 +1,9 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { DisplaySection } from "@renderer/components/settings/panes/display-section";
 
@@ -108,7 +112,37 @@ describe("Settings → Appearance → Display", () => {
     expect(html).toContain('for="authority-hints-visible"');
     // The persisted default is visible (true), so a fresh install draws the
     // switch checked.
-    expect(html).toContain('data-state="checked"');
+    const hintsControl = html.match(/<button\b[^>]*\bid="authority-hints-visible"[^>]*>/)?.[0];
+    expect(hintsControl).toBeDefined();
+    expect(hintsControl).toContain('data-state="checked"');
+  });
+
+  it("draws an off hints choice independently of the cost switch and can enable it", () => {
+    const previous = useUiStore.getState();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    useUiStore.setState({ authorityHintsVisible: false, costVisible: true });
+    try {
+      act(() => root.render(<DisplaySection />));
+      const hints = container.querySelector<HTMLButtonElement>("#authority-hints-visible");
+      expect(hints).not.toBeNull();
+      expect(hints?.getAttribute("aria-checked")).toBe("false");
+      expect(container.querySelector("#cost-visible")?.getAttribute("aria-checked")).toBe("true");
+      act(() => hints?.click());
+      expect(useUiStore.getState().authorityHintsVisible).toBe(true);
+      expect(hints?.getAttribute("aria-checked")).toBe("true");
+      act(() => hints?.click());
+      expect(useUiStore.getState().authorityHintsVisible).toBe(false);
+      expect(hints?.getAttribute("aria-checked")).toBe("false");
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+      useUiStore.setState({
+        authorityHintsVisible: previous.authorityHintsVisible,
+        costVisible: previous.costVisible,
+      });
+    }
   });
 
   it("carries no prose under the hints row", () => {

@@ -548,8 +548,6 @@ export interface PiAdapterOptions {
     allowInjection: boolean;
     wait: SecretWaitPublisher;
   }) => DesktopSecretPort;
-  /** Live opt-in for paid shadow review; separate from automatic enforcement. */
-  authorityShadowReviewEnabled?: PiRuntimeHostOptions["authorityShadowReviewEnabled"];
   /** Authority review is host policy, not an agent tool capability. */
   decisions?: import("@volli/shared").DecisionPort;
   authorityReason?: SessionRuntimeSpec["authorityReason"];
@@ -842,9 +840,6 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
-    ...(options.authorityShadowReviewEnabled === undefined
-      ? {}
-      : { authorityShadowReviewEnabled: options.authorityShadowReviewEnabled }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
     ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
@@ -1304,9 +1299,8 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // Off installs no gate. Observe permits behavior-neutral shadow review
-      // only with the host's live opt-in; enforce retains rule-pack gating.
-      // The pinned Snapshot records
+      // Off installs no gate. Observe installs VC-28's behavior-neutral shadow
+      // review; enforce retains rule-pack gating. The pinned Snapshot records
       // which posture this attachment uses, independent of tool capability.
       //
       // Spread rather than assigned for `promptResources`' reason: the field must

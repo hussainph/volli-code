@@ -366,12 +366,19 @@ describe("tool-linked authority hints", () => {
     act(() => root?.render(<ActivityBundle rows={rows} />));
     act(() =>
       root?.render(
-        <ActivityBundle rows={rows} authorityReviews={new Map([[failed.toolCallId, [review]]])} />,
+        <ActivityBundle
+          rows={rows}
+          authorityReviews={
+            new Map([
+              [rows[0]!.key, [{ ...review, toolCallId: failed.toolCallId, tool: failed.toolName }]],
+            ])
+          }
+        />,
       ),
     );
     const show = container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
     act(() => show?.click());
-    expect(container?.textContent).toContain("Would block bash");
+    expect(container?.textContent).toContain(`Would block ${failed.toolName}`);
   });
 });
 

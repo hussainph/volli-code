@@ -88,6 +88,7 @@ import {
   type QueuedMessage,
   type TranscriptRow,
   type TranscriptAuthorityReview,
+  type TranscriptLinkedAuthorityReview,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -2326,7 +2327,7 @@ export function ChatTranscriptRow({
   onOpenSession?(sessionId: string): void;
 }) {
   const hintsVisible = useUiStore((store) => store.authorityHintsVisible);
-  const authorityReviews = useStableList<TranscriptAuthorityReview>(
+  const authorityReviews = useStableList<TranscriptLinkedAuthorityReview>(
     React.useMemo(
       () =>
         row.kind === "turn"
@@ -2394,19 +2395,19 @@ export const ChatTurn = React.memo(function ChatTurn({
   authorityReviews,
 }: {
   messages: readonly UIMessage[];
-  authorityReviews?: readonly TranscriptAuthorityReview[];
+  authorityReviews?: readonly TranscriptLinkedAuthorityReview[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
-  const reviewsByCall = React.useMemo(() => {
+  const reviewsByRow = React.useMemo(() => {
     const indexed = new Map<string, TranscriptAuthorityReview[]>();
     for (const review of authorityReviews ?? []) {
-      const entries = indexed.get(review.toolCallId) ?? [];
+      const entries = indexed.get(review.toolRowKey) ?? [];
       entries.push(review);
-      indexed.set(review.toolCallId, entries);
+      indexed.set(review.toolRowKey, entries);
     }
     return indexed;
   }, [authorityReviews]);
@@ -2494,7 +2495,7 @@ export const ChatTurn = React.memo(function ChatTurn({
           {segments
             ? segments.map((segment) => (
                 <div key={segment.key}>
-                  {renderSegment(segment, role, context, live, reviewsByCall)}
+                  {renderSegment(segment, role, context, live, reviewsByRow)}
                 </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
@@ -2593,7 +2594,7 @@ function renderSegment(
         <GatedCall
           part={segment.part}
           context={context}
-          authorityReviews={authorityReviews.get(segment.part.toolCallId)}
+          authorityReviews={authorityReviews.get(segment.key)}
         />
       );
     default:

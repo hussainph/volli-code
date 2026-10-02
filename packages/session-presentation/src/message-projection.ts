@@ -1,8 +1,10 @@
 import { projectKeyedTranscriptMessage, type TranscriptOverlay } from "@volli/session-engine";
+import { SESSION_TOOL_CALL_SCOPE_METADATA_KEY, type RendererSessionEvent } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 export interface TranscriptMessageFrame {
   transcript: { message: UIMessage } | null;
+  event?: Pick<RendererSessionEvent, "payload"> | null;
 }
 
 /**
@@ -15,8 +17,37 @@ export function projectTranscriptMessages(
 ): readonly UIMessage[] {
   const latestByMessageId = new Map<string, UIMessage>();
   for (const frame of frames) {
-    if (frame.transcript && speaksInTranscript(frame.transcript.message))
-      latestByMessageId.set(frame.transcript.message.id, frame.transcript.message);
+    if (frame.transcript && speaksInTranscript(frame.transcript.message)) {
+      let message = frame.transcript.message;
+      const payload = frame.event?.payload;
+      // Older activity artifacts lack call scope. Recover it from the Session
+      // fact, never from an executor-shaped message id or event adjacency.
+      if (
+        payload?.kind === "transcript.referenced" &&
+        payload.attachmentId !== null &&
+        payload.turnId !== null &&
+        message.parts.some((part) => part.type === "dynamic-tool")
+      ) {
+        message = {
+          ...message,
+          parts: message.parts.map((part) =>
+            part.type === "dynamic-tool"
+              ? {
+                  ...part,
+                  toolMetadata: {
+                    ...part.toolMetadata,
+                    [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: {
+                      attachmentId: payload.attachmentId,
+                      turnId: payload.turnId,
+                    },
+                  },
+                }
+              : part,
+          ),
+        };
+      }
+      latestByMessageId.set(message.id, message);
+    }
   }
   return [...latestByMessageId.values()];
 }

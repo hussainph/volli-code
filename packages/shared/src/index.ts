@@ -43,6 +43,7 @@ export * from "./web-target-policy";
 export * from "./session-activity";
 export * from "./browser-trace";
 export * from "./session-host-notice";
+export * from "./session-tool-call";
 export * from "./session-todo";
 export * from "./ticket-branch";
 export * from "./ticket-comment";

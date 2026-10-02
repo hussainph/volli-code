@@ -949,9 +949,7 @@ export const ActivityBundle = React.memo(
           <BundleRowView
             key={row.key}
             row={row}
-            authorityReviews={
-              row.kind === "tool" ? authorityReviews?.get(row.part.toolCallId) : undefined
-            }
+            authorityReviews={row.kind === "tool" ? authorityReviews?.get(row.key) : undefined}
             onOpenFile={onOpenFile}
             onOpenSession={onOpenSession}
           />

@@ -1,4 +1,6 @@
 import type { UIMessage } from "ai";
+import { readSessionToolCallScope, type SessionToolCallScope } from "@volli/shared";
+import { transcriptPartKey } from "./activity";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
 import type {
   TranscriptAuthorityReview,
@@ -11,12 +13,17 @@ export type TranscriptRow =
   | {
       kind: "turn";
       messages: readonly UIMessage[];
-      authorityReviews?: readonly TranscriptAuthorityReview[];
+      authorityReviews?: readonly TranscriptLinkedAuthorityReview[];
     }
   | { kind: "host-notice"; messageId: string; notice: TranscriptHostNotice }
   | { kind: "compaction"; compaction: TranscriptCompaction }
   | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
   | { kind: "authority-review"; review: TranscriptAuthorityReview };
+
+/** A resolved call placement. Clients use this row key, never a native call id. */
+export interface TranscriptLinkedAuthorityReview extends TranscriptAuthorityReview {
+  toolRowKey: string;
+}
 
 export function authorityReviewNoticeCopy(review: TranscriptAuthorityReview): string {
   return `${review.mode === "shadow" ? "Would block" : "Blocked"} ${review.tool}: ${review.reason}`;
@@ -79,27 +86,60 @@ export function projectTranscriptRows(
   reasoningDrops: readonly TranscriptReasoningDrop[],
   authorityReviews: readonly TranscriptAuthorityReview[] = [],
 ): readonly TranscriptRow[] {
-  const reviewsByCall = new Map<string, TranscriptAuthorityReview[]>();
-  for (const review of authorityReviews) {
-    const reviews = reviewsByCall.get(review.toolCallId) ?? [];
-    reviews.push(review);
-    reviewsByCall.set(review.toolCallId, reviews);
+  const initialRows = turns.map(rowFor);
+  const callsById = new Map<
+    string,
+    Map<string, { rowKey: string; scope: SessionToolCallScope | null }>
+  >();
+  if (authorityReviews.length > 0) {
+    for (const row of initialRows) {
+      if (row.kind !== "turn") continue;
+      for (const message of row.messages) {
+        message.parts.forEach((part, index) => {
+          if (part.type !== "dynamic-tool") return;
+          const calls = callsById.get(part.toolCallId) ?? new Map();
+          // Repeated parts in one message are one logical call. Distinct
+          // messages with the same native id must never be conflated.
+          if (!calls.has(message.id)) {
+            calls.set(message.id, {
+              rowKey: transcriptPartKey(message.id, index),
+              scope: readSessionToolCallScope(part.toolMetadata),
+            });
+          }
+          callsById.set(part.toolCallId, calls);
+        });
+      }
+    }
   }
   const linked = new Set<TranscriptAuthorityReview>();
-  const turnRows = turns.map((messages) => {
-    const row = rowFor(messages);
-    if (row.kind !== "turn" || reviewsByCall.size === 0) return row;
-    const reviews = messages.flatMap((message) =>
-      message.parts.flatMap((part) => {
-        if (!("toolCallId" in part) || typeof part.toolCallId !== "string") return [];
-        return (reviewsByCall.get(part.toolCallId) ?? []).filter((review) => {
-          if (linked.has(review)) return false;
-          linked.add(review);
-          return true;
-        });
-      }),
+  const reviewsByRow = new Map<string, TranscriptLinkedAuthorityReview[]>();
+  for (const review of authorityReviews) {
+    const candidates = [...(callsById.get(review.toolCallId)?.values() ?? [])].filter(
+      (call) =>
+        review.scope === undefined ||
+        (review.scope !== null &&
+          call.scope?.attachmentId === review.scope.attachmentId &&
+          call.scope.turnId === review.scope.turnId),
     );
-    return reviews.length === 0 ? row : { ...row, authorityReviews: reviews };
+    // A scoped review cannot claim an unscoped old call while its own live
+    // call is still arriving. Ambiguous legacy history stays a disclosure.
+    if (candidates.length !== 1) continue;
+    const target = candidates[0]!;
+    const reviews = reviewsByRow.get(target.rowKey) ?? [];
+    reviews.push({ ...review, toolRowKey: target.rowKey });
+    reviewsByRow.set(target.rowKey, reviews);
+    linked.add(review);
+  }
+  const turnRows = initialRows.map((row) => {
+    if (row.kind !== "turn" || reviewsByRow.size === 0) return row;
+    const reviews = row.messages.flatMap((message) =>
+      message.parts.flatMap(
+        (_part, index) => reviewsByRow.get(transcriptPartKey(message.id, index)) ?? [],
+      ),
+    );
+    return reviews.length === 0
+      ? row
+      : { kind: "turn" as const, messages: row.messages, authorityReviews: reviews };
   });
   const pending: AnchoredContextNotice[] = [
     ...compactions.map((value) => ({
