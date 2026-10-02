@@ -218,7 +218,21 @@ Proportional next implementation steps, grounded in inspected evidence:
 4. Inspect DB recovery's bounded shutdown and child ownership without treating completed restore assertions as a licence to accept every SIGTERM. Source: `database-recovery-smoke.mjs` cleanup/`closeRun`; the final fail includes `cannot inspect Electron main child before bounded close` after the earlier forced termination.
 5. Browser recovery's post-click snapshot and preview recapture deserve targeted investigation. The current source at `browser-recovery-smoke.mjs:248–287` immediately asserts the returned snapshot/result. This census identifies a repeated failing boundary, not which layer owns the fix.
 
-## Verification performed
+## VC-531: bare-PATH readiness capture repair
+
+The retained first-attempt artifact from quarantine run [37069281453](https://github.com/hussainph/volli-code/actions/runs/37069281453) was inspected before implementation: bare-path-env passed on its first process (32.5s), so this is not a retained failure. Both historical final-failure replays (jobs 109855090266 and 110934290745) fail check 2 with `last value: null`. Their separate main-output evidence files were not uploaded by the historical runner, and the 16 retry-green first-process assertions remain censored. Those logs alone cannot distinguish lost readiness from unfinished generation or explain every historical recovery.
+
+**Reproduced boundary:** the old probe awaited Playwright's `launch()` **before** attaching its pipe listeners. Playwright already drains those pipes while connecting to main and Chromium. With a fast login-shell fixture returning the same bare PATH, a pre-entry capture recorded `[volli] harness runtime ready` before `launch()` returned; the old probe then passed its PATH assertion and failed check 2 after the unchanged 12s wait. The repaired probe passes the same fixture without a retry. This is a probe observation race, not evidence of a wrapper-generation product race.
+
+**Repair:** a smoke-only main preload captures stdout/stderr from before the app entry runs, preserving each descriptor's bytes independently. The post-window PATH stream is marked by Electron's actual `browser-window-created` event, not the later Playwright client response. The probe still waits for the product's real ready/failure markers with the original 12s bound and now also checks that main initially received exactly `/usr/bin:/bin:/usr/sbin:/sbin`. No product readiness is synthesized, no wrapper generation is bypassed, and no assertion or timeout is loosened. Failure output includes full main logs in the runner's retained attempt log instead of only printing paths to unuploaded temporary files.
+
+Focused regressions cover early readiness, early genuine errors, split/interleaved output, the actual window boundary, pending boot, byte/write forwarding and stale-capture reset. A fault-injected isolated launch made a generated `.zshenv` path non-regular: check 2 correctly failed with `failed to generate harness wrappers: Refusing to manage non-regular file`, and the full error was retained in probe output.
+
+**Local proof:** `node apps/desktop/e2e/bare-path-env-smoke.mjs` ran **10/10 PASS, 0 FAIL, 0 retries**, serially with `VOLLI_CONCURRENCY_HINT=1` and inherited `VOLLI_SMOKE_DIR` removed for every fresh profile. `node --test --test-concurrency="$VOLLI_CONCURRENCY_HINT" apps/desktop/e2e/lib/bare-path-boot-capture.test.mjs apps/desktop/e2e/lib/smoke-kit.test.mjs` passed **29/29**; `vp check`, desktop typecheck, build/packed-require checks and `git diff --check` passed. No full local suite or smoke matrix ran.
+
+Quarantine proof is recorded with the gate-return change below; VC-531 supersedes VC-525. The owner approved two staged pushes so the three dispatches execute bare-path-env while its quarantine selection still exists, before removing that selection. The owner waived the original 50-opportunity/3-SHA return bar in favor of 10 serial fresh-profile local runs and three clean quarantine dispatches.
+
+## Verification performed (VC-522 census)
 
 - GitHub Actions census and focused job/Scope log inspections completed; the run count reconciles to 337 = 333 included + 4 manual dispatches, with no attempt-list request errors. Sixteen log 404s and the empty main attempt are explicitly retained/censored.
 - `python3 docs/research/measure-smoke-flakes.py self-test`: **8 focused parser/duration/inherited-job assertions pass**; no application suite runs.
