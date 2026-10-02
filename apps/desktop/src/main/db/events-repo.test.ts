@@ -532,9 +532,13 @@ describe("recordSessionResumedOnce", () => {
       latestTurnId: "t4",
       resumedAfterStop: false,
       resumptions: [
-        { turnId: "t1", startedAt: 10, origin: { kind: "user" } as const },
-        { turnId: "t2", startedAt: 20, origin: { kind: "session", sessionId: "parent" } as const },
-        { turnId: "t3", startedAt: 30, origin: null },
+        { attachmentId: "a1", startedAt: 10, origin: { kind: "user" } as const },
+        {
+          attachmentId: "a2",
+          startedAt: 20,
+          origin: { kind: "session", sessionId: "parent" } as const,
+        },
+        { attachmentId: "a3", startedAt: 30, origin: null },
       ],
     };
     expect(recordSessionResumedOnce(ctx.db, projection)).toBe(true);
@@ -542,7 +546,12 @@ describe("recordSessionResumedOnce", () => {
     expect(listTicketEvents(ctx.db, ticketId)[0]).toMatchObject({
       actor: "user",
       createdAt: 10,
-      payload: { kind: "session_resumed", sessionId: "s", turnId: "t1", origin: { kind: "user" } },
+      payload: {
+        kind: "session_resumed",
+        sessionId: "s",
+        attachmentId: "a1",
+        origin: { kind: "user" },
+      },
     });
     expect(
       recordSessionResumedOnce(ctx.db, { ...projection, session: { ...session, ticketId: null } }),
@@ -550,10 +559,10 @@ describe("recordSessionResumedOnce", () => {
     expect(
       recordSessionResumedOnce(ctx.db, {
         ...projection,
-        session: { ...session, role: "subagent", parentSessionId: "parent" },
+        session: { ...session, id: "child", role: "subagent", parentSessionId: "parent" },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(recordSessionResumedOnce(ctx.db, { ...projection, resumptions: [] })).toBe(false);
-    expect(listTicketEvents(ctx.db, ticketId)).toHaveLength(3);
+    expect(listTicketEvents(ctx.db, ticketId)).toHaveLength(6);
   });
 });

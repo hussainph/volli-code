@@ -2184,6 +2184,41 @@ describe("origin storage and checkpoint upgrade", () => {
       provenance,
       intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
     });
+    await control.observe({
+      id: "origin-detached",
+      sessionId: created.session.id,
+      occurredAt: 28,
+      provenance,
+      kind: "attachment.closed",
+      attachmentId: "origin-a",
+      outcome: "interrupted",
+    });
+    const resumed = await control.submit({
+      commandId: "origin-reattach",
+      sessionId: created.session.id,
+      provenance: {
+        ...provenance,
+        source: { ...provenance.source, detail: { sessionOrigin: origin } },
+      },
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+    });
+    await control.observe({
+      id: "origin-reattachment",
+      sessionId: created.session.id,
+      commandId: resumed.command.id,
+      occurredAt: 29,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "origin-b",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: provenance.venue,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
     await ledger.transaction((tx) => {
       const sequence = tx.latestEventSequence(created.session.id) + 1;
       const command = {
@@ -2217,9 +2252,9 @@ describe("origin storage and checkpoint upgrade", () => {
         occurredAt: 31,
         recordedAt: 31,
         provenance,
-        attachmentId: "origin-a",
+        attachmentId: "origin-b",
         commandId: null,
-        payload: { kind: "turn.started", attachmentId: "origin-a", turnId: "origin-t" },
+        payload: { kind: "turn.started", attachmentId: "origin-b", turnId: "origin-t" },
       });
     });
     const audit = await control.listEvents({ sessionId: created.session.id });
@@ -2229,7 +2264,7 @@ describe("origin storage and checkpoint upgrade", () => {
       expect("provenance" in slim[0]!).toBe(false);
       expect(audit[0]?.provenance.source.detail).toEqual({ sessionOrigin: origin });
       const checkpoint = createSessionProjectionCheckpoint(created.session, audit);
-      expect(checkpoint.version).toBe(3);
+      expect(checkpoint.version).toBe(4);
       tx.saveProjectionCheckpoint(checkpoint);
     });
     ctx.db
@@ -2240,7 +2275,7 @@ describe("origin storage and checkpoint upgrade", () => {
     );
     const rebuilt = await control.getSession({ sessionId: created.session.id });
     expect(rebuilt?.latestTurnOrigin).toEqual(origin);
-    expect(rebuilt?.resumptions).toEqual([{ turnId: "origin-t", origin, startedAt: 31 }]);
+    expect(rebuilt?.resumptions).toEqual([{ attachmentId: "origin-b", origin, startedAt: 29 }]);
     expect(rebuilt).toEqual(createSessionProjectionCheckpoint(created.session, audit).projection);
   });
 });

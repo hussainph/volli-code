@@ -56,7 +56,7 @@ import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
-import { publicSessionOrigin, publicTurnHandle } from "./wire";
+import { publicSessionOrigin } from "./wire";
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller
@@ -197,9 +197,10 @@ export async function sessionListVerb(
   // What each Session consumed, off the fold above. Keyed by full id because
   // that is what both halves of the listing hold; the short handle is only
   // ever an output.
-  const usageById = new Map(
-    projections.map((projection) => [projection.session.id, projection.usage]),
+  const projectionById = new Map(
+    projections.map((projection) => [projection.session.id, projection]),
   );
+  const sources = new Map<object, SessionProvenanceQuery>();
   const projectSessions = sessions
     .filter((session) => session.projectId === project.id)
     .filter((session) => !ticketResolution?.ok || session.ticketId === ticketResolution.ticket.id)
@@ -226,7 +227,13 @@ export async function sessionListVerb(
       };
       // Assigned rather than spread (oxc(no-map-spread)); the target is a
       // fresh literal on every row, so this is still copy-on-write.
-      return Object.assign(row, usageCells(usageById.get(session.id)));
+      sources.set(row, { sessionId: session.id, ticketId: session.ticketId });
+      const projection = projectionById.get(session.id);
+      return Object.assign(
+        row,
+        projection === undefined ? {} : sessionOrchestrationCells(projection, chatRecords),
+        usageCells(projection?.usage),
+      );
     });
   // Structured chat rows (VC-13 decision 4): `session start` must never
   // open a session its own caller cannot see. Precedence mirrors the
@@ -234,7 +241,6 @@ export async function sessionListVerb(
   // terminal row above; only structured-only Sessions land here. The
   // addressable snapshot (identify/peek/rename) stays terminal-only:
   // a chat has no PTY to peek and exports no VOLLI_SESSION of its own.
-  const chatSources = new Map<object, SessionProvenanceQuery>();
   const chatRows = projections.flatMap((projection) => {
     if (projection.session.projectId !== project.id || terminalSessionRecord(projection) !== null)
       return [];
@@ -265,17 +271,15 @@ export async function sessionListVerb(
       // a `stopped` row that was interrupted on the way down says `stopped`
       // and hands the caller no second, older reason.
       interruptedReason: interruptedReason(record, projection),
-      ...chatOrchestrationCells(projection, chatRecords),
+      ...sessionOrchestrationCells(projection, chatRecords),
       interruption: record.activity === "stopped" ? null : sessionInterruptionDetail(projection),
       // Age of the newest durable fact, against the caller's clock — beside
       // `ageMs` (age since creation), which stays for sorting what is old.
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
       ageMs: Math.max(0, observedAt - record.createdAt),
     };
-    chatSources.set(row, { sessionId: record.sessionId, ticketId: record.ticketId });
-    return [
-      Object.assign(row, modelCells(projection), usageCells(usageById.get(record.sessionId))),
-    ];
+    sources.set(row, { sessionId: record.sessionId, ticketId: record.ticketId });
+    return [Object.assign(row, modelCells(projection), usageCells(projection.usage))];
   });
   // Explicit scope/state filters define the roster being asked about. The
   // hidden count is only older rows removed by the window, so its recovery
@@ -287,14 +291,18 @@ export async function sessionListVerb(
     (row) =>
       request.args["all"] === true ||
       ["working", "waiting", "interrupted", "running"].includes(row.status) ||
+      (row.status === "idle" &&
+        "pendingSubagents" in row &&
+        Array.isArray(row.pendingSubagents) &&
+        row.pendingSubagents.length > 0) ||
       row.lastActivityAgeMs <= observedAt - since,
   );
   // The old concatenation had no recency order; newest durable activity first.
   visible.sort((a, b) => a.lastActivityAgeMs - b.lastActivityAgeMs);
-  // Who started each chat row, asked once for the rows actually returned: the
+  // Who started each Session, asked once for the rows actually returned: the
   // roster's older Sessions pay nothing for an answer nobody reads.
   const shown = visible.flatMap((row) => {
-    const source = chatSources.get(row);
+    const source = sources.get(row);
     return source === undefined ? [] : [{ row, source }];
   });
   const startedBy = readSessionProvenances(
@@ -308,18 +316,26 @@ export async function sessionListVerb(
 }
 
 /**
- * Shared list/peek/show cells for a chat Session's orchestration state: the
- * subagents it still waits on, and who asked for its latest turn.
+ * Shared list/peek/show cells for a Session's orchestration state: its
+ * pending subagents, latest turn, and latest successful attachment.
  *
  * `latestTurn` is `null` until a turn has begun. After that `origin` is `null`
  * only for a turn whose door recorded none — a legacy fact, so unknown and
  * never the user — and `resumedAfterStop` says the turn followed a stop.
  */
-function chatOrchestrationCells(
+function sessionOrchestrationCells(
   projection: SessionProjection,
   records: readonly ReturnType<typeof chatSessionRecord>[],
 ): Record<string, unknown> {
+  const latest = projection.attachments.findLast((attachment) => attachment.openedAt !== null);
   return {
+    latestAttachment:
+      latest === undefined
+        ? null
+        : {
+            origin: publicSessionOrigin(latest.origin ?? null),
+            reattached: latest.reattached ?? false,
+          },
     pendingSubagents: pendingSubagentIds(projection.session.id, records),
     latestTurn:
       projection.latestTurnId === null
@@ -400,7 +416,21 @@ export async function sessionShowVerb(
           kind: terminal.ticketId === null ? "project" : "ticket",
           status: terminal.endedAt === null ? "running" : "exited",
           harness: effectiveHarnessId(terminal),
+          startedBy: publicStartedBy(
+            readSessionProvenance(options.db, {
+              sessionId: terminal.id,
+              ticketId: terminal.ticketId,
+            }),
+            true,
+          ),
         },
+        projection === undefined
+          ? {}
+          : sessionOrchestrationCells(
+              projection,
+              projections.map((p) => chatSessionRecord(p)),
+            ),
+        resumptionCells(projection),
         usageCells(projection?.usage),
       ),
     };
@@ -465,17 +495,22 @@ export async function sessionShowVerb(
               : { id: shortSessionId(record.parentSessionId), title: null },
         children,
       },
-      chatOrchestrationCells(projection, records),
-      {
-        // Oldest first, uncapped: the text renderer decides how many to print.
-        resumptions: projection.resumptions.map(({ turnId, origin }) => ({
-          turn: publicTurnHandle(turnId),
-          origin: publicSessionOrigin(origin),
-        })),
-      },
+      sessionOrchestrationCells(projection, records),
+      resumptionCells(projection),
       modelCells(projection),
       usageCells(projection.usage),
     ),
+  };
+}
+
+/** Successful reattachments, oldest first; independent of whether a turn began. */
+function resumptionCells(projection: SessionProjection | undefined): Record<string, unknown> {
+  return {
+    resumptions:
+      projection?.resumptions.map(({ attachmentId, origin }) => ({
+        attachment: attachmentId.slice(0, 8),
+        origin: publicSessionOrigin(origin),
+      })) ?? [],
   };
 }
 
@@ -553,6 +588,8 @@ export async function sessionPeekVerb(
         `Session ${shortSessionId(resolved.session.id)} has no observable live terminal.`,
       );
     }
+    const projections = await context.loadProjections();
+    const projection = projections.find((p) => p.session.id === resolved.session.id);
     return {
       v: 1,
       ok: true,
@@ -560,6 +597,19 @@ export async function sessionPeekVerb(
         session: shortSessionId(resolved.session.id),
         status: observation.status,
         output: observation.output,
+        startedBy: publicStartedBy(
+          readSessionProvenance(options.db, {
+            sessionId: resolved.session.id,
+            ticketId: resolved.session.ticketId,
+          }),
+          false,
+        ),
+        ...(projection === undefined
+          ? {}
+          : sessionOrchestrationCells(
+              projection,
+              projections.map((p) => chatSessionRecord(p)),
+            )),
       },
     };
   }
@@ -594,7 +644,7 @@ export async function sessionPeekVerb(
       waitingOn: record.waitingOn,
       // See `session list` — the state word's reason, on the same guard.
       interruptedReason: interruptedReason(record, chat.projection),
-      ...chatOrchestrationCells(
+      ...sessionOrchestrationCells(
         chat.projection,
         projections.map((p) => chatSessionRecord(p)),
       ),

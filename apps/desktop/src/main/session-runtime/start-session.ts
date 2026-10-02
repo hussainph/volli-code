@@ -43,7 +43,12 @@ import type { SessionOrigin } from "@volli/shared";
  */
 
 import type Database from "better-sqlite3";
-import { displayTicketId, errorMessage, shortSessionId } from "@volli/shared";
+import {
+  displayTicketId,
+  errorMessage,
+  sessionOriginFromActor,
+  shortSessionId,
+} from "@volli/shared";
 import type {
   AgentModelTier,
   ModelSelection,
@@ -247,12 +252,5 @@ export function startSessionModelOverride(
 }
 
 function startOrigin(input: StartSessionInput): SessionOrigin | undefined {
-  return (
-    input.origin ??
-    (input.actor.kind === "session"
-      ? { kind: "session", sessionId: input.actor.sessionId }
-      : input.actor.kind === "user"
-        ? { kind: "user" }
-        : undefined)
-  );
+  return input.origin ?? sessionOriginFromActor(input.actor);
 }

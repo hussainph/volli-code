@@ -30,6 +30,7 @@ import {
   defaultModelRequiredForTier,
   isAgentModelTier,
   modelPurposeForRole,
+  sessionOriginFromActor,
 } from "@volli/shared";
 import type {
   AgentModelTier,
@@ -1207,7 +1208,5 @@ function birthOrigin(input: SessionStartInput): SessionOrigin | undefined {
   if (input.origin !== undefined) return input.origin;
   if (input.parentSessionId !== undefined)
     return { kind: "session", sessionId: input.parentSessionId };
-  if (input.actor?.kind === "session") return { kind: "session", sessionId: input.actor.sessionId };
-  if (input.actor === undefined || input.actor.kind === "user") return { kind: "user" };
-  return undefined;
+  return sessionOriginFromActor(input.actor);
 }

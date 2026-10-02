@@ -34,6 +34,7 @@ import type {
 } from "@volli/shared";
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
+import { recordSessionStartedOnce } from "../db/events-repo";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { SessionConcurrencyEnvReader } from "../session-concurrency";
@@ -422,6 +423,18 @@ export class PtyManager {
           provenance: terminalSystemProvenance({ kind: "user" }),
         });
         sessionId = created.session.id;
+        if (
+          scope.ticketId !== null &&
+          recordSessionStartedOnce(db, {
+            ticketId: scope.ticketId,
+            sessionId,
+            now: created.session.createdAt,
+            actor: { kind: "user" },
+            origin: { kind: "user" },
+          })
+        ) {
+          broadcastDataChanged({ projectId: scope.projectId, ticketId: scope.ticketId });
+        }
       } else {
         sessionId = scope.resume.sessionId;
       }

@@ -35,19 +35,19 @@ export async function catchUpSessionResumptions(
 ): Promise<void> {
   try {
     // Both EXISTS seeks use session_event_sequence_match (session_id, kind,
-    // sequence). Only Ticket Sessions with a start after a stop need folding.
+    // sequence). Every Ticket-bound Session with a later successful attachment needs folding.
     const candidates = prepared<[], { id: string }>(
       db,
       `
       SELECT s.id FROM sessions s
-       WHERE s.role = 'ticket' AND s.ticket_id IS NOT NULL
+       WHERE s.ticket_id IS NOT NULL
          AND EXISTS (
-           SELECT 1 FROM session_event_sequence stopped
-            WHERE stopped.session_id = s.id AND stopped.kind = 'session.stopped'
+           SELECT 1 FROM session_event_sequence earlier
+            WHERE earlier.session_id = s.id AND earlier.kind = 'attachment.opened'
               AND EXISTS (
-                SELECT 1 FROM session_event_sequence started
-                 WHERE started.session_id = s.id AND started.kind = 'turn.started'
-                   AND started.sequence > stopped.sequence
+                SELECT 1 FROM session_event_sequence later
+                 WHERE later.session_id = s.id AND later.kind = 'attachment.opened'
+                   AND later.sequence > earlier.sequence
               )
          )
     `,

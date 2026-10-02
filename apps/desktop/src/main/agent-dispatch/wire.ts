@@ -110,7 +110,7 @@ export function publicEvent(
           ? {
               kind: "session_resumed",
               session: publicEventSession(event.payload.sessionId),
-              turn: publicTurnHandle(event.payload.turnId),
+              attachment: event.payload.attachmentId.slice(0, 8),
               origin: publicSessionOrigin(readSessionOrigin(event.payload.origin)),
             }
           : event.payload;

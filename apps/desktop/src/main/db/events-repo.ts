@@ -381,19 +381,19 @@ export function listTicketStatusEntries(
   return entries;
 }
 
-/** A durable per-turn key survives re-fold/relaunch and activity coalescing. */
+/** A durable per-attachment key survives re-fold/relaunch and activity coalescing. */
 export function recordSessionResumedOnce(
   db: Database.Database,
   projection: SessionProjection,
 ): boolean {
   const { session } = projection;
-  if (session.role !== "ticket" || session.ticketId === null) return false;
+  if (session.ticketId === null) return false;
   let wrote = false;
-  for (const { turnId, origin, startedAt } of projection.resumptions) {
+  for (const { attachmentId, origin, startedAt } of projection.resumptions) {
     const exists = prepared<[string, string, string], { found: number }>(
       db,
-      `SELECT 1 AS found FROM ticket_events WHERE ticket_id = ? AND kind = 'session_resumed' AND json_extract(payload, '$.sessionId') = ? AND json_extract(payload, '$.turnId') = ? LIMIT 1`,
-    ).get(session.ticketId, session.id, turnId);
+      `SELECT 1 AS found FROM ticket_events WHERE ticket_id = ? AND kind = 'session_resumed' AND json_extract(payload, '$.sessionId') = ? AND json_extract(payload, '$.attachmentId') = ? LIMIT 1`,
+    ).get(session.ticketId, session.id, attachmentId);
     if (exists !== undefined) continue;
     const actor: TicketEventActor =
       origin?.kind === "session"
@@ -404,7 +404,7 @@ export function recordSessionResumedOnce(
     recordTicketEvent(
       db,
       session.ticketId,
-      { kind: "session_resumed", sessionId: session.id, turnId, origin },
+      { kind: "session_resumed", sessionId: session.id, attachmentId, origin },
       startedAt,
       actor,
     );

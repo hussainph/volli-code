@@ -17,7 +17,7 @@ const automation = (name: string | null) => ({
   automationRunId: "3f2a1b2c-9999-4000-8000-000000000001",
 });
 
-const resumption = (index: number, origin: unknown) => ({ turn: `turn000${index}`, origin });
+const resumption = (index: number, origin: unknown) => ({ attachment: `attach0${index}`, origin });
 const events = (...payloads: Record<string, unknown>[]) =>
   renderCliSuccess("ticket.events", { events: payloads }, { json: false }).split("\n");
 const started = (origin: unknown, extra: Record<string, unknown> = {}) => ({
@@ -34,7 +34,7 @@ const started = (origin: unknown, extra: Record<string, unknown> = {}) => ({
 const resumed = (origin: unknown, extra: Record<string, unknown> = {}) => ({
   actor: "user",
   createdAt: 9,
-  payload: { kind: "session_resumed", session: "1a2b3c4d", turn: "9ab0c1d2", origin },
+  payload: { kind: "session_resumed", session: "1a2b3c4d", attachment: "9ab0c1d2", origin },
   ...extra,
 });
 
@@ -387,7 +387,7 @@ describe("orchestration CLI", () => {
       );
     });
 
-    it("puts both facts in a chat peek header and leaves a terminal peek alone", () => {
+    it("puts both facts in a chat peek header and keeps old terminal replies compatible", () => {
       const peek = (extra: Record<string, unknown>) =>
         renderCliSuccess(
           "session.peek",
@@ -455,20 +455,78 @@ describe("orchestration CLI", () => {
       expect(text).toContain(
         [
           "resumed  2 earlier not shown",
-          "resumed  turn turn0003  by an unknown origin",
-          "resumed  turn turn0004  by Volli (relaunch-recovery)",
-          'resumed  turn turn0005  by Automation "Review" (run 3f2a1b2c)',
-          "resumed  turn turn0006  by Session 56856e2a",
-          "resumed  turn turn0007  by the user",
+          "resumed  attachment attach03  by an unknown origin",
+          "resumed  attachment attach04  by Volli (relaunch-recovery)",
+          'resumed  attachment attach05  by Automation "Review" (run 3f2a1b2c)',
+          "resumed  attachment attach06  by Session 56856e2a",
+          "resumed  attachment attach07  by the user",
         ].join("\n"),
       );
-      expect(text).not.toContain("turn0001");
+      expect(text).not.toContain("attach01");
       // Exactly the cap is printed whole, with no count line.
       const five = show({
         resumptions: [1, 2, 3, 4, 5].map((index) => resumption(index, { kind: "user" })),
       });
       expect(five).not.toContain("earlier not shown");
-      expect(five.match(/^resumed {2}turn /gm)).toHaveLength(5);
+      expect(five.match(/^resumed {2}attachment /gm)).toHaveLength(5);
+    });
+
+    it("uses successful attachment attribution for chat and terminal reads before a turn begins", () => {
+      const latestAttachment = { origin: { kind: "user" }, reattached: true };
+      const latestTurn = {
+        origin: { kind: "session", sessionId: "56856e2a" },
+        resumedAfterStop: true,
+      };
+      expect(row({ latestAttachment, latestTurn })).toContain("resumed by the user");
+      expect(row({ latestAttachment, latestTurn })).not.toContain("resumed by Session");
+      expect(
+        row({ latestAttachment: { origin: null, reattached: false }, latestTurn }),
+      ).not.toContain("resumed by");
+      for (const transcript of [[], undefined]) {
+        const text = renderCliSuccess(
+          "session.peek",
+          {
+            session: "abcdef12",
+            status: "running",
+            startedBy: automation("Review"),
+            latestAttachment,
+            latestTurn: null,
+            ...(transcript === undefined ? { output: "$ " } : { transcript }),
+          },
+          { json: false },
+        );
+        expect(text).toContain('started by Automation "Review" (run 3f2a1b2c)');
+        expect(text).toContain("resumed by the user");
+        if (transcript === undefined) expect(text).toContain("\n$ \n");
+      }
+      const text = renderCliSuccess(
+        "session.show",
+        {
+          ...base,
+          latestAttachment,
+          latestTurn: null,
+          resumptions: [resumption(1, { kind: "user" })],
+        },
+        { json: false },
+      );
+      expect(text).toContain("latest-attachment  by the user (reattached)");
+      expect(text).toContain("resumed  attachment attach01  by the user");
+      expect(text).not.toContain("latest-turn");
+    });
+
+    it("shows a fresh attachment without a resume label and reads older turn histories", () => {
+      const text = renderCliSuccess(
+        "session.show",
+        {
+          ...base,
+          latestAttachment: { origin: { kind: "user" }, reattached: false },
+          resumptions: [{ turn: "oldturn1", origin: { kind: "session", sessionId: "56856e2a" } }],
+        },
+        { json: false },
+      );
+      expect(text).toContain("latest-attachment  by the user\n");
+      expect(text).not.toContain("(reattached)");
+      expect(text).toContain("resumed  turn oldturn1  by Session 56856e2a\n");
     });
 
     it("prints show's sparse cells as dashes and leaves malformed data to the generic printer", () => {
@@ -496,7 +554,7 @@ describe("orchestration CLI", () => {
         ...base,
         startedBy: automation("Review"),
         latestTurn: { origin: { kind: "user" }, resumedAfterStop: true },
-        resumptions: [{ turn: "turn0001", origin: null }],
+        resumptions: [{ turn: "attach01", origin: null }],
       };
       expect(JSON.parse(renderCliSuccess("session.show", data, { json: true }))).toEqual(data);
     });
@@ -543,11 +601,11 @@ describe("orchestration CLI", () => {
           resumed({ kind: "mystery" }),
         ),
       ).toEqual([
-        "event  session_resumed  session=1a2b3c4d  turn=9ab0c1d2  by=the user  at=9",
-        "event  session_resumed  session=1a2b3c4d  turn=9ab0c1d2  by=Session 56856e2a  at=9",
-        "event  session_resumed  session=1a2b3c4d  turn=9ab0c1d2  by=Automation (run 3f2a1b2c)  at=9",
-        "event  session_resumed  session=1a2b3c4d  turn=9ab0c1d2  by=unknown  at=9",
-        "event  session_resumed  session=1a2b3c4d  turn=9ab0c1d2  by=unknown  at=9",
+        "event  session_resumed  session=1a2b3c4d  attachment=9ab0c1d2  by=the user  at=9",
+        "event  session_resumed  session=1a2b3c4d  attachment=9ab0c1d2  by=Session 56856e2a  at=9",
+        "event  session_resumed  session=1a2b3c4d  attachment=9ab0c1d2  by=Automation (run 3f2a1b2c)  at=9",
+        "event  session_resumed  session=1a2b3c4d  attachment=9ab0c1d2  by=unknown  at=9",
+        "event  session_resumed  session=1a2b3c4d  attachment=9ab0c1d2  by=unknown  at=9",
         "",
       ]);
       // A resume that lost its origin key is still unknown rather than a bare row.

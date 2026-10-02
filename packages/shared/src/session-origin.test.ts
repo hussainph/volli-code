@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formatSessionOrigin, readSessionOrigin } from "./session-origin";
+import { formatSessionOrigin, readSessionOrigin, sessionOriginFromActor } from "./session-origin";
+
+describe("sessionOriginFromActor", () => {
+  it("defaults an absent door actor to the user and preserves a Session's identity", () => {
+    expect(sessionOriginFromActor(undefined)).toEqual({ kind: "user" });
+    expect(sessionOriginFromActor({ kind: "user" })).toEqual({ kind: "user" });
+    expect(
+      sessionOriginFromActor({ kind: "session", sessionId: "parent", ticketId: "ticket" }),
+    ).toEqual({
+      kind: "session",
+      sessionId: "parent",
+    });
+  });
+  it("does not invent a Run or credit unauthenticated callers to a person", () => {
+    expect(sessionOriginFromActor({ kind: "automation" })).toBeUndefined();
+    expect(
+      sessionOriginFromActor({ kind: "automation", sessionId: "runner", ticketId: null }),
+    ).toBeUndefined();
+    expect(sessionOriginFromActor({ kind: "unauthenticated" })).toBeUndefined();
+  });
+});
 
 describe("formatSessionOrigin", () => {
   it("never credits legacy unknown attribution to a person", () => {

@@ -52,6 +52,11 @@ import {
 } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import type { SessionStartInput } from "./sessions";
+import { createTicketSessionDelegationStore } from "./delegation-store";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { insertSession } from "../session-control/test-support";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testSession } from "../db/test-helpers";
 
 const PARENT = "aaaaaaaa-0000-0000-0000-000000000000";
 const CHILD = "bbbbbbbb-0000-0000-0000-000000000000";
@@ -400,6 +405,7 @@ function harness(
     projections.set(PARENT, projection(PARENT, overrides));
   };
   return {
+    ports,
     delegations,
     delegate,
     emit,
@@ -414,6 +420,7 @@ function harness(
     stops,
     subscriptions,
     ledgers,
+    projections,
     reports,
     parentCommands: () => commands.filter((c) => "sessionId" in c && c.sessionId === PARENT),
     activeSubscriptions: (sessionId: string) =>
@@ -677,6 +684,257 @@ describe("delegate — the child is a real Session, and the parent keeps working
 });
 
 describe("delegate — stopping the parent stops the child", () => {
+  it("suppresses a parent's own child stop, cleans up watches, and suppresses it again on recovery", async () => {
+    const h = harness();
+    await h.delegate();
+    await h.emit(CHILD, 4, {
+      kind: "session.stopped",
+      reason: "Cancelled task",
+      by: { kind: "session", sessionId: PARENT },
+    });
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+    // Runtime interruption follows the committed stop; recovery must not turn
+    // that consequence into a relaunch notice if handed a stale pending list.
+    await h.emit(CHILD, 5, { kind: "turn.interrupted", attachmentId: "a", turnId: "t" });
+    const unanswered = [
+      {
+        childSessionId: CHILD,
+        parentSessionId: PARENT,
+        projectId: "project-1",
+        operationId: `${PARENT}:tc-1`,
+        title: "Helper",
+      },
+    ];
+    const rebooted = createDelegations({
+      sessions: {
+        start: async () => {
+          throw new Error("must not restart");
+        },
+      },
+      submitSessionMessage: async () => {
+        throw new Error("must not send kickoff");
+      },
+      runtime: {
+        command: async (request) => {
+          throw new Error(`must not deliver ${request.commandId}`);
+        },
+        subscribe: async () => {
+          throw new Error("must not park echo");
+        },
+        projection: async () => {
+          throw new Error("must not need parent projection");
+        },
+      },
+      sessionEngine: {
+        listEvents: async ({ sessionId }) => h.ledgers.get(sessionId) ?? [],
+        listSessions: async () => [],
+        submit: async () => {
+          throw new Error("must not write stop");
+        },
+      },
+      now: () => 1,
+    });
+    expect(await rebooted.recover(unanswered)).toEqual({ answered: 0, reported: 0, skipped: 1 });
+    expect(await rebooted.recover(unanswered)).toEqual({ answered: 0, reported: 0, skipped: 1 });
+  });
+
+  it("suppresses the interruption frame when the parent's durable stop committed first but its frame lags", async () => {
+    const h = harness();
+    await h.delegate();
+    const stopped = {
+      kind: "session.stopped" as const,
+      reason: null,
+      by: { kind: "session" as const, sessionId: PARENT },
+    };
+    h.ledgers.set(CHILD, [...h.ledgers.get(CHILD)!, event(CHILD, 4, stopped)]);
+    h.projections.set(
+      CHILD,
+      projection(CHILD, { stopped: { at: 4, reason: null, by: stopped.by } }),
+    );
+    await h.emit(CHILD, 5, {
+      kind: "turn.interrupted",
+      attachmentId: "a",
+      turnId: "t",
+    });
+    await h.emit(CHILD, 4, stopped);
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+  });
+
+  it("reports a delayed interruption frame whose durable sequence precedes the parent's stop", async () => {
+    const h = harness();
+    await h.delegate();
+    const stopped = {
+      kind: "session.stopped" as const,
+      reason: null,
+      by: { kind: "session" as const, sessionId: PARENT },
+    };
+    h.ledgers.set(CHILD, [...h.ledgers.get(CHILD)!, event(CHILD, 5, stopped)]);
+    h.projections.set(
+      CHILD,
+      projection(CHILD, { stopped: { at: 5, reason: null, by: stopped.by } }),
+    );
+    await h.emit(CHILD, 4, { kind: "turn.interrupted", attachmentId: "a", turnId: "t" });
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain(
+      "was interrupted before it answered",
+    );
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+  });
+
+  it("reports an earlier durable interruption when the later own-stop frame arrives first", async () => {
+    const h = harness();
+    await h.delegate();
+    h.ledgers.set(CHILD, [
+      ...h.ledgers.get(CHILD)!,
+      event(CHILD, 4, {
+        kind: "turn.interrupted",
+        attachmentId: "a",
+        turnId: "t",
+      }),
+    ]);
+    await h.emit(CHILD, 5, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: PARENT },
+    });
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain(
+      "was interrupted before it answered",
+    );
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "orders a delayed kickoff rejection before an own-stop frame (matching: %s)",
+    async (matching) => {
+      const h = harness();
+      await h.delegate();
+      const rejected = kickoffRejection(`${PARENT}:${matching ? "tc-1" : "other"}:kickoff`);
+      h.ledgers.set(CHILD, [...h.ledgers.get(CHILD)!, event(CHILD, 4, rejected)]);
+      await h.emit(CHILD, 5, {
+        kind: "session.stopped",
+        reason: null,
+        by: { kind: "session", sessionId: PARENT },
+      });
+      // The rejected kickoff's delayed frame cannot send a second notice,
+      // and an unrelated rejection does not turn our own stop into news.
+      await h.emit(CHILD, 4, rejected);
+      expect(h.parentCommands()).toHaveLength(matching ? 1 : 0);
+      if (matching) {
+        expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain("failed before it answered");
+        expect(JSON.stringify(h.parentCommands()[0])).toContain('"state":"failed"');
+      }
+      expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+      expect(h.activeSubscriptions(CHILD)).toEqual([]);
+      expect(h.activeSubscriptions(PARENT)).toEqual([]);
+    },
+  );
+
+  it("suppresses a delayed own stop even if a later rejected kickoff frame arrives first", async () => {
+    const h = harness();
+    await h.delegate();
+    h.ledgers.set(CHILD, [
+      ...h.ledgers.get(CHILD)!,
+      event(CHILD, 4, {
+        kind: "session.stopped",
+        reason: null,
+        by: { kind: "session", sessionId: PARENT },
+      }),
+    ]);
+    await h.emit(CHILD, 5, kickoffRejection(`${PARENT}:tc-1:kickoff`));
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+  });
+
+  it("recovers an independent interruption before a later parent stop instead of suppressing it", async () => {
+    const h = harness();
+    h.ledgers.set(CHILD, [
+      event(CHILD, 4, { kind: "turn.interrupted", attachmentId: "a", turnId: "t" }),
+      event(CHILD, 5, {
+        kind: "session.stopped",
+        reason: null,
+        by: { kind: "session", sessionId: PARENT },
+      }),
+    ]);
+    expect(
+      await h.delegations.recover([
+        {
+          childSessionId: CHILD,
+          parentSessionId: PARENT,
+          projectId: "project-1",
+          operationId: `${PARENT}:tc-1`,
+          title: "Helper",
+        },
+      ]),
+    ).toEqual({ answered: 0, reported: 1, skipped: 0 });
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain(
+      "was interrupted before it answered",
+    );
+  });
+
+  it.each([
+    { kind: "user" as const },
+    { kind: "watchdog" as const },
+    { kind: "session" as const, sessionId: "cccccccc-other" },
+  ])("recovers stops by $kind with a positive notice", async (by) => {
+    const h = harness();
+    h.ledgers.set(CHILD, [event(CHILD, 4, { kind: "session.stopped", reason: null, by })]);
+    expect(
+      await h.delegations.recover([
+        {
+          childSessionId: CHILD,
+          parentSessionId: PARENT,
+          projectId: "project-1",
+          operationId: `${PARENT}:tc-1`,
+          title: "Helper",
+        },
+      ]),
+    ).toEqual({ answered: 0, reported: 1, skipped: 0 });
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain("was stopped");
+  });
+
+  it("reports an independent interruption that happened before the parent's stop committed", async () => {
+    const h = harness();
+    await h.delegate();
+    await h.emit(CHILD, 4, {
+      kind: "turn.interrupted",
+      attachmentId: "a",
+      turnId: "t",
+    });
+    await h.emit(CHILD, 5, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "session", sessionId: PARENT },
+    });
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain(
+      "was interrupted before it answered",
+    );
+  });
+
+  it.each([
+    { by: { kind: "user" as const }, wording: "by the person driving it" },
+    { by: { kind: "watchdog" as const }, wording: "by Volli's watchdog" },
+    {
+      by: { kind: "session" as const, sessionId: "cccccccc-other" },
+      wording: "by Session cccccccc",
+    },
+  ])("still delivers stops by $by.kind", async ({ by, wording }) => {
+    const h = harness();
+    await h.delegate();
+    await h.emit(CHILD, 4, { kind: "session.stopped", reason: null, by });
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toContain(wording);
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+  });
   it("stops live children on a parent stop recorded after the watch began, and ignores frames the cursor already covers", async () => {
     const h = harness();
     // The parent has history: the watch must start at its END, not at zero
@@ -698,7 +956,7 @@ describe("delegate — stopping the parent stops the child", () => {
     await h.emit(PARENT, 9, { kind: "session.stopped", reason: null, by: { kind: "user" } });
 
     // Each child received the durable stop naming the parent as the actor,
-    // and each notice was dropped — the parent is stopped — with a log line.
+    // and each parent-own child stop was suppressed without an echo.
     expect(h.stops.map((s) => s.sessionId).toSorted()).toEqual([CHILD, "child-2"].toSorted());
     expect(h.stops[0]?.intent).toMatchObject({
       kind: "session.stop",
@@ -717,7 +975,7 @@ describe("delegate — stopping the parent stops the child", () => {
     expect(h.stops.map((s) => s.sessionId)).toEqual([CHILD]);
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
     expect(h.parentCommands()).toEqual([]);
-    expect(h.reports).toEqual([expect.stringMatching(/was not delivered: Session .* is stopped/)]);
+    expect(h.reports).toEqual([]);
   });
 });
 
@@ -795,6 +1053,114 @@ describe("recover — delegations a relaunch left unanswered (VC-9)", () => {
   const FINISHED = "dddddddd-0000-0000-0000-000000000000";
   const CUT_SHORT = "eeeeeeee-0000-0000-0000-000000000000";
   const NEVER_RAN = "ffffffff-0000-0000-0000-000000000000";
+
+  it.each([true, false])(
+    "recovers a real-ledger rejection before a parent stop after restart (matching: %s)",
+    async (matching) => {
+      const ctx = openTestDb();
+      try {
+        insertProject(ctx.db, testProject({ id: "project-1" }));
+        insertSession(ctx.db, testSession("project-1", null, { id: PARENT }));
+        insertSession(ctx.db, testSession("project-1", null, { id: CHILD }));
+        ctx.db
+          .prepare("UPDATE sessions SET role = 'subagent', parent_session_id = ? WHERE id = ?")
+          .run(PARENT, CHILD);
+        const operationId = `${PARENT}:tc-1`;
+        ctx.db
+          .prepare(
+            `INSERT INTO session_commands (id, session_id, created_at, intent)
+           VALUES (?, ?, 0, '{"kind":"session.create"}')`,
+          )
+          .run(`${operationId}:create`, CHILD);
+        const ledger = createSqliteSessionLedger(ctx.db);
+        await ledger.transaction((tx) => {
+          const commandId = `${PARENT}:${matching ? "tc-1" : "other"}:kickoff`;
+          tx.saveCommand({
+            id: commandId,
+            sessionId: CHILD,
+            createdAt: 2,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "kickoff-message", mediaType: "text/plain", digest: "test" },
+            },
+            route: null,
+          });
+          const receipt = {
+            id: "kickoff-rejected",
+            commandId,
+            sequence: 2,
+            recordedAt: 2,
+            status: "rejected" as const,
+            code: "no_live_executor",
+            detail: "No live executor",
+          };
+          tx.appendReceipt(receipt);
+          tx.appendEvent({
+            ...event(CHILD, 2, { kind: "command.receipt.recorded", receipt }),
+            commandId,
+          });
+          tx.appendEvent(
+            event(CHILD, 3, {
+              kind: "session.stopped",
+              reason: null,
+              by: { kind: "session", sessionId: PARENT },
+            }),
+          );
+        });
+        // Fresh store and host: no live watcher, no parent answer command.
+        const restartedStore = createTicketSessionDelegationStore(ctx.db);
+        expect(restartedStore.subagentDelegation(CHILD)).toMatchObject({ answered: !matching });
+        const unanswered = restartedStore.listUnansweredSubagents();
+        expect(unanswered).toHaveLength(matching ? 1 : 0);
+        expect(
+          ctx.db.prepare("SELECT id FROM session_commands WHERE session_id = ?").all(PARENT),
+        ).toEqual([]);
+        const h = harness();
+        const restartedHost = createDelegations({
+          ...h.ports,
+          sessionEngine: {
+            ...h.ports.sessionEngine,
+            listEvents: (query) => ledger.transaction((tx) => tx.listEvents(query)),
+          },
+        });
+        expect(await restartedHost.recover(unanswered)).toEqual({
+          answered: 0,
+          reported: matching ? 1 : 0,
+          skipped: 0,
+        });
+        expect(h.parentCommands()).toHaveLength(matching ? 1 : 0);
+        if (matching) {
+          expect(noticeText(h.commands, operationId)).toContain("failed before it answered");
+          expect(JSON.stringify(h.parentCommands()[0])).toContain('"state":"failed"');
+        }
+        expect(restartedHost.liveChildren(PARENT)).toEqual([]);
+      } finally {
+        ctx.cleanup();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "recovers only a matching rejected kickoff when no turn ever began (matching: %s)",
+    async (matching) => {
+      const h = harness();
+      h.ledgers.set(CHILD, [
+        event(CHILD, 4, kickoffRejection(`${PARENT}:${matching ? "tc-1" : "other"}:kickoff`)),
+      ]);
+      expect(
+        await h.delegations.recover([
+          {
+            childSessionId: CHILD,
+            parentSessionId: PARENT,
+            projectId: "project-1",
+            operationId: `${PARENT}:tc-1`,
+            title: "Helper",
+          },
+        ]),
+      ).toEqual({ answered: 0, reported: matching ? 1 : 0, skipped: matching ? 0 : 1 });
+      expect(h.parentCommands()).toHaveLength(matching ? 1 : 0);
+    },
+  );
 
   it("notifies for a finished child and a cut-short one, leaves an unstarted one alone, and parks each notice until the parent attaches", async () => {
     const h = harness();
@@ -1036,7 +1402,11 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
   it("answers under the delegation's own ids when its notice never landed", async () => {
     const h = harness();
     await h.delegations.rearm({ ...entry, answered: false }, { turnId: "t1", afterSequence: 3 });
-    await completeChildTurn(h);
+    // A kickoff receipt from the original watch is irrelevant to resumed work.
+    await h.emit(CHILD, 4, kickoffRejection(`${PARENT}:tc-1:kickoff`));
+    expect(h.delegations.watching(CHILD)).toBe(true);
+    expect(h.parentCommands()).toEqual([]);
+    await completeChildTurn(h, CHILD, { from: 5 });
     expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
   });
 });

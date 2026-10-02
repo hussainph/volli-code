@@ -240,7 +240,7 @@ const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = 
   attachment_added: ["attachmentId"],
   attachment_removed: ["attachmentId"],
   session_started: [],
-  session_resumed: ["turn"],
+  session_resumed: ["turn", "attachment"],
 };
 
 /** Ticket events cross the socket under `payload`; a top-level kind is not an event payload. */
@@ -568,8 +568,15 @@ function latestTurnText(value: unknown): string | null {
   return `by ${originText(value["origin"])}${value["resumedAfterStop"] === true ? " (resumed after stop)" : ""}`;
 }
 
-/** `resumed by <who>` for a Session whose latest turn followed a stop; otherwise nothing. */
+/** Successful reattachment is attributed to its opener, not the next message's sender. */
 function resumedByText(session: Record<string, unknown>): string | null {
+  const attachment = session["latestAttachment"];
+  if (isRecord(attachment)) {
+    return attachment["reattached"] === true
+      ? `resumed by ${originText(attachment["origin"])}`
+      : null;
+  }
+  // Read older hosts that reported only turn chronology.
   const turn = session["latestTurn"];
   return isRecord(turn) && turn["resumedAfterStop"] === true
     ? `resumed by ${originText(turn["origin"])}`
@@ -588,13 +595,19 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
     lines.push(`started-by  ${terminalSafeInline(startedByText(data["startedBy"]))}`);
   const latestTurn = latestTurnText(data["latestTurn"]);
   if (latestTurn !== null) lines.push(`latest-turn  ${terminalSafeInline(latestTurn)}`);
+  const attachment = data["latestAttachment"];
+  if (isRecord(attachment)) {
+    lines.push(
+      `latest-attachment  by ${terminalSafeInline(originText(attachment["origin"]))}${attachment["reattached"] === true ? " (reattached)" : ""}`,
+    );
+  }
   const resumptions = recordsAt(data, "resumptions") ?? [];
   if (resumptions.length > SESSION_RESUMPTIONS_SHOWN) {
     lines.push(`resumed  ${resumptions.length - SESSION_RESUMPTIONS_SHOWN} earlier not shown`);
   }
   for (const resumption of resumptions.slice(-SESSION_RESUMPTIONS_SHOWN)) {
     lines.push(
-      `resumed  turn ${terminalSafeInline(resumption["turn"])}  by ${terminalSafeInline(originText(resumption["origin"]))}`,
+      `resumed  ${typeof resumption["attachment"] === "string" ? `attachment ${terminalSafeInline(resumption["attachment"])}` : `turn ${terminalSafeInline(resumption["turn"])}`}  by ${terminalSafeInline(originText(resumption["origin"]))}`,
     );
   }
   const parent = data["parentSession"];
@@ -614,13 +627,6 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
     `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
   );
   return lines.join("\n");
-  const reason = session["interruptedReason"];
-  const detail = session["interruption"];
-  const category = isRecord(detail) ? detail["category"] : null;
-  const suffix = typeof category === "string" ? `; ${category}` : "";
-  if (typeof waitingOn === "string") return `${status} on ${waitingOn}${suffix}`;
-  if (typeof reason === "string") return `${status} (${reason}${suffix})`;
-  return status;
 }
 
 /** Free-form provider text gets the same trust envelope as another Session's answer. */
@@ -669,24 +675,29 @@ function ageText(value: unknown): string {
  */
 function renderChatPeek(data: Record<string, unknown>, transcript: readonly unknown[]): string {
   const unreadable = data["unreadable"];
-  const resumedBy = resumedByText(data);
   const header = [
     `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
     ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
-    // Who started it, and who resumed it if a stop came between turns: the two
-    // facts a supervisor reads a peek's header for before deciding to step in.
-    ...(data["startedBy"] === undefined
-      ? []
-      : [terminalSafeInline(`started by ${startedByText(data["startedBy"])}`)]),
-    ...(resumedBy === null ? [] : [terminalSafeInline(resumedBy)]),
+    ...sessionOriginHeaderCells(data),
   ].join("  ");
   return [
     header,
     ...sessionStopLines(data),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
+}
+
+/** Origin cells shared by terminal and chat peek headers. */
+function sessionOriginHeaderCells(data: Record<string, unknown>): string[] {
+  const resumed = resumedByText(data);
+  return [
+    ...(data["startedBy"] === undefined
+      ? []
+      : [terminalSafeInline(`started by ${startedByText(data["startedBy"])}`)]),
+    ...(resumed === null ? [] : [terminalSafeInline(resumed)]),
+  ];
 }
 
 /**
@@ -1264,43 +1275,44 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
     const sessions = recordsAt(data, "sessions");
     const rows =
       sessions
-        ?.map((session) =>
-          [
-            ...[
-              session["id"],
-              session["kind"],
-              // The liveness cell (VC-86): peek's own vocabulary — the state,
-              // with its reason inline so "waiting" never hides the one thing
-              // the caller could act on.
-              sessionStateCell(session),
-              // Age of the newest durable fact — the signal a wedge hides in.
-              // Absent only on a legacy or malformed row, never rendered as "-".
-              typeof session["lastActivityAgeMs"] === "number"
-                ? `last ${ageText(session["lastActivityAgeMs"])}`
-                : null,
-              session["ticket"],
-              sessionModelCell(session),
-              // Said only where it informs: a person-started Session is the
-              // common row and keeps its width. A Run, a parent Session and
-              // a resume after a stop each get one cell, before the cost
-              // cells so the title stays last.
-              sessionStartedByCell(session),
-              resumedByText(session),
-            ]
-              .filter((value) => value !== null && value !== undefined)
-              .map(terminalSafeInline),
-            // Cost and tokens sit BEFORE the title and are never filtered out,
-            // because the title is free text that may contain spaces and has
-            // to stay the last cell for anything downstream to cut on. An
-            // unmetered Session prints `—  0`, which reads as unmeasured; a
-            // filtered-out cell would silently shift every column left.
-            usdCell(session),
-            terminalSafeInline(usageCountCell(session["tokens"])),
-            terminalSafeInline(session["title"]),
-          ].join("  ") +
-          (sessionStopLines(session).length === 0
-            ? ""
-            : `\n${sessionStopLines(session).join("\n")}`),
+        ?.map(
+          (session) =>
+            [
+              ...[
+                session["id"],
+                session["kind"],
+                // The liveness cell (VC-86): peek's own vocabulary — the state,
+                // with its reason inline so "waiting" never hides the one thing
+                // the caller could act on.
+                sessionStateCell(session),
+                // Age of the newest durable fact — the signal a wedge hides in.
+                // Absent only on a legacy or malformed row, never rendered as "-".
+                typeof session["lastActivityAgeMs"] === "number"
+                  ? `last ${ageText(session["lastActivityAgeMs"])}`
+                  : null,
+                session["ticket"],
+                sessionModelCell(session),
+                // Said only where it informs: a person-started Session is the
+                // common row and keeps its width. A Run, a parent Session and
+                // a resume after a stop each get one cell, before the cost
+                // cells so the title stays last.
+                sessionStartedByCell(session),
+                resumedByText(session),
+              ]
+                .filter((value) => value !== null && value !== undefined)
+                .map(terminalSafeInline),
+              // Cost and tokens sit BEFORE the title and are never filtered out,
+              // because the title is free text that may contain spaces and has
+              // to stay the last cell for anything downstream to cut on. An
+              // unmetered Session prints `—  0`, which reads as unmeasured; a
+              // filtered-out cell would silently shift every column left.
+              usdCell(session),
+              terminalSafeInline(usageCountCell(session["tokens"])),
+              terminalSafeInline(session["title"]),
+            ].join("  ") +
+            (sessionStopLines(session).length === 0
+              ? ""
+              : `\n${sessionStopLines(session).join("\n")}`),
         )
         .join("\n") ?? null;
     if (rows === null) return null;
@@ -1316,11 +1328,15 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;
     // A chat peek is told apart by what it carries, not by a `kind` word: the
-    // terminal reply is a status line plus raw output and stays byte-for-byte
-    // what it always was, while a chat's is an activity line plus a transcript.
+    // terminal reply is a status/origin line plus raw output, while a chat's
+    // is an activity line plus a transcript.
     if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
-    return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
+    const header = [
+      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
+      ...sessionOriginHeaderCells(data),
+    ].join("  ");
+    return `${header}${output.length > 0 ? `\n${output}` : ""}`;
   }
   // The dedicated event log reads the same rows `ticket show` does, at ten
   // times the default count, so it takes the same formatter and the same

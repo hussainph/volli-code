@@ -496,12 +496,12 @@ describe("Session origin history", () => {
       describeEvent({
         kind: "session_resumed",
         sessionId: "s",
-        turnId: "t",
+        attachmentId: "a",
         origin: { kind: "user" },
       }),
     ).toBe("session resumed by the user");
     expect(
-      describeEvent({ kind: "session_resumed", sessionId: "s", turnId: "t", origin: null }),
+      describeEvent({ kind: "session_resumed", sessionId: "s", attachmentId: "a", origin: null }),
     ).toBe("session resumed by an unknown origin");
   });
 });

@@ -176,7 +176,12 @@ export type TicketEventPayload =
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: string; origin?: SessionOrigin }
-  | { kind: "session_resumed"; sessionId: string; turnId: string; origin: SessionOrigin | null };
+  | {
+      kind: "session_resumed";
+      sessionId: string;
+      attachmentId: string;
+      origin: SessionOrigin | null;
+    };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

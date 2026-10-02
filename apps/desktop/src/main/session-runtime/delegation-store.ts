@@ -53,6 +53,39 @@ interface ClaimRow {
   child_session_id: string | null;
 }
 
+/**
+ * An answer reached the parent, or the parent itself ended the original watch.
+ * A stop after an independent outcome is not its cause, even if stream delivery
+ * lagged. The child ledger supplies settlement without a synthetic message.
+ * Aliases `s` (child) and `c` (create command) belong to both readers below.
+ */
+const SUBAGENT_SETTLED_SQL = `
+  EXISTS (
+    SELECT 1 FROM session_commands a
+     WHERE a.session_id = s.parent_session_id
+       AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
+  ) OR EXISTS (
+    SELECT 1 FROM session_events stop
+     WHERE stop.session_id = s.id
+       AND json_extract(stop.payload, '$.kind') = 'session.stopped'
+       AND json_extract(stop.payload, '$.by.kind') = 'session'
+       AND json_extract(stop.payload, '$.by.sessionId') = s.parent_session_id
+       AND NOT EXISTS (
+         SELECT 1 FROM session_events earlier
+          WHERE earlier.session_id = s.id AND earlier.sequence < stop.sequence
+            AND (
+              json_extract(earlier.payload, '$.kind') IN
+                ('turn.completed', 'turn.interrupted', 'session.stopped', 'attachment.failed')
+              OR (json_extract(earlier.payload, '$.kind') = 'attachment.closed'
+                  AND json_extract(earlier.payload, '$.outcome') != 'completed')
+              OR (json_extract(earlier.payload, '$.kind') = 'command.receipt.recorded'
+                  AND json_extract(earlier.payload, '$.receipt.status') = 'rejected'
+                  AND json_extract(earlier.payload, '$.receipt.commandId') =
+                    substr(c.id, 1, length(c.id) - length(':create')) || ':kickoff')
+            )
+       )
+  )`;
+
 export class TicketSessionDelegationStore
   implements SessionGrantPorts, TicketSessionDelegationClaims
 {
@@ -370,7 +403,9 @@ export class TicketSessionDelegationStore
    * child's create command id minus its `:create` suffix — the same derivation
    * the tool door made — and the notice is delivered under
    * `<operationId>:answer` in the PARENT's ledger, so a parent without that
-   * command has not heard from this child. The parent is the child's own
+   * command has not heard from this child. A parent-own stop that ended the
+   * original watch also settles it, without echoing that decision as a message.
+   * Both facts survive later attachments. The parent is the child's own
    * ledger fact (`sessions.parent_session_id`, migration 041). No other
    * bookkeeping is needed, and none is kept.
    *
@@ -384,7 +419,8 @@ export class TicketSessionDelegationStore
    * parent, the title and the operation its notice ids are keyed on. Null for
    * a Session that is not a subagent, or whose create command is not spelled
    * the way the delegate door spells one. `answered` says whether the
-   * delegation's own notice already reached the parent's ledger.
+   * delegation is durably settled: its notice reached the parent's ledger,
+   * or the parent itself ended its original watch.
    */
   subagentDelegation(childSessionId: string): (DelegationRef & { answered: boolean }) | null {
     const row = this.db
@@ -394,12 +430,7 @@ export class TicketSessionDelegationStore
                 s.project_id,
                 s.title,
                 c.id AS create_command_id,
-                EXISTS (
-                  SELECT 1
-                    FROM session_commands a
-                   WHERE a.session_id = s.parent_session_id
-                     AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
-                ) AS answered
+                (${SUBAGENT_SETTLED_SQL}) AS answered
            FROM sessions s
            JOIN session_commands c
              ON c.session_id = s.id
@@ -443,12 +474,7 @@ export class TicketSessionDelegationStore
             AND json_extract(c.intent, '$.kind') = 'session.create'
           WHERE s.role = 'subagent'
             AND s.parent_session_id IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1
-                FROM session_commands a
-               WHERE a.session_id = s.parent_session_id
-                 AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
-            )
+            AND NOT (${SUBAGENT_SETTLED_SQL})
           ORDER BY s.created_at ASC, s.id COLLATE BINARY ASC`,
       )
       .all() as Array<{

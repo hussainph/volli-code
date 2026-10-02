@@ -261,8 +261,8 @@ volli session list [--project <name>] [--ticket <id>]
 ```
 
 Active and recent terminal and chat Sessions, each with its title and short
-handle. By default: `working`, `waiting`, `interrupted`, or terminal `running`
-at any age, plus activity in the last 24 hours. `--since` replaces that activity
+handle. By default: `working`, `waiting`, `interrupted`, terminal `running`,
+or an idle Session with pending subagents at any age, plus activity in the last 24 hours. `--since` replaces that activity
 window with a look-back (`7d`, `24h`, `90m`) or RFC 3339 instant. `--all` removes
 the window. `--state` intersects those filters using the exact printed words:
 `working`, `waiting`, `idle`, `stopped`, `interrupted`, `running`, `exited`.
@@ -272,8 +272,9 @@ Rows sort by most recent activity. Text ends with an older-row count when the
 activity window omitted rows; JSON keeps `sessions` and adds `hidden` for that
 count, after the explicit project, ticket and state filters. This default filter also
 applies to `--json`. Pending delegated subagents appear on chat rows and in
-`session peek`, even when a child is filtered out. A chat row says who started
-it unless a person did, and who resumed it when it was resumed after a stop.
+`session peek`, even when a child is filtered out. Terminal and chat rows say who
+started them unless a person did, and who last reattached them. Reattachment is
+visible before any new message or turn.
 
 ### volli session show
 
@@ -283,10 +284,10 @@ volli session show <handle>
 
 Session metadata without a transcript: title, role, ticket, project, state,
 who started it (a person, an Automation with its run id, or a parent Session),
-who asked for its latest turn and for its last few resumptions after a stop,
-parent and children with states, pending subagents, model,
-reasoning/tier, usage/cost and creation/last-activity ages. Terminals return the
-metadata their list rows know. `session show`, `peek`, and `answer` take the same
+who last reattached it and its last few successful reattachments. Chat details
+also name the latest turn's sender, parent and children with states, pending
+subagents, model and reasoning/tier. Both include usage/cost and creation/last-activity
+ages. The reattacher and the next message's sender are separate facts. `session show`, `peek`, and `answer` take the same
 short handles.
 
 <Aside type="note" title="Starting a Session is not a shell command">

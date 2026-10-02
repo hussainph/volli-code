@@ -1372,9 +1372,9 @@ export const VERB_REGISTRY = [
     example: "volli session list --ticket VC-12",
     notes: [
       "Prints each session's title and short id; session show and peek take either type.",
-      "Default: working, waiting, interrupted or running at any age, plus activity in the last 24h. --since replaces that window; --all removes it. --state intersects these filters.",
+      "Default: working, waiting, interrupted, running or idle with pending subagents at any age, plus activity in the last 24h. --since replaces that window; --all removes it. --state intersects these filters.",
       "Chat rows and peek also name pending delegated subagents, even if those children are filtered out.",
-      "Chat rows name who started a session unless a person did, and who resumed it after a stop.",
+      "Terminal and chat rows name who started a session unless a person did, and who last reattached it, even before another turn begins.",
       "Chat rows carry liveness: working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
       "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
@@ -1408,7 +1408,7 @@ export const VERB_REGISTRY = [
     example: "volli session show a1b2c3d4",
     notes: [
       "Handle is a short session id from session list — terminal or chat.",
-      "Chat details include who started it (a person, an Automation with its run id, or a parent session), who asked for its latest turn, who resumed it after a stop, its parent and children, and pending delegated subagents.",
+      "Terminal and chat details include who started it and who last reattached it. Chat details also include its latest turn's sender, parent and children, and pending subagents. Reattachment history is independent of turns.",
     ],
     positionalId: "required",
     options: [],
@@ -1427,7 +1427,7 @@ export const VERB_REGISTRY = [
     example: "volli session peek a1b2c3 --lines 60",
     notes: [
       "Handle is a short session id from session list — terminal or chat.",
-      "A chat answers activity, last-event age, turn depth, who started it and who resumed it after a stop, then its transcript tail.",
+      "Terminal and chat headers name who started and last reattached the session. A chat also answers activity, last-event age, turn depth and its transcript tail.",
       "--lines is trailing terminal lines (60), or chat messages (12).",
       "Keep peeks narrow — output consumes the caller's context.",
     ],

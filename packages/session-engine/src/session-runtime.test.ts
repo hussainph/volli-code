@@ -5781,6 +5781,54 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
 });
 
 describe("trusted command origins", () => {
+  it("attributes a no-turn reattachment to its trusted opener and preserves it after durable replay", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const oldAttachmentId = (await first.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    await first.runtime.command({
+      commandId: "release-for-reattach",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: oldAttachmentId },
+    });
+    const origin = { kind: "session", sessionId: "parent" } as const;
+    const request = {
+      commandId: "origin-reattach",
+      sessionId,
+      origin,
+      command: { kind: "adapter.attach", continuity: "context_replay" } as const,
+    };
+    await first.runtime.command(request);
+    const attached = (await first.engine.getSession({ sessionId }))!;
+    expect(attached.liveExecutor).toMatchObject({
+      origin,
+      reattached: true,
+      continuity: "context_replay",
+    });
+    expect(attached.latestTurnOrigin).toBeNull();
+    expect(attached.resumptions).toEqual([
+      {
+        attachmentId: attached.liveExecutor!.id,
+        origin,
+        startedAt: attached.liveExecutor!.openedAt,
+      },
+    ]);
+    await first.runtime.close();
+    const replay = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "replay-",
+    });
+    await replay.runtime.command({ ...request, origin: { kind: "user" } });
+    expect((await replay.engine.getSession({ sessionId }))!.resumptions).toEqual(
+      attached.resumptions,
+    );
+    expect(
+      (await replay.runtime.projection({ sessionId })).projection.liveExecutor?.origin,
+    ).toEqual(origin);
+    expect((await replay.engine.getSession({ sessionId }))!.liveExecutor?.origin).toEqual(origin);
+    await replay.runtime.close();
+  });
+
   it("persists origin separately from intent and projects it through the slim ledger and checkpoint", async () => {
     const { runtime, engine, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -5816,6 +5864,11 @@ describe("trusted command origins", () => {
       request.origin,
     );
     await runtime.command({ ...request, origin: { kind: "user" } });
+    // Durable replay must retain the first writer's attribution, not the retrying door's.
+    expect((await engine.getSession({ sessionId }))?.latestTurnOrigin).toEqual(request.origin);
+    expect((await runtime.projection({ sessionId })).projection.latestTurnOrigin).toEqual(
+      request.origin,
+    );
     expect(
       (await engine.listEvents({ sessionId })).filter(
         (event) =>

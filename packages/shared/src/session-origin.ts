@@ -1,3 +1,5 @@
+import type { TicketEventActor } from "./ticket-events";
+
 /** Trusted door that requested work, not the executor that reported it.
  * Stored at event.provenance.source.detail.sessionOrigin, outside command
  * intent: attribution cannot change retry identity. Absence is unknown.
@@ -18,6 +20,15 @@ export type SessionOrigin =
         | "worktree-notice"
         | "auto-title";
     };
+
+/** Convert a trusted door's Actor; legacy automation lacks Run attribution. */
+export function sessionOriginFromActor(
+  actor: TicketEventActor | undefined,
+): SessionOrigin | undefined {
+  if (actor === undefined || actor.kind === "user") return { kind: "user" };
+  if (actor.kind === "session") return { kind: "session", sessionId: actor.sessionId };
+  return undefined;
+}
 
 const HOST_REASONS = [
   "watch-notice",

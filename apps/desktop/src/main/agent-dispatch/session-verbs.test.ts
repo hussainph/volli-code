@@ -20,7 +20,7 @@ function data(response: AgentResponse): Record<string, unknown> {
   if (!response.ok) throw new Error(response.error.message);
   return response.data as Record<string, unknown>;
 }
-function fixture() {
+function fixture(observeTerminal = false) {
   db = openTestDb();
   insertProject(
     db.db,
@@ -42,6 +42,9 @@ function fixture() {
     appVersion: "test",
     sessionEngine: engine,
     now: () => 10 * DAY,
+    ...(observeTerminal
+      ? { observeSession: () => ({ status: "working" as const, output: "$ " }) }
+      : {}),
   });
   const read = (cmd: AgentCommand, args: Record<string, unknown> = {}) =>
     service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
@@ -205,7 +208,8 @@ describe("session roster and detail", () => {
 
   it("computes pending delegated children before filtering and shares them with peek/show", async () => {
     const { read, create, active } = fixture();
-    const parent = await create("parent", 9.5 * DAY, { ticketId: "ticket" });
+    // Older than the default window, but active through its children.
+    const parent = await create("parent", DAY, { ticketId: "ticket" });
     const late = await create("late", 2 * DAY, {
       role: "subagent",
       parentSessionId: parent,
@@ -231,6 +235,9 @@ describe("session roster and detail", () => {
       ticketId: "ticket",
     });
     const handle = parent.slice(0, 8);
+    expect(data(await read("session.list"))["sessions"]).toContainEqual(
+      expect.objectContaining({ id: handle }),
+    );
     expect(data(await read("session.list", { state: ["idle"], ticket: "VC-12" }))).toMatchObject({
       sessions: [{ id: handle, pendingSubagents: [early.slice(0, 8), late.slice(0, 8)] }],
       hidden: 1,
@@ -426,33 +433,74 @@ describe("who started and who resumed a Session", () => {
         venue: { id: "local", kind: "local" },
       },
     });
+    const projection = (await f.engine.getSession({ sessionId }))!;
     await f.engine.observe({
       id: `turn-${turnId}`,
       kind: "turn.started",
       sessionId,
-      attachmentId: `attachment-${sessionId}`,
+      attachmentId: projection.attachments.find((attachment) => attachment.status === "open")!.id,
       occurredAt: 9 * DAY,
       provenance,
       turnId,
     });
   }
-  async function attach(f: ReturnType<typeof fixture>, sessionId: string) {
+  let attachmentNumber = 0;
+  async function attach(
+    f: ReturnType<typeof fixture>,
+    sessionId: string,
+    origin: SessionOrigin | null = null,
+    attachmentId = `${(++attachmentNumber).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    adapterId = "pi",
+  ) {
+    const projection = (await f.engine.getSession({ sessionId }))!;
+    const previous = projection.attachments.find((attachment) => attachment.status === "open");
+    if (previous !== undefined) {
+      await f.engine.observe({
+        id: `close-${previous.id}`,
+        sessionId,
+        kind: "attachment.closed",
+        occurredAt: 8 * DAY,
+        provenance,
+        attachmentId: previous.id,
+        outcome: "interrupted",
+      });
+    }
+    const commandId = `open-${attachmentId}`;
+    await f.engine.submit({
+      commandId,
+      sessionId,
+      intent: {
+        kind: "executor.start",
+        adapterId,
+        continuity: previous === undefined ? "fresh" : "context_replay",
+      },
+      provenance: {
+        ...provenance,
+        source: {
+          ...provenance.source,
+          detail: origin === null ? null : { sessionOrigin: origin },
+        },
+      },
+    });
     await f.engine.observe({
-      id: `attach-${sessionId}`,
+      id: `attach-${attachmentId}`,
+      commandId,
       kind: "attachment.opened",
       sessionId,
       occurredAt: 9 * DAY,
       provenance,
       attachment: {
-        id: `attachment-${sessionId}`,
+        id: attachmentId,
         sessionId,
-        adapterId: "pi",
+        adapterId,
         venue: { id: "local", kind: "local" },
-        continuity: "fresh",
-        native: { id: "test", detail: null },
+        continuity: previous === undefined ? "fresh" : "context_replay",
+        native:
+          adapterId === "terminal" ? (previous?.native ?? null) : { id: "test", detail: null },
         authority: null,
       },
     });
+    return attachmentId;
   }
   let stops = 0;
   async function stop(f: ReturnType<typeof fixture>, sessionId: string) {
@@ -513,10 +561,12 @@ describe("who started and who resumed a Session", () => {
       parentSessionId: parent.slice(0, 8),
       parentTitle: "Planner",
     });
-    // Terminal rows are not chat rows and carry no origin cells.
+    // Terminal rows expose the same birth attribution as chat rows.
     const terminal = "abcdef12-0000-4000-8000-000000000001";
     insertSession(db.db, testSession("p", null, { id: terminal, createdAt: 9.5 * DAY }));
-    expect(sessionRow(await f.read("session.list"), "abcdef12")).not.toHaveProperty("startedBy");
+    expect(sessionRow(await f.read("session.list"), "abcdef12")).toHaveProperty("startedBy", {
+      kind: "user",
+    });
     expect(JSON.stringify(await f.read("session.list"))).not.toContain(parent);
   });
 
@@ -531,10 +581,13 @@ describe("who started and who resumed a Session", () => {
     await attach(f, stopped);
     await turn(f, stopped, first, { kind: "user" });
     await stop(f, stopped);
+    await attach(f, stopped, { kind: "session", sessionId: parent }, second);
     await turn(f, stopped, second, { kind: "session", sessionId: parent });
     await stop(f, stopped);
+    await attach(f, stopped, null, third);
     await turn(f, stopped, third, null);
     await stop(f, stopped);
+    await attach(f, stopped, { kind: "volli", reason: "scheduled-resume" }, fourth);
     await turn(f, stopped, fourth, { kind: "volli", reason: "scheduled-resume" });
 
     const plain = await f.create("plain", 9.5 * DAY);
@@ -565,9 +618,9 @@ describe("who started and who resumed a Session", () => {
     // Oldest first and uncapped; the first turn was a start, not a resume. A
     // Session id travels as its public handle, a legacy turn as unknown.
     expect(shown["resumptions"]).toEqual([
-      { turn: "22222222", origin: { kind: "session", sessionId: parent.slice(0, 8) } },
-      { turn: "33333333", origin: null },
-      { turn: "44444444", origin: { kind: "volli", reason: "scheduled-resume" } },
+      { attachment: "22222222", origin: { kind: "session", sessionId: parent.slice(0, 8) } },
+      { attachment: "33333333", origin: null },
+      { attachment: "44444444", origin: { kind: "volli", reason: "scheduled-resume" } },
     ]);
     expect(data(await f.read("session.show", { id: plain.slice(0, 8) }))).toMatchObject({
       latestTurn: { origin: { kind: "user" }, resumedAfterStop: false },
@@ -585,6 +638,86 @@ describe("who started and who resumed a Session", () => {
     }
   });
 
+  it("attributes a chat reattachment before any turn and keeps the next sender separate", async () => {
+    const f = fixture();
+    const parent = await f.create("Planner", 9 * DAY);
+    const child = await f.create("recovering", 9 * DAY, { ticketId: "ticket" });
+    await attach(f, child, { kind: "session", sessionId: parent });
+    await attach(f, child, { kind: "user" });
+    const handle = child.slice(0, 8);
+    for (const command of ["session.show", "session.peek"] as const) {
+      expect(data(await f.read(command, { id: handle }))).toMatchObject({
+        latestTurn: null,
+        latestAttachment: { origin: { kind: "user" }, reattached: true },
+      });
+    }
+    expect(sessionRow(await f.read("session.list"), handle)).toMatchObject({
+      latestAttachment: { origin: { kind: "user" }, reattached: true },
+    });
+    await turn(f, child, "sender-turn", { kind: "session", sessionId: parent });
+    expect(data(await f.read("session.peek", { id: handle }))).toMatchObject({
+      latestTurn: {
+        origin: { kind: "session", sessionId: parent.slice(0, 8) },
+        resumedAfterStop: false,
+      },
+      latestAttachment: { origin: { kind: "user" }, reattached: true },
+    });
+  });
+
+  it("exposes terminal birth and reattachment origins on list, peek, show and Ticket history", async () => {
+    const f = fixture(true);
+    const id = "abcdef12-0000-4000-8000-000000000001";
+    insertSession(db.db, testSession("p", "ticket", { id, title: "Terminal", createdAt: DAY }));
+    recordTicketEvent(
+      db.db,
+      "ticket",
+      {
+        kind: "session_started",
+        sessionId: id,
+        origin: { kind: "automation", automationRunId: RUN, automationName: "Review" },
+      },
+      DAY,
+      { kind: "automation" },
+    );
+    const attachment = await attach(
+      f,
+      id,
+      { kind: "user" },
+      "87654321-0000-4000-8000-000000000001",
+      "terminal",
+    );
+    const expected = {
+      startedBy: { kind: "automation", automationRunId: RUN, automationName: "Review" },
+      latestAttachment: { origin: { kind: "user" }, reattached: true },
+      latestTurn: null,
+    };
+    expect(sessionRow(await f.read("session.list"), "abcdef12")).toMatchObject(expected);
+    expect(data(await f.read("session.peek", { id: "abcdef12" }))).toMatchObject({
+      ...expected,
+      output: "$ ",
+    });
+    expect(data(await f.read("session.show", { id: "abcdef12" }))).toMatchObject({
+      ...expected,
+      resumptions: [{ attachment: "87654321", origin: { kind: "user" } }],
+    });
+    expect(recordSessionResumedOnce(db.db, (await f.engine.getSession({ sessionId: id }))!)).toBe(
+      true,
+    );
+    expect(data(await f.read("ticket.events", { id: "VC-12" }))["events"]).toContainEqual(
+      expect.objectContaining({
+        payload: {
+          kind: "session_resumed",
+          session: "abcdef12",
+          attachment: "87654321",
+          origin: { kind: "user" },
+        },
+      }),
+    );
+    expect(JSON.stringify(await f.read("session.show", { id: "abcdef12" }))).not.toContain(
+      attachment,
+    );
+  });
+
   it("carries the origin on ticket events under public handles, and never trusts a stored shape", async () => {
     const f = fixture();
     const parent = await f.create("Planner", 9.5 * DAY);
@@ -593,11 +726,18 @@ describe("who started and who resumed a Session", () => {
     await attach(f, resumed);
     await turn(f, resumed, "11111111-0000-4000-8000-000000000001", { kind: "user" });
     await stop(f, resumed);
+    await attach(
+      f,
+      resumed,
+      { kind: "session", sessionId: parent },
+      "22222222-0000-4000-8000-000000000002",
+    );
     await turn(f, resumed, "22222222-0000-4000-8000-000000000002", {
       kind: "session",
       sessionId: parent,
     });
     await stop(f, resumed);
+    await attach(f, resumed, null, "33333333-0000-4000-8000-000000000003");
     await turn(f, resumed, "33333333-0000-4000-8000-000000000003", null);
     recordTicketEvent(
       db.db,
@@ -641,7 +781,7 @@ describe("who started and who resumed a Session", () => {
       {
         kind: "session_resumed",
         sessionId: "not-a-session-id",
-        turnId: "legacy-turn",
+        attachmentId: "legacy-attachment",
         origin: { kind: "future-door" } as unknown as SessionOrigin,
       },
       4 * DAY,
@@ -666,19 +806,19 @@ describe("who started and who resumed a Session", () => {
     expect(events).toContainEqual({
       kind: "session_resumed",
       session: resumed.slice(0, 8),
-      turn: "22222222",
+      attachment: "22222222",
       origin: { kind: "session", sessionId: parent.slice(0, 8) },
     });
     expect(events).toContainEqual({
       kind: "session_resumed",
       session: resumed.slice(0, 8),
-      turn: "33333333",
+      attachment: "33333333",
       origin: null,
     });
     expect(events).toContainEqual({
       kind: "session_resumed",
       session: "not-a-session-id",
-      turn: "legacy-t",
+      attachment: "legacy-a",
       origin: null,
     });
     const wire = JSON.stringify(await f.read("ticket.events", { id: "VC-12", limit: 20 }));

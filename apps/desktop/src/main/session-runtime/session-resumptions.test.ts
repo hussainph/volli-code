@@ -45,7 +45,7 @@ function fixture() {
     });
     return session.id;
   }
-  async function resume(sessionId: string, stopFirst = true) {
+  async function resume(sessionId: string, stopFirst = true, reopen = true) {
     await engine.observe({
       id: `attach-${sessionId}`,
       sessionId,
@@ -69,21 +69,63 @@ function fixture() {
         intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
         provenance,
       });
+    if (!reopen) {
+      // Admitted before stop, observed after it: not a successful reopening.
+      await engine.observe({
+        id: `racing-turn-${sessionId}`,
+        sessionId,
+        kind: "turn.started",
+        occurredAt: 50,
+        attachmentId: `a-${sessionId}`,
+        turnId: `t-${sessionId}`,
+        provenance,
+      });
+      return;
+    }
     await engine.observe({
-      id: `turn-${sessionId}`,
+      id: `closed-${sessionId}`,
       sessionId,
-      kind: "turn.started",
+      kind: "attachment.closed",
+      occurredAt: 25,
+      attachmentId: `a-${sessionId}`,
+      outcome: "interrupted",
+      provenance,
+    });
+    await engine.submit({
+      commandId: `reattach-${sessionId}`,
+      sessionId,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "context_replay" },
+      provenance: {
+        ...provenance,
+        source: {
+          ...provenance.source,
+          detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+        },
+      },
+    });
+    await engine.observe({
+      id: `reopened-${sessionId}`,
+      commandId: `reattach-${sessionId}`,
+      sessionId,
+      kind: "attachment.opened",
       occurredAt: 50,
       provenance,
-      attachmentId: `a-${sessionId}`,
-      turnId: `t-${sessionId}`,
+      attachment: {
+        id: `b-${sessionId}`,
+        sessionId,
+        adapterId: "pi",
+        venue: provenance.venue,
+        continuity: "context_replay",
+        native: null,
+        authority: null,
+      },
     });
   }
   return { engine, create, resume, ticketId: ticket.id };
 }
 
 describe("Session resumption catch-up", () => {
-  it("folds only Ticket Sessions with a start after a stop and repairs missing history exactly once at its original time", async () => {
+  it("folds Ticket-bound Sessions including children with a later attachment and no turn and repairs missing history exactly once at its original time", async () => {
     const f = fixture();
     const ticketSession = await f.create("ticket");
     const board = await f.create("project");
@@ -92,23 +134,34 @@ describe("Session resumption catch-up", () => {
     const stopWithoutResume = await f.create("ticket");
     for (const sessionId of [ticketSession, board, child]) await f.resume(sessionId);
     await f.resume(neverStopped, false);
-    await f.engine.submit({
-      commandId: "stop-only",
-      sessionId: stopWithoutResume,
-      intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
-      provenance,
-    });
+    await f.resume(stopWithoutResume, true, false);
     const getSession = vi.fn(f.engine.getSession);
     const publish = vi.fn();
     const report = vi.fn();
     recordTicketEvent(ctx.db, f.ticketId, { kind: "archived" }, 100);
     const cursor = currentTicketEventCursor(ctx.db);
     await catchUpSessionResumptions(ctx.db, { getSession }, { publish, report });
-    expect(getSession.mock.calls).toEqual([[{ sessionId: ticketSession }]]);
-    expect(listTicketEvents(ctx.db, f.ticketId)).toMatchObject([
-      { createdAt: 50, payload: { kind: "session_resumed", sessionId: ticketSession } },
-      { createdAt: 100, payload: { kind: "archived" } },
-    ]);
+    expect(getSession.mock.calls.map(([query]) => query.sessionId).toSorted()).toEqual(
+      [ticketSession, child, neverStopped].toSorted(),
+    );
+    const history = listTicketEvents(ctx.db, f.ticketId);
+    expect(history).toHaveLength(4);
+    expect(history.at(-1)).toMatchObject({ createdAt: 100, payload: { kind: "archived" } });
+    expect(history.slice(0, 3)).toEqual(
+      expect.arrayContaining(
+        [ticketSession, child, neverStopped].map((sessionId) =>
+          expect.objectContaining({
+            createdAt: 50,
+            payload: {
+              kind: "session_resumed",
+              sessionId,
+              attachmentId: `b-${sessionId}`,
+              origin: { kind: "volli", reason: "relaunch-recovery" },
+            },
+          }),
+        ),
+      ),
+    );
     // The ticket-watch vocabulary cannot interpret the backfill as fresh news.
     expect(
       firstMatchingTicketEventAfter(
@@ -119,8 +172,8 @@ describe("Session resumption catch-up", () => {
       ),
     ).toBeUndefined();
     await catchUpSessionResumptions(ctx.db, { getSession }, { publish, report });
-    expect(listTicketEvents(ctx.db, f.ticketId)).toHaveLength(2);
-    expect(publish).toHaveBeenCalledTimes(1);
+    expect(listTicketEvents(ctx.db, f.ticketId)).toHaveLength(4);
+    expect(publish).toHaveBeenCalledTimes(3);
     expect(report).not.toHaveBeenCalled();
   });
 
