@@ -10,6 +10,7 @@ import type { SubagentNotice } from "@volli/session-presentation";
 import {
   BrowserHoldNoticeRow,
   HostNoticeRow,
+  ShellNoticeRow,
   SubagentNoticeRow,
   UnknownHostNoticeRow,
   WatchNoticeRow,
@@ -88,6 +89,49 @@ describe("a Subagent Session notice row", () => {
     );
 
     expect(html).toContain("Volli relaunched while its turn was active");
+  });
+});
+
+describe("a background shell notice row (VC-495)", () => {
+  const exited = {
+    kind: "background-shell",
+    event: "exited",
+    shellId: "sh-1",
+    label: "pnpm test --watch",
+    code: 1,
+    signal: null,
+    runtimeMs: 125_000,
+    byPerson: false,
+  } as const;
+  const matched = {
+    kind: "background-shell",
+    event: "matched",
+    shellId: "sh-2",
+    label: "dev server",
+    pattern: "listening on",
+    regex: false,
+  } as const;
+
+  it("draws the shell and how it ended in the transcript's quiet host register", () => {
+    const html = renderToStaticMarkup(<ShellNoticeRow notice={exited} />);
+
+    expect(html).toContain("pnpm test --watch");
+    expect(html).toContain("exited 1");
+    expect(html).toContain("Ran 2m 5s.");
+    expect(html).toContain('data-slot="separator"');
+    expect(html).not.toContain('aria-label="Copy"');
+  });
+
+  it("puts the complete label and note in the row's hover text, and says a match is a match", () => {
+    const html = renderToStaticMarkup(<ShellNoticeRow notice={matched} />);
+
+    expect(html).toContain("dev server");
+    expect(html).toContain("matched");
+    expect(html).toContain('title="dev server — matched. Printed &quot;listening on&quot;."');
+  });
+
+  it("is what the portable row model dispatches to", () => {
+    expect(renderToStaticMarkup(<HostNoticeRow notice={exited} />)).toContain("exited 1");
   });
 });
 

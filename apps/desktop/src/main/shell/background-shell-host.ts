@@ -33,6 +33,18 @@
  * durable row saying whose it was, which is what lets a later sweep list it
  * instead of guessing from its command line.
  *
+ * WHAT IT SAYS BY ITSELF (VC-495). A shell is no longer pull-only: through
+ * `onNotice` it tells the Session that started it when it exits on its own,
+ * and, if the model asked with `notifyOn`, the first time a line of its output
+ * matches. The host decides WHEN to speak and hands over only redacted text;
+ * `shell-notices.ts` words it and `session-runtime/host-notice-delivery.ts`
+ * gets it into the chat. It stays quiet when the model already has the news
+ * (its own `shell_kill`; an exit it read with `shell_output` inside the
+ * {@link SHELL_EXIT_NOTICE_GRACE_MS} grace; output `start` itself returned) and
+ * when there is no one to tell (the attachment ended). A person's kill from the
+ * Island is NOT quiet: the Session has no other way to learn of it. At most one
+ * exit notice and one match notice per shell, however chatty it is.
+ *
  * WHAT ENDS IT. A kill is SIGTERM to the group, then SIGKILL after
  * {@link SHELL_KILL_GRACE_MS}. {@link disposeSession} is the attachment's end
  * — stop, done, detach, replace, relaunch, all through the adapter's one
@@ -46,12 +58,23 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
-import type { RuntimeShellRecord, SpawnLedgerPort } from "@volli/shared";
+import {
+  redactPayloadSecrets,
+  shellCommandLine,
+  type RuntimeShellRecord,
+  type SpawnLedgerPort,
+} from "@volli/shared";
 
 import type { BackgroundShellState } from "../../ipc/contract";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
+import {
+  compileNotifyPattern,
+  SHELL_NOTIFY_LINE_MAX_CHARS,
+  type ShellNotifyPattern,
+} from "./notify-pattern";
 
 /** Bytes retained per shell — the PTY peek's own bound (`pty/output.ts`). */
 export const SHELL_OUTPUT_MAX_BYTES = 256_000;
@@ -61,6 +84,48 @@ export const SHELL_TAIL_MAX_BYTES = 64_000;
 export const SHELL_START_SETTLE_MS = 1_000;
 /** How long SIGTERM gets before SIGKILL. */
 export const SHELL_KILL_GRACE_MS = 5_000;
+
+/** How long an exit waits for the model to have read it itself before a notice is sent. */
+export const SHELL_EXIT_NOTICE_GRACE_MS = 1_000;
+/** The most of a shell's output an exit notice carries: its last few kilobytes. */
+export const SHELL_NOTICE_TAIL_MAX_BYTES = 4_000;
+/** The longest label a notice names a shell by, in characters. */
+export const SHELL_NOTICE_LABEL_MAX_CHARS = 80;
+/** The most of a matching line a match notice quotes, in characters. */
+export const SHELL_NOTICE_MATCH_LINE_MAX_CHARS = 500;
+/** How much of one line is buffered to be redacted and tested; the rest of it is dropped. */
+const LINE_BUFFER_MAX_CHARS = 8_192;
+
+/**
+ * What the host tells main about a shell that has something to say (VC-495).
+ * Every string here has already been through the redactors: the host is the
+ * one place that holds both the raw output and the credential store's exact
+ * values, so nothing downstream ever sees a secret to scrub.
+ */
+export type BackgroundShellNotice = {
+  sessionId: string;
+  shellId: string;
+  /** The model's title, else the command's first line; redacted and bounded. */
+  label: string;
+} & (
+  | {
+      kind: "exited";
+      code: number | null;
+      signal: string | null;
+      runtimeMs: number;
+      /** A person ended it from the Island; the agent's own kill never notifies. */
+      byPerson: boolean;
+      tail: string;
+      /** The tail is not all of the output: the ring dropped bytes, or the notice bound cut it. */
+      truncated: boolean;
+    }
+  | {
+      kind: "matched";
+      pattern: string;
+      regex: boolean;
+      line: string;
+    }
+);
 
 /** Who a shell belongs to: the Session, and the scope the adapter stated for it. */
 export interface BackgroundShellOwner {
@@ -77,6 +142,12 @@ export interface BackgroundShellStartInput {
   title: string | null;
   /** The whole environment the child gets; nothing is added here. */
   env: Record<string, string>;
+  /**
+   * Tell the Session the first time this appears in a line of output (VC-495).
+   * Judged before anything is spawned: a pattern the host will not run is a
+   * `shell.pattern` refusal.
+   */
+  notifyOn?: ShellNotifyPattern;
 }
 
 export interface BackgroundShellHostDependencies {
@@ -86,6 +157,15 @@ export interface BackgroundShellHostDependencies {
   publishRemoved(shellId: string): void;
   /** Apply after combining chunks, before tool or renderer reads. Never logs output. */
   redactOutput?: (text: string) => string;
+  /**
+   * A shell has something to tell the Session that started it (VC-495): it
+   * exited on its own, or its output matched the pattern the model asked to
+   * be told about. Never called for a shell the Session's own `shell_kill`
+   * ended, nor once the Session's attachment has ended.
+   */
+  onNotice?(notice: BackgroundShellNotice): void;
+  /** Overridable for tests; defaults to {@link SHELL_EXIT_NOTICE_GRACE_MS}. */
+  exitNoticeGraceMs?: number;
   /** Where a started shell is recorded so a later launch can still attribute it. */
   ledger?: SpawnLedgerPort;
   createId?: () => string;
@@ -185,6 +265,21 @@ interface ShellEntry {
   exited: Promise<void>;
   /** Told on every chunk, for the settle window. */
   onOutput: Set<() => void>;
+  /**
+   * `start` has handed the model its first answer. An exit before that is in
+   * the answer itself (its record is copied after this flips), so only an exit
+   * after it is news.
+   */
+  returned: boolean;
+  /** The pending exit notice, while the grace for the model's own read runs. */
+  noticeTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Who asked for the kill, once someone did. The Session's own `shell_kill`
+   * is confirmed by its tool result and is never echoed back (VC-485's rule for
+   * a Session's own stops); a person's is news the Session has no other way to
+   * learn.
+   */
+  endedBy?: "agent" | "person";
 }
 
 export class BackgroundShellHost {
@@ -196,6 +291,7 @@ export class BackgroundShellHost {
   private readonly outputMaxBytes: number;
   private readonly tailMaxBytes: number;
   private readonly ledger: SpawnLedgerPort;
+  private readonly exitNoticeGraceMs: number;
 
   constructor(private readonly deps: BackgroundShellHostDependencies) {
     this.ledger = deps.ledger ?? NO_SPAWN_LEDGER;
@@ -205,6 +301,7 @@ export class BackgroundShellHost {
     this.killGraceMs = deps.killGraceMs ?? SHELL_KILL_GRACE_MS;
     this.outputMaxBytes = deps.outputMaxBytes ?? SHELL_OUTPUT_MAX_BYTES;
     this.tailMaxBytes = deps.tailMaxBytes ?? SHELL_TAIL_MAX_BYTES;
+    this.exitNoticeGraceMs = deps.exitNoticeGraceMs ?? SHELL_EXIT_NOTICE_GRACE_MS;
   }
 
   private stateOf(entry: ShellEntry): BackgroundShellState {
@@ -263,6 +360,17 @@ export class BackgroundShellHost {
           .join(", ")}): kill one with shell_kill, or reuse one.`,
       );
     }
+    let notifyTest: ((line: string) => boolean) | null = null;
+    if (input.notifyOn !== undefined) {
+      const compiled = compileNotifyPattern(input.notifyOn);
+      if (!compiled.ok) {
+        throw new ShellRefusal(
+          "shell.pattern",
+          `The shell was not started, because ${compiled.reason}. Use notifyOn with a plain string, or a simpler regular expression with notifyOnRegex.`,
+        );
+      }
+      notifyTest = compiled.test;
+    }
     const shellId = this.createId();
     const child = spawn("/bin/bash", ["-c", input.command], {
       cwd: input.cwd,
@@ -304,8 +412,18 @@ export class BackgroundShellHost {
     };
     const ring = new OutputRing(this.outputMaxBytes);
     const onOutput = new Set<() => void>();
+    const notifyOn = input.notifyOn;
+    const watch =
+      notifyTest === null || notifyOn === undefined || this.deps.onNotice === undefined
+        ? null
+        : new LineWatch(
+            (line) => this.noticeText(line),
+            notifyTest,
+            (line) => this.announceMatch(entry, notifyOn, line),
+          );
     const receive = (chunk: Buffer): void => {
       ring.append(chunk);
+      watch?.feed(chunk);
       for (const listener of onOutput) listener();
     };
     child.stdout?.on("data", receive);
@@ -318,7 +436,13 @@ export class BackgroundShellHost {
         record.signal = signal;
         record.exitedAt = this.now();
         if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
-        if (this.shells.has(shellId)) this.deps.publishState(this.stateOf(entry));
+        if (this.shells.has(shellId)) {
+          this.deps.publishState(this.stateOf(entry));
+          // A last line that never got its newline is still a line — unless
+          // the Session itself just killed the shell, and has its answer.
+          if (entry.endedBy !== "agent") watch?.flush();
+          this.scheduleExitNotice(entry);
+        }
         resolve();
       };
       // `close`, not `exit`: Node fires `exit` the moment the process itself
@@ -337,13 +461,119 @@ export class BackgroundShellHost {
       // A spawn that failed after a pid was handed out (rare) ends the same way.
       child.once("error", () => settle(null, null));
     });
-    const entry: ShellEntry = { owner, record, pid, child, ring, exited, onOutput };
+    const entry: ShellEntry = {
+      owner,
+      record,
+      pid,
+      child,
+      ring,
+      exited,
+      onOutput,
+      returned: false,
+    };
     this.shells.set(shellId, entry);
     this.deps.publishState(this.stateOf(entry));
 
     await this.settle(entry);
+    // Flipped in the same synchronous block that copies the record below: an
+    // exit lands either before it (and is in the answer) or after (and is news).
+    entry.returned = true;
     const { output } = ring.readNew();
     return { shell: { ...record }, pid, output: this.safeOutput(output) };
+  }
+
+  /**
+   * The exit notice, after a short grace (VC-495): a model that reads the exit
+   * itself inside it has been told, and a notice on top would only repeat it.
+   */
+  private scheduleExitNotice(entry: ShellEntry): void {
+    if (this.deps.onNotice === undefined || !entry.returned || entry.endedBy === "agent") return;
+    entry.noticeTimer = setTimeout(() => {
+      entry.noticeTimer = undefined;
+      const { record } = entry;
+      // The same window a `tail` read gets, and the cursor moves with it: the
+      // notice is the model's read of how this ended.
+      const window = entry.ring.readTail(this.tailMaxBytes);
+      // REDACT, THEN CUT. A cut made first could leave the back half of a
+      // secret behind, which no redactor recognises as one.
+      const tail = lastBytes(this.noticeText(window.output), SHELL_NOTICE_TAIL_MAX_BYTES);
+      this.emit({
+        kind: "exited",
+        sessionId: entry.owner.sessionId,
+        shellId: record.shellId,
+        label: this.labelOf(record),
+        code: record.code,
+        signal: record.signal,
+        runtimeMs: (record.exitedAt ?? this.now()) - record.startedAt,
+        byPerson: entry.endedBy === "person",
+        tail: tail.text,
+        truncated: window.truncated || tail.cut,
+      });
+    }, this.exitNoticeGraceMs);
+  }
+
+  /**
+   * The one way a notice leaves the host. The sink is main's, and this runs
+   * inside the child's `close` and `data` handlers, where a throw would be an
+   * uncaught exception in the main process and would skip the listeners behind
+   * it. A notice that could not be sent is written to the log (nobody is
+   * waiting on it) and the shell stays readable.
+   */
+  private emit(notice: BackgroundShellNotice): void {
+    try {
+      this.deps.onNotice?.(notice);
+    } catch (error) {
+      console.error(
+        "[volli] background shell notice failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  /**
+   * Text on its way into a notice, and so into a durable transcript: the
+   * credential store's exact values first (it knows what to look for), then
+   * the shared pattern redactor for the secrets nobody stored.
+   */
+  private noticeText(text: string): string {
+    return redactPayloadSecrets(this.safeOutput(text));
+  }
+
+  /** What a notice calls a shell: its title, else the command's first line, scrubbed and short. */
+  private labelOf(record: RuntimeShellRecord): string {
+    const named = this.noticeText(record.title ?? shellCommandLine(record.command));
+    const chars = [...named];
+    return chars.length <= SHELL_NOTICE_LABEL_MAX_CHARS
+      ? named
+      : `${chars.slice(0, SHELL_NOTICE_LABEL_MAX_CHARS - 1).join("")}…`;
+  }
+
+  /**
+   * The match notice (VC-495). Silent for a match inside the settle window —
+   * `start` hands the model that very output — and for a shell whose Session
+   * has gone; the watch has used its one match either way.
+   */
+  private announceMatch(entry: ShellEntry, notifyOn: ShellNotifyPattern, line: string): void {
+    if (!entry.returned || !this.shells.has(entry.record.shellId)) return;
+    const chars = [...line];
+    this.emit({
+      kind: "matched",
+      sessionId: entry.owner.sessionId,
+      shellId: entry.record.shellId,
+      label: this.labelOf(entry.record),
+      pattern: notifyOn.pattern,
+      regex: notifyOn.regex,
+      line:
+        chars.length <= SHELL_NOTICE_MATCH_LINE_MAX_CHARS
+          ? line
+          : `${chars.slice(0, SHELL_NOTICE_MATCH_LINE_MAX_CHARS - 1).join("")}…`,
+    });
+  }
+
+  private cancelExitNotice(entry: ShellEntry): void {
+    if (entry.noticeTimer === undefined) return;
+    clearTimeout(entry.noticeTimer);
+    entry.noticeTimer = undefined;
   }
 
   /** The settle window: the exit, or the bound, whichever is first. */
@@ -367,6 +597,8 @@ export class BackgroundShellHost {
     tail?: number,
   ): { shell: RuntimeShellRecord; output: string; truncated: boolean } {
     const entry = this.requireOwn(owner, shellId);
+    // The model is reading the exit itself; a notice on top would repeat it.
+    if (entry.record.state === "exited") this.cancelExitNotice(entry);
     const read =
       tail === undefined
         ? entry.ring.readNew()
@@ -388,6 +620,7 @@ export class BackgroundShellHost {
         }); there is nothing to kill. Its output is still readable with shell_output.`,
       );
     }
+    entry.endedBy = "agent";
     await this.terminate(entry);
     return { shell: { ...entry.record } };
   }
@@ -429,6 +662,7 @@ export class BackgroundShellHost {
   async killAny(shellId: string): Promise<void> {
     const entry = this.shells.get(shellId);
     if (entry === undefined) return;
+    if (entry.record.state === "running") entry.endedBy ??= "person";
     await this.terminate(entry);
   }
 
@@ -436,14 +670,104 @@ export class BackgroundShellHost {
    * The attachment's end: kill every shell the Session started and forget
    * them. Fire-and-forget on the kill, because release must not wait on a
    * process that ignores SIGTERM — the SIGKILL still follows after the grace.
+   *
+   * A Session that has ended is told nothing (VC-495): an exit notice still
+   * waiting out its grace is dropped with the shell, and the forgotten entry is
+   * what keeps a match or an exit that lands later quiet.
    */
   disposeSession(sessionId: string): void {
     for (const entry of this.ownedBy(sessionId)) {
+      this.cancelExitNotice(entry);
       this.shells.delete(entry.record.shellId);
       void this.terminate(entry);
       this.deps.publishRemoved(entry.record.shellId);
     }
   }
+}
+
+/**
+ * One shell's output, assembled into lines and tested against the pattern its
+ * model asked to be told about (VC-495). It fires ONCE and then goes quiet
+ * for good: a chatty process matching on every line costs one notice, not a
+ * flood.
+ *
+ * Each line is redacted BEFORE it is tested, with the same redactors a notice
+ * passes through. A pattern that matched the raw line would be an oracle for
+ * whatever the redactors exist to hide — a model could narrow in on a stored
+ * credential one guess at a time, by whether its notice came. Only the first
+ * {@link SHELL_NOTIFY_LINE_MAX_CHARS} characters of the redacted line are
+ * tested (a regex is run on a bounded input, see `notify-pattern.ts`), and
+ * a line past {@link LINE_BUFFER_MAX_CHARS} is cut there and its remainder
+ * dropped. Cutting happens after redaction, never before it.
+ */
+class LineWatch {
+  readonly #decoder = new StringDecoder("utf8");
+  #partial = "";
+  /** The tail of a line past the buffer, dropped until its newline. */
+  #skipping = false;
+  #done = false;
+
+  constructor(
+    private readonly redact: (line: string) => string,
+    private readonly test: (line: string) => boolean,
+    private readonly onMatch: (redactedLine: string) => void,
+  ) {}
+
+  feed(chunk: Buffer): void {
+    if (this.#done) return;
+    let text = this.#decoder.write(chunk);
+    if (this.#skipping) {
+      const newline = text.indexOf("\n");
+      if (newline === -1) return;
+      this.#skipping = false;
+      text = text.slice(newline + 1);
+    }
+    let rest = this.#partial + text;
+    let newline = rest.indexOf("\n");
+    while (!this.#done && newline !== -1) {
+      this.#line(rest.slice(0, newline));
+      rest = rest.slice(newline + 1);
+      newline = rest.indexOf("\n");
+    }
+    if (this.#done) return;
+    if (rest.length > LINE_BUFFER_MAX_CHARS) {
+      this.#line(rest.slice(0, LINE_BUFFER_MAX_CHARS));
+      rest = "";
+      this.#skipping = true;
+    }
+    this.#partial = rest;
+  }
+
+  /** The shell has closed: whatever is buffered is the last line. */
+  flush(): void {
+    if (this.#done) return;
+    const last = this.#partial + this.#decoder.end();
+    this.#partial = "";
+    if (last.length > 0 && !this.#skipping) this.#line(last);
+  }
+
+  #line(raw: string): void {
+    const safe = this.redact(raw.endsWith("\r") ? raw.slice(0, -1) : raw);
+    const tested = [...safe].slice(0, SHELL_NOTIFY_LINE_MAX_CHARS).join("");
+    if (!this.test(tested)) return;
+    this.#done = true;
+    this.#partial = "";
+    this.onMatch(safe);
+  }
+}
+
+/**
+ * The last `bytes` of `text`, advanced past any continuation bytes to a
+ * character boundary for the reason {@link OutputRing.slice} gives: a cut
+ * through a character would be decoded into a U+FFFD that re-encodes larger
+ * than the bound promised.
+ */
+function lastBytes(text: string, bytes: number): { text: string; cut: boolean } {
+  const encoded = Buffer.from(text, "utf8");
+  if (encoded.length <= bytes) return { text, cut: false };
+  let from = encoded.length - bytes;
+  while (from < encoded.length && (encoded[from]! & 0xc0) === 0x80) from += 1;
+  return { text: encoded.subarray(from).toString("utf8"), cut: true };
 }
 
 /** A record as handed out: a copy, so a caller never holds the live one. */

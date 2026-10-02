@@ -103,6 +103,50 @@ describe("shell tools", () => {
     expect(text).toMatch(/sh-1.*running.*1s.*pnpm dev/);
   });
 
+  it("hands notifyOn to the port as one pattern, a literal unless the model says regex (VC-495)", async () => {
+    const port = unusedPort();
+    const calls: unknown[] = [];
+    port.start = async (input) => {
+      calls.push(input.notifyOn);
+      return { shell: record(), pid: 1, output: "", shells: [record()] };
+    };
+    const tool = createShellTool("shell_start", port, undefined, clock);
+
+    await tool.execute("c1", { command: "pnpm dev" });
+    await tool.execute("c2", { command: "pnpm dev", notifyOn: "listening on" });
+    await tool.execute("c3", { command: "pnpm test", notifyOn: "FAIL \\d+", notifyOnRegex: true });
+    await tool.execute("c4", { command: "pnpm test", notifyOn: "x", notifyOnRegex: false });
+
+    expect(calls).toEqual([
+      undefined,
+      { pattern: "listening on", regex: false },
+      { pattern: "FAIL \\d+", regex: true },
+      { pattern: "x", regex: false },
+    ]);
+  });
+
+  it("bounds notifyOn in the schema the model sees, and leaves it optional", () => {
+    const schema = createShellTool("shell_start", unusedPort()).parameters as {
+      required: string[];
+      properties: Record<string, { maxLength?: number; type: string }>;
+    };
+
+    expect(schema.required).toEqual(["command"]);
+    expect(schema.properties["notifyOn"]).toMatchObject({ type: "string", maxLength: 200 });
+    expect(schema.properties["notifyOnRegex"]).toMatchObject({ type: "boolean" });
+  });
+
+  it("tells the model an exit notice arrives by itself, so it need not poll or sleep (VC-495)", () => {
+    const { description } = createShellTool("shell_start", unusedPort());
+
+    expect(description).toMatch(/exits?, Volli sends you a notice/);
+    expect(description).toMatch(/do not poll or sleep/i);
+    // The one optional extra, named where the model reads it.
+    expect(description).toContain("notifyOn");
+    // A line or two, not a paragraph: this rides every Session's tool array.
+    expect(description.length).toBeLessThan(900);
+  });
+
   it("says plainly when a started shell printed nothing yet", async () => {
     const port = unusedPort();
     port.start = async () => ({ shell: record(), pid: 1, output: "", shells: [record()] });

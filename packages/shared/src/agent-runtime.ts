@@ -1132,6 +1132,24 @@ export function shellStanding(
 }
 
 /**
+ * How long a shell ran, in the two units that matter: `45s`, `2m 5s`, `1h 1m`
+ * (VC-495). Here beside {@link shellStanding} because the notice the model
+ * reads and the transcript row a person reads must say the same duration.
+ */
+export function formatShellRuntime(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const rest = seconds % 60;
+    return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/**
  * The one line a shell is named by: the first non-blank line of its command,
  * trimmed. Deliberately NOT truncated — how short a name must be is the
  * caller's business (the model's listing bounds it to fit a result; the
@@ -1199,6 +1217,12 @@ export interface RuntimeShellPort {
     /** Defaults to the Session workspace, and must stay inside it. */
     cwd?: string;
     title?: string;
+    /**
+     * Send the Session ONE notice the first time this appears in a line of the
+     * shell's output (VC-495). A literal, or a regular expression when `regex`;
+     * the host bounds it and refuses what it will not run as `shell.pattern`.
+     */
+    notifyOn?: { pattern: string; regex: boolean };
     signal: AbortSignal;
   }): Promise<RuntimeShellStartOutcome>;
   output(input: {

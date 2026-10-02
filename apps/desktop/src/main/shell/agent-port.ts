@@ -117,6 +117,7 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
         cwd,
         title: input.title ?? null,
         env,
+        ...(input.notifyOn === undefined ? {} : { notifyOn: input.notifyOn }),
       });
       return { ...started, shells: shells() };
     },

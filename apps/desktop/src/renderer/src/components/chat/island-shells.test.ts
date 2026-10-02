@@ -84,10 +84,12 @@ describe("projectIslandShells", () => {
       "session-1",
     );
 
+    // The signal rides with the code (VC-495): a killed shell's code is null,
+    // and the island has to say what ended it rather than read it as a success.
     expect(shells).toEqual([
-      { id: "first", command: "pnpm dev", state: "exited", code: 1 },
-      { id: "killed", command: "pnpm dev", state: "exited", code: null },
-      { id: "later", command: "pnpm test --watch", state: "running", code: null },
+      { id: "first", command: "pnpm dev", state: "exited", code: 1, signal: null },
+      { id: "killed", command: "pnpm dev", state: "exited", code: null, signal: "SIGTERM" },
+      { id: "later", command: "pnpm test --watch", state: "running", code: null, signal: null },
     ]);
   });
 

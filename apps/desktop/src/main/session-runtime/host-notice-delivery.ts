@@ -1,9 +1,10 @@
 /**
  * One host-authored notice into one Session, delivered when it can be read.
  *
- * Shared by the two things in main that tell a Session about work it is not
- * doing itself: a subagent's completion (`delegate-session.ts`) and a watched
- * Session or Ticket changing (`watches.ts`). Both are the same act — a marked
+ * Shared by the things in main that tell a Session about work it is not
+ * doing itself: a subagent's completion (`delegate-session.ts`), a watched
+ * Session or Ticket changing (`watches.ts`), and a background shell exiting or
+ * matching (`shell/shell-notices.ts`, VC-495). All are the same act — a marked
  * `steer` message whose command id is its one durable mark of "told" — so
  * both take the same three answers about WHEN:
  *
@@ -65,7 +66,9 @@ export function submitHostNotice(ports: HostNoticeDeliveryPorts, notice: HostNot
             ? "watch-notice"
             : notice.metadata.notice.kind === "subagent"
               ? "subagent-notice"
-              : "browser-notice",
+              : notice.metadata.notice.kind === "background-shell"
+                ? "shell-notice"
+                : "browser-notice",
       },
       sessionId: notice.sessionId,
       command: {

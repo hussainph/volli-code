@@ -371,8 +371,9 @@ import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { OrphanProcessService } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
-import { BackgroundShellHost } from "./shell/background-shell-host";
+import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
+import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -1508,8 +1509,14 @@ app.whenReady().then(async () => {
    * is built here beside the tokens rather than in the ready path; its
    * renderer doors are registered there, once a window can receive them.
    */
+  // Where a background shell's exit or match is steered into the Session that
+  // started it (VC-495): the same delivery path a watch notice rides. Composed
+  // below, once the Session runtime exists; a shell that speaks before then, or
+  // in a build with no runtime, has nobody to tell.
+  let relayShellNotice: ((notice: BackgroundShellNotice) => void) | null = null;
   const backgroundShells = new BackgroundShellHost({
     redactOutput: (text) => secrets.store.redact(text),
+    onNotice: (notice) => relayShellNotice?.(notice),
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     // One row per started shell (VC-341). A background shell is the door a
@@ -2556,6 +2563,14 @@ app.whenReady().then(async () => {
     });
     return watches;
   };
+  if (sessionRuntime !== null) {
+    const relay = relayShellNotices({
+      runtime: sessionRuntime,
+      report: (message) => console.error(`[volli] ${message}`),
+    });
+    // The relay resolves, never rejects: a notice it could not deliver is in the log.
+    relayShellNotice = (notice) => void relay(notice);
+  }
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
   // rest: the project list grows, and the facade is built further down this

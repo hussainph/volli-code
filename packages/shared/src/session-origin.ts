@@ -17,6 +17,7 @@ export type SessionOrigin =
         | "scheduled-resume"
         | "supervision"
         | "browser-notice"
+        | "shell-notice"
         | "worktree-notice"
         | "auto-title";
     };
@@ -37,6 +38,7 @@ const HOST_REASONS = [
   "scheduled-resume",
   "supervision",
   "browser-notice",
+  "shell-notice",
   "worktree-notice",
   "auto-title",
 ] as const;
