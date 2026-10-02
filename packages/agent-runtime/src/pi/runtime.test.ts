@@ -21,6 +21,7 @@ import {
   JsonlSessionRepo,
   NodeExecutionEnv,
   type ExecutionEnv,
+  type ShellExecResult,
 } from "@earendil-works/pi-agent-core/node";
 import {
   createAssistantMessageEventStream,
@@ -2664,9 +2665,24 @@ describe("startSession", () => {
   it("runs commands without per-call policy or approval", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const ask = vi.fn(async () => "refuse" as const);
+    let afterTool: Context | undefined;
     const exec = vi.fn(async () => ({
       ok: true as const,
-      value: { stdout: "", stderr: "", exitCode: 0 },
+      value: {
+        exitCode: 0,
+        truncation: {
+          truncated: false,
+          truncatedBy: null,
+          totalLines: 0,
+          totalBytes: 0,
+          outputLines: 0,
+          outputBytes: 0,
+          lastLinePartial: false,
+          firstLineExceedsLimit: false,
+          maxLines: 2_000,
+          maxBytes: 50 * 1024,
+        },
+      } satisfies ShellExecResult,
     }));
     const containedEnv = {
       cwd: attachment.worktreePath,
@@ -2682,7 +2698,8 @@ describe("startSession", () => {
             emit.toolCall("bash", { command: "git reset --hard" });
             emit.finish();
           },
-          (emit) => {
+          (emit, context) => {
+            afterTool = context;
             emit.text("Understood.");
             emit.finish();
           },
@@ -2698,6 +2715,19 @@ describe("startSession", () => {
     await handle.close();
 
     expect(exec).toHaveBeenCalledOnce();
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        state: "completed",
+        input: { command: "git reset --hard" },
+        descriptor: expect.objectContaining({ nativeToolName: "bash" }),
+      }),
+    );
+    expect(afterTool?.messages.find((message) => message.role === "toolResult")).toMatchObject({
+      role: "toolResult",
+      toolName: "bash",
+      isError: false,
+    });
     // Only explicit host budget/confirmation paths use the ask port.
     expect(ask).not.toHaveBeenCalled();
     expect(kinds(attachment.observations)).not.toContain("authority");
@@ -2706,6 +2736,7 @@ describe("startSession", () => {
   it("reattaches an old enforce snapshot without reinstalling a gate", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const ask = vi.fn(async () => "refuse" as const);
+    let afterTool: Context | undefined;
     const exec = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -2714,11 +2745,15 @@ describe("startSession", () => {
           truncated: false,
           truncatedBy: null,
           totalLines: 0,
+          totalBytes: 0,
           outputLines: 0,
           outputBytes: 0,
           lastLinePartial: false,
+          firstLineExceedsLimit: false,
+          maxLines: 2_000,
+          maxBytes: 50 * 1024,
         },
-      },
+      } satisfies ShellExecResult,
     }));
     const env = {
       cwd: attachment.worktreePath,
@@ -2745,7 +2780,11 @@ describe("startSession", () => {
             emit.toolCall("bash", { command: "git reset --hard" });
             emit.finish();
           },
-          settles("Done."),
+          (emit, context) => {
+            afterTool = context;
+            emit.text("Done.");
+            emit.finish();
+          },
         ]),
       ),
     });
@@ -2772,6 +2811,19 @@ describe("startSession", () => {
     await second.submitUserMessage("Reset the tree.");
     await second.close();
     expect(exec).toHaveBeenCalledOnce();
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        state: "completed",
+        input: { command: "git reset --hard" },
+        descriptor: expect.objectContaining({ nativeToolName: "bash" }),
+      }),
+    );
+    expect(afterTool?.messages.find((message) => message.role === "toolResult")).toMatchObject({
+      role: "toolResult",
+      toolName: "bash",
+      isError: false,
+    });
     expect(ask).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
     expect(kinds(attachment.observations)).not.toContain("authority");
