@@ -52,6 +52,42 @@ describe("host notice outbox migration", () => {
     expect(migrate(f.db, f.path)).toBe(false);
   });
 
+  it("preserves pending payloads and terminal command ids when migration 56 is reoffered", async () => {
+    const f = await version55();
+    migrate(f.db, f.path);
+    const insert = f.db.prepare(
+      "INSERT INTO host_notice_outbox(command_id, session_id, notice, receipt) VALUES (?, ?, ?, ?)",
+    );
+    insert.run(
+      "pending",
+      f.sessionId,
+      '{"nonce":"original-nonce","text":"Sanitized output"}',
+      null,
+    );
+    insert.run("settled", f.sessionId, null, '{"status":"accepted","commandId":"settled"}');
+    const rows = f.db.prepare("SELECT * FROM host_notice_outbox ORDER BY ordinal").all();
+    const schema = f.db
+      .prepare("SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? ORDER BY type, name")
+      .all("host_notice_outbox");
+    const before = await f.engine.getSession({ sessionId: f.sessionId });
+
+    f.db.pragma("user_version = 55");
+    expect(migrate(f.db, f.path, { toVersion: 56 })).toBe(true);
+    expect(f.db.pragma("user_version", { simple: true })).toBe(56);
+    expect(f.db.prepare("SELECT * FROM host_notice_outbox ORDER BY ordinal").all()).toEqual(rows);
+    expect(
+      f.db
+        .prepare("SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? ORDER BY type, name")
+        .all("host_notice_outbox"),
+    ).toEqual(schema);
+    expect(await f.engine.getSession({ sessionId: f.sessionId })).toEqual(before);
+    expect(f.db.pragma("foreign_key_check")).toEqual([]);
+    expect(() => insert.run("settled", f.sessionId, "{}", null)).toThrow(
+      "UNIQUE constraint failed",
+    );
+    expect(migrate(f.db, f.path, { toVersion: 56 })).toBe(false);
+  });
+
   it("requires exactly one JSON payload or terminal receipt and cascades with its Session", async () => {
     const f = await version55();
     migrate(f.db, f.path);

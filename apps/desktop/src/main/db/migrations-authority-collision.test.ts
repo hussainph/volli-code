@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
 import { openRawDb } from "./test-helpers";
 
+const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)!.version;
+
 // The two unreleased branches both stamped 53. Pin their original DDL here
 // rather than building either lineage from the migration being repaired.
 const DECISION_MODEL_053 = `
@@ -81,7 +83,7 @@ function schema(table: string): unknown[] {
 }
 
 function expectConverged(): void {
-  expect(db.pragma("user_version", { simple: true })).toBe(55);
+  expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
   expect((db.pragma("table_info(projects)") as { name: string }[]).map((c) => c.name)).toContain(
     "decision_model",
   );
@@ -214,8 +216,8 @@ describe("053 collision: decision models and remembered authority approvals", ()
     expect(db.pragma("user_version", { simple: true })).toBe(53);
     expect(migrate(db, dbPath)).toBe(true);
     expectConverged();
-    db.pragma("user_version = 55");
+    db.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
     expect(migrate(db, dbPath)).toBe(false);
-    expect(db.pragma("user_version", { simple: true })).toBe(55);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
   });
 });

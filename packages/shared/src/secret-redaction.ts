@@ -15,8 +15,8 @@ const PEM_BOUNDARY = /-----(BEGIN|END) ([A-Z0-9]+(?:[ -][A-Z0-9]+)*)-----/g;
 const BASIC_SECRET = /\bbasic\s+[A-Za-z0-9+/]+=*/gi;
 // A cookie header includes later cookies/attributes, but never a shell tail.
 const COOKIE_HEADER_SECRET = /\b(?:set-cookie|cookie)[ \t]*[:=][ \t]*/gi;
-const COOKIE_ATTRIBUTE =
-  /[ \t]*;[ \t]*(?:([A-Za-z0-9!#$%*+.^_`~-]+[ \t]*=[ \t]*)|(?:Secure|HttpOnly|Partitioned)\b)/iy;
+const COOKIE_ATTRIBUTE_NAME_UNIT = /^[A-Za-z0-9!#$%*+.^_`~-]$/;
+const COOKIE_FLAGS = ["secure", "httponly", "partitioned"];
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;|&()<>]+/gi;
 // Start at the fixed scheme delimiter and stay within one authority, so a
@@ -310,6 +310,34 @@ function redactAssignments(value: string, collector?: SpanCollector): string {
   return parts.join("");
 }
 
+function skipHorizontalSpace(value: string, from: number): number {
+  while (value[from] === " " || value[from] === "\t") from += 1;
+  return from;
+}
+
+/** Advance once over an attribute; never backtrack over uncontrolled whitespace. */
+function cookieAttribute(
+  value: string,
+  from: number,
+): { valueStart: number | null; end: number } | null {
+  const semicolon = skipHorizontalSpace(value, from);
+  if (value[semicolon] !== ";") return null;
+  const start = skipHorizontalSpace(value, semicolon + 1);
+  let nameEnd = start;
+  while (nameEnd < value.length && COOKIE_ATTRIBUTE_NAME_UNIT.test(value[nameEnd]!)) nameEnd += 1;
+  const equals = skipHorizontalSpace(value, nameEnd);
+  if (nameEnd > start && value[equals] === "=") {
+    const valueStart = skipHorizontalSpace(value, equals + 1);
+    return { valueStart, end: valueStart };
+  }
+  for (const flag of COOKIE_FLAGS) {
+    const end = start + flag.length;
+    if (value.slice(start, end).toLowerCase() === flag && !/\w/.test(value[end] ?? ""))
+      return { valueStart: null, end };
+  }
+  return null;
+}
+
 /** Scan complete cookie headers without hiding a command after them. */
 function redactCookieHeaders(value: string, collector?: SpanCollector): string {
   COOKIE_HEADER_SECRET.lastIndex = 0;
@@ -321,13 +349,12 @@ function redactCookieHeaders(value: string, collector?: SpanCollector): string {
     const boundaryQuote = quoteBefore(match.index);
     let end = assignmentValueEnd(value, COOKIE_HEADER_SECRET.lastIndex, false, boundaryQuote);
     while (true) {
-      COOKIE_ATTRIBUTE.lastIndex = end;
-      const attribute = COOKIE_ATTRIBUTE.exec(value);
+      const attribute = cookieAttribute(value, end);
       if (attribute === null) break;
       end =
-        attribute[1] !== undefined
-          ? assignmentValueEnd(value, COOKIE_ATTRIBUTE.lastIndex, false, boundaryQuote)
-          : COOKIE_ATTRIBUTE.lastIndex;
+        attribute.valueStart === null
+          ? attribute.end
+          : assignmentValueEnd(value, attribute.valueStart, false, boundaryQuote);
     }
     parts.push(
       value.slice(copied, match.index),

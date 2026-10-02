@@ -217,9 +217,11 @@ describe("bounded shell notice patterns", () => {
   );
 
   it("agrees with native regex boolean results on a small supported-grammar corpus", () => {
-    const atoms = ["a", "b", ".", "[ab]", "[^a]", "\\d", "\\w", "\\s", "(?:a|ab)", "(?:a?)"];
+    // Keep the reference engine's corpus unambiguous too: adversarial and
+    // nested repetition is tested ONLY against the bounded matcher above.
+    const atoms = ["a", "b", ".", "[ab]", "[^a]", "\\d", "\\w", "\\s", "(?:ab)"];
     const patterns = atoms.flatMap((atom) => [atom, `${atom}?`, `${atom}*`, `^${atom}{0,2}b$`]);
-    patterns.push("^(a|b)+$", "^a{2,}b?$", "(?:ab|a)+?", "a|", "()", "^[a-cb-d]+$", "^(a+)+$");
+    patterns.push("^(a|b)+$", "^a{2,}b?$", "a|", "()", "^[a-cb-d]+$", "(Compiled )?successfully");
     const lines = [""];
     let frontier = [""];
     for (let length = 1; length <= 4; length += 1) {

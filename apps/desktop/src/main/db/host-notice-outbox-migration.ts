@@ -1,6 +1,6 @@
 /** VC-495: the complete sanitized notice precedes delivery, even while live. */
 export const HOST_NOTICE_OUTBOX_MIGRATION = `
-CREATE TABLE host_notice_outbox (
+CREATE TABLE IF NOT EXISTS host_notice_outbox (
   ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
   command_id TEXT NOT NULL UNIQUE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -9,6 +9,6 @@ CREATE TABLE host_notice_outbox (
   CHECK ((notice IS NOT NULL AND receipt IS NULL) OR
          (notice IS NULL AND receipt IS NOT NULL))
 );
-CREATE INDEX host_notice_outbox_pending ON host_notice_outbox(ordinal)
+CREATE INDEX IF NOT EXISTS host_notice_outbox_pending ON host_notice_outbox(ordinal)
   WHERE receipt IS NULL;
 `;

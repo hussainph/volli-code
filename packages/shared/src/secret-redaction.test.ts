@@ -326,6 +326,16 @@ it.each([
   expect(safe).toContain("rm -rf /important");
 });
 
+it("scans long cookie-attribute whitespace and near misses without backtracking", () => {
+  const tabs = "\t".repeat(50_000);
+  const raw = `Cookie: session=dummy;${tabs}csrf${tabs}= ${tabs}second; HttpOnly; Secure; Partitioned; echo tail`;
+  expect(redactPayloadSecrets(raw)).toBe("Cookie: [redacted]; echo tail");
+  expect(maskSpans(raw, payloadSecretSpans(raw))).not.toContain("second");
+  expect(redactPayloadSecrets(`Cookie: session=dummy;${tabs}near_miss${tabs}; echo tail`)).toBe(
+    `Cookie: [redacted];${tabs}near_miss${tabs}; echo tail`,
+  );
+});
+
 describe("original-source payload spans", () => {
   it.each([
     ["https://alice:dummy@example.com/path", "://alice:dummy@"],
