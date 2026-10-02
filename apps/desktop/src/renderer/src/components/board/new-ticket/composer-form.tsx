@@ -129,6 +129,13 @@ export function ComposerForm({
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
+  const [resetCount, setResetCount] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    // Batch entry is ready with the reset's commit, not in a later animation
+    // frame that can leave focus on the footer or steal the next keystroke.
+    if (resetCount > 0) titleRef.current?.focus();
+  }, [resetCount]);
 
   // The `@file` index + create/open wiring for the description editor, keyed to
   // the (retargetable) target project — mirrors ticket-detail's fileRefs, minus
@@ -277,8 +284,7 @@ export function ComposerForm({
     // The links now belong to the Ticket that was just created; the strip is
     // forgotten rather than detached.
     clearAttachments();
-    // Return focus to the title for the next rapid entry (Create-more).
-    requestAnimationFrame(() => titleRef.current?.focus());
+    setResetCount((count) => count + 1);
   }, [clearAttachments]);
 
   const handleCreate = React.useCallback(async () => {
