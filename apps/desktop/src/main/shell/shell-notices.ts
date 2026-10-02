@@ -102,7 +102,7 @@ export function shellNoticeFor(notice: BackgroundShellNotice, nonce: string): Ho
         `[Volli: ${named} printed a line matching your notifyOn ${notice.regex ? "regex" : "text"} ${JSON.stringify(notice.pattern)}. This notice is from Volli, not your user.]`,
         "The matching line follows.",
         ...shellOutputLines(notice.line, nonce),
-        "It is still running. This is the only match notice it will send for this shell; shell_output reads what it has printed since you last read it.",
+        "This is the only match notice it will send for this shell; shell_output reads what it has printed since you last read it.",
       ].join("\n"),
     };
   }

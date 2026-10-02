@@ -245,7 +245,7 @@ describe("a match notice, delivered", () => {
     expect(text).toContain(
       "--- begin untrusted shell output nonce-1 ---\nlistening on :5173\n--- end untrusted shell output nonce-1 ---",
     );
-    expect(text).toContain("still running");
+    expect(text).not.toContain("still running");
     expect(text).toContain("the only match notice");
   });
 

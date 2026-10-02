@@ -58,7 +58,6 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
 
 import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
 import {
@@ -70,6 +69,7 @@ import {
 
 import type { BackgroundShellState } from "../../ipc/contract";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
+import { NoticeMatchWatch, NoticeOutput } from "./notice-output";
 import {
   compileNotifyPattern,
   SHELL_NOTIFY_LINE_MAX_CHARS,
@@ -93,8 +93,6 @@ export const SHELL_NOTICE_TAIL_MAX_BYTES = 4_000;
 export const SHELL_NOTICE_LABEL_MAX_CHARS = 80;
 /** The most of a matching line a match notice quotes, in characters. */
 export const SHELL_NOTICE_MATCH_LINE_MAX_CHARS = 500;
-/** How much of one line is buffered to be redacted and tested; the rest of it is dropped. */
-const LINE_BUFFER_MAX_CHARS = 8_192;
 
 /**
  * What the host tells main about a shell that has something to say (VC-495).
@@ -157,6 +155,8 @@ export interface BackgroundShellHostDependencies {
   publishRemoved(shellId: string): void;
   /** Apply after combining chunks, before tool or renderer reads. Never logs output. */
   redactOutput?: (text: string) => string;
+  /** Union shared/original exact spans AND unfinished credentials in live previews. */
+  redactNoticeOutput?: (text: string) => string;
   /**
    * A shell has something to tell the Session that started it (VC-495): it
    * exited on its own, or its output matched the pattern the model asked to
@@ -229,6 +229,10 @@ class OutputRing {
     return { output, truncated: take < retained || this.#head > 0 };
   }
 
+  get truncated(): boolean {
+    return this.#head > 0;
+  }
+
   /** The whole retained output, for a person's read; moves nothing. */
   all(): string {
     return this.slice(0);
@@ -261,6 +265,9 @@ interface ShellEntry {
   pid: number;
   child: ChildProcess;
   ring: OutputRing;
+  /** Each pipe retains its own bounded, uncut redaction/UTF-8 context. */
+  stdout: NoticeOutput;
+  stderr: NoticeOutput;
   /** Settles when the child exits, however it exits. */
   exited: Promise<void>;
   /** Told on every chunk, for the settle window. */
@@ -413,21 +420,36 @@ export class BackgroundShellHost {
     const ring = new OutputRing(this.outputMaxBytes);
     const onOutput = new Set<() => void>();
     const notifyOn = input.notifyOn;
-    const watch =
+    const stdout = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
+    const stderr = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
+    let matched = false;
+    const makeWatch = (): NoticeMatchWatch | null =>
       notifyTest === null || notifyOn === undefined || this.deps.onNotice === undefined
         ? null
-        : new LineWatch(
-            (line) => this.noticeText(line),
+        : new NoticeMatchWatch(
             notifyTest,
-            (line) => this.announceMatch(entry, notifyOn, line),
+            (line) => {
+              if (matched) return;
+              matched = true;
+              this.announceMatch(entry, notifyOn, line);
+            },
+            SHELL_NOTIFY_LINE_MAX_CHARS,
           );
-    const receive = (chunk: Buffer): void => {
+    const stdoutWatch = makeWatch();
+    const stderrWatch = makeWatch();
+    const matchOutput = (output: NoticeOutput, watch: NoticeMatchWatch | null): void => {
+      if (matched || output.withheld || entry.endedBy === "agent" || watch === null) return;
+      const safe = output.snapshot();
+      if (!output.withheld) watch.feed(safe);
+    };
+    const receive = (output: NoticeOutput, watch: NoticeMatchWatch | null, chunk: Buffer): void => {
       ring.append(chunk);
-      watch?.feed(chunk);
+      output.feed(chunk);
+      matchOutput(output, watch);
       for (const listener of onOutput) listener();
     };
-    child.stdout?.on("data", receive);
-    child.stderr?.on("data", receive);
+    child.stdout?.on("data", (chunk: Buffer) => receive(stdout, stdoutWatch, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => receive(stderr, stderrWatch, chunk));
     const exited = new Promise<void>((resolve) => {
       const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
         if (record.state === "exited") return;
@@ -438,9 +460,10 @@ export class BackgroundShellHost {
         if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
         if (this.shells.has(shellId)) {
           this.deps.publishState(this.stateOf(entry));
-          // A last line that never got its newline is still a line — unless
-          // the Session itself just killed the shell, and has its answer.
-          if (entry.endedBy !== "agent") watch?.flush();
+          stdout.finish();
+          stderr.finish();
+          matchOutput(stdout, stdoutWatch);
+          matchOutput(stderr, stderrWatch);
           this.scheduleExitNotice(entry);
         }
         resolve();
@@ -467,6 +490,8 @@ export class BackgroundShellHost {
       pid,
       child,
       ring,
+      stdout,
+      stderr,
       exited,
       onOutput,
       returned: false,
@@ -491,12 +516,13 @@ export class BackgroundShellHost {
     entry.noticeTimer = setTimeout(() => {
       entry.noticeTimer = undefined;
       const { record } = entry;
-      // The same window a `tail` read gets, and the cursor moves with it: the
-      // notice is the model's read of how this ended.
-      const window = entry.ring.readTail(this.tailMaxBytes);
-      // REDACT, THEN CUT. A cut made first could leave the back half of a
-      // secret behind, which no redactor recognises as one.
-      const tail = lastBytes(this.noticeText(window.output), SHELL_NOTICE_TAIL_MAX_BYTES);
+      // Redact each complete pipe context BEFORE selecting a tail. Do not
+      // move the incremental read cursor: delivery can fail or remain parked.
+      const stdout = entry.stdout.snapshot();
+      const stderr = entry.stderr.snapshot();
+      const separator =
+        stdout.length > 0 && stderr.length > 0 && !stdout.endsWith("\n") ? "\n" : "";
+      const tail = lastBytes(`${stdout}${separator}${stderr}`, SHELL_NOTICE_TAIL_MAX_BYTES);
       this.emit({
         kind: "exited",
         sessionId: entry.owner.sessionId,
@@ -507,7 +533,8 @@ export class BackgroundShellHost {
         runtimeMs: (record.exitedAt ?? this.now()) - record.startedAt,
         byPerson: entry.endedBy === "person",
         tail: tail.text,
-        truncated: window.truncated || tail.cut,
+        truncated:
+          entry.ring.truncated || entry.stdout.withheld || entry.stderr.withheld || tail.cut,
       });
     }, this.exitNoticeGraceMs);
   }
@@ -535,8 +562,18 @@ export class BackgroundShellHost {
    * credential store's exact values first (it knows what to look for), then
    * the shared pattern redactor for the secrets nobody stored.
    */
+  private redactNoticeText(text: string): string {
+    return redactPayloadSecrets(
+      this.deps.redactNoticeOutput?.(text) ?? this.deps.redactOutput?.(text) ?? text,
+    );
+  }
+
   private noticeText(text: string): string {
-    return redactPayloadSecrets(this.safeOutput(text));
+    try {
+      return this.redactNoticeText(text);
+    } catch {
+      return "[Output withheld: credential redaction failed.]";
+    }
   }
 
   /** What a notice calls a shell: its title, else the command's first line, scrubbed and short. */
@@ -554,14 +591,15 @@ export class BackgroundShellHost {
    * has gone; the watch has used its one match either way.
    */
   private announceMatch(entry: ShellEntry, notifyOn: ShellNotifyPattern, line: string): void {
-    if (!entry.returned || !this.shells.has(entry.record.shellId)) return;
+    if (!entry.returned || entry.endedBy === "agent" || !this.shells.has(entry.record.shellId))
+      return;
     const chars = [...line];
     this.emit({
       kind: "matched",
       sessionId: entry.owner.sessionId,
       shellId: entry.record.shellId,
       label: this.labelOf(entry.record),
-      pattern: notifyOn.pattern,
+      pattern: this.noticeText(notifyOn.pattern),
       regex: notifyOn.regex,
       line:
         chars.length <= SHELL_NOTICE_MATCH_LINE_MAX_CHARS
@@ -682,77 +720,6 @@ export class BackgroundShellHost {
       void this.terminate(entry);
       this.deps.publishRemoved(entry.record.shellId);
     }
-  }
-}
-
-/**
- * One shell's output, assembled into lines and tested against the pattern its
- * model asked to be told about (VC-495). It fires ONCE and then goes quiet
- * for good: a chatty process matching on every line costs one notice, not a
- * flood.
- *
- * Each line is redacted BEFORE it is tested, with the same redactors a notice
- * passes through. A pattern that matched the raw line would be an oracle for
- * whatever the redactors exist to hide — a model could narrow in on a stored
- * credential one guess at a time, by whether its notice came. Only the first
- * {@link SHELL_NOTIFY_LINE_MAX_CHARS} characters of the redacted line are
- * tested (a regex is run on a bounded input, see `notify-pattern.ts`), and
- * a line past {@link LINE_BUFFER_MAX_CHARS} is cut there and its remainder
- * dropped. Cutting happens after redaction, never before it.
- */
-class LineWatch {
-  readonly #decoder = new StringDecoder("utf8");
-  #partial = "";
-  /** The tail of a line past the buffer, dropped until its newline. */
-  #skipping = false;
-  #done = false;
-
-  constructor(
-    private readonly redact: (line: string) => string,
-    private readonly test: (line: string) => boolean,
-    private readonly onMatch: (redactedLine: string) => void,
-  ) {}
-
-  feed(chunk: Buffer): void {
-    if (this.#done) return;
-    let text = this.#decoder.write(chunk);
-    if (this.#skipping) {
-      const newline = text.indexOf("\n");
-      if (newline === -1) return;
-      this.#skipping = false;
-      text = text.slice(newline + 1);
-    }
-    let rest = this.#partial + text;
-    let newline = rest.indexOf("\n");
-    while (!this.#done && newline !== -1) {
-      this.#line(rest.slice(0, newline));
-      rest = rest.slice(newline + 1);
-      newline = rest.indexOf("\n");
-    }
-    if (this.#done) return;
-    if (rest.length > LINE_BUFFER_MAX_CHARS) {
-      this.#line(rest.slice(0, LINE_BUFFER_MAX_CHARS));
-      rest = "";
-      this.#skipping = true;
-    }
-    this.#partial = rest;
-  }
-
-  /** The shell has closed: whatever is buffered is the last line. */
-  flush(): void {
-    if (this.#done) return;
-    const last = this.#partial + this.#decoder.end();
-    this.#partial = "";
-    if (last.length > 0 && !this.#skipping) this.#line(last);
-  }
-
-  #line(raw: string): void {
-    const safe = this.redact(raw.endsWith("\r") ? raw.slice(0, -1) : raw);
-    const tested = [...safe].slice(0, SHELL_NOTIFY_LINE_MAX_CHARS).join("");
-    if (!this.test(tested)) return;
-    this.#done = true;
-    this.#partial = "";
-    this.onMatch(safe);
   }
 }
 

@@ -5,7 +5,7 @@
  * into a chat is `shell-notices.test.ts`'s business; this file owns WHEN the
  * host speaks, WHAT it hands over, and what it never lets through unredacted.
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ShellRefusal } from "@volli/agent-runtime";
@@ -17,6 +17,7 @@ import {
   type BackgroundShellNotice,
   type BackgroundShellOwner,
 } from "./background-shell-host";
+import { SecretStore } from "../secrets/store";
 
 const owner: BackgroundShellOwner = {
   sessionId: "session-1",
@@ -28,6 +29,26 @@ const owner: BackgroundShellOwner = {
 const ENV = { PATH: process.env.PATH ?? "/usr/bin:/bin" };
 
 const hosts: BackgroundShellHost[] = [];
+const credentialDirs: string[] = [];
+
+function credentialRedactors(value: string) {
+  const directory = mkdtempSync(join(process.cwd(), ".notice-credentials-"));
+  credentialDirs.push(directory);
+  const store = new SecretStore(join(directory, "credentials.enc"), {
+    isEncryptionAvailable: () => false,
+    encryptString: () => {
+      throw new Error("session-only fixture");
+    },
+    decryptString: () => {
+      throw new Error("session-only fixture");
+    },
+  });
+  store.put({ name: "TOKEN", value, scope: "session", sessionId: owner.sessionId });
+  return {
+    redactOutput: (text: string) => store.redact(text),
+    redactNoticeOutput: (text: string) => store.redactPartial(text),
+  };
+}
 
 function harness(overrides: Partial<ConstructorParameters<typeof BackgroundShellHost>[0]> = {}) {
   const notices: BackgroundShellNotice[] = [];
@@ -72,6 +93,8 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 afterEach(() => {
   for (const host of hosts.splice(0)) host.disposeSession(owner.sessionId);
+  for (const directory of credentialDirs.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 describe("an exit notice", () => {
@@ -165,14 +188,14 @@ describe("what an exit notice carries out of the host", () => {
     expect(notice.truncated).toBe(true);
   });
 
-  it("counts the tail as read, so the shell_output that follows is not a repeat of it", async () => {
+  it("keeps incremental output available because notice delivery may fail or remain parked", async () => {
     const { host, notices } = harness();
     await start(host, "sleep 0.3; echo the-end; exit 1");
 
     const notice = await exitNotice(notices);
 
     expect(notice.tail).toBe("the-end\n");
-    expect(host.read(owner, "sh-1")).toMatchObject({ output: "", truncated: false });
+    expect(host.read(owner, "sh-1")).toMatchObject({ output: "the-end\n", truncated: false });
   });
 
   it("names the shell by its title, or by the command's first line — scrubbed and short", async () => {
@@ -342,11 +365,15 @@ describe("a notifyOn match notice", () => {
 
   it("does not turn a half-printed line into a match once the Session has killed the shell itself", async () => {
     const { host, notices } = harness();
-    await start(host, "sleep 0.2; printf listening; sleep 30", {
-      notifyOn: { pattern: "listening", regex: false },
-    });
+    await start(
+      host,
+      "trap 'printf ing; exit 0' TERM; sleep 0.2; printf listen; while true; do sleep 0.1; done",
+      {
+        notifyOn: { pattern: "listening", regex: false },
+      },
+    );
     await pause(500);
-    // No newline yet, so nothing has matched.
+    // The pattern is only completed by the TERM handler after our own kill.
     expect(notices).toEqual([]);
 
     await host.kill(owner, "sh-1");
@@ -389,7 +416,7 @@ describe("a notice sink that fails", () => {
 
       expect(host.read(owner, "sh-1")).toMatchObject({
         shell: { state: "exited", code: 2 },
-        output: "",
+        output: "hit\n",
       });
       expect(errors.map((args) => String(args[1]))).toEqual([
         expect.stringContaining("sink down"),
@@ -401,16 +428,207 @@ describe("a notice sink that fails", () => {
   });
 });
 
+describe("review regressions: safe output and lifecycle", () => {
+  it("withholds a multiline exact-value prefix across chunks before matching", async () => {
+    const secret = "Ready ALMOND123\nWALNUT456";
+    const { host, notices } = harness(credentialRedactors(secret));
+    await start(
+      host,
+      "sleep 0.3; printf 'Ready ALMOND123\\n'; sleep 0.2; printf 'WALNUT456\\nsafe\\n'; sleep 30",
+      {
+        notifyOn: { pattern: "Ready", regex: false },
+      },
+    );
+    await until(() => host.tailOf("sh-1")?.output.includes("safe") === true);
+    expect(notices).toEqual([]);
+    expect(host.tailOf("sh-1")?.output).toContain("‹secret:TOKEN›");
+  });
+
+  it("never matches or quotes a PEM body, including while the block is incomplete", async () => {
+    const { host, notices } = harness();
+    await start(
+      host,
+      "sleep 0.3; printf '%s\\n' '-----BEGIN PRIVATE KEY-----' 'MII_SYNTHETIC_PRIVATE_BODY'; sleep 0.2; printf '%s\\n' '-----END PRIVATE KEY-----' 'ready'; sleep 30",
+      {
+        notifyOn: { pattern: "MII|ready", regex: true },
+      },
+    );
+    await until(() => matches(notices).length > 0);
+    expect(matches(notices)).toEqual([expect.objectContaining({ line: "ready" })]);
+    expect(JSON.stringify(notices)).not.toContain("MII_SYNTHETIC_PRIVATE_BODY");
+  });
+
+  it("keeps a shared auth prefix across newline chunks before matching and exit delivery", async () => {
+    const { host, notices } = harness();
+    await start(
+      host,
+      "sleep 0.3; printf 'Bearer \\n'; sleep 0.2; printf 'SYNTHETIC_CREDENTIAL\\n'; exit 1",
+      {
+        notifyOn: { pattern: "SYNTHETIC_CREDENTIAL", regex: false },
+      },
+    );
+    const notice = await exitNotice(notices);
+    expect(matches(notices)).toEqual([]);
+    expect(notice.tail).toBe("Bearer [redacted]\n");
+  });
+
+  it("protects a PEM body when a stored credential erases its original delimiters", async () => {
+    const { host, notices } = harness(credentialRedactors("-"));
+    await start(
+      host,
+      "sleep 0.3; printf '%s\\n' 'TOKEN=-----BEGIN PRIVATE KEY-----'; sleep 0.2; printf '%s\\n' 'SYNTHETIC_BODY' '-----END PRIVATE KEY-----' 'ready'; exit 1",
+      {
+        notifyOn: { pattern: "SYNTHETIC_BODY|ready", regex: true },
+      },
+    );
+    await until(() => notices.some((notice) => notice.kind === "exited"));
+    const notice = notices.find((candidate) => candidate.kind === "exited")!;
+    expect(matches(notices)).toEqual([expect.objectContaining({ line: "ready" })]);
+    expect(notice.tail).not.toContain("SYNTHETIC_BODY");
+    expect(notice.tail).toContain("ready");
+  });
+
+  it("withholds URL userinfo while an immediate readiness notice can precede its @", async () => {
+    const { host, notices } = harness();
+    await start(
+      host,
+      "sleep 0.3; printf 'ready https://alice:opaque-value'; sleep 0.2; printf '@example.test/path\\n'; sleep 30",
+      {
+        notifyOn: { pattern: "ready", regex: false },
+      },
+    );
+    await until(() => matches(notices).length > 0);
+    expect(matches(notices)[0]?.line).toContain("ready");
+    expect(matches(notices)[0]?.line).toContain("[redacted]");
+    expect(matches(notices)[0]?.line).not.toContain("opaque-value");
+  });
+
+  it("never falls back to raw notice output when the exact redactor throws", async () => {
+    const { host, notices } = harness({
+      redactOutput: () => {
+        throw new Error("synthetic failure");
+      },
+    });
+    await start(host, "sleep 0.3; echo SYNTHETIC_CREDENTIAL; exit 1", {
+      notifyOn: { pattern: "SYNTHETIC_CREDENTIAL", regex: false },
+    });
+    const notice = await exitNotice(notices);
+    expect(matches(notices)).toEqual([]);
+    expect(notice.tail).toContain("credential redaction failed");
+    expect(notice.tail).not.toContain("SYNTHETIC_CREDENTIAL");
+    expect(notice.truncated).toBe(true);
+  });
+
+  it("redacts the entire context before a raw 64 KB tail boundary can remove a credential prefix", async () => {
+    const secret = "OPAQUE_SYNTHETIC_FRAGMENT_1234567890";
+    const header = `${secret}\nBearer `;
+    const output = `${header}${"x".repeat(64_010 - header.length - 1)}\n`;
+    const { host, notices } = harness(credentialRedactors(secret));
+    await start(host, `sleep 0.3; printf '%s' '${output}'; exit 1`, { title: "tail redaction" });
+    const notice = await exitNotice(notices);
+    expect(notice.tail).toBe("‹secret: [redacted]\n[redacted]\n");
+    expect(notice.tail).not.toContain(secret.slice(10));
+  });
+
+  it("withholds output rather than leak fragments when raw redaction context exceeds its bound", async () => {
+    const { host, notices } = harness({ outputMaxBytes: 100 });
+    await start(
+      host,
+      "sleep 0.3; printf '%s\\n' '-----BEGIN PRIVATE KEY-----'; head -c 1000 /dev/zero | tr '\\0' A; exit 1",
+    );
+    const notice = await exitNotice(notices);
+    expect(notice.tail).toContain("Output withheld: secure redaction context exceeded its bound");
+    expect(notice.tail).not.toContain("AAAA");
+    expect(notice.truncated).toBe(true);
+  });
+
+  it.each([
+    ["shared", "ghp_SYNTHETIC_SHOULD_REDACT"],
+    ["stored", "opaque-review-credential"],
+  ])(
+    "scrubs %s credentials from the displayed pattern before a notice leaves the host",
+    async (_kind, secret) => {
+      const { host, notices } = harness(_kind === "stored" ? credentialRedactors(secret) : {});
+      await start(host, "sleep 0.3; echo ready; sleep 30", {
+        notifyOn: { pattern: `ready|${secret}`, regex: true },
+      });
+      await until(() => matches(notices).length > 0);
+      expect(matches(notices)[0]).toMatchObject({ line: "ready" });
+      expect(JSON.stringify(notices)).not.toContain(secret);
+      expect(matches(notices)[0]?.pattern).toContain(_kind === "stored" ? "secret:" : "[redacted]");
+    },
+  );
+
+  it("announces readiness before a newline while the shell remains running", async () => {
+    const { host, notices } = harness();
+    await start(host, "sleep 0.3; printf 'listening on :5173'; sleep 30", {
+      notifyOn: { pattern: "listening on", regex: false },
+    });
+    await until(() => matches(notices).length > 0);
+    expect(matches(notices)).toEqual([expect.objectContaining({ line: "listening on :5173" })]);
+    expect(host.list(owner.sessionId)[0]?.state).toBe("running");
+  });
+
+  it("does not repeat startup output when its delayed newline arrives", async () => {
+    const { host, notices } = harness();
+    const started = await start(host, "printf ready; sleep 0.4; printf '\\n'; sleep 30", {
+      notifyOn: { pattern: "ready", regex: false },
+    });
+    expect(started.output).toBe("ready");
+    await until(() => host.tailOf("sh-1")?.output === "ready\n");
+    expect(notices).toEqual([]);
+  });
+
+  it("suppresses matching newline output from the agent's own TERM handler", async () => {
+    const { host, notices } = harness();
+    await start(host, "trap 'echo STOPPED; exit 0' TERM; while true; do sleep 0.1; done", {
+      notifyOn: { pattern: "STOPPED", regex: false },
+    });
+    await host.kill(owner, "sh-1");
+    await pause(100);
+    expect(host.list(owner.sessionId)[0]?.state).toBe("exited");
+    expect(notices).toEqual([]);
+  });
+
+  it("finds stdout's own line despite interleaved stderr and byte-split UTF-8", async () => {
+    const { host, notices } = harness();
+    await start(
+      host,
+      "sleep 0.3; printf '\\360\\237'; sleep 0.1; echo diagnostic >&2; sleep 0.1; printf '\\237\\242 listening on :1\\n'; sleep 30",
+      {
+        notifyOn: { pattern: "listening on", regex: false },
+      },
+    );
+    await until(() => matches(notices).length > 0);
+    expect(matches(notices)).toEqual([expect.objectContaining({ line: "🟢 listening on :1" })]);
+    expect(JSON.stringify(notices)).not.toContain("�");
+    expect(matches(notices)[0]?.line).not.toContain("diagnostic");
+  });
+
+  it("keeps one shared match limit across both pipes", async () => {
+    const { host, notices } = harness();
+    await start(
+      host,
+      "sleep 0.3; i=0; while [ $i -lt 100 ]; do echo ready-out; echo ready-err >&2; i=$((i+1)); done",
+      {
+        notifyOn: { pattern: "ready", regex: false },
+      },
+    );
+    await until(() => notices.some((notice) => notice.kind === "exited"));
+    expect(matches(notices)).toHaveLength(1);
+    expect(matches(notices)[0]?.line).toMatch(/^ready-(out|err)$/);
+  });
+});
+
 describe("a notifyOn pattern the host will not run", () => {
   const refused = [
     ["a regex that does not compile", { pattern: "(", regex: true }],
     ["an empty pattern", { pattern: "", regex: false }],
     ["a literal that spans lines", { pattern: "one\ntwo", regex: false }],
     ["a pattern over the length bound", { pattern: "a".repeat(201), regex: false }],
-    ["a repeated group that repeats inside itself", { pattern: "(a+)+$", regex: true }],
-    ["a repeated group of alternatives", { pattern: "(a|aa)*b", regex: true }],
     ["a back-reference", { pattern: "(a)\\1", regex: true }],
-    ["a pattern with a run of open-ended repeats", { pattern: ".*a.*b.*c", regex: true }],
+    ["lookaround", { pattern: "(?=ready)", regex: true }],
+    ["an expression over the expanded state bound", { pattern: "a{1000}", regex: true }],
   ] as const;
 
   it.each(refused)("refuses %s before anything is spawned", async (_name, notifyOn) => {
@@ -429,6 +647,9 @@ describe("a notifyOn pattern the host will not run", () => {
     ["a port", { pattern: "listening on :\\d+", regex: true }],
     ["an optional group", { pattern: "(Compiled )?successfully", regex: true }],
     ["a class holding repeat characters", { pattern: "[+*]{2}", regex: true }],
+    ["nested repetition with a bounded-state matcher", { pattern: "(a+)+$", regex: true }],
+    ["repeated alternatives with a bounded-state matcher", { pattern: "(a|aa)*b", regex: true }],
+    ["adjacent open repeats with a bounded-state matcher", { pattern: ".*a.*b.*c", regex: true }],
   ] as const)("runs %s", async (_name, notifyOn) => {
     const { host } = harness();
 

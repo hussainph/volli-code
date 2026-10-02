@@ -450,9 +450,19 @@ read mid-turn, opening a turn on an idle Session, or parked until the next
 attachment — naming the shell, how it ended, how long it ran, and the end of
 its output. That output is another author's prose: redacted by the credential
 store and the shared redactor BEFORE it is cut, and quoted inside an untrusted
-envelope. `shell_start`'s optional `notifyOn` (a literal, or a bounded regex)
-adds ONE notice the first time a line matches, so a chatty process cannot flood
-the chat. A notice is never sent for the Session's own `shell_kill` (its tool
+envelope. Each pipe is decoded and redacted independently, including multiline
+credentials, overlapping shared/exact values, and incomplete PEM/URL/token
+structures. Raw redaction context is bounded (256 KB per pipe): if it
+cannot be retained safely, the notice withholds that pipe's output instead of
+quoting a credential fragment. Notices never consume the incremental output
+cursor, so failed delivery leaves the next `shell_output` useful.
+`shell_start`'s optional `notifyOn` (a literal, or a bounded-state regex)
+adds ONE notice the first time output matches, even before a newline, so a
+chatty process cannot flood the chat. Matching examines the first 1,000 UTF-16
+units of each line; unsupported regex syntax or expansion is refused rather
+than run in a backtracking engine. Pending shell notices are stored by the
+host before delivery and replayed after restart with the same payload and id.
+A notice is never sent for the Session's own `shell_kill` (its tool
 result is the news), for an exit the model already read, for output `shell_start`
 already returned, or once the Session's attachment has ended; a person's kill
 from the Island is sent, because nothing else would tell the Session.

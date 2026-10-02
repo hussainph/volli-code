@@ -1195,6 +1195,13 @@ export interface RuntimeShellKillOutcome {
   shells: readonly RuntimeShellRecord[];
 }
 
+/** A shell output notice's portable pattern; the host owns syntax and work bounds. */
+export interface ShellNotifyPattern {
+  pattern: string;
+  /** True for the host's bounded regular-expression subset, false for literal text. */
+  regex: boolean;
+}
+
 /**
  * The one background shell port (VC-270): everything a Session can do to a
  * command that runs beside the turn, answered by the host that owns the
@@ -1222,7 +1229,7 @@ export interface RuntimeShellPort {
      * shell's output (VC-495). A literal, or a regular expression when `regex`;
      * the host bounds it and refuses what it will not run as `shell.pattern`.
      */
-    notifyOn?: { pattern: string; regex: boolean };
+    notifyOn?: ShellNotifyPattern;
     signal: AbortSignal;
   }): Promise<RuntimeShellStartOutcome>;
   output(input: {

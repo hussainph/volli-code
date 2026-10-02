@@ -137,7 +137,7 @@ describe("createAgentShellPort", () => {
 
     const refused = shell.start({
       command: "sleep 30",
-      notifyOn: { pattern: "(a+)+$", regex: true },
+      notifyOn: { pattern: "(a)\\1", regex: true },
       signal,
     });
     await expect(refused).rejects.toMatchObject({ rule: "shell.pattern" });

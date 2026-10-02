@@ -125,6 +125,32 @@ describe("shell tools", () => {
     ]);
   });
 
+  it.each([
+    { command: "pnpm dev" },
+    { command: "pnpm dev", cwd: "/ws/app", title: "legacy dev server" },
+  ])(
+    "executes pre-VC495 shell_start arguments unchanged through the Session tool array: %j",
+    async (args) => {
+      const calls: Parameters<RuntimeShellPort["start"]>[0][] = [];
+      const port = unusedPort();
+      port.start = async (input) => {
+        calls.push(input);
+        return { shell: record(), pid: 4242, output: "legacy start worked", shells: [record()] };
+      };
+      const tools = createSessionTools({ tools: { tools: [] }, shell: port }, {} as never);
+      expect(tools.map(({ name }) => name)).toEqual(["shell_start", "shell_output", "shell_kill"]);
+      const start = tools[0]!;
+      expect(start.parameters).toMatchObject({ required: ["command"] });
+
+      const result = await start.execute("legacy-call", args);
+
+      expect(calls).toEqual([{ ...args, signal: expect.any(AbortSignal) }]);
+      expect(calls[0]?.notifyOn).toBeUndefined();
+      expect(result.details).toMatchObject({ shellId: "sh-1", state: "running" });
+      expect(resultText(result)).toContain("legacy start worked");
+    },
+  );
+
   it("bounds notifyOn in the schema the model sees, and leaves it optional", () => {
     const schema = createShellTool("shell_start", unusedPort()).parameters as {
       required: string[];
