@@ -90,12 +90,43 @@ export interface ApprovalUsedHostNotice {
   asked: string;
 }
 
+/**
+ * A background shell the Session started has something to say (VC-495): it
+ * exited on its own, or its output matched the pattern the Session asked to be
+ * told about. Only host-minted facts live here — the shell's output rides the
+ * model-facing text, inside an untrusted envelope, and is never stored as
+ * metadata a client could mistake for Volli's own words.
+ */
+export type BackgroundShellHostNotice = {
+  kind: "background-shell";
+  shellId: string;
+  /** The Session's own title for the shell, or its command's first line: scrubbed and short. */
+  label: string;
+} & (
+  | {
+      event: "exited";
+      /** `null` when a signal ended it. */
+      code: number | null;
+      signal: string | null;
+      runtimeMs: number;
+      /** A person ended it from the Activity Island; the Session's own kill never notifies. */
+      byPerson: boolean;
+    }
+  | {
+      event: "matched";
+      /** The Session's own `notifyOn`, bounded at the tool. */
+      pattern: string;
+      regex: boolean;
+    }
+);
+
 /** Every host-authored transcript notice understood by this product version. */
 export type SessionHostNotice =
   | SubagentSessionHostNotice
   | BrowserHoldHostNotice
   | WatchHostNotice
-  | ApprovalUsedHostNotice;
+  | ApprovalUsedHostNotice
+  | BackgroundShellHostNotice;
 
 /** The durable marker shared by notice writers and Session clients. */
 export const SESSION_HOST_NOTICE_METADATA_KIND = "session-host-notice" as const;

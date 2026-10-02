@@ -186,6 +186,22 @@ describe("wordWrap", () => {
   });
 });
 
+describe("authorityHintsVisible", () => {
+  it("shows the hints by default", () => {
+    expect(createUiStore(createMemoryStorage()).getState().authorityHintsVisible).toBe(true);
+  });
+
+  it("sets from either direction", () => {
+    const store = createUiStore(createMemoryStorage());
+
+    store.getState().setAuthorityHintsVisible(false);
+    expect(store.getState().authorityHintsVisible).toBe(false);
+
+    store.getState().setAuthorityHintsVisible(true);
+    expect(store.getState().authorityHintsVisible).toBe(true);
+  });
+});
+
 describe("defaultExternalAppId", () => {
   it("round-trips a chosen app id", () => {
     const storage = createMemoryStorage();
@@ -467,6 +483,7 @@ describe("persistence", () => {
     store.getState().setDiffPresentation("side-by-side");
     store.getState().setWordWrap(false);
     store.getState().setCostVisible(false);
+    store.getState().setAuthorityHintsVisible(false);
     store.getState().toggleRailFold("worktree");
     store.getState().dismissEnvironmentFault("login-path-unreadable");
     store.getState().toggleUsagePin("anthropic", "five_hour");
@@ -485,6 +502,7 @@ describe("persistence", () => {
       homeRailMode: "files",
       homeEmptyVisual: "board",
       costVisible: false,
+      authorityHintsVisible: false,
       railFolds: { sessionsRecord: false, worktree: true, usage: false },
       diffPresentation: "side-by-side",
       wordWrap: false,
@@ -727,6 +745,34 @@ describe("persistence", () => {
       }),
     );
     expect(createUiStore(corrupt).getState().costVisible).toBe(true);
+  });
+
+  it("rehydrates authorityHintsVisible from storage; corrupt/missing values keep hints visible", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setAuthorityHintsVisible(false);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().authorityHintsVisible).toBe(false);
+
+    // Every build before VC-498 wrote no key at all, and those launches must
+    // open with the hints on screen — a reader who never hid them must not
+    // find them gone.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().authorityHintsVisible).toBe(true);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, authorityHintsVisible: "no" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().authorityHintsVisible).toBe(true);
   });
 
   it("rehydrates railCollapsed from storage; corrupt/missing values default to expanded", async () => {

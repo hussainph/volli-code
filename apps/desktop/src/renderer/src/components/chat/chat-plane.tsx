@@ -87,6 +87,8 @@ import {
   type MessageDelivery,
   type QueuedMessage,
   type TranscriptRow,
+  type TranscriptAuthorityReview,
+  type TranscriptLinkedAuthorityReview,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -2312,6 +2314,24 @@ function transcriptRowKey(row: TranscriptRow): string {
   }
 }
 
+/** Projection adds placement to fresh wrappers; unchanged facts must still memoize. */
+function sameLinkedAuthorityReview(
+  previous: TranscriptLinkedAuthorityReview,
+  next: TranscriptLinkedAuthorityReview,
+): boolean {
+  return (
+    previous.sequence === next.sequence &&
+    previous.afterMessageId === next.afterMessageId &&
+    previous.toolCallId === next.toolCallId &&
+    previous.toolRowKey === next.toolRowKey &&
+    previous.tool === next.tool &&
+    previous.mode === next.mode &&
+    previous.reason === next.reason &&
+    previous.scope?.attachmentId === next.scope?.attachmentId &&
+    previous.scope?.turnId === next.scope?.turnId
+  );
+}
+
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
 export function ChatTranscriptRow({
   row,
@@ -2324,6 +2344,17 @@ export function ChatTranscriptRow({
   live: boolean;
   onOpenSession?(sessionId: string): void;
 }) {
+  const hintsVisible = useUiStore((store) => store.authorityHintsVisible);
+  const authorityReviews = useStableList<TranscriptLinkedAuthorityReview>(
+    React.useMemo(
+      () =>
+        row.kind === "turn"
+          ? (row.authorityReviews ?? []).filter((review) => hintsVisible || review.mode === "auto")
+          : [],
+      [row, hintsVisible],
+    ),
+    sameLinkedAuthorityReview,
+  );
   switch (row.kind) {
     case "host-notice":
       return (
@@ -2337,14 +2368,31 @@ export function ChatTranscriptRow({
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
     case "authority-review":
+      if (!hintsVisible && row.review.mode === "shadow") return null;
+      // Until the matching call arrives (or in incomplete older history), the
+      // record still has a disclosure rather than an uncollapsible feed line.
       return (
-        <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
-          <WarningIcon aria-hidden className="size-3.5 shrink-0" />
-          <p>{authorityReviewNoticeCopy(row.review)}</p>
-        </div>
+        <details
+          className="not-prose text-ui text-muted-foreground"
+          open={row.review.mode === "auto"}
+        >
+          <summary className="cursor-default select-none">
+            {row.review.mode === "shadow" ? "Would block" : "Blocked"} {row.review.tool}
+          </summary>
+          <p className="py-1 whitespace-pre-wrap break-words">
+            {authorityReviewNoticeCopy(row.review)}
+          </p>
+        </details>
       );
     case "turn":
-      return <ChatTurn messages={row.messages} context={context} live={live} />;
+      return (
+        <ChatTurn
+          messages={row.messages}
+          context={context}
+          live={live}
+          authorityReviews={authorityReviews}
+        />
+      );
   }
 }
 
@@ -2362,14 +2410,41 @@ export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
   live,
+  authorityReviews,
 }: {
   messages: readonly UIMessage[];
+  authorityReviews?: readonly TranscriptLinkedAuthorityReview[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const heldReviewsByRow = React.useRef<
+    ReadonlyMap<string, readonly TranscriptLinkedAuthorityReview[]>
+  >(new Map());
+  const reviewsByRow = React.useMemo(() => {
+    const indexed = new Map<string, TranscriptLinkedAuthorityReview[]>();
+    for (const review of authorityReviews ?? []) {
+      const entries = indexed.get(review.toolRowKey) ?? [];
+      entries.push(review);
+      indexed.set(review.toolRowKey, entries);
+    }
+    // A new verdict for one call must not invalidate every settled ToolRow.
+    // Like useStableList, retain content-equal groups, not just their entries.
+    const previous = heldReviewsByRow.current;
+    const next = new Map<string, readonly TranscriptLinkedAuthorityReview[]>();
+    let unchanged = previous.size === indexed.size;
+    for (const [key, reviews] of indexed) {
+      const before = previous.get(key);
+      const entries =
+        before === undefined ? reviews : holdList(before, reviews, sameLinkedAuthorityReview);
+      next.set(key, entries);
+      if (entries !== before) unchanged = false;
+    }
+    if (!unchanged) heldReviewsByRow.current = next;
+    return heldReviewsByRow.current;
+  }, [authorityReviews]);
 
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
@@ -2453,7 +2528,9 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
+                <div key={segment.key}>
+                  {renderSegment(segment, role, context, live, reviewsByRow)}
+                </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
@@ -2528,6 +2605,7 @@ function renderSegment(
   role: UIMessage["role"],
   context: TurnContext,
   live: boolean,
+  authorityReviews: ReadonlyMap<string, readonly TranscriptAuthorityReview[]>,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
@@ -2540,12 +2618,19 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
+          authorityReviews={authorityReviews}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
         />
       );
     case "attention":
-      return <GatedCall part={segment.part} context={context} />;
+      return (
+        <GatedCall
+          part={segment.part}
+          context={context}
+          authorityReviews={authorityReviews.get(segment.key)}
+        />
+      );
     default:
       return null;
   }
@@ -2562,13 +2647,26 @@ function renderSegment(
  * No card when nothing correlates: a gate we cannot pair with a question must
  * not invent one, and `footInteraction` draws it at the foot instead.
  */
-function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
+function GatedCall({
+  part,
+  context,
+  authorityReviews,
+}: {
+  part: DynamicToolUIPart;
+  context: TurnContext;
+  authorityReviews?: readonly TranscriptAuthorityReview[];
+}) {
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
     // The id is on the row so a notification click can scroll to THIS question
     // (VC-295): it is the one card the foot slot never draws.
     <div className="space-y-1" data-interaction-id={interaction?.id}>
-      <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
+      <ToolRow
+        part={part}
+        authorityReviews={authorityReviews}
+        onOpenFile={context.onOpenFile}
+        onOpenSession={context.onOpenSession}
+      />
       {interaction ? (
         <InteractionCard
           key={interaction.id}

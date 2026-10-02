@@ -152,11 +152,18 @@ interface KeyedPart {
   key: string;
 }
 
+/** The portable address of one rendered transcript part. */
+export function transcriptPartKey(messageId: string, index: number): string {
+  return `${messageId}:${index}`;
+}
+
 export function segmentMessageParts(
   parts: readonly MessagePart[],
   messageId: string,
 ): ChatSegment[] {
-  return segmentParts(parts.map((part, index) => ({ part, key: `${messageId}:${index}` })));
+  return segmentParts(
+    parts.map((part, index) => ({ part, key: transcriptPartKey(messageId, index) })),
+  );
 }
 
 /**
@@ -173,7 +180,9 @@ export function segmentMessageParts(
 export function segmentTurn(messages: readonly UIMessage[]): ChatSegment[] {
   const parts: KeyedPart[] = [];
   for (const message of messages) {
-    message.parts.forEach((part, index) => parts.push({ part, key: `${message.id}:${index}` }));
+    message.parts.forEach((part, index) =>
+      parts.push({ part, key: transcriptPartKey(message.id, index) }),
+    );
   }
   return segmentParts(parts);
 }

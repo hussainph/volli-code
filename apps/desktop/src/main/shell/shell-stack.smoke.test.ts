@@ -17,9 +17,13 @@ import { join } from "node:path";
 import { createShellTool } from "@volli/agent-runtime";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import type { SessionRuntimeCommandRequest } from "@volli/session-engine";
+import type { SessionProjection } from "@volli/shared";
+
 import type { BackgroundShellState } from "../../ipc/contract";
 import { createAgentShellPort, type AgentShellPort } from "./agent-port";
 import { BackgroundShellHost } from "./background-shell-host";
+import { relayShellNotices } from "./shell-notices";
 
 /** The four fields the Activity Island's shell row carries. */
 interface IslandRow {
@@ -119,5 +123,87 @@ describe("background shell stack smoke", () => {
     // 6. The attachment ends: the shell is gone from the renderer's view.
     port!.dispose();
     expect(island()).toEqual([]);
+  });
+
+  it("tells the Session by itself when a long command prints its line and when it exits, and says nothing for the kill it asked for (VC-495)", async () => {
+    // The whole path with no model and no Electron: the tool the model calls,
+    // the real port and host, the relay, and a fake of the runtime the notices
+    // are steered through.
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const relay = relayShellNotices({
+      report: () => {},
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          return { receipt: { status: "accepted" } } as never;
+        },
+        projection: async () => ({
+          projection: {
+            stopped: null,
+            liveExecutor: { id: "executor" },
+          } as unknown as SessionProjection,
+          throughSequence: 0,
+        }),
+        subscribe: async () => () => {},
+      },
+    });
+    const host = new BackgroundShellHost({
+      publishState: () => {},
+      publishRemoved: () => {},
+      settleMs: 200,
+      killGraceMs: 200,
+      exitNoticeGraceMs: 60,
+      onNotice: (notice) => void relay(notice),
+    });
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), "volli-shell-smoke-")));
+    port = createAgentShellPort({
+      host,
+      scope: { projectId: "project-1", ticketId: "ticket-1" },
+      session: { sessionId: "session-1", attachmentId: "attachment-1" },
+      workspacePath: workspace,
+      identity: { sessionId: "session-1", ticketDisplayId: "VC-495", sessionToken: "tok" },
+      pathPrefixes: [],
+    });
+    const start = createShellTool("shell_start", port);
+    const kill = createShellTool("shell_kill", port);
+    const bodies = () =>
+      commands.map((request) => {
+        if (request.command.kind !== "message.submit") throw new Error("expected a submit");
+        const part = request.command.message.parts[0];
+        return part?.type === "text" ? part.text : "";
+      });
+
+    // A long command that prints its line and then exits non-zero.
+    await start.execute("c1", {
+      command: "sleep 0.5; echo ready on $((40+2)); sleep 0.3; echo boom >&2; exit 4",
+      title: "ci",
+      notifyOn: "ready on",
+    });
+    await until(() => commands.length === 2, 6_000);
+
+    expect(commands.map((request) => request.commandId.split(":").at(-1))).toEqual([
+      "match",
+      "exit",
+    ]);
+    expect(bodies()[0]).toContain("ready on 42");
+    expect(bodies()[1]).toContain("background shell");
+    expect(bodies()[1]).toContain("exited with code 4");
+    expect(bodies()[1]).toContain("boom");
+    for (const request of commands) {
+      expect(request).toMatchObject({
+        sessionId: "session-1",
+        origin: { kind: "volli", reason: "shell-notice" },
+      });
+    }
+
+    // A shell the model kills itself: its tool result is the whole news.
+    const second = await start.execute("c2", { command: "sleep 30" });
+    const secondId = /Started background shell (\S+) /.exec(
+      second.content.map((entry) => (entry.type === "text" ? entry.text : "")).join("\n"),
+    )?.[1];
+    await kill.execute("c3", { shellId: secondId });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(commands).toHaveLength(2);
   });
 });

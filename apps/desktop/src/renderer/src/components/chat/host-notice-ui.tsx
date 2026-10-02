@@ -10,12 +10,14 @@ import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 
 import {
   browserHoldNoticeCopy,
+  shellNoticeCopy,
   subagentNoticeCopy,
   watchNoticeCopy,
   type BrowserHoldNotice,
@@ -24,6 +26,8 @@ import {
   type UnknownHostNotice,
   type WatchNotice,
 } from "@volli/session-presentation";
+
+import type { BackgroundShellHostNotice } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Separator } from "@renderer/components/ui/separator";
@@ -133,6 +137,32 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
   );
 });
 
+/**
+ * A background shell the Session started exited, or printed the line it asked
+ * to be told about (VC-495). Quiet on purpose, like the other host rows: the
+ * state word carries the outcome, and a non-zero exit or a signal is not
+ * drawn louder here — the Activity Island's shell cluster is the loud place.
+ */
+export const ShellNoticeRow = React.memo(function ShellNoticeRow({
+  notice,
+}: {
+  notice: BackgroundShellHostNotice;
+}) {
+  const copy = shellNoticeCopy(notice);
+  return (
+    <div
+      className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
+      title={`${copy.headline} — ${copy.state}. ${copy.note}`}
+    >
+      <TerminalWindowIcon aria-hidden className={GLYPH_CLASS} />
+      <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
+      <span className="shrink-0">{copy.state}</span>
+      <Separator aria-hidden className="min-w-4 flex-1" />
+      <span className="min-w-0 truncate text-muted-foreground/70">{copy.note}</span>
+    </div>
+  );
+});
+
 export const UnknownHostNoticeRow = React.memo(function UnknownHostNoticeRow({
   notice,
 }: {
@@ -170,6 +200,8 @@ export const HostNoticeRow = React.memo(function HostNoticeRow({
       return <BrowserHoldNoticeRow notice={notice} />;
     case "watch":
       return <WatchNoticeRow notice={notice} />;
+    case "background-shell":
+      return <ShellNoticeRow notice={notice} />;
     case "approval-used":
       return (
         <div className="not-prose text-ui text-muted-foreground" title={notice.asked}>

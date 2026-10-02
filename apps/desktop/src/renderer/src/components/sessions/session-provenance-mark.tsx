@@ -7,8 +7,9 @@
  * per-surface bolt is how two lists come to disagree about the same Session.
  *
  * ── WHAT IT DRAWS, AND WHAT IT REFUSES TO ─────────────────────────────────
- * A lightning bolt and the Automation's name, and nothing at all for the other
- * two parties. That asymmetry is the whole design:
+ * A lightning bolt only, and nothing at all for the other two parties. The
+ * Session title owns the row's width; provenance qualifies it, never competes
+ * with it. That asymmetry is the whole design:
  *
  * - **`user` draws nothing.** It is the resting case, and a rail is mostly this
  *   — so anything drawn here would be persistent weight paid on every row to
@@ -22,9 +23,9 @@
  *   column header and the palette already use for an Automation. A fourth
  *   spelling of one concept would have been a fourth thing to learn.
  *
- * The name beside the bolt is conditional and {@link automationMarkName} owns
- * why: a Run names its Session after its Automation, so the word is usually the
- * row's title already.
+ * The Automation's name stays in the accessible label and the surface's own
+ * peek or hover line, even when auto-titling changes the Session title. No
+ * visible name is repeated or added beside the bolt (VC-517).
  *
  * ── WEIGHT ────────────────────────────────────────────────────────────────
  * `bold` at `size-3`, which is the sidebar band's small-glyph tier and a
@@ -40,21 +41,15 @@
  * would compete with the dot beside it that says what the work is doing.
  */
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { automationMarkLabel, automationMarkName, type SessionProvenance } from "@volli/shared";
+import { automationMarkLabel, type SessionProvenance } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
 
 export function SessionProvenanceMark({
   provenance,
-  rowTitle,
   className,
 }: {
   provenance: SessionProvenance;
-  /**
-   * The title this row already shows. The mark reads it so it can decline to
-   * print a name the row is already saying — see {@link automationMarkName}.
-   */
-  rowTitle: string;
   className?: string;
 }) {
   // The accessible sentence decides whether anything is drawn at all: it is
@@ -62,19 +57,14 @@ export function SessionProvenanceMark({
   // the DOM without a name for a screen reader to read.
   const label = automationMarkLabel(provenance);
   if (label === null) return null;
-  const name = automationMarkName(provenance, rowTitle);
   return (
     <span
-      className={cn("inline-flex min-w-0 shrink items-center gap-1 text-primary", className)}
-      // One accessible sentence for the pair, rather than a labelled glyph
-      // beside a text node a screen reader would read as two things. It names
-      // the Automation even when the visible half declines to repeat it, so the
-      // fact never depends on a sighted comparison with the title — and when
-      // there is no name to be had it still says an Automation was here.
+      className={cn("inline-flex size-3 shrink-0 items-center text-primary", className)}
+      // Fixed geometry: narrow rows give width to the title, never shrink the
+      // bolt. The full origin stays accessible without printing a second title.
       aria-label={label}
     >
       <LightningIcon weight="bold" aria-hidden className="size-3 shrink-0" />
-      {name === null ? null : <span className="truncate">{name}</span>}
     </span>
   );
 }

@@ -68,19 +68,21 @@ export interface SidebarPeekSurface {
   setRead(sessionId: string, unread: boolean): void;
 }
 
+/** Independent of the surface: rebuilding its action ports must not invalidate peek reads. */
+const readContent: SessionPeekPorts["readContent"] = async (sessionId, refine = false) => {
+  const result = await window.api.sessions.peekContent({ sessionId, refine });
+  // A refusal is a failed read, not an empty Session or a read receipt.
+  if (!result.ok) throw new Error(result.error);
+  return result.content;
+};
+
 /** The peek ports both sidebars share; only activation, conversation and the read store differ. */
 export function createSidebarPeekPorts(surface: SidebarPeekSurface): SessionPeekPorts {
   const read = (sessionId: string): void => {
     surface.setRead(sessionId, false);
   };
   return {
-    async readContent(sessionId, refine = false) {
-      const result = await window.api.sessions.peekContent({ sessionId, refine });
-      // A refusal is a FAILED card, never a card claiming the Session said
-      // nothing — and never a read: a peek has no read side effect at all.
-      if (!result.ok) throw new Error(result.error);
-      return result.content;
-    },
+    readContent,
 
     async answer(sessionId, interactionId, submission: InteractionSubmission) {
       const client = adopt(sessionId);

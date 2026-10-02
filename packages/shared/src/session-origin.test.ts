@@ -51,6 +51,10 @@ describe("formatSessionOrigin", () => {
     expect(formatSessionOrigin({ kind: "volli", reason: "watch-notice" })).toBe(
       "Volli (watch-notice)",
     );
+    // A background shell's exit or match (VC-495) is Volli's too, never the person's.
+    expect(formatSessionOrigin({ kind: "volli", reason: "shell-notice" })).toBe(
+      "Volli (shell-notice)",
+    );
   });
 });
 
@@ -62,6 +66,7 @@ describe("readSessionOrigin", () => {
       { kind: "automation", automationRunId: "run", automationName: "Review" },
       { kind: "automation", automationRunId: "run", automationName: null },
       { kind: "volli", reason: "watch-notice" },
+      { kind: "volli", reason: "shell-notice" },
     ])
       expect(readSessionOrigin(origin)).toEqual(origin);
     for (const bad of [

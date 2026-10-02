@@ -9,6 +9,7 @@ import {
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
+  formatShellRuntime,
   shellCommandLine,
   shellStanding,
   UtilityCompletionError,
@@ -338,6 +339,21 @@ describe("sessionToolIds", () => {
     // Exited with neither: the OS told us nothing, and the text says so
     // rather than inventing a zero that would read as success.
     expect(shellStanding({ state: "exited", code: null, signal: null })).toBe("exited ?");
+  });
+
+  it("says how long a shell ran in the two units that matter (VC-495)", () => {
+    // Whole seconds under a minute; a sub-second run is `0s`, never negative
+    // when a clock steps back.
+    expect(formatShellRuntime(0)).toBe("0s");
+    expect(formatShellRuntime(900)).toBe("0s");
+    expect(formatShellRuntime(-5_000)).toBe("0s");
+    expect(formatShellRuntime(45_000)).toBe("45s");
+    // Minutes with the seconds that remain, and no `0s` tacked on.
+    expect(formatShellRuntime(60_000)).toBe("1m");
+    expect(formatShellRuntime(125_000)).toBe("2m 5s");
+    // From an hour, minutes: the seconds are noise by then.
+    expect(formatShellRuntime(3_600_000)).toBe("1h");
+    expect(formatShellRuntime(3_700_000)).toBe("1h 1m");
   });
 
   it("names a shell by the first line that says something (VC-270)", () => {

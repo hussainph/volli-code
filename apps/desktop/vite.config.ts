@@ -385,6 +385,8 @@ export default defineConfig(({ mode }) => ({
         // and a status that read "ready" for a provider nobody signed in to
         // would send them to a model that can only answer "needs setup".
         "src/components/pages/decision-model-model.ts",
+        // Host and client must agree on the explicit shadow-spending opt-in.
+        "**/src/authority-review-preferences.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",

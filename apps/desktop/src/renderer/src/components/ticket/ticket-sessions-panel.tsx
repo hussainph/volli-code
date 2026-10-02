@@ -354,7 +354,7 @@ function SessionRow({
                 the status column, and a mark that drifted between the title and
                 that column depending on title length would stop being scannable
                 down the list. */}
-            <SessionProvenanceMark provenance={provenance} rowTitle={title} />
+            <SessionProvenanceMark provenance={provenance} />
             <span
               // Unread outranks read by WEIGHT alone; the colour stays the
               // row's own, so the dot is the only new ink on the line.

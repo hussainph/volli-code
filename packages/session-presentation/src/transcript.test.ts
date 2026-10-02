@@ -17,7 +17,12 @@ import type {
   SessionStreamOverlay,
   TranscriptDelta,
 } from "@volli/session-engine";
-import { scrubSessionEventPayload } from "@volli/shared";
+import {
+  scrubSessionEventPayload,
+  sessionHostNoticeMetadata,
+  SESSION_TOOL_CALL_SCOPE_METADATA_KEY,
+  type SessionToolCallScope,
+} from "@volli/shared";
 import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
@@ -31,10 +36,25 @@ import {
   mergeTranscriptMessages,
   movesProjection,
   type ChatSessionFrame,
+  type TranscriptAuthorityReview,
 } from "./transcript";
 
 function message(id: string, text: string): UIMessage {
   return { id, role: "assistant", parts: [{ type: "text", text }] };
+}
+
+function toolPart(id: string, scope?: SessionToolCallScope): UIMessage["parts"][number] {
+  return {
+    type: "dynamic-tool",
+    toolCallId: id,
+    toolName: "execute",
+    state: "output-available",
+    input: {},
+    output: "done",
+    ...(scope === undefined
+      ? {}
+      : { toolMetadata: { [SESSION_TOOL_CALL_SCOPE_METADATA_KEY]: { ...scope } } }),
+  };
 }
 
 /**
@@ -707,6 +727,201 @@ describe("classifier verdict transcript notices", () => {
     expect(authorityReviewNoticeCopy(all.authorityReviews[2]!)).toBe(
       "Blocked execute: Outside the request.",
     );
+  });
+
+  it("links reviews to exact tool calls, not their earlier message anchors", () => {
+    const one = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "First",
+    };
+    const two = { ...one, sequence: 2, toolCallId: "call-2", reason: "Second" };
+    const turns: UIMessage[][] = [
+      [{ id: "user", role: "user", parts: [{ type: "text", text: "Implement it" }] }],
+      [
+        {
+          id: "assistant",
+          role: "assistant",
+          parts: [toolPart("call-2"), toolPart("call-1"), toolPart("call-1")],
+        },
+      ],
+    ];
+    const rows = projectTranscriptRows(turns, [], [], [one, two]);
+    expect(rows).toEqual([
+      { kind: "turn", messages: turns[0] },
+      {
+        kind: "turn",
+        messages: turns[1],
+        authorityReviews: [
+          { ...two, toolRowKey: "assistant:0" },
+          { ...one, toolRowKey: "assistant:1" },
+        ],
+      },
+    ]);
+    // A verdict may arrive before the tool's transcript part; once the part
+    // lands the fallback notice disappears, rather than leaving a duplicate.
+    expect(projectTranscriptRows([turns[0]!], [], [], [one])[0]?.kind).toBe("authority-review");
+    const more = { ...one, sequence: 3, reason: "Another review" };
+    expect(projectTranscriptRows(turns, [], [], [one, more])[1]).toEqual({
+      kind: "turn",
+      messages: turns[1],
+      authorityReviews: [
+        { ...one, toolRowKey: "assistant:1" },
+        { ...more, toolRowKey: "assistant:1" },
+      ],
+    });
+  });
+
+  it.each([
+    { attachmentId: "attachment-2", turnId: "turn-1" },
+    { attachmentId: "attachment-1", turnId: "turn-2" },
+  ])("does not confuse a reused call id in $attachmentId/$turnId", (laterScope) => {
+    const earlierScope = { attachmentId: "attachment-1", turnId: "turn-1" };
+    const earlier: UIMessage = {
+      id: "opaque-earlier-message",
+      role: "assistant",
+      parts: [toolPart("reused", earlierScope)],
+    };
+    const later: UIMessage = {
+      id: "opaque-later-message",
+      role: "assistant",
+      parts: [toolPart("reused", laterScope)],
+    };
+    const laterReview = {
+      sequence: 30,
+      afterMessageId: earlier.id,
+      toolCallId: "reused",
+      scope: laterScope,
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "Later concern",
+    };
+    // The late review must not be claimed by the old call before its own call
+    // arrives, even though that is currently the only matching native id.
+    expect(projectTranscriptRows([[earlier]], [], [], [laterReview])).toEqual([
+      { kind: "turn", messages: [earlier] },
+      { kind: "authority-review", review: laterReview },
+    ]);
+    expect(projectTranscriptRows([[earlier], [later]], [], [], [laterReview])).toEqual([
+      { kind: "turn", messages: [earlier] },
+      {
+        kind: "turn",
+        messages: [later],
+        authorityReviews: [{ ...laterReview, toolRowKey: `${later.id}:0` }],
+      },
+    ]);
+    const earlierReview = { ...laterReview, sequence: 10, scope: earlierScope, reason: "Earlier" };
+    // Consecutive assistant messages can share a visual turn. Clients receive
+    // two resolved row keys, rather than rejoining both by the reused native id.
+    expect(projectTranscriptRows([[earlier, later]], [], [], [earlierReview, laterReview])).toEqual(
+      [
+        {
+          kind: "turn",
+          messages: [earlier, later],
+          authorityReviews: [
+            { ...earlierReview, toolRowKey: `${earlier.id}:0` },
+            { ...laterReview, toolRowKey: `${later.id}:0` },
+          ],
+        },
+      ],
+    );
+  });
+
+  it("keeps ambiguous or insufficiently scoped history in a fallback disclosure", () => {
+    const scope = { attachmentId: "a", turnId: "t" };
+    const legacyReview = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "reused",
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "Concern",
+    };
+    const legacy: UIMessage = { id: "old", role: "assistant", parts: [toolPart("reused")] };
+    const other: UIMessage = { ...legacy, id: "other" };
+    const cases: readonly [readonly UIMessage[], TranscriptAuthorityReview][] = [
+      [[legacy, other], legacyReview],
+      [[legacy], { ...legacyReview, scope }],
+      [[legacy], { ...legacyReview, scope: null }],
+      [
+        [
+          { ...legacy, parts: [toolPart("reused", scope)] },
+          { ...other, parts: [toolPart("reused", scope)] },
+        ],
+        { ...legacyReview, scope },
+      ],
+    ];
+    for (const [messages, heldReview] of cases) {
+      expect(projectTranscriptRows([messages], [], [], [heldReview])).toEqual([
+        { kind: "authority-review", review: heldReview },
+        { kind: "turn", messages },
+      ]);
+    }
+  });
+
+  it("does not attach a review to a host notice that happens to carry the same call id", () => {
+    const notice: UIMessage = {
+      id: "host-notice",
+      role: "user",
+      metadata: sessionHostNoticeMetadata({
+        kind: "browser-hold",
+        tabId: "tab",
+        tabTitle: "Example",
+        tabHostname: "example.com",
+        action: "person-took",
+      }),
+      parts: [toolPart("call-1")],
+    };
+    const heldReview = {
+      sequence: 1,
+      afterMessageId: null,
+      toolCallId: "call-1",
+      tool: "execute",
+      mode: "shadow" as const,
+      reason: "Concern",
+    };
+    expect(projectTranscriptRows([[notice]], [], [], [heldReview]).map((row) => row.kind)).toEqual([
+      "authority-review",
+      "host-notice",
+    ]);
+  });
+
+  it("folds call scope and recovers older activity scope from its durable Session fact", () => {
+    const held: UIMessage = {
+      id: "opaque-message",
+      role: "assistant",
+      parts: [toolPart("call-1")],
+    };
+    const state = appendFrames(EMPTY_TRANSCRIPT, [frame(1, review), transcriptFrame(2, held)]);
+    const scope = { attachmentId: review.attachmentId, turnId: review.turnId };
+    expect(state.authorityReviews[0]?.scope).toEqual(scope);
+    expect(projectTranscriptRows([state.messages], [], [], state.authorityReviews)).toEqual([
+      {
+        kind: "turn",
+        messages: state.messages,
+        authorityReviews: [{ ...state.authorityReviews[0]!, toolRowKey: "opaque-message:0" }],
+      },
+    ]);
+  });
+
+  it("never guesses a call for a flagged historical review without a turn", () => {
+    const held: UIMessage = {
+      id: "only-matching-call",
+      role: "assistant",
+      parts: [toolPart("call-1", { attachmentId: "attachment-1", turnId: "turn-1" })],
+    };
+    const state = appendFrames(EMPTY_TRANSCRIPT, [
+      frame(1, { ...review, turnId: null }),
+      transcriptFrame(2, held),
+    ]);
+    expect(state.authorityReviews[0]?.scope).toBeNull();
+    expect(projectTranscriptRows([state.messages], [], [], state.authorityReviews)).toEqual([
+      { kind: "authority-review", review: state.authorityReviews[0] },
+      { kind: "turn", messages: state.messages },
+    ]);
   });
 
   it("keeps utility wording labelled in the person-facing review notice only", () => {

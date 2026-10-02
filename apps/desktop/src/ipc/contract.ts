@@ -2766,6 +2766,20 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
+export interface DatabaseSafetyCopy {
+  name: string;
+  modifiedAt: number;
+  integrity: "clean" | "damaged" | "unavailable";
+}
+
+export type DatabaseRecoveryListResult = Result<{ backups: DatabaseSafetyCopy[] }>;
+export type DatabaseRecoveryRestoreResult = Result<{ restoredBackup: string }>;
+
+export interface VolliDatabaseRecoveryIpcContract {
+  "volli:database-recovery-list": { args: []; result: DatabaseRecoveryListResult };
+  "volli:database-recovery-restore": { args: []; result: DatabaseRecoveryRestoreResult };
+}
+
 /** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */
 export interface VolliSecretIpcContract {
   "volli:secrets-list": { args: [projectId?: string]; result: SecretsResult };
@@ -2781,6 +2795,7 @@ export type SecretIpcChannel = keyof VolliSecretIpcContract;
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
+    VolliDatabaseRecoveryIpcContract,
     VolliSecretIpcContract,
     VolliPiSessionOrphanIpcContract,
     VolliOrphanProcessIpcContract,

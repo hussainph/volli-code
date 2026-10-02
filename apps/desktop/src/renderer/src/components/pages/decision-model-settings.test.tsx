@@ -13,6 +13,7 @@ import {
   authorityOptInExtensionKey,
   cloudSetting,
 } from "./decision-model-model";
+import { AUTHORITY_SHADOW_REVIEW_ENABLED_KEY } from "../../../../authority-review-preferences";
 import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 
 import {
@@ -230,6 +231,152 @@ describe("Settings → Models → Decision model", () => {
     await act(async () => button("Cloud").click());
     expect(document.querySelector('[data-testid="decision-model-cloud"]')).not.toBeNull();
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+describe("the global shadow review opt-in", () => {
+  it("starts off and persists both enable and disable independently of model selection", async () => {
+    const { setAppState, set } = stubApi({ kind: "none" });
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    const control = document.querySelector<HTMLButtonElement>("#authority-shadow-review");
+    expect(control?.getAttribute("aria-checked")).toBe("false");
+    await act(async () => control?.click());
+    expect(setAppState).toHaveBeenLastCalledWith(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "true");
+    expect(control?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => control?.click());
+    expect(setAppState).toHaveBeenLastCalledWith(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "false");
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("reads a saved opt-in and retains it when the block reason changes", async () => {
+    const { appState } = stubApi({ kind: "none" });
+    appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "true");
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    await act(async () => button("Risk category").click());
+    expect(document.querySelector("#authority-shadow-review")?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  it("keeps the spending switch usable when block-reason state is corrupt", async () => {
+    const { appState, setAppState } = stubApi({ kind: "none" });
+    appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "true");
+    appState.set(AUTHORITY_REASON_SOURCE_KEY, "broken JSON");
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    const control = document.querySelector<HTMLButtonElement>("#authority-shadow-review");
+    expect(control?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => control?.click());
+    expect(setAppState).toHaveBeenLastCalledWith(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "false");
+    expect(control?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it.each([false, true])(
+    "does not let an earlier settings retry replace a saved shadow opt-in=%s",
+    async (enabled) => {
+      const { appState, bootstrap, setAppState } = stubApi({ kind: "none" });
+      appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, JSON.stringify(!enabled));
+      appState.set(AUTHORITY_REASON_SOURCE_KEY, "broken JSON");
+      await render(<DecisionModelSettings onSignIn={() => undefined} />);
+      const control = document.querySelector<HTMLButtonElement>("#authority-shadow-review");
+      expect(control).not.toBeNull();
+      // Capture the old durable value, but deliver it only after the person
+      // saves the new choice. A retry must not make a spending control lie.
+      const stale = { ok: true as const, data: { appState: Object.fromEntries(appState) } };
+      let finishRead!: (value: typeof stale) => void;
+      bootstrap.mockImplementationOnce(
+        () => new Promise<typeof stale>((resolve) => (finishRead = resolve)),
+      );
+      await act(async () => button("Retry").click());
+      expect(bootstrap).toHaveBeenCalledTimes(2);
+      await act(async () => control!.click());
+      expect(setAppState).toHaveBeenLastCalledWith(
+        AUTHORITY_SHADOW_REVIEW_ENABLED_KEY,
+        JSON.stringify(enabled),
+      );
+      expect(appState.get(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY)).toBe(JSON.stringify(enabled));
+      await act(async () => finishRead(stale));
+      expect(control!.getAttribute("aria-checked")).toBe(String(enabled));
+    },
+  );
+
+  it.each(["refused", "rejected"])(
+    "surfaces a %s shadow save, retains the durable choice, and can retry",
+    async (failure) => {
+      const { appState, setAppState } = stubApi({ kind: "none" });
+      appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "true");
+      if (failure === "refused")
+        setAppState.mockResolvedValueOnce({ ok: false, error: "disk full" });
+      else setAppState.mockRejectedValueOnce(new Error("disk full"));
+      await render(<DecisionModelSettings onSignIn={() => undefined} />);
+      const control = document.querySelector<HTMLButtonElement>("#authority-shadow-review");
+      expect(control).not.toBeNull();
+      await act(async () => control!.click());
+      expect(control!.getAttribute("aria-checked")).toBe("true");
+      expect(control!.disabled).toBe(false);
+      expect(appState.get(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY)).toBe("true");
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("disk full"),
+        expect.any(Object),
+      );
+      await act(async () => control!.click());
+      expect(setAppState).toHaveBeenLastCalledWith(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, "false");
+      expect(appState.get(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY)).toBe("false");
+      expect(control!.getAttribute("aria-checked")).toBe("false");
+      await unmount();
+      await render(<DecisionModelSettings onSignIn={() => undefined} />);
+      expect(document.querySelector("#authority-shadow-review")?.getAttribute("aria-checked")).toBe(
+        "false",
+      );
+    },
+  );
+
+  it("waits for durable shadow save and prevents a second write while pending", async () => {
+    const { appState, setAppState } = stubApi({ kind: "none" });
+    let finishWrite!: () => void;
+    setAppState.mockImplementationOnce(
+      (key, value) =>
+        new Promise((resolve) => {
+          finishWrite = () => {
+            appState.set(key, value);
+            resolve({ ok: true });
+          };
+        }),
+    );
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    const control = document.querySelector<HTMLButtonElement>("#authority-shadow-review");
+    expect(control).not.toBeNull();
+    await act(async () => control!.click());
+    expect(control!.getAttribute("aria-checked")).toBe("false");
+    expect(control!.disabled).toBe(true);
+    expect(appState.has(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY)).toBe(false);
+    await act(async () => control!.click());
+    expect(setAppState).toHaveBeenCalledOnce();
+    await act(async () => finishWrite());
+    expect(control!.getAttribute("aria-checked")).toBe("true");
+    expect(control!.disabled).toBe(false);
+    expect(appState.get(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY)).toBe("true");
+    await unmount();
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(document.querySelector("#authority-shadow-review")?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  it.each([
+    { raw: undefined, enabled: false },
+    { raw: "true", enabled: true },
+    { raw: "false", enabled: false },
+    { raw: '"true"', enabled: false },
+    { raw: "null", enabled: false },
+    { raw: "invalid", enabled: false },
+  ])("only displays a strict saved shadow opt-in ($raw)", async ({ raw, enabled }) => {
+    const { appState, setAppState } = stubApi({ kind: "none" });
+    if (raw !== undefined) appState.set(AUTHORITY_SHADOW_REVIEW_ENABLED_KEY, raw);
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(document.querySelector("#authority-shadow-review")?.getAttribute("aria-checked")).toBe(
+      String(enabled),
+    );
+    expect(setAppState).not.toHaveBeenCalled();
   });
 });
 

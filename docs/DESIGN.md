@@ -615,6 +615,15 @@ the bolt (`SessionProvenanceMark`) — never a second time under Automations. Th
 face is the figure, the token count and a caret; the rest is one fold behind it, not lines on the
 page.
 
+**Session origin is a mark, never a second title (VC-517).** Every Session provenance mark is a
+fixed, non-shrinking 12px bold-outline bolt in `text-primary`, without a pill, border or animation.
+It prints no Automation name, even when a Session is renamed: the title owns the width, and the
+full origin stays in the accessible label and the surface's peek or hover line. Existing slots
+stay put — Active and palette rows trail the title, Previous and Ticket roster rows lead it,
+tabs use their badge slot, and Home's roster trails the title. User-started and Session-started
+work gains no glyph. This is provenance, not current state: armed/fill and switched-off/slash
+remain the vocabulary of saved Automation records, whose names stay visible.
+
 **Cost notation.** A hedged figure carries a small word *after* the money, a step down and muted
 (`UsageCostFigure`): `$8.42 est.` for a catalogue estimate or a mixed basis, `$8.42 unverified`
 for a basis Volli cannot vouch for, `$8.42+` when only part of the report was priced, bare only

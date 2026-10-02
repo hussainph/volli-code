@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { pendingNoticeSecretStart } from "./pending-notice-secret";
 
 /** Inject safeStorage at the application edge; importing this module never loads Electron. */
 export interface SecretCodec {
@@ -20,7 +21,12 @@ export interface SecretCodec {
   decryptString(value: Buffer): string;
 }
 
-import type { SecretMetadata, SecretScope } from "@volli/shared";
+import {
+  payloadSecretSpans,
+  pemSecretSpans,
+  type SecretMetadata,
+  type SecretScope,
+} from "@volli/shared";
 export type { SecretMetadata, SecretScope } from "@volli/shared";
 
 export interface SecretInput {
@@ -128,6 +134,28 @@ function validate(input: SecretInput): void {
   ) {
     throw new Error("Invalid secret input.");
   }
+}
+
+/** KMP borders keep both complete matches and trailing previews linear. */
+function secretBorders(value: string): Uint32Array {
+  const borders = new Uint32Array(value.length);
+  for (let i = 1, matched = 0; i < value.length; i += 1) {
+    while (matched > 0 && value[i] !== value[matched]) matched = borders[matched - 1]!;
+    if (value[i] === value[matched]) matched += 1;
+    borders[i] = matched;
+  }
+  return borders;
+}
+
+function trailingSecretPrefix(text: string, value: string, borders: Uint32Array): number {
+  if (value.length < 2 || text.length === 0) return 0;
+  let matched = 0;
+  // Scan fewer than value.length units, so only a proper prefix can match.
+  for (let i = Math.max(0, text.length - value.length + 1); i < text.length; i += 1) {
+    while (matched > 0 && text[i] !== value[matched]) matched = borders[matched - 1]!;
+    if (text[i] === value[matched]) matched += 1;
+  }
+  return matched;
 }
 
 function metadata(record: SecretRecord): SecretMetadata {
@@ -254,16 +282,81 @@ export class SecretStore {
     return this.#history.size > 0;
   }
 
-  /** A single replacement pass prevents short secrets from rewriting generated markers. */
+  /** A single literal replacement pass never reinterprets generated markers. */
   redact(text: string): string {
+    return this.#redact(text, false);
+  }
+
+  /** Withhold a live preview's trailing credential prefix, including a newline. */
+  redactPartial(text: string): string {
+    return this.#redact(text, true);
+  }
+
+  #redact(text: string, partial: boolean): string {
     this.#load();
-    const values = [...this.#history.keys()].toSorted((left, right) => right.length - left.length);
-    if (values.length === 0) return text;
-    const pattern = values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    return text.replace(
-      new RegExp(pattern, "g"),
-      (value) => `‹secret:${this.#history.get(value)}›`,
-    );
+    if (text.length === 0 || (!partial && this.#history.size === 0)) return text;
+    // Match source text only. A large stored credential must not become a
+    // native regex (which can exceed the engine's compilation bound).
+    const lengths = new Uint32Array(text.length);
+    const sharedLengths = new Map<number, number>();
+    if (partial) {
+      // Both redactors inspect ORIGINAL text. Replacing a stored "Bearer"
+      // or "-" must not hide a shared delimiter; shared replacement must
+      // not expose the remainder of an overlapping multiline exact value.
+      for (const span of [...payloadSecretSpans(text), ...pemSecretSpans(text, true)]) {
+        const length = span.end - span.start;
+        lengths[span.start] = Math.max(lengths[span.start]!, length);
+        sharedLengths.set(span.start, lengths[span.start]!);
+      }
+      const from = pendingNoticeSecretStart(text);
+      if (from !== null) {
+        const length = text.length - from;
+        lengths[from] = Math.max(lengths[from]!, length);
+        sharedLengths.set(from, lengths[from]!);
+      }
+    }
+    let hidden = 0;
+    let partialName = "";
+    for (const [value, name] of this.#history) {
+      const borders = secretBorders(value);
+      for (let at = 0, matched = 0; at < text.length; at += 1) {
+        while (matched > 0 && text[at] !== value[matched]) matched = borders[matched - 1]!;
+        if (text[at] === value[matched]) matched += 1;
+        if (matched !== value.length) continue;
+        const start = at - value.length + 1;
+        lengths[start] = Math.max(lengths[start]!, value.length);
+        matched = borders[matched - 1]!;
+      }
+      if (!partial) continue;
+      const length = trailingSecretPrefix(text, value, borders);
+      if (length > hidden) {
+        hidden = length;
+        partialName = name;
+      }
+    }
+    const partialAt = hidden === 0 ? text.length : text.length - hidden;
+    if (hidden > 0) lengths[partialAt] = Math.max(lengths[partialAt]!, hidden);
+    const parts: string[] = [];
+    let copied = 0;
+    for (let at = 0; at < text.length; at += 1) {
+      const length = lengths[at]!;
+      if (length === 0) continue;
+      const name =
+        sharedLengths.get(at) === length
+          ? null
+          : at === partialAt && length === hidden
+            ? partialName
+            : this.#history.get(text.slice(at, at + length))!;
+      let end = at + length;
+      // Overlapping complete values/prefixes are one protected span. Never
+      // preserve a suffix just because another credential started earlier.
+      for (let next = at + 1; next < end; next += 1) end = Math.max(end, next + lengths[next]!);
+      parts.push(text.slice(copied, at), name === null ? "[redacted]" : `‹secret:${name}›`);
+      copied = end;
+      at = end - 1;
+    }
+    parts.push(text.slice(copied));
+    return parts.join("");
   }
 
   endSession(sessionId: string): void {

@@ -1,9 +1,10 @@
 /**
  * One host-authored notice into one Session, delivered when it can be read.
  *
- * Shared by the two things in main that tell a Session about work it is not
- * doing itself: a subagent's completion (`delegate-session.ts`) and a watched
- * Session or Ticket changing (`watches.ts`). Both are the same act — a marked
+ * Shared by the things in main that tell a Session about work it is not
+ * doing itself: a subagent's completion (`delegate-session.ts`), a watched
+ * Session or Ticket changing (`watches.ts`), and a background shell exiting or
+ * matching (`shell/shell-notices.ts`, VC-495). All are the same act — a marked
  * `steer` message whose command id is its one durable mark of "told" — so
  * both take the same three answers about WHEN:
  *
@@ -27,61 +28,64 @@
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { SessionHostNoticeMetadata } from "@volli/shared";
-import type { SessionRuntime } from "@volli/session-engine";
+import type {
+  HostNotice,
+  SessionRuntime,
+  SessionRuntimeCommandRequest,
+} from "@volli/session-engine";
+export type { HostNotice } from "@volli/session-engine";
 import { isSessionStreamFrame } from "@volli/session-engine";
 
 export interface HostNoticeDeliveryPorts {
   runtime: Pick<SessionRuntime, "command" | "subscribe" | "projection">;
   report: (message: string) => void;
-}
-
-export interface HostNotice {
-  /** The Session that reads the notice. */
-  sessionId: string;
-  /** Durable ids: the command id is the one mark of "told", so replays land once. */
-  commandId: string;
-  messageId: string;
-  /** What the model reads, in-band. */
-  text: string;
-  /** What every Session client reads to draw it as Volli's row, not a person's. */
-  metadata: SessionHostNoticeMetadata;
-  /** How the log names this notice, e.g. "subagent notice for ab12 to parent cd34". */
-  label: string;
+  /** Optional during migration: watches and subagents keep their existing ports. */
+  delivery?: HostNoticeDelivery;
 }
 
 /** Where a notice ended up, for the log and for tests. */
-export type NoticeDelivery = "delivered" | "parked" | "reader-stopped";
+export type NoticeDelivery = "delivered" | "parked" | "reader-stopped" | "already-settled";
+
+export interface HostNoticeDelivery {
+  deliver(notice: HostNotice): Promise<NoticeDelivery>;
+  /** Reconstruct subscriptions from storage, without waiting for idle turns. */
+  recover(): Promise<void>;
+  /** Release this host's subscriptions; leave pending payloads durable. */
+  close(): void;
+}
+
+export function hostNoticeCommand(notice: HostNotice): SessionRuntimeCommandRequest {
+  return {
+    commandId: notice.commandId,
+    origin: {
+      kind: "volli",
+      reason:
+        notice.metadata.notice.kind === "watch"
+          ? "watch-notice"
+          : notice.metadata.notice.kind === "subagent"
+            ? "subagent-notice"
+            : notice.metadata.notice.kind === "background-shell"
+              ? "shell-notice"
+              : "browser-notice",
+    },
+    sessionId: notice.sessionId,
+    command: {
+      kind: "message.submit",
+      delivery: "steer",
+      message: {
+        id: notice.messageId,
+        role: "user",
+        metadata: notice.metadata,
+        parts: [{ type: "text", text: notice.text }],
+      },
+    },
+  };
+}
 
 /** Submit one notice now; the receipt is read, and a refusal is reported. */
 export function submitHostNotice(ports: HostNoticeDeliveryPorts, notice: HostNotice): void {
   void ports.runtime
-    .command({
-      commandId: notice.commandId,
-      origin: {
-        kind: "volli",
-        reason:
-          notice.metadata.notice.kind === "watch"
-            ? "watch-notice"
-            : notice.metadata.notice.kind === "subagent"
-              ? "subagent-notice"
-              : "browser-notice",
-      },
-      sessionId: notice.sessionId,
-      command: {
-        kind: "message.submit",
-        delivery: "steer",
-        message: {
-          id: notice.messageId,
-          role: "user",
-          // Shared semantic metadata lets every Session client draw this
-          // message as a host-authored row. The adapter delivers only the
-          // text to the Agent Runtime.
-          metadata: notice.metadata,
-          parts: [{ type: "text", text: notice.text }],
-        },
-      },
-    })
+    .command(hostNoticeCommand(notice))
     .then((result) => {
       const receipt = result.receipt;
       if (receipt !== null && receipt.status === "rejected") {
@@ -101,6 +105,7 @@ export async function deliverHostNotice(
   ports: HostNoticeDeliveryPorts,
   notice: HostNotice,
 ): Promise<NoticeDelivery> {
+  if (ports.delivery !== undefined) return ports.delivery.deliver(notice);
   const { projection, throughSequence } = await ports.runtime.projection({
     sessionId: notice.sessionId,
   });
