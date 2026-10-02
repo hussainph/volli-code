@@ -1,0 +1,78 @@
+# Desktop smoke gate policy (VC-522)
+
+## What gates a build
+
+At this change: **47 gating smokes**, down from 51 active gates (74 files), without deleting a smoke or assertion. New `*-smoke.mjs` files still join automatically unless explicitly excluded for credentials, an existing runner limitation, or measured quarantine. Extended journeys are **not** broadly switched off.
+
+**Core e2e** is the nine-probe `CORE_E2E` set in `apps/desktop/scripts/run-smokes.mjs`. It gates every desktop-relevant PR and runs on main after merges:
+
+| Journey | Core probes (`-smoke.mjs` omitted) |
+|---|---|
+| Boot, board, persistence | board |
+| Session/composer seam | composer-basics, session-rpc-transport |
+| Terminal and worktree | terminal, worktree |
+| Agent socket / real CLI round-trip | agent-socket, agent-cli-roundtrip |
+| Degraded DB / last-clean restore / fresh launch | database-recovery |
+| Live tokens, appearance, inheritance, persistence | canvas-theming |
+
+The other 38 probes gate desktop PRs in three rest shards. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
+
+No sole core journey is quarantined based on historical flakes. Board and theming exceed the screening threshold but stay gating; DB recovery's sample is too small. The existing DB shutdown-grace fix remains; graceful-exit assertions are not weakened.
+
+## Retry and evidence contract
+
+- At most **two new probe processes**: first attempt, then one retry only if it failed. Never nest a workflow/quiet-window retry around this. Cancellation does not start retries.
+- Remove inherited `VOLLI_SMOKE_DIR` for **both** attempts. Each probe creates its own new scratch DB/profile (including probes with their own scratch allocator). Direct invocation of an individual smoke still supports its debugging overrides.
+- PASS means first-attempt green. **FLAKY means fail then pass** and counts green, visibly. FAIL means both attempts failed and remains red in core/rest. Native quiet-window failures are independently red and are never excused by retry-green.
+- Every lane checkpoints `results.json` on each attempt/result. It records name, status, per-attempt exit code/signal/timestamps/runtime/log path, total runtime, lane, SHA and workflow run/attempt identity. Logs stream to disk as bytes arrive, including the first failure; no loss when the retry passes.
+- Job summary lists all outcomes and both attempt durations. Ordered stdout replays both attempts for FLAKY/FAIL. `quiet-window.json` retains the native sampler report/verdict. An incomplete checkpoint has pending/running entries and `completed: false`, **not** fabricated passes.
+- CI always uploads `smoke-results-core-*`, `smoke-results-rest-*`, or `smoke-results-quarantine-*` artifacts, retained **30 days**, including on failure/cancellation when the job can still upload. Rerun attempt numbers avoid artifact-name collisions. An unstarted lane cannot manufacture an artifact; an abruptly killed process may leave unfinished metadata, with already streamed logs still available. Reports are not an indefinite historical store: collect/commit rolling censuses or download artifacts before retention expires.
+- Local reports default to a fresh ignored `<workspace>/.tmp/smoke-results-*`; CI sets `VOLLI_SMOKE_REPORT_DIR`. Runner jobs obey `min(requested jobs, VOLLI_CONCURRENCY_HINT)` when a Session budget exists.
+
+## Measured quarantine, not red-count suppression
+
+Evidence and limits: [14-day census](smoke-flakes-2026-10.md), committed before implementation. 333 main/PR runs, 354 attempts, 11,651 observed outcomes: 247 retry-green flakes, 41 final failures, 15 genuine same-SHA rerun recoveries. 57 inherited rerun jobs were removed from denominators. First-attempt output was historically lost; most root causes remain hypotheses.
+
+Screen initial workflow opportunities only: at least **50 observations**, at least **3 distinct SHAs with confirmed recovery**, and a **95% Wilson lower bound above 2%**. Confirmed recovery is internal retry-green or a genuine same-run/SHA rerun recovery, counted once per initial opportunity. Related deterministic failures, unrelated-diff suspicions and inherited rerun jobs do not count as recovered flakes. The operational budget is intentionally conservative and descriptive, not a claim of independent/stationary probabilities.
+
+| Non-gating probe | Initial confirmed recovery | Backlog fix ticket / likely boundary |
+|---|---:|---|
+| browser-recovery | 59/225 (26.2%) | VC-523 — lost click result / preview recovery and settling |
+| automations-picker | 15/227 (6.6%) | VC-524 — picker/drag/Option-key readiness; first cause unknown |
+| bare-path-env | 16/227 (7.0%) | VC-525 — harness startup readiness marker capture |
+| browser-tab | 16/226 (7.1%) | VC-526 — hold/cursor renderer readiness; first cause unknown |
+
+They still execute daily at **04:31 UTC** and on manual dispatch in `.github/workflows/smoke-quarantine.yml`. This workflow is separate from `CI gate`; its observation step uses `continue-on-error`, keeping smoke flakes from producing failed-workflow emails. The step's raw outcome, failed rows, logs and quiet-window verdict are visible in the summary/artifact. Build/setup/upload failures can still make that workflow red. No GitHub notification settings, required checks, rulesets or auto-merge settings change.
+
+**Return:** fix the root cause, preserve all assertions, then record at least **50 post-fix fresh-profile opportunities across 3+ SHAs with no FAIL/FLAKY**, including CI observations; remove only the quarantine entry. Restart the evidence window after the fix. The legacy deny-list/credential exclusions are unchanged and are not newly certified stable or included in this four-probe lane.
+
+The fifth non-core threshold candidate, **vc418-contrast**, stays gating: the captured defect was literal `"2px"` matching while the focus ring was still interpolating (`1.99963px`). Fix actual readiness rather than discard contrast coverage. Canvas transition completion, composer dialog unmount and the shell unit test's environment read likewise receive synchronization fixes, not weakened assertions.
+
+## Consolidation proposal — owner review required
+
+**Proposal only. No smoke or assertion is deleted here.** Counts below are candidate process/boot reductions, not promised wall-clock improvements. Preserve a named assertion inventory and all reload/second-launch/isolation boundaries before replacing any gate. Require owner approval **before** deleting a file or duplicate check.
+
+### Automations: eight files → five journey owners
+
+1. **Contract tracer** (`automations-smoke`): keep CRUD, validation, sort order, missing-model/no-durable-run and deletion assertions.
+2. **Author → schedule → restart** (`automations-page` + `automations-schedule`): share launch/editor fixtures; retain defaults, ticket/project ownership listings, machine-local switches, row sentences, no cron field, hand run/Run now, lanes/drag rank/reload, timer cursor, relaunch and skipped windows. Duplicate switches may share one assertion only after proving both ownership contexts.
+3. **Board move → offer/aim → arm/cancel/fire** (`automations-arming` + `automations-picker`): retain Offered list, Option growth/collapse, digit pinning, model choice, Move only/Escape/empty-column pill, trigger persistence, replace-arm/not-retroactive, no-window when unarmed, single Cancel, cancellation keeps the move, measured 3500ms firing floor, switched-off silence and **real CLI move**. Restore the picker to gating after deflaking; merging must not simply smuggle its unrepaired flake back into the gate.
+4. **Inspect rail → provenance everywhere** (`automations-rail` + `automations-provenance`): boot-share, not assertion deletion. Keep rail wiring/click target and each provenance mark independently.
+5. **Notification silence/lifecycle** (`automations-notification`): keep its real main Notification interception and relaunch boundaries separate. Missing-model opens Settings is shared setup only after maintaining the no-notification assertion.
+
+### Browser: six smokes → four journey owners
+
+1. **Navigation + cold headless capture** (`browser-page-navigation` + `browser-headless-capture`): boot-share only; preserve page-owned link/submit/Enter navigation and generation bumps separately from cold module load, screenshot bytes/pixels and click capture.
+2. **Person tab + headless island** (`browser-tab` + `browser-headless`): keep chrome back/forward/reload, profile isolation, overlay-pixel freeze, popups, DevTools, cursor/hold UI, person takeover, turn-end release, teardown, born-headless islands, composer-relative placement and Open-as-tab/Session marks. Port-level hold/refusal and chrome behavior are different doors, not interchangeable assertions.
+3. **Preview fault recovery** (`browser-recovery`): retain rejected/stuck preview bounds/recovery, cancellation on withdrawal, concurrent snapshot/ref consistency, find beyond bound, stale found-ref and explicit screenshot errors. Share presentation-state fixture machinery with the **currently manual** `browser-tools-stress.mjs` only after deciding which checks belong in CI. Do not claim this non-`*-smoke` research/stress probe already gates PRs.
+4. **Trace → restart → replay** (`browser-trace`): keep its lifecycle/replay journey whole.
+
+Keep stale-ref through `browser_act` and stale found-ref through `browser_find` as separate door assertions unless the owner explicitly approves consolidation. Quarantined tab/recovery sections return only after the post-fix observation condition; boot sharing does not authorize deleting their unique assertions.
+
+### Core follow-up (not implemented)
+
+- Board header-open/Escape and `c`/Cmd-Enter overlap composer checks. Move only duplicated door checks after composer also proves the created card is **visible on the board**. Keep board's Cmd-K `c` guard, persistence and boot-failure assertions.
+- Socket 0600 mode, raw NDJSON context/version response and regenerated shim contents are unique: retain them even if agent socket/CLI/worktree-CLI boot-share later.
+- Do not consolidate away real DB restored relaunch/shutdown or theming first-paint/inheritance/persistence checks. Keep credentials-dependent live-model journeys outside unattended CI.
+
+For each later merge, publish old-check → journey-section mapping, run changed journeys, compare retained assertion counts and lane runtime, then obtain owner approval before deleting the old smoke. Filename count is not coverage and concurrent durations cannot simply be summed into a speedup.

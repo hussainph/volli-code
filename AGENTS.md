@@ -69,7 +69,11 @@ The global `vp` toolchain CLI is used by this repository. Node and pnpm versions
 
 ## CI is the gate
 
-CI runs the full test suite, every coverage threshold and the desktop smoke matrix on every PR. `CI gate` is the one check that sums them, and every lane must be green before shipping. Local runs exist to catch your own mistakes quickly, not to repeat CI: this machine runs many Sessions at once, so a full local run slows every one of them and is then run again on the PR anyway.
+CI runs the full test suite, every coverage threshold and the gating desktop smoke lanes on every desktop PR. `CI gate` sums those lanes; each must pass or skip by its documented condition. Measured quarantines run separately, not as a hidden waiver inside the gate.
+
+**Core e2e** (`run-smokes.mjs --tier core`; `boot` is an alias) gates every desktop-relevant PR and runs after main merges: `board`, `composer-basics`, `terminal`, `worktree`, `agent-socket`, `session-rpc-transport`, `agent-cli-roundtrip`, `database-recovery`, and `canvas-theming` (`-smoke.mjs` filenames). The other non-quarantined journeys still gate PRs in the rest shards; new smokes join by default. A failure retries **once in a fresh profile**; retry-green is explicitly **FLAKY** in stdout, the job summary and 30-day both-attempt artifacts. Two failures or a native quiet-window violation remain red. `smoke-quarantine.yml` runs measured repeat flakers nightly with visible non-gating observations and one Backlog fix ticket each. Thresholds, return criteria and the **owner-approval-before-deletion** consolidation proposal: `docs/research/smoke-suite-policy.md`; measured table: `docs/research/smoke-flakes-2026-10.md`. No smoke is deleted here.
+
+Local runs exist to catch your own mistakes quickly, not to repeat CI: this machine runs many Sessions at once, so a full local run slows every one of them and is then run again on the PR anyway.
 
 - Before pushing, run `vp check`, the typecheck of each package you touched (`vp run --filter <package> typecheck`, or `vp exec tsc --noEmit -p tsconfig.json` for the root configuration), and only the test files you touched or that directly cover your change (`vp test run path/to/file.test.ts` from that package's directory).
 - If you changed a file on a protected coverage list, check that one file rather than running the gate: `vp test run <its test file> --coverage --coverage.include=<the file, written the way that package's vite.config.ts lists it>`. The config's 100% thresholds then apply to that file alone.

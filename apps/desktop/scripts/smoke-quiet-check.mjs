@@ -19,7 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -208,6 +208,23 @@ try {
       assertStationaryCursor: args.assertStationaryCursor,
       requireHostInput: args.requireHostInput,
     });
+    // Native invariants are NOT retried or waived by a green smoke retry.
+    // Keep their evidence alongside the per-smoke attempt artifact in CI.
+    if (process.env.VOLLI_SMOKE_REPORT_DIR) {
+      mkdirSync(process.env.VOLLI_SMOKE_REPORT_DIR, { recursive: true });
+      writeFileSync(
+        join(process.env.VOLLI_SMOKE_REPORT_DIR, "quiet-window.json"),
+        `${JSON.stringify({ report, verdict }, null, 2)}\n`,
+      );
+    }
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `\n### Native quiet-window check: ${verdict.ok ? "PASS" : "FAIL"}\n` +
+          `${report.samples} polls; ${report.smokeAppCount} smoke apps. ` +
+          `${verdict.failures.join("; ") || "No native-window invariant violated."}\n`,
+      );
+    }
     if (verdict.ok) process.stdout.write("QUIET WINDOW CHECK PASSED\n");
     else {
       for (const failure of verdict.failures)
@@ -215,7 +232,17 @@ try {
       process.exitCode = 1;
     }
   } catch (error) {
-    console.error(`QUIET WINDOW CHECK FAILED: ${error?.message ?? error}`);
+    const failure = `QUIET WINDOW CHECK FAILED: ${error?.message ?? error}`;
+    console.error(failure);
+    if (process.env.VOLLI_SMOKE_REPORT_DIR) {
+      mkdirSync(process.env.VOLLI_SMOKE_REPORT_DIR, { recursive: true });
+      writeFileSync(
+        join(process.env.VOLLI_SMOKE_REPORT_DIR, "quiet-window-error.json"),
+        `${JSON.stringify({ failure, samplerOutput: sampler?.output() ?? "" }, null, 2)}\n`,
+      );
+    }
+    if (process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${failure}\n`);
     process.exitCode = 1;
   }
 

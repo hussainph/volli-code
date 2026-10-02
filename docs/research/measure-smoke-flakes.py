@@ -78,7 +78,10 @@ def parse_log(log):
         if 'Running ' in line and 'smoke(s)' in line:
             headers.append(line)
         if '::group::FAILED ' in line:
-            failure = {'smoke': line.split('::group::FAILED ', 1)[1], 'line': index + 1, 'lines': []}
+            label = line.split('::group::FAILED ', 1)[1]
+            # VC-522 now replays each attempt; keep filename identity separate
+            # from the attempt/exit metadata while accepting historical groups.
+            failure = {'smoke': label.split(' attempt ', 1)[0], 'line': index + 1, 'lines': []}
         elif failure is not None:
             if '::endgroup::' in line:
                 body = '\n'.join(failure.pop('lines'))
@@ -314,7 +317,10 @@ def self_test():
     job = {'name': 'Smoke (boot tier)', 'started_at': '2026-10-02T20:30:00Z', 'completed_at': '2026-10-02T20:31:00Z'}
     record = {'attempts': [{'attempt': 1, 'jobs': [dict(job)]}, {'attempt': 2, 'jobs': [dict(job)]}]}
     assert mark_inherited(record)['attempts'][1]['jobs'][0]['inherited_from_attempt'] == 1
-    print('8 focused parser/duration/inherited-job assertions passed')
+    attempted = log.replace('::group::FAILED database-recovery-smoke.mjs',
+                            '::group::FAILED database-recovery-smoke.mjs attempt 1 (exit 1)')
+    assert parse_log(attempted)[1][0]['smoke'] == 'database-recovery-smoke.mjs'
+    print('9 focused parser/duration/inherited-job assertions passed')
 
 
 if __name__ == '__main__':
