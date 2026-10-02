@@ -1,9 +1,12 @@
 import {
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -12,8 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
+import {
+  BACKUP_RETENTION_LOG_PREFIX,
+  migrationBackupCandidatePattern,
+  pruneMigrationBackups,
+} from "./backup-retention";
 import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
+import { verifyMigrationBackup } from "./backup-integrity";
 import { internSessionEventProvenance } from "./session-event-provenance";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -534,10 +542,12 @@ describe("migrate — 002 to 004 upgrade path", () => {
   it("checkpoints and copies a backup of the pre-migration db before altering it", () => {
     const dbPath = tempDbPath();
     const db = buildV2DbWithRows(dbPath);
+    db.pragma("journal_mode = WAL");
 
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
+    expect(readdirSync(dir).filter((name) => name.includes(".pending-"))).toEqual([]);
     db.close();
   });
 
@@ -655,8 +665,8 @@ describe("migrate — post-success compaction", () => {
   it("keeps migration success and defers retention when VACUUM throws", () => {
     const dbPath = tempDbPath();
     const db = buildV40DbWithReclaimableSpace(dbPath);
-    writeFileSync(`${dbPath}.backup-v1`, "old safety copy");
-    writeFileSync(`${dbPath}.backup-v2`, "newest other safety copy");
+    copyFileSync(dbPath, `${dbPath}.backup-v1`);
+    copyFileSync(dbPath, `${dbPath}.backup-v2`);
     const sqliteFull = Object.assign(new Error("database or disk is full"), {
       code: "SQLITE_FULL",
     });
@@ -734,17 +744,415 @@ describe("migrate — post-success compaction", () => {
   });
 });
 
+/** Zero an unrelated index page, mirroring corruption outside a migration's touch. */
+function addIntegrityProbe(db: Database.Database): number {
+  db.exec("CREATE TABLE integrity_probe (value TEXT UNIQUE)");
+  db.prepare("INSERT INTO integrity_probe VALUES (?)").run("evidence");
+  const { rootpage } = db
+    .prepare("SELECT rootpage FROM sqlite_master WHERE name = 'sqlite_autoindex_integrity_probe_1'")
+    .get() as { rootpage: number };
+  return rootpage;
+}
+
+function zeroPage(dbPath: string, page: number): void {
+  const bytes = readFileSync(dbPath);
+  const pageSize = bytes.readUInt16BE(16);
+  bytes.fill(0, (page - 1) * pageSize, page * pageSize);
+  writeFileSync(dbPath, bytes);
+}
+
+describe("migrate — backup integrity", () => {
+  it.each([51, 55])(
+    "upgrades a healthy WAL schema v%s with Session events intact and reopens without another backup",
+    (fromVersion) => {
+      const dbPath = tempDbPath();
+      const db = openRawDb(dbPath);
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      migrate(db, dbPath, { toVersion: 51 });
+      db.exec(`
+      INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+        VALUES ('p1', 'Preserved', '/repo', 'VC', 0, 0, 1, 1);
+      INSERT INTO sessions (id, project_id, title, created_at)
+        VALUES ('s1', 'p1', 'Preserved', 1);
+    `);
+      const provenanceId = internSessionEventProvenance(
+        db,
+        JSON.stringify({
+          source: { kind: "system", id: "desktop", detail: null },
+          venue: { id: "local", kind: "local" },
+        }),
+      );
+      db.prepare(`INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+      VALUES ('e1', 's1', 1, 1, 1, ?, '{"kind":"session.created"}')`).run(provenanceId);
+      migrate(db, dbPath, { toVersion: fromVersion });
+      const beforeEvents = db.prepare("SELECT * FROM session_events ORDER BY sequence").all();
+      const beforeSequence = db
+        .prepare("SELECT * FROM session_event_sequence ORDER BY sequence")
+        .all();
+      try {
+        expect(migrate(db, dbPath)).toBe(true);
+        expect(db.prepare("SELECT * FROM session_events ORDER BY sequence").all()).toEqual(
+          beforeEvents,
+        );
+        expect(db.prepare("SELECT * FROM session_event_sequence ORDER BY sequence").all()).toEqual(
+          beforeSequence,
+        );
+        verifyMigrationBackup(`${dbPath}.backup-v${fromVersion}`);
+        const backup = openRawDb(`${dbPath}.backup-v${fromVersion}`);
+        try {
+          expect(backup.pragma("user_version", { simple: true })).toBe(fromVersion);
+          expect(backup.prepare("SELECT * FROM session_events ORDER BY sequence").all()).toEqual(
+            beforeEvents,
+          );
+        } finally {
+          backup.close();
+        }
+        const backups = matchingBackupNames(dbPath);
+        expect(migrate(db, dbPath)).toBe(false);
+        expect(matchingBackupNames(dbPath)).toEqual(backups);
+      } finally {
+        db.close();
+      }
+      const reopened = openRawDb(dbPath);
+      try {
+        expect(migrate(reopened, dbPath)).toBe(false);
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
+  it("retries a failed WAL v55 upgrade without backup sidecars blocking publication", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 55 });
+    vi.spyOn(db, "exec").mockImplementationOnce(() => {
+      throw new Error("injected migration failure");
+    });
+    try {
+      expect(() => migrate(db, dbPath)).toThrow("injected migration failure");
+      expect(db.pragma("user_version", { simple: true })).toBe(55);
+      expect(existsSync(`${dbPath}.backup-v55-wal`)).toBe(false);
+      expect(existsSync(`${dbPath}.backup-v55-shm`)).toBe(false);
+      expect(migrate(db, dbPath)).toBe(true);
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      verifyMigrationBackup(`${dbPath}.backup-v55`);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([true, false])(
+    "retains the real clean backup-v51 when newer copies have zeroed pages (new corrupt: %s)",
+    (corruptNew) => {
+      const dbPath = tempDbPath();
+      const db = buildV2DbWithRows(dbPath);
+      const page = addIntegrityProbe(db);
+      db.close();
+      for (const version of [50, 51, 54, 55]) copyFileSync(dbPath, `${dbPath}.backup-v${version}`);
+      zeroPage(`${dbPath}.backup-v54`, page);
+      if (corruptNew) zeroPage(`${dbPath}.backup-v55`, page);
+
+      const report = pruneMigrationBackups(dbPath, 55);
+
+      expect(existsSync(`${dbPath}.backup-v51`)).toBe(true);
+      const clean = openRawDb(`${dbPath}.backup-v51`);
+      try {
+        expect(clean.pragma("quick_check")).toEqual([{ quick_check: "ok" }]);
+      } finally {
+        clean.close();
+      }
+      if (corruptNew) {
+        expect(report.removed).toEqual([]);
+        expect(existsSync(`${dbPath}.backup-v55`)).toBe(false);
+      } else {
+        expect(report.kept.map((entry) => entry.name)).toEqual([
+          "volli.db.backup-v51",
+          "volli.db.backup-v55",
+        ]);
+        expect(report.removed.map((entry) => entry.name)).toEqual(["volli.db.backup-v50"]);
+        expect(existsSync(`${dbPath}.backup-v54`)).toBe(false);
+      }
+      expect(report.quarantined).toHaveLength(corruptNew ? 2 : 1);
+    },
+  );
+
+  it("fails closed on a zeroed source index page without blessing or pruning a backup", () => {
+    const dbPath = tempDbPath();
+    const initial = buildV2DbWithRows(dbPath);
+    const page = addIntegrityProbe(initial);
+    initial.close();
+    copyFileSync(dbPath, `${dbPath}.backup-v1`);
+    copyFileSync(dbPath, `${dbPath}.backup-v2`);
+    const previous = readFileSync(`${dbPath}.backup-v2`);
+    zeroPage(dbPath, page);
+    const db = openRawDb(dbPath);
+    try {
+      expect(() => migrate(db, dbPath)).toThrow(
+        /source database.*Recovery action: quit Volli and restore/,
+      );
+      expect(db.pragma("user_version", { simple: true })).toBe(2);
+      expect(matchingBackupNames(dbPath)).toEqual(["volli.db.backup-v1", "volli.db.backup-v2"]);
+      expect(readFileSync(`${dbPath}.backup-v2`)).toEqual(previous);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("names recovery when corruption prevents reading the source schema version", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    vi.spyOn(db, "pragma").mockImplementation(() => {
+      throw new Error("database disk image is malformed");
+    });
+    try {
+      expect(() => migrate(db, dbPath)).toThrow(
+        /source database could not be read.*Recovery action: quit Volli and restore/,
+      );
+      expect(existsSync(`${dbPath}.backup-v2`)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects multiple quick_check diagnostics even if the first row is ok", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    const pragma = db.pragma.bind(db);
+    vi.spyOn(db, "pragma").mockImplementation((source, options) =>
+      source === "quick_check"
+        ? [{ quick_check: "ok" }, { quick_check: "damaged index" }]
+        : pragma(source, options),
+    );
+    expect(() => migrate(db, dbPath)).toThrow(/source database.*Recovery action/);
+    expect(existsSync(`${dbPath}.backup-v2`)).toBe(false);
+    db.close();
+  });
+
+  it("verifies the actual copy and quarantines it without overwriting an existing clean rollback point", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    const page = addIntegrityProbe(db);
+    copyFileSync(dbPath, `${dbPath}.backup-v1`);
+    copyFileSync(dbPath, `${dbPath}.backup-v2`);
+    const previous = readFileSync(`${dbPath}.backup-v2`);
+    const pragma = db.pragma.bind(db);
+    vi.spyOn(db, "pragma").mockImplementation((source, options) => {
+      const result = pragma(source, options);
+      // Simulate damage between the source check and the filesystem copy.
+      if (source === "wal_checkpoint(TRUNCATE)") zeroPage(dbPath, page);
+      return result;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() => migrate(db, dbPath)).toThrow(/safety copy.*Recovery action/);
+      expect(db.pragma("user_version", { simple: true })).toBe(2);
+      expect(readFileSync(`${dbPath}.backup-v2`)).toEqual(previous);
+      expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
+      expect(readdirSync(dir).filter((name) => name.endsWith(".corrupt"))).toHaveLength(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        BACKUP_RETENTION_LOG_PREFIX,
+        expect.objectContaining({ action: "quarantined" }),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each(["base", "sidecar"])(
+    "preserves a real recovery WAL on a %s-only quarantine failure",
+    (failure) => {
+      const dbPath = tempDbPath();
+      const source = openRawDb(dbPath);
+      source.exec(
+        "CREATE TABLE recovery_probe (value TEXT); INSERT INTO recovery_probe VALUES ('older main state')",
+      );
+      source.close();
+      const backupPath = `${dbPath}.backup-v51`;
+      copyFileSync(dbPath, backupPath);
+      copyFileSync(dbPath, `${dbPath}.backup-v55`);
+      const backup = openRawDb(backupPath);
+      backup.pragma("journal_mode = WAL");
+      backup.exec("UPDATE recovery_probe SET value = 'last clean recovery state'");
+      const baseBefore = readFileSync(backupPath);
+      const walBefore = readFileSync(`${backupPath}-wal`);
+      const removeFile = vi.fn();
+      try {
+        const report = pruneMigrationBackups(dbPath, 55, {
+          readDirectory: readdirSync,
+          readFileInfo: (path) => {
+            const info = lstatSync(path);
+            return { sizeBytes: info.size, isFile: info.isFile() };
+          },
+          verifyIntegrity: (path) => {
+            if (path === backupPath) throw new Error("transient verification failure");
+            verifyMigrationBackup(path);
+          },
+          quarantineFile: (path, destination) => {
+            if (path === (failure === "base" ? backupPath : `${backupPath}-wal`))
+              throw new Error("rename denied");
+            renameSync(path, destination);
+          },
+          removeFile,
+        });
+        expect(report.quarantined).toEqual([]);
+        expect(removeFile).not.toHaveBeenCalled();
+        expect(readFileSync(backupPath)).toEqual(baseBefore);
+        expect(readFileSync(`${backupPath}-wal`)).toEqual(walBefore);
+        const reopened = openRawDb(backupPath);
+        try {
+          expect(reopened.prepare("SELECT value FROM recovery_probe").get()).toEqual({
+            value: "last clean recovery state",
+          });
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        backup.close();
+      }
+    },
+  );
+
+  it("preserves a real nonempty backup WAL before publishing only the verified source snapshot", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    db.exec(
+      "CREATE TABLE recovery_probe (value TEXT); INSERT INTO recovery_probe VALUES ('older main state')",
+    );
+    const writerPath = join(dir, "old-snapshot.db");
+    copyFileSync(dbPath, writerPath);
+    const writer = openRawDb(writerPath);
+    writer.pragma("journal_mode = WAL");
+    writer.exec("UPDATE recovery_probe SET value = 'last clean recovery state'");
+    const backupPath = `${dbPath}.backup-v2`;
+    for (const suffix of ["", "-wal", "-shm"])
+      copyFileSync(`${writerPath}${suffix}`, `${backupPath}${suffix}`);
+    writer.close();
+    db.exec("UPDATE recovery_probe SET value = 'current source'");
+    const baseBefore = readFileSync(backupPath);
+    const walBefore = readFileSync(`${backupPath}-wal`);
+    expect(walBefore.length).toBeGreaterThan(0);
+    try {
+      expect(migrate(db, dbPath)).toBe(true);
+      const preservedName = readdirSync(dir).find((name) =>
+        /^volli\.db\.backup-v2\.preserved-[\da-f-]+$/.test(name),
+      );
+      expect(preservedName).toBeDefined();
+      const preservedPath = join(dir, preservedName!);
+      expect(readFileSync(preservedPath)).toEqual(baseBefore);
+      expect(readFileSync(`${preservedPath}-wal`)).toEqual(walBefore);
+      verifyMigrationBackup(preservedPath);
+      const preserved = openRawDb(preservedPath);
+      const published = openRawDb(backupPath);
+      try {
+        expect(preserved.prepare("SELECT value FROM recovery_probe").get()).toEqual({
+          value: "last clean recovery state",
+        });
+        expect(published.prepare("SELECT value FROM recovery_probe").get()).toEqual({
+          value: "current source",
+        });
+        expect(published.pragma("quick_check")).toEqual([{ quick_check: "ok" }]);
+      } finally {
+        preserved.close();
+        published.close();
+      }
+      expect(readdirSync(dir).filter((name) => name.includes(".pending-"))).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("restores a clean WAL backup after success and upgrades again without manual sidecar cleanup", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 55 });
+    db.exec(
+      "CREATE TABLE recovery_probe (value TEXT); INSERT INTO recovery_probe VALUES ('before upgrade')",
+    );
+    migrate(db, dbPath);
+    db.close();
+    const backupPath = `${dbPath}.backup-v55`;
+    expect(existsSync(`${backupPath}-wal`)).toBe(true);
+    expect(existsSync(`${backupPath}-shm`)).toBe(true);
+    copyFileSync(backupPath, dbPath);
+    const restored = openRawDb(dbPath);
+    restored.pragma("journal_mode = WAL");
+    restored.exec("UPDATE recovery_probe SET value = 'after restore'");
+    try {
+      expect(restored.pragma("user_version", { simple: true })).toBe(55);
+      expect(migrate(restored, dbPath)).toBe(true);
+      expect(restored.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      verifyMigrationBackup(backupPath);
+      const rollback = openRawDb(backupPath);
+      try {
+        expect(rollback.prepare("SELECT value FROM recovery_probe").get()).toEqual({
+          value: "after restore",
+        });
+      } finally {
+        rollback.close();
+      }
+      expect(
+        readdirSync(dir).some((name) => name.startsWith("volli.db.backup-v55.preserved-")),
+      ).toBe(true);
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("refuses to replace an incomplete or non-regular existing backup family without moving it", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    const backupPath = `${dbPath}.backup-v2`;
+    writeFileSync(`${backupPath}-wal`, "orphan evidence");
+    try {
+      expect(() => migrate(db, dbPath)).toThrow(/could not preserve and publish.*Recovery action/);
+      expect(readFileSync(`${backupPath}-wal`, "utf8")).toBe("orphan evidence");
+      expect(existsSync(backupPath)).toBe(false);
+      copyFileSync(dbPath, backupPath);
+      mkdirSync(`${backupPath}-shm`);
+      const before = readFileSync(backupPath);
+      expect(() => migrate(db, dbPath)).toThrow(/could not preserve and publish.*Recovery action/);
+      expect(readFileSync(backupPath)).toEqual(before);
+      expect(readdirSync(dir).some((name) => name.includes(".preserved-"))).toBe(false);
+      expect(db.pragma("user_version", { simple: true })).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses a busy checkpoint before copying or running migrations", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    const pragma = db.pragma.bind(db);
+    vi.spyOn(db, "pragma").mockImplementation((source, options) =>
+      source === "wal_checkpoint(TRUNCATE)"
+        ? [{ busy: 1, log: 2, checkpointed: 1 }]
+        : pragma(source, options),
+    );
+    expect(() => migrate(db, dbPath)).toThrow(/WAL checkpoint did not complete/);
+    expect(existsSync(`${dbPath}.backup-v2`)).toBe(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    db.close();
+  });
+});
+
 describe("migrate — safety-copy retention", () => {
   it("keeps this run and the numerically newest other copy, with sidecars, regardless of mtimes", () => {
     const dbPath = tempDbPath();
     const db = buildV2DbWithRows(dbPath);
     db.pragma("journal_mode = DELETE");
 
-    const writeBackup = (version: number, suffix = "", content = `v${version}${suffix}`) => {
-      writeFileSync(`${dbPath}.backup-v${version}${suffix}`, content);
+    const writeBackup = (version: number, suffix = "") => {
+      if (suffix === "") copyFileSync(dbPath, `${dbPath}.backup-v${version}`);
+      else
+        writeFileSync(
+          `${dbPath}.backup-v${version}${suffix}`,
+          suffix === "-shm" ? Buffer.alloc(32768) : "",
+        );
     };
-    writeBackup(2, "-wal");
-    writeBackup(2, "-shm");
     for (const suffix of ["", "-wal", "-shm"]) {
       writeBackup(3, suffix);
       writeBackup(10, suffix);
@@ -766,7 +1174,7 @@ describe("migrate — safety-copy retention", () => {
       join(dir, "volliXdb.backup-v3"),
       join(dir, "other.db.backup-v99"),
     ];
-    for (const path of unrelated) writeFileSync(path, "unrelated");
+    for (const path of unrelated) writeFileSync(path, path.endsWith("-journal") ? "" : "unrelated");
     const nested = join(dir, "nested");
     mkdirSync(nested);
     writeFileSync(join(nested, "volli.db.backup-v1"), "nested copy");
@@ -778,8 +1186,6 @@ describe("migrate — safety-copy retention", () => {
       "volli.db.backup-v10-shm",
       "volli.db.backup-v10-wal",
       "volli.db.backup-v2",
-      "volli.db.backup-v2-shm",
-      "volli.db.backup-v2-wal",
     ]);
     // SQLite may rewrite its live WAL/SHM during the migration; the real
     // retention matcher must never classify either one as a candidate.
@@ -851,15 +1257,28 @@ describe("migrate — safety-copy retention", () => {
       "custom.sqlite.backup-v9",
       "custom.sqlite.backup-v10",
       "custom.sqlite.backup-v10-wal",
+      "custom.sqlite.backup-v10-shm",
       "volli.db.backup-v99",
     ]) {
-      writeFileSync(join(dir, name), name);
+      if (
+        name.startsWith("custom.sqlite.backup-v") &&
+        !name.endsWith("-wal") &&
+        !name.endsWith("-shm")
+      ) {
+        copyFileSync(dbPath, join(dir, name));
+      } else
+        writeFileSync(
+          join(dir, name),
+          name.endsWith("-wal") ? "" : name.endsWith("-shm") ? Buffer.alloc(32768) : name,
+        );
     }
 
     migrate(db, dbPath);
 
     expect(matchingBackupNames(dbPath)).toEqual([
+      "custom.sqlite.backup-v1",
       "custom.sqlite.backup-v10",
+      "custom.sqlite.backup-v10-shm",
       "custom.sqlite.backup-v10-wal",
       "custom.sqlite.backup-v2",
     ]);
@@ -867,32 +1286,28 @@ describe("migrate — safety-copy retention", () => {
     db.close();
   });
 
-  it("logs a removal failure, continues pruning, and preserves migration success", () => {
+  it("logs an unverifiable directory, preserves its sidecar, and keeps migration success", () => {
     const dbPath = tempDbPath();
     const db = buildV2DbWithRows(dbPath);
     mkdirSync(`${dbPath}.backup-v1`);
-    writeFileSync(`${dbPath}.backup-v1-wal`, "remove after failure");
-    writeFileSync(`${dbPath}.backup-v10`, "keep");
+    writeFileSync(`${dbPath}.backup-v1-wal`, "evidence");
+    copyFileSync(dbPath, `${dbPath}.backup-v10`);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     expect(() => migrate(db, dbPath)).not.toThrow();
 
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
-    expect(existsSync(`${dbPath}.backup-v1-wal`)).toBe(false);
-    const retentionErrors = errorSpy.mock.calls.filter(
-      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
-    );
-    expect(retentionErrors).toContainEqual([
+    expect(readFileSync(`${dbPath}.backup-v1-wal`, "utf8")).toBe("evidence");
+    expect(errorSpy).toHaveBeenCalledWith(
       BACKUP_RETENTION_LOG_PREFIX,
       expect.objectContaining({
         action: "failed",
-        operation: "remove",
+        operation: "verify",
         name: "volli.db.backup-v1",
-        sizeBytes: expect.any(Number),
-        error: expect.stringMatching(/(EISDIR|EPERM|directory)/i),
+        error: expect.stringMatching(/regular file/i),
       }),
-    ]);
+    );
     db.close();
   });
 });
