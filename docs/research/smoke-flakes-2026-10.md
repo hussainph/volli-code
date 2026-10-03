@@ -226,7 +226,7 @@ Local post-fix proof on the product changes in `47a7c5aab`: **10/10 serial fresh
 
 Each run's retained `smoke-results-quarantine-attempt-1` artifact was downloaded and checked: browser-tab has exactly one successful attempt, check 8 reports a label-sized 135×49 view, and takeover/turn-end/clean teardown pass. **13/13 requested post-fix opportunities pass, zero FAIL/FLAKY**; the three CI observations share one fix SHA, not three SHAs. The owner approved two staged pushes so this proof could precede removal of only browser-tab's `SMOKE_QUARANTINE` entry. It now joins the gating rest tier; the other quarantine entries are unchanged.
 
-Only **browser-recovery** and **bare-path-env** remain in `SMOKE_QUARANTINE`; both **automations-picker (VC-530)** and **browser-tab (VC-532)** run in the gating rest tier.
+Only **bare-path-env** remains in `SMOKE_QUARANTINE`, pending **VC-531**. **Browser-recovery (VC-529)**, **automations-picker (VC-530)**, and **browser-tab (VC-532)** run in the gating rest tier: **50 gating probes** (9 core, 41 rest), with one nightly quarantine probe.
 
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
@@ -268,4 +268,25 @@ Proportional next implementation steps, grounded in inspected evidence:
 - `gzip -t docs/research/smoke-flakes-2026-10-evidence.json.gz`: pass. Evidence is 543,378 compressed bytes; SHA-256 `746ecb311427163d84992b33ebaca28748b48f2a0c5a772c8d01d8d04ada70c3`.
 - A focused standard-library evidence check validated the 337-run reconciliation, 333 unique included run IDs, unique outcome keys, initial/all status totals, all 15 same-SHA recovery pairs, every row's status sum, the 52-row generated table's equality with this report, and text whitespace: pass. `git diff --check -- docs/research` also returned clean (the new files additionally received the explicit text whitespace check).
 
-Open limitations: first failed process output was never persisted historically; 16 job logs were unavailable; cancellation and small/new probes censor exposure; cause attribution for most internal retries remains unknown. No local suite, full workspace check, workflow dispatch, rerun, PR mutation, or source implementation was performed.
+Open limitations: first failed process output was never persisted historically; 16 job logs were unavailable; cancellation and small/new probes censor exposure; cause attribution for most internal retries remains unknown. No local suite, full workspace check, workflow dispatch, rerun, PR mutation, or source implementation was performed for the census.
+
+## VC-529: browser recovery return to the gate
+
+[PR #692](https://github.com/hussainph/volli-code/pull/692) repairs the product readiness boundary, not the assertions. The original job **110272341458** and the first post-VC-522 both-attempt artifact (run **37069281453**, a first-attempt PASS) were read before implementation. Historical failure messages omit the actual values, so they cannot attribute every censored recovery to this repair.
+
+A focused real-Chromium reproducer repeated headless same-URL navigation, rejected preview capture, a ref-based click, and restored native capture. Before the fix, **2/80 cycles failed**: one click returned `Count 0` after `did-stop-loading`; a different restored capture rejected with **`UnknownVizError`** after document load completed. Both tabs were staged, unfocused, with no person-interaction stamp or pending-capture-cap exhaustion. After the fix, **0/80 cycles failed**. These cycles share a profile and are diagnostic evidence, **not** fresh-profile smoke opportunities.
+
+**Root cause:** load completion and an AX tree can precede the new document's rendering opportunity. A healthy optional preview had incidentally supplied a frame barrier; rejecting it exposed a click before the new surface was ready. Restored native capture could reach the same boundary. The controller now awaits two animation-frame callbacks before the first tree read of each generation, observing a completed rendering opportunity between callbacks independently of the preview camera. It uses the existing CDP deadline and caller cancellation, caches only that generation, and never retries or replays input. All fault-injection, presentation-state, navigation, action, ref, find, cancellation, and explicit-screenshot assertions remain. The two opaque assertion messages now include returned values.
+
+**Owner-approved return exception:** replace the original 50-opportunity / three-SHA bar for this probe with ten serial local fresh-profile runs and three branch quarantine dispatches. Two staged pushes were approved because the quarantine workflow selects only entries still in `SMOKE_QUARANTINE`: observe the proof commit first, then remove only browser-recovery's entry. All three CI observations below ran the same proof SHA **`2893cc43259d2844b08c271717c09b3e5899f839`**; this is not a claim of three-SHA evidence.
+
+| Post-fix opportunity | Result | Attempts | All checks | Native quiet-window verdict |
+|---|---|---:|---:|---|
+| Local serial fresh-profile runs, `VOLLI_CONCURRENCY_HINT=2` | **10/10 PASS**, 0 failures | 1 each | 11/11 each | Not separately sampled locally |
+| [Quarantine run 37071665319](https://github.com/hussainph/volli-code/actions/runs/37071665319) | **PASS**, 37.160s | 1 | 11/11 | PASS |
+| [Quarantine run 37072323255](https://github.com/hussainph/volli-code/actions/runs/37072323255) | **PASS**, 36.273s | 1 | 11/11 | PASS |
+| [Quarantine run 37072665825](https://github.com/hussainph/volli-code/actions/runs/37072665825) | **PASS**, 39.328s | 1 | 11/11 | PASS |
+
+Each CI artifact's `results.json` was checked for the proof SHA, completion, browser-recovery's `PASS`, exactly one attempt, exit 0, and no signal. Its attempt log has all eleven PASS rows and no FAIL/FLAKY; `quiet-window.json` has `verdict.ok=true`. The three dispatches were serial to avoid replacing a pending run in the workflow's concurrency group.
+
+Additional focused checks: desktop `cdp-controller.test.ts` and `agent-port.test.ts` **115/115 PASS**, with `--maxWorkers="$VOLLI_CONCURRENCY_HINT"`; desktop typecheck; root `vp check`; production build and Electron prefetch. The readiness tests cover callback sequencing, generation invalidation, timeout, withdrawal, exceptions, and late answers. No full local suite or smoke matrix ran. Navigation/headless/trace and deterministic ownership/refusal gates remain unchanged. Removing the one quarantine entry restores browser-recovery to the rest-tier CI gate; other quarantines keep their ordinary return criteria.
