@@ -580,6 +580,26 @@ jobs:
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier core --jobs 4
 
+      # Temporary VC-536 investigation on this branch, before any shutdown fix.
+      - name: Reproduce database recovery with native shutdown traces
+        if: always() && github.head_ref == 'volli/VC-536-deflake-database-recovery-smoke-degraded-restore'
+        env:
+          VOLLI_RECOVERY_TRACE: "1"
+        run: |
+          mkdir -p .tmp/vc536-ci
+          seq 1 12 | xargs -P 4 -I '{}' sh -c 'node apps/desktop/e2e/database-recovery-smoke.mjs > .tmp/vc536-ci/{}.log 2>&1'
+
+      - name: Upload recovery investigation traces
+        if: always() && github.head_ref == 'volli/VC-536-deflake-database-recovery-smoke-degraded-restore'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recovery-investigation-${{ github.run_attempt }}
+          path: |
+            .tmp/vc536-ci
+            .tmp/recovery-*/result.json
+            .tmp/recovery-*/*.txt
+          retention-days: 30
+
       - name: Upload core smoke attempts and native-window evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

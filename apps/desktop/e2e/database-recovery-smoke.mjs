@@ -12,9 +12,10 @@
  * Manually run (display required); not part of vp test. Never builds artifacts.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 
@@ -35,6 +36,8 @@ const NO_CLEAN = "No local backup checks clean. Nothing was restored.";
 const MANUAL = "Your database and safety copies are preserved for manual recovery.";
 const MARKER_KEY = "database-recovery-smoke";
 const MARKER_VALUE = "last-clean-saved-marker";
+const execFileAsync = promisify(execFile);
+const traceShutdown = process.env.VOLLI_RECOVERY_TRACE === "1";
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -99,6 +102,27 @@ async function openApp(config, label) {
   app.process().stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
   });
+  if (traceShutdown) {
+    await bounded(`${label}: install shutdown trace`, () =>
+      app.evaluate(({ app: electronApp }) => {
+        const trace = (stage) =>
+          console.log(
+            "[recovery shutdown]",
+            Date.now(),
+            stage,
+            electronApp.isReady(),
+            process.getActiveResourcesInfo(),
+          );
+        electronApp.prependListener("before-quit", () => trace("before-quit"));
+        electronApp.on("will-quit", () => trace("will-quit"));
+        const exit = electronApp.exit;
+        electronApp.exit = function (...args) {
+          trace(`app.exit(${args.join(",")})`);
+          return exit.apply(this, args);
+        };
+      }),
+    );
+  }
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
   );
@@ -128,7 +152,31 @@ async function closeRun(run) {
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  const startedAt = Date.now();
+  const child = run.app.process();
+  let sample = Promise.resolve();
+  const sampleTimer =
+    traceShutdown && process.platform === "darwin"
+      ? setTimeout(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          const path = join(scratch, `${run.label.replaceAll(" ", "-")}-shutdown.sample.txt`);
+          sample = execFileAsync("/usr/bin/sample", [String(child.pid), "2", "-file", path], {
+            timeout: 7000,
+          }).catch((error) => console.error(`shutdown sample: ${error.message}`));
+        }, 10000)
+      : undefined;
+  let exit;
+  try {
+    exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  } finally {
+    clearTimeout(sampleTimer);
+    await sample;
+    if (traceShutdown) {
+      console.log(
+        `SHUTDOWN TRACE: ${run.label}: ${Date.now() - startedAt}ms\n${run.stdout}\n${run.stderr}`,
+      );
+    }
+  }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   // Retain failed runs so the outer handler prints their stdout/stderr.
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
