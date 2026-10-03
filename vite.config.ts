@@ -27,6 +27,13 @@ const toolingIgnorePatterns = [
   // The Document-view markdown corpus keeps the exact variants (`*` vs `_`,
   // Setext underlines, tilde fences) a formatter exists to normalise away.
   "apps/desktop/src/renderer/src/editor/__fixtures__",
+  // Written by the Flute CLI (`flute init` / `flute sync`) and the film's
+  // recipe generator (VC-464): regenerated wholesale, so formatting them is
+  // churn the next sync undoes.
+  "apps/desktop/FLUTE.md",
+  "apps/desktop/src/flute/catalog.js",
+  "apps/desktop/src/flute/ProjectPreview.jsx",
+  "apps/desktop/src/flute/scenes/*.scene.json",
 ];
 
 export default defineConfig({

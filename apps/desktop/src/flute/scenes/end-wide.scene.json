@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "end-wide",
+  "title": "End card · 16:9",
+  "description": "The Volli mark builds on the ember world; name, category line, download CTA.",
+  "definition": {
+    "scene": {
+      "version": 3,
+      "camera": {
+        "perspective": 1400,
+        "x": 0,
+        "y": 0,
+        "z": -400,
+        "rotateX": 0,
+        "rotateY": 0,
+        "rotateZ": 0
+      },
+      "focus": {
+        "distance": 1000,
+        "fStop": 8,
+        "focalLength": 60,
+        "maxBlur": 0
+      },
+      "nodes": []
+    },
+    "motion": {
+      "durationMs": 3600,
+      "speed": 1,
+      "tracks": []
+    },
+    "width": 1920,
+    "height": 1080
+  }
+}

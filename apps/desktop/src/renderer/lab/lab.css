@@ -26,4 +26,6 @@
  */
 @import "../src/globals.css";
 @source "./";
+/* The release film's scenes (VC-464) live beside the lab in src/flute. */
+@source "../../flute";
 @source "../../../node_modules/streamdown/dist/*.js";

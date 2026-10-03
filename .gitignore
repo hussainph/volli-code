@@ -44,3 +44,7 @@ packages/agent-runtime/.runtime-profile/
 
 # VC-291 investigation evidence (screenshots, OCR sidecars, matrix JSON)
 /evidence/
+
+# The release film's renders (VC-464): masters, cuts, frame dumps and contact
+# sheets. Video never lands in the repository; `scripts/film/` regenerates it.
+/apps/desktop/.film-out/

@@ -61,9 +61,27 @@ installFakeApi();
 // once its `?v=` hash has moved on, which it does on every re-optimization. A
 // module fetched at boot is never asked for again; a module fetched an hour
 // later is asking a server that has changed its mind. See markdown-boundary.tsx.
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <HighlighterWarmup />
-    <LabShell />
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById("root")!);
+
+// The release film (VC-464). `?flute-preview=1` swaps the shell for Flute's
+// scene library, whose scenes point a camera at real components from here.
+// Both guards are load-bearing: `import.meta.env.DEV` lets a production build
+// drop the branch — and with it the only import of Flute — at compile time,
+// and the query keeps the ordinary lab from ever fetching the module.
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("flute-preview")) {
+  const { FluteProjectPreview } = await import("../../flute/ProjectPreview.jsx");
+  root.render(
+    <StrictMode>
+      <FluteProjectPreview enabled>
+        <LabShell />
+      </FluteProjectPreview>
+    </StrictMode>,
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <HighlighterWarmup />
+      <LabShell />
+    </StrictMode>,
+  );
+}
