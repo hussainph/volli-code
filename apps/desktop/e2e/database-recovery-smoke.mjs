@@ -154,7 +154,11 @@ async function sampleShutdownProcesses(run, metrics) {
   const types = new Map(metrics.map(({ pid, type }) => [pid, type]));
   const processes = [{ pid: run.child.pid, command: "tracked Electron main" }, ...helpers];
   for (const entry of processes) entry.type = types.get(entry.pid) ?? "unknown";
-  await fs.writeFile(`${prefix}-processes.json`, `${JSON.stringify(processes, null, 2)}\n`);
+  await bounded(
+    "shutdown process evidence",
+    () => fs.writeFile(`${prefix}-processes.json`, `${JSON.stringify(processes, null, 2)}\n`),
+    2000,
+  ).catch((error) => console.error(`shutdown process evidence: ${error.message}`));
   // Capture the GPU/Viz peer and renderer/utility helpers alongside main. Never
   // select helpers globally by name: another Session's/live app is not ours.
   await Promise.all(
