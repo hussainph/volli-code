@@ -174,9 +174,9 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 
 | Probe | Initial confirmed recoveries / N | Rate (95% Wilson interval) | Distinct confirmed SHAs | Recommendation |
 |---|---:|---:|---:|---|
-| browser-recovery | 59/225 | 26.2% (20.9–32.3%) | 59 | Non-gating candidate; preserve navigation/hold/CLI browser integration elsewhere. Investigate post-click snapshot/preview settling; final replays show lost click result and failed preview recovery. |
+| browser-recovery | 59/225 | 26.2% (20.9–32.3%) | 59 | **Returned to gating by VC-529** (replaces VC-523); see the per-generation rendering repair below. All recovery/navigation/ref/cancellation assertions remain. Historical internal first-failure causes are still unavailable. |
 | automations-picker | 15/227 | 6.6% (4.0–10.6%) | 15 | **Returned to gating by VC-530** (replaces VC-524); see the post-census investigation below. All assertions and the arming/provenance/schedule/page/notification gates remain. Historical internal first-failure causes are still unavailable. |
-| bare-path-env | 16/227 | 7.0% (4.4–11.1%) | 16 | Non-gating candidate while preserving ordinary boot and CLI round-trip. Investigate startup readiness capture / the 12s marker wait; do not suppress actual wrapper-generation errors. |
+| bare-path-env | 16/227 | 7.0% (4.4–11.1%) | 16 | Historical non-gating candidate; **returned to the rest-tier gate by VC-531** after fixing pre-attachment readiness capture. Assertions and 12s bound preserved; post-fix proof below. |
 | browser-tab | 16/226 | 7.1% (4.4–11.2%) | 16 | **Returned to gating by VC-532** (replaces VC-526); see the hold/cursor repair below. All ownership/refusal, cursor and tab journey assertions remain. Historical internal first-failure causes are still unavailable. |
 | vc418-contrast | 28/223 | 12.6% (8.8–17.5%) | 28 | Prefer the cheap focus-settling fix; otherwise non-gating extended contrast candidate, **not** removal of core theming or accessibility assertions. |
 | canvas-theming | 50/224 | 22.3% (17.4–28.2%) | 50 | Meets statistical threshold but **protected core: keep gating**, repair transition synchronization. If splitting, only incidental motion timing may move; tokens, mode, inheritance and persistence remain gating. |
@@ -185,7 +185,7 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 
 Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, interval 1.6–5.7%) does not meet the lower-bound threshold. Agent CLI relaunch (5/229), browser-page-navigation (8/226), done-flow (7/224), and retention (7/223) are watch-list items, not justified quarantine decisions under this threshold. Settings-search, automations-rail and automations-smoke must not be quarantined merely for related final failures.
 
-These are recommendations, **not implemented moves**. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
+The original census recommendations did not implement moves; the VC-529–VC-532 follow-ups record all four measured probes' later repairs and returns. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
 
 ## VC-530: picker post-census investigation and return
 
@@ -226,7 +226,7 @@ Local post-fix proof on the product changes in `47a7c5aab`: **10/10 serial fresh
 
 Each run's retained `smoke-results-quarantine-attempt-1` artifact was downloaded and checked: browser-tab has exactly one successful attempt, check 8 reports a label-sized 135×49 view, and takeover/turn-end/clean teardown pass. **13/13 requested post-fix opportunities pass, zero FAIL/FLAKY**; the three CI observations share one fix SHA, not three SHAs. The owner approved two staged pushes so this proof could precede removal of only browser-tab's `SMOKE_QUARANTINE` entry. It now joins the gating rest tier; the other quarantine entries are unchanged.
 
-Only **bare-path-env** remains in `SMOKE_QUARANTINE`, pending **VC-531**. **Browser-recovery (VC-529)**, **automations-picker (VC-530)**, and **browser-tab (VC-532)** run in the gating rest tier: **50 gating probes** (9 core, 41 rest), with one nightly quarantine probe.
+All four measured probes are restored: **browser-recovery (VC-529)**, **automations-picker (VC-530)**, **bare-path-env (VC-531)**, and **browser-tab (VC-532)** run in the gating rest tier. There are **51 gating probes** (9 core, 42 rest); `SMOKE_QUARANTINE` is an empty Map. The nightly workflow is retained unchanged for future measured entries, with no current probes to observe; legacy/credential exclusions are unchanged.
 
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
@@ -259,7 +259,31 @@ Proportional next implementation steps, grounded in inspected evidence:
 4. Inspect DB recovery's bounded shutdown and child ownership without treating completed restore assertions as a licence to accept every SIGTERM. Source: `database-recovery-smoke.mjs` cleanup/`closeRun`; the final fail includes `cannot inspect Electron main child before bounded close` after the earlier forced termination.
 5. Browser recovery's post-click snapshot and preview recapture deserve targeted investigation. The current source at `browser-recovery-smoke.mjs:248–287` immediately asserts the returned snapshot/result. This census identifies a repeated failing boundary, not which layer owns the fix.
 
-## Verification performed
+## VC-531: bare-PATH readiness capture repair
+
+The retained first-attempt artifact from quarantine run [37069281453](https://github.com/hussainph/volli-code/actions/runs/37069281453) was inspected before implementation: bare-path-env passed on its first process (32.5s), so this is not a retained failure. Both historical final-failure replays (jobs 109855090266 and 110934290745) fail check 2 with `last value: null`. Their separate main-output evidence files were not uploaded by the historical runner, and the 16 retry-green first-process assertions remain censored. Those logs alone cannot distinguish lost readiness from unfinished generation or explain every historical recovery.
+
+**Reproduced boundary:** the old probe awaited Playwright's `launch()` **before** attaching its pipe listeners. Playwright already drains those pipes while connecting to main and Chromium. With a fast login-shell fixture returning the same bare PATH, a pre-entry capture recorded `[volli] harness runtime ready` before `launch()` returned; the old probe then passed its PATH assertion and failed check 2 after the unchanged 12s wait. The repaired probe passes the same fixture without a retry. This is a probe observation race, not evidence of a wrapper-generation product race.
+
+**Repair:** an environment-only smoke hook in main captures stdout/stderr before boot readiness work, preserving each descriptor's bytes independently. The hook is absent in ordinary launches and does not mutate PATH or generate wrappers. The first revision used Electron's `-r` preload; review caught that the packaged loader ignores that flag, so the final hook runs in both built and packaged app modes without changing launch arguments. The post-window PATH stream is marked by Electron's actual `browser-window-created` event, not the later Playwright client response. The probe still waits for the product's real ready/failure markers with the original 12s bound and now also checks that main initially received exactly `/usr/bin:/bin:/usr/sbin:/sbin`. No product readiness is synthesized, no wrapper generation is bypassed, and no assertion or timeout is loosened. Failure output includes full main logs in the runner's retained attempt log instead of only printing paths to unuploaded temporary files.
+
+Nine focused regressions in `src/main/bare-path-boot-capture.test.ts` cover early readiness, early genuine errors, split/interleaved output, the actual window boundary, pending boot, byte/write forwarding, stale-capture reset, normal-launch inertness and restoration. The desktop CI test discovery includes these tests automatically. A fault-injected isolated launch made a generated `.zshenv` path non-regular: check 2 correctly failed with `failed to generate harness wrappers: Refusing to manage non-regular file`, and the full error was retained in probe output.
+
+**Local proof:** `node apps/desktop/e2e/bare-path-env-smoke.mjs` ran **10/10 PASS, 0 FAIL, 0 retries**, serially with `VOLLI_CONCURRENCY_HINT=1` and inherited `VOLLI_SMOKE_DIR` removed for every fresh profile. `vp test run src/main/bare-path-boot-capture.test.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"` passed **9/9**, and the shared smoke-kit's focused Node tests passed **22/22**; `vp check`, desktop typecheck, build/packed-require checks and `git diff --check` passed. A disposable packaged-loader fixture (`app.isPackaged=true`, using this worktree's built app) also passed both smoke checks; this is loader compatibility evidence, not a release-packaging test. No full local suite or smoke matrix ran.
+
+**Quarantine proof:** all three serial `gh workflow run "Smoke quarantine" --ref volli/VC-531-deflake-bare-path-harness-readiness-smoke` dispatches ran the final capture implementation on SHA `789152b0d09279b9e250e20c9ed12e033dd04e0a`. Their retained `results.json` and first-attempt logs were checked for the exact SHA, completed lane, one exit-0 attempt and both passing assertions:
+
+| Run | bare-path-env result | Attempts | Runtime |
+|---|---|---:|---:|
+| [37074905945](https://github.com/hussainph/volli-code/actions/runs/37074905945) | PASS | 1 | 16.685s |
+| [37076961740](https://github.com/hussainph/volli-code/actions/runs/37076961740) | PASS | 1 | 22.178s |
+| [37077768440](https://github.com/hussainph/volli-code/actions/runs/37077768440) | PASS | 1 | 24.950s |
+
+**3/3 first-attempt PASS, 0 FAIL, 0 FLAKY.** The validation revision's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37074913101) also passed. Only bare-path-env's `SMOKE_QUARANTINE` entry is removed by the gate-return commit. The final main integration preserves VC-529, VC-530 and VC-532's returns, leaving the Map empty; core and legacy exclusions are unchanged. The final PR-head CI remains the owner's merge gate.
+
+VC-531 supersedes VC-525. The owner approved staged pushes, including an extra validation revision to preserve packaged support, so the three dispatches actually executed the final capture implementation before removing its quarantine selection. The owner waived the original 50-opportunity/3-SHA return bar in favor of 10 serial fresh-profile local runs and three clean quarantine dispatches.
+
+## Verification performed (VC-522 census)
 
 - GitHub Actions census and focused job/Scope log inspections completed; the run count reconciles to 337 = 333 included + 4 manual dispatches, with no attempt-list request errors. Sixteen log 404s and the empty main attempt are explicitly retained/censored.
 - `python3 docs/research/measure-smoke-flakes.py self-test`: **8 focused parser/duration/inherited-job assertions pass**; no application suite runs.
