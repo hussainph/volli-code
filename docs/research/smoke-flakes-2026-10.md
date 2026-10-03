@@ -181,11 +181,40 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 | vc418-contrast | 28/223 | 12.6% (8.8–17.5%) | 28 | Prefer the cheap focus-settling fix; otherwise non-gating extended contrast candidate, **not** removal of core theming or accessibility assertions. |
 | canvas-theming | 50/224 | 22.3% (17.4–28.2%) | 50 | Meets statistical threshold but **protected core: keep gating**, repair transition synchronization. If splitting, only incidental motion timing may move; tokens, mode, inheritance and persistence remain gating. |
 | board | 12/294 | 4.1% (2.4–7.0%) | 12 | Meets statistical threshold but **protected core: keep gating**, repair evidence/interaction waits. |
-| database-recovery | 5/9 | 55.6% (26.7–81.1%) | 5 | Too few opportunities and **protected core**. Urgent shutdown investigation, never blanket quarantine of recovery. |
+| database-recovery | 5/9 | 55.6% (26.7–81.1%) | 5 | Too few opportunities and **protected core**. **VC-536** adds a targeted native-exit mitigation and child-retention fix; [evidence and remaining limits](#vc-536-database-recovery-native-shutdown-investigation) below. Elimination and multi-SHA return proof remain open. Never quarantine recovery. |
 
 Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, interval 1.6–5.7%) does not meet the lower-bound threshold. Agent CLI relaunch (5/229), browser-page-navigation (8/226), done-flow (7/224), and retention (7/223) are watch-list items, not justified quarantine decisions under this threshold. Settings-search, automations-rail and automations-smoke must not be quarantined merely for related final failures.
 
 The original census recommendations did not implement moves; the VC-529–VC-532 follow-ups record all four measured probes' later repairs and returns. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
+
+## VC-536: database recovery native shutdown investigation
+
+Historical census counts above are unchanged. The later same-SHA recovery in [run 37079875734](https://github.com/hussainph/volli-code/actions/runs/37079875734), SHA `ec9ad975f`, includes a degraded launch's 20s forced-close failure and a separate restored-renderer screenshot timeout after fonts loaded.
+
+[Investigation run 37117315738](https://github.com/hussainph/volli-code/actions/runs/37117315738), SHA `d6d23681e`, ran three batches of 12 fresh profiles, four at a time, with smoke-only quit tracing. Batch 1: 11/12 green (one screenshot timeout); batch 2: 12/12 green; batch 3: 10/12 green (one screenshot timeout, one native shutdown stall). The ordinary core probe also failed a screenshot in batch 3 before passing its one allowed retry (**FLAKY**, not a first-attempt pass). These are **pre-fix observations**, not return evidence. Earlier run 37116702217's repetition logs were censored by a hidden-directory artifact exclusion; its red repetition step is not counted as green or assigned a cause.
+
+The batch-3 stall is opportunity 12, resumed healthy launch PID **51811**: `before-quit` at `1791026004224`, entry to `app.exit(0)` at `1791026004226`, then `app.close timed out after 20000ms`, unsuccessful 1500ms SIGTERM grace, and **SIGKILL**. `recovery-investigation-3` contains its log and native sample. All **1104 main-thread samples** have this relevant stack:
+
+```text
+libuv filesystem completion / FSReqPromise
+  -> V8 MicrotasksScope / JavaScript
+  -> NSWindow _close / _finishClosingWindow
+  -> notification delivery / compositor frame-sink invalidation
+  -> synchronous Mojo FrameSinkManager::DestroyCompositorFrameSink
+  -> indefinite Mach-backed WaitableEvent / mach_msg
+```
+
+Independent address rebasing/disassembly against the matching Electron 44 arm64 image (UUID `4C4C448B-5555-3144-A179-5775D5EF8BF6`) identifies the native wait as **main waiting on GPU/Viz root frame-sink teardown**, not a DB, socket or Session drain. Chromium's [`HostFrameSinkManager::InvalidateFrameSinkId`](https://github.com/chromium/chromium/blob/152.0.7977.54/components/viz/host/host_frame_sink_manager.cc) waits for GPU drawing-context/surface destruction before closing the platform window. The [`FrameSinkManager` contract](https://github.com/chromium/chromium/blob/152.0.7977.54/services/viz/privileged/mojom/compositing/frame_sink_manager.mojom) is **`[Sync, NoInterrupt] DestroyCompositorFrameSink`**; its Mojo wait ends in an indefinite Mach-backed WaitableEvent. No GPU-process sample exists for this occurrence: the stalled dependency is identified, but the peer's state and a circular deadlock are **not proven**. An earlier 10.9s close ended before its sampler captured a stack.
+
+The sample's deep `uv_fs_lstat`, SQLite and other private-frame labels are misleading nearest-export symbols, not ownership evidence. The genuine filesystem completion beneath the checkpoint is unidentified; **it is not established as socket unlink**. Real-I/O tests use unlink only as an experimental settlement trigger.
+
+The **targeted product mitigation**, not a proven complete fix, schedules native `exit(0)` with a referenced `setImmediate` after either shutdown settlement outcome. This changes the entry context, leaving the shutdown microtask checkpoint before native teardown; it cannot guarantee a Viz reply or bound native exit. The socket-only early-startup `will-quit` fallback had the same direct Promise-to-exit pattern and now shares this scheduling guarantee, although it was not the captured failing path. Refusal ordering, once-only drain/exit, the 15s asynchronous deadline and the smoke's 20s allowance remain intact.
+
+Ordinary **⌘Q/Dock Quit** reaches the same coordinator, and **0.2.0 already had the same source-level exposure**. This is not confined to the degraded recovery UI or proved new in 0.2.1. User prevalence is unmeasured. Independent local experiments found **zero hangs in 400 minimal baseline/candidate trials and six full journeys** on macOS 26, so those controls do not demonstrate a reliability improvement over baseline or reproduce the macOS 15 CI failure.
+
+A separate harness ownership bug explains the later `cannot inspect Electron main child`: Playwright disposes its Electron dispatcher after process exit. Retaining the exact child preserves its observed code/signal for repeat cleanup, including forced-exit failures. Opt-in `VOLLI_RECOVERY_TRACE` now samples main **and its GPU/renderer/other child helpers** on a stall, preserving the scoped process tree; it performs no extra round trips, timers or sampling when unset. The temporary branch-only CI investigation steps have been removed. Screenshot failures and every original recovery assertion remain failures; no quarantine, timeout increase or SIGTERM/SIGKILL acceptance was introduced.
+
+Candidate `3c507d595` observations: **51/51 fresh-profile opportunities passed**, comprising 12 untraced local runs under four-way load and 39 CI observations in [run 37119602970](https://github.com/hussainph/volli-code/actions/runs/37119602970), attempts **1–3** (each: first-attempt core PASS plus 12 repeated passes). This is **one SHA**, not three; **elimination and the policy's multi-SHA return criteria remain open**. The final supplemental tests verify actual filesystem/async-hooks settlement enters an `Immediate`, not `PROMISE`, for both the coordinator and fallback. Focused quit/socket/recovery tests: **75 passed**; smoke-kit tests: **27 passed**. Aggregate product/smoke/test diff applies cleanly to the exported `v0.2.1-canary.7` files (`git apply --check`). Final-head CI evidence and review handoff are recorded in [PR #706](https://github.com/hussainph/volli-code/pull/706).
 
 ## VC-530: picker post-census investigation and return
 
