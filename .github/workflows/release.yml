@@ -399,8 +399,14 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Build desktop pipeline
-        run: vp run --filter @volli/desktop build
+      # electron-builder downloads its own Electron distribution, but our
+      # extraResources reads Chromium's notice from the installed package.
+      # Prefetch that package too (as CI does), or packaging silently omits it.
+      - name: Build desktop pipeline and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+          test -s apps/desktop/node_modules/electron/dist/LICENSES.chromium.html
 
       # The dist script minus its build half (done above): electron-builder
       # finds the Developer ID Application identity in CSC_KEYCHAIN (set by
@@ -425,9 +431,8 @@ jobs:
 
       # mac.notarize and the staple hook both degrade to a skip when
       # credentials are absent or wrong-shaped, so trust nothing: prove the
-      # artifacts exist and that Gatekeeper accepts them before calling the
-      # run green. (The release is already uploaded at this point — a failure
-      # here means: fix, delete the bad release + tag, re-tag.)
+      # artifacts and required notices exist and that Gatekeeper accepts them
+      # before calling the run green. Upload happens only after this gate.
       - name: "Gate: artifacts complete and notarized"
         run: |
           cd apps/desktop/release
@@ -446,6 +451,14 @@ jobs:
           hdiutil verify "${dmgs[0]}"
           app="mac-arm64/Volli Code.app"
           [ -d "$app" ] || { echo "::error::$app missing"; exit 1; }
+          # A valid signature does not prove extraResources was copied:
+          # electron-builder only warns when a notice source is absent.
+          resources="$app/Contents/Resources"
+          for notice in LICENSE.txt THIRD-PARTY-NOTICES.txt LICENSES.chromium.html \
+            licensing/GPL-3.0.txt licensing/LGPL-3.0.txt licensing/LGPL-LIBVIPS.md \
+            licensing/RELINK-LIBVIPS.md licensing/relink-libvips.sh; do
+            [ -s "$resources/$notice" ] || { echo "::error::required notice missing or empty: $resources/$notice"; exit 1; }
+          done
           spctl -a -vv --type execute "$app" 2>&1 | tee spctl-assessment.txt
           if ! grep -q "source=Notarized Developer ID" spctl-assessment.txt; then
             echo "::error::app is not notarized — spctl did not report 'Notarized Developer ID'"
