@@ -225,24 +225,20 @@ async function drag(page, sourceBox, target) {
 }
 
 /**
- * Block until dnd-kit has finished a drag.
- *
- * The source card carries `opacity-40` for exactly as long as `isDragging` is
- * true (ticket-card.tsx), so its absence is the drop having been committed and
- * the overlay torn down. Every drag here used to end in a flat `sleep(500)`,
- * which is a bet on the drop animation; on a CI runner that bet expired
- * mid-drag and the board was read while still in its dragging DOM — which is
- * why the column headers came back null and every later check failed behind
- * it. Falls through on timeout so a genuinely stuck drag still fails on its
- * own assertion rather than here.
+ * Block until the gesture AND its retained overlay have gone. The dimming
+ * class belongs to the sortable wrapper, not its article; checking the old
+ * article.opacity-40 selector returned immediately even during a live drag.
+ * Overlay articles also inflate global card counts until teardown completes.
  */
 async function waitForDragSettled(page) {
-  await page
-    .waitForFunction(() => document.querySelector("article.opacity-40") === null, null, {
-      timeout: 10_000,
-    })
-    .catch(() => {});
-  await sleep(250);
+  await page.waitForFunction(
+    () =>
+      document.querySelector(
+        "[data-board-drag], [data-ticket-drag-preview], [data-board-ticket-slot] .opacity-40",
+      ) === null,
+    null,
+    { timeout: 10_000 },
+  );
 }
 
 /**
@@ -930,16 +926,32 @@ async function main() {
       10,
       '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears (numbering continues)',
       async () => {
+        // Check 9's pill drop can retain a duplicate overlay article after the
+        // real card lands. Do not let that picture enter the baseline count.
+        await waitForDragSettled(page);
         const before = await page.locator("article").count();
         await page.getByRole("button", { name: "New", exact: true }).first().click();
-        await sleep(200);
-        await page.getByPlaceholder("Ticket title…").fill("Board smoke test card");
-        await page.keyboard.press("Enter");
-        await sleep(400);
-        await page.keyboard.press("Escape");
-        await sleep(300);
-        const after = await page.locator("article").count();
+        const title = page.getByPlaceholder("Ticket title…");
+        await waitUntil(
+          "inline composer title to be ready",
+          async () => (await title.isVisible()) && (await title.isEditable()),
+          { timeout: 3000 },
+        );
+        await title.fill("Board smoke test card");
+        await title.press("Enter");
         const vc12 = cardById(page, "VC-12");
+        await waitUntil(
+          "Enter to create VC-12 and reset the inline composer",
+          async () => (await vc12.count()) === 1 && (await title.inputValue()) === "",
+          { timeout: 3000 },
+        );
+        await title.press("Escape");
+        await waitUntil(
+          "Escape to unmount the inline composer",
+          async () => (await title.count()) === 0,
+          { timeout: 3000 },
+        );
+        const after = await page.locator("article").count();
         const vc12Count = await vc12.count();
         const ok = after === before + 1 && vc12Count === 1;
         return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
