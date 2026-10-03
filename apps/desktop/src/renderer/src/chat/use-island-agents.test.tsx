@@ -9,6 +9,10 @@
  * chat store, because the hook IS the seam: what it owes `useActivityIsland`
  * is a slice of the model and a slice of the verbs, and what it owes the
  * person is that a child's state moving becomes exactly one announcement.
+ *
+ * The stop door arrives as a dep (VC-533, mirroring the shells feed): the
+ * verbs' tests inject it, and one test stubs the window's RPC bridge to pin
+ * the Electron fallback the app itself runs when the mount injects nothing.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -35,6 +39,8 @@ import {
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 import { toastError } from "@renderer/lib/toast";
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({ sessionRpcClient: vi.fn() }));
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 const SESSION = "s-parent";
 const PROJECT = "p1";
@@ -316,9 +322,13 @@ describe("the verbs", () => {
 
   it("stop asks main to stop the child by id — the person's door", async () => {
     listing([record({ sessionId: "a" })]);
-    const stop = vi.fn(async () => ({ ok: true, interrupted: true, released: true, failures: [] }));
-    vi.stubGlobal("api", { sessions: { stop } });
-    const probe = await mount();
+    const stop = vi.fn(async () => ({
+      ok: true as const,
+      interrupted: true,
+      released: true,
+      failures: [],
+    }));
+    const probe = await mount({ api: { stop } });
 
     probe.latest().feed.actions.stopAgent("a");
     await act(async () => {});
@@ -329,9 +339,8 @@ describe("the verbs", () => {
 
   it("surfaces a refused stop as a toast and a flash, by the child's label at press time", async () => {
     listing([record({ sessionId: "a", title: "Runaway" })]);
-    const stop = vi.fn(async () => ({ ok: false, error: "Unknown session." }));
-    vi.stubGlobal("api", { sessions: { stop } });
-    const probe = await mount();
+    const stop = vi.fn(async () => ({ ok: false as const, error: "Unknown session." }));
+    const probe = await mount({ api: { stop } });
 
     probe.latest().feed.actions.stopAgent("a");
     await act(async () => {});
@@ -347,16 +356,57 @@ describe("the verbs", () => {
     expect(toastError).toHaveBeenLastCalledWith("Could not stop subagent: bridge down");
   });
 
-  it("stops nothing where there is no bridge, and names a row that already left as a subagent", async () => {
+  it("stops nothing where there is no bridge — no door injected, none on window", async () => {
+    // Nothing injected, and jsdom has no `api` on window: the press must go
+    // nowhere rather than throw.
     listing([record({ sessionId: "a" })]);
-    vi.stubGlobal("api", undefined);
     const probe = await mount();
     probe.latest().feed.actions.stopAgent("a");
     await act(async () => {});
     expect(toastError).not.toHaveBeenCalled();
+  });
 
-    const stop = vi.fn(async () => ({ ok: false, error: "Unknown session." }));
-    vi.stubGlobal("api", { sessions: { stop } });
+  // What production actually runs (the shells feed's fallback test): no
+  // injection, so the door is the window's RPC bridge adapted — the stop
+  // rides `session.command`, and success is the row moving, not a toast.
+  it("falls back to the app's own window bridge when the mount injects none", async () => {
+    listing([record({ sessionId: "a" })]);
+    const mutate = vi.fn(async () => ({
+      sessionId: "a",
+      receipt: null,
+      throughSequence: 1,
+      refusal: null,
+      stop: {
+        sessionId: "a",
+        handle: "a",
+        title: null,
+        previouslyStopped: false,
+        interrupted: true,
+        released: true,
+        failures: [],
+      },
+    }));
+    vi.mocked(sessionRpcClient).mockReturnValue({
+      session: { command: { mutate } },
+    } as unknown as ReturnType<typeof sessionRpcClient>);
+    vi.stubGlobal("api", { sessionRpc: {} });
+    vi.stubGlobal("crypto", { randomUUID: () => "command-1" });
+    const probe = await mount();
+
+    probe.latest().feed.actions.stopAgent("a");
+    await act(async () => {});
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "a", command: { kind: "session.stop" } }),
+    );
+    expect(toastError).not.toHaveBeenCalled();
+    expect(probe.flashes).toEqual([]);
+  });
+
+  it("names a row that already left the listing as a subagent", async () => {
+    listing([record({ sessionId: "a" })]);
+    const stop = vi.fn(async () => ({ ok: false as const, error: "Unknown session." }));
+    const probe = await mount({ api: { stop } });
+
     probe.latest().feed.actions.stopAgent("gone");
     await act(async () => {});
     expect(stop).toHaveBeenCalledWith({ sessionId: "gone" });
@@ -368,13 +418,12 @@ describe("the verbs", () => {
   it("reports the runtime acts a durable stop could not complete", async () => {
     listing([record({ sessionId: "a", title: "Runaway" })]);
     const stop = vi.fn(async () => ({
-      ok: true,
+      ok: true as const,
       interrupted: true,
       released: false,
       failures: ["The executor did not release: gone."],
     }));
-    vi.stubGlobal("api", { sessions: { stop } });
-    const probe = await mount();
+    const probe = await mount({ api: { stop } });
 
     probe.latest().feed.actions.stopAgent("a");
     await act(async () => {});

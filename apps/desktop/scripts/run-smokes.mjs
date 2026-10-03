@@ -196,10 +196,6 @@ export const CORE_E2E = new Set([
  * coverage, deterministic related failures, or credential-dependent probes.
  */
 export const SMOKE_QUARANTINE = new Map([
-  [
-    "automations-picker-smoke.mjs",
-    "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
-  ],
   ["bare-path-env-smoke.mjs", "VC-525: 16/227 confirmed recoveries; harness readiness marker"],
 ]);
 

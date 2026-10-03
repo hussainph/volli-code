@@ -29,7 +29,6 @@ import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
-import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import { removeTicketToolOutput } from "./pi-tool-output";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
@@ -92,8 +91,6 @@ import type {
   SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionStopInput,
-  SessionStopResult,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -1444,40 +1441,6 @@ export function registerDataIpcHandlers(
         });
       }
       return { ok: true };
-    },
-
-    // The person's stop (VC-269): the agent tool's three acts behind a door
-    // the renderer can reach, with `{ kind: "user" }` as the durable actor.
-    // A refusal the operation words (unknown id, a terminal session, a
-    // not-live target, an unrecorded stop) is the error; anything else is a
-    // bug and throws.
-    "volli:session-stop": async (input: SessionStopInput): Promise<SessionStopResult> => {
-      const runtime = options.sessionRuntime;
-      if (runtime === undefined) {
-        return {
-          ok: false,
-          error: "Volli's Session runtime is not available this launch, so nothing was stopped.",
-        };
-      }
-      try {
-        const outcome = await stopSessionById(
-          { sessionEngine, runtime },
-          {
-            operationId: randomUUID(),
-            sessionId: input.sessionId,
-            ...(input.reason === undefined ? {} : { reason: input.reason.trim() }),
-          },
-        );
-        return {
-          ok: true,
-          interrupted: outcome.interrupted,
-          released: outcome.released,
-          failures: [...outcome.failures],
-        };
-      } catch (error) {
-        if (error instanceof SuperviseSessionError) return { ok: false, error: error.message };
-        throw error;
-      }
     },
 
     "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {

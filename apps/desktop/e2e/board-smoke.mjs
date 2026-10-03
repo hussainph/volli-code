@@ -743,36 +743,70 @@ async function main() {
           sourceBox.y + sourceBox.height / 2,
         );
         await page.mouse.down();
-        await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, {
-          steps: 8,
-        });
-        await page.mouse.move(todoHeaderBox.x + 20, todoHeaderBox.y + 120, { steps: 20 });
-        await sleep(150);
-        const clusterCount = await page.getByLabel("2 tickets selected").count();
-        await page.mouse.up();
+        let clusterCount = 0;
+        try {
+          await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, {
+            steps: 8,
+          });
+          await page.mouse.move(todoHeaderBox.x + 20, todoHeaderBox.y + 120, { steps: 20 });
+          await waitUntil(
+            "multi-drag cluster and Todo landing to be ready",
+            async () =>
+              (await page.locator("[data-board-drag]").count()) === 1 &&
+              (await page.locator('[data-board-column="todo"][data-drop-aimed]').count()) === 1 &&
+              (await page.getByLabel("2 tickets selected").count()) === 1,
+            { timeout: 1_000, interval: 50 },
+          );
+          clusterCount = await page.getByLabel("2 tickets selected").count();
+        } finally {
+          await page.mouse.up();
+        }
+
+        // dnd-kit may retain the overlay's duplicate articles after release.
+        // An unscoped cardById().evaluate() then fails strict-mode resolution
+        // even though the real destination slots already animated. Read ONLY
+        // Todo's slots, in one snapshot, and wait for their actual animations
+        // to finish rather than betting another sleep on teardown/commit.
+        let slotState = null;
         const slotted = await waitUntil(
-          "multi-drag destination-slot transition",
-          async () =>
-            Promise.any(
-              [first, second].map(async (id) => {
-                const animation = await cardById(page, id).evaluate((article) => {
-                  const slot = article.closest("[data-board-ticket-slot]");
-                  return slot instanceof HTMLElement
-                    ? {
-                        transform: getComputedStyle(slot).transform,
-                        started: slot.dataset.boardSlotAnimated === "true",
-                      }
-                    : { transform: "", started: false };
-                });
-                if (!animation.started) throw new Error("not moving yet");
-                return true;
-              }),
-            ),
+          "multi-drag destination-slot transition to settle",
+          async () => {
+            slotState = await page.evaluate(
+              (ids) => {
+                const slots = Array.from(
+                  document.querySelectorAll('[data-board-column="todo"] [data-board-ticket-slot]'),
+                );
+                return {
+                  dragging: document.querySelector("[data-board-drag]") !== null,
+                  slots: ids.map((id) => {
+                    const slot = slots.find(
+                      (element) =>
+                        element.querySelector("article span.font-mono")?.textContent?.trim() === id,
+                    );
+                    return {
+                      id,
+                      started: slot?.getAttribute("data-board-slot-animated") === "true",
+                      settled:
+                        slot !== undefined &&
+                        slot
+                          .getAnimations()
+                          .every((animation) => ["finished", "idle"].includes(animation.playState)),
+                    };
+                  }),
+                };
+              },
+              [first, second],
+            );
+            return (
+              !slotState.dragging &&
+              slotState.slots.some((slot) => slot.started) &&
+              slotState.slots.every((slot) => slot.settled)
+            );
+          },
           { timeout: 1_000, interval: 50 },
         )
           .then(() => true)
           .catch(() => false);
-        await sleep(500);
 
         const todoAfterDrop = await columnCardIds(page, "Todo");
         const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
@@ -818,7 +852,7 @@ async function main() {
           JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
         return {
           ok,
-          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)}`,
+          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)} slots=${JSON.stringify(slotState)}`,
         };
       },
     );

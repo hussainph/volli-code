@@ -3,6 +3,7 @@ import type { JsonUnsafeProcedures } from "./json-safe";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
 import {
   isSessionStreamFrame,
+  SuperviseSessionError,
   type ModelAccessSnapshot,
   type SessionClientCommand,
   type SessionRuntime,
@@ -47,6 +48,7 @@ export type RendererSessionCommand =
   | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
   | Extract<
       SessionClientCommand,
+      | { kind: "session.stop" }
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
@@ -64,7 +66,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence" | "refusal"
+  "sessionId" | "receipt" | "throughSequence" | "refusal" | "stop"
 >;
 
 /**
@@ -386,7 +388,9 @@ const skillSlugs = z
   .array(nonEmptyString.refine((value) => /^[A-Za-z0-9_:-]+$/.test(value), "Expected a skill slug"))
   .max(20)
   .optional();
-const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
+const uiMessageSchema = z
+  .custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage")
+  .refine(isJsonSafeUiMessage, "UIMessage payloads must contain only JSON-safe values");
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
   modelId: nonEmptyString,
@@ -573,6 +577,10 @@ const interactionResolutionSchema = z
   );
 
 const commandSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("session.stop"),
+    reason: z.string().trim().min(1).max(4000).optional(),
+  }),
   z.object({
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
@@ -1002,9 +1010,16 @@ export function createSessionRouter() {
               message: "Use the product Session start and recovery routes.",
             });
           }
-          return rendererCommandResult(
-            await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
-          );
+          try {
+            return rendererCommandResult(
+              await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
+          }
         }),
       // A pending interaction the user walked away from. The reason is fixed
       // here rather than taken as input: this transport is the user seam, and
@@ -1081,6 +1096,7 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     // Nullable rather than optional, so the field survives every transport
     // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
     refusal: result.refusal,
+    ...(result.stop === undefined ? {} : { stop: result.stop }),
   };
 }
 
@@ -1263,6 +1279,44 @@ function isUiMessage(value: unknown): value is RpcUiMessage {
     return false;
   }
   return value.parts.every((part) => isRecord(part) && typeof part.type === "string");
+}
+
+/** Preserve transcript serialization's established undefined-slot semantics while checking opaque values. */
+function isJsonSafeUiMessage(value: unknown): boolean {
+  return isJsonSafeValue(value, new Set());
+}
+
+function isJsonSafeValue(value: unknown, ancestors: Set<object>): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || ancestors.has(value)) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return Object.keys(value).every((key) => {
+        const index = Number(key);
+        return (
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < value.length &&
+          `${index}` === key &&
+          isJsonSafeValue(value[index], ancestors)
+        );
+      });
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return (
+      (prototype === Object.prototype || prototype === null) &&
+      Object.keys(value).every((key) =>
+        isJsonSafeValue((value as Record<string, unknown>)[key], ancestors),
+      )
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function isUiRole(value: unknown): value is RpcUiMessage["role"] {
