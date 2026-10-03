@@ -127,14 +127,15 @@ export function registerAgentSocketWillQuit(options: {
     event.preventDefault();
     if (shutdownStarted) return;
     shutdownStarted = true;
+    // Early startup's socket-only fallback needs the same native-exit entry
+    // boundary as the accepted-quit coordinator (VC-536), not a Promise
+    // checkpoint. Keep the Immediate referenced; native exit remains unbounded.
+    const exitAfterCheckpoint = () => setImmediate(() => options.lifecycle.exit(0));
     void settleShutdownBeforeDeadline({
       shutdowns: [options.shutdownAgentSocket],
       deadlineMs: options.shutdownDeadlineMs,
       reportFailure: options.reportFailure,
-    }).then(
-      () => options.lifecycle.exit(0),
-      () => options.lifecycle.exit(0),
-    );
+    }).then(exitAfterCheckpoint, exitAfterCheckpoint);
   });
 }
 

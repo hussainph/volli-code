@@ -26,6 +26,7 @@ import {
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
+  descendantProcesses,
   launch,
   waitUntil,
   writeFakeLoginShell,
@@ -138,6 +139,72 @@ async function openApp(config, label) {
   return run;
 }
 
+async function sampleShutdownProcesses(run, metrics) {
+  const prefix = join(scratch, `${run.label.replaceAll(" ", "-")}-shutdown`);
+  let helpers = [];
+  try {
+    const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
+      timeout: 2000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    helpers = descendantProcesses(stdout, run.child.pid);
+  } catch (error) {
+    console.error(`shutdown process discovery: ${error.message}`);
+  }
+  const types = new Map(metrics.map(({ pid, type }) => [pid, type]));
+  const processes = [{ pid: run.child.pid, command: "tracked Electron main" }, ...helpers];
+  for (const entry of processes) entry.type = types.get(entry.pid) ?? "unknown";
+  await fs.writeFile(`${prefix}-processes.json`, `${JSON.stringify(processes, null, 2)}\n`);
+  // Capture the GPU/Viz peer and renderer/utility helpers alongside main. Never
+  // select helpers globally by name: another Session's/live app is not ours.
+  await Promise.all(
+    processes.map(async ({ pid }) => {
+      try {
+        await execFileAsync(
+          "/usr/bin/sample",
+          [String(pid), "2", "-file", `${prefix}-${pid}.sample.txt`],
+          {
+            timeout: 7000,
+          },
+        );
+      } catch (error) {
+        console.error(`shutdown sample pid ${pid}: ${error.message}`);
+      }
+    }),
+  );
+}
+
+// Called only under VOLLI_RECOVERY_TRACE: no extra timers, process enumeration,
+// native sampling or round trips when tracing is unset.
+async function startShutdownTrace(run) {
+  // macOS may name GPU and Utility processes simply "Electron Helper". Record
+  // Electron's PID/type mapping while main still answers, before quit begins.
+  const metrics = await bounded("shutdown helper types", () =>
+    run.app.evaluate(({ app }) => app.getAppMetrics().map(({ pid, type }) => ({ pid, type }))),
+  ).catch((error) => {
+    console.error(`shutdown helper types: ${error.message}`);
+    return [];
+  });
+  const startedAt = Date.now();
+  let sample = Promise.resolve();
+  const timer =
+    process.platform === "darwin"
+      ? setTimeout(() => {
+          if (run.child.exitCode !== null || run.child.signalCode !== null) return;
+          sample = sampleShutdownProcesses(run, metrics).catch((error) =>
+            console.error(`shutdown samples: ${error.message}`),
+          );
+        }, 10000)
+      : undefined;
+  return async () => {
+    clearTimeout(timer);
+    await sample;
+    console.log(
+      `SHUTDOWN TRACE: ${run.label}: ${Date.now() - startedAt}ms\n${run.stdout}\n${run.stderr}`,
+    );
+  };
+}
+
 async function closeRun(run) {
   // Restore original methods BEFORE closeAppBounded invokes Playwright's quit.
   await bounded(`${run.label}: restore native lifecycle`, () =>
@@ -152,30 +219,12 @@ async function closeRun(run) {
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
-  const startedAt = Date.now();
-  const child = run.child;
-  let sample = Promise.resolve();
-  const sampleTimer =
-    traceShutdown && process.platform === "darwin"
-      ? setTimeout(() => {
-          if (child.exitCode !== null || child.signalCode !== null) return;
-          const path = join(scratch, `${run.label.replaceAll(" ", "-")}-shutdown.sample.txt`);
-          sample = execFileAsync("/usr/bin/sample", [String(child.pid), "2", "-file", path], {
-            timeout: 7000,
-          }).catch((error) => console.error(`shutdown sample: ${error.message}`));
-        }, 10000)
-      : undefined;
+  const finishTrace = traceShutdown ? await startShutdownTrace(run) : null;
   let exit;
   try {
     exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
   } finally {
-    clearTimeout(sampleTimer);
-    await sample;
-    if (traceShutdown) {
-      console.log(
-        `SHUTDOWN TRACE: ${run.label}: ${Date.now() - startedAt}ms\n${run.stdout}\n${run.stderr}`,
-      );
-    }
+    if (finishTrace) await finishTrace();
   }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   // Retain failed runs so the outer handler prints their stdout/stderr.
@@ -269,30 +318,7 @@ async function expectFault(run) {
 }
 
 async function screenshot(run, name) {
-  try {
-    await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
-  } catch (error) {
-    if (traceShutdown) {
-      try {
-        const startedAt = Date.now();
-        const png = await bounded("diagnostic native capture", () =>
-          run.app.evaluate(async ({ BrowserWindow }) => {
-            const window = BrowserWindow.getAllWindows()[0];
-            const image = await window.webContents.capturePage(undefined, {
-              stayHidden: true,
-              stayAwake: true,
-            });
-            return image.toPNG().toString("base64");
-          }),
-        );
-        await fs.writeFile(join(scratch, `native-${name}.png`), Buffer.from(png, "base64"));
-        console.log(`NATIVE CAPTURE AFTER CDP FAILURE: ${run.label}: ${Date.now() - startedAt}ms`);
-      } catch (captureError) {
-        console.error(`native capture diagnostic failed: ${captureError.message}`);
-      }
-    }
-    throw error;
-  }
+  await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
 }
 
 // Match the real incident: the SQLite header/schema are intact, but an index

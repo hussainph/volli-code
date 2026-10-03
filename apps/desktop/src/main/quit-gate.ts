@@ -193,10 +193,12 @@ export function registerAcceptedQuitCoordinator(options: {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
       const exitAfterCheckpoint = () => {
-        // app.exit destroys native windows synchronously. On macOS, doing so
-        // inside the shutdown Promise's V8 microtask checkpoint can stall in
-        // NSWindow teardown (VC-536). Let that checkpoint unwind first, without
-        // adding a grace period or re-issuing app.quit inside before-quit.
+        // app.exit destroys native windows synchronously. VC-536 captured
+        // macOS compositor teardown waiting on synchronous Viz IPC while
+        // entered from this shutdown checkpoint. Defer teardown until the
+        // checkpoint unwinds, without changing drain/quit bounds or re-issuing
+        // app.quit. Keep the Immediate referenced so the final drain cannot
+        // leave the terminal callback behind. Native exit is still unbounded.
         setImmediate(() => options.lifecycle.exit(0));
       };
       void settleShutdownBeforeDeadline({

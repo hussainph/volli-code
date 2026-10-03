@@ -10,6 +10,7 @@ import {
   closeAppBounded,
   createDeadline,
   createRunner,
+  descendantProcesses,
   evidenceDir,
   launchEnvFor,
   quietAppExecutablePlan,
@@ -216,6 +217,29 @@ const FAST_CLOSE = {
   killGraceMs: 20,
   naturalExitRaceMs: 10,
 };
+
+test("stall sampling selects GPU/renderer descendants, never another Electron app", () => {
+  const output = `
+    100 1 /scratch/Electron
+    101 100 /scratch/Electron Helper (GPU)
+    102 100 /scratch/Electron Helper (Renderer)
+    103 102 /scratch/child helper
+    200 1 /live/Electron
+    201 200 /live/Electron Helper (GPU)
+  `;
+  assert.deepEqual(descendantProcesses(output, 100), [
+    { pid: 101, ppid: 100, command: "/scratch/Electron Helper (GPU)" },
+    { pid: 102, ppid: 100, command: "/scratch/Electron Helper (Renderer)" },
+    { pid: 103, ppid: 102, command: "/scratch/child helper" },
+  ]);
+});
+
+test("stall sampling handles missing processes, malformed rows and cycles", () => {
+  assert.deepEqual(descendantProcesses("invalid\n1 2 root\n2 1 child\n2 1 duplicate", 1), [
+    { pid: 2, ppid: 1, command: "child" },
+  ]);
+  assert.deepEqual(descendantProcesses("2 1 child", 99), []);
+});
 
 test("closeAppBounded exposes the full default shutdown budget", () => {
   assert.equal(CLOSE_APP_BOUNDED_MAX_MS, 6_000);

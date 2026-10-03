@@ -1,7 +1,8 @@
+import { createHook, executionAsyncId } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
-import { lstat, stat } from "node:fs/promises";
+import { lstat, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -313,6 +314,55 @@ describe("agent socket", () => {
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(failure);
   });
 
+  it("exits the socket-only fallback through an Immediate after real I/O", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "volli-socket-checkpoint-"));
+    const file = join(directory, "completion");
+    await writeFile(file, "experimental FS settlement");
+    const resources = new Map<number, string>();
+    const hook = createHook({
+      init(id, type) {
+        resources.set(id, type);
+      },
+      destroy(id) {
+        resources.delete(id);
+      },
+    });
+    let attemptQuit!: (event: { preventDefault(): void }) => void;
+    let finishExit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      finishExit = resolve;
+    });
+    let exitResource: string | undefined;
+    const exit = vi.fn(() => {
+      exitResource = resources.get(executionAsyncId());
+      finishExit();
+    });
+    const shutdownAgentSocket = vi.fn(() => unlink(file));
+    hook.enable();
+    try {
+      registerAgentSocketWillQuit({
+        lifecycle: {
+          on(_event, listener) {
+            attemptQuit = listener;
+          },
+          exit,
+        },
+        shutdownAgentSocket,
+        reportFailure: vi.fn(),
+      });
+      attemptQuit({ preventDefault: vi.fn() });
+      await exited;
+      expect(exitResource).toBe("Immediate");
+      attemptQuit({ preventDefault: vi.fn() });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+    } finally {
+      hook.disable();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("holds will-quit until socket shutdown completes", async () => {
     const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
     let finishClose: (() => void) | undefined;
@@ -395,6 +445,8 @@ describe("agent socket", () => {
       expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
         new Error("Application shutdown did not settle within 25ms."),
       );
+      expect(exit).not.toHaveBeenCalled();
+      await vi.runOnlyPendingTimersAsync();
       expect(exit).toHaveBeenCalledExactlyOnceWith(0);
 
       failShutdown(new Error("late socket failure"));
