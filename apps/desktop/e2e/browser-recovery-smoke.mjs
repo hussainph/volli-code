@@ -260,7 +260,7 @@ try {
           const clicked = await faultAct("click", "Count 0");
           must(
             clicked.picture === null && clicked.snapshotText.includes('"Count 1"'),
-            "Click lost its result",
+            `Click lost its result: ${JSON.stringify(clicked)}`,
           );
         } finally {
           faultContents.capturePage = faultOriginalCapture;
@@ -284,7 +284,7 @@ try {
           navigation: { kind: "url", url },
           signal,
         });
-        must(nav.picture !== null, "Preview did not recover");
+        must(nav.picture !== null, `Preview did not recover: ${JSON.stringify(nav)}`);
       });
       await check("withdrawal during preview cancels promptly", async () => {
         const abort = new AbortController();

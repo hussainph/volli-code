@@ -566,7 +566,11 @@ export const Board = React.memo(function Board({
     [aimedStatus],
   );
 
-  // Live only while a card is in the air. ⌥ is read from TWO sources for the
+  // Listen before activation, but consume input only while the synchronous
+  // picker ref says a card is in the air. Attaching from the drag-start render's
+  // passive effect loses moves and Option presses that arrive before it commits
+  // (VC-530). A stationary hand must not need a second move to recover them.
+  // ⌥ is read from TWO sources for the
   // reason the Lab rig documents: the key events alone miss a drag that STARTED
   // with ⌥ already down, and a keyup that never arrived (⌥ released while the
   // window lacked focus) would leave a column enlarged under a modifier nobody
@@ -574,8 +578,8 @@ export const Board = React.memo(function Board({
   // read from whichever event is fresher.
   const dragging = drag !== null;
   React.useEffect(() => {
-    if (!dragging) return;
     function handlePointerMove(event: PointerEvent) {
+      if (!pickerRef.current.dragging) return;
       const landing = pointerLanding(event.clientX, event.clientY);
       applyPicker({
         kind: "pointer-move",
@@ -585,6 +589,7 @@ export const Board = React.memo(function Board({
       });
     }
     function handleKey(event: KeyboardEvent) {
+      if (!pickerRef.current.dragging) return;
       if (event.key === "Alt") {
         applyPicker({ kind: "modifier", held: event.type === "keydown" });
         return;
@@ -606,7 +611,7 @@ export const Board = React.memo(function Board({
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("keyup", handleKey);
     };
-  }, [dragging, applyPicker]);
+  }, [applyPicker]);
 
   // The countdown owns bottom-centre while it is open: it has a deadline and
   // the one control, and the hint is advice. Two ephemeral surfaces on one edge

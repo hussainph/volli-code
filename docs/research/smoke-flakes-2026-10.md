@@ -174,10 +174,10 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 
 | Probe | Initial confirmed recoveries / N | Rate (95% Wilson interval) | Distinct confirmed SHAs | Recommendation |
 |---|---:|---:|---:|---|
-| browser-recovery | 59/225 | 26.2% (20.9–32.3%) | 59 | Non-gating candidate; preserve navigation/hold/CLI browser integration elsewhere. Investigate post-click snapshot/preview settling; final replays show lost click result and failed preview recovery. |
-| automations-picker | 15/227 | 6.6% (4.0–10.6%) | 15 | Non-gating candidate, **not** the whole automation family. Keep deterministic arming/provenance/schedule journey coverage. Internal first-failure cause is unavailable. |
+| browser-recovery | 59/225 | 26.2% (20.9–32.3%) | 59 | **Returned to gating by VC-529** (replaces VC-523); see the per-generation rendering repair below. All recovery/navigation/ref/cancellation assertions remain. Historical internal first-failure causes are still unavailable. |
+| automations-picker | 15/227 | 6.6% (4.0–10.6%) | 15 | **Returned to gating by VC-530** (replaces VC-524); see the post-census investigation below. All assertions and the arming/provenance/schedule/page/notification gates remain. Historical internal first-failure causes are still unavailable. |
 | bare-path-env | 16/227 | 7.0% (4.4–11.1%) | 16 | Historical non-gating candidate; **returned to the rest-tier gate by VC-531** after fixing pre-attachment readiness capture. Assertions and 12s bound preserved; post-fix proof below. |
-| browser-tab | 16/226 | 7.1% (4.4–11.2%) | 16 | Non-gating candidate only with tab ownership/refusal kept in deterministic tests and a stable browser journey. Final failures include check 8's cursor/hold UI assertion; inspect lost first attempts before attributing all flakes. |
+| browser-tab | 16/226 | 7.1% (4.4–11.2%) | 16 | **Returned to gating by VC-532** (replaces VC-526); see the hold/cursor repair below. All ownership/refusal, cursor and tab journey assertions remain. Historical internal first-failure causes are still unavailable. |
 | vc418-contrast | 28/223 | 12.6% (8.8–17.5%) | 28 | Prefer the cheap focus-settling fix; otherwise non-gating extended contrast candidate, **not** removal of core theming or accessibility assertions. |
 | canvas-theming | 50/224 | 22.3% (17.4–28.2%) | 50 | Meets statistical threshold but **protected core: keep gating**, repair transition synchronization. If splitting, only incidental motion timing may move; tokens, mode, inheritance and persistence remain gating. |
 | board | 12/294 | 4.1% (2.4–7.0%) | 12 | Meets statistical threshold but **protected core: keep gating**, repair evidence/interaction waits. |
@@ -185,9 +185,30 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 
 Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, interval 1.6–5.7%) does not meet the lower-bound threshold. Agent CLI relaunch (5/229), browser-page-navigation (8/226), done-flow (7/224), and retention (7/223) are watch-list items, not justified quarantine decisions under this threshold. Settings-search, automations-rail and automations-smoke must not be quarantined merely for related final failures.
 
-The original census recommendations did not implement moves; the VC-531 follow-up records bare-path-env's later return. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
+The original census recommendations did not implement moves; the VC-529–VC-532 follow-ups record all four measured probes' later repairs and returns. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
 
-### VC-532: browser-tab hold/cursor repair
+## VC-530: picker post-census investigation and return
+
+The historical measurements above are unchanged. The new per-attempt artifact from quarantine run [37069281453](https://github.com/hussainph/volli-code/actions/runs/37069281453) was inspected first: the picker passed its first attempt (58.8s). The newest historical retry-green job, [110843120803](https://github.com/hussainph/volli-code/actions/runs/37008724421/job/110843120803), retains only the FLAKY outcome, not the first failure's assertion. Both-attempt artifacts were introduced after those flakes, so their exact causes cannot be retrospectively established. The available historical final-failure replay, [109135978487](https://github.com/hussainph/volli-code/actions/runs/36483274017/job/109135978487), instead names the related `runsForTicket is not a function` contract breakage; it is not startup-race evidence.
+
+A deterministic real-board regression reproduces a product input-loss race: dnd-kit activates a drag synchronously, but the picker used to attach its pointer/Option listeners only in the new render's passive effect. Activation, arrival over Doing and Option-down in one task leave a live drag with no expanded picker. The test fails on the old product and passes when listeners stay mounted, consuming input only while the synchronous picker ref is dragging. This establishes that boundary's bug, not that every censored historical flake had the same cause.
+
+The smoke no longer compensates with repeated pointer nudges while awaiting the Offered list. It observes that destination's panel directly, and waits for both drag state and the retained drop-animation preview to disappear instead of a fixed 200ms teardown sleep. All checks 0–8, including named targeting, digit pinning, no model override, Move only, Escape and the armed empty pill, remain intact.
+
+Local verification on the final candidate: **10/10 serial fresh-profile opportunities passed**, all checks 0–8, with `VOLLI_CONCURRENCY_HINT=1`, no tracing and no retries; the ten scratch paths were distinct. Focused board/drop/measure-loop/picker tests passed **50/50**, smoke-selection/observation tests **17/17**, plus `vp check`, desktop typecheck and a built app. An intermediate candidate failed check 6 after removing the teardown sleep before adding preview-detached readiness; that failed candidate and diagnostic runs are not pooled into the final proof.
+
+For this probe only, the owner waived the original 50-opportunity/3-SHA return bar in favour of **10 serial local fresh-profile passes and three branch dispatches with no picker FAIL/FLAKY**. On proof SHA `5971634bc05287ba867c95d7ef995c0e71e7ffb0`, a temporary manual observation input executed four concurrent fresh picker profiles per dispatch after the entry left `SMOKE_QUARANTINE`. The durable reports and each attempt log were downloaded and verified:
+
+| Executed quarantine run | Picker first-attempt outcomes | Retained assertions |
+|---|---:|---:|
+| [37071911800](https://github.com/hussainph/volli-code/actions/runs/37071911800) | 4/4 PASS | 36/36 |
+| [37071918083](https://github.com/hussainph/volli-code/actions/runs/37071918083) | 4/4 PASS | 36/36 |
+| [37073013835](https://github.com/hussainph/volli-code/actions/runs/37073013835) | 4/4 PASS | 36/36 |
+
+**12/12 concurrent CI picker opportunities, no FAIL/FLAKY and no retries**, plus the 10/10 serial local opportunities: **22/22 fresh profiles and 198/198 smoke assertions**. Run [37071914864](https://github.com/hussainph/volli-code/actions/runs/37071914864) was cancelled by GitHub's same-ref pending-concurrency replacement before any job executed; it is censored, not a pass. Its replacement was dispatched sequentially. The proof head's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37071882911/job/111057503222) also passed.
+
+After recording these results on [PR #693](https://github.com/hussainph/volli-code/pull/693#issuecomment-5962555600), the owner directed removal of the temporary observation input/step and its sole helper test in a final push. The shared workflow is restored unchanged; the proven product/smoke/runner files remain byte-identical. Ongoing proof is the restored gating smoke shard on every desktop PR. The final-head gate result is recorded on the PR/ticket. No other quarantine entry or return condition changes.
+## VC-532: browser-tab hold/cursor repair
 
 The census above remains the pre-fix measurement. The retained both-attempt artifact from [quarantine run 37069281453](https://github.com/hussainph/volli-code/actions/runs/37069281453), on the VC-522 merge SHA, was inspected before repair: browser-tab passed its first attempt in 52.1s (`labelSized` 135×49); there was no new failing browser-tab artifact. Historical final replays in runs [36636016591](https://github.com/hussainph/volli-code/actions/runs/36636016591) and [36817860736](https://github.com/hussainph/volli-code/actions/runs/36817860736) isolate check 8's `labelSized=null`: ownership/refusal, holder pill/dot, cursor position and stacking all passed, but the sampled cursor was at its 44×44 default size and the label-size wait observed no growth. Only the former run has an observed same-SHA recovery. The lost internal first failures remain unknown; this repair does not attribute all 16 confirmed recoveries to one cause.
 
@@ -204,6 +225,8 @@ Local post-fix proof on the product changes in `47a7c5aab`: **10/10 serial fresh
 | [37071864839](https://github.com/hussainph/volli-code/actions/runs/37071864839) | `47a7c5aab` | PASS | 1 | 24.1s | PASS |
 
 Each run's retained `smoke-results-quarantine-attempt-1` artifact was downloaded and checked: browser-tab has exactly one successful attempt, check 8 reports a label-sized 135×49 view, and takeover/turn-end/clean teardown pass. **13/13 requested post-fix opportunities pass, zero FAIL/FLAKY**; the three CI observations share one fix SHA, not three SHAs. The owner approved two staged pushes so this proof could precede removal of only browser-tab's `SMOKE_QUARANTINE` entry. It now joins the gating rest tier; the other quarantine entries are unchanged.
+
+All four measured probes are restored: **browser-recovery (VC-529)**, **automations-picker (VC-530)**, **bare-path-env (VC-531)**, and **browser-tab (VC-532)** run in the gating rest tier. There are **51 gating probes** (9 core, 42 rest); `SMOKE_QUARANTINE` is an empty Map. The nightly workflow is retained unchanged for future measured entries, with no current probes to observe; legacy/credential exclusions are unchanged.
 
 ## Preserve core gates and shrink by journeys, not by deleting assertions
 
@@ -256,7 +279,7 @@ Nine focused regressions in `src/main/bare-path-boot-capture.test.ts` cover earl
 | [37076961740](https://github.com/hussainph/volli-code/actions/runs/37076961740) | PASS | 1 | 22.178s |
 | [37077768440](https://github.com/hussainph/volli-code/actions/runs/37077768440) | PASS | 1 | 24.950s |
 
-**3/3 first-attempt PASS, 0 FAIL, 0 FLAKY.** The validation revision's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37074913101) also passed. Only bare-path-env's `SMOKE_QUARANTINE` entry is removed by the gate-return commit; core, other quarantine and legacy exclusions are unchanged. The final PR-head CI remains the owner's merge gate.
+**3/3 first-attempt PASS, 0 FAIL, 0 FLAKY.** The validation revision's [CI gate](https://github.com/hussainph/volli-code/actions/runs/37074913101) also passed. Only bare-path-env's `SMOKE_QUARANTINE` entry is removed by the gate-return commit. The final main integration preserves VC-529, VC-530 and VC-532's returns, leaving the Map empty; core and legacy exclusions are unchanged. The final PR-head CI remains the owner's merge gate.
 
 VC-531 supersedes VC-525. The owner approved staged pushes, including an extra validation revision to preserve packaged support, so the three dispatches actually executed the final capture implementation before removing its quarantine selection. The owner waived the original 50-opportunity/3-SHA return bar in favor of 10 serial fresh-profile local runs and three clean quarantine dispatches.
 
@@ -269,4 +292,25 @@ VC-531 supersedes VC-525. The owner approved staged pushes, including an extra v
 - `gzip -t docs/research/smoke-flakes-2026-10-evidence.json.gz`: pass. Evidence is 543,378 compressed bytes; SHA-256 `746ecb311427163d84992b33ebaca28748b48f2a0c5a772c8d01d8d04ada70c3`.
 - A focused standard-library evidence check validated the 337-run reconciliation, 333 unique included run IDs, unique outcome keys, initial/all status totals, all 15 same-SHA recovery pairs, every row's status sum, the 52-row generated table's equality with this report, and text whitespace: pass. `git diff --check -- docs/research` also returned clean (the new files additionally received the explicit text whitespace check).
 
-Open limitations: first failed process output was never persisted historically; 16 job logs were unavailable; cancellation and small/new probes censor exposure; cause attribution for most internal retries remains unknown. No local suite, full workspace check, workflow dispatch, rerun, PR mutation, or source implementation was performed.
+Open limitations: first failed process output was never persisted historically; 16 job logs were unavailable; cancellation and small/new probes censor exposure; cause attribution for most internal retries remains unknown. No local suite, full workspace check, workflow dispatch, rerun, PR mutation, or source implementation was performed for the census.
+
+## VC-529: browser recovery return to the gate
+
+[PR #692](https://github.com/hussainph/volli-code/pull/692) repairs the product readiness boundary, not the assertions. The original job **110272341458** and the first post-VC-522 both-attempt artifact (run **37069281453**, a first-attempt PASS) were read before implementation. Historical failure messages omit the actual values, so they cannot attribute every censored recovery to this repair.
+
+A focused real-Chromium reproducer repeated headless same-URL navigation, rejected preview capture, a ref-based click, and restored native capture. Before the fix, **2/80 cycles failed**: one click returned `Count 0` after `did-stop-loading`; a different restored capture rejected with **`UnknownVizError`** after document load completed. Both tabs were staged, unfocused, with no person-interaction stamp or pending-capture-cap exhaustion. After the fix, **0/80 cycles failed**. These cycles share a profile and are diagnostic evidence, **not** fresh-profile smoke opportunities.
+
+**Root cause:** load completion and an AX tree can precede the new document's rendering opportunity. A healthy optional preview had incidentally supplied a frame barrier; rejecting it exposed a click before the new surface was ready. Restored native capture could reach the same boundary. The controller now awaits two animation-frame callbacks before the first tree read of each generation, observing a completed rendering opportunity between callbacks independently of the preview camera. It uses the existing CDP deadline and caller cancellation, caches only that generation, and never retries or replays input. All fault-injection, presentation-state, navigation, action, ref, find, cancellation, and explicit-screenshot assertions remain. The two opaque assertion messages now include returned values.
+
+**Owner-approved return exception:** replace the original 50-opportunity / three-SHA bar for this probe with ten serial local fresh-profile runs and three branch quarantine dispatches. Two staged pushes were approved because the quarantine workflow selects only entries still in `SMOKE_QUARANTINE`: observe the proof commit first, then remove only browser-recovery's entry. All three CI observations below ran the same proof SHA **`2893cc43259d2844b08c271717c09b3e5899f839`**; this is not a claim of three-SHA evidence.
+
+| Post-fix opportunity | Result | Attempts | All checks | Native quiet-window verdict |
+|---|---|---:|---:|---|
+| Local serial fresh-profile runs, `VOLLI_CONCURRENCY_HINT=2` | **10/10 PASS**, 0 failures | 1 each | 11/11 each | Not separately sampled locally |
+| [Quarantine run 37071665319](https://github.com/hussainph/volli-code/actions/runs/37071665319) | **PASS**, 37.160s | 1 | 11/11 | PASS |
+| [Quarantine run 37072323255](https://github.com/hussainph/volli-code/actions/runs/37072323255) | **PASS**, 36.273s | 1 | 11/11 | PASS |
+| [Quarantine run 37072665825](https://github.com/hussainph/volli-code/actions/runs/37072665825) | **PASS**, 39.328s | 1 | 11/11 | PASS |
+
+Each CI artifact's `results.json` was checked for the proof SHA, completion, browser-recovery's `PASS`, exactly one attempt, exit 0, and no signal. Its attempt log has all eleven PASS rows and no FAIL/FLAKY; `quiet-window.json` has `verdict.ok=true`. The three dispatches were serial to avoid replacing a pending run in the workflow's concurrency group.
+
+Additional focused checks: desktop `cdp-controller.test.ts` and `agent-port.test.ts` **115/115 PASS**, with `--maxWorkers="$VOLLI_CONCURRENCY_HINT"`; desktop typecheck; root `vp check`; production build and Electron prefetch. The readiness tests cover callback sequencing, generation invalidation, timeout, withdrawal, exceptions, and late answers. No full local suite or smoke matrix ran. Navigation/headless/trace and deterministic ownership/refusal gates remain unchanged. Removing the one quarantine entry restores browser-recovery to the rest-tier CI gate; other quarantines keep their ordinary return criteria.

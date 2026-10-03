@@ -195,16 +195,7 @@ export const CORE_E2E = new Set([
  * evidence: docs/research/smoke-flakes-2026-10.md. Never quarantine sole core
  * coverage, deterministic related failures, or credential-dependent probes.
  */
-export const SMOKE_QUARANTINE = new Map([
-  [
-    "browser-recovery-smoke.mjs",
-    "VC-523: 59/225 confirmed recoveries; lost click result / preview recovery",
-  ],
-  [
-    "automations-picker-smoke.mjs",
-    "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
-  ],
-]);
+export const SMOKE_QUARANTINE = new Map();
 
 /**
  * Probes that must not overlap another smoke process.

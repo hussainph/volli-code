@@ -32,8 +32,8 @@
  * Deliberately absent, mirroring the tool surface: no page-supplied
  * JavaScript, no cookie or storage domains, no network interception. `select`
  * runs one host-authored function against the resolved element because CDP has
- * no input-level option picker; the function is a fixed string in this file,
- * never composed from model text.
+ * no input-level option picker; rendering readiness also runs a fixed frame
+ * handshake. Neither function is ever composed from model text.
  */
 
 import { BrowserRefusal } from "@volli/agent-runtime";
@@ -192,8 +192,8 @@ async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * The fixed function `select` runs against the resolved element. A constant by
- * design: the one place this file executes anything in the page, and nothing
- * in it comes from the model — the option value arrives as a CDP argument,
+ * design, like the rendering handshake below: nothing in its code comes from
+ * the model — the option value arrives as a CDP argument,
  * data rather than code.
  */
 const SELECT_OPTION_FUNCTION = `function(value) {
@@ -206,6 +206,17 @@ const SELECT_OPTION_FUNCTION = `function(value) {
   this.dispatchEvent(new Event("change", { bubbles: true }));
   return "selected";
 }`;
+
+/**
+ * Load/AX readiness does not mean Chromium has submitted the new document's
+ * first frame. A headless click can otherwise hit the previous surface, and
+ * capturePage can reject with UnknownVizError. The second animation frame
+ * observes a rendering opportunity completed between callbacks, independently
+ * of the optional preview camera (which may be rejected or stuck).
+ */
+const RENDERED_FRAME_EXPRESSION = `new Promise(resolve => {
+  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+})`;
 
 /** Keys `press` understands beyond single characters, in CDP's spellings. */
 const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
@@ -278,6 +289,7 @@ export class BrowserTabController {
   readonly #limits: Required<ControllerLimits>;
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
+  #renderedGeneration = -1;
   /** The refs the latest read printed — the only ones an action may name. */
   #refs: ReadonlyMap<string, number> = new Map();
   #names: ReadonlyMap<string, string> = new Map();
@@ -448,6 +460,7 @@ export class BrowserTabController {
     this.#knownRefs = new Map();
     this.#present = new Set();
     this.#snapshotGeneration = -1;
+    this.#renderedGeneration = -1;
     this.#nextRef = 1;
   }
 
@@ -462,6 +475,18 @@ export class BrowserTabController {
 
   /** One fresh read of the page's accessibility tree, as CDP answers it. */
   async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
+    if (this.#renderedGeneration !== this.#generation) {
+      const generation = this.#generation;
+      const rendered = (await this.#command(
+        "Runtime.evaluate",
+        { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
+        signal,
+        "readiness",
+      )) as { exceptionDetails?: unknown };
+      if (rendered.exceptionDetails !== undefined)
+        throw new Error("The Browser Tab could not finish rendering its document");
+      this.#renderedGeneration = generation;
+    }
     const answer = (await this.#command(
       "Accessibility.getFullAXTree",
       undefined,

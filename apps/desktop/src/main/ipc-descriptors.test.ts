@@ -1580,29 +1580,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  // VC-269: the person's stop.
-  describe("volli:session-stop", () => {
-    const { guard, invalidError } = DATA_IPC["volli:session-stop"];
-
-    it("accepts an id alone, and an id with a non-blank reason", () => {
-      expect(guard([{ sessionId: "s1" }])).toBe(true);
-      expect(guard([{ sessionId: "s1", reason: "Runaway" }])).toBe(true);
-    });
-
-    it("rejects a missing or empty id, a blank or non-string reason, and a wrong arity", () => {
-      expect(guard([{ sessionId: "" }])).toBe(false);
-      expect(guard([{ sessionId: 1 }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: "   " }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: 1 }])).toBe(false);
-      expect(guard([null])).toBe(false);
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid session stop");
-    });
-  });
-
   describe("volli:label-set-color", () => {
     const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
 
@@ -2202,8 +2179,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 84 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(84);
+    it("covers all 83 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(83);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
