@@ -181,11 +181,33 @@ Two percent is an operational reliability budget, not a natural constant: dozens
 | vc418-contrast | 28/223 | 12.6% (8.8–17.5%) | 28 | Prefer the cheap focus-settling fix; otherwise non-gating extended contrast candidate, **not** removal of core theming or accessibility assertions. |
 | canvas-theming | 50/224 | 22.3% (17.4–28.2%) | 50 | Meets statistical threshold but **protected core: keep gating**, repair transition synchronization. If splitting, only incidental motion timing may move; tokens, mode, inheritance and persistence remain gating. |
 | board | 12/294 | 4.1% (2.4–7.0%) | 12 | Meets statistical threshold but **protected core: keep gating**, repair evidence/interaction waits. |
-| database-recovery | 5/9 | 55.6% (26.7–81.1%) | 5 | Too few opportunities and **protected core**. Urgent shutdown investigation, never blanket quarantine of recovery. |
+| database-recovery | 5/9 | 55.6% (26.7–81.1%) | 5 | Too few opportunities and **protected core**. **VC-536** investigates native shutdown reentrancy; [captured evidence and candidate](#vc-536-database-recovery-native-shutdown-investigation) below. Never quarantine recovery. |
 
 Composer-basics is also protected; 9/294 confirmed initial recoveries (3.1%, interval 1.6–5.7%) does not meet the lower-bound threshold. Agent CLI relaunch (5/229), browser-page-navigation (8/226), done-flow (7/224), and retention (7/223) are watch-list items, not justified quarantine decisions under this threshold. Settings-search, automations-rail and automations-smoke must not be quarantined merely for related final failures.
 
 The original census recommendations did not implement moves; the VC-529–VC-532 follow-ups record all four measured probes' later repairs and returns. Any quarantine should be explicit, non-gating but still executed/reported, with an issue naming the probe, evidence IDs, unknown first-failure cause where applicable, and a return condition. Prefer fixing the cheap proven cause to moving a gate. Never silently deny-list a probe just because it is red.
+
+## VC-536: database recovery native shutdown investigation
+
+Historical census counts above are unchanged. The later same-SHA recovery in [run 37079875734](https://github.com/hussainph/volli-code/actions/runs/37079875734), SHA `ec9ad975f`, includes a degraded launch's 20s forced-close failure and a separate restored-renderer screenshot timeout after fonts loaded.
+
+[Investigation run 37117315738](https://github.com/hussainph/volli-code/actions/runs/37117315738), SHA `d6d23681e`, ran three batches of 12 fresh profiles, four at a time, with smoke-only quit tracing. Batch 1: 11/12 green (one screenshot timeout); batch 2: 12/12 green; batch 3: 10/12 green (one screenshot timeout, one native shutdown stall). The ordinary core probe also failed a screenshot in batch 3 before passing its one allowed retry (**FLAKY**, not a first-attempt pass). These are **pre-fix observations**, not return evidence. Earlier run 37116702217's repetition logs were censored by a hidden-directory artifact exclusion; its red repetition step is not counted as green or assigned a cause.
+
+The batch-3 stall is opportunity 12, resumed healthy launch PID **51811**: `before-quit` at `1791026004224`, entry to `app.exit(0)` at `1791026004226`, then `app.close timed out after 20000ms`, unsuccessful 1500ms SIGTERM grace, and **SIGKILL**. `recovery-investigation-3` contains its log and native sample. All **1104 main-thread samples** have this relevant stack:
+
+```text
+libuv filesystem completion / FSReqPromise
+  -> V8 MicrotasksScope / JavaScript
+  -> NSWindow _close / _finishClosingWindow
+  -> notification delivery
+  -> mach_msg wait
+```
+
+Thus the observed hold is **inside native window destruction entered from the shutdown Promise checkpoint**, not an asynchronous DB/Session/socket drain: accepted shutdown reaches native exit in 2ms. Electron 44's [`Browser::ExitWithCode`](https://github.com/electron/electron/blob/v44.0.0/shell/browser/browser.cc) synchronously destroys windows; [`NativeWindowMac::CloseImmediately`](https://github.com/electron/electron/blob/v44.0.0/shell/browser/native_window_mac.mm) calls `[window close]`. Private Electron/Chromium frames in the sample have nearest-export names, not usable ownership symbols; neither the exact native wait target nor a deadlock cycle is established. An earlier 10.9s close reached native exit in 24ms but ended before its sampler captured a stack.
+
+The **product-side candidate** schedules native `exit(0)` with a referenced `setImmediate` after either shutdown settlement outcome, leaving the microtask checkpoint before native window teardown. It does not change refusal ordering, the 15s asynchronous drain deadline, or the smoke's 20s close allowance. The same coordinator handles real user quits, so this is treated as a possible product hang, not excused as test cleanup; ordinary non-inspector user incidence is not yet reproduced. A separate harness ownership bug explains the later `cannot inspect Electron main child`: Playwright disposes its Electron dispatcher after process exit. Retaining the exact child preserves its observed code/signal for repeat cleanup, including forced-exit failures.
+
+The two microtask-boundary regression cases fail the old coordinator and pass the candidate; both child-disposal cases similarly fail the old cleanup helper. Focused quit/socket/recovery tests: **72 passed**; smoke-kit tests: **25 passed**. Candidate repeated local/CI verification is pending. No post-fix reliability claim, quarantine, timeout increase, or acceptance of SIGTERM/SIGKILL is made here.
 
 ## VC-530: picker post-census investigation and return
 

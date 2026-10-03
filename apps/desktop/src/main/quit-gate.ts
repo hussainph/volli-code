@@ -192,15 +192,18 @@ export function registerAcceptedQuitCoordinator(options: {
     void Promise.resolve().then(() => {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
+      const exitAfterCheckpoint = () => {
+        // app.exit destroys native windows synchronously. On macOS, doing so
+        // inside the shutdown Promise's V8 microtask checkpoint can stall in
+        // NSWindow teardown (VC-536). Let that checkpoint unwind first, without
+        // adding a grace period or re-issuing app.quit inside before-quit.
+        setImmediate(() => options.lifecycle.exit(0));
+      };
       void settleShutdownBeforeDeadline({
         shutdowns: [options.shutdownNativeSessions, options.shutdownAgentSocket],
         deadlineMs: options.shutdownDeadlineMs,
         reportFailure: options.reportFailure,
-      }).then(
-        // Re-issuing app.quit() during before-quit is swallowed by Electron.
-        () => options.lifecycle.exit(0),
-        () => options.lifecycle.exit(0),
-      );
+      }).then(exitAfterCheckpoint, exitAfterCheckpoint);
     });
   });
 }

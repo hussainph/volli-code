@@ -602,6 +602,7 @@ jobs:
             .tmp/vc536-ci
             .tmp/recovery-*/result.json
             .tmp/recovery-*/*.txt
+            .tmp/recovery-*/native-*.png
           retention-days: 30
 
       - name: Upload core smoke attempts and native-window evidence

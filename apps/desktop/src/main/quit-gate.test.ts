@@ -145,6 +145,44 @@ describe("refuseQuit", () => {
 });
 
 describe("registerAcceptedQuitCoordinator", () => {
+  for (const reportingThrows of [false, true]) {
+    it(`leaves the shutdown microtask checkpoint before native exit (${reportingThrows ? "rejected" : "drained"})`, async () => {
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      let attemptQuit!: (event: { preventDefault(): void }) => void;
+      const exit = vi.fn();
+      const shutdownNativeSessions = vi.fn(() =>
+        reportingThrows ? Promise.reject(new Error("close failed")) : Promise.resolve(),
+      );
+      const shutdownAgentSocket = vi.fn(() => Promise.resolve());
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on(_event, listener) {
+            attemptQuit = listener;
+          },
+          exit,
+        },
+        shutdownNativeSessions,
+        shutdownAgentSocket,
+        reportFailure() {
+          throw new Error("reporter failed");
+        },
+      });
+      attemptQuit({ preventDefault: vi.fn() });
+      // Flush only microtasks, not an event-loop turn. The old coordinator
+      // destroys native windows in this checkpoint and fails this assertion.
+      for (let index = 0; index < 20; index++) await Promise.resolve();
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+      const repeated = { preventDefault: vi.fn() };
+      attemptQuit(repeated);
+      expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      await vi.runAllTimersAsync();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+    });
+  }
+
   it("forces one accepted quit after the shutdown deadline and observes late settlements", async () => {
     vi.useFakeTimers();
     const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
@@ -194,6 +232,8 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
       new Error("Application shutdown did not settle within 25ms."),
     );
+    expect(exit).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
 
     finishSessions();
@@ -230,6 +270,8 @@ describe("registerAcceptedQuitCoordinator", () => {
 
     handlers.get("before-quit")?.({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(25);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
 
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
   });

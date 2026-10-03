@@ -576,6 +576,10 @@ export function summarizeTurnFrames(frames) {
   };
 }
 
+// Playwright disposes the Electron dispatcher on exit. Keep the exact child
+// independently so a second cleanup can still inspect its exit fields.
+const boundedCloseChildren = new WeakMap();
+
 /**
  * Close Electron within bounded grace periods and return how the tracked main
  * child exited. Every successful return is backed by observed ChildProcess exit
@@ -592,7 +596,9 @@ export async function closeAppBounded(app, options = {}) {
   };
   let child;
   try {
-    child = app.process();
+    child = boundedCloseChildren.get(app) ?? app.process();
+    if (!child) throw new Error("Electron main child is unavailable");
+    boundedCloseChildren.set(app, child);
   } catch (error) {
     throw new Error("cannot inspect Electron main child before bounded close", { cause: error });
   }

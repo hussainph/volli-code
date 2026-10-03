@@ -93,13 +93,13 @@ async function fixture(name) {
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, label, stdout: "", stderr: "", page: null };
+  const run = { app, child: app.process(), label, stdout: "", stderr: "", page: null };
   runs.add(run);
   // Bounded log retention; neither seed nor app gets any real credentials.
-  app.process().stdout?.on("data", (chunk) => {
+  run.child.stdout?.on("data", (chunk) => {
     run.stdout = `${run.stdout}${chunk}`.slice(-24000);
   });
-  app.process().stderr?.on("data", (chunk) => {
+  run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
   });
   if (traceShutdown) {
@@ -153,7 +153,7 @@ async function closeRun(run) {
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
   const startedAt = Date.now();
-  const child = run.app.process();
+  const child = run.child;
   let sample = Promise.resolve();
   const sampleTimer =
     traceShutdown && process.platform === "darwin"
@@ -269,7 +269,30 @@ async function expectFault(run) {
 }
 
 async function screenshot(run, name) {
-  await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
+  try {
+    await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
+  } catch (error) {
+    if (traceShutdown) {
+      try {
+        const startedAt = Date.now();
+        const png = await bounded("diagnostic native capture", () =>
+          run.app.evaluate(async ({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            const image = await window.webContents.capturePage(undefined, {
+              stayHidden: true,
+              stayAwake: true,
+            });
+            return image.toPNG().toString("base64");
+          }),
+        );
+        await fs.writeFile(join(scratch, `native-${name}.png`), Buffer.from(png, "base64"));
+        console.log(`NATIVE CAPTURE AFTER CDP FAILURE: ${run.label}: ${Date.now() - startedAt}ms`);
+      } catch (captureError) {
+        console.error(`native capture diagnostic failed: ${captureError.message}`);
+      }
+    }
+    throw error;
+  }
 }
 
 // Match the real incident: the SQLite header/schema are intact, but an index

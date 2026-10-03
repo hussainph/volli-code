@@ -349,6 +349,43 @@ test("closeAppBounded returns graceful only after the child exit is observed", a
   assert.deepEqual(child.signals, []);
 });
 
+for (const forced of [false, true]) {
+  test(`closeAppBounded retains the child after ${forced ? "forced" : "graceful"} exit disposes Playwright`, async () => {
+    const child = new FakeChild({
+      onSignal(signal, process) {
+        process.exit({ signal });
+        return true;
+      },
+    });
+    const app = {
+      process() {
+        if (child.exitCode !== null || child.signalCode !== null)
+          throw new Error("Electron dispatcher disposed");
+        return child;
+      },
+      async close() {
+        if (!forced) child.exit({ code: 0 });
+        else await new Promise(() => {});
+      },
+    };
+    const first = await closeAppBounded(app, FAST_CLOSE);
+    assert.equal(first.kind, forced ? "sigterm" : "graceful");
+    const second = await closeAppBounded(app, FAST_CLOSE);
+    assert.equal(second.kind, "already-exited");
+    assert.deepEqual(second.exit, first.exit);
+    assert.equal(second.exit.code, forced ? null : 0);
+    assert.equal(second.exit.signal, forced ? "SIGTERM" : null);
+    assert.deepEqual(child.signals, forced ? ["SIGTERM"] : []);
+  });
+}
+
+test("closeAppBounded rejects an unavailable first child rather than claiming an exit", async () => {
+  await assert.rejects(
+    closeAppBounded({ process: () => undefined }, FAST_CLOSE),
+    /cannot inspect Electron main child before bounded close/,
+  );
+});
+
 for (const [label, close] of [
   ["rejection", async () => Promise.reject(new Error("window would not close"))],
   ["timeout", async () => new Promise(() => {})],
