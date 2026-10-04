@@ -7,11 +7,11 @@
  * tickets write them (VC-562 hostd, VC-575 pairing, VC-580 workers, VC-581
  * leases, VC-591 promotion); the spec is the contract they follow.
  *
- * Two of the tables are about the WORKSPACE and travel with it (moves,
- * replicas, backups): `workspace_epochs` and `checkout_leases`. The other three
- * are about THIS HOST and never leave it. VC-588 will put the two halves in
- * different files, so no foreign key crosses between them: `host_id` and
- * `worker_id` below are plain UUID values, not references.
+ * Two tables reside with the WORKSPACE: `workspace_epochs` and
+ * `checkout_leases`. Epoch history travels in backups; live leases do not.
+ * The other three are about THIS HOST and never leave it. VC-588 will put the
+ * two halves in different files, so no foreign key crosses between them:
+ * `host_id` and `worker_id` below are plain UUID values, not references.
  *
  * Every statement is `IF NOT EXISTS`, so a lineage re-offered version 58 (a
  * rewound `user_version`, a restore) converges instead of failing.
