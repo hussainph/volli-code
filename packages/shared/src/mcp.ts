@@ -357,7 +357,10 @@ const JSON_SCHEMA_VALIDATORS = new Map([
 // eslint-disable-next-line unicorn/no-useless-spread -- live Map iteration would also visit the newly added aliases.
 for (const [uri, validator] of [...JSON_SCHEMA_VALIDATORS]) {
   const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
-  validator.addMetaSchema({ $ref: uri }, alias);
+  // This fixed host-authored wrapper needs no meta-validation at registration.
+  // Ajv would compile it eagerly and violate renderer CSP on module import.
+  // Server schemas still undergo validateSchema below, on the host at discovery.
+  validator.addMetaSchema({ $ref: uri }, alias, false);
   JSON_SCHEMA_VALIDATORS.set(alias, validator);
 }
 

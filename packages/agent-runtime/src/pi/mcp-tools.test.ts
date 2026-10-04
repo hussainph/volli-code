@@ -1,6 +1,8 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createContext, runInContext } from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   MCP_RESULT_INLINE_MAX_BYTES,
@@ -12,6 +14,7 @@ import {
 } from "@volli/shared";
 
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import { build } from "esbuild";
 import sharp from "sharp";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
 import { ToolOutputStore } from "./tool-output";
@@ -57,6 +60,22 @@ function store(): ToolOutputStore {
 const notice = { type: "text", text: MCP_UNTRUSTED_DATA_WARNING };
 
 describe("MCP Pi tool wrapper", () => {
+  it("imports the browser-bundled shared schema module without CSP-unsafe code generation", async () => {
+    const bundled = await build({
+      entryPoints: [fileURLToPath(new URL("../../../shared/src/mcp.ts", import.meta.url))],
+      bundle: true,
+      platform: "browser",
+      format: "iife",
+      globalName: "McpSchema",
+      write: false,
+    });
+    const context = createContext({}, { codeGeneration: { strings: false, wasm: false } });
+    // Match the renderer's script-src 'self': importing shared vocabulary must
+    // not compile Ajv validators. Catalog validation runs on the host later.
+    expect(() => runInContext(bundled.outputFiles[0]!.text, context)).not.toThrow();
+    expect(runInContext("typeof McpSchema.sanitizeMcpToolDefinition", context)).toBe("function");
+  });
+
   it("uses the frozen provider definition and maps exact identity and arguments through the port", async () => {
     const call = vi.fn<RuntimeMcpPort["call"]>(async () => ({
       content: [
