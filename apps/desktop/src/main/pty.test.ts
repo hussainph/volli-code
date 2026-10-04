@@ -86,12 +86,14 @@ vi.mock("node-pty", () => ({ spawn }));
 // `parseSetupSentinel` stay REAL so the sentinel contract is exercised end to
 // end. The runtime deps bundle is replaced so phase broadcasts don't touch
 // electron and `worktreesHome` is a stable stand-in.
-vi.mock("./worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./worktree")>();
+vi.mock("@volli/host-core/worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
-vi.mock("./worktree-runtime", () => ({
+vi.mock("./worktree-host", () => ({
   worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
+}));
+vi.mock("@volli/host-core/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
@@ -100,7 +102,7 @@ import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } 
 import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { importBlob } from "./blob-import";
-import { blobsRoot, removeBlob } from "./blob-store";
+import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
 import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
@@ -118,7 +120,7 @@ import {
 } from "@volli/host-core/db/test-helpers";
 import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { syncProjectRoots } from "./project-roots";
+import { syncProjectRoots } from "@volli/host-core/project-roots";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { createSessionTokenRegistry } from "./session-tokens";
 

@@ -7,8 +7,12 @@ import type { Session } from "@volli/shared";
 import { broadcastDataChanged } from "../broadcast";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { getTicket } from "@volli/host-core/db/tickets-repo";
-import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
-import { worktreeDeps } from "../worktree-runtime";
+import {
+  acquireWorktreeStartLease,
+  ensure,
+  UNDER_DELETION_REFUSAL,
+} from "@volli/host-core/worktree";
+import { worktreeDeps } from "../worktree-host";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
 

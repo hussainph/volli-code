@@ -7,7 +7,7 @@ import {
 } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessWrapperLookup } from "@volli/shared";
 import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import type { EnsureOutcome } from "../worktree";
+import type { EnsureOutcome } from "@volli/host-core/worktree";
 import type { SessionScope } from "./scope";
 
 /**

@@ -42,7 +42,7 @@ import {
   readSessionTranscriptTail,
 } from "@volli/session-engine";
 
-import { createTicketCommentCommand } from "../ticket-commands";
+import { createTicketCommentCommand } from "@volli/host-core/ticket-commands";
 import { withTicketWake } from "../ticket-wake";
 import { getTicket } from "@volli/host-core/db/tickets-repo";
 import {

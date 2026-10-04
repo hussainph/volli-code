@@ -92,12 +92,12 @@ import { getTicketRow } from "@volli/host-core/db/tickets-repo";
 import type { TicketRow } from "@volli/host-core/db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import { isPathWithinRoots } from "./project-roots";
+import { isPathWithinRoots } from "@volli/host-core/project-roots";
 import { loadPromptTemplates, writePromptTemplate } from "./prompt-templates";
-import { worktreesHome } from "./worktree-runtime";
-import { isInside } from "./worktree/paths";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
+import { isInside } from "@volli/host-core/worktree/paths";
 import { loadSkills } from "./skills";
-import { createGitCapturingAsyncRunner } from "./worktree/git";
+import { createGitCapturingAsyncRunner } from "@volli/host-core/worktree/git";
 
 /** Text-read cap (decision #7): utf8 files past this are truncated + flagged. */
 const TEXT_CAP_BYTES = 1024 * 1024;

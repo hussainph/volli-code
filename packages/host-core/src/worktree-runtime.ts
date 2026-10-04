@@ -1,19 +1,18 @@
 /**
- * The app-side construction of the worktree module's injected deps (§2's
+ * The host-side construction of the worktree module's injected deps (§2's
  * seam): the open database, the stderr-capturing git runner, and the phase
  * broadcast to every window over `volli:worktree-phase`. Both consumers —
  * `pty.ts` (ensure on session boot) and `data-ipc.ts` (state/remove/branches/
  * orphans) — build their deps HERE so phases always reach the renderer no
  * matter which entrypoint moved them.
  */
-import { app } from "electron";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 
 import { blobsRoot } from "./blob-store";
-import { windowEventBus } from "./broadcast";
+import type { HostEventBus } from "./ports";
 import {
   createOrphanCleanupEngine,
   runGitCapturing,
@@ -23,8 +22,8 @@ import {
 import type { OrphanCleanupEngine, WorktreeDeps, WorktreePhase } from "./worktree";
 
 /** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
-function broadcastPhase(ticketId: string, phase: WorktreePhase): void {
-  windowEventBus.publish("worktree-phase", { ticketId, phase });
+function broadcastPhase(events: HostEventBus, ticketId: string, phase: WorktreePhase): void {
+  events.publish("worktree-phase", { ticketId, phase });
 }
 
 /**
@@ -51,18 +50,22 @@ export function worktreeHomeDir(): string {
  * The standard runtime deps bundle for every worktree module call.
  * `blobsRoot` — the userData Blob-bytes root the post-copy
  * materialize step reads from (issue #77 PR 2) — resolves off
- * `app.getPath("userData")` exactly like {@link resolveHome} resolves `~`: one
+ * the host's explicit `dataDir` exactly like {@link resolveHome} resolves `~`: one
  * production resolution point every worktree-module consumer shares, even the
  * ones (remove/sweep/publish/…) that never read the field.
  */
-export function worktreeDeps(db: Database.Database): WorktreeDeps {
+export function worktreeDeps(
+  db: Database.Database,
+  ports: { events: HostEventBus },
+  options: { dataDir: string },
+): WorktreeDeps {
   return {
     db,
     git: runGitCapturing,
     gitAsync: runGitCapturingAsync,
     home: resolveHome(),
-    onPhase: broadcastPhase,
-    blobsRoot: blobsRoot(app.getPath("userData")),
+    onPhase: (ticketId, phase) => broadcastPhase(ports.events, ticketId, phase),
+    blobsRoot: blobsRoot(options.dataDir),
   };
 }
 
@@ -97,3 +100,13 @@ export function orphanCleanupEngine(db: Database.Database): OrphanCleanupEngine 
 export function worktreesHome(): string {
   return join(resolveHome(), ".volli", "worktrees");
 }
+
+/** Captures the host's event port and data-directory policy for its worktree calls. */
+export function createWorktreeRuntime(
+  ports: { events: HostEventBus },
+  options: { dataDir: string },
+) {
+  return { deps: (db: Database.Database) => worktreeDeps(db, ports, options) };
+}
+
+export type WorktreeRuntime = ReturnType<typeof createWorktreeRuntime>;

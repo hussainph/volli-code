@@ -18,8 +18,8 @@
  * scan supersedes the older revision, because a proposal a person reviewed
  * minutes ago describes a world that has since moved.
  */
-import { scanOrphans } from "./worktree";
-import type { OrphanScanOptions, OrphanScanReport, WorktreeDeps } from "./worktree";
+import { scanOrphans } from "@volli/host-core/worktree";
+import type { OrphanScanOptions, OrphanScanReport, WorktreeDeps } from "@volli/host-core/worktree";
 import type { OrphanCleanupPlanItem, OrphanCleanupRejectionCode } from "@volli/shared";
 
 /** The single in-flight/settled scan promise for this launch; `null` until first triggered. */

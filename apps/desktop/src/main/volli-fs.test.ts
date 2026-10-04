@@ -24,7 +24,7 @@ import { basename, dirname, join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "../ipc/contract";
 import { VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
 import { FILE_CHANNELS } from "./ipc-descriptors";
-import { syncProjectRoots } from "./project-roots";
+import { syncProjectRoots } from "@volli/host-core/project-roots";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts/data-ipc.test.ts, so the
@@ -81,7 +81,7 @@ import {
   GIT_MAX_CONCURRENT_CHILDREN,
   resetGitChildSlotsForTest,
   withGitChildSlot,
-} from "./worktree/git";
+} from "@volli/host-core/worktree/git";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";

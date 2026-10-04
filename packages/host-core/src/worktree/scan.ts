@@ -90,7 +90,7 @@ import type {
   PrunableWorktreeMetadata,
   RemovableWorktreeOrphan,
   UnreadableWorktreeProject,
-} from "../../ipc/contract";
+} from "@volli/shared";
 import { listProjects } from "@volli/host-core/db/projects-repo";
 import { listWorktreePaths } from "@volli/host-core/db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";

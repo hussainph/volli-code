@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { HostClientEventSink } from "../ports";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";
@@ -248,7 +249,7 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
   function railHarness(): {
     git: ScriptedGit;
     manager: WorktreeChangeWatchManager;
-    webContents: object;
+    webContents: HostClientEventSink;
     watchCalls: WatchCall[];
     armCalls: string[][];
     statusLoads: () => number;
@@ -316,11 +317,11 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
     managers.push(manager);
 
     const webContents = {
-      id: 1,
-      send: vi.fn(),
-      isDestroyed: () => false,
-      once: vi.fn(),
-      removeListener: vi.fn(),
+      id: "1",
+      publish: vi.fn(),
+      isClosed: () => false,
+      onceClosed: vi.fn(),
+      removeCloseListener: vi.fn(),
     };
 
     let statusLoads = 0;
@@ -351,15 +352,15 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
       async mount() {
         await readStatus();
         await readChangeSet();
-        await manager.watch(webContents as never, TICKET_ID, worktreePath);
+        await manager.watch(webContents, TICKET_ID, worktreePath);
       },
       // A rail page flip: the outgoing panel releases, the incoming one reads
       // and subscribes, all in one render commit.
       async flip() {
-        manager.unwatch(webContents as never, TICKET_ID);
+        manager.unwatch(webContents, TICKET_ID);
         await readStatus();
         await readChangeSet();
-        await manager.watch(webContents as never, TICKET_ID, worktreePath);
+        await manager.watch(webContents, TICKET_ID, worktreePath);
       },
       fireChange(filename: string) {
         watchCalls[0]!.cb("change", filename);
@@ -435,7 +436,7 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
 
     // The panel closes for good: nothing re-watches within the grace, so the
     // root is really torn down and no coverage remains.
-    rail.manager.unwatch(rail.webContents as never, TICKET_ID);
+    rail.manager.unwatch(rail.webContents, TICKET_ID);
     vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
     await rail.flip();
 

@@ -10,7 +10,7 @@ import {
   sessionLinkBudgetRefusal,
   workspaceRelPath,
 } from "./blob-attach";
-import { blobExists } from "./blob-store";
+import { blobExists } from "@volli/host-core/blob-store";
 import { listSessionLinks, listTicketLinks } from "@volli/host-core/db/blobs-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import {

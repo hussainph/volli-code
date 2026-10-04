@@ -52,7 +52,7 @@ import type {
 import type { NotificationOutcome, NotificationRequest } from "../notifications/dispatch";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
-import type { RunGit, RunGitAsync } from "../worktree";
+import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;

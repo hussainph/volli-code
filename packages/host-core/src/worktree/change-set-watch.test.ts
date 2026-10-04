@@ -90,17 +90,17 @@ function makeFakeWatcher(): FakeWatcher {
 function makeWebContents(id = 1) {
   const eventListeners = new Map<string, () => void>();
   return {
-    id,
-    send: vi.fn(),
+    id: String(id),
+    publish: vi.fn(),
     destroyed: false,
-    isDestroyed(): boolean {
+    isClosed(): boolean {
       return this.destroyed;
     },
-    once: vi.fn(function (this: unknown, event: string, cb: () => void) {
-      eventListeners.set(event, cb);
+    onceClosed: vi.fn(function (this: unknown, cb: () => void) {
+      eventListeners.set("destroyed", cb);
     }),
-    removeListener: vi.fn(function (this: unknown, event: string) {
-      eventListeners.delete(event);
+    removeCloseListener: vi.fn(function (this: unknown) {
+      eventListeners.delete("destroyed");
     }),
     fireDestroyed() {
       eventListeners.get("destroyed")?.();
@@ -142,7 +142,7 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    const result = await manager.watch(webContents as never, "t1", "/wt/t1");
+    const result = await manager.watch(webContents, "t1", "/wt/t1");
     expect(result.ok).toBe(true);
     expect(watchCalls).toHaveLength(1);
     expect(watchCalls[0]?.path).toBe("/wt/t1");
@@ -150,11 +150,11 @@ describe("WorktreeChangeWatchManager", () => {
 
     watchCalls[0]!.cb("change", "src/a.ts");
     watchCalls[0]!.cb("change", "src/b.ts");
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
-    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t1" });
   });
 
   it("filters ignored directories reported by git in a non-Node fixture", async () => {
@@ -169,7 +169,7 @@ describe("WorktreeChangeWatchManager", () => {
 
       manager = makeManager({ git: runGitCapturingAsync });
       const webContents = makeWebContents();
-      const result = await manager.watch(webContents as never, "t1", repo);
+      const result = await manager.watch(webContents, "t1", repo);
       expect(result.ok).toBe(true);
 
       vi.useFakeTimers();
@@ -177,11 +177,11 @@ describe("WorktreeChangeWatchManager", () => {
       cb("change", "target/artifact");
       cb("change", ".venv/installed");
       vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
-      expect(webContents.send).not.toHaveBeenCalled();
+      expect(webContents.publish).not.toHaveBeenCalled();
 
       cb("change", "src/main.rs");
       vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-      expect(webContents.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+      expect(webContents.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t1" });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -197,7 +197,7 @@ describe("WorktreeChangeWatchManager", () => {
       },
     });
     const webContents = makeWebContents();
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     vi.useFakeTimers();
 
     const cb = watchCalls[0]!.cb;
@@ -209,7 +209,7 @@ describe("WorktreeChangeWatchManager", () => {
 
     expect(checks).toEqual([["target", ".venv"]]);
     vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("fires at the maxWait ceiling even while events keep arriving", async () => {
@@ -217,7 +217,7 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     const cb = watchCalls[0]!.cb;
 
     // An agent writing faster than the debounce window never leaves a 250ms
@@ -226,12 +226,12 @@ describe("WorktreeChangeWatchManager", () => {
       cb("change", "src/generated.ts");
       vi.advanceTimersByTime(WATCH_DEBOUNCE_MS - 50);
     }
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
 
     // The ceiling resets with the burst, so the next quiet gap fires normally.
     cb("change", "src/generated.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(2);
+    expect(webContents.publish).toHaveBeenCalledTimes(2);
   });
 
   it("ignores .git events when the watched tree is a main repo", async () => {
@@ -239,7 +239,7 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager({ gitPathIsDirectory: () => true });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/repo");
+    await manager.watch(webContents, "t1", "/repo");
     const cb = watchCalls[0]!.cb;
 
     // Our own snapshot's index/lock writes come straight back through the
@@ -247,11 +247,11 @@ describe("WorktreeChangeWatchManager", () => {
     cb("change", ".git/index");
     cb("rename", ".git");
     vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
 
     cb("change", "src/a.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes ignored paths when .gitignore changes, then broadcasts that source change", async () => {
@@ -261,7 +261,7 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager({ git, gitPathIsDirectory: () => false });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     ignoredOutput = ".venv/\0";
     watchCalls[0]!.cb("change", ".gitignore");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
@@ -269,11 +269,11 @@ describe("WorktreeChangeWatchManager", () => {
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
 
     expect(git).toHaveBeenCalledTimes(2);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
 
     watchCalls[0]!.cb("change", ".venv/installed");
     vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes .git/info/exclude without feeding git metadata into a snapshot", async () => {
@@ -282,14 +282,14 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager({ git, gitPathIsDirectory: () => true });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/repo");
+    await manager.watch(webContents, "t1", "/repo");
     watchCalls[0]!.cb("change", ".git/info/exclude");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     await Promise.resolve();
     vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
 
     expect(git).toHaveBeenCalledTimes(2);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("restarts the watch when the ticket's worktree moved", async () => {
@@ -297,23 +297,23 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/old");
-    await manager.watch(webContents as never, "t1", "/wt/old");
+    await manager.watch(webContents, "t1", "/wt/old");
+    await manager.watch(webContents, "t1", "/wt/old");
     expect(watchCalls).toHaveLength(1);
 
     // Removed and re-ensured at a fresh path inside one window's lifetime.
-    await manager.watch(webContents as never, "t1", "/wt/new");
+    await manager.watch(webContents, "t1", "/wt/new");
     expect(watchCalls).toHaveLength(2);
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalled();
     expect(watchCalls[1]?.path).toBe("/wt/new");
 
     watchCalls[0]!.cb("change", "stale.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
 
     watchCalls[1]!.cb("change", "fresh.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
   });
 
   it("shares one watcher across windows and closes it after the last subscriber", async () => {
@@ -322,26 +322,26 @@ describe("WorktreeChangeWatchManager", () => {
     const windowA = makeWebContents(1);
     const windowB = makeWebContents(2);
 
-    await manager.watch(windowA as never, "t1", "/wt/t1");
-    await manager.watch(windowB as never, "t1", "/wt/t1");
+    await manager.watch(windowA, "t1", "/wt/t1");
+    await manager.watch(windowB, "t1", "/wt/t1");
     expect(watchCalls).toHaveLength(1);
 
     watchCalls[0]!.cb("change", "src/shared.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
-    expect(windowB.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+    expect(windowA.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t1" });
+    expect(windowB.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t1" });
 
-    manager.unwatch(windowA as never, "t1");
+    manager.unwatch(windowA, "t1");
     expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
 
-    windowA.send.mockClear();
-    windowB.send.mockClear();
+    windowA.publish.mockClear();
+    windowB.publish.mockClear();
     watchCalls[0]!.cb("change", "src/still-shared.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(windowA.send).not.toHaveBeenCalled();
-    expect(windowB.send).toHaveBeenCalledTimes(1);
+    expect(windowA.publish).not.toHaveBeenCalled();
+    expect(windowB.publish).toHaveBeenCalledTimes(1);
 
-    manager.unwatch(windowB as never, "t1");
+    manager.unwatch(windowB, "t1");
     // The last subscriber released, but the root stays armed for the rewatch
     // grace so a panel swap can reuse it (VC-372) — it closes only once the
     // grace expires with no replacement.
@@ -355,23 +355,23 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     expect(watchCalls).toHaveLength(1);
 
     // The rail page flip: one panel releases and the other subscribes in the
     // same commit. The unwatch must not close the handle the rewatch will use —
     // and it must not re-arm (a `git ls-files`) either.
-    manager.unwatch(webContents as never, "t1");
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    manager.unwatch(webContents, "t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     expect(watchCalls).toHaveLength(1);
     expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
 
     // Still live: the same handle the first subscription opened delivers the
     // debounced broadcast to the replacement subscriber.
-    webContents.send.mockClear();
+    webContents.publish.mockClear();
     watchCalls[0]!.cb("change", "src/swapped.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+    expect(webContents.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t1" });
   });
 
   it("tells the observer when a worktree's coverage begins and ends", async () => {
@@ -382,12 +382,12 @@ describe("WorktreeChangeWatchManager", () => {
     });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     expect(coverage).toEqual([{ ticketId: "t1", covered: true }]);
 
     // A renderer release only drops the subscriber: the linger keeps the
     // worktree covered, so the last-known answer stays trustworthy (VC-372).
-    manager.unwatch(webContents as never, "t1");
+    manager.unwatch(webContents, "t1");
     expect(coverage).toHaveLength(1);
 
     // Grace expiry really ends coverage.
@@ -404,8 +404,8 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager({ onRelevantChange: (ticketIds) => changes.push([...ticketIds]) });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
-    manager.unwatch(webContents as never, "t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
+    manager.unwatch(webContents, "t1");
 
     // No subscriber is left to broadcast to, but the replacement subscriber of
     // the panel swap is about to read a last-known answer — this change is
@@ -422,8 +422,8 @@ describe("WorktreeChangeWatchManager", () => {
     });
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
-    expect(manager.pause(webContents as never, "t1")).toEqual({ ok: true });
+    await manager.watch(webContents, "t1", "/wt/t1");
+    expect(manager.pause(webContents, "t1")).toEqual({ ok: true });
     // Disarmed while backgrounded: nothing observes changes, so nothing may
     // keep serving the last-known answer.
     expect(coverage).toEqual([
@@ -431,7 +431,7 @@ describe("WorktreeChangeWatchManager", () => {
       { ticketId: "t1", covered: false },
     ]);
 
-    expect(await manager.resume(webContents as never, "t1")).toEqual({ ok: true });
+    expect(await manager.resume(webContents, "t1")).toEqual({ ok: true });
     expect(coverage).toEqual([
       { ticketId: "t1", covered: true },
       { ticketId: "t1", covered: false },
@@ -444,8 +444,8 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
-    manager.unwatch(webContents as never, "t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
+    manager.unwatch(webContents, "t1");
     vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS - 1);
     expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
 
@@ -453,7 +453,7 @@ describe("WorktreeChangeWatchManager", () => {
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
 
     // Past the grace the root is gone, so the next subscriber arms anew.
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     expect(watchCalls).toHaveLength(2);
     expect(watchCalls[1]?.path).toBe("/wt/t1");
   });
@@ -464,33 +464,33 @@ describe("WorktreeChangeWatchManager", () => {
     const foreground = makeWebContents(1);
     const background = makeWebContents(2);
 
-    await manager.watch(foreground as never, "t1", "/wt/t1");
-    await manager.watch(background as never, "t1", "/wt/t1");
-    expect(manager.pause(background as never, "t1")).toEqual({ ok: true });
+    await manager.watch(foreground, "t1", "/wt/t1");
+    await manager.watch(background, "t1", "/wt/t1");
+    expect(manager.pause(background, "t1")).toEqual({ ok: true });
     expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
 
     watchCalls[0]!.cb("change", "src/foreground.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(foreground.send).toHaveBeenCalledTimes(1);
-    expect(background.send).not.toHaveBeenCalled();
+    expect(foreground.publish).toHaveBeenCalledTimes(1);
+    expect(background.publish).not.toHaveBeenCalled();
 
-    expect(manager.pause(foreground as never, "t1")).toEqual({ ok: true });
+    expect(manager.pause(foreground, "t1")).toEqual({ ok: true });
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
     watchCalls[0]!.cb("change", "src/background.ts");
     vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
-    expect(foreground.send).toHaveBeenCalledTimes(1);
-    expect(background.send).not.toHaveBeenCalled();
+    expect(foreground.publish).toHaveBeenCalledTimes(1);
+    expect(background.publish).not.toHaveBeenCalled();
 
-    expect(await manager.resume(background as never, "t1")).toEqual({ ok: true });
+    expect(await manager.resume(background, "t1")).toEqual({ ok: true });
     expect(watchCalls).toHaveLength(2);
-    expect(background.send).toHaveBeenCalledTimes(1);
+    expect(background.publish).toHaveBeenCalledTimes(1);
 
-    foreground.send.mockClear();
-    background.send.mockClear();
+    foreground.publish.mockClear();
+    background.publish.mockClear();
     watchCalls[1]!.cb("change", "src/resumed.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(foreground.send).not.toHaveBeenCalled();
-    expect(background.send).toHaveBeenCalledTimes(1);
+    expect(foreground.publish).not.toHaveBeenCalled();
+    expect(background.publish).toHaveBeenCalledTimes(1);
   });
 
   it("unwatchTicket drops every window subscription on that ticket", async () => {
@@ -499,9 +499,9 @@ describe("WorktreeChangeWatchManager", () => {
     const windowA = makeWebContents(1);
     const windowB = makeWebContents(2);
 
-    await manager.watch(windowA as never, "t1", "/wt/t1");
-    await manager.watch(windowB as never, "t1", "/wt/t1");
-    await manager.watch(windowA as never, "t2", "/wt/t2");
+    await manager.watch(windowA, "t1", "/wt/t1");
+    await manager.watch(windowB, "t1", "/wt/t1");
+    await manager.watch(windowA, "t2", "/wt/t2");
     expect(watchCalls).toHaveLength(2);
 
     manager.unwatchTicket("t1");
@@ -510,13 +510,13 @@ describe("WorktreeChangeWatchManager", () => {
 
     watchCalls[0]!.cb("change", "gone.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(windowA.send).not.toHaveBeenCalled();
-    expect(windowB.send).not.toHaveBeenCalled();
+    expect(windowA.publish).not.toHaveBeenCalled();
+    expect(windowB.publish).not.toHaveBeenCalled();
 
     // The untouched ticket keeps working.
     watchCalls[1]!.cb("change", "still-here.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t2" });
+    expect(windowA.publish).toHaveBeenCalledWith("worktree-changed", { ticketId: "t2" });
   });
 
   it("tells the renderer a watcher faulted, then tears the subscription down", async () => {
@@ -524,10 +524,10 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     watchCalls[0]!.watcher.fail(new Error("EMFILE: too many open files"));
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+    expect(webContents.publish).toHaveBeenCalledWith("worktree-watch-error", {
       ticketId: "t1",
       error: "EMFILE: too many open files",
     });
@@ -536,7 +536,7 @@ describe("WorktreeChangeWatchManager", () => {
     // Dead for good — no further change events from this subscription.
     watchCalls[0]!.cb("change", "after.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
   });
 
   it("maps a vanished-directory ENOENT to the shared missing sentence, so the rail can offer Recreate", async () => {
@@ -544,12 +544,12 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/does-not-exist");
+    await manager.watch(webContents, "t1", "/wt/does-not-exist");
     const enoent = new Error("ENOENT: no such file or directory, watch '/wt/does-not-exist'");
     Object.assign(enoent, { code: "ENOENT" });
     watchCalls[0]!.watcher.fail(enoent);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+    expect(webContents.publish).toHaveBeenCalledWith("worktree-watch-error", {
       ticketId: "t1",
       error: WORKTREE_MISSING_ON_DISK,
     });
@@ -562,12 +562,12 @@ describe("WorktreeChangeWatchManager", () => {
       manager = makeManager();
       const webContents = makeWebContents();
 
-      await manager.watch(webContents as never, "t1", live);
+      await manager.watch(webContents, "t1", live);
       const enoent = new Error(`ENOENT: no such file or directory, watch '${live}'`);
       Object.assign(enoent, { code: "ENOENT" });
       watchCalls[0]!.watcher.fail(enoent);
 
-      expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+      expect(webContents.publish).toHaveBeenCalledWith("worktree-watch-error", {
         ticketId: "t1",
         error: enoent.message,
       });
@@ -591,7 +591,7 @@ describe("WorktreeChangeWatchManager", () => {
     });
     const webContents = makeWebContents();
 
-    const result = await manager.watch(webContents as never, "t1", "/wt/gone");
+    const result = await manager.watch(webContents, "t1", "/wt/gone");
 
     expect(result).toEqual({ ok: false, error: WORKTREE_MISSING_ON_DISK });
   });
@@ -609,7 +609,7 @@ describe("WorktreeChangeWatchManager", () => {
     });
     const webContents = makeWebContents();
 
-    const result = await manager.watch(webContents as never, "t1", "/wt/t1");
+    const result = await manager.watch(webContents, "t1", "/wt/t1");
 
     expect(result).toEqual({ ok: false, error: "boom" });
   });
@@ -619,7 +619,7 @@ describe("WorktreeChangeWatchManager", () => {
     const webContents = makeWebContents();
     webContents.destroyed = true;
 
-    const result = await manager.watch(webContents as never, "t1", "/wt/t1");
+    const result = await manager.watch(webContents, "t1", "/wt/t1");
 
     expect(result.ok).toBe(false);
     expect(watchCalls).toHaveLength(0);
@@ -630,18 +630,18 @@ describe("WorktreeChangeWatchManager", () => {
     manager = makeManager();
     const webContents = makeWebContents();
 
-    await manager.watch(webContents as never, "t1", "/wt/t1");
+    await manager.watch(webContents, "t1", "/wt/t1");
     const first = watchCalls[0]!;
-    manager.unwatch(webContents as never, "t1");
+    manager.unwatch(webContents, "t1");
     // Held for the rewatch grace (VC-372), then released.
     vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
     expect(first.watcher.close).toHaveBeenCalled();
 
     first.cb("change", "late.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
 
-    await manager.watch(webContents as never, "t2", "/wt/t2");
+    await manager.watch(webContents, "t2", "/wt/t2");
     expect(watchCalls).toHaveLength(2);
     expect(watchCalls[1]?.path).toBe("/wt/t2");
   });
