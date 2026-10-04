@@ -67,6 +67,15 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
 
+## Linux host boundary
+
+`Test (packages)` is the plain-Node Linux host lane, pinned by `.nvmrc`; new host
+packages must provide `test:coverage`. `Check + Build` enforces zero Electron
+imports across all packages and hostd, including transitive relative imports.
+`Build (host container)` is path-filtered and required by `CI gate` when selected.
+Host development image, native ABI isolation and inventory commands:
+`docs/development/host-linux.md`.
+
 ## CI is the gate
 
 CI runs the full test suite, every coverage threshold and the gating desktop smoke lanes on every desktop PR. `CI gate` sums those lanes; each must pass or skip by its documented condition. Measured quarantines run separately, not as a hidden waiver inside the gate.
