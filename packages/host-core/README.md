@@ -106,8 +106,20 @@ MCP/Code Mode/Web Access owners, secret service and attachment identities. Brows
 and shell ports are construction inputs; birth membership derives from those
 capabilities, preserving desktop's shipped tool order. Venue and sandbox assets
 are explicit options. The runtime and peek share one transcript artifact store.
-Session facade/agent commands, recovery gating and the single composition
-`close()` are the next desktop-only slice; hostd does not run Sessions yet.
+The next desktop-only slice adds `session-runtime/lifecycle` and
+`session-runtime/automations`: synchronous quit-hold installation, then stale
+attachments → delegations → durable shell notices → scheduled resume. Only
+`await lifecycle.ready()` issues `RecoveredSessionServices`, the opaque proof
+required to start runtime automations. One idempotent `close()` stops producers,
+releases power listeners and drains notices/RPC/runtime/MCP/observability through
+VC-618's maintenance seam; it also waits for an in-flight recovery sweep. Desktop
+still owns the accepted-quit gate, deadline and app exit. Recorded port-call tests
+replace its former source-text ordering checks; frozen original-main fixtures
+cover all 336 verified tool-surface combinations, including refusals.
+
+Facade/agent-command construction and the remaining circular staging are still
+desktop-owned pending the final lift slice. Those consumers will join the same
+ready interface, not create another engine. Hostd does not run Sessions yet.
 
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot

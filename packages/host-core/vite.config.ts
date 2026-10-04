@@ -52,6 +52,10 @@ export default defineConfig({
         // login shell. Neither is visible anywhere until the laptop swaps.
         "src/session-concurrency.ts",
         "src/session-runtime/boot-recovery.ts",
+        // Recovery-before-consumers and a single drain are now executable port
+        // contracts, replacing desktop's source scans (VC-622).
+        "src/session-runtime/lifecycle.ts",
+        "src/session-control/suspend-clock.ts",
         // Birth-frozen membership must never name an absent host capability (VC-622).
         "src/session-runtime/host-capabilities.ts",
         "src/session-runtime/sessions.ts",
