@@ -16,6 +16,12 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // File/blob/template services moved with their tests at unchanged 100% (VC-557).
+        "src/blob-attach.ts",
+        "src/blob-collect.ts",
+        "src/blob-protocol.ts",
+        "src/turn-attachments.ts",
+        "src/prompt-templates.ts",
         // The ports every moved service asks its host through (VC-554), and
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.

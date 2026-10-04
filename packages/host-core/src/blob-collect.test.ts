@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { attachBlob } from "./blob-attach";
 import { collectUnlinkedBlobs } from "./blob-collect";
 import { blobExists } from "./blob-store";
-import { deleteBlobLink, getBlob, listTicketLinks } from "@volli/host-core/db/blobs-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { deleteBlobLink, getBlob, listTicketLinks } from "./db/blobs-repo";
+import { insertProject } from "./db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
+import { insertTicket } from "./db/tickets-repo";
 
 let ctx: TestDb;
 let root: string;

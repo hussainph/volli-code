@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { importBlob } from "../blob-import";
+import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot, removeBlob } from "../blob-store";
 import { listTicketEvents } from "@volli/host-core/db/events-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";

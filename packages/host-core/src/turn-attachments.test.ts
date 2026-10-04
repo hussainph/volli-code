@@ -6,17 +6,17 @@ import { blobUrl, type UIMessageLike } from "@volli/shared";
 
 import { attachBlob } from "./blob-attach";
 import { collectUnlinkedBlobs } from "./blob-collect";
-import { deleteBlobLink } from "@volli/host-core/db/blobs-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+import { deleteBlobLink } from "./db/blobs-repo";
+import { insertProject } from "./db/projects-repo";
 import {
   openTestDb,
   testProject,
   testSession,
   testTicket,
   type TestDb,
-} from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
+} from "./db/test-helpers";
+import { insertTicket } from "./db/tickets-repo";
+import { insertSession } from "./session-control/test-support";
 import { messageBlobHashes, prepareTurnAttachments } from "./turn-attachments";
 
 let ctx: TestDb;

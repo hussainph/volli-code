@@ -24,7 +24,7 @@ import {
   createBlobLink,
   upsertBlob,
   type CreateBlobLinkInput,
-} from "@volli/host-core/db/blobs-repo";
+} from "./db/blobs-repo";
 
 /**
  * Extension → media type for the kinds a user actually attaches. Deliberately

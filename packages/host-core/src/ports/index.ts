@@ -20,3 +20,4 @@ export {
   type SecretKeyPort,
   type SecretKeyRefusal,
 } from "./secret-key";
+export { trashCapabilities, TrashUnavailableError, type TrashPort } from "./trash";

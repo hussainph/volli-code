@@ -41,7 +41,7 @@ import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concu
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
-import { ensureProjectArtifactsDir } from "../volli-fs";
+import { ensureProjectArtifactsDir } from "@volli/host-core/volli-fs";
 import {
   acquireWorktreeStartLease,
   createSetupRun,

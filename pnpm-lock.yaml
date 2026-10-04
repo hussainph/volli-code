@@ -511,9 +511,15 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vscode/ripgrep':
+        specifier: ^1.18.0
+        version: 1.18.0
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
     devDependencies:
       ai:
         specifier: ^7.0.83

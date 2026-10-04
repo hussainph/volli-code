@@ -34,7 +34,7 @@ import {
 } from "@volli/shared";
 import { materializeBlobs } from "./blob-materialize";
 import { readBlob } from "./blob-store";
-import { getBlob, listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
+import { getBlob, listMaterializableLinks } from "./db/blobs-repo";
 
 export interface TurnAttachments {
   /**

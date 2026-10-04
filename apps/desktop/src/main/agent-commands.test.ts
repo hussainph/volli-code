@@ -23,7 +23,7 @@ import type { UIMessage } from "ai";
 import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
 import type { NotificationOutcome, NotificationRequest } from "./notifications/dispatch";
 
-import { importBlob } from "./blob-import";
+import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot } from "./blob-store";
 import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
 import { listComments } from "@volli/host-core/db/comments-repo";

@@ -21,6 +21,8 @@ import { openVolliDb } from "./db";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
+import type { TrashPort } from "./ports/trash";
+import { createHostFileServices, type HostFileServices } from "./file-services";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
@@ -68,6 +70,8 @@ export interface HostCorePorts extends HostSessionPorts {
    * refused with a `ClientCapabilityUnavailableError`.
    */
   client?: ClientCapabilityPort;
+  /** Host-side recoverable deletion; absent on headless hosts, which refuse. */
+  trash?: TrashPort;
 }
 
 /** How this host behaves. No defaults for policy: every host states it. */
@@ -98,6 +102,7 @@ export interface HostCore extends HostSessionServices {
   readonly database: DbHandle;
   /** The client's capabilities, or one that refuses each readably when there is none. */
   readonly client: ClientCapabilityPort;
+  readonly fileServices: HostFileServices;
   /**
    * Why the database did not open, typed for routing (VC-602): `null` when it
    * opened. `database.error` is the sentence every degraded surface answers
@@ -149,6 +154,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     dbPath,
     database,
     client: clientCapabilities(ports.client),
+    fileServices: createHostFileServices(ports),
     databaseFailure,
     ...createHostSessionServices(database.ok ? database.db : null, ports),
   };

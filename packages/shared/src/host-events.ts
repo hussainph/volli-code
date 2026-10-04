@@ -1,3 +1,4 @@
+import type { FileSource } from "./file-ref";
 /**
  * What a host announces to its clients, as domain vocabulary (VC-554).
  *
@@ -254,3 +255,40 @@ export interface WorktreePhaseEvent {
 
 /** The best scope a caller can name; `entity` is stamped by the fan-out. */
 export type DataChangeScope = Omit<DataChangedEvent, "entity">;
+
+/**
+ * The last word a watch subscription gets: main has torn the subscription down
+ * and will never send for it again (issue #134). Every holder of that watch owes
+ * itself a re-arm or an honest "live updates are off" — its `watch()` hold is
+ * now a hold on nothing. Only ever `true`; ORDINARY change events omit the field
+ * entirely, so `event.final === true` is the whole test.
+ *
+ * It cannot be inferred from the payload: the dominant teardown (the watched
+ * directory is gone for good) does carry `revision: null`, but a watcher that
+ * fails to REWIRE over a directory still present sends a final event that reads
+ * exactly like ordinary news.
+ */
+interface FinalWatchEvent {
+  final?: true;
+}
+
+/** The single watched file a `volli:file-changed` push event fired for. */
+export interface FileChangedEvent extends FinalWatchEvent {
+  projectId: string;
+  /** The worktree owner; Main-checkout files always normalize this to null. */
+  ticketId: string | null;
+  relPath: string;
+  source: FileSource;
+  /** Current on-disk mtime after the debounce, or null when the file is unreadable. */
+  revision: number | null;
+}
+
+/**
+ * The single watched directory a `volli:dir-changed` push event fired for
+ * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
+ * {@link FileChangedEvent} there is no `source` to disambiguate.
+ */
+export interface DirChangedEvent extends FinalWatchEvent {
+  projectId: string;
+  relPath: string;
+}

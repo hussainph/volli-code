@@ -132,7 +132,7 @@ type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
 import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
-import type { TurnAttachments } from "../turn-attachments";
+import type { TurnAttachments } from "@volli/host-core/turn-attachments";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
