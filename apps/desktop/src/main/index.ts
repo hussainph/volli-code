@@ -3900,6 +3900,7 @@ app.whenReady().then(async () => {
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
+          busyWorktreeSites,
           interruptTicketSessions: interruptTicketSessionsAnnounced,
           // An explicit `volli ticket move` is the other Deliberate-move door.
           // It reaches the same one main-owned pending arrival as renderer IPC;

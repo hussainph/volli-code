@@ -129,6 +129,10 @@
       "types": "./src/blob-materialize.ts",
       "import": "./src/blob-materialize.ts"
     },
+    "./ticket-move": {
+      "types": "./src/ticket-move.ts",
+      "import": "./src/ticket-move.ts"
+    },
     "./ticket-commands": {
       "types": "./src/ticket-commands.ts",
       "import": "./src/ticket-commands.ts"
