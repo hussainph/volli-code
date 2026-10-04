@@ -61,7 +61,7 @@ import {
   recoveryPendingPath,
   syncRecoveryPath,
 } from "./recovery-pending";
-import { checkSchemaCompatibility } from "./schema-compatibility";
+import { checkSchemaCompatibility, DatabaseFromNewerVersionError } from "./schema-compatibility";
 import type { SchemaCompatibility } from "./schema-compatibility";
 import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
 import type { TransactionViolationHandler } from "./transaction-gate";
@@ -222,6 +222,32 @@ function stagedSchemaVersion(path: string): number {
 // ---------------------------------------------------------------------------
 
 /**
+ * The read-only checks an existing live file passes before anything opens it
+ * for writing. A read-only handle cannot checkpoint/delete a damaged WAL on
+ * close or overwrite a clean migration safety copy before recovery becomes
+ * available.
+ */
+function preflight(dbPath: string): SchemaCompatibility {
+  assertDatabaseHeader(dbPath);
+  const check = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    if (!checksClean(check)) {
+      throw new Error(
+        "The local database failed its integrity check. Restore from the last backup that checks clean.",
+      );
+    }
+    // The downgrade guard, on the read-only handle. A refusal opens no
+    // writable handle, checkpoints nothing and takes no safety copy: the db
+    // file and its WAL stay byte-identical; `-shm`, an index with no data, may
+    // be created or reset by SQLite's read-only reader, exactly as the
+    // preflight above already does.
+    return checkSchemaCompatibility(check, SCHEMA_HEAD);
+  } finally {
+    check.close();
+  }
+}
+
+/**
  * Opens (creating if absent) the Volli SQLite database at `dbPath`, applies
  * the pragmas migration 001 assumes — WAL journaling, foreign keys ON, a
  * busy timeout so a brief writer/reader overlap blocks instead of erroring,
@@ -244,6 +270,12 @@ function stagedSchemaVersion(path: string): number {
  * boot closed rather than creating an empty first-run database at a path the
  * swap had not finished filling.
  *
+ * Removes the unpublished copies a dead migration attempt left behind only
+ * once the live file exists and passes the preflight. If it is missing or
+ * fails, they are kept and the refusal names them: one may be the only intact
+ * copy of the database, and a missing live file beside one is never a first
+ * run.
+ *
  * The parent directory must already exist; the host creates it (and catches
  * everything this throws) before calling in, since that's also where the
  * open+migrate failure is turned into the degraded IPC story.
@@ -265,34 +297,29 @@ export function openVolliDb(
   // handle cannot resume against a different inode after a successful swap.
   const openLock = options.allowPendingRecovery ? undefined : acquireDatabaseOpenLock(dbPath);
   try {
-    if (!options.allowPendingRecovery) {
-      assertNoPendingDatabaseRecovery(dbPath);
-      // Under the lock no rollback point is being published: any pending
-      // copy is from an attempt that died before it could publish.
-      removeAbandonedRollbackCopies(dbPath);
-    }
+    // Under the lock no rollback point is being published: any pending copy
+    // is from an attempt that died before it could publish. It may still be
+    // the only intact copy of the database, so it is only listed here, and
+    // removed below once the live file has passed its preflight.
+    if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+    const abandoned = options.allowPendingRecovery ? [] : abandonedRollbackCopies(dbPath);
     let compatibility: SchemaCompatibility | undefined;
     if (exists(dbPath)) {
-      // Read-only preflight cannot checkpoint/delete a damaged WAL on close or
-      // overwrite a clean migration safety copy before recovery becomes available.
-      assertDatabaseHeader(dbPath);
-      const check = new Database(dbPath, { readonly: true, fileMustExist: true });
       try {
-        if (!checksClean(check)) {
-          throw new Error(
-            "The local database failed its integrity check. Restore from the last backup that checks clean.",
-          );
-        }
-        // The downgrade guard, on the read-only handle. A refusal opens no
-        // writable handle, checkpoints nothing and takes no safety copy: the
-        // db file and its WAL stay byte-identical; `-shm`, an index with no
-        // data, may be created or reset by SQLite's read-only reader, exactly
-        // as the preflight above already does.
-        compatibility = checkSchemaCompatibility(check, SCHEMA_HEAD);
-      } finally {
-        check.close();
+        compatibility = preflight(dbPath);
+      } catch (error) {
+        throw keepingAbandonedCopies(error, abandoned);
       }
+    } else if (abandoned.length > 0) {
+      // A missing live file beside an unpublished copy is a lost database,
+      // not a first run. Creating an empty profile here would hide the copy.
+      throw new Error(
+        `The local database is missing, but an unpublished safety copy of it was kept: ${abandoned.join(", ")}. Nothing was created. Recover the database from that copy before starting Volli again.`,
+      );
     }
+    // The live database exists and checks clean: the pending copies are
+    // redundant now, and never recovery candidates.
+    removeAbandonedRollbackCopies(abandoned);
     const db = new Database(dbPath);
     try {
       db.pragma("journal_mode = WAL");
@@ -458,8 +485,11 @@ function preserveRollbackFamily(
 
 /**
  * Best effort: give the old family its rollback name back (sidecars first,
- * base last), then drop the preserved second names (base first). Stopping
- * anywhere leaves a state {@link preserveRollbackFamily} resumes from.
+ * base last) and make those names durable, then drop the preserved second
+ * names (base first) and make that durable: the forward path's barrier, in
+ * reverse, so a power cut can never persist the removals without the
+ * restored names. Stopping anywhere leaves a state
+ * {@link preserveRollbackFamily} resumes from.
  */
 function undoPreservation(backupPath: string, family: PreservedFamily): void {
   const { path } = family;
@@ -472,6 +502,7 @@ function undoPreservation(backupPath: string, family: PreservedFamily): void {
     ]) {
       linkSync(`${path}${suffix}`, `${backupPath}${suffix}`);
     }
+    syncRecoveryPath(dirname(backupPath));
     for (const suffix of [
       ...family.linked.filter((item) => item === ""),
       ...family.linked.filter((item) => item !== ""),
@@ -493,11 +524,14 @@ function undoPreservation(backupPath: string, family: PreservedFamily): void {
  * A `.pending-<uuid>` copy exists only while {@link publishRollbackPoint}
  * runs, and migrations run only under the open lock. One found while holding
  * that lock is therefore from an attempt that died before publishing: the
- * migration it protected never ran, so the live database is newer and whole,
- * and the copy (up to a full database in size) is never a recovery
- * candidate. A `.corrupt` quarantine is evidence, and is kept.
+ * migration it protected never ran. Such a copy (up to a full database in
+ * size) is never a recovery candidate, but it may be the only intact copy of
+ * the database left, so this only lists them; {@link openVolliDb} removes
+ * them once the live database has passed its preflight, and names them in
+ * any refusal otherwise. A `.corrupt` quarantine is evidence, and is never
+ * listed.
  */
-function removeAbandonedRollbackCopies(dbPath: string): void {
+function abandonedRollbackCopies(dbPath: string): string[] {
   const name = basename(dbPath).replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
   const uuid = "[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}";
   const pending = new RegExp(`^${name}\\.backup-v\\d+\\.pending-${uuid}(?:-wal|-shm)?$`);
@@ -506,24 +540,51 @@ function removeAbandonedRollbackCopies(dbPath: string): void {
   try {
     names = readdirSync(directory);
   } catch {
-    return;
+    return [];
   }
-  for (const entry of names) {
+  const found: string[] = [];
+  for (const entry of names.toSorted()) {
     if (!pending.test(entry)) continue;
     const path = join(directory, entry);
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (info?.isFile() === true) found.push(path);
+  }
+  return found;
+}
+
+/** Only after the live database has passed its preflight: see {@link abandonedRollbackCopies}. */
+function removeAbandonedRollbackCopies(paths: readonly string[]): void {
+  for (const path of paths) {
     try {
-      if (!lstatSync(path).isFile()) continue;
       unlinkSync(path);
-      console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "removed-abandoned", name: entry });
+      console.info(BACKUP_RETENTION_LOG_PREFIX, {
+        action: "removed-abandoned",
+        name: basename(path),
+      });
     } catch (error) {
       console.error(BACKUP_RETENTION_LOG_PREFIX, {
         action: "failed",
         operation: "remove-abandoned",
-        name: entry,
+        name: basename(path),
         error,
       });
     }
   }
+}
+
+/**
+ * A refusal to open a live database that is damaged also names any pending
+ * copies, which were kept and may be the only intact database left. A
+ * newer-version refusal is rethrown as is: its type routes the recovery
+ * screen, and the live file it guards is intact.
+ */
+function keepingAbandonedCopies(error: unknown, abandoned: readonly string[]): unknown {
+  if (abandoned.length === 0 || error instanceof DatabaseFromNewerVersionError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `${message} An unpublished safety copy of the database was kept: ${abandoned.join(", ")}.`,
+    { cause: error },
+  );
 }
 
 export const MIGRATION_RECOVERY_ACTION =

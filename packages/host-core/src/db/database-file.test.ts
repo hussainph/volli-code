@@ -79,7 +79,11 @@ import {
 import type { DatabaseFileStep } from "./database-file";
 import { migrate } from "./migrations";
 import { recoveryPendingPath } from "./recovery-pending";
-import { MIN_READER_VERSION_KEY } from "./schema-compatibility";
+import {
+  DatabaseFromNewerVersionError,
+  MIN_READER_VERSION_KEY,
+  raiseMinReaderVersion,
+} from "./schema-compatibility";
 import { openRawDb } from "./test-helpers";
 
 const PROBE = "database-file-probe";
@@ -743,6 +747,88 @@ describe("publishRollbackPoint", () => {
     expect(existsSync(`${abandoned}-shm`)).toBe(false);
     expect(readFileSync(`${abandoned}.corrupt`, "utf8")).toBe("quarantined evidence");
   });
+
+  // A publication failure leaves a verified pending copy and no published
+  // rollback point. If the next boot then finds the live file damaged or
+  // gone, that copy may be the only intact database left: it is kept, the
+  // refusal names it, and no empty first-run profile is created beside it.
+  it.each(["damaged", "missing"] as const)(
+    "keeps a pending copy, names it and refuses when the live database is %s",
+    (state) => {
+      const fx = rollbackFixture(false);
+      try {
+        expect(() =>
+          publishRollbackPoint(fx.db, fx.dbPath, 55, {
+            faults: (step) => {
+              if (step === "rollback-point:publish") throw new Error("injected publish failure");
+            },
+          }),
+        ).toThrow(/could not preserve and publish/);
+      } finally {
+        fx.db.close();
+      }
+      const pendingName = readdirSync(fx.root).find((name) => /\.pending-[\da-f-]+$/.test(name));
+      expect(pendingName).toBeDefined();
+      const pending = join(fx.root, pendingName as string);
+      for (const suffix of ["-wal", "-shm"]) rmSync(`${fx.dbPath}${suffix}`, { force: true });
+      if (state === "damaged") {
+        const bytes = readFileSync(fx.dbPath);
+        bytes.write("BROKEN", 0);
+        writeFileSync(fx.dbPath, bytes);
+      } else {
+        rmSync(fx.dbPath);
+      }
+      // The open lock is the one name a boot may add: it holds no data.
+      const listing = () =>
+        readdirSync(fx.root)
+          .filter((name) => !name.endsWith(".open-lock"))
+          .toSorted();
+      const before = listing();
+      const pendingBytes = readFileSync(pending);
+      const liveBytes = state === "damaged" ? readFileSync(fx.dbPath) : undefined;
+
+      let refusal: Error | undefined;
+      try {
+        openVolliDb(fx.dbPath).close();
+      } catch (error) {
+        refusal = error as Error;
+      }
+      expect(refusal?.message).toMatch(
+        state === "damaged" ? /damaged header/ : /missing.*Nothing was created/,
+      );
+      expect(refusal?.message).toContain(pending);
+      // Nothing was removed or created; the copy and the live bytes are untouched.
+      expect(listing()).toEqual(before);
+      expect(readFileSync(pending).equals(pendingBytes)).toBe(true);
+      if (liveBytes !== undefined) expect(readFileSync(fx.dbPath).equals(liveBytes)).toBe(true);
+      expect(existsSync(fx.dbPath)).toBe(state === "damaged");
+      // A second boot refuses the same way: the evidence survives repeated launches.
+      expect(() => openVolliDb(fx.dbPath)).toThrow(pending);
+
+      // The copy is a usable database: put it back, and boot opens it and
+      // only then drops the now-redundant pending copy.
+      copyFileSync(pending, fx.dbPath);
+      const db = openVolliDb(fx.dbPath);
+      try {
+        expect(readProbe(db)).toBe("current");
+      } finally {
+        db.close();
+      }
+      expect(existsSync(pending)).toBe(false);
+    },
+  );
+
+  it("keeps pending copies on a newer-version refusal, which leaves everything as it was", () => {
+    const fx = fixture();
+    const abandoned = `${fx.dbPath}.backup-v57.pending-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`;
+    copyFileSync(fx.dbPath, abandoned);
+    const db = openRawDb(fx.dbPath);
+    db.pragma("user_version = 9999");
+    raiseMinReaderVersion(db, 9999, 1);
+    db.close();
+    expect(() => openVolliDb(fx.dbPath)).toThrow(DatabaseFromNewerVersionError);
+    expect(existsSync(abandoned)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -783,6 +869,39 @@ describe("durability ordering", () => {
       releaseSync,
     );
     position((entry) => entry === `fsync ${fx.root}`, publish);
+  });
+
+  it("a failed publish puts the old names back durably before dropping the preserved ones", () => {
+    const fx = rollbackFixture(true);
+    try {
+      expect(() =>
+        publishRollbackPoint(fx.db, fx.dbPath, 55, {
+          faults: (step) => {
+            if (step === "rollback-point:publish") throw new Error("injected publish failure");
+          },
+        }),
+      ).toThrow(/could not preserve and publish/);
+    } finally {
+      fx.db.close();
+    }
+    const releaseSync = position(
+      (entry) => entry === `fsync ${fx.root}`,
+      position((entry) => entry === `unlink ${fx.backupPath}-shm`),
+    );
+    const preserved = (suffix: string) => (entry: string) =>
+      new RegExp(`^link ${fx.backupPath}\\.preserved-[\\da-f-]+${suffix} -> `).test(entry) &&
+      entry.endsWith(` -> ${fx.backupPath}${suffix}`);
+    // Sidecars first, base last, then durable before any preserved name goes.
+    const relinkWal = position(preserved("-wal"), releaseSync);
+    const relinkBase = position(preserved(""), relinkWal);
+    const relinkSync = position((entry) => entry === `fsync ${fx.root}`, relinkBase);
+    const drop = (suffix: string) => (entry: string) =>
+      new RegExp(`^unlink ${fx.backupPath}\\.preserved-[\\da-f-]+${suffix}$`).test(entry);
+    const dropBase = position(drop(""), relinkSync);
+    const dropWal = position(drop("-wal"), dropBase);
+    position((entry) => entry === `fsync ${fx.root}`, dropWal);
+    expect(contents(fx.backupPath)).toBe(fx.previous);
+    expect(readdirSync(fx.root).some((name) => name.includes(".preserved-"))).toBe(false);
   });
 
   it("a swap's marker is durable before anything moves, its content before its name, its name before the marker clears", () => {
