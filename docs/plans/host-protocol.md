@@ -149,7 +149,7 @@ One Workspace's facts never reach another Workspace's connection.
 | Class | Meaning | Examples |
 |---|---|---|
 | feed | A durable change; it travels on the Workspace change feed (F1), not as a topic | `data-changed`, `session-retitled` once their areas move |
-| overlay | Live state with a latest value, coalesced per key. A (re)connecting Client reads a baseline query first. Never a durable cursor | `shell-state`, `browser-tab-state`, `worktree-phase`, `pending-armed-runs-changed` |
+| overlay | Live state with a latest value, coalesced per key. Never a durable cursor. A (re)connecting Client subscribes, and the subscription's first yield is the baseline, taken in the same synchronous turn the listener is installed, so no change falls between them | `shell-state`, `browser-tab-state`, `worktree-phase`, `pending-armed-runs-changed` |
 | notice | Ephemeral, for connections open at the time, dropped otherwise. Never the only carrier of a durable fact | `session-started`, `pending-armed-run-settled` |
 
 **Cadence in host-core.** Coalescing (`data-change-coalescer.ts`) and any throttle move into host-core with the bus. Adapters (desktop windows, WebSocket connections) deliver what they are handed, within their outbound byte bounds.
@@ -170,7 +170,7 @@ Terminal output is ordered/lossless within a connection: bound bytes in flight a
 
 1. The host keeps a headless emulator per terminal (`@xterm/headless`, the core of the renderer's `@xterm/xterm`) and feeds it every output batch.
 2. Each attachment opens with that emulator's serialization (`@xterm/addon-serialize`: screen, bounded scrollback, modes, cursor, alternate screen) as its first frames.
-3. Live output follows from the same point. Serialization and attach happen in one synchronous turn, so no byte appears in both or in neither.
+3. The serialization reflects the output through one byte offset, the cut. The cut is taken only after the emulator has drained its writes up to it (xterm's `write` is asynchronous; use its completion callback), and only where the escape parser is in its ground state. Live frames start at the cut, so an escape sequence still open at the cut is sent whole, never as a suffix. No byte appears in both or in neither.
 
 Attach metadata names the serializer version. The raw tail stays for CLI peek, which reads text.
 
