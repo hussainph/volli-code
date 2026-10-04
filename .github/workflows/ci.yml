@@ -589,6 +589,14 @@ jobs:
           docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
             bash -s < apps/hostd/scripts/ci-boot-artifact.sh
 
+      # VC-623: as root, issue an operator token for a non-service login; that
+      # login registers a project and creates a ticket with the bundled CLI;
+      # the `volli` service account cannot read the token or mint one.
+      - name: Operator token proof (VC-623)
+        run: |
+          docker run --rm -i --user 0 -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-operator-proof.sh
+
       - name: Upload the hostd artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

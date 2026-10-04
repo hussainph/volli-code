@@ -24,11 +24,17 @@
  * streaming/progress/cancellation work — to VC-317 and the restore UI.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
 import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
+import {
+  DatabaseSwapFinalizeError,
+  DatabaseSwapRollbackError,
+  swapInStagedProfile,
+} from "@volli/host-core/db/database-file";
+import type { DatabaseFileFaults } from "@volli/host-core/db/database-file";
 import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
 import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
@@ -61,6 +67,8 @@ export interface RestoreRequest {
   /** Project id → the local directory that project lives in on this machine. */
   projectPaths: Record<string, string>;
   now: number;
+  /** Crash tests only: stop the profile swap at a named step. */
+  faults?: DatabaseFileFaults;
 }
 
 /**
@@ -406,64 +414,43 @@ async function writeArtifacts(staging: string, bundle: ReadBackupBundle): Promis
   }
 }
 
-/** The profile files a restore replaces. Everything else in the root is left alone. */
-const PROFILE_ENTRIES = [
-  "volli.db",
-  "volli.db-wal",
-  "volli.db-shm",
-  "blobs",
-  "session-transcripts",
-] as const;
-
 /**
- * Moves each named entry from one directory to another, recording every name
- * it moved in `moved` BEFORE moving the next one.
- *
- * The accumulator is the whole point: a rename that fails on the third entry
- * has already moved two, and the caller's rollback has to know exactly which
- * two so it can put those back and only those. Returning the list would lose
- * it on the throw.
+ * The profile entries a restore replaces beside the database itself. Every
+ * other entry in the root, credentials included, is left alone.
  */
-function moveInto(from: string, to: string, names: readonly string[], moved: string[]): void {
-  mkdirSync(to, { recursive: true });
-  for (const name of names) {
-    const source = join(from, name);
-    if (!existsSync(source)) continue;
-    renameSync(source, join(to, name));
-    moved.push(name);
-  }
+const PROFILE_COMPANIONS = ["blobs", "session-transcripts"] as const;
+
+/** The live database inside a profile root (or a staged one). */
+function profileDatabasePath(root: string): string {
+  return join(root, "volli.db");
 }
 
 /**
  * The swap, and the only moment the live profile changes.
  *
- * Two multi-entry moves with a window between and inside them, so the window
- * is what this function exists to handle. Either move can fail PARTWAY — the
- * database renamed aside, the blob directory refused — and each failure is
- * unwound to the entry: whatever the staged profile had already placed goes
- * back to staging, whatever the old profile had already set aside comes back,
- * and only then is the failure reported. That is the difference between "the
- * restore did not happen" and a profile directory missing its database.
+ * It belongs to the fenced database-file module (VC-628), not to this one:
+ * the open lock, a durable intent marker that keeps boot from creating an
+ * empty profile mid-swap, SQLite's exclusive ownership of the live file (so a
+ * running app is refused rather than detached from the file it is writing),
+ * fsync, and an atomic rename onto the live path, which is never empty. A
+ * failure partway puts the previous profile back, entry by entry, and clears
+ * the marker; only a failure to put it back leaves boot refusing, with the
+ * original files kept in the set-aside directory.
  */
-function activateProfile(profileRoot: string, staging: string, replacedPath: string): void {
-  const setAside: string[] = [];
-  try {
-    moveInto(profileRoot, replacedPath, PROFILE_ENTRIES, setAside);
-  } catch (error) {
-    moveInto(replacedPath, profileRoot, setAside, []);
-    rmSync(replacedPath, { recursive: true, force: true });
-    throw error;
-  }
-  const activated: string[] = [];
-  try {
-    moveInto(staging, profileRoot, PROFILE_ENTRIES, activated);
-  } catch (error) {
-    // Staged entries first, so the old ones do not land on top of them.
-    moveInto(profileRoot, staging, activated, []);
-    moveInto(replacedPath, profileRoot, setAside, []);
-    rmSync(replacedPath, { recursive: true, force: true });
-    throw error;
-  }
+function activateProfile(
+  profileRoot: string,
+  staging: string,
+  replacedPath: string,
+  faults: DatabaseFileFaults | undefined,
+): void {
+  swapInStagedProfile({
+    dbPath: profileDatabasePath(profileRoot),
+    stagedPath: profileDatabasePath(staging),
+    asideDirectory: replacedPath,
+    replacing: "healthy",
+    companions: PROFILE_COMPANIONS,
+    faults,
+  });
 }
 
 /**
@@ -500,7 +487,7 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
 
   let db: Database.Database | null = null;
   try {
-    const dbPath = join(staging, "volli.db");
+    const dbPath = profileDatabasePath(staging);
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = OFF");
@@ -539,7 +526,35 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     db = null;
 
     const replacedPath = join(request.profileRoot, `.volli-replaced-${request.now}`);
-    activateProfile(request.profileRoot, staging, replacedPath);
+    try {
+      activateProfile(request.profileRoot, staging, replacedPath, request.faults);
+    } catch (error) {
+      if (error instanceof DatabaseSwapFinalizeError) {
+        rmSync(staging, { recursive: true, force: true });
+        return {
+          ok: false,
+          problems: [
+            problem(
+              "verify",
+              `The restored profile is installed and checked, but the restore could not be finalized, so Volli will not open it yet. The previous profile is preserved at ${replacedPath}.`,
+            ),
+          ],
+        };
+      }
+      if (error instanceof DatabaseSwapRollbackError) {
+        // Staging may hold half of either profile now: keep it as evidence.
+        return {
+          ok: false,
+          problems: [
+            problem(
+              "verify",
+              `The restore failed and the previous profile could not be put back. Its files are preserved at ${replacedPath}; the restored files at ${staging}.`,
+            ),
+          ],
+        };
+      }
+      throw error;
+    }
     rmSync(staging, { recursive: true, force: true });
 
     return {

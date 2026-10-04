@@ -7,8 +7,9 @@ No window, no Electron: `scripts/check-host-electron-imports.mjs` gates this
 directory.
 
 ```sh
-volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>]
+volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>] [--operators <file>]
 volli-hostd status --data-dir /var/lib/volli-hostd
+sudo volli-hostd operator-token --for <login> | --revoke <login>
 VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 ```
 
@@ -22,9 +23,10 @@ VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 | `terminals`   | `unavailable` | The host protocol's terminal streams (VC-568). node-pty already ships and loads.                        |
 | `browser`     | `unavailable` | Standalone Chromium (VC-619).                                                                           |
 
-Writes over the socket need an authenticated Session, so an operator's CLI is
-read-only for now, and there is no verb to register a project yet: VC-623.
-Backup, retention, recovery and the maintenance loops move into host-core in
+Writes over the socket need an authenticated Session, or the person: an
+operator at the host's shell holding a token root issued
+([Operators](#operators)). That is how a fresh host's board gets its first
+project (`volli project add`). Backup, retention, recovery and the maintenance loops move into host-core in
 VC-618; hostd wires them once they land.
 
 ## Ports
@@ -61,14 +63,114 @@ In order; each refusal is logged as one JSON line and exits **78**
    `VOLLI_SECRET_KEY_FILE`, a key file with group or other access, owned by
    another user, not a file or not one key line, or sealed secrets whose key is
    missing or different: each refuses boot with the adapter's own sentence.
-4. **The agent socket**, before the database, so a request that arrives
+4. **Operators.** The operator verifier file (`/etc/volli-hostd-operators`, or
+   `--operators`) is refused when it is not a regular file, root does not own
+   it or its directory, or its group or others can write either: whoever can
+   write it can mint a person. Absent is fine: no operator token is accepted.
+   An operator who shares hostd's uid is a warning (see the limitation below).
+5. **The agent socket**, before the database, so a request that arrives
    during migrations waits for boot rather than being refused at connect. A
-   live listener on the same path refuses this host.
-5. **host-core** opens and migrates the database. A database that will not
+   live listener on the same path refuses this host. Under socket activation
+   hostd serves the descriptor systemd passed instead (more than one is
+   refused) and leaves the pathname to systemd.
+6. **host-core** opens and migrates the database. A database that will not
    open is **not** a boot failure: hostd stays up in state `refusing`, every
    verb answers `DB_UNAVAILABLE` with the reason, and the status file carries
    the typed `databaseFailure`. That includes a database from a newer Volli
    (VC-602), which is left byte-identical.
+
+## Operators
+
+A person almost never uses the `volli` CLI: they work in the UI, and agents
+use the CLI. On a headless host there is no UI yet, so the **operator token**
+(VC-623) is the bootstrap and break-glass credential for the person at the
+host's shell: register a project, create or move a ticket over SSH. It is the
+M1 stand-in for a paired device; key-bound device credentials (the host
+protocol's F5) may supersede it.
+
+```sh
+sudo volli-hostd operator-token --for alice      # issue (or reissue) alice's token
+sudo usermod -aG volli alice                     # reach the socket; log in again
+export VOLLI_SOCKET=/run/volli-hostd.sock        # as alice
+volli project add ~/code/acme [--name Acme] [--dry-run]
+volli ticket create --title "Fix auth" --project AC
+sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next request
+```
+
+**The trust model.**
+
+- **Root issues; nothing else can.** `operator-token` refuses to run except as
+  root. It writes 256 random bits to `~alice/.config/volli/operator-token`
+  (0600, in a 0700 directory, both alice's) through a child process running
+  as alice, so root never follows a path alice controls. Only then does it
+  record a **verifier** (the token's SHA-256) in `/etc/volli-hostd-operators`
+  (root-owned, 0640, group `volli`). hostd keeps no plaintext and compares in
+  constant time.
+- **The service account can never become the person.** hostd and every
+  Session it starts run as `volli`. That account cannot read alice's token
+  file, cannot write the operators file (hostd refuses to boot if it could),
+  and cannot run `operator-token`; `--for volli` is refused too, and so is any
+  issue when the service account (`--service-user`, default `volli`) cannot
+  be found to check against. No socket
+  verb mints a token, and hostd removes `VOLLI_OPERATOR_TOKEN` from its own
+  environment so no Session inherits one.
+- **A Session's request is judged exactly as before.** The CLI never reads or
+  sends an operator token when `VOLLI_SESSION` or `VOLLI_SESSION_TOKEN` is
+  set, and the door ignores one that arrives beside either. A request with no
+  token is still read-only.
+- **A valid token is the person.** Its writes are attributed to `user`, the
+  actor the app's own writes carry, and governed by each project's `user`
+  policy. `project add` is the person's verb alone: no Session may run it,
+  whatever a policy grants (`docs/plans/host-identity.md`, "Operator token").
+- **Revocation needs no restart.** hostd reads the operators file again for
+  every request that presents a token, so `--revoke` (or deleting the line)
+  holds from the next request. Reissuing replaces the old token.
+
+The CLI reads `VOLLI_OPERATOR_TOKEN`, then the token file. Like ssh with a key,
+it will not use a token file that another user owns or that group or others
+can read, and says so on stderr.
+
+**The socket, and why systemd binds it.** A token is a bearer secret, and the
+CLI cannot authenticate the listener, so the socket's _name_ must be one the
+service account cannot take over: otherwise any Session could rename the real
+socket away, listen in its place and collect the next operator's token.
+`volli-hostd.socket` therefore has systemd bind `/run/volli-hostd.sock` as
+root, in root's `/run`, `root:volli` 0660, and pass it to hostd
+(`LISTEN_FDS`); hostd serves that descriptor and never binds, renames or
+removes the pathname. The `volli` group reaches it; group membership is reach,
+not authority, since a caller without a token reads and never writes. On its
+side, the CLI sends a token only to a socket owned by root or the caller,
+through directories only root or the caller can write (sticky ones such as
+`/tmp` excepted) and no symlink anyone else owns, judging every entry along
+the path as typed and as resolved without following it; otherwise it warns
+and sends none. Without socket activation hostd binds `<data-dir>/volli.sock`
+itself at 0600, as before.
+
+**Audit.** Every write that presented a valid token logs one line, refused or
+not, naming the login, never the token:
+
+```json
+{
+  "login": "alice",
+  "cmd": "project.add",
+  "ok": true,
+  "code": null,
+  "ts": "…",
+  "level": "info",
+  "msg": "operator write"
+}
+```
+
+It does not carry the peer's `SO_PEERCRED` uid and pid: Node's `net` exposes
+no peer credentials for a Unix socket, and reading them would take a native
+addon. The token's login is the attribution, and the socket's group bounds who
+could have connected.
+
+**Limitation: one uid is one principal.** When the operator _is_ the account
+hostd runs as (a foreground `volli-hostd` in your own shell, or the launchd
+user agent), operator and Sessions are not separated: a Session can read the token file like any other
+file its uid owns. hostd logs a warning at boot when an operator shares its
+uid, or when it runs as root. Separation needs the systemd layout above.
 
 ## Health
 
@@ -159,7 +261,7 @@ volli-hostd-<version>-linux-x64/
   lib/volli.cjs         the CLI bundle (packages/cli)
   lib/probe-natives.cjs loads and exercises every native under bin/node
   lib/node_modules/     `pnpm deploy --prod` of this package, from the lockfile
-  share/systemd/volli-hostd.service
+  share/systemd/volli-hostd.{service,socket}
   share/launchd/com.volli.hostd.plist
   MANIFEST.json  README.md  LICENSE
 ```
@@ -207,6 +309,12 @@ docker run --rm -i -v "$PWD/.tmp/hostd:/out:ro" volli-host-dev \
 On an Apple Silicon Mac that builds `linux-arm64`, which exercises the same
 scripts. A macOS arm64 artifact is VC-624.
 
+A second fresh container, as root, proves the operator token on the real
+layout (`scripts/ci-operator-proof.sh`): root issues a token for a non-service
+login, which registers a project and creates a ticket with the bundled CLI; a
+token-less caller and a Session-token caller are refused; the `volli` account
+can neither read the token nor run `operator-token`; revocation holds at once.
+
 The boot check unpacks the archive in a fresh container with no checkout and
 no system Node on `PATH`, probes the natives, boots against an empty data
 directory, waits for `status` to report `serving`, lists projects through the
@@ -223,10 +331,14 @@ sudo useradd --system --create-home --home-dir /var/lib/volli-hostd --shell /bin
 sudo mkdir -p /opt/volli-hostd
 sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd --strip-components=1 \
   --no-same-owner
-sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
+sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.{service,socket} \
+  /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
 sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
 ```
+
+Then issue yourself an operator token and add a project ([Operators](#operators)).
+The socket unit binds the agent socket at `/run/volli-hostd.sock`.
 
 - **A dedicated service user** (`User=volli`). The key and the data belong to
   it; nothing runs as root.
@@ -235,7 +347,10 @@ sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-
   the box rewrite `bin/node`. `--no-same-owner` makes every file root-owned;
   the service user can read and run them and cannot change them.
 - **`StateDirectory=volli-hostd` with `StateDirectoryMode=0700`** and
-  `UMask=0077`. The adapter checks only the key file, so a data directory
+  `UMask=0077`. The socket is elsewhere: **`volli-hostd.socket`** binds
+  `/run/volli-hostd.sock` as root (`root:volli` 0660), so the `volli` group
+  reaches the socket and nothing in the data directory, and no Session can
+  replace it ([Operators](#operators)). The adapter checks only the key file, so a data directory
   others could write would let them rename the key or the store away (denial
   of service, not disclosure).
 - **`RestartPreventExitStatus=78`**: a boot refusal waits for the operator.
@@ -280,12 +395,17 @@ file is absent. See `docs/secrets.md`, "Headless hosts".
 `packaging/com.volli.hostd.plist` is a user agent template: replace
 `/Users/YOU` and the install path, then
 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.volli.hostd.plist`.
-`launchctl bootout` sends `SIGTERM`. Never point hostd at the desktop app's
+`launchctl bootout` sends `SIGTERM`. A user agent runs as you, so an operator
+token there does not separate you from the host's Sessions
+([Operators](#operators), the limitation). Never point hostd at the desktop app's
 own data directory while the app runs: both would serve one database.
 
 ## Tests
 
 `vp test run --coverage` from this directory: boot, refusals, the
-newer-version database, shutdown faults and the status check, against real
+newer-version database, shutdown faults, the status check, and the operator
+token (issue, revoke, the verifier file's refusals, and an operator
+registering a project and creating a ticket over the socket while token-less
+and Session-token callers are refused), against real
 data directories, the real host-core and a real socket, at 100% coverage of
 `src/` except `main.ts` (the process shell, which CI's artifact boot drives).

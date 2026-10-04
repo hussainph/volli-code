@@ -174,6 +174,27 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("Input:");
   });
 
+  it("names a positional by its declared label, required or optional (VC-623)", () => {
+    const entry: VerbEntry = {
+      key: "project.add",
+      accessModes: ["cli"],
+      actor: "user",
+      handler: { site: "main", id: "project.add" },
+      listed: true,
+      referenceOrder: 0,
+      group: "Write",
+      summary: "Register a folder.",
+      positionalId: "required",
+      positionalLabel: "path",
+      options: [],
+    };
+
+    expect(renderHelp(["project", "add"], [entry])).toContain("Usage: volli project add <path>");
+    expect(renderHelp(["project", "add"], [{ ...entry, positionalId: "optional" }])).toContain(
+      "Usage: volli project add [<path>]",
+    );
+  });
+
   it("renders a command that has options but no notes", () => {
     const detail = renderHelp(["ticket", "list"]);
     expect(detail).toContain("Options:");

@@ -1,0 +1,26 @@
+# The agent socket for volli-hostd.service (VC-623). systemd binds it as root,
+# directly in /run, which only root can write: neither hostd nor any Session
+# (both run as `volli`) can rename, unlink or replace this pathname, so an
+# operator can send their token to it knowing nothing the service account runs
+# put an impostor there. The `volli` group reaches it; without an operator
+# token a caller reads the board and writes nothing.
+#
+#   sudo install -m 644 volli-hostd.socket /etc/systemd/system/
+#   sudo systemctl enable --now volli-hostd.socket
+#
+# README.md, "Operators".
+
+[Unit]
+Description=Volli headless host agent socket (volli-hostd)
+Documentation=https://github.com/hussainph/volli-code/blob/main/apps/hostd/README.md
+
+[Socket]
+ListenStream=/run/volli-hostd.sock
+SocketUser=root
+SocketGroup=volli
+SocketMode=0660
+RemoveOnStop=yes
+Service=volli-hostd.service
+
+[Install]
+WantedBy=sockets.target
