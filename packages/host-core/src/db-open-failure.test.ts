@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
+import { DatabaseFromNewerVersionError } from "./db/schema-compatibility";
 import {
   REQUIRED_NODE_RANGE,
+  USER_NEWER_VERSION_REMEDY,
+  classifyDbOpenFailure,
   dbOpenFailureLogLine,
   describeDbOpenFailure,
   isNativeModuleFailure,
@@ -93,6 +96,36 @@ describe("describeDbOpenFailure", () => {
   it("survives a non-Error throw", () => {
     expect(describeDbOpenFailure("disk full")).toBe("The local database failed to open: disk full");
     expect(dbOpenFailureLogLine("disk full")).toBe("disk full");
+  });
+});
+
+describe("a database from a newer Volli (VC-602)", () => {
+  const refusal = new DatabaseFromNewerVersionError(99, 58, 99);
+
+  it("is classified by type, with its versions, for a host to route on", () => {
+    expect(classifyDbOpenFailure(refusal)).toEqual({
+      kind: "newer-version",
+      schemaVersion: 99,
+      supportedVersion: 58,
+      minReaderVersion: 99,
+    });
+    expect(classifyDbOpenFailure(new Error(ABI_MISMATCH))).toEqual({ kind: "native-module" });
+    expect(classifyDbOpenFailure(new Error("disk I/O error"))).toEqual({ kind: "other" });
+    // The words alone do not make the type: only the guard's refusal routes.
+    expect(classifyDbOpenFailure(new Error(refusal.message))).toEqual({ kind: "other" });
+  });
+
+  it("tells a packaged-app user what happened and what to do, without version numbers", () => {
+    expect(describeDbOpenFailure(refusal, { dev: false })).toBe(USER_NEWER_VERSION_REMEDY);
+    expect(describeDbOpenFailure(refusal)).toBe(USER_NEWER_VERSION_REMEDY);
+    expect(USER_NEWER_VERSION_REMEDY).not.toMatch(/\d/);
+  });
+
+  it("keeps the versions for a developer and in the log", () => {
+    expect(describeDbOpenFailure(refusal, { dev: true })).toBe(
+      `The local database failed to open: ${refusal.message}`,
+    );
+    expect(dbOpenFailureLogLine(refusal)).toBe(refusal.message);
   });
 });
 

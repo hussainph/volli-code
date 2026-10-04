@@ -300,8 +300,13 @@ identity.
   the older writer**: v57's table list omits epoch history while its backup
   header stamps the actual schema (58). A v58 reader refuses that incomplete
   bundle; it must never infer missing epoch history is empty. Back up with the
-  v58-capable build, or retain the verified pre-upgrade backup. VC-602 owns the
-  unresolved downgrade/backup policy; 058 adds no new refusal on ordinary boot
+  v58-capable build, or retain the verified pre-upgrade backup. VC-602 settled
+  the downgrade/backup policy for builds from then on: a minimum reader version
+  (baseline 58) refuses older-than-floor builds, and a build backing up a newer
+  compatible database stamps its own head and table set. When VC-588 or
+  replication moves workspace state between hosts on different builds, the
+  replicated state must heal or carry the floor, exactly as bundles do under
+  that rule. 058 adds no new refusal on ordinary boot
   and does not loosen restore validation to disguise a missing fence.
 
 Open decisions are explicit: raw-profile-copy detection; whether/how a restore

@@ -49,7 +49,7 @@ if (!host.database.ok) console.error(host.database.error);
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------- |
 | `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                     | VC-553   |
 | `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`) | VC-553   |
-| `src/db-open-failure.ts` | (internal) classifies a failed open for its reader                                                                          | VC-553   |
+| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
 | `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power and client-capability ports, with their headless answers | VC-554   |
 | `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
 
@@ -139,6 +139,27 @@ in desktop until their remaining desktop dependencies move.
   `src/db/migrations.lock.json`. Append a migration, then run
   `pnpm --filter @volli/host-core migrations:lock`. See
   [BOUNDARIES](../../docs/BOUNDARIES.md#shipped-sqlite-migrations).
+- **A database from a newer build (VC-602).** Before anything opens the
+  file for writing, `openVolliDb` reads its `user_version` and minimum reader
+  version on the read-only preflight handle (`src/db/schema-compatibility.ts`).
+  - At or below this build's head: migrate as usual.
+  - Newer, and the floor is at or below the head: open it, log once, run no
+    migration, never lower `user_version`.
+  - Newer, and the floor is above the head (or unreadable): throw
+    `DatabaseFromNewerVersionError` with the file byte-identical.
+    `createHostCore` classifies it as `databaseFailure.kind === "newer-version"`;
+    desktop shows its named recovery screen, and a headless host refuses to
+    serve with the same typed reason.
+  - The floor lives in `app_state` under `volli:min-reader-version`, which
+    every schema has. A missing marker reads as the baseline, 58: the head the
+    guard shipped at, and the oldest head that can safely back up a v58 file.
+    Only a migration declared `raisesMinReader: true` writes it, in its own
+    transaction. **Read "Breaking an older reader" above `MIGRATIONS` before
+    adding a migration.**
+  - A backup of a newer, compatible database is stamped with this build's
+    head and carries only this build's columns, so a newer build can restore
+    it and migrate it up. Bundles never carry the floor; a restore's
+    migrations derive it.
 - **Transaction ownership (VC-551).** No transaction spans an `await`. Use
   `withTransaction` / `settleTransaction` from `db/transaction-gate`.
   `openVolliDb` installs the ownership guard after migrations, with the handler

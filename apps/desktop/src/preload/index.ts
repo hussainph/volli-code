@@ -59,6 +59,7 @@ import type {
   ArtifactCreateResult,
   BootstrapResult,
   DatabaseRecoveryListResult,
+  DatabaseRecoveryFaultResult,
   DatabaseRecoveryRestoreResult,
   BrowserPictureInput,
   BrowserPictureResult,
@@ -422,6 +423,9 @@ const api = {
     list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
     restore: (): Promise<DatabaseRecoveryRestoreResult> =>
       invoke("volli:database-recovery-restore"),
+    /** Which recovery screen to show: a damaged database, or one from a newer Volli (VC-602). */
+    fault: (): Promise<DatabaseRecoveryFaultResult> => invoke("volli:database-recovery-fault"),
+    quit: (): Promise<Result> => invoke("volli:database-recovery-quit"),
   },
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */

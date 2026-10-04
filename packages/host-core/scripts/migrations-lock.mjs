@@ -153,7 +153,19 @@ export function migrationFingerprints(
         throw new Error(`Migration ${migration.version}: source/runtime apply mismatch`);
       }
       const applySource = name ? declarationSource(MIGRATIONS_PATH, name) : null;
-      return [migration.version, sha256(JSON.stringify([migration.sql, applySource]))];
+      // VC-602: whether a migration raises the minimum reader version is part
+      // of what shipped. Appended only when set, so every fingerprint locked
+      // before the flag existed (all of them `false`) is byte-for-byte the same.
+      const fingerprinted = [migration.sql, applySource];
+      if (migration.raisesMinReader !== undefined) {
+        if (migration.raisesMinReader !== true) {
+          throw new Error(
+            `Migration ${migration.version}: raisesMinReader must be \`true\` or omitted`,
+          );
+        }
+        fingerprinted.push({ raisesMinReader: true });
+      }
+      return [migration.version, sha256(JSON.stringify(fingerprinted))];
     }),
   );
 }

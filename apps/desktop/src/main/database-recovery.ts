@@ -13,8 +13,13 @@ import {
   rmSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { DatabaseSafetyCopy } from "../ipc/contract";
+import type { DatabaseOpenFault, DatabaseSafetyCopy } from "../ipc/contract";
 import { assertDatabaseHeader, openVolliDb } from "@volli/host-core/db";
+import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
+import {
+  DatabaseFromNewerVersionError,
+  checkSchemaCompatibility,
+} from "@volli/host-core/db/schema-compatibility";
 import { migrationBackupCandidatePattern } from "@volli/host-core/db/backup-retention";
 import { acquireDatabaseOpenLock } from "@volli/host-core/db/open-lock";
 import {
@@ -77,8 +82,13 @@ function integrity(path: string): DatabaseSafetyCopy["integrity"] {
       bytes[19] = 1;
     }
     db = new Database(bytes);
-    return checksClean(db) ? "clean" : "damaged";
+    if (!checksClean(db)) return "damaged";
+    // A clean copy this build would refuse to open (VC-602) is not one it can
+    // restore: the boot check would refuse it all over again.
+    checkSchemaCompatibility(db, SCHEMA_HEAD);
+    return "clean";
   } catch (error) {
+    if (error instanceof DatabaseFromNewerVersionError) return "newer";
     const code = (error as { code?: string }).code;
     return code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB" ? "damaged" : "unavailable";
   } finally {
@@ -318,17 +328,36 @@ export class DatabaseRecovery {
 export function registerDatabaseRecoveryIpcHandlers(
   options: DatabaseRecoveryOptions & {
     degraded: boolean;
+    /**
+     * Which recovery screen the renderer shows (VC-602): `newer-version` when
+     * the database is from a newer Volli this build refused to open.
+     */
+    fault: DatabaseOpenFault;
     restart: () => void;
+    /** Quits the app from the recovery screen. */
+    quit: () => void;
   },
 ): void {
   const recovery = new DatabaseRecovery(options);
   let restored = false;
-  const available = (): void => {
+  const degraded = (): void => {
     if (!options.degraded)
       throw new Error("Backup recovery is only available when the database failed to open.");
+  };
+  const available = (): void => {
+    degraded();
     if (restored) throw new Error("The database has been restored. Volli is restarting.");
   };
   registerGuardedIpcHandlers(DATABASE_RECOVERY_IPC, {
+    "volli:database-recovery-fault": () => {
+      degraded();
+      return { ok: true, fault: options.fault };
+    },
+    "volli:database-recovery-quit": () => {
+      degraded();
+      options.quit();
+      return { ok: true };
+    },
     "volli:database-recovery-list": () => {
       available();
       try {

@@ -59,6 +59,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
@@ -4742,6 +4743,34 @@ describe("descriptor guard rejections reach the caller through the envelope, one
       ok: false,
       error: "Invalid app state",
     });
+  });
+
+  it("refuses a renderer write to the database's schema floor (VC-602)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", MIN_READER_VERSION_KEY, "999")).toEqual(
+      { ok: false, error: "This app state key is owned by the database." },
+    );
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:other", "1")).toEqual({
+      ok: true,
+    });
+  });
+
+  it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    const result = invoke<{ ok: boolean }>("volli:legacy-import", {
+      projects: [],
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:imported": "1" },
+      rawBackup: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(
+      ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:imported'").get(),
+    ).toEqual({ value: "1" });
   });
 
   it("optional-object-arg shape: rejects a non-object argument", () => {
