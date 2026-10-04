@@ -524,15 +524,17 @@ jobs:
       # Electron's headers. Rebuild it from source for this Node (this job runs
       # no Electron; the desktop jobs keep their own Electron build), then
       # prove it loads and runs a shell before the tests depend on it.
+      # `vp rebuild`, not `pnpm rebuild`: pnpm is not a command on this runner.
       - name: Build node-pty for Node
+        working-directory: packages/host-core
         run: |
           env -u npm_config_arch -u npm_config_target_arch \
             npm_config_runtime=node \
             npm_config_target="$(node -p 'process.versions.node')" \
             npm_config_disturl=https://nodejs.org/download/release \
             npm_config_build_from_source=true \
-            pnpm --filter @volli/host-core rebuild node-pty
-          node packages/host-core/scripts/probe-node-pty.mjs
+            vp rebuild node-pty
+          node scripts/probe-node-pty.mjs
 
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface

@@ -130,14 +130,14 @@ lane does not lean on that: **Test (packages)** rebuilds node-pty for its own
 Node and probes it before the tests run:
 
 ```sh
-# The same commands CI runs, after the job's install:
+# The same commands CI runs after the job's install, from packages/host-core:
 env -u npm_config_arch -u npm_config_target_arch \
     npm_config_runtime=node \
     npm_config_target="$(node -p 'process.versions.node')" \
     npm_config_disturl=https://nodejs.org/download/release \
     npm_config_build_from_source=true \
-    pnpm --filter @volli/host-core rebuild node-pty
-node packages/host-core/scripts/probe-node-pty.mjs
+    vp rebuild node-pty
+node scripts/probe-node-pty.mjs
 ```
 
 `npm_config_build_from_source=true` makes node-pty's install script remove its
