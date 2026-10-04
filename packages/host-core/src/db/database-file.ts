@@ -73,6 +73,9 @@ export { hasPendingDatabaseRecovery, recoveryPendingPath };
 export type DatabaseFileStep =
   | "rollback-point:copy"
   | `rollback-point:preserve${"" | "-wal" | "-shm" | "-journal"}`
+  | "rollback-point:preserve-sync"
+  | `rollback-point:release${"" | "-wal" | "-shm" | "-journal"}`
+  | "rollback-point:release-sync"
   | "rollback-point:publish"
   | "rollback-point:sync"
   | "swap:lock"
@@ -201,6 +204,19 @@ export function assertDatabaseHeader(dbPath: string): void {
   }
 }
 
+/** `user_version`, from the header bytes: no SQLite handle, no sidecar created. */
+function stagedSchemaVersion(path: string): number {
+  assertDatabaseHeader(path);
+  const fd = openSync(path, "r");
+  const field = Buffer.alloc(4);
+  try {
+    readSync(fd, field, 0, 4, 60);
+  } finally {
+    closeSync(fd);
+  }
+  return field.readInt32BE(0);
+}
+
 // ---------------------------------------------------------------------------
 // Open
 // ---------------------------------------------------------------------------
@@ -249,7 +265,12 @@ export function openVolliDb(
   // handle cannot resume against a different inode after a successful swap.
   const openLock = options.allowPendingRecovery ? undefined : acquireDatabaseOpenLock(dbPath);
   try {
-    if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+    if (!options.allowPendingRecovery) {
+      assertNoPendingDatabaseRecovery(dbPath);
+      // Under the lock no rollback point is being published: any pending
+      // copy is from an attempt that died before it could publish.
+      removeAbandonedRollbackCopies(dbPath);
+    }
     let compatibility: SchemaCompatibility | undefined;
     if (exists(dbPath)) {
       // Read-only preflight cannot checkpoint/delete a damaged WAL on close or
@@ -322,6 +343,189 @@ export function openVolliDb(
 // Publish rollback point (the migration safety copy)
 // ---------------------------------------------------------------------------
 
+type FamilySuffix = (typeof FAMILY)[number];
+
+interface PreservedFamily {
+  /** Where the old family now lives, or undefined when only stale names were released. */
+  path: string | undefined;
+  /** Suffixes given a second name at {@link path}, in order. */
+  linked: FamilySuffix[];
+  /** Suffixes whose old name was removed, in order. */
+  released: FamilySuffix[];
+}
+
+function inode(path: string): string {
+  const info = lstatSync(path);
+  return `${info.dev}:${info.ino}`;
+}
+
+/** The inodes of every sidecar that belongs to a whole preserved family of `backupPath`. */
+function preservedSidecarInodes(backupPath: string): Set<string> {
+  const directory = dirname(backupPath);
+  const prefix = `${basename(backupPath)}.preserved-`;
+  const inodes = new Set<string>();
+  for (const name of readdirSync(directory)) {
+    if (!name.startsWith(prefix)) continue;
+    const sidecar = SIDECARS.find((suffix) => name.endsWith(suffix));
+    if (sidecar === undefined) continue;
+    // Only a family that has its base: a base-less one is not a candidate.
+    if (!exists(join(directory, name.slice(0, -sidecar.length)))) continue;
+    inodes.add(inode(join(directory, name)));
+  }
+  return inodes;
+}
+
+/**
+ * Moves the family at a rollback name (base plus any sidecars) to a fresh
+ * `.preserved-<uuid>` name, so the new copy can be published there.
+ *
+ * By hard link, never by rename, and in this order, so that no crash between
+ * any two steps can strand data or offer an incomplete database to recovery:
+ *
+ * 1. link the sidecars, then the base, to the preserved names; fsync the
+ *    directory. A preserved base never exists without its sidecars, so
+ *    recovery (which lists bases) never sees a partial family there;
+ * 2. remove the old base name, then the old sidecar names; fsync the
+ *    directory. The old name never holds a base without its sidecars. A crash
+ *    here leaves base-less sidecars that are, provably, second names of a
+ *    whole preserved family (the same inode), and the next attempt releases
+ *    them. Nothing is copied, so a full disk cannot stop this half way.
+ *
+ * Base-less sidecars that are NOT such second names and hold data (a WAL or
+ * journal with frames) are not this module's: they are refused, never
+ * discarded. Ones without data (an empty WAL, an SHM index) are preserved
+ * like any family.
+ */
+function preserveRollbackFamily(
+  backupPath: string,
+  faults: DatabaseFileFaults,
+): PreservedFamily | undefined {
+  const present = FAMILY.filter((suffix) => {
+    const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
+    if (info === undefined) return false;
+    if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
+    return true;
+  });
+  if (present.length === 0) return undefined;
+  const family: PreservedFamily = { path: undefined, linked: [], released: [] };
+  let keep: FamilySuffix[] = present;
+  if (!present.includes("")) {
+    const duplicates = preservedSidecarInodes(backupPath);
+    keep = [];
+    for (const suffix of present) {
+      const path = `${backupPath}${suffix}`;
+      if (duplicates.has(inode(path))) {
+        // An interrupted release: this name's data is safe in a whole
+        // preserved family, so removing the name loses nothing.
+        faults(`rollback-point:release${suffix}`);
+        unlinkSync(path);
+        continue;
+      }
+      if (suffix !== "-shm" && lstatSync(path).size > 0)
+        throw new Error("existing safety copy family is missing its base");
+      keep.push(suffix);
+    }
+    if (keep.length === 0) {
+      faults("rollback-point:release-sync");
+      syncRecoveryPath(dirname(backupPath));
+      return family;
+    }
+  }
+  family.path = `${backupPath}.preserved-${randomUUID()}`;
+  const base = keep.includes("") ? (["" as const] as FamilySuffix[]) : [];
+  const sidecars = keep.filter((suffix) => suffix !== "");
+  try {
+    for (const suffix of [...sidecars, ...base]) {
+      faults(`rollback-point:preserve${suffix}`);
+      linkSync(`${backupPath}${suffix}`, `${family.path}${suffix}`);
+      family.linked.push(suffix);
+    }
+    faults("rollback-point:preserve-sync");
+    syncRecoveryPath(dirname(backupPath));
+    for (const suffix of [...base, ...sidecars]) {
+      faults(`rollback-point:release${suffix}`);
+      unlinkSync(`${backupPath}${suffix}`);
+      family.released.push(suffix);
+    }
+    faults("rollback-point:release-sync");
+    syncRecoveryPath(dirname(backupPath));
+  } catch (error) {
+    undoPreservation(backupPath, family);
+    throw error;
+  }
+  return family;
+}
+
+/**
+ * Best effort: give the old family its rollback name back (sidecars first,
+ * base last), then drop the preserved second names (base first). Stopping
+ * anywhere leaves a state {@link preserveRollbackFamily} resumes from.
+ */
+function undoPreservation(backupPath: string, family: PreservedFamily): void {
+  const { path } = family;
+  if (path === undefined) return;
+  try {
+    const released = [...family.released];
+    for (const suffix of [
+      ...released.filter((item) => item !== ""),
+      ...released.filter((item) => item === ""),
+    ]) {
+      linkSync(`${path}${suffix}`, `${backupPath}${suffix}`);
+    }
+    for (const suffix of [
+      ...family.linked.filter((item) => item === ""),
+      ...family.linked.filter((item) => item !== ""),
+    ]) {
+      unlinkSync(`${path}${suffix}`);
+    }
+    syncRecoveryPath(dirname(backupPath));
+  } catch (error) {
+    console.error(BACKUP_RETENTION_LOG_PREFIX, {
+      action: "failed",
+      operation: "preserve",
+      name: path,
+      error,
+    });
+  }
+}
+
+/**
+ * A `.pending-<uuid>` copy exists only while {@link publishRollbackPoint}
+ * runs, and migrations run only under the open lock. One found while holding
+ * that lock is therefore from an attempt that died before publishing: the
+ * migration it protected never ran, so the live database is newer and whole,
+ * and the copy (up to a full database in size) is never a recovery
+ * candidate. A `.corrupt` quarantine is evidence, and is kept.
+ */
+function removeAbandonedRollbackCopies(dbPath: string): void {
+  const name = basename(dbPath).replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
+  const uuid = "[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}";
+  const pending = new RegExp(`^${name}\\.backup-v\\d+\\.pending-${uuid}(?:-wal|-shm)?$`);
+  const directory = dirname(dbPath);
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const entry of names) {
+    if (!pending.test(entry)) continue;
+    const path = join(directory, entry);
+    try {
+      if (!lstatSync(path).isFile()) continue;
+      unlinkSync(path);
+      console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "removed-abandoned", name: entry });
+    } catch (error) {
+      console.error(BACKUP_RETENTION_LOG_PREFIX, {
+        action: "failed",
+        operation: "remove-abandoned",
+        name: entry,
+        error,
+      });
+    }
+  }
+}
+
 export const MIGRATION_RECOVERY_ACTION =
   "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
 
@@ -376,54 +580,20 @@ export function publishRollbackPoint(
   // Readonly WAL verification can create empty WAL/SHM files. These belong
   // only to our unique staged snapshot, not to any existing backup family.
   for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
-  // A verified backup's readonly check can leave WAL/SHM behind. Preserve
-  // the entire old family before publishing, including on restore/re-upgrade.
-  // Never attach an old WAL or journal to the newly verified base file.
-  const preservedPath = `${backupPath}.preserved-${randomUUID()}`;
-  const moved: string[] = [];
+  let preserved: PreservedFamily | undefined;
   try {
     // The copy's bytes are durable before any name can point at them.
     syncRecoveryPath(stagedPath);
-    let orphanData = false;
-    const existingSuffixes = FAMILY.filter((suffix) => {
-      const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
-      if (info === undefined) return false;
-      if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
-      if (suffix !== "" && suffix !== "-shm" && info.size > 0) orphanData = true;
-      return true;
-    });
-    // Sidecars without a base that hold no data (an empty WAL or journal, an
-    // SHM index) are what a crash between these renames leaves, since the
-    // base goes first and copies only ever carry such sidecars. They are set
-    // aside like any family: refusing them would wedge every later upgrade on
-    // that one crash. A base-less journal WITH data is not ours; refuse it.
-    if (existingSuffixes.length > 0 && existingSuffixes[0] !== "" && orphanData) {
-      throw new Error("existing safety copy family is missing its base");
-    }
-    for (const suffix of existingSuffixes) {
-      faults(`rollback-point:preserve${suffix}`);
-      renameSync(`${backupPath}${suffix}`, `${preservedPath}${suffix}`);
-      moved.push(suffix);
-    }
+    // A verified backup's readonly check can leave WAL/SHM behind. Preserve
+    // the entire old family before publishing, including on restore/re-upgrade.
+    // Never attach an old WAL or journal to the newly verified base file.
+    preserved = preserveRollbackFamily(backupPath, faults);
     faults("rollback-point:publish");
     renameSync(stagedPath, backupPath);
   } catch (error) {
-    // Restore sidecars before the base; on rollback failure leave the base
-    // aside, not at a rollback name with an incomplete family.
-    for (const suffix of moved.toReversed()) {
-      try {
-        renameSync(`${preservedPath}${suffix}`, `${backupPath}${suffix}`);
-        moved.pop();
-      } catch (rollbackError) {
-        console.error(BACKUP_RETENTION_LOG_PREFIX, {
-          action: "failed",
-          operation: "preserve",
-          name: preservedPath,
-          error: rollbackError,
-        });
-        break;
-      }
-    }
+    // Put the old family back at its name. If that fails too, every state it
+    // can stop in is one the next attempt resumes from (see below).
+    if (preserved !== undefined) undoPreservation(backupPath, preserved);
     throw new Error(
       `Migration refused: could not preserve and publish the safety copy. Recovery action: quit Volli and recover the complete backup family kept beside ${backupPath} before retrying.`,
       { cause: error },
@@ -438,8 +608,8 @@ export function publishRollbackPoint(
       cause: error,
     });
   }
-  if (moved.length > 0)
-    console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preservedPath });
+  if (preserved?.path !== undefined)
+    console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preserved.path });
   return backupPath;
 }
 
@@ -509,6 +679,13 @@ export function swapInStagedProfile(request: StagedProfileSwap): void {
     if (exists(sidecar) && suffix !== "-shm" && lstatSync(sidecar).size !== 0)
       throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
   }
+  // The verification open must never migrate at the live path: that would
+  // take a safety copy beside the live profile and could write the reader
+  // floor there (VC-602). Callers migrate in staging; refuse anything older.
+  if (stagedSchemaVersion(stagedPath) < SCHEMA_HEAD)
+    throw new Error(
+      `The staged database is not at this build's schema (${SCHEMA_HEAD}). Nothing was swapped.`,
+    );
   // A directory fsync flushes its own entries, not its descendants'. Every
   // staged companion file and directory is durable before the swap begins, so
   // a power cut after success cannot leave a booting database whose

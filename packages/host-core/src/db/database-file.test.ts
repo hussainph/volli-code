@@ -15,14 +15,18 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
@@ -227,6 +231,35 @@ function stepsOf(run: Run): DatabaseFileStep[] {
 }
 
 /**
+ * A byte copy of a directory tree that keeps hard links as hard links, as the
+ * disk itself does: names that share an inode in `from` share one in `to`.
+ */
+function snapshot(from: string, to: string): void {
+  const copied = new Map<string, string>();
+  const walk = (source: string, target: string): void => {
+    mkdirSync(target, { recursive: true });
+    for (const entry of readdirSync(source, { withFileTypes: true })) {
+      const path = join(source, entry.name);
+      const destination = join(target, entry.name);
+      if (entry.isDirectory()) {
+        walk(path, destination);
+        continue;
+      }
+      const info = statSync(path);
+      const key = `${info.dev}:${info.ino}`;
+      const first = copied.get(key);
+      if (first === undefined) {
+        copyFileSync(path, destination);
+        copied.set(key, destination);
+      } else {
+        linkSync(first, destination);
+      }
+    }
+  };
+  walk(from, to);
+}
+
+/**
  * Runs `run`, and as a crash would, stops it just before its `index`-th step,
  * after copying the whole directory. Indices, not names: a rollback passes
  * some names twice. Returns the copy.
@@ -238,7 +271,7 @@ function crashAt(root: string, index: number, run: Run): Fixture {
   try {
     run(() => {
       if (seen++ !== index) return;
-      cpSync(root, crash, { recursive: true });
+      snapshot(root, crash);
       crashed = true;
       throw new SimulatedCrash();
     });
@@ -307,6 +340,7 @@ describe("swapInStagedProfile — success", () => {
       // VC-602: the swap's verification open writes no reader floor.
       expect(minReader(fx.dbPath)).toEqual(floorBefore);
     },
+    15_000,
   );
 
   it("heals an interrupted switch whose live path is already empty", () => {
@@ -508,6 +542,18 @@ describe("swapInStagedProfile — refusals", () => {
     expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(false);
   });
 
+  it("refuses a staged database below this build's schema, so verification never migrates live", () => {
+    const fx = fixture();
+    const staged = join(fx.root, ".staged", "volli.db");
+    const db = new Database(staged);
+    db.pragma("user_version = 57");
+    db.close();
+    expect(() => swap(fx, "damaged")).toThrow(/not at this build's schema/);
+    expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(false);
+    expect(existsSync(join(fx.root, ".aside"))).toBe(false);
+    expect(boot(fx.dbPath)).toBe("original");
+  });
+
   it("sets the live database aside only beside it", () => {
     const fx = fixture();
     expect(() =>
@@ -545,78 +591,158 @@ describe("swapInStagedProfile — refusals", () => {
 interface RollbackFixture extends Fixture {
   db: Database.Database;
   backupPath: string;
+  /** What the existing rollback family holds, read whole (base plus WAL). */
+  previous: string;
 }
 
-/** A v55 database with an older rollback family already at its name. */
-function rollbackFixture(): RollbackFixture {
+/**
+ * A v55 database ("current") with an older rollback family already at its
+ * name. With `walData`, that family's last committed state lives ONLY in its
+ * WAL (a supported shape, `migrations.test.ts`): its base alone reads an older
+ * value, so a base detached from its WAL is an incomplete database.
+ */
+function rollbackFixture(walData: boolean): RollbackFixture {
   const root = tempDir("rollback-point");
   const dbPath = join(root, "volli.db");
   const backupPath = `${dbPath}.backup-v55`;
   const db = openRawDb(dbPath);
   db.pragma("journal_mode = WAL");
   migrate(db, dbPath, { toVersion: 55 });
-  setProbe(db, "previous");
+  setProbe(db, walData ? "older base only" : "previous");
   db.pragma("wal_checkpoint(TRUNCATE)");
   copyFileSync(dbPath, backupPath);
-  writeFileSync(`${backupPath}-wal`, "");
-  writeFileSync(`${backupPath}-shm`, Buffer.alloc(32768));
+  if (walData) {
+    const writer = new Database(backupPath);
+    writer.pragma("wal_autocheckpoint = 0");
+    setProbe(writer, "previous, committed in WAL");
+    const wal = tempDir("wal-family");
+    for (const suffix of ["", "-wal", "-shm"])
+      copyFileSync(`${backupPath}${suffix}`, join(wal, `f${suffix}`));
+    writer.close();
+    for (const suffix of ["", "-wal", "-shm"])
+      copyFileSync(join(wal, `f${suffix}`), `${backupPath}${suffix}`);
+    expect(readFileSync(`${backupPath}-wal`).length).toBeGreaterThan(32);
+  } else {
+    writeFileSync(`${backupPath}-wal`, "");
+    writeFileSync(`${backupPath}-shm`, Buffer.alloc(32768));
+  }
   setProbe(db, "current");
-  return { root, dbPath, db, backupPath };
+  const previous = walData ? "previous, committed in WAL" : "previous";
+  return { root, dbPath, db, backupPath, previous };
 }
 
 const ROLLBACK_POINT_STEPS: DatabaseFileStep[] = [
   "rollback-point:copy",
-  "rollback-point:preserve",
   "rollback-point:preserve-wal",
   "rollback-point:preserve-shm",
+  "rollback-point:preserve",
+  "rollback-point:preserve-sync",
+  "rollback-point:release",
+  "rollback-point:release-wal",
+  "rollback-point:release-shm",
+  "rollback-point:release-sync",
   "rollback-point:publish",
   "rollback-point:sync",
 ];
 
+/**
+ * After a crash at any step: the live database is whole; every database
+ * recovery would offer reads, with its sidecars, as either the old rollback
+ * point or the current state, never a base cut off from its WAL; the next
+ * upgrade succeeds; and the old rollback point's data is still offered.
+ */
+function assertRollbackPointCrash(copy: Fixture, previous: string): void {
+  expect(contents(copy.dbPath)).toBe("current");
+  const offered = (): string[] =>
+    new DatabaseRecovery({ dbPath: copy.dbPath, userData: copy.root })
+      .list()
+      .map(({ name }) => contents(join(copy.root, name)));
+  for (const value of offered()) expect([previous, "current"]).toContain(value);
+  const db = openRawDb(copy.dbPath);
+  try {
+    expect(migrate(db, copy.dbPath)).toBe(true);
+  } finally {
+    db.close();
+  }
+  expect(contents(`${copy.dbPath}.backup-v55`)).toBe("current");
+  const after = offered();
+  expect(after).toContain(previous);
+  for (const value of after) expect([previous, "current"]).toContain(value);
+  // Nothing at the rollback name is left without its base.
+  const wal = `${copy.dbPath}.backup-v55-wal`;
+  expect(existsSync(wal) && statSync(wal).size > 0).toBe(false);
+}
+
 describe("publishRollbackPoint", () => {
-  it("names every step it takes, in order", () => {
-    const fx = rollbackFixture();
+  it.each([false, true])("names every step it takes, in order (WAL data: %s)", (walData) => {
+    const fx = rollbackFixture(walData);
     try {
       expect(stepsOf((faults) => publishRollbackPoint(fx.db, fx.dbPath, 55, { faults }))).toEqual(
         ROLLBACK_POINT_STEPS,
       );
       expect(contents(fx.backupPath)).toBe("current");
+      // The old family is whole under one preserved name.
+      const preserved = readdirSync(fx.root).find((name) => /\.preserved-[\da-f-]+$/.test(name));
+      expect(contents(join(fx.root, preserved as string))).toBe(fx.previous);
     } finally {
       fx.db.close();
     }
   });
 
+  describe.each([false, true])("WAL data in the old family: %s", (walData) => {
+    it.each(ROLLBACK_POINT_STEPS.map((step, index) => [step, index] as const))(
+      "a crash just before %s keeps every rollback point whole and the next upgrade working",
+      (_step, index) => {
+        const fx = rollbackFixture(walData);
+        let copy: Fixture;
+        try {
+          copy = crashAt(fx.root, index, (faults) =>
+            publishRollbackPoint(fx.db, fx.dbPath, 55, { faults }),
+          );
+        } finally {
+          fx.db.close();
+        }
+        assertRollbackPointCrash(copy, fx.previous);
+      },
+      15_000,
+    );
+  });
+
+  // A real process kill, not a thrown exception: whatever the kernel had
+  // when the process died is what the next launch finds.
   it.each(ROLLBACK_POINT_STEPS.map((step, index) => [step, index] as const))(
-    "a crash just before %s leaves the live database and a clean rollback point",
-    (_step, index) => {
-      const fx = rollbackFixture();
-      let copy: Fixture;
-      try {
-        copy = crashAt(fx.root, index, (faults) =>
-          publishRollbackPoint(fx.db, fx.dbPath, 55, { faults }),
-        );
-      } finally {
-        fx.db.close();
-      }
-      expect(contents(copy.dbPath)).toBe("current");
-      // Every copy recovery would offer checks clean; at least one exists,
-      // and the published name, when present, is whole.
-      const listed = new DatabaseRecovery({ dbPath: copy.dbPath, userData: copy.root }).list();
-      expect(listed.length).toBeGreaterThan(0);
-      expect(listed.map(({ integrity }) => integrity)).toEqual(listed.map(() => "clean"));
-      const published = `${copy.dbPath}.backup-v55`;
-      if (existsSync(published)) expect(["previous", "current"]).toContain(contents(published));
-      // And the crash never wedges the next upgrade.
-      const db = openRawDb(copy.dbPath);
-      try {
-        expect(migrate(db, copy.dbPath)).toBe(true);
-      } finally {
-        db.close();
-      }
-      expect(contents(published)).toBe("current");
+    "a SIGKILL just before %s, with WAL data in the old family, loses nothing",
+    (step, index) => {
+      const fx = rollbackFixture(true);
+      fx.db.close();
+      const child = spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL("./database-file-crash-child.test-fixture.mjs", import.meta.url)),
+          fx.dbPath,
+          "55",
+          String(index),
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+      expect(child.signal, child.stderr).toBe("SIGKILL");
+      expect(child.stdout).toContain(`SIGKILL before ${step}`);
+      assertRollbackPointCrash(fx, fx.previous);
     },
-    15_000,
+    90_000,
   );
+
+  it("removes a pending copy abandoned by a dead attempt, under the open lock, and keeps quarantines", () => {
+    const fx = fixture();
+    const abandoned = `${fx.dbPath}.backup-v57.pending-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`;
+    copyFileSync(fx.dbPath, abandoned);
+    writeFileSync(`${abandoned}-shm`, "");
+    writeFileSync(`${abandoned}.corrupt`, "quarantined evidence");
+    expect(boot(fx.dbPath)).toBe("original");
+    expect(existsSync(abandoned)).toBe(false);
+    expect(existsSync(`${abandoned}-shm`)).toBe(false);
+    expect(readFileSync(`${abandoned}.corrupt`, "utf8")).toBe("quarantined evidence");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -631,7 +757,7 @@ function position(pattern: (entry: string) => boolean, after = -1): number {
 
 describe("durability ordering", () => {
   it("migrate fsyncs the safety copy before naming it, and its directory before migrating", () => {
-    const fx = rollbackFixture();
+    const fx = rollbackFixture(true);
     try {
       log.length = 0;
       expect(migrate(fx.db, fx.dbPath)).toBe(true);
@@ -641,10 +767,20 @@ describe("durability ordering", () => {
     const contentSync = position(
       (entry) => entry.startsWith(`fsync ${fx.backupPath}.pending-`) && !entry.endsWith("-shm"),
     );
+    // The old family gains its preserved names, sidecars before base, and
+    // those names are durable before any old name goes.
+    const old = (suffix: string) => `${fx.backupPath}${suffix} -> ${fx.backupPath}.preserved-`;
+    const linkWal = position((entry) => entry.startsWith(`link ${old("-wal")}`), contentSync);
+    const linkBase = position((entry) => entry.startsWith(`link ${old("")}`), linkWal);
+    const linksSync = position((entry) => entry === `fsync ${fx.root}`, linkBase);
+    // Old names go base first, and that is durable before the new copy is named.
+    const releaseBase = position((entry) => entry === `unlink ${fx.backupPath}`, linksSync);
+    const releaseWal = position((entry) => entry === `unlink ${fx.backupPath}-wal`, releaseBase);
+    const releaseSync = position((entry) => entry === `fsync ${fx.root}`, releaseWal);
     const publish = position(
       (entry) =>
         entry.startsWith(`rename ${fx.backupPath}.pending-`) && entry.endsWith(fx.backupPath),
-      contentSync,
+      releaseSync,
     );
     position((entry) => entry === `fsync ${fx.root}`, publish);
   });
