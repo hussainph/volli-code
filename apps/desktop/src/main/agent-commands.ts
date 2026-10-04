@@ -32,7 +32,7 @@ import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/c
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, listProjects } from "@volli/host-core/db/projects-repo";
-import { terminalSessionRecord } from "./session-control";
+import { terminalSessionRecord } from "@volli/host-core/session-control";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 
 export {

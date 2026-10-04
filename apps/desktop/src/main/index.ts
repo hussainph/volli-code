@@ -115,8 +115,8 @@ import {
   getProjectById,
   listProjects,
 } from "@volli/host-core/db/projects-repo";
-import { createSessionConcurrencyEnvReader } from "./session-concurrency";
-import type { SessionConcurrencyEnvReader } from "./session-concurrency";
+import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -138,13 +138,8 @@ import {
 } from "@volli/host-core/db/tickets-repo";
 import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import {
-  catchUpSessionResumptions,
-  observeSessionResumptions,
-} from "./session-runtime/session-resumptions";
+import { catchUpSessionResumptions } from "@volli/host-core/session-runtime/session-resumptions";
 import type { SessionOrigin } from "@volli/shared";
-import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { readAutomationRunAttendance } from "@volli/host-core/db/automations-repo";
 import {
   beginPendingArmedRunAttempt,
   deletePendingArmedRun,
@@ -162,26 +157,15 @@ import {
   createPendingArmedRunCoordinator,
   type PendingArmedRunCoordinator,
 } from "./automations/pending-armed-runs";
-import { createRunAttentionWatch } from "./automations/run-attention";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
-  createCheckpointFailureReporter,
-  createSqliteSessionLedger,
   createScheduledResumeHost,
-  createSessionReadWatch,
   createSessionWatchdog,
   createSuspendClock,
-  publishSessionListingRow,
-  watchSessionActivity,
   type ScheduledResumeHost,
-} from "./session-control";
-import {
-  markSessionUnread,
-  readSessionUnread,
-  writeSessionUnread,
-} from "@volli/host-core/db/session-read-repo";
+} from "@volli/host-core/session-control";
 import { listScheduledResumeSessionIds } from "@volli/host-core/db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
@@ -191,9 +175,8 @@ import {
 } from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
-import { createSessionEngine, sessionRootThreadId } from "@volli/session-engine";
+import { sessionRootThreadId } from "@volli/session-engine";
 import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
-import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
@@ -223,7 +206,7 @@ import { registerSecretIpc } from "./secrets/ipc";
 import { refusingCredentialReads } from "@volli/agent-runtime";
 import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
-import { createPeekSummarizer } from "./session-control/peek-summary";
+import { createPeekSummarizer } from "@volli/host-core/session-control/peek-summary";
 import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
@@ -304,7 +287,6 @@ import { createAgentToolDoor } from "./agent-tool-door";
 import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
-import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
 import { createWatches } from "./watches";
 import type { Watches } from "./watches";
@@ -935,8 +917,20 @@ app.whenReady().then(async () => {
   // The host's persistence comes out of host-core (VC-553): this file only
   // states the policy. Packaged builds log a transaction-ownership violation;
   // dev and tests throw (VC-551) — chosen from `app.isPackaged`, never NODE_ENV.
+  // The runtime and notification registry are installed below. Session
+  // construction only captures these adapters; it never calls them at boot.
+  let listOpenNativeBindings = noOpenNativeBindings;
+  let scheduledResumeHost: ScheduledResumeHost | null = null;
   const hostCore = createHostCore(
-    { log: console },
+    {
+      log: console,
+      publishSessionActivity: broadcastSessionActivity,
+      publishDataChanged: broadcastDataChanged,
+      deliverNotification: (request) => notifications.deliver(request),
+      focusedSessionIds: () => notifications.focusedSessionIds(),
+      listOpenNativeBindings: () => listOpenNativeBindings(),
+      observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
+    },
     {
       dataDir: app.getPath("userData"),
       databasePath: dbPath,
@@ -958,126 +952,22 @@ app.whenReady().then(async () => {
       }, 750);
     },
   });
-  // The one Session Engine in the process, wrapped once so every durable write
-  // anywhere downstream — the runtime's turns, the agent socket's commands, the
-  // IPC handlers' retitles — re-publishes the affected Session's listing row to
-  // every window. Wrapping HERE is what makes that claim true: this is the only
-  // construction site, so there is no unwatched engine for a caller to hold.
-  // See `session-control/activity-watch.ts`.
-  //
-  // The handle is captured into a const first because `dbHandle` is a `let`
-  // that a later branch may reassign: a narrowing on it does not survive into
-  // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
   installExperimentalSettings(
     new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"]),
   );
-  // One transaction queue for Session facts AND host notices. put() must
-  // commit before submission, never ride inside another writer's transaction.
-  const sessionLedger = watchedDb === null ? null : createSqliteSessionLedger(watchedDb);
-  const hostNoticeOutbox =
-    watchedDb === null || sessionLedger === null
-      ? null
-      : createSqliteHostNoticeOutbox(watchedDb, sessionLedger);
+  const { hostNoticeOutbox, sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore;
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
   // than a convention. Built here, right after the database handle is known,
-  // because the run-attention watch below is the first thing that needs it; the
+  // because host-core's run-attention adapter is the first thing that needs it; the
   // window opener is bound later, when the window factory exists.
   //
   // Deliberately built even for a degraded database: with no stored
   // preferences the all-on default applies, so a broken db costs the app its
   // settings, never its voice.
   const notifications = createNotificationRuntime({ db: watchedDb });
-  // The Notification rule (VC-112, VC-133): an unattended Run that enters
-  // `waiting` or `error` says so, and nothing else does. It hangs off the
-  // activity watch below because that is the one place every durable Session
-  // write in this process is already seen — see `automations/run-attention.ts`.
-  const runAttention =
-    watchedDb !== null
-      ? createRunAttentionWatch({
-          attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
-          // The preference is read per alert inside the delivery path, so this
-          // observer names the producer and the target and nothing else.
-          notify: (request) => notifications.deliver(request),
-        })
-      : null;
-  // The runtime is composed from the watched Engine below, so this reader is
-  // installed in two steps: the watch closes over the indirection now, and the
-  // real process-local binding list replaces the empty boot answer once the
-  // runtime exists. Durable attachments alone never enter this list.
-  let listOpenNativeBindings = noOpenNativeBindings;
-  // The scheduled-resume host needs the runtime, which is composed from the
-  // watched engine below — so the watch closes over this indirection and the
-  // host is installed once the runtime exists.
-  let scheduledResumeHost: ScheduledResumeHost | null = null;
-  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
-  // watch: a write returns from the engine, the bus fans the committed event
-  // out to its listeners (the Watch registry, the resumed-subagent re-arm —
-  // VC-457), and only then does the
-  // watch mark the row dirty. Same construction-site rule as the watch — this
-  // is the only place the engine is made, so no caller can hold an unwatched
-  // one. See `session-wake.ts`.
-  const sessionWakeBus =
-    watchedDb !== null && sessionLedger !== null
-      ? createSessionWakeBus(
-          createSessionEngine({
-            ledger: sessionLedger,
-            clock: { now: Date.now },
-            ids: { next: () => randomUUID() },
-            onProjectionCheckpointFailure: createCheckpointFailureReporter(),
-            yieldToHost: () => new Promise<void>((resolve) => setImmediate(resolve)),
-          }),
-          { db: watchedDb },
-        )
-      : null;
-  // Unread, decided here because main is the only process that sees every turn
-  // boundary AND honestly knows which window is focused and what it is showing
-  // (VC-30). Both edges live in one watch: a turn that ended with nobody
-  // looking becomes unread, and a Session that comes into view becomes read.
-  //
-  // `publishSessionRow` is what makes the second edge visible. Marking read
-  // moves no ledger fact, so the activity watch below has nothing to notice —
-  // the row has to be re-published by hand, through the same broadcast and the
-  // same builder, or one window's dot would outlive the other's.
-  const publishSessionRow = (sessionId: string): void => {
-    if (watchedDb === null || sessionEngine === null) return;
-    void publishSessionListingRow(
-      {
-        db: watchedDb,
-        getSession: (query) => sessionEngine.getSession(query),
-        liveAttachmentIds: () =>
-          new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
-        publish: broadcastSessionActivity,
-      },
-      sessionId,
-    ).catch((error: unknown) => {
-      console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
-    });
-  };
-  const sessionReadWatch =
-    watchedDb !== null
-      ? createSessionReadWatch({
-          // The same registry the alert suppression asks, so a turn can never
-          // be both loud and unread.
-          focusedSessionIds: () => notifications.focusedSessionIds(),
-          markUnread: (sessionId, at) => {
-            markSessionUnread(watchedDb, sessionId, at);
-            // No publish here: the activity watch is already mid-fold for this
-            // Session and reads the receipt below, so the row it is about to
-            // publish carries the mark this write just made.
-          },
-          markRead: (sessionId) => {
-            // A Session that is already read must not cost a broadcast: this
-            // fires for everything in front of a focused window, which on an
-            // ordinary switch is a Session nobody has left work in.
-            if (readSessionUnread(watchedDb, sessionId).unreadSince === null) return;
-            writeSessionUnread(watchedDb, sessionId, null);
-            publishSessionRow(sessionId);
-          },
-        })
-      : null;
   // A1: a Session that BECOMES in front of a focused window is read — the
   // renderer's active target changed to it, or its window took focus while
   // already showing it. Without this, returning to a window that has a finished
@@ -1087,41 +977,6 @@ app.whenReady().then(async () => {
       sessionReadWatch.observeFocused(sessionIds),
     );
   }
-  const sessionActivityWatch =
-    watchedDb !== null && sessionWakeBus !== null
-      ? watchSessionActivity(sessionWakeBus.engine, {
-          publish: broadcastSessionActivity,
-          // Read on the push path as well as the fetch path, so a Run's bolt
-          // survives its Session's first turn (VC-131): the renderer upserts
-          // the whole row, so a push without provenance would erase the mark.
-          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
-          // Read AFTER `observe` below has run for this fold, so the row a turn
-          // boundary publishes already carries the mark that boundary earned
-          // (VC-30).
-          readOf: (sessionId) => readSessionUnread(watchedDb, sessionId),
-          listOpenNativeBindings: () => listOpenNativeBindings(),
-          observe: (projection) => {
-            observeSessionResumptions(watchedDb, projection, {
-              publish: broadcastDataChanged,
-              report: (error) =>
-                console.error("[volli] failed to record Session resumption:", errorMessage(error)),
-            });
-            runAttention?.observe(projection);
-            // A schedule made (or settled) anywhere reaches the timer here.
-            scheduledResumeHost?.observe(projection);
-            // Did a turn just end with nobody looking? (VC-30)
-            sessionReadWatch?.observe(projection);
-          },
-          // The baseline for the rule above: a Session minted in this process
-          // began with no need, which is what makes its first fold an edge
-          // rather than a first sighting (VC-133).
-          observeBirth: (sessionId) => {
-            runAttention?.observeBirth(sessionId);
-            sessionReadWatch?.observeBirth(sessionId);
-          },
-        })
-      : null;
-  const sessionEngine = sessionActivityWatch?.engine ?? null;
   // Attachment bytes reach the renderer here (VC-50). Registered after the db
   // opens because the media type is a `blobs` column, and read through the
   // handle at request time rather than captured: a degraded db still serves

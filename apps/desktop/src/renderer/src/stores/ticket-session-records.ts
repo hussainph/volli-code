@@ -12,7 +12,7 @@
  * ── WHY THE FETCH IS THE BASELINE ONLY (VC-373) ───────────────────────────
  * Main already pushes the answer: `volli:session-activity` carries
  * `{ projectId, ticketId, row }` for every durable Session change
- * (`main/session-control/activity-watch.ts`), and this store subscribes to it
+ * (`packages/host-core/src/session-control/activity-watch.ts`), and this store subscribes to it
  * ({@link subscribeTicketSessionActivity}) exactly as `stores/project-sessions.ts`
  * does. A create, a split, a rename, an exit and an agent's own turn all land
  * here as an upsert within a frame or two. So the fetch survives as the

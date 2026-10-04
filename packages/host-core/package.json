@@ -9,6 +9,26 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./session-control": {
+      "types": "./src/session-control/index.ts",
+      "import": "./src/session-control/index.ts"
+    },
+    "./session-control/*": {
+      "types": "./src/session-control/*.ts",
+      "import": "./src/session-control/*.ts"
+    },
+    "./session-runtime/*": {
+      "types": "./src/session-runtime/*.ts",
+      "import": "./src/session-runtime/*.ts"
+    },
+    "./session-wake": {
+      "types": "./src/session-wake.ts",
+      "import": "./src/session-wake.ts"
+    },
+    "./session-concurrency": {
+      "types": "./src/session-concurrency.ts",
+      "import": "./src/session-concurrency.ts"
+    },
     "./db": {
       "types": "./src/db/index.ts",
       "import": "./src/db/index.ts"
@@ -25,12 +45,14 @@
     "migrations:lock": "node scripts/lock-migrations.mjs"
   },
   "dependencies": {
+    "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
     "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
+    "ai": "^7.0.83",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

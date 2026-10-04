@@ -502,6 +502,9 @@ importers:
 
   packages/host-core:
     dependencies:
+      '@volli/session-engine':
+        specifier: workspace:*
+        version: link:../session-engine
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
@@ -509,6 +512,9 @@ importers:
         specifier: ^13.0.3
         version: 13.0.3
     devDependencies:
+      ai:
+        specifier: ^7.0.83
+        version: 7.0.84(zod@4.4.3)
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13

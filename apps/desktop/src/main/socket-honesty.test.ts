@@ -29,8 +29,8 @@ import { listTicketsByProject, insertTicket } from "@volli/host-core/db/tickets-
 import { listComments } from "@volli/host-core/db/comments-repo";
 import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "./session-control";
-import { insertSession } from "./session-control/test-support";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;

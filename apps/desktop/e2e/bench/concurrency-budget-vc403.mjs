@@ -87,11 +87,11 @@ try {
     "/packages/host-core/src/db/projects-repo.ts",
   );
   const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+    "/packages/host-core/src/session-control/sqlite-ledger.ts",
   );
   const engineModule = await vite.ssrLoadModule("/packages/session-engine/src/index.ts");
   const concurrencyModule = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-concurrency.ts",
+    "/packages/host-core/src/session-concurrency.ts",
   );
   const commandsModule = await vite.ssrLoadModule("/apps/desktop/src/main/agent-commands.ts");
 

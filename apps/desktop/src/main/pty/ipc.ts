@@ -21,9 +21,9 @@ import { blobsRoot } from "../blob-store";
 import type { DbHandle } from "../data-ipc";
 import { SpawnLedger } from "../process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
-import { createDesktopSessionEngine } from "../session-control";
-import { createSessionConcurrencyEnvReader } from "../session-concurrency";
-import type { SessionConcurrencyEnvReader } from "../session-concurrency";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
 

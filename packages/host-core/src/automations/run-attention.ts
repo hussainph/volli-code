@@ -71,7 +71,7 @@ import {
   type SessionProjection,
 } from "@volli/shared";
 
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 
 export interface RunAttentionPorts {
   /**

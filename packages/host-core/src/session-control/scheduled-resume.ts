@@ -50,7 +50,7 @@ import type {
   SessionRuntimeCommandResult,
 } from "@volli/session-engine";
 
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 
 /**
  * How long the timer sleeps at most. A minute, like the Automation schedule

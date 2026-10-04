@@ -30,7 +30,7 @@ import Database from "better-sqlite3";
 
 import { blobsRoot, writeBlob } from "../blob-store";
 import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
-import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import {
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,

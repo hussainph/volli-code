@@ -78,7 +78,10 @@ export type {
   StopSessionOutcome,
 } from "@volli/session-engine";
 
-import { latestStructuredAttachment, terminalSessionRecord } from "../session-control";
+import {
+  latestStructuredAttachment,
+  terminalSessionRecord,
+} from "@volli/host-core/session-control";
 
 /** What the operations need. Narrow on purpose; everything is per-call. */
 export interface SuperviseSessionPorts {

@@ -176,7 +176,7 @@ import {
   readSessionPeekContent,
   sessionListingRowsForRoster,
   type SessionPeekContentPorts,
-} from "./session-control";
+} from "@volli/host-core/session-control";
 import { readSessionUnread, writeSessionUnread } from "@volli/host-core/db/session-read-repo";
 import { prepared } from "@volli/host-core/db/prepared";
 import {

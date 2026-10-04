@@ -14,7 +14,7 @@ import {
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { insertSession } from "./session-control/test-support";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { piSessionDirectoryName, piSessionFilename } from "./pi-session-orphans";
 import { removeTicketToolOutput } from "./pi-tool-output";
 

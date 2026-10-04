@@ -24,7 +24,7 @@ import {
   testSession,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import { insertSession } from "./session-control/test-support";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import {
   PiSessionOrphanService,
   piSessionDirectoryName,

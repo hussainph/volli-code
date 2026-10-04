@@ -105,10 +105,10 @@ try {
     "/packages/host-core/src/db/session-provenance-repo.ts",
   );
   const sessionControl = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/index.ts",
+    "/packages/host-core/src/session-control/index.ts",
   );
   const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+    "/packages/host-core/src/session-control/sqlite-ledger.ts",
   );
   const engineModule = await vite.ssrLoadModule("/packages/session-engine/src/index.ts");
 

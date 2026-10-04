@@ -701,23 +701,9 @@ export default defineConfig(({ mode }) => ({
         // stays enrolled here because its covering test composes desktop
         // Session code, and moves when that test can.
         "**/packages/host-core/src/db/export.ts",
-        // The Session concurrency budget (VC-339). In the gate because every
-        // branch of it is a rule about a machine nobody watches: a miscount
-        // hands one Session the whole box while three others build, and a
-        // missed no-clobber branch overwrites what a person put in their own
-        // login shell. Neither is visible anywhere until the laptop swaps.
-        "**/src/main/session-concurrency.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
         "**/src/main/session-runtime/sessions.ts",
-        "**/src/main/session-control/activity-watch.ts",
-        // The turn boundary that decides unread (VC-30), beside the watch it
-        // decorates: main is the only process that knows both that a turn ended
-        // and whether anyone was looking, so every branch of this is one nobody
-        // else can check. The peek's fold rides here too — it is the whole of
-        // what a card is allowed to say about a Session it never adopted.
-        "**/src/main/session-control/session-read-watch.ts",
-        "**/src/main/session-control/peek-content.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

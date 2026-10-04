@@ -354,7 +354,7 @@ VC-466 land.
     Session. Making `location.ts` Electron-free would let the bench use the
     real one, and a headless host would need the same change.
   - **Runtime context and host yield.** `resolveRuntimeContext` is fixed.
-    `yieldToMainProcess` is copied from `session-control`, where it is private.
+    `yieldToMainProcess` is copied from `packages/host-core/src/session-control/index.ts`, where it is private.
   - **Pi host options.** No connectivity, compaction-policy or
     execution-environment options are passed, and there are no web, browser,
     shell or MCP ports, so Pi's defaults apply.
