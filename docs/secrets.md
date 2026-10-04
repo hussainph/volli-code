@@ -97,7 +97,8 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   belong to that user alone. Give the data directory `StateDirectoryMode=0700`:
   the adapter checks only the key file, so a directory other users could write
   would let them rename the key or the store away. hostd refuses a data
-  directory every user can write and warns about a group-writable one.
+  directory another user owns or every user can write, and warns about a
+  group-writable one.
   `apps/hostd/README.md` ("Running under systemd") has the unit.
 - **Never re-keyed.** A key is only created to seal, and the store always opens
   what exists before it seals. So if `session-secrets.enc` exists and its key

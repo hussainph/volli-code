@@ -7,9 +7,10 @@
  * {@link HostdBootError} before anything is served:
  *
  * 1. **Data directory.** Created 0700 when absent. Refused when it is not a
- *    directory or every user can write it: any of them could then rename the
- *    key or the database out from under the host. Group-writable is a warning
- *    (user private groups make that group this user alone).
+ *    directory, another user owns it, or every user can write it: any of them
+ *    could then rename the key or the database out from under the host.
+ *    Group-writable is a warning (user private groups make that group this
+ *    user alone), as is a `--socket` in a world-writable directory.
  * 2. **Another host.** Refused when another process holds the data
  *    directory's instance lock (`instance-lock.ts`), whatever its `--socket`:
  *    two hosts must never open one database. The lock is held until stop.
@@ -37,6 +38,7 @@
  * retention and the maintenance loops (VC-618).
  */
 import { mkdirSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 
 import type Database from "better-sqlite3";
 import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/shared";
@@ -120,6 +122,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
 
   logger.info("starting", { version: options.version, dataDir, socketPath, pid: process.pid });
   prepareDataDir(dataDir, logger);
+  warnOfSharedSocketDir(socketPath, dataDir, logger);
   const lock = acquireInstanceLock(dataDir);
   try {
     return await boot();
@@ -151,9 +154,15 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     const ready = new Promise<Execute>((resolve) => {
       settle = resolve;
     });
+    let socketCloseFailed = false;
     const socket = createAgentSocketLifecycle({
       start: startAgentSocket,
-      reportFailure: (error) => logger.error("agent socket did not close cleanly", { error }),
+      // A socket that did not close is an unclean stop: the exit must say so,
+      // so systemd's Restart=on-failure acts on it.
+      reportFailure: (error) => {
+        socketCloseFailed = true;
+        logger.error("agent socket did not close cleanly", { error });
+      },
     });
     try {
       await socket.start({
@@ -264,13 +273,39 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           const closed = handle.ok ? closeDatabase(handle.db, logger) : true;
           lock.release();
           record("stopped");
-          const clean = drained && closed;
+          const clean = drained && closed && !socketCloseFailed;
           logger.info("stopped", { clean });
           return clean;
         })();
         return stopping;
       },
     };
+  }
+}
+
+/**
+ * A socket outside the data directory gets the data directory's warning: in a
+ * directory every user can write, another user can unlink it or squat on its
+ * path between hostd's runs. The socket itself stays mode 0600 either way.
+ * A missing directory is left to the socket's own open to report.
+ */
+function warnOfSharedSocketDir(socketPath: string, dataDir: string, logger: HostdLogger): void {
+  const directory = dirname(socketPath);
+  if (directory === dataDir) return;
+  let mode: number;
+  try {
+    mode = statSync(directory).mode & 0o777;
+  } catch {
+    return;
+  }
+  if ((mode & 0o002) !== 0) {
+    logger.warn(
+      "the socket's directory is world-writable; another user could unlink or squat on it",
+      {
+        socketPath,
+        mode: mode.toString(8).padStart(4, "0"),
+      },
+    );
   }
 }
 
@@ -299,7 +334,18 @@ function prepareDataDir(dataDir: string, logger: HostdLogger): void {
     );
   }
   // `mkdirSync` has already refused a path that is not a directory (EEXIST).
-  const mode = statSync(dataDir).mode & 0o777;
+  const stat = statSync(dataDir);
+  // The key file's rule (`file-key.ts`), one level up: a directory another
+  // user owns is one they can replace the database or key inside.
+  const uid = process.getuid!();
+  if (stat.uid !== uid) {
+    throw new HostdBootError(
+      "data-dir",
+      `The data directory ${dataDir} belongs to uid ${stat.uid}, not to the user ` +
+        `volli-hostd runs as (uid ${uid}), so it will not use it. Run: chown ${uid} ${dataDir}`,
+    );
+  }
+  const mode = stat.mode & 0o777;
   const octal = mode.toString(8).padStart(4, "0");
   if ((mode & 0o002) !== 0) {
     throw new HostdBootError(

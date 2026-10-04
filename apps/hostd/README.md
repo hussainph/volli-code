@@ -48,9 +48,10 @@ In order; each refusal is logged as one JSON line and exits **78**
 (`EX_CONFIG`), which the systemd unit does not restart:
 
 1. **Data directory.** Created mode 0700 when absent. Refused when it is not a
-   directory or when every user can write it. Group-writable is a warning:
-   with user private groups (the Debian and Ubuntu default) the group is the
-   user alone.
+   directory, when another user owns it (the key file's rule, one level up),
+   or when every user can write it. Group-writable is a warning: with user
+   private groups (the Debian and Ubuntu default) the group is the user alone.
+   A `--socket` in a world-writable directory is a warning too.
 2. **Another host.** Refused when another process holds the data directory's
    instance lock, whatever its `--socket`: an exclusive SQLite lock on
    `<data-dir>/hostd.lock`, atomic, held until stop, released by the kernel
@@ -220,7 +221,8 @@ socket with the bundled CLI, sends `SIGTERM`, requires exit 0, status
 ```sh
 sudo useradd --system --create-home --home-dir /var/lib/volli-hostd --shell /bin/bash volli
 sudo mkdir -p /opt/volli-hostd
-sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd --strip-components=1
+sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd --strip-components=1 \
+  --no-same-owner
 sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
 sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
@@ -228,14 +230,21 @@ sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-
 
 - **A dedicated service user** (`User=volli`). The key and the data belong to
   it; nothing runs as root.
+- **The install is root's.** The archive records the CI builder's uid (1000),
+  and `tar` run as root restores it, which would let whoever holds uid 1000 on
+  the box rewrite `bin/node`. `--no-same-owner` makes every file root-owned;
+  the service user can read and run them and cannot change them.
 - **`StateDirectory=volli-hostd` with `StateDirectoryMode=0700`** and
   `UMask=0077`. The adapter checks only the key file, so a data directory
   others could write would let them rename the key or the store away (denial
   of service, not disclosure).
 - **`RestartPreventExitStatus=78`**: a boot refusal waits for the operator.
-- **Hardening** that leaves git, Node and a shell working: `NoNewPrivileges`,
-  `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, the kernel and
-  control-group protections. Not `MemoryDenyWriteExecute` (V8's JIT).
+- **Hardening** that leaves git, Node, node-pty and a shell working:
+  `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, the
+  kernel and control-group protections, an empty `CapabilityBoundingSet=`,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
+  `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
+  `MemoryDenyWriteExecute` (V8's JIT).
 
 ### The secret key
 

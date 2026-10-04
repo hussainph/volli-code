@@ -5,6 +5,8 @@
 #
 #   sudo useradd --system --create-home --home-dir /var/lib/volli-hostd \
 #     --shell /bin/bash volli
+#   sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd \
+#     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
 #   sudo install -m 644 volli-hostd.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
 #   journalctl -u volli-hostd -o cat | jq .
@@ -56,6 +58,13 @@ ProtectHostname=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 LockPersonality=yes
+# No capabilities at all: hostd and its Sessions run as an ordinary user.
+CapabilityBoundingSet=
+# The agent socket, outbound HTTPS and git, and the interface lookups Node
+# and git make. No raw or packet sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+SystemCallArchitectures=native
 # Not MemoryDenyWriteExecute=: V8's JIT needs writable executable memory.
 
 [Install]

@@ -37,9 +37,27 @@ const faults = vi.hoisted(() => ({
   socketCloseFails: false,
   /** When set, every command waits on it before it runs. */
   hold: null as Promise<void> | null,
+  /** A path whose `statSync` answers as if another user owned it. */
+  foreignOwner: null as string | null,
   /** The execute hostd handed the socket, to call without a connection. */
   execute: null as ((request: AgentRequest) => Promise<AgentResponse>) | null,
 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const ownedStat = ((path: string, ...rest: unknown[]) => {
+    const stat = (actual.statSync as (...args: unknown[]) => import("node:fs").Stats)(
+      path,
+      ...rest,
+    );
+    return path === faults.foreignOwner ? Object.assign(stat, { uid: stat.uid + 1 }) : stat;
+  }) as typeof actual.statSync;
+  return {
+    ...actual,
+    statSync: ownedStat,
+    default: { ...actual, statSync: ownedStat },
+  };
+});
 
 vi.mock("@volli/host-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@volli/host-core")>();
@@ -105,6 +123,7 @@ afterEach(async () => {
   faults.socketCloseFails = false;
   faults.hold = null;
   faults.execute = null;
+  faults.foreignOwner = null;
   await Promise.all(running.splice(0).map((host) => host.stop("test over")));
   chmodSync(root, 0o700);
   rmSync(root, { recursive: true, force: true });
@@ -299,6 +318,30 @@ describe("boot refusals", () => {
     );
   });
 
+  it("refuses a data directory another user owns", async () => {
+    const dataDir = join(root, "theirs");
+    mkdirSync(dataDir);
+    faults.foreignOwner = dataDir;
+    const error = await refused({ dataDir });
+    const uid = process.getuid!();
+    expect(error.reason).toBe("data-dir");
+    expect(error.message).toBe(
+      `The data directory ${dataDir} belongs to uid ${uid + 1}, not to the user volli-hostd runs as (uid ${uid}), so it will not use it. Run: chown ${uid} ${dataDir}`,
+    );
+  });
+
+  it("warns of a socket in a directory every user can write", async () => {
+    const shared = join(root, "shared-run");
+    mkdirSync(shared);
+    chmodSync(shared, 0o777);
+    const log = logger();
+    await boot({ socketPath: join(shared, "volli.sock") }, log);
+    expect(log.warn).toHaveBeenCalledWith(
+      "the socket's directory is world-writable; another user could unlink or squat on it",
+      { socketPath: join(shared, "volli.sock"), mode: "0777" },
+    );
+  });
+
   it("serves a group-writable data directory, and says so", async () => {
     const dataDir = join(root, "group");
     mkdirSync(dataDir);
@@ -475,6 +518,18 @@ describe("shutdown faults", () => {
       error: expect.any(Error),
       state: "stopping",
     });
+    expect(existsSync(join(root, "data", "volli.db-wal"))).toBe(false);
+  });
+
+  it("reports a socket that did not close as an unclean stop, even with the database closed", async () => {
+    const log = logger();
+    const host = await boot({}, log);
+    faults.socketCloseFails = true;
+    expect(await host.stop("SIGTERM")).toBe(false);
+    expect(log.error).toHaveBeenCalledWith("agent socket did not close cleanly", {
+      error: expect.any(Error),
+    });
+    expect(log.error).not.toHaveBeenCalledWith("database did not close cleanly", expect.anything());
     expect(existsSync(join(root, "data", "volli.db-wal"))).toBe(false);
   });
 
