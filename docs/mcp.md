@@ -558,7 +558,8 @@ normally.
 
 Both schema halves must be bounded JSON object schemas with root `type: "object"`
 that validate against a bundled JSON Schema meta-schema. Discovery recognizes
-these root `$schema` declarations (with or without a trailing empty `#` fragment):
+these root `$schema` declarations (HTTP and HTTPS spellings are accepted, with
+or without a trailing empty `#` fragment):
 
 - draft-07: `http://json-schema.org/draft-07/schema`
 - 2019-09: `https://json-schema.org/draft/2019-09/schema`

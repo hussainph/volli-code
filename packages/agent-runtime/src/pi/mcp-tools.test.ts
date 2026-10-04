@@ -118,6 +118,18 @@ describe("MCP Pi tool wrapper", () => {
       "https://json-schema.org/draft/2020-12/schema",
       { prefixItems: [{ type: "string" }], items: false },
     ],
+    [
+      "https://json-schema.org/draft-07/schema#",
+      { items: [{ type: "string" }], additionalItems: false },
+    ],
+    [
+      "http://json-schema.org/draft/2019-09/schema",
+      { items: [{ type: "string" }], additionalItems: false },
+    ],
+    [
+      "http://json-schema.org/draft/2020-12/schema",
+      { prefixItems: [{ type: "string" }], items: false },
+    ],
   ])(
     "Pi validates a raw %s schema without rebuilding or stripping its declaration",
     async ($schema, tupleSchema) => {

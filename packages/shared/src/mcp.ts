@@ -351,6 +351,15 @@ const JSON_SCHEMA_VALIDATORS = new Map([
   ["https://json-schema.org/draft/2019-09/schema", new Ajv2019(JSON_SCHEMA_OPTIONS)],
   ["https://json-schema.org/draft/2020-12/schema", JSON_SCHEMA_2020],
 ]);
+// Recognize the HTTP/HTTPS spellings in use without rewriting a declaration
+// or aliasing one draft to another. Each fixed alias resolves only locally to
+// its bundled meta-schema. Snapshot the entries before adding their aliases.
+// eslint-disable-next-line unicorn/no-useless-spread -- live Map iteration would also visit the newly added aliases.
+for (const [uri, validator] of [...JSON_SCHEMA_VALIDATORS]) {
+  const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
+  validator.addMetaSchema({ $ref: uri }, alias);
+  JSON_SCHEMA_VALIDATORS.set(alias, validator);
+}
 
 /** Small deterministic identity suffix. Final collision detection remains mandatory. */
 function identityHash(input: string): string {

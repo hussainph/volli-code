@@ -126,6 +126,12 @@ describe("sanitizeMcpToolDefinition", () => {
     "https://json-schema.org/draft/2019-09/schema#",
     "https://json-schema.org/draft/2020-12/schema",
     "https://json-schema.org/draft/2020-12/schema#",
+    "https://json-schema.org/draft-07/schema",
+    "https://json-schema.org/draft-07/schema#",
+    "http://json-schema.org/draft/2019-09/schema",
+    "http://json-schema.org/draft/2019-09/schema#",
+    "http://json-schema.org/draft/2020-12/schema",
+    "http://json-schema.org/draft/2020-12/schema#",
   ])("accepts declared %s unchanged at discovery and frozen-set validation", ($schema) => {
     const schema = {
       $schema,
@@ -171,6 +177,9 @@ describe("sanitizeMcpToolDefinition", () => {
 
   it.each([
     ["http://json-schema.org/draft-07/schema#", { items: [1] }],
+    ["https://json-schema.org/draft-07/schema#", { items: [1] }],
+    ["http://json-schema.org/draft/2019-09/schema", { dependentSchemas: { query: 1 } }],
+    ["http://json-schema.org/draft/2020-12/schema", { prefixItems: [1] }],
     ["https://json-schema.org/draft/2019-09/schema", { dependentSchemas: { query: 1 } }],
     ["https://json-schema.org/draft/2020-12/schema", { prefixItems: [1] }],
     ["http://json-schema.org/draft-07/schema#", { properties: { query: { minLength: -1 } } }],
