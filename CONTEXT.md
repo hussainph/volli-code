@@ -4,6 +4,57 @@ Local-first planner and execution workspace. This glossary is the canonical proj
 
 ## Language
 
+**Host**:
+The process that is the single authority for one or more Workspaces and serves
+the Host protocol. Volli Cloud direction: `hostd`, headless Node, no Electron.
+_Avoid_: Electron main (one current host, not the product API), relay
+
+**Worker**:
+A process that executes Sessions for a Host and owns the checkouts it holds
+leases on. Connects outbound to its Host.
+_Avoid_: Host, Client, agent (the Worker hosts the agent loop)
+
+**Client**:
+Anything that reads projections and sends commands over the Host protocol:
+desktop, web/phone client, CLI. Owns no durable workspace state and never talks
+to databases.
+_Avoid_: renderer (only one client), Worker
+
+**Workspace**:
+The portable unit a Host is authoritative for: one database file, its artifacts
+and git refs. Today: one project's board. Not the **Ticket workspace**, which
+names the ticket's UI surface.
+_Avoid_: Ticket workspace, worktree, device-local state
+
+**Host protocol**:
+The versioned, capability-negotiated API every Client and Worker speaks.
+_Avoid_: Electron IPC, database sync
+
+**Execution venue**:
+The Worker a ticket's checkout currently lives on. Not `VenueKind` in
+`packages/shared/src/session-venue.ts`, which describes the checkout type.
+_Avoid_: checkout type, `VenueKind`, client device
+
+**Checkout lease / epoch**:
+The Host's grant naming the one Worker allowed to write a ticket's checkout.
+The epoch increments on every transfer and fences older holders.
+_Avoid_: tab hold, unfenced lock
+
+**Workspace epoch**:
+The same fence one level up: which Host is the authority for a Workspace.
+_Avoid_: Checkout epoch, database version
+
+**Checkpoint ref**:
+`refs/volli/checkpoints/<ticket>`, a commit holding a checkout's uncommitted
+work, pushed to the Host's git store, never the user's origin. Live processes
+and browser sockets do not migrate.
+_Avoid_: user branch, process snapshot
+
+**Control plane**:
+Closed hosted services only Volli Cloud needs: accounts, billing, provisioning,
+workspace and device registry, push delivery. Never the board authority.
+_Avoid_: Host, board store
+
 **Ticket**:
 A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket workspace; moving it to Doing records work state but does not start a Session.
 
@@ -859,11 +910,11 @@ _Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
-_Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
+_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), space
 
 **Ticket worktree**:
 The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
-_Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
+_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:
 A durable, project-scoped output or reference, stored as a file or bundle and reusable across tickets. Its format determines how Volli presents it.
