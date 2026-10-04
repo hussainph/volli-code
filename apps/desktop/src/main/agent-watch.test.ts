@@ -21,10 +21,10 @@ import {
   watchTool,
 } from "./agent-watch";
 import type { WatchToolPorts } from "./agent-watch";
-import { openTestDb, testProject, testTicket } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
-import { insertProject, listProjects } from "./db/projects-repo";
-import { insertTicket } from "./db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject, listProjects } from "@volli/host-core/db/projects-repo";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import type { Watches, WatchSessionInput, WatchTicketInput } from "./watches";
 
 let ctx: TestDb | undefined;

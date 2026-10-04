@@ -56,7 +56,7 @@ export type SessionProvenance =
        *   its `session_started` event are durable one step before that row is
        *   written, so a crash in between leaves a Session that is provably a
        *   Run's without anything on disk that can say whose
-       *   (`main/db/session-provenance-repo.ts`).
+       *   (`host-core/src/db/session-provenance-repo.ts`).
        *
        * The bolt draws either way. Only the name is missing, and a mark that
        * printed a guess here would be worse than one that prints nothing.

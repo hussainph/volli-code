@@ -87,9 +87,9 @@ import type {
   WorktreeRevealInput,
 } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
-import { getProjectById } from "./db/projects-repo";
-import { getTicketRow } from "./db/tickets-repo";
-import type { TicketRow } from "./db/tickets-repo";
+import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import type { TicketRow } from "@volli/host-core/db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 import { isPathWithinRoots } from "./project-roots";

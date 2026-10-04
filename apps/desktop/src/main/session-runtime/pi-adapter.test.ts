@@ -7,8 +7,8 @@ import { randomUUID } from "node:crypto";
 import { SecretService } from "../secrets/service";
 import { SecretStore } from "../secrets/store";
 
-import { insertProject } from "../db/projects-repo";
-import { openRawDb, openTestDb, testProject } from "../db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openRawDb, openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import type {
   BindingHandle,
   HarnessCommand,

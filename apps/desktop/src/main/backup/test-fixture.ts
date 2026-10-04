@@ -23,8 +23,8 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 
 import { blobsRoot, writeBlob } from "../blob-store";
-import { migrate } from "../db/migrations";
-import { openRawDb } from "../db/test-helpers";
+import { migrate } from "@volli/host-core/db/migrations";
+import { openRawDb } from "@volli/host-core/db/test-helpers";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 
 export const FIXTURE_NATIVE_RECEIPT_EVENT_ID =

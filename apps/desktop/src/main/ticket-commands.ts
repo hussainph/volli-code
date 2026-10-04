@@ -17,10 +17,10 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
-import { withTransaction } from "./db/transaction-gate";
-import { createComment } from "./db/comments-repo";
-import { recordTicketEvent } from "./db/events-repo";
-import { createSignal } from "./db/signals-repo";
+import { withTransaction } from "@volli/host-core/db/transaction-gate";
+import { createComment } from "@volli/host-core/db/comments-repo";
+import { recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { createSignal } from "@volli/host-core/db/signals-repo";
 import {
   addTicketLabel,
   getLabel,
@@ -30,7 +30,7 @@ import {
   removeTicketLabel,
   retireLabelInto,
   type LabelMergeTicket,
-} from "./db/labels-repo";
+} from "@volli/host-core/db/labels-repo";
 import {
   archiveTicket,
   bumpTicketVersion,
@@ -47,7 +47,7 @@ import {
   updateTicketPriority,
   type TicketFieldUpdate,
   type TicketRow,
-} from "./db/tickets-repo";
+} from "@volli/host-core/db/tickets-repo";
 
 export interface TicketCommandContext {
   now: number;

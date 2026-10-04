@@ -23,11 +23,11 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { TicketEventActor } from "@volli/shared";
 
-import { listTicketEvents } from "./db/events-repo";
-import { getOrCreateLabel } from "./db/labels-repo";
-import { insertProject } from "./db/projects-repo";
-import { getTicket, getTicketRow } from "./db/tickets-repo";
-import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
+import { listTicketEvents } from "@volli/host-core/db/events-repo";
+import { getOrCreateLabel } from "@volli/host-core/db/labels-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { getTicket, getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
 import {
   archiveTicketCommand,
   createTicketCommand,

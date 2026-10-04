@@ -20,10 +20,10 @@ import {
   listRunsForTicket,
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
-} from "../db/automations-repo";
-import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
+} from "@volli/host-core/db/automations-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 
 let ctx: TestDb;
 

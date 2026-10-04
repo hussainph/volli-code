@@ -87,7 +87,7 @@ import type {
   ProjectRelinkRefusal,
   ProjectThemeOverride,
   PromptTemplate,
-  ResolvedAppearance,
+  FirstPaintHint,
   RetentionReason,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -1442,28 +1442,11 @@ export interface AppearanceSetProjectInput {
 }
 
 /**
- * The first-paint HINT: the mode the renderer resolved to, and the canvas
- * background it painted.
- *
- * This is a cache, not an authority. `{canvas, appearance}` remains the only
- * authoritative pair — this row exists solely because main has to answer "what
- * color is this window's edge, and is it light or dark?" *synchronously, at
- * window construction*, before any renderer exists to ask. Whenever the two
- * disagree, the pair wins and this row is overwritten on the next paint.
- *
- * It is NOT a violation of "never persist the resolved token set" (`apply.ts`):
- * what is stored is one enum and one hex — the two values main physically
- * cannot derive without the renderer — not the 31-token ladder. Persisting the
- * ladder would let a stale copy of it out-vote the authored canvas, which is the
- * bug that rule is about; one background color cannot, because nothing reads it
- * after first paint.
+ * The first-paint hint is persisted by the host's theme repo, so its shape is
+ * `@volli/shared`'s; re-exported because every desktop process reads channel
+ * types from this one file.
  */
-export interface FirstPaintHint {
-  /** `auto` already resolved — main stamps this mode before the renderer boots. */
-  appearance: ResolvedAppearance;
-  /** The canvas background as a hex color; `BrowserWindow`'s `backgroundColor`. */
-  background: string;
-}
+export type { FirstPaintHint };
 
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;

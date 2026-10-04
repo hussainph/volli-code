@@ -39,8 +39,8 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/volli-secrecy" },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
-import { readSecret } from "../db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { readSecret } from "@volli/host-core/db/secrets-repo";
 import { registerDataIpcHandlers } from "../data-ipc";
 import { createPiNativeAdapter, type PiRuntimeContext } from "../session-runtime/pi-adapter";
 import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";

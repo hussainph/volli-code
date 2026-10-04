@@ -246,11 +246,11 @@ async function loadProductionModules() {
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
     const [db, sessionControl, artifacts, shared, migrations] = await Promise.all([
-      load("src/main/db/index.ts"),
+      load("../../packages/host-core/src/db/index.ts"),
       load("src/main/session-control/index.ts"),
       load("src/main/session-runtime/transcript-artifacts.ts"),
       vite.ssrLoadModule("@volli/shared"),
-      load("src/main/db/migrations.ts"),
+      load("../../packages/host-core/src/db/migrations.ts"),
     ]);
     return {
       vite,

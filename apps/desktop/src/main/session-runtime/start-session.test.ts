@@ -24,10 +24,10 @@ import { autoTitleFromKickoff, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
 import type { Project, SessionOrigin, Ticket, TicketEventActor } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../../ipc/contract";
-import { getTicket, insertTicket } from "../db/tickets-repo";
-import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, testTicket } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
+import { getTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { StructuredSessionsError, type SessionStartInput } from "./sessions";
 import { startSessionModelOverride, startSessionOperation } from "./start-session";
 

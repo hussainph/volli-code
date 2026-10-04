@@ -57,12 +57,12 @@ import {
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   recordAutomationRun,
-} from "../db/automations-repo";
-import { insertProject } from "../db/projects-repo";
+} from "@volli/host-core/db/automations-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertSession } from "../session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
-import { insertTicket } from "../db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 
 let ctx: TestDb;
 

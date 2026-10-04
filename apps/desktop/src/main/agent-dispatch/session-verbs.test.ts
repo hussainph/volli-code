@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AgentCommand, AgentResponse, SessionOrigin, SessionRole } from "@volli/shared";
 import { createAgentCommandService } from "../agent-commands";
-import { insertProject } from "../db/projects-repo";
-import { insertTicket } from "../db/tickets-repo";
-import { recordSessionResumedOnce, recordTicketEvent } from "../db/events-repo";
-import { openTestDb, testProject, testSession, testTicket, type TestDb } from "../db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { recordSessionResumedOnce, recordTicketEvent } from "@volli/host-core/db/events-repo";
+import {
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
 import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
 

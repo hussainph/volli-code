@@ -266,7 +266,10 @@ async function malformedHeader(config) {
 // Use the immutable production v1/v2 SQL snapshots, not a partial hand-written
 // app_state-only database (that can pass quick_check but cannot really migrate).
 async function legacySql(version) {
-  const source = await fs.readFile(join(APP_DIR, "src/main/db/migrations.ts"), "utf8");
+  const source = await fs.readFile(
+    join(APP_DIR, "../../packages/host-core/src/db/migrations.ts"),
+    "utf8",
+  );
   const constant = version === 1 ? "MIGRATION_001_INITIAL_SCHEMA" : "MIGRATION_002_TICKET_ARCHIVAL";
   const match = new RegExp(`const ${constant} = \x60([\\s\\S]*?)\x60;`).exec(source);
   assert.ok(match, `immutable v${version} fixture SQL was not found`);

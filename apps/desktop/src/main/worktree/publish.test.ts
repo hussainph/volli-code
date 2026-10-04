@@ -11,10 +11,10 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { TicketEvent } from "@volli/shared";
 
-import { insertProject } from "../db/projects-repo";
-import { getTicket, insertTicket } from "../db/tickets-repo";
-import { listTicketEvents } from "../db/events-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { getTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
+import { listTicketEvents } from "@volli/host-core/db/events-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 import { commitTicketRemaining, publishTicketBranch, type PublishDeps } from "./publish";
 import { scriptedGit } from "./scripted-git";
 import { netFailure, scriptedNet } from "./scripted-net";

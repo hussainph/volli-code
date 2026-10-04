@@ -19,7 +19,7 @@ import type Database from "better-sqlite3";
 import { errorMessage, trimWorktreeFailureStderr } from "@volli/shared";
 import type { WorktreePhase } from "../../ipc/contract";
 
-import { recordTicketEvent } from "../db/events-repo";
+import { recordTicketEvent } from "@volli/host-core/db/events-repo";
 import { setPhase } from "./phase";
 import { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 

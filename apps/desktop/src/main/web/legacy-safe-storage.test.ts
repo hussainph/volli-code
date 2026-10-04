@@ -37,8 +37,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
-import { readSecret, writeSecret } from "../db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { readSecret, writeSecret } from "@volli/host-core/db/secrets-repo";
 import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET } from "./credential";
 import { migrateLegacySafeStorageSecrets } from "./legacy-safe-storage";
 

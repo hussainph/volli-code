@@ -35,7 +35,10 @@ import type {
   ManifestError,
 } from "@volli/shared";
 
-import { getRegisteredHarness, markHarnessEventVerified } from "./db/harness-registry-repo";
+import {
+  getRegisteredHarness,
+  markHarnessEventVerified,
+} from "@volli/host-core/db/harness-registry-repo";
 
 /** The filename inside each `~/.agents/harnesses/<slug>/` directory. */
 const MANIFEST_FILENAME = "harness.json";

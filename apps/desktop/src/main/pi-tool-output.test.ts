@@ -5,9 +5,15 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
-import { insertTicket } from "./db/tickets-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import {
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import { insertSession } from "./session-control/test-support";
 import { piSessionDirectoryName, piSessionFilename } from "./pi-session-orphans";
 import { removeTicketToolOutput } from "./pi-tool-output";

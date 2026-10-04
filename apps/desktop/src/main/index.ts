@@ -16,7 +16,7 @@ import {
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -104,9 +104,17 @@ import {
 } from "./quiet-windows";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { openVolliDb } from "./db";
-import { logTransactionViolation, throwTransactionViolation } from "./db/transaction-gate";
-import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import {
+  createHostCore,
+  defaultDatabasePath,
+  logTransactionViolation,
+  throwTransactionViolation,
+} from "@volli/host-core";
+import {
+  getProjectAuthorityPolicy,
+  getProjectById,
+  listProjects,
+} from "@volli/host-core/db/projects-repo";
 import { createSessionConcurrencyEnvReader } from "./session-concurrency";
 import type { SessionConcurrencyEnvReader } from "./session-concurrency";
 import {
@@ -120,23 +128,23 @@ import {
   listRunsForTicket,
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
-} from "./db/automations-repo";
+} from "@volli/host-core/db/automations-repo";
 import {
   getTicket,
   getTicketBrief,
   getTicketRow,
   listWorktreeHoldersForSessions,
   listWorktreeRefs,
-} from "./db/tickets-repo";
-import { listMaterializableLinks } from "./db/blobs-repo";
-import { recordSessionStartedOnce } from "./db/events-repo";
+} from "@volli/host-core/db/tickets-repo";
+import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
+import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import {
   catchUpSessionResumptions,
   observeSessionResumptions,
 } from "./session-runtime/session-resumptions";
 import type { SessionOrigin } from "@volli/shared";
-import { readSessionProvenance } from "./db/session-provenance-repo";
-import { readAutomationRunAttendance } from "./db/automations-repo";
+import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
+import { readAutomationRunAttendance } from "@volli/host-core/db/automations-repo";
 import {
   beginPendingArmedRunAttempt,
   deletePendingArmedRun,
@@ -148,7 +156,7 @@ import {
   listPendingArmedRuns,
   putPendingArmedRun,
   updatePendingArmedRunAttemptError,
-} from "./db/pending-armed-runs-repo";
+} from "@volli/host-core/db/pending-armed-runs-repo";
 import { enabledAutomationIds } from "./automations/enablement";
 import {
   createPendingArmedRunCoordinator,
@@ -169,8 +177,12 @@ import {
   watchSessionActivity,
   type ScheduledResumeHost,
 } from "./session-control";
-import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
-import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
+import {
+  markSessionUnread,
+  readSessionUnread,
+  writeSessionUnread,
+} from "@volli/host-core/db/session-read-repo";
+import { listScheduledResumeSessionIds } from "@volli/host-core/db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
@@ -183,7 +195,6 @@ import { createSessionEngine, sessionRootThreadId } from "@volli/session-engine"
 import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
 import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import type { OpenNativeBinding } from "@volli/session-engine";
-import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
@@ -260,7 +271,7 @@ import {
   readExperiments,
   setExperiment,
 } from "./experiments";
-import { listRegisteredHarnesses } from "./db/harness-registry-repo";
+import { listRegisteredHarnesses } from "@volli/host-core/db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -268,7 +279,11 @@ import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { AgentRuntimeEnvironment, PtyManager } from "./pty";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
+import {
+  getFirstPaintHint,
+  getGlobalAppearance,
+  getGlobalCanvas,
+} from "@volli/host-core/db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
 import {
@@ -293,7 +308,7 @@ import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
 import { createWatches } from "./watches";
 import type { Watches } from "./watches";
-import { getComment } from "./db/comments-repo";
+import { getComment } from "@volli/host-core/db/comments-repo";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -352,7 +367,7 @@ import { registerCliIpcHandlers } from "./cli-ipc";
 import { registerSupportIpcHandlers } from "./support-info";
 import { probeCliDoctor } from "./cli-doctor";
 import { readCliStatus } from "./cli-status";
-import { getAllAppState, setAppState } from "./db/app-state-repo";
+import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 import {
   readAllowPrerelease,
   readUpdateChannel,
@@ -371,7 +386,7 @@ import { collectUnlinkedBlobs } from "./blob-collect";
 import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
-import { getBlob } from "./db/blobs-repo";
+import { getBlob } from "@volli/host-core/db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
 import { getAutoReapPolicy } from "./process/auto-reap-settings";
 import { createAutoReapWatch } from "./process/auto-reap-watch";
@@ -910,31 +925,26 @@ app.whenReady().then(async () => {
   // empty `VOLLI_DB_PATH=` (not nullish, so it wins and yields an empty path)
   // and blame userData for a failure the override caused.
   const dbOverride = isDev ? process.env["VOLLI_DB_PATH"] : undefined;
-  const dbPath = dbOverride ?? join(app.getPath("userData"), "volli.db");
+  const dbPath = dbOverride ?? defaultDatabasePath(app.getPath("userData"));
   // Log the resolved db up front: a `pnpm dev` boot lands on the empty
   // `Volli Code-dev/volli.db` while your real data sits in the packaged app's
   // `Volli Code/volli.db`. Without this line an empty dev UI is
   // indistinguishable from a broken data pointer — surface which db is live.
   const dbSource = dbOverride === undefined ? "userData" : "VOLLI_DB_PATH";
   console.info(`[volli] db: mode=${isDev ? "dev" : "packaged"} source=${dbSource} path=${dbPath}`);
-  let dbHandle: DbHandle;
-  try {
-    mkdirSync(dirname(dbPath), { recursive: true });
-    const db = openVolliDb(dbPath, {
+  // The host's persistence comes out of host-core (VC-553): this file only
+  // states the policy. Packaged builds log a transaction-ownership violation;
+  // dev and tests throw (VC-551) — chosen from `app.isPackaged`, never NODE_ENV.
+  const hostCore = createHostCore(
+    { log: console },
+    {
+      dataDir: app.getPath("userData"),
+      databasePath: dbPath,
       onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
-    });
-    dbHandle = { ok: true, db };
-  } catch (error) {
-    // The recorded reason is what every degraded handler answers with, so it
-    // is classified here, once: a native-ABI failure names the Node
-    // incompatibility and a fix its reader can carry out instead of a bare
-    // NODE_MODULE_VERSION number (VC-76). Which fix that is depends on who is
-    // looking, so the audience is stated rather than assumed (VC-160) — and the
-    // log keeps the raw message plus the dev-loop remedy either way, so a
-    // packaged user's report is still diagnosable.
-    dbHandle = { ok: false, error: describeDbOpenFailure(error, { dev: isDev }) };
-    console.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
-  }
+      devDiagnostics: isDev,
+    },
+  );
+  const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
     dbPath,
     userData: app.getPath("userData"),

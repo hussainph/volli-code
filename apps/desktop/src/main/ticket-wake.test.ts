@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { TicketEvent } from "@volli/shared";
 
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
-import { insertProject } from "./db/projects-repo";
-import { createSignal } from "./db/signals-repo";
-import { openTestDb, testProject, testTicket } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
-import { insertTicket } from "./db/tickets-repo";
+import { listTicketEvents, recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { createSignal } from "@volli/host-core/db/signals-repo";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import {
   emitTicketWake,
   markTicketWake,

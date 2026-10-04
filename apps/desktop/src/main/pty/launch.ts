@@ -6,7 +6,7 @@ import {
   worktreeOrientationPreamble,
 } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessWrapperLookup } from "@volli/shared";
-import { listMaterializableLinks } from "../db/blobs-repo";
+import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 import type { EnsureOutcome } from "../worktree";
 import type { SessionScope } from "./scope";
 

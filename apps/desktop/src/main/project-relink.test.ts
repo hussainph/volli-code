@@ -14,11 +14,15 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
 
-import { insertProject, getProjectById, listProjects } from "./db/projects-repo";
+import { insertProject, getProjectById, listProjects } from "@volli/host-core/db/projects-repo";
 import { projectForCreate } from "./agent-dispatch/resolution";
-import { insertTicket, listTicketsByProject, listWorktreePathsByProject } from "./db/tickets-repo";
-import { openTestDb, testProject, testTicket } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
+import {
+  insertTicket,
+  listTicketsByProject,
+  listWorktreePathsByProject,
+} from "@volli/host-core/db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { scriptedGit } from "./worktree/scripted-git";
 import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { FolderProbe, ProjectRelinkDeps } from "./project-relink";

@@ -263,7 +263,7 @@ not introduce another identity for the same paired principal.
 ## Ticket display numbers: authority only
 
 `projects.next_ticket_number` is allocated by
-`nextTicketNumberForProject` in `apps/desktop/src/main/db/tickets-repo.ts`.
+`nextTicketNumberForProject` in `packages/host-core/src/db/tickets-repo.ts`.
 Only the workspace authority calls the allocator and creates the ticket;
 clients, workers and replicas request creation, never reserve number ranges or
 mint display ids while disconnected. UUID identity, command idempotency and

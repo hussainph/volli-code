@@ -14,16 +14,16 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSafetyCopy } from "../ipc/contract";
-import { assertDatabaseHeader, openVolliDb } from "./db";
-import { migrationBackupCandidatePattern } from "./db/backup-retention";
-import { acquireDatabaseOpenLock } from "./db/open-lock";
+import { assertDatabaseHeader, openVolliDb } from "@volli/host-core/db";
+import { migrationBackupCandidatePattern } from "@volli/host-core/db/backup-retention";
+import { acquireDatabaseOpenLock } from "@volli/host-core/db/open-lock";
 import {
   beginDatabaseRecovery,
   finishDatabaseRecovery,
   hasPendingDatabaseRecovery,
   recoveryPendingPath,
   syncRecoveryPath,
-} from "./db/recovery-pending";
+} from "@volli/host-core/db/recovery-pending";
 import { DATABASE_RECOVERY_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
 

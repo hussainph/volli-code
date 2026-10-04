@@ -20,8 +20,8 @@
 import type Database from "better-sqlite3";
 import type { OrphanCleanupReceipt, OrphanCleanupRejectionCode, Synchronous } from "@volli/shared";
 
-import { prepared } from "../db/prepared";
-import { settleTransaction } from "../db/transaction-gate";
+import { prepared } from "@volli/host-core/db/prepared";
+import { settleTransaction } from "@volli/host-core/db/transaction-gate";
 import type {
   OrphanCleanupCommand,
   OrphanCleanupFact,

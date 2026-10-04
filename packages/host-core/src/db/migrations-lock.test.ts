@@ -9,7 +9,7 @@ import {
   LOCK_PATH,
   MIGRATIONS_PATH,
   migrationFingerprints,
-} from "../../../scripts/migrations-lock.mjs";
+} from "../../scripts/migrations-lock.mjs";
 import { MIGRATIONS } from "./migrations";
 
 const text = readFileSync(LOCK_PATH, "utf8");

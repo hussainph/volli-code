@@ -82,10 +82,10 @@ import {
   resetGitChildSlotsForTest,
   withGitChildSlot,
 } from "./worktree/git";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testTicket } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
-import { insertTicket } from "./db/tickets-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import type { ExternalAppGateway } from "./external-apps";
 
 // ---- shared test scaffolding -------------------------------------------------

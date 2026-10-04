@@ -5,8 +5,8 @@ import type { SessionLocation, SessionLocationResolver } from "@volli/session-en
 import type { Session } from "@volli/shared";
 
 import { broadcastDataChanged } from "../broadcast";
-import { getProjectById } from "../db/projects-repo";
-import { getTicket } from "../db/tickets-repo";
+import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getTicket } from "@volli/host-core/db/tickets-repo";
 import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 

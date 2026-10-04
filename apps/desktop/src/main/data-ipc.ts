@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { withTransaction } from "./db/transaction-gate";
+import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import { statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
+import type { DbHandle } from "@volli/host-core";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
@@ -23,12 +24,12 @@ import {
   deleteBlobLink,
   listLinkViews,
   listMaterializableLinks,
-} from "./db/blobs-repo";
+} from "@volli/host-core/db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { listMcpOperations } from "./db/mcp-operations-repo";
+import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { removeTicketToolOutput } from "./pi-tool-output";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
@@ -139,10 +140,15 @@ import type {
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
-import { getAllAppState, setAppState } from "./db/app-state-repo";
-import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
-import { listAllLabels, listLabelsByProject, setLabelColor } from "./db/labels-repo";
+import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import {
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+} from "@volli/host-core/db/comments-repo";
+import { listTicketEvents, listTicketStatusEntries } from "@volli/host-core/db/events-repo";
+import { listAllLabels, listLabelsByProject, setLabelColor } from "@volli/host-core/db/labels-repo";
 import {
   countProjects,
   deleteProject,
@@ -157,7 +163,7 @@ import {
   updateProjectSessionDefaults,
   updateProjectSetupCommand,
   updateProjectSkillModes,
-} from "./db/projects-repo";
+} from "@volli/host-core/db/projects-repo";
 /**
  * Both listing channels build their rows through one roster-shaped read
  * (VC-131, VC-392). The provenance question lives beside the other Session read
@@ -171,8 +177,8 @@ import {
   sessionListingRowsForRoster,
   type SessionPeekContentPorts,
 } from "./session-control";
-import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
-import { prepared } from "./db/prepared";
+import { readSessionUnread, writeSessionUnread } from "@volli/host-core/db/session-read-repo";
+import { prepared } from "@volli/host-core/db/prepared";
 import {
   getTicket,
   getTicketBody,
@@ -182,7 +188,7 @@ import {
   listTicketRosterByProject,
   listWorktreePaths,
   setTicketRetentionKeep,
-} from "./db/tickets-repo";
+} from "@volli/host-core/db/tickets-repo";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -245,8 +251,8 @@ import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-r
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
-/** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
-export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
+/** The result of the host's open+migrate attempt (`createHostCore`), fed into {@link registerDataIpcHandlers}. */
+export type { DbHandle };
 
 /**
  * The live SQLite database is its main file plus WAL-mode sidecars. A WAL

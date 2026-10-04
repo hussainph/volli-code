@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { getAppState, setAppState } from "./db/app-state-repo";
-import { openRawDb, openTestDb, type TestDb } from "./db/test-helpers";
-import { settleTransaction } from "./db/transaction-gate";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { openRawDb, openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { settleTransaction } from "@volli/host-core/db/transaction-gate";
 import {
   ExperimentalSettings,
   EXPERIMENTS_APP_STATE_KEY,

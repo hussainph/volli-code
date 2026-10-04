@@ -16,8 +16,11 @@ import {
 } from "./harness-registry";
 import type { HarnessManifestScan, ScannedHarnessManifest } from "./harness-registry";
 import { ensureHarnessRuntime } from "./harness-runtime";
-import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
-import { openTestDb, type TestDb } from "./db/test-helpers";
+import {
+  getRegisteredHarness,
+  recordHarnessTrust,
+} from "@volli/host-core/db/harness-registry-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 
 let root: string;
 let fixture: TestDb;

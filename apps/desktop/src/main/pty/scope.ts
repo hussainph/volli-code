@@ -19,8 +19,8 @@ import type {
   HarnessWrapperLookup,
 } from "@volli/shared";
 import { materializeBlobs } from "../blob-materialize";
-import { getProjectById } from "../db/projects-repo";
-import { getTicketSessionContext } from "../db/tickets-repo";
+import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getTicketSessionContext } from "@volli/host-core/db/tickets-repo";
 import { terminalSessionRecord } from "../session-control";
 
 /** The db-resolved shape a PTY is spawned + persisted from (ticket- or project-scoped). */

@@ -17,8 +17,13 @@ import { join } from "node:path";
 import { TOOL_OUTPUT_TOTAL_MAX_BYTES } from "@volli/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testSession, type TestDb } from "./db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import {
+  openTestDb,
+  testProject,
+  testSession,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
 import { insertSession } from "./session-control/test-support";
 import {
   PiSessionOrphanService,

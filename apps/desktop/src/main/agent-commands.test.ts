@@ -25,11 +25,18 @@ import type { NotificationOutcome, NotificationRequest } from "./notifications/d
 
 import { importBlob } from "./blob-import";
 import { blobsRoot } from "./blob-store";
-import { listHarnessChannels } from "./db/harness-channel-repo";
-import { listComments } from "./db/comments-repo";
-import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
-import { insertProject, listProjects, updateProjectAuthorityPolicy } from "./db/projects-repo";
-import { listLatestSignals } from "./db/signals-repo";
+import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
+import { listComments } from "@volli/host-core/db/comments-repo";
+import {
+  getRegisteredHarness,
+  recordHarnessTrust,
+} from "@volli/host-core/db/harness-registry-repo";
+import {
+  insertProject,
+  listProjects,
+  updateProjectAuthorityPolicy,
+} from "@volli/host-core/db/projects-repo";
+import { listLatestSignals } from "@volli/host-core/db/signals-repo";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
   endSession,
@@ -42,10 +49,10 @@ import {
   insertTicket,
   listArchivedTicketsByProject,
   listTicketsByProject,
-} from "./db/tickets-repo";
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
-import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
+} from "@volli/host-core/db/tickets-repo";
+import { listTicketEvents, recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import {
   CHAT_PEEK_ENTRIES,
   composeProjectBrief,
