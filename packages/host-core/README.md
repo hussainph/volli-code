@@ -8,7 +8,8 @@ what it returns. Electron main keeps only window-only work.
 ```ts
 import { createHostCore, throwTransactionViolation, type HostCorePorts } from "@volli/host-core";
 
-// The host supplies its event sinks, notifications, focus and runtime readers.
+// The host supplies its event bus, attention delivery, power, connectivity,
+// optional client capabilities and runtime readers (see "Ports" below).
 declare const ports: HostCorePorts;
 
 const host = createHostCore(
@@ -34,10 +35,9 @@ if (!host.database.ok) console.error(host.database.error);
   - **Options** are policy: data directory, overrides, handler choices. Policy
     has no defaults; every host states it. `userData` is the `dataDir`
     option, and `app.isPackaged` decisions are options.
-  - **Ports** are what host-core asks its process to do: log, publish Session
-    activity and data-change notices, deliver notifications, query focused
-    Sessions and live runtime bindings, and observe scheduled resumes. Desktop
-    passes Electron-backed adapters; `hostd` passes its own.
+  - **Ports** are what host-core asks its process to do. They are listed under
+    [Ports](#ports). Desktop passes Electron-backed adapters; `hostd` passes
+    its own.
 - **Composition stays thin in the host.** `apps/desktop/src/main/index.ts`
   resolves Electron facts (`app.getPath("userData")`, `app.isPackaged`,
   `VOLLI_DB_PATH` in dev), calls `createHostCore`, and wires the result
@@ -50,12 +50,57 @@ if (!host.database.ok) console.error(host.database.error);
 | `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                     | VC-553   |
 | `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`) | VC-553   |
 | `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
+| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power and client-capability ports, with their headless answers | VC-554   |
 | `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
 
 VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `@volli/host-core/session-control/*`), `src/session-wake.ts`,
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
+
+## Ports
+
+A port is what host-core asks of the process hosting it. Each port lives in
+`src/ports/` (`@volli/host-core/ports`, re-exported from the root). Desktop's
+Electron adapter does exactly what desktop did before the port existed.
+
+| Port (`HostCorePorts`)                             | Asks for                                                                                          | Desktop adapter                                                                                    | Headless host passes                                                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `events: HostEventBus`                             | Announce a fact to every client: `publish(topic, payload)`, topics in `HostEventMap`              | `windowEventBus` (`main/broadcast.ts`): `volli:<topic>` to every live window                       | Its protocol's broadcast                                                            |
+| `attention`                                        | Raise an alert with a person (`deliver`), and which Sessions a focused client shows               | `notifications/runtime.ts`: native notification, preferences, focused-target suppression           | `HEADLESS_ATTENTION`: every alert `unsupported`, nothing focused                    |
+| `power: PowerPort`                                 | Sleep and wake (`suspend`, `resume`, `unlock-screen`, `user-did-become-active`)                   | Electron's `powerMonitor` itself                                                                   | `NO_POWER_EVENTS`                                                                   |
+| `connectivity`                                     | The network, for retry policy. This is `ConnectivityPort` from `@volli/agent-runtime`, not a copy | `createConnectivityPort({ net, powerMonitor })`                                                    | `ALWAYS_ONLINE` from `@volli/agent-runtime`                                         |
+| `client?`                                          | Open a link, reveal a file, the clipboard, menus (`ClientCapabilityPort`)                         | `createElectronClientCapabilities()` (`main/client-capabilities.ts`): `shell`, `clipboard`, `Menu` | Nothing. `host.client` refuses each request with `ClientCapabilityUnavailableError` |
+| `log`                                              | Errors and warnings                                                                               | `console`                                                                                          | Its logger                                                                          |
+| `listOpenNativeBindings`, `observeScheduledResume` | The live runtime's bindings and the scheduled-resume host, bound after the runtime exists         | Late-bound closures in `index.ts`                                                                  | Its runtime's                                                                       |
+
+**How a moved service asks for a port.** Its `create<Cluster>(ports, options)`
+takes only the ports it uses, as a `Pick<HostCorePorts, …>`.
+`createHostCore` hands them over. A service never imports an adapter, and
+never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
+
+- **Announcing something.** Add the topic to `HostEventMap`, with its payload
+  type in `@volli/shared` (`host-events.ts`). Add its channel to
+  `windowEventBus` in desktop's `broadcast.ts`; the mapped type fails to
+  compile until you do. Desktop code that has not moved yet keeps calling the
+  `broadcastX` functions, which publish through the same bus.
+- **One client's stream** (a watched worktree, terminal output, a file
+  watch) is not a broadcast. The first move that needs one (VC-556, VC-557 or
+  VC-560) adds an addressed sink beside the bus, over the same topic map.
+- **Alerts** go through `ports.attention.deliver`. A background observer
+  ignores the outcome; a person's own request reports it.
+- **Client work** goes through `clientCapabilities(ports.client)`, or
+  `host.client`. Never test whether a client is present. With no client,
+  `openExternal`, the clipboard and `showMenu` reject, and `revealInFolder`
+  throws, a `ClientCapabilityUnavailableError`. It carries `capability` and a
+  message a person can read ("Opening a link needs the Volli desktop app, and
+  this host is running without one."). Let it reach the caller as a refusal;
+  `isClientCapabilityUnavailable` tells it apart from a real failure.
+
+Window-only work stays in desktop and never becomes a port: the OS
+appearance broadcast, the updater state, notification Settings pushes,
+Ghostty appearance (`ghostty-config.ts`), the application menu, dialogs and
+pickers.
 
 ### Session composition
 
@@ -67,8 +112,10 @@ watch: committed facts fan out before a listing row becomes dirty. Resumption
 history, unattended Run notifications and read receipts observe in their
 original order, before the row is built.
 
-`HostCorePorts` extends `HostSessionPorts`. Its adapters are captured, not
-called during construction, so desktop can bind notifications and the runtime
+`HostCorePorts` extends `HostSessionPorts`, which holds the ports Session
+composition uses: `events`, `attention`, `log`, `listOpenNativeBindings` and
+`observeScheduledResume`. Its adapters are captured, not called during
+construction, so desktop can bind notifications and the runtime
 after the database is known. Desktop wires `onFocusedSessionsChanged` to the
 returned read watch, and supplies the runtime-dependent scheduled-resume
 observer after the runtime exists. `createDesktopSessionEngine` retains its

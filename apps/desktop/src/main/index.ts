@@ -109,7 +109,9 @@ import {
   defaultDatabasePath,
   logTransactionViolation,
   throwTransactionViolation,
+  type HostCorePorts,
 } from "@volli/host-core";
+import { createElectronClientCapabilities } from "./client-capabilities";
 import {
   getProjectAuthorityPolicy,
   getProjectById,
@@ -274,13 +276,13 @@ import {
   broadcastHarnessEvent,
   broadcastPendingArmedRuns,
   broadcastPendingArmedRunSettled,
-  broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionRetitled,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
   broadcastUpdateState,
+  windowEventBus,
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
@@ -921,23 +923,27 @@ app.whenReady().then(async () => {
   // construction only captures these adapters; it never calls them at boot.
   let listOpenNativeBindings = noOpenNativeBindings;
   let scheduledResumeHost: ScheduledResumeHost | null = null;
-  const hostCore = createHostCore(
-    {
-      log: console,
-      publishSessionActivity: broadcastSessionActivity,
-      publishDataChanged: broadcastDataChanged,
-      deliverNotification: (request) => notifications.deliver(request),
+  // The Electron adapters for host-core's ports (VC-554). Code still composed
+  // below reads power, connectivity and the client through them too.
+  const hostPorts: HostCorePorts = {
+    log: console,
+    events: windowEventBus,
+    attention: {
+      deliver: (request) => notifications.deliver(request),
       focusedSessionIds: () => notifications.focusedSessionIds(),
-      listOpenNativeBindings: () => listOpenNativeBindings(),
-      observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
     },
-    {
-      dataDir: app.getPath("userData"),
-      databasePath: dbPath,
-      onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
-      devDiagnostics: isDev,
-    },
-  );
+    power: powerMonitor,
+    connectivity: createConnectivityPort({ net, powerMonitor }),
+    client: createElectronClientCapabilities(),
+    listOpenNativeBindings: () => listOpenNativeBindings(),
+    observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
+  };
+  const hostCore = createHostCore(hostPorts, {
+    dataDir: app.getPath("userData"),
+    databasePath: dbPath,
+    onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
+    devDiagnostics: isDev,
+  });
   const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
     dbPath,
@@ -1149,7 +1155,7 @@ app.whenReady().then(async () => {
           store: mcpCredentials,
           // Only ever an authorization page the server's own metadata named,
           // already checked to be https (or loopback) by the broker.
-          openExternal: (url) => shell.openExternal(url),
+          openExternal: (url) => hostCore.client.openExternal(url),
         }),
       })
     : null;
@@ -1470,7 +1476,7 @@ app.whenReady().then(async () => {
           // A closed lid or a missing Wi-Fi is waited out rather than charged
           // to a turn's retry budget, and a request open across a sleep is
           // re-sent instead of hanging on a dead socket (VC-443).
-          connectivity: createConnectivityPort({ net, powerMonitor }),
+          connectivity: hostPorts.connectivity,
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -2549,11 +2555,11 @@ app.whenReady().then(async () => {
     sessionRuntime !== null && sessionEngine !== null
       ? createSessionWatchdog({
           listBindings: () => sessionRuntime.openNativeBindings(),
-          suspendedMsWithin: createSuspendClock(powerMonitor).suspendedMsWithin,
+          suspendedMsWithin: createSuspendClock(hostPorts.power).suspendedMsWithin,
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
-          notify: (request) => notifications.deliver(request),
+          notify: (request) => hostPorts.attention.deliver(request),
         })
       : null;
   sessionWatchdog?.start();
@@ -2571,7 +2577,7 @@ app.whenReady().then(async () => {
           ticketSessions: ({ projectId, ticketId }) =>
             sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
           command: (request) => sessionRuntime.command(request),
-          notify: (request) => notifications.deliver(request),
+          notify: (request) => hostPorts.attention.deliver(request),
         })
       : null;
   // From this point onward the native Session control plane exists. Install
@@ -2755,7 +2761,7 @@ app.whenReady().then(async () => {
   if (scheduledResumeHost !== null) {
     const host = scheduledResumeHost;
     void host.start();
-    powerMonitor.on("resume", () => void host.pass());
+    hostPorts.power.on("resume", () => void host.pass());
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and

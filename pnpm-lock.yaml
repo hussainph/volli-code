@@ -502,6 +502,9 @@ importers:
 
   packages/host-core:
     dependencies:
+      '@volli/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
       '@volli/session-engine':
         specifier: workspace:*
         version: link:../session-engine

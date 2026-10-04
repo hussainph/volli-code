@@ -13,6 +13,7 @@
  * after `app` is ready, and a port keeps this testable without Electron.
  */
 
+import type { PowerPort } from "../ports/power";
 import {
   EMPTY_SUSPEND_LEDGER,
   suspendLedgerResumed,
@@ -20,13 +21,8 @@ import {
   suspendedMsWithin,
 } from "@volli/shared";
 
-/** The announcements this reads; Electron's `powerMonitor` satisfies it. */
-export interface PowerEvents {
-  on(
-    event: "suspend" | "resume" | "unlock-screen" | "user-did-become-active",
-    listener: () => void,
-  ): unknown;
-}
+/** The announcements this reads: the host's power port, subscribe-only. */
+export type PowerEvents = Pick<PowerPort, "on">;
 
 /**
  * Every announcement that proves the machine is awake. `resume` is the one

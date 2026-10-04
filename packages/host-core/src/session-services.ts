@@ -1,12 +1,7 @@
 /** The one host composition of the Session writer and its post-commit observers. */
 import type Database from "better-sqlite3";
 import type { HostNoticeOutbox, OpenNativeBinding, SessionEngine } from "@volli/session-engine";
-import {
-  errorMessage,
-  type NotificationRequest,
-  type SessionLedger,
-  type SessionProjection,
-} from "@volli/shared";
+import { errorMessage, type SessionLedger, type SessionProjection } from "@volli/shared";
 import { readAutomationRunAttendance } from "./db/automations-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
@@ -21,16 +16,18 @@ import {
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
+import type { AttentionDeliveryPort } from "./ports/attention";
+import type { HostEventBus } from "./ports/events";
 import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import { observeSessionResumptions } from "./session-runtime/session-resumptions";
 import { createSessionWakeBus, type SessionWakeBus } from "./session-wake";
 
 /** Only the process-owned edges of Session composition; no window mechanisms. */
 export interface HostSessionPorts {
-  publishSessionActivity: SessionActivityWatchPorts["publish"];
-  publishDataChanged(input: { projectId: string; ticketId: string }): void;
-  deliverNotification(request: NotificationRequest): void;
-  focusedSessionIds(): ReadonlySet<string>;
+  /** Session listing rows (`session-activity`) and resumption notices (`data-changed`). */
+  events: HostEventBus;
+  /** Unattended Run alerts, and which Sessions a focused client is showing. */
+  attention: AttentionDeliveryPort;
   listOpenNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId">[];
   /** Installed by desktop once its runtime-dependent scheduled-resume host exists. */
   observeScheduledResume(projection: SessionProjection): void;
@@ -65,7 +62,9 @@ export function createHostSessionServices(
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
     attendanceOf: (sessionId) => readAutomationRunAttendance(db, sessionId),
-    notify: (request) => ports.deliverNotification(request),
+    notify: (request) => {
+      ports.attention.deliver(request);
+    },
   });
   // Wake committed facts before marking listing rows dirty, as in desktop.
   const sessionWakeBus = createSessionWakeBus(
@@ -74,6 +73,8 @@ export function createHostSessionServices(
       db,
     },
   );
+  const publishSessionActivity: SessionActivityWatchPorts["publish"] = (notice) =>
+    ports.events.publish("session-activity", notice);
   const publishSessionRow = (sessionId: string): void => {
     void publishSessionListingRow(
       {
@@ -81,7 +82,7 @@ export function createHostSessionServices(
         getSession: (query) => sessionEngine.getSession(query),
         liveAttachmentIds: () =>
           new Set(ports.listOpenNativeBindings().map((binding) => binding.attachmentId)),
-        publish: ports.publishSessionActivity,
+        publish: publishSessionActivity,
       },
       sessionId,
     ).catch((error: unknown) => {
@@ -89,7 +90,7 @@ export function createHostSessionServices(
     });
   };
   const sessionReadWatch = createSessionReadWatch({
-    focusedSessionIds: () => ports.focusedSessionIds(),
+    focusedSessionIds: () => ports.attention.focusedSessionIds(),
     markUnread: (sessionId, at) => {
       // No publish: the activity fold reads this receipt after observe runs.
       markSessionUnread(db, sessionId, at);
@@ -101,13 +102,13 @@ export function createHostSessionServices(
     },
   });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
-    publish: ports.publishSessionActivity,
+    publish: publishSessionActivity,
     provenanceOf: (born) => readSessionProvenance(db, born),
     readOf: (sessionId) => readSessionUnread(db, sessionId),
     listOpenNativeBindings: () => ports.listOpenNativeBindings(),
     observe: (projection) => {
       observeSessionResumptions(db, projection, {
-        publish: ports.publishDataChanged,
+        publish: (change) => ports.events.publish("data-changed", change),
         report: (error) =>
           ports.log.error("[volli] failed to record Session resumption:", errorMessage(error)),
       });
