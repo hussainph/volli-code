@@ -675,6 +675,9 @@ export function registerDataIpcHandlers(
           });
         });
         for (const [key, value] of Object.entries(request.appState)) {
+          // Never the schema floor (VC-602): localStorage never held it, and a
+          // renderer-supplied value could lock builds out or let one in.
+          if (key === MIN_READER_VERSION_KEY) continue;
           setAppState(db, key, value, now);
         }
       });

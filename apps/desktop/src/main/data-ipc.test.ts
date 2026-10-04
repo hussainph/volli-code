@@ -4757,6 +4757,22 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     });
   });
 
+  it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    const result = invoke<{ ok: boolean }>("volli:legacy-import", {
+      projects: [],
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:imported": "1" },
+      rawBackup: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(
+      ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:imported'").get(),
+    ).toEqual({ value: "1" });
+  });
+
   it("optional-object-arg shape: rejects a non-object argument", () => {
     expect(invoke<WorktreeOrphansResult>("volli:worktree-orphans", "nope")).toEqual({
       ok: false,
