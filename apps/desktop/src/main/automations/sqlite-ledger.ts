@@ -22,6 +22,7 @@ import {
   triggerColumnValue,
 } from "../db/automations-repo";
 import { prepared } from "../db/prepared";
+import { getTransactionGate } from "../db/transaction-gate";
 import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
   AutomationCommand,
@@ -67,34 +68,12 @@ interface DeliveryRow {
  * ledger without importing Electron or this database.
  */
 export class SqliteAutomationLedger implements AutomationLedger {
-  #tail: Promise<void> = Promise.resolve();
-
   constructor(private readonly db: Database.Database) {}
 
-  async transaction<T>(
-    work: (transaction: AutomationLedgerTransaction) => T | Promise<T>,
-  ): Promise<T> {
-    const previous = this.#tail;
-    let release!: () => void;
-    this.#tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    let began = false;
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
-      began = true;
-      const result = await work(new SqliteAutomationLedgerTransaction(this.db));
-      this.db.exec("COMMIT");
-      began = false;
-      return result;
-    } catch (error) {
-      if (began) this.db.exec("ROLLBACK");
-      throw error;
-    } finally {
-      // A failed BEGIN must not strand every later command behind this queue.
-      release();
-    }
+  transaction<T>(work: (transaction: AutomationLedgerTransaction) => T | Promise<T>): Promise<T> {
+    return getTransactionGate(this.db).transaction(() =>
+      work(new SqliteAutomationLedgerTransaction(this.db)),
+    );
   }
 }
 

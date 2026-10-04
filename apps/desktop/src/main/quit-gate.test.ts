@@ -1,3 +1,7 @@
+import { createHook, executionAsyncId } from "node:async_hooks";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -145,6 +149,106 @@ describe("refuseQuit", () => {
 });
 
 describe("registerAcceptedQuitCoordinator", () => {
+  for (const reportingThrows of [false, true]) {
+    it(`exits through an Immediate after real filesystem settlement (${reportingThrows ? "reporter rejects" : "drained"})`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "volli-quit-checkpoint-"));
+      const file = join(directory, "completion");
+      await writeFile(file, "shutdown");
+      const resources = new Map<number, string>();
+      const hook = createHook({
+        init(id, type) {
+          resources.set(id, type);
+        },
+        destroy(id) {
+          resources.delete(id);
+        },
+      });
+      let attemptQuit!: (event: { preventDefault(): void }) => void;
+      let finishExit!: () => void;
+      const exited = new Promise<void>((resolve) => {
+        finishExit = resolve;
+      });
+      let exitResource: string | undefined;
+      const exit = vi.fn(() => {
+        exitResource = resources.get(executionAsyncId());
+        finishExit();
+      });
+      const shutdownNativeSessions = vi.fn(() => Promise.resolve());
+      const shutdownAgentSocket = vi.fn(async () => {
+        // FSReqPromise/AfterInteger was below the checkpoint in the native
+        // sample. This tests real I/O, not just a fake-timer scheduling rule;
+        // it does not claim to reproduce the native compositor hang.
+        await unlink(file);
+        if (reportingThrows) throw new Error("drain rejected");
+      });
+      hook.enable();
+      try {
+        registerAcceptedQuitCoordinator({
+          lifecycle: {
+            on(_event, listener) {
+              attemptQuit = listener;
+            },
+            exit,
+          },
+          shutdownNativeSessions,
+          shutdownAgentSocket,
+          reportFailure() {
+            throw new Error("reporter rejected");
+          },
+        });
+        attemptQuit({ preventDefault: vi.fn() });
+        await exited;
+        expect(exitResource).toBe("Immediate");
+        attemptQuit({ preventDefault: vi.fn() });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+        expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      } finally {
+        hook.disable();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const reportingThrows of [false, true]) {
+    it(`leaves the shutdown microtask checkpoint before native exit (${reportingThrows ? "rejected" : "drained"})`, async () => {
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      let attemptQuit!: (event: { preventDefault(): void }) => void;
+      const exit = vi.fn();
+      const shutdownNativeSessions = vi.fn(() =>
+        reportingThrows ? Promise.reject(new Error("close failed")) : Promise.resolve(),
+      );
+      const shutdownAgentSocket = vi.fn(() => Promise.resolve());
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on(_event, listener) {
+            attemptQuit = listener;
+          },
+          exit,
+        },
+        shutdownNativeSessions,
+        shutdownAgentSocket,
+        reportFailure() {
+          throw new Error("reporter failed");
+        },
+      });
+      attemptQuit({ preventDefault: vi.fn() });
+      // Flush only microtasks, not an event-loop turn. The old coordinator
+      // destroys native windows in this checkpoint and fails this assertion.
+      for (let index = 0; index < 20; index++) await Promise.resolve();
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+      const repeated = { preventDefault: vi.fn() };
+      attemptQuit(repeated);
+      expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      await vi.runAllTimersAsync();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+    });
+  }
+
   it("forces one accepted quit after the shutdown deadline and observes late settlements", async () => {
     vi.useFakeTimers();
     const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
@@ -194,6 +298,8 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
       new Error("Application shutdown did not settle within 25ms."),
     );
+    expect(exit).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
 
     finishSessions();
@@ -230,6 +336,8 @@ describe("registerAcceptedQuitCoordinator", () => {
 
     handlers.get("before-quit")?.({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(25);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
 
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
   });

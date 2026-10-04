@@ -1759,12 +1759,15 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
   });
 
-  it("uses SQLite BINARY ordering to break equal-time ticket signal ties", async () => {
+  it("breaks equal-time ticket signal ties by local acceptance order, not Session id (VC-512)", async () => {
     const { ledger, plane } = composition();
     const bmpId = "session-\uE000";
     const nonBmpId = "session-\u{10000}";
     await ledger.transaction((transaction) => {
-      for (const sessionId of [bmpId, nonBmpId]) {
+      // Accepted first is the Session id SQLite BINARY would rank HIGHER, so an
+      // ordering by id — or by occurredAt, which both signals share — would
+      // name the wrong signal "latest".
+      for (const sessionId of [nonBmpId, bmpId]) {
         transaction.insertSession({ ...sessionRecord(sessionId), ticketId: "ticket-1" });
         transaction.appendEvent({
           id: `signal-${sessionId}`,
@@ -1785,9 +1788,9 @@ describe("SessionEngine creation and explicit commands", () => {
     await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
       {
         ticketId: "ticket-1",
-        sessionId: nonBmpId,
+        sessionId: bmpId,
         signal: "done",
-        reason: nonBmpId,
+        reason: bmpId,
         createdAt: 100,
       },
     ]);

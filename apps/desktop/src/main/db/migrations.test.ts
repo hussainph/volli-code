@@ -23,6 +23,7 @@ import {
 import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
 import { verifyMigrationBackup } from "./backup-integrity";
 import { internSessionEventProvenance } from "./session-event-provenance";
+import { currentSessionEventSequence } from "./session-events-cursor-repo";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -3551,6 +3552,21 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
   });
 });
 
+/** Compare the entire derived kind index to the canonical log, including missing/extra rows. */
+function expectKindIndexMatchesLog(db: Database.Database): void {
+  expect(
+    db
+      .prepare("SELECT event_id, session_id, kind FROM session_event_sequence ORDER BY event_id")
+      .all(),
+  ).toEqual(
+    db
+      .prepare(
+        "SELECT id AS event_id, session_id, json_extract(payload, '$.kind') AS kind FROM session_events ORDER BY id",
+      )
+      .all(),
+  );
+}
+
 describe("migration 044 — durable Session Event sequence", () => {
   /** The provenance every seeded Session Event carries; shape, not meaning. */
   const PROVENANCE =
@@ -3586,6 +3602,83 @@ describe("migration 044 — durable Session Event sequence", () => {
     insertEvent.run("e-one-2", "s-one", 2, '{"kind":"turn.completed"}');
     return db;
   }
+
+  it("keeps the kind index equal to the log after every migration, including future repairs", () => {
+    const dbPath = tempDbPath();
+    const db = buildV43WithInterleavedEvents(dbPath);
+    try {
+      // Walk every migration rather than maintaining a list of repair versions.
+      // Future migrations also have to retain the synchronization trigger.
+      for (const migration of MIGRATIONS.filter((candidate) => candidate.version >= 44)) {
+        migrate(db, dbPath, { toVersion: migration.version });
+        expectKindIndexMatchesLog(db);
+        if (migration.version >= 57) {
+          const cursors = db
+            .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
+            .all();
+          const highWater = currentSessionEventSequence(db);
+          db.prepare(
+            "UPDATE session_events SET payload = json_set(payload, '$.kind', ?) WHERE id = 'e-one-1'",
+          ).run(migration.version % 2 === 0 ? "turn.completed" : "turn.interrupted");
+          expectKindIndexMatchesLog(db);
+          db.prepare(
+            "UPDATE session_events SET recorded_at = recorded_at + 1 WHERE id = 'e-one-1'",
+          ).run();
+          expectKindIndexMatchesLog(db);
+          expect(
+            db
+              .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
+              .all(),
+          ).toEqual(cursors);
+          expect(currentSessionEventSequence(db)).toBe(highWater);
+        }
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("repairs pre-057 kind drift without reassigning cursors or reusing deleted positions", () => {
+    const dbPath = tempDbPath();
+    const db = buildV43WithInterleavedEvents(dbPath);
+    try {
+      migrate(db, dbPath, { toVersion: 56 });
+      db.prepare(
+        "UPDATE session_events SET payload = '{\"kind\":\"turn.interrupted\"}' WHERE id = 'e-one-1'",
+      ).run();
+      db.prepare("DELETE FROM session_events WHERE id = 'e-two-1'").run();
+      expect(
+        db.prepare("SELECT kind FROM session_event_sequence WHERE event_id = 'e-one-1'").get(),
+      ).toEqual({ kind: "session.archived" });
+      const cursors = db
+        .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
+        .all();
+      const events = db.prepare("SELECT * FROM session_events ORDER BY id").all();
+      const highWater = currentSessionEventSequence(db);
+
+      migrate(db, dbPath, { toVersion: 57 });
+      expectKindIndexMatchesLog(db);
+      expect(db.prepare("SELECT * FROM session_events ORDER BY id").all()).toEqual(events);
+      expect(
+        db.prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence").all(),
+      ).toEqual(cursors);
+      expect(currentSessionEventSequence(db)).toBe(highWater);
+
+      // Re-offering the migration is safe and never rebuilds the cursor table.
+      db.pragma("user_version = 56");
+      migrate(db, dbPath, { toVersion: 57 });
+      expectKindIndexMatchesLog(db);
+      expect(
+        db.prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence").all(),
+      ).toEqual(cursors);
+      db.prepare(`INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+        VALUES ('e-two-2', 's-two', 2, 1, 1, 1, '{"kind":"turn.completed"}')`).run();
+      expect(currentSessionEventSequence(db)).toBe(highWater + 1);
+      expectKindIndexMatchesLog(db);
+    } finally {
+      db.close();
+    }
+  });
 
   it("upgrades a populated v43 database, backfilling each Session's own order", () => {
     const dbPath = tempDbPath();

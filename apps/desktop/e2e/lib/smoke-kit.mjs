@@ -576,6 +576,35 @@ export function summarizeTurnFrames(frames) {
   };
 }
 
+/** Select only descendants of one tracked child from `ps -axo pid=,ppid=,comm=`. */
+export function descendantProcesses(output, rootPid) {
+  const byParent = new Map();
+  for (const line of output.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const entry = { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
+    const siblings = byParent.get(entry.ppid) ?? [];
+    siblings.push(entry);
+    byParent.set(entry.ppid, siblings);
+  }
+  const seen = new Set([rootPid]);
+  const queue = [rootPid];
+  const descendants = [];
+  for (let index = 0; index < queue.length; index++) {
+    for (const entry of byParent.get(queue[index]) ?? []) {
+      if (seen.has(entry.pid)) continue;
+      seen.add(entry.pid);
+      descendants.push(entry);
+      queue.push(entry.pid);
+    }
+  }
+  return descendants;
+}
+
+// Playwright disposes the Electron dispatcher on exit. Keep the exact child
+// independently so a second cleanup can still inspect its exit fields.
+const boundedCloseChildren = new WeakMap();
+
 /**
  * Close Electron within bounded grace periods and return how the tracked main
  * child exited. Every successful return is backed by observed ChildProcess exit
@@ -592,7 +621,9 @@ export async function closeAppBounded(app, options = {}) {
   };
   let child;
   try {
-    child = app.process();
+    child = boundedCloseChildren.get(app) ?? app.process();
+    if (!child) throw new Error("Electron main child is unavailable");
+    boundedCloseChildren.set(app, child);
   } catch (error) {
     throw new Error("cannot inspect Electron main child before bounded close", { cause: error });
   }

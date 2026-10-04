@@ -220,10 +220,17 @@ test("new smoke joins gate by default; credentials/legacy exclusions do not", (t
   writeFileSync(join(dir, "sigstop-smoke.mjs"), "// needs missing CLI\n");
   assert.deepEqual(selectSmokes(parseArgs([]), dir), ["new-smoke.mjs"]);
   assert.throws(() => selectSmokes(parseArgs(["--tier", "core"]), dir), /core e2e smoke missing/);
-  assert.throws(
-    () => selectSmokes(parseArgs(["--tier", "quarantine"]), dir),
-    /quarantined smoke missing/,
-  );
+  assert.deepEqual(selectSmokes(parseArgs(["--tier", "quarantine"]), dir), []);
+  const missing = "missing-quarantine-smoke.mjs";
+  SMOKE_QUARANTINE.set(missing, "test-only missing quarantine entry");
+  try {
+    assert.throws(
+      () => selectSmokes(parseArgs(["--tier", "quarantine"]), dir),
+      /quarantined smoke missing/,
+    );
+  } finally {
+    SMOKE_QUARANTINE.delete(missing);
+  }
 });
 
 test("CLI validates tiers/jobs/shards and lowers jobs to Session concurrency budget", () => {

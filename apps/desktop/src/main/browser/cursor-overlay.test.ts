@@ -366,31 +366,54 @@ describe("createCursorOverlay", () => {
     expect(h.pushed.at(-1)?.labelPinned).toBe(false);
   });
 
-  it("pins the label from when the page could first draw it, not from a boot it slept through", async () => {
+  it("pins the label from the first drawing ACK, not a boot it slept through", async () => {
     const h = harness();
     h.host.hold("tab-a", HOLDER_A);
     h.host.attach("tab-a");
     h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
-    await move(h, "tab-a", { x: 10, y: 10 });
+    const action = h.overlay.driverFor("tab-a").moveTo({ x: 10, y: 10 }, "hover");
 
-    // The overlay's page is built lazily by that first draw and boots slowly —
-    // slower here than the whole pin. Every push so far went at a page that
-    // was not listening yet, so nobody has seen the label.
+    // The first boot exceeds the whole pin. Pushes are still pinned because
+    // no drawing has been acknowledged; the action paid only its old bound.
     await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 500);
-    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
-
-    // Its first word is its size. From here it can hear, so the pin it slept
-    // through runs now: without this the person is never told which Session
-    // took their tab, and the view never grows past the bare arrow.
-    h.page.resize({ width: 181, height: 40 });
+    await action;
     expect(h.pushed.at(-1)?.labelPinned).toBe(true);
 
-    // And it still lets go a moment later, exactly as on a fast boot.
+    // The size report replays state, but does not start the visible pin.
+    h.page.resize({ width: 44, height: 44 });
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 500);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+    pageAnswers(h);
     await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 10);
     expect(h.pushed.at(-1)?.labelPinned).toBe(false);
   });
 
-  it("leaves a pin that is still live alone when the page reports, rather than extending it", async () => {
+  it("keeps the first label pinned through readiness just before the old hold-time deadline", async () => {
+    const h = harness();
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.attach("tab-a");
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    // The page has not booted; the action still finishes at its existing bound.
+    const action = h.overlay.driverFor("tab-a").moveTo({ x: 10, y: 10 }, "hover");
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS - 1);
+    await action;
+
+    // It subscribes just before the old pin expires. React has not drawn the
+    // replay yet when the original hold-time timer fires.
+    h.page.resize({ width: 44, height: 44 });
+    await vi.advanceTimersByTimeAsync(2);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+
+    // A drawing acknowledgement, not boot or hold time, starts the visible pin.
+    pageAnswers(h);
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS - 1);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+    h.overlay.dispose();
+  });
+
+  it("does not extend an acknowledged pin on later size reports or drawing acknowledgements", async () => {
     const h = harness();
     h.host.hold("tab-a", HOLDER_A);
     h.host.attach("tab-a");
@@ -400,11 +423,56 @@ describe("createCursorOverlay", () => {
     // A page that booted inside the pin — the fast path, which already worked.
     await vi.advanceTimersByTimeAsync(200);
     h.page.resize({ width: 181, height: 40 });
+    pageAnswers(h);
     expect(h.pushed.at(-1)?.labelPinned).toBe(true);
 
     // The pin ends on its ORIGINAL schedule; being heard does not restart it.
     await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS - 200 + 10);
     expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+  });
+
+  it("pins an off-screen hold only once its first on-screen drawing is acknowledged", async () => {
+    const h = harness();
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    await h.overlay.driverFor("tab-a").moveTo({ x: 10, y: 10 }, "hover");
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS * 2);
+    expect(h.pushed).toHaveLength(0);
+    h.host.attach("tab-a");
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+    pageAnswers(h);
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 1);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+    h.overlay.dispose();
+  });
+
+  it("ignores stale and foreign label acknowledgements, including after release and reacquisition", async () => {
+    const h = harness();
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.attach("tab-a");
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    const action = h.overlay.driverFor("tab-a").moveTo({ x: 10, y: 10 }, "hover");
+    const oldSeq = h.pushed.at(-1)!.seq;
+    h.page.resize({ width: 44, height: 44 });
+    h.page.settle(oldSeq);
+    h.stranger.settle(h.pushed.at(-1)!.seq);
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS * 2);
+    await action;
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+
+    const releasedSeq = h.pushed.at(-1)!.seq;
+    h.host.hold("tab-a", null);
+    h.host.emit({ kind: "released", tabId: "tab-a", holder: A, why: "turn-end" });
+    h.page.settle(releasedSeq);
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    h.page.settle(releasedSeq);
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS * 2);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+    pageAnswers(h);
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 1);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+    h.overlay.dispose();
   });
 
   it("fades out when the hold ends with the turn, then forgets the tab and leaves the plane", async () => {

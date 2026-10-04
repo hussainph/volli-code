@@ -18,6 +18,7 @@ import {
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
+import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type {
@@ -479,6 +480,28 @@ const payloads = samples(
 type MissingPayloadSample = Exclude<SessionEventPayload["kind"], (typeof payloads)[number]["kind"]>;
 type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
+
+type RendererReasoningDroppedPayload = Extract<
+  RendererSessionEventPayload,
+  { kind: "context.reasoning_dropped" }
+>;
+
+// The decoder's per-kind type check and this published contract proof guard
+// against putting the scrubbed structural paths back on the renderer edge.
+const safeReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  kind: "context.reasoning_dropped",
+  attachmentId: "attachment-1",
+  turnId: "turn-1",
+  count: 1,
+  causes: ["prefix-mismatch"],
+};
+const leakedReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  ...safeReasoningDroppedPayload,
+  // @ts-expect-error context.reasoning_dropped scrub removes structural paths.
+  paths: ["messages.1.content.0"],
+};
+
+void leakedReasoningDroppedPayload;
 
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
   it("round-trips credential presentation metadata but never extra fields or values", () => {

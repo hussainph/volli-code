@@ -20,9 +20,10 @@
  * process inherits a terminal's already-full PATH — only a BUILT app launch
  * with a genuinely bare PATH does, which is exactly what this probe drives.
  *
- * A FAILURE here is a finding about that chain, not a bug in this probe —
- * per the task this smoke was written for, do not patch `src/` to make it
- * pass. On failure this captures the Electron main process's own
+ * A FAILURE here is a finding about that chain. Main output is captured before
+ * boot readiness work: Playwright drains the pipes during launch(), so attaching
+ * listeners only after launch resolves can miss a completed boot entirely.
+ * On failure this captures the Electron main process's own
  * stdout/stderr (console.error lines live there, not in the renderer) plus
  * the renderer's console and a screenshot, and prints where to find them.
  *
@@ -36,6 +37,11 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
+import {
+  readBootCapture,
+  wrapperGenerationOutcome,
+  WRAPPER_READY_MARKER,
+} from "../src/main/bare-path-boot-capture.ts";
 import { createRunner, evidenceDir, launch, makeScratch, waitUntil } from "./lib/smoke-kit.mjs";
 
 const { userDataDir, dbPath, cleanup } = await makeScratch("bare-path-env-");
@@ -47,12 +53,6 @@ const { attempt, summarize } = createRunner();
 // inherited (a real launchd launch still sets it; resolveShell needs it to
 // know which shell to ask).
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
-
-/** What main logs when boot-time harness-wrapper generation fails. */
-const WRAPPER_FAILURE_MARKER = "[volli] failed to generate harness wrappers";
-
-/** What main logs only after the boot-time wrapper/config/shell-init pass settles. */
-const WRAPPER_READY_MARKER = "[volli] harness runtime ready";
 
 /** The one boot-time report from main/login-path-adoption.ts. */
 const LOGIN_PATH_MARKER = /\[volli\] PATH (?:adopted from login shell \([1-9]\d* entries\)|kept)/;
@@ -67,60 +67,47 @@ const WAIT_TIMEOUT_MS = 12_000;
  */
 const EVIDENCE_DIR = await evidenceDir("bare-path-env");
 
-async function captureFailureEvidence(page, mainOut, mainErr, rendererConsole, label) {
+async function captureFailureEvidence(page, capture, rendererConsole, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true });
   const slug = label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const screenshotPath = join(EVIDENCE_DIR, `bare-path-env-${slug}.png`);
   const logPath = join(EVIDENCE_DIR, `bare-path-env-${slug}.log`);
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-  await fs.writeFile(
-    logPath,
-    [
-      `=== ${label} ===`,
-      `BARE_PATH=${BARE_PATH}`,
-      "",
-      "--- main process stdout ---",
-      mainOut.join(""),
-      "",
-      "--- main process stderr ---",
-      mainErr.join(""),
-      "",
-      "--- renderer console ---",
-      rendererConsole.join("\n"),
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+  const log = [
+    `=== ${label} ===`,
+    `BARE_PATH=${BARE_PATH}`,
+    `initial main PATH=${capture.initialPath}`,
+    "",
+    "--- main process stdout ---",
+    capture.stdout,
+    "",
+    "--- main process stderr ---",
+    capture.stderr,
+    "",
+    "--- renderer console ---",
+    rendererConsole.join("\n"),
+    "",
+  ].join("\n");
+  await fs.writeFile(logPath, log, "utf8");
+  // The runner retains probe output, not this temporary evidence directory.
+  // Include actual main logs in both-attempt artifacts, not just their paths.
+  console.error(log);
   console.log(`  evidence: ${screenshotPath}`);
   console.log(`  evidence: ${logPath}`);
 }
 
 async function main() {
-  const app = await launch({ dbPath, userDataDir, extraEnv: { PATH: BARE_PATH } });
-  const mainStdout = [];
-  const mainStderr = [];
-  const postWindowMainStdout = [];
-  const postWindowMainStderr = [];
+  const captureDir = join(userDataDir, "bare-path-boot-capture");
+  await fs.mkdir(captureDir, { recursive: true });
+  const app = await launch({
+    dbPath,
+    userDataDir,
+    extraEnv: { PATH: BARE_PATH, VOLLI_BARE_PATH_CAPTURE_DIR: captureDir },
+  });
   const rendererConsole = [];
-  const proc = app.process();
-  let windowReached = false;
-  // Install these before firstWindow(): main's boot logs can arrive before the
-  // renderer exists. Keep a distinct post-window stream too, so the assertion
-  // cannot mistake a PATH log emitted before createWindow for fresh output.
-  proc.stdout?.on("data", (chunk) => {
-    const text = chunk.toString();
-    mainStdout.push(text);
-    if (windowReached) postWindowMainStdout.push(text);
-  });
-  proc.stderr?.on("data", (chunk) => {
-    const text = chunk.toString();
-    mainStderr.push(text);
-    if (windowReached) postWindowMainStderr.push(text);
-  });
 
   try {
     const page = await app.firstWindow();
-    windowReached = true;
     page.on("console", (msg) => rendererConsole.push(`[${msg.type()}] ${msg.text()}`));
     await page.waitForLoadState("domcontentloaded");
 
@@ -129,32 +116,39 @@ async function main() {
       "main adopted or kept its PATH after launching under the bare PATH",
       async () => {
         try {
+          const { initialPath } = readBootCapture(captureDir);
+          if (initialPath !== BARE_PATH) {
+            throw new Error(`main did not start with bare PATH: ${initialPath}`);
+          }
           const match = await waitUntil(
             "main-process login-shell PATH outcome",
-            // Join each descriptor independently before combining them: stdout
-            // and stderr events can interleave, but a line can split across
-            // arbitrary chunks within either descriptor.
-            () =>
-              `${postWindowMainStdout.join("")}\n${postWindowMainStderr.join("")}`.match(
-                LOGIN_PATH_MARKER,
-              )?.[0] ?? null,
+            // Main marks the ACTUAL browser-window-created event, not
+            // when Playwright eventually returns that window to this client.
+            // Keep descriptors separate so interleaved chunks cannot split a line.
+            () => {
+              const { postWindowStdout, postWindowStderr } = readBootCapture(captureDir);
+              return (
+                `${postWindowStdout}\n${postWindowStderr}`.match(LOGIN_PATH_MARKER)?.[0] ?? null
+              );
+            },
             { timeout: WAIT_TIMEOUT_MS },
           );
+          const { postWindowStdout, postWindowStderr } = readBootCapture(captureDir);
           return {
             ok: true,
-            detail: `${match} (post-window stdout=${postWindowMainStdout.join("").length} bytes, stderr=${postWindowMainStderr.join("").length} bytes)`,
+            detail: `${match} (post-window stdout=${postWindowStdout.length} bytes, stderr=${postWindowStderr.length} bytes)`,
           };
         } catch (error) {
           await captureFailureEvidence(
             page,
-            mainStdout,
-            mainStderr,
+            readBootCapture(captureDir),
             rendererConsole,
             "login-shell-path-outcome",
           );
+          const { postWindowStdout, postWindowStderr } = readBootCapture(captureDir);
           return {
             ok: false,
-            detail: `${error.message}; post-window stdout=${postWindowMainStdout.join("").length} bytes, stderr=${postWindowMainStderr.join("").length} bytes`,
+            detail: `${error.message}; post-window stdout=${postWindowStdout.length} bytes, stderr=${postWindowStderr.length} bytes`,
           };
         }
       },
@@ -170,23 +164,13 @@ async function main() {
           // success marker after wrappers, configs and shell init have settled.
           const outcome = await waitUntil(
             "harness-wrapper generation to finish",
-            async () => {
-              const offending = mainStderr
-                .join("")
-                .split("\n")
-                .find((line) => line.includes(WRAPPER_FAILURE_MARKER));
-              if (offending !== undefined) return { kind: "failed", offending };
-              return `${mainStdout.join("")}\n${mainStderr.join("")}`.includes(WRAPPER_READY_MARKER)
-                ? { kind: "ready" }
-                : null;
-            },
+            () => wrapperGenerationOutcome(readBootCapture(captureDir)),
             { timeout: WAIT_TIMEOUT_MS },
           );
           if (outcome.kind === "failed") {
             await captureFailureEvidence(
               page,
-              mainStdout,
-              mainStderr,
+              readBootCapture(captureDir),
               rendererConsole,
               "harness-wrappers",
             );
@@ -196,8 +180,7 @@ async function main() {
         } catch (error) {
           await captureFailureEvidence(
             page,
-            mainStdout,
-            mainStderr,
+            readBootCapture(captureDir),
             rendererConsole,
             "harness-wrapper-completion-timeout",
           );

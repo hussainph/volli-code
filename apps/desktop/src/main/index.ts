@@ -312,6 +312,7 @@ import {
 } from "./harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
+import { installSmokeBootCapture } from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import {
@@ -427,6 +428,10 @@ protocol.registerSchemesAsPrivileged([
 // accepted limitation" doc comment atop the old (pre-SQLite)
 // stores/projects.ts for the localStorage-origin version of this same split.
 app.setName("Volli Code");
+
+// Capture smoke boot output before any readiness work, in built AND packaged
+// launches. Ordinary launches have no capture env var and do no extra work.
+installSmokeBootCapture(process.env, app, process.stdout, process.stderr);
 
 // Packed-app smokes need the real compositor, but not the native app activation
 // that a normal Volli launch owns. This env-only seam is deliberately resolved
