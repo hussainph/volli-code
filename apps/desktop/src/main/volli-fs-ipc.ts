@@ -1,6 +1,7 @@
 /** Desktop IPC door for the host file services. */
 import { basename, dirname } from "node:path";
 import type { WebContents } from "electron";
+import { clientEventSink } from "./client-event-sink";
 import { applySkillModes, errorMessage, projectCommandsDir, projectSkillsDir } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
 import { searchFiles } from "@volli/host-core/file-search";
@@ -272,7 +273,7 @@ export function registerFileIpcHandlers(
       if (!resolved.ok) return resolved;
       const { source, filePath } = resolved.value;
       return manager.watch(
-        sender,
+        clientEventSink(sender),
         input.projectId,
         input.ticketId ?? null,
         input.relPath,
@@ -289,7 +290,12 @@ export function registerFileIpcHandlers(
     // than an unhandled IPC rejection: a deliberate hardening, not a behavior
     // this handler relied on.
     "volli:file-unwatch": (input: FilePathInput, sender: WebContents): Result => {
-      manager.unwatch(sender, input.projectId, input.ticketId ?? null, input.relPath);
+      manager.unwatch(
+        clientEventSink(sender),
+        input.projectId,
+        input.ticketId ?? null,
+        input.relPath,
+      );
       return { ok: true };
     },
 
@@ -301,7 +307,7 @@ export function registerFileIpcHandlers(
       const resolved = await resolveSafeDir(project.projectPath, input.relPath);
       if (!resolved.ok) return resolved;
       return dirManager.watch(
-        sender,
+        clientEventSink(sender),
         input.projectId,
         input.relPath,
         resolved.dirPath,
@@ -313,7 +319,7 @@ export function registerFileIpcHandlers(
     // drop its subscription even if the directory has since been deleted (which
     // is often exactly why it collapsed).
     "volli:dir-unwatch": (input: DirPathInput, sender: WebContents): Result => {
-      dirManager.unwatch(sender, input.projectId, input.relPath);
+      dirManager.unwatch(clientEventSink(sender), input.projectId, input.relPath);
       return { ok: true };
     },
 

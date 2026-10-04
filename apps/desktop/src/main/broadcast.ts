@@ -56,6 +56,8 @@ const dataChanges = createDataChangeCoalescer({
 
 /** How each host topic reaches the windows: its channel, and for one, its cadence. */
 const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => void } = {
+  "file-changed": (event) => sendToEveryWindow("volli:file-changed", event),
+  "dir-changed": (event) => sendToEveryWindow("volli:dir-changed", event),
   "data-changed": (change) => dataChanges.queue(change),
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
   "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),

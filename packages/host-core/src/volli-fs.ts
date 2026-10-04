@@ -56,6 +56,7 @@ import type {
   Result,
   RevealResult,
 } from "./file-types";
+import type { HostClientEventSink } from "./ports/events";
 import type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import { trashCapabilities, type TrashPort } from "./ports/trash";
@@ -1101,7 +1102,7 @@ const WATCH_DEBOUNCE_MS = 250;
  * {@link FileWatchSubscription}); a directory watch adds nothing.
  */
 interface WatchSubscription {
-  webContents: WebContents;
+  client: HostClientEventSink;
   projectId: string;
   /** The project's MAIN checkout path — used to recreate a wiped `.volli` watch dir on re-arm. */
   projectPath: string;
@@ -1167,7 +1168,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       existing.refCount += 1;
       return { ok: true };
     }
-    if (sub.webContents.isDestroyed()) return { ok: true };
+    if (sub.client.isClosed()) return { ok: true };
 
     sub.refCount = 1;
     this.subs.set(key, sub);
@@ -1180,7 +1181,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       this.subs.delete(key);
       return { ok: false, error: errorMessage(error) };
     }
-    sub.webContents.once("destroyed", sub.onDestroyed);
+    sub.client.onceClosed(sub.onDestroyed);
     return { ok: true };
   }
 
@@ -1199,7 +1200,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
     sub.debounceTimer = setTimeout(() => {
       sub.debounceTimer = null;
-      if (sub.webContents.isDestroyed()) return;
+      if (sub.client.isClosed()) return;
       this.sendChanged(sub, false);
     }, this.debounceMs);
   }
@@ -1297,7 +1298,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
         // is the path where the dir (and usually the file) is STILL THERE, so
         // only the `final` flag distinguishes the event from ordinary news.
         this.teardown(key);
-        if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
+        if (!sub.client.isClosed()) this.sendChanged(sub, true);
         return;
       }
       sub.reArming = false;
@@ -1312,7 +1313,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       return;
     }
     this.teardown(key);
-    if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
+    if (!sub.client.isClosed()) this.sendChanged(sub, true);
   }
 
   protected teardown(key: string): void {
@@ -1321,8 +1322,8 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     sub.watcher?.close();
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
     if (sub.retryTimer !== null) clearTimeout(sub.retryTimer);
-    if (!sub.webContents.isDestroyed()) {
-      sub.webContents.removeListener("destroyed", sub.onDestroyed);
+    if (!sub.client.isClosed()) {
+      sub.client.removeCloseListener(sub.onDestroyed);
     }
     this.subs.delete(key);
   }
@@ -1332,21 +1333,21 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
  * Watches one open file tab and broadcasts a debounced `volli:file-changed`.
  * Watches the file's PARENT directory and filters events by basename so an
  * atomic replace (temp-write + rename, how most editors save) still fires.
- * One subscription per `(webContents, projectId, ticketId, relPath)`.
+ * One subscription per `(client, projectId, ticketId, relPath)`.
  */
 export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
   private keyFor(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
   ): string {
-    return `${webContents.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
+    return `${client.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
   }
 
   /** Idempotent wiring: a second watch on the same tab bumps refCount. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
   watch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
@@ -1355,9 +1356,9 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
     base: string,
     projectPath: string,
   ): Result {
-    const key = this.keyFor(webContents, projectId, ticketId, relPath);
+    const key = this.keyFor(client, projectId, ticketId, relPath);
     return this.install(key, {
-      webContents,
+      client,
       projectId,
       projectPath,
       relPath,
@@ -1376,12 +1377,12 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
 
   /** Drops one hold; tears down only when the last FileView/DiffView (etc.) releases. */
   unwatch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
   ): void {
-    this.release(this.keyFor(webContents, projectId, ticketId, relPath));
+    this.release(this.keyFor(client, projectId, ticketId, relPath));
   }
 
   /**
@@ -1403,7 +1404,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       revision: this.currentRevision(join(sub.dir, sub.base)),
     };
     if (final) payload.final = true;
-    sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+    sub.client.publish("file-changed", payload);
   }
 
   private currentRevision(filePath: string): number | null {
@@ -1426,21 +1427,21 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
  * {@link DirWatchManager.matches} for the one exclusion.
  */
 export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
-  private keyFor(webContents: WebContents, projectId: string, relPath: string): string {
-    return `${webContents.id}:${projectId}:${relPath}`;
+  private keyFor(client: HostClientEventSink, projectId: string, relPath: string): string {
+    return `${client.id}:${projectId}:${relPath}`;
   }
 
   /** Idempotent wiring: a second watch on the same directory bumps refCount. `dir` is the caller's resolved absolute path. */
   watch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     relPath: string,
     dir: string,
     projectPath: string,
   ): Result {
-    const key = this.keyFor(webContents, projectId, relPath);
+    const key = this.keyFor(client, projectId, relPath);
     return this.install(key, {
-      webContents,
+      client,
       projectId,
       projectPath,
       relPath,
@@ -1455,8 +1456,8 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
   }
 
   /** Drops one hold; safe for a directory that was never watched (a collapse racing a teardown). */
-  unwatch(webContents: WebContents, projectId: string, relPath: string): void {
-    this.release(this.keyFor(webContents, projectId, relPath));
+  unwatch(client: HostClientEventSink, projectId: string, relPath: string): void {
+    this.release(this.keyFor(client, projectId, relPath));
   }
 
   /**
@@ -1485,7 +1486,7 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
   protected override sendChanged(sub: WatchSubscription, final: boolean): void {
     const payload: DirChangedEvent = { projectId: sub.projectId, relPath: sub.relPath };
     if (final) payload.final = true;
-    sub.webContents.send("volli:dir-changed" satisfies VolliIpcEvent, payload);
+    sub.client.publish("dir-changed", payload);
   }
 }
 

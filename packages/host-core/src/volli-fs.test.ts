@@ -143,20 +143,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A WebContents double keyed by `id` (the FileWatchManager subscription key). */
+/** A HostClientEventSink double keyed by `id` (the FileWatchManager subscription key). */
 function makeWebContents(id = 1) {
   const eventListeners = new Map<string, () => void>();
   return {
-    id,
-    send: vi.fn(),
+    id: String(id),
+    publish: vi.fn(),
     destroyed: false,
-    isDestroyed(): boolean {
+    isClosed(): boolean {
       return this.destroyed;
     },
-    once: vi.fn(function (this: unknown, event: string, cb: () => void) {
-      eventListeners.set(event, cb);
+    onceClosed: vi.fn(function (this: unknown, cb: () => void) {
+      eventListeners.set("destroyed", cb);
     }),
-    removeListener: vi.fn(),
+    removeCloseListener: vi.fn(),
     fireDestroyed() {
       eventListeners.get("destroyed")?.();
     },
@@ -1277,7 +1277,7 @@ describe("FileWatchManager", () => {
     watchCalls[0]?.cb("change", "notes.md");
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1310,7 +1310,7 @@ describe("FileWatchManager", () => {
     watchCalls[0]?.cb("change", "app.ts");
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: "ticket-1",
       relPath: "src/app.ts",
@@ -1330,7 +1330,7 @@ describe("FileWatchManager", () => {
     watchCalls[0]?.cb("rename", "notes.md");
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1357,7 +1357,7 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(250);
 
     expect(revision).not.toBe(oldRevision);
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1376,7 +1376,7 @@ describe("FileWatchManager", () => {
     watchCalls[0]?.cb("change", "other.md");
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("broadcasts conservatively when the platform reports a null filename", async () => {
@@ -1389,7 +1389,7 @@ describe("FileWatchManager", () => {
     watchCalls[0]?.cb("rename", null);
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).toHaveBeenCalledTimes(1);
+    expect(webContents.publish).toHaveBeenCalledTimes(1);
   });
 
   it("does not broadcast before the debounce window elapses", async () => {
@@ -1401,7 +1401,7 @@ describe("FileWatchManager", () => {
     vi.useFakeTimers();
     watchCalls[0]?.cb("change", "notes.md");
     vi.advanceTimersByTime(200);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("closes the watcher and clears the pending timer on unwatch — no late broadcast", async () => {
@@ -1416,7 +1416,7 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(1000);
 
     expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("tears down when the owning webContents is destroyed", async () => {
@@ -1453,7 +1453,7 @@ describe("FileWatchManager", () => {
     vi.useFakeTimers();
     watchCalls[0]?.cb("change", "notes.md");
     vi.advanceTimersByTime(250);
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1478,7 +1478,7 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(1000);
 
     expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
   });
 
   it("unwatching a key that was never watched is a harmless no-op", () => {
@@ -1502,7 +1502,7 @@ describe("FileWatchManager", () => {
     expect(watchMock).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(0);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1527,7 +1527,7 @@ describe("FileWatchManager", () => {
 
     // The file outlived the watcher, so `revision` reads like ordinary news
     // (issue #134): only `final` tells the holders their watch is gone.
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
@@ -1565,12 +1565,12 @@ describe("FileWatchManager", () => {
 
     // A non-.volli dir is never mkdir'd; the manager retries (~1s apart) in case
     // it is mid-regeneration before giving up — no broadcast until exhausted.
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
-    expect(webContents.send).not.toHaveBeenCalled();
+    expect(webContents.publish).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "sub/notes.md",
@@ -1612,7 +1612,7 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(1000);
     expect(watchMock).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
-    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+    expect(webContents.publish).toHaveBeenCalledWith("file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "sub/notes.md",

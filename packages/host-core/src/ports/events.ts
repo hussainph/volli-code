@@ -22,6 +22,8 @@
  */
 import type {
   DataChangeScope,
+  FileChangedEvent,
+  DirChangedEvent,
   HarnessEventNotice,
   PendingArmedRun,
   PendingArmedRunSettledNotice,
@@ -35,6 +37,10 @@ import type {
 
 /** Every fact a host announces, by topic. A topic is the channel name minus `volli:`. */
 export interface HostEventMap {
+  /** A subscribed client's open file changed; addressed by the watch. */
+  "file-changed": FileChangedEvent;
+  /** A subscribed client's expanded directory changed; addressed by the watch. */
+  "dir-changed": DirChangedEvent;
   /**
    * Planning data changed outside a client's own request. Carries the best
    * scope the publisher knows; `{}` means anything may have changed.

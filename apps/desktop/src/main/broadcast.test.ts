@@ -169,6 +169,14 @@ describe("the host event bus over every window (VC-554)", () => {
     "pending-armed-runs-changed": [PENDING],
     "pending-armed-run-settled": { kind: "failed", pending: PENDING, error: "no" },
     "worktree-phase": { ticketId: "t", phase: "ready" },
+    "file-changed": {
+      projectId: "p",
+      ticketId: null,
+      relPath: "file.md",
+      source: "main",
+      revision: 1,
+    },
+    "dir-changed": { projectId: "p", relPath: "" },
   };
 
   it("sends each topic on its own volli: channel to every live window, at once", () => {
