@@ -281,7 +281,7 @@
 
     "dompurify": {
       "license": "(MPL-2.0 OR Apache-2.0)",
-      "versions": ["3.4.15", "3.4.16"],
+      "versions": ["3.4.16"],
       "disposition": "shipped",
       "summary": [
         "Dual-licensed, so the choice is ours. Volli elects Apache-2.0, which is already the dominant",
