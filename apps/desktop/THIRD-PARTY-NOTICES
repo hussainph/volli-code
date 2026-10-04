@@ -44,6 +44,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/agent-runtime
   @volli/cli
   @volli/desktop
+  @volli/host-protocol
   @volli/session-engine
   @volli/session-presentation
   @volli/session-rpc
