@@ -65,6 +65,8 @@ describe("scrubInheritedSessionEnv", () => {
         VOLLI_PROJECT_DIR: "/outer",
         VOLLI_BIN_DIR: "/outer/bin",
         VOLLI_CONCURRENCY_HINT: "7",
+        // VC-623: a person's credential never rides into a Session's terminal.
+        VOLLI_OPERATOR_TOKEN: "volli_op_person",
         VOLLI_HARNESS_ARGV_CLAUDE_CODE: '["--settings","/outer/settings.json"]',
         VOLLI_HARNESS_BIN_CLAUDE_CODE: "/outer/bin/claude",
         HOME: "/Users/x",

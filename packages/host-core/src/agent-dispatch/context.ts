@@ -54,6 +54,7 @@ import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-tit
 import type { Sessions } from "@volli/host-core/session-runtime/sessions";
 import type { BusyWorktreeSites } from "@volli/host-core/worktree/activity";
 import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
+import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
@@ -255,6 +256,28 @@ export interface AgentCommandServiceOptions {
    */
   verifySessionToken?: (token: string | undefined) => string | null;
   /**
+   * Verifies a hostd-issued operator token (VC-623), answering who it was
+   * issued for or `null`.
+   *
+   * Absent means this host accepts none — desktop, which issues none — so a
+   * request carrying one is the unauthenticated actor, exactly as it would be
+   * without it. Reached only by a request with no Session evidence at all
+   * (`presentedOperatorToken`), so it can never change how a Session's request
+   * is judged.
+   */
+  verifyOperatorToken?: VerifyOperatorToken;
+  /**
+   * How `project.add` detects a new project's base branch (VC-623). Defaults
+   * to the same async detector the app's Add Project uses; tests script it.
+   */
+  detectBaseBranch?: (path: string) => Promise<string | null>;
+  /**
+   * Called once for every write an operator token was presented for, after it
+   * was answered: who, which verb, and how it ended (VC-623). The host's audit
+   * line. Never handed the token itself.
+   */
+  onOperatorWrite?: (record: OperatorWriteRecord) => void;
+  /**
    * Reads one project's resolved authority policy for the admission gate
    * (VC-163).
    *
@@ -274,6 +297,16 @@ export interface AgentCommandServiceOptions {
    * report a baseline it knows is missing a section.
    */
   skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
+}
+
+/** One operator write, as {@link AgentCommandServiceOptions.onOperatorWrite} reports it. */
+export interface OperatorWriteRecord {
+  /** The login the token was issued for. */
+  readonly login: string;
+  readonly cmd: string;
+  readonly ok: boolean;
+  /** The refusal's code when `ok` is false. */
+  readonly code: AgentErrorCode | null;
 }
 
 export interface AgentCommandService {
@@ -396,10 +429,11 @@ export interface AgentCommandContext {
    * Who to ATTRIBUTE this caller's writes to, decided once by the dispatch
    * (VC-163).
    *
-   * Either the authenticated session actor its token proves, or
-   * `unauthenticated`. Never `user`: a socket call cannot establish that a
-   * person made it, and attributing one anyway is the grant-by-absence VC-92
-   * §6.3 ruled dead.
+   * The authenticated session actor its token proves, `user` when a
+   * hostd-issued operator token proves the person (VC-623, VC-92 §6.3's
+   * amendment), or `unauthenticated`. Never `user` on absence: a socket call
+   * without that proof cannot establish that a person made it, and attributing
+   * one anyway is the grant-by-absence VC-92 §6.3 ruled dead.
    *
    * Handlers read this rather than deriving their own, so the actor a write is
    * ATTRIBUTED to is by construction the same actor the admission gate

@@ -129,6 +129,10 @@
       "types": "./src/project-base-branch.ts",
       "import": "./src/project-base-branch.ts"
     },
+    "./project-create": {
+      "types": "./src/project-create.ts",
+      "import": "./src/project-create.ts"
+    },
     "./project-relink": {
       "types": "./src/project-relink.ts",
       "import": "./src/project-relink.ts"

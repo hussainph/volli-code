@@ -324,6 +324,22 @@ describe("parseCliArgs", () => {
     expect(result.code).toBe("WRONG_DOOR");
   });
 
+  it("parses the operator's project add, and names its positional <path> (VC-623)", () => {
+    expect(parseCliArgs(["project", "add", "/srv/acme", "--name", "Acme", "--dry-run"])).toEqual({
+      ok: true,
+      invocation: {
+        command: "project.add",
+        args: { id: "/srv/acme", name: "Acme", dryRun: true },
+        json: false,
+      },
+    });
+    expect(parseCliArgs(["project", "add"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "project add requires <path>",
+    });
+  });
+
   it("requires the harness session id positional for session link", () => {
     expect(parseCliArgs(["session", "link"])).toEqual({
       ok: false,

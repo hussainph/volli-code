@@ -2,21 +2,18 @@ import { clientEventSink } from "./client-event-sink";
 import { randomUUID } from "node:crypto";
 import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import { statSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { DbHandle } from "@volli/host-core";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
-  derivePrefix,
   errorMessage,
   validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,
-  PROJECT_COLORS,
   sanitizeLegacyProjects,
   USER_ACTOR,
-  validateUniquePrefix,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
 import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/blob-attach";
@@ -28,19 +25,14 @@ import {
 } from "@volli/host-core/db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import { createProject } from "@volli/host-core/project-create";
 import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { McpSettingsService } from "@volli/host-core/mcp/settings";
 import { removeTicketToolOutput } from "@volli/host-core/pi-tool-output";
 import type { StopSessionByIdPorts } from "@volli/host-core/session-runtime/supervise-session";
-import type {
-  AuthorityPolicyOverride,
-  DataChangedEvent,
-  Label,
-  Project,
-  Ticket,
-} from "@volli/shared";
+import type { AuthorityPolicyOverride, DataChangedEvent, Label, Ticket } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -160,11 +152,9 @@ import { listAllLabels, listLabelsByProject, setLabelColor } from "@volli/host-c
 import {
   countProjects,
   deleteProject,
-  findProjectByPath,
   getProjectById,
   insertProject,
   listProjects,
-  nextSortOrder,
   reorderProjects,
   updateProjectAuthorityPolicy,
   updateProjectBaseBranch,
@@ -207,7 +197,6 @@ import {
   updateTicketFieldsCommand,
 } from "@volli/host-core/ticket-commands";
 import { executeTicketMove, trimFinishedTicketInBackground } from "@volli/host-core/ticket-move";
-import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
 import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
 import { withTicketWake } from "@volli/host-core/ticket-wake";
@@ -690,47 +679,10 @@ export function registerDataIpcHandlers(
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": async (input: ProjectCreateInput): Promise<ProjectCreateResult> => {
-      const existing = findProjectByPath(db, input.path);
-      if (existing) {
-        return { ok: true, project: existing, created: false };
-      }
-      let stats;
-      try {
-        stats = await stat(input.path);
-      } catch {
-        return { ok: false, error: "Project path does not exist" };
-      }
-      if (!stats.isDirectory()) {
-        return { ok: false, error: "Project path is not a directory" };
-      }
-      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
-        input.path,
-      );
-      // Detection yields to other IPC requests. Re-read mutable project state only
-      // after it returns, then validate and insert without another await.
-      const createdWhileDetecting = findProjectByPath(db, input.path);
-      if (createdWhileDetecting) {
-        return { ok: true, project: createdWhileDetecting, created: false };
-      }
-      const ticketPrefix = derivePrefix(input.name);
-      const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
-      if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
-      const now = Date.now();
-      const project: Project = {
-        id: randomUUID(),
-        name: input.name,
-        path: input.path,
-        ticketPrefix,
-        baseBranch,
-        colorIndex: countProjects(db) % PROJECT_COLORS.length,
-        sortOrder: nextSortOrder(db),
-        createdAt: now,
-        updatedAt: now,
-      };
-      insertProject(db, project);
-      return { ok: true, project, created: true };
-    },
+    // The rules live in host-core (VC-623), shared with the operator's
+    // `volli project add` on a headless host: one validation, every door.
+    "volli:project-create": (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
+      createProject({ db, detectBaseBranch: options.detectBaseBranch }, input),
 
     /**
      * Whether one project's registered folder is still there (VC-430) — the

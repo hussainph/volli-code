@@ -43,6 +43,9 @@ const SOCKET_SURFACE = [
   "worktree.sync",
   "conflicts",
   "project.list",
+  // VC-623: the operator's bootstrap write. A `user` verb, so no Session
+  // reaches it whatever a policy grants.
+  "project.add",
   "label.list",
   "label.merge",
   "model.list",
@@ -133,6 +136,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // enough to run in a bash pipeline.
   conflicts: "read",
   "project.list": "read",
+  // The person's write (VC-623): coordination tier, but judged by the door's
+  // actor alone — an operator token — and never by a policy list.
+  "project.add": "coordination",
   "label.list": "read",
   // A coordination write despite sitting beside a read: it retires a Label
   // and rewrites associations, so it is attributable or it does not happen.
@@ -389,8 +395,9 @@ describe("verbTier", () => {
     expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(19);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
-    // VC-310 adds label.merge, the label cleanup write.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
+    // VC-310 adds label.merge, the label cleanup write. VC-623 adds
+    // project.add, the one write only the person may make.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(14);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 
@@ -420,6 +427,25 @@ describe("verbTier", () => {
   it("splits the socket by actor: any caller reads, a session actor coordinates", () => {
     expect(verbTier({ accessModes: ["cli"], actor: "any" })).toBe("read");
     expect(verbTier({ accessModes: ["cli", "tool"], actor: "session" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["cli"], actor: "user" })).toBe("coordination");
+  });
+
+  it("keeps the person's verbs off every Session surface (VC-623)", () => {
+    const userVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+      (entry) => entry.actor === "user",
+    );
+    expect(userVerbs.map((entry) => entry.key)).toEqual(["project.add"]);
+    for (const entry of userVerbs) {
+      // Never a tool, so no Role bundle can carry it; never listed, so neither
+      // help nor the managed skill an agent reads offers it.
+      expect(entry.accessModes, entry.key).toEqual(["cli"]);
+      expect(entry.listed, entry.key).toBe(false);
+      expect(
+        entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+      expect(entry.effects?.nonEffects.length, entry.key).toBeGreaterThan(0);
+    }
   });
 
   it("is the only way to get a tier — no entry stores one", () => {
@@ -529,7 +555,16 @@ describe("the registry table", () => {
     // person's saved Automation. `session.await` stays unlisted beside it;
     // both are retired (VC-457). `watch`, which replaced them, is discovered
     // through its tool schema the same way.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await", "watch"]);
+    // `project.add` (VC-623) is unlisted because no agent can run it: it is the
+    // person's verb, and the reference is what agents read.
+    expect(unlisted).toEqual([
+      "project.add",
+      "session.harness",
+      "hook",
+      "ticket.await",
+      "session.await",
+      "watch",
+    ]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -867,10 +902,14 @@ describe("REFERENCE_VERBS", () => {
     ]);
   });
 
-  it("is a different surface from the socket, by two verbs each way", () => {
+  it("is a different surface from the socket: the involuntary pair and the person's verb", () => {
     const reference = new Set(REFERENCE_VERBS.map((entry) => entry.key));
     const socket = new Set<string>(AGENT_COMMANDS);
-    expect([...socket].filter((key) => !reference.has(key))).toEqual(["session.harness", "hook"]);
+    expect([...socket].filter((key) => !reference.has(key))).toEqual([
+      "project.add",
+      "session.harness",
+      "hook",
+    ]);
     expect([...reference].filter((key) => !socket.has(key))).toEqual(["app.launch", "help"]);
   });
 });
