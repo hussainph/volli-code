@@ -24,6 +24,9 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 
 ## Architecture direction
 
+Volli Cloud's architecture ruling is [docs/plans/volli-cloud.md](docs/plans/volli-cloud.md) (VC-486).
+The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs how that direction lands behind the `cloud` flag.
+
 - A Session is durable and owns identity and ordered local history before any live executor attaches. The temporary native-adapter contract, processes, terminal panes, and UI views never own Session lifetime.
 - Commands are explicit user intent. Persist intent before delivery; make acceptance idempotent and observable through durable receipts.
 - Events are immutable facts. Local durable history is canonical; renderer stores project it into UI state and structured attention.

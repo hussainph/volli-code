@@ -17,6 +17,11 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `packages/font-notices/` (`@volli/font-notices`) — the font license notices `apps/website` and `apps/docs` must publish beside the font binaries they redistribute (OFL-1.1 clause 2). `src/` is pure rendering — **no Electron/Node/DOM imports**, so each site resolves its own font package through its own bundler. `check-dist.mjs` (CLI: `check-font-notices`) re-reads the built `dist/` and fails the build on an uncovered font; it shares no code with the renderer so the two cannot agree with each other about a gap.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse. **Its subject is UI state, UX flows and visual systems — never backend behavior.** It has no main-process half and is not reconciled against SQLite or the Session ledger; a scratch that needs a live backend fact is a scratch in the wrong place, and the lab's own expressiveness is never a reason to keep a backend seam alive.
 
+## Architecture direction
+
+Volli Cloud's architecture ruling is [docs/plans/volli-cloud.md](docs/plans/volli-cloud.md) (VC-486).
+The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs how that direction lands behind the `cloud` flag.
+
 ## Conventions
 
 - A Session is durable and owns identity and ordered local history before any live executor attaches. The temporary native-adapter contract, processes, terminal panes, and UI views never own Session lifetime.
