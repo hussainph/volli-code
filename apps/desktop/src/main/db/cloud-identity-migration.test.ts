@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
 import { insertSession } from "../session-control/test-support";
-import { insertProject } from "./projects-repo";
-import { insertTicket } from "./tickets-repo";
+import { getProjectById, insertProject } from "./projects-repo";
+import { getTicket, insertTicket, nextTicketNumberForProject } from "./tickets-repo";
 import { openRawDb, testProject, testSession, testTicket } from "./test-helpers";
+import { openVolliDb } from "./index";
+import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
+import * as migrations from "./migrations";
 import { migrate } from "./migrations";
 
 const WORKSPACE = "6f0e8f7c-2b7c-4f43-9a55-0c8f3c1d2a01";
@@ -47,6 +50,7 @@ const WORKER_KINDS = {
 let directory: string | undefined;
 let db: Database.Database | undefined;
 afterEach(() => {
+  vi.restoreAllMocks();
   db?.close();
   if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
   db = undefined;
@@ -175,9 +179,9 @@ describe("cloud identity migration (058)", () => {
     db = openRawDb(path);
     expect(migrate(db, path)).toBe(true);
     expect(db.pragma("user_version", { simple: true })).toBe(58);
-    expect(
-      schemaObjects(db).filter((object) => IDENTITY_TABLES.includes(object.tbl_name)),
-    ).toEqual(upgradedSchema);
+    expect(schemaObjects(db).filter((object) => IDENTITY_TABLES.includes(object.tbl_name))).toEqual(
+      upgradedSchema,
+    );
   });
 
   it("converges when version 58 is offered again, keeping every identity row", () => {
@@ -194,6 +198,72 @@ describe("cloud identity migration (058)", () => {
     expect(tableRows(f.db)).toEqual(rows);
     expect(schemaObjects(f.db)).toEqual(schema);
     expect(f.db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("re-running the SQL directly is a no-op, including all three populated-table triggers", () => {
+    const f = version57();
+    migrate(f.db, f.path);
+    seedIdentityRows(f.db);
+    const rows = tableRows(f.db);
+    const schema = schemaObjects(f.db);
+    const changes = f.db.prepare("SELECT total_changes() AS n").get();
+
+    f.db.exec(CLOUD_IDENTITY_MIGRATION);
+    f.db.exec(CLOUD_IDENTITY_MIGRATION);
+
+    expect(f.db.pragma("user_version", { simple: true })).toBe(58);
+    expect(f.db.prepare("SELECT total_changes() AS n").get()).toEqual(changes);
+    expect(tableRows(f.db)).toEqual(rows);
+    expect(schemaObjects(f.db)).toEqual(schema);
+    expect(schema.filter(({ type }) => type === "trigger").map(({ name }) => name)).toEqual(
+      expect.arrayContaining(
+        IDENTITY_OBJECTS.filter(({ type }) => type === "trigger").map(({ name }) => name),
+      ),
+    );
+    // The original fence remains active, not replaced or silently lost.
+    expect(() => f.db.prepare("UPDATE workspace_epochs SET epoch = 2").run()).toThrow(
+      "workspace epochs are append-only",
+    );
+  });
+
+  it("opens a v58 database through the v57 migration ceiling and keeps old read/write paths working", () => {
+    const f = version57();
+    migrate(f.db, f.path);
+    seedIdentityRows(f.db);
+    const schema = schemaObjects(f.db);
+    const rows = tableRows(f.db);
+    const project = getProjectById(f.db, WORKSPACE);
+    const ticket = getTicket(f.db, TICKET);
+    f.db.close();
+    db = undefined;
+
+    // The shipped open path and runner are unchanged by 058. Limit its known
+    // migrations to 057 to model stable reopening a canary-expanded profile;
+    // do not rewind user_version, which would test a different situation.
+    const shippedMigrate = migrate;
+    const stableMigration = vi
+      .spyOn(migrations, "migrate")
+      .mockImplementation((handle, path) => shippedMigrate(handle, path, { toVersion: 57 }));
+    db = openVolliDb(f.path);
+
+    expect(stableMigration).toHaveBeenCalledOnce();
+    expect(stableMigration).toHaveReturnedWith(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(58);
+    expect(schemaObjects(db)).toEqual(schema);
+    expect(tableRows(db)).toEqual(rows);
+    expect(existsSync(`${f.path}.backup-v58`)).toBe(false);
+    expect(getProjectById(db, WORKSPACE)).toEqual(project);
+    expect(getTicket(db, TICKET)).toEqual(ticket);
+    const number = nextTicketNumberForProject(db, WORKSPACE);
+    const added = testTicket(WORKSPACE, {
+      id: "78ebc7e6-0357-444b-a62a-3ca028c35ae1",
+      ticketNumber: number,
+    });
+    insertTicket(db, added);
+    expect(getTicket(db, added.id)).toEqual(added);
+    for (const table of IDENTITY_TABLES) expect(tableRows(db)[table], table).toEqual(rows[table]);
+    expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
   it("holds at most one host identity", () => {
