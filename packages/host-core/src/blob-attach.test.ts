@@ -13,13 +13,7 @@ import {
 import { blobExists } from "./blob-store";
 import { listSessionLinks, listTicketLinks } from "./db/blobs-repo";
 import { insertProject } from "./db/projects-repo";
-import {
-  openTestDb,
-  testProject,
-  testSession,
-  testTicket,
-  type TestDb,
-} from "./db/test-helpers";
+import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
 import { insertTicket } from "./db/tickets-repo";
 import { insertSession } from "./session-control/test-support";
 

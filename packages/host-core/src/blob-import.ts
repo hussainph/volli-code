@@ -20,11 +20,7 @@ import { basename, extname } from "node:path";
 import type Database from "better-sqlite3";
 import { MAX_INLINE_IMAGE_BYTES, isInlinableImageMime, type BlobLink } from "@volli/shared";
 import { blobExists, hashBytes, writeBlob } from "./blob-store";
-import {
-  createBlobLink,
-  upsertBlob,
-  type CreateBlobLinkInput,
-} from "./db/blobs-repo";
+import { createBlobLink, upsertBlob, type CreateBlobLinkInput } from "./db/blobs-repo";
 
 /**
  * Extension → media type for the kinds a user actually attaches. Deliberately

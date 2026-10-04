@@ -140,9 +140,9 @@
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0",
     "better-sqlite3": "^13.0.3",
-    "yaml": "2.9.0",
-    "@vscode/ripgrep": "^1.18.0"
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
