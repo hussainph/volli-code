@@ -52,6 +52,7 @@ export const HOST_ERROR_REASON_CODES = {
   "verb-refused": "FORBIDDEN",
   "command-conflict": "CONFLICT",
   "subscription-overflow": "TOO_MANY_REQUESTS",
+  "subscription-resnapshot-required": "PRECONDITION_FAILED",
   "subscription-source-failed": "INTERNAL_SERVER_ERROR",
   "operation-unavailable": "NOT_IMPLEMENTED",
 } as const satisfies Record<string, HostErrorCode>;

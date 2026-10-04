@@ -33,6 +33,17 @@ describe("the error envelope", () => {
     }
   });
 
+  it("pins resnapshot-required failures to PRECONDITION_FAILED on the wire", () => {
+    const envelope = hostError("subscription-resnapshot-required", "Read a fresh snapshot");
+    expect(envelope).toStrictEqual({
+      code: "PRECONDITION_FAILED",
+      message: "Read a fresh snapshot",
+      reason: "subscription-resnapshot-required",
+    });
+    expect(isHostError(envelope)).toBe(true);
+    expect(readHostError({ data: { hostError: envelope } })).toStrictEqual(envelope);
+  });
+
   it("refuses an envelope whose reason travels under the wrong code, or is not one", () => {
     expect(isHostError({ code: "NOT_FOUND", message: "gone" })).toBe(true);
     expect(isHostError(hostError("verb-refused", "no"))).toBe(true);

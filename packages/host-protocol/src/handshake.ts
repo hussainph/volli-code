@@ -79,7 +79,10 @@ export function negotiateFeatures(
   return [...new Set(offered)].filter((feature) => wanted.has(feature));
 }
 
-/** Authenticated hello negotiation: version, workspace scope and authority fence. */
+/**
+ * Authenticated hello negotiation: version, workspace scope and authority fence.
+ * `ok` at a higher epoch is not authority-validated; VC-591/VC-564 own promotion validation.
+ */
 export function negotiateWelcome(
   hello: HostHello,
   offer: HostOffer,
