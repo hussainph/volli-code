@@ -1,3 +1,5 @@
+import Ajv from "ajv";
+import Ajv2019 from "ajv/dist/2019.js";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -427,13 +429,51 @@ describe("sanitizeMcpToolDefinition", () => {
                 allOf: [{ required: ["a"] }, true],
                 patternProperties: { "^a": { type: "string" } },
               },
-              list: { type: "array", prefixItems: [{ type: "string" }], items: false },
+              list: { type: "array", items: { type: "string" }, contains: { type: "string" } },
             },
           },
         }),
       ).ok,
     ).toBe(true);
   });
+
+  it.each([false, { type: "number" }])(
+    "refuses prefixItems that would weaken old-draft items constraints (%#)",
+    (items) => {
+      const options = { strict: false, validateFormats: false };
+      const provider = new Ajv2020(options);
+      for (const [$schema, own] of [
+        ["http://json-schema.org/draft-07/schema#", new Ajv(options)],
+        ["https://json-schema.org/draft/2019-09/schema", new Ajv2019(options)],
+      ] as const) {
+        const body = {
+          type: "object",
+          properties: {
+            list: { type: "array", prefixItems: [{ type: "string" }], items },
+          },
+        };
+        const schema = { $schema, ...body };
+        expect(own.validateSchema(schema)).toBe(true);
+        expect(provider.validateSchema(body)).toBe(true);
+        // Synthetic test-only compilation proves why dual meta-validation
+        // alone cannot admit this unchanged schema. Production never compiles
+        // server schemas or resolves/registers their references.
+        expect(own.compile(schema)({ list: ["x"] })).toBe(false);
+        expect(provider.compile(body)({ list: ["x"] })).toBe(true);
+        const before = JSON.stringify(schema);
+        expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: schema }))).toEqual({
+          ok: false,
+          reason:
+            "input schema uses `prefixItems`, which model providers cannot preserve for this dialect; the server should declare 2020-12 to use `prefixItems` without changing legacy `items` semantics",
+        });
+        expect(JSON.stringify(schema)).toBe(before);
+        const output = sanitizeMcpToolDefinition(toolCandidate({ outputSchema: schema }));
+        expect(output.ok).toBe(true);
+        if (!output.ok) throw new Error(output.reason);
+        expect(output.definition.outputSchema).toBe(schema);
+      }
+    },
+  );
 
   it("keeps old-draft output tuples unchanged because output schemas are not sent to providers", () => {
     const outputSchema = {

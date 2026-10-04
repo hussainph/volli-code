@@ -582,7 +582,11 @@ Volli does not translate tuples or silently change the tool's meaning.
 
 Dual meta-validation alone is not a provider-compatibility guarantee. Legacy
 `dependencies` and recursive-reference keywords can lose semantics under
-2020-12, and Pi's non-strict Anthropic adapter retains only root `type`,
+2020-12. Combining `prefixItems` with old-draft `items` can also weaken constraints:
+old drafts ignore `prefixItems` and apply `items` to every element, whereas
+2020-12 applies `items` only after the prefix. Newly admitted old-draft inputs
+therefore cannot use `prefixItems`; the server must declare 2020-12 to use it.
+Pi's non-strict Anthropic adapter retains only root `type`,
 `properties`, and `required`. For newly admitted old-draft inputs, Volli also
 refuses references (`$ref`/`$dynamicRef`, including references into `definitions`
 or `$defs`) and root assertions the adapter drops, such as `additionalProperties`,

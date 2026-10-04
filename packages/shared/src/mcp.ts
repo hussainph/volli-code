@@ -517,6 +517,7 @@ const PROJECTED_ROOT_ASSERTIONS = [
 ] as const;
 const LEGACY_PROVIDER_KEYWORDS = new Map([
   ["dependencies", "use 2020-12 `dependentRequired` or `dependentSchemas`"],
+  ["prefixItems", "declare 2020-12 to use `prefixItems` without changing legacy `items` semantics"],
   ["$recursiveRef", "use 2020-12 `$dynamicRef`"],
   ["$recursiveAnchor", "use 2020-12 `$dynamicAnchor`"],
   ["$ref", "inline referenced schemas"],
