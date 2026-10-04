@@ -136,7 +136,7 @@ asarUnpack:
   # INSIDE app.asar for a file unpacked beside it, and Electron supports only
   # `execFile` — not `spawn` — on such a path (it fails with ENOTDIR). The
   # `app.asar` -> `app.asar.unpacked` rewrite that finishes the job lives in
-  # `unpackedBinaryPath` in src/main/file-search.ts; a search that reports
+  # `unpackedBinaryPath` in packages/host-core/src/file-search.ts; a search that reports
   # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
   # Code Mode's sandbox (VC-471). Each run starts a worker thread from
