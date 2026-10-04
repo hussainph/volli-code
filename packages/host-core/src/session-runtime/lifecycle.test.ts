@@ -241,8 +241,10 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
   it("a close during recovery waits for the sweep and never starts resume or exposes consumers", async () => {
     const f = fixture();
     const gate = deferred();
-    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async () => {
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      expect(ports.shouldStop!()).toBe(false);
       await gate.promise;
+      expect(ports.shouldStop!()).toBe(true);
       return 0;
     });
     const owner = createSessionRuntimeLifecycle(f.options);
@@ -253,7 +255,10 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     void drain.then(() => {
       drained = true;
     });
-    await Promise.resolve();
+    // Let the actual RPC/runtime → MCP → flush chain finish. A lone microtask
+    // didn't pin this wait: removing boot from close() used to keep this green.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.calls).toContain("flush");
     expect(drained).toBe(false);
     gate.resolve();
     await refused;
@@ -319,6 +324,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     owner.observeScheduledResume(projection);
     const notice = {} as Parameters<typeof owner.relayShellNotice>[0];
     owner.relayShellNotice(notice);
+    await Promise.resolve();
     expect(f.resume.pass).toHaveBeenCalledOnce();
     expect(f.resume.observe).toHaveBeenCalledWith(projection);
     const relay = vi.mocked(shell.relayShellNotices).mock.results[0]!.value;
@@ -398,6 +404,58 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await drain;
     expect(f.services).not.toHaveBeenCalled();
     expect(f.calls).not.toContain("resume.start");
+  });
+
+  it("reads a late-bound RPC owner at close, not the empty slot at construction", async () => {
+    const f = fixture();
+    let rpc: typeof f.rpc | null = null;
+    const owner = createSessionRuntimeLifecycle({ ...f.options, rpc: () => rpc });
+    const ready = await owner.ready();
+    expect(ready.services).toBe(f.services.mock.results[0]!.value);
+    rpc = f.rpc;
+    await owner.close();
+    expect(f.rpc.close).toHaveBeenCalledOnce();
+    expect(() => ready.services).toThrow("runtime is closing");
+  });
+
+  it("fresh shell notices wait for recovery and are dropped if close wins", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async () => {
+      await gate.promise;
+      return 0;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    const notice = {} as Parameters<typeof owner.relayShellNotice>[0];
+    const relay = vi.mocked(shell.relayShellNotices).mock.results[0]!.value;
+    owner.relayShellNotice(notice);
+    expect(relay).not.toHaveBeenCalled();
+    gate.resolve();
+    await owner.ready();
+    expect(relay).toHaveBeenCalledOnce();
+    // A resolved proof does not let the already queued external notice run
+    // after its runtime closes in this same turn of the host's event loop.
+    owner.relayShellNotice(notice);
+    await owner.close();
+    expect(relay).toHaveBeenCalledOnce();
+  });
+
+  it("reports a queued notice whose recovery is interrupted, without an unhandled rejection", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async () => {
+      await gate.promise;
+      return 0;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    owner.relayShellNotice({} as Parameters<typeof owner.relayShellNotice>[0]);
+    const drain = owner.close();
+    gate.resolve();
+    await drain;
+    expect(f.options.ports.log.error).toHaveBeenCalledWith(
+      "[volli] failed to ready a shell notice:",
+      "The Session runtime closed during recovery.",
+    );
   });
 
   it("closing an unstarted owner prevents any later recovery", async () => {

@@ -55,6 +55,13 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        // The automation assembly over the ready Session facade (VC-622). Every
+        // branch is a decision made once at boot on a machine nobody watches:
+        // which degraded capability drops which port, and the two failures a
+        // timer fires into an unattended log. A branch read wrong is a
+        // scheduler that silently never starts, or a recovery error that
+        // reaches no one.
+        "src/session-runtime/automations.ts",
         "src/session-control/suspend-clock.ts",
         // Birth-frozen membership must never name an absent host capability (VC-622).
         "src/session-runtime/host-capabilities.ts",
