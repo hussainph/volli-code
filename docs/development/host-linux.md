@@ -50,6 +50,9 @@ requires that checking this fixture exits unsuccessfully. Report mode uses the
 same resolver to inventory desktop main modules, not to execute their tests.
 Its schema records the closure limitations and illustrative (not exhaustive)
 witnesses; output is restricted to JSON files in `.tmp/`, never source/manifests.
+An exclusively created temporary file plus atomic rename replaces the output
+entry without following a destination symlink; the self-test proves its target
+is unchanged.
 
 A desktop Vitest test passing in the Node environment can still have an
 Electron-dependent production graph: `vi.mock("electron", ...)` and mocks of
@@ -67,7 +70,7 @@ The VC-552 inventory comment records the module lists and test caveats.
 
 The image in `.devcontainer/host/Dockerfile` is a **development toolchain**, not
 a production hostd deployment. Its multi-architecture base is pinned by digest;
-its Node version must equal `.nvmrc` (currently 24.13.0), and Corepack installs
+its Node version must equal `.nvmrc` (currently 24.15.0), and Corepack installs
 the root manifest's exact pnpm version. It includes git/SSH, Python/make/g++ for
 native compilation, fonts and Chromium runtime libraries. It contains neither
 Electron, Chromium itself, source code, installed workspace dependencies nor
@@ -96,6 +99,12 @@ be writable by uid 1000 (`node`); adjust the container user/mount permissions
 for your own checkout if needed. No production secrets are baked or mounted.
 Standalone Chromium provisioning belongs to the browser/worker ticket; these
 libraries support it without installing another browser in every dev image.
+
+The previous 24.13.0 `.nvmrc` pin could not install the current dependency graph:
+jsdom 30.0.1 requires Node ^24.15.0 in the 24.x line, and `engineStrict` rejects
+older versions. The host lane/image therefore use 24.15.0, within the unchanged
+root `engines.node` range. Do not infer compatibility from that caret range's
+lower bound alone; the host lane's exact-version install checks the full graph.
 
 When bumping Node, update `.nvmrc`, the Dockerfile's tag and multi-arch digest
 together; the image build catches drift. A root `packageManager` bump also

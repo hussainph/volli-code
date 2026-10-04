@@ -12,16 +12,20 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   globSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, extname, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -664,6 +668,18 @@ function runGuard(repoRoot) {
   return 0;
 }
 
+function writeReportAtomically(destination, content) {
+  // Exclusive creation avoids following a pre-existing temp-file symlink;
+  // rename replaces the final entry without following a destination symlink.
+  const temporary = resolve(dirname(destination), `.report-${randomUUID()}.json`);
+  writeFileSync(temporary, content, { flag: "wx" });
+  try {
+    renameSync(temporary, destination);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
 function runReport(repoRoot, outputPath) {
   const mainEntries = sourceFilesBelow(repoRoot, "apps/desktop/src/main");
   if (mainEntries.length === 0) fail("no main-process source files found for --report");
@@ -705,10 +721,10 @@ function runReport(repoRoot, outputPath) {
   const physicalParent = realpathSync(dirname(destination));
   if (!withinRoot(repoRoot, physicalParent))
     fail("--report output parent resolves outside the repository root");
-  if (existsSync(destination) && !withinRoot(repoRoot, realpathSync(destination))) {
-    fail("--report output resolves outside the repository root");
-  }
-  writeFileSync(destination, `${JSON.stringify(inventory, null, 2)}\n`);
+  writeReportAtomically(
+    resolve(physicalParent, basename(destination)),
+    `${JSON.stringify(inventory, null, 2)}\n`,
+  );
   console.log(
     `[host-electron-imports] report: ${inventory.summary.reachingElectron}/${modules.length} main modules reach electron; ` +
       `inventory written to ${repoRelative(repoRoot, destination)}`,
@@ -796,6 +812,30 @@ function selfTest() {
   } catch (error) {
     if (!error.message.includes("under .tmp/"))
       failures.push(`wrong report safety error: ${error.message}`);
+  }
+
+  const reportTest = resolve(REPO_ROOT, ".tmp", `report-self-test-${randomUUID()}`);
+  mkdirSync(reportTest, { recursive: true });
+  try {
+    const target = resolve(reportTest, "manifest.json");
+    const destination = resolve(reportTest, "report.json");
+    writeFileSync(target, "original manifest", { flag: "wx" });
+    symlinkSync(target, destination);
+    writeReportAtomically(destination, "new inventory");
+    check(
+      "atomic report does not follow destination symlink",
+      readFileSync(target, "utf8"),
+      "original manifest",
+      failures,
+    );
+    check(
+      "atomic report replaces destination entry",
+      readFileSync(destination, "utf8"),
+      "new inventory",
+      failures,
+    );
+  } finally {
+    rmSync(reportTest, { recursive: true, force: true });
   }
 
   const fixtureFiles = enumerateGuardFiles(FIXTURE_ROOT);
