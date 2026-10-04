@@ -45,7 +45,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function entry(login: string, token: string, uid = 1001): OperatorEntry {
+function entry(login: string, token: string, uid = 4000001): OperatorEntry {
   return { login, uid, verifier: operatorVerifier(token), issuedAt: "2026-10-04T00:00:00.000Z" };
 }
 
@@ -89,19 +89,19 @@ describe("tokens and verifiers", () => {
 
 describe("the file format", () => {
   it("round-trips, skipping comments and blank lines", () => {
-    const entries = [entry("alice", "a"), entry("bob", "b", 1002)];
+    const entries = [entry("alice", "a"), entry("bob", "b", 4000002)];
     expect(parseOperators(`${formatOperators(entries)}\n\n# trailing note\n`)).toEqual(entries);
   });
 
   it("refuses the whole file over one bad line, naming it", () => {
-    const good = `alice 1001 ${operatorVerifier("a")} 2026`;
+    const good = `alice 4000001 ${operatorVerifier("a")} 2026`;
     for (const [text, message] of [
-      [`${good}\nbob 1002 md5:abc 2026`, "line 2 is not"],
+      [`${good}\nbob 4000002 md5:abc 2026`, "line 2 is not"],
       [`bob x ${operatorVerifier("b")} 2026`, "line 1 is not"],
       [`-bob 1 ${operatorVerifier("b")} 2026`, "line 1 is not"],
       [`bob 1 ${operatorVerifier("b")}`, "line 1 is not"],
       [`bob 1 ${operatorVerifier("b")} 2026 extra`, "line 1 is not"],
-      [`${good}\nalice 1001 ${operatorVerifier("c")} 2027`, "line 2 names alice a second time"],
+      [`${good}\nalice 4000001 ${operatorVerifier("c")} 2027`, "line 2 names alice a second time"],
     ] as const) {
       expect(() => parseOperators(text), text).toThrow(message);
     }
@@ -208,7 +208,7 @@ describe("inspectOperatorsFile", () => {
 });
 
 describe("matchOperator", () => {
-  const entries = [entry("alice", "token-a"), entry("bob", "token-b", 1002)];
+  const entries = [entry("alice", "token-a"), entry("bob", "token-b", 4000002)];
 
   it("finds the login a token was issued to, among every entry", () => {
     expect(matchOperator(entries, "token-b")).toEqual(entries[1]);
@@ -223,7 +223,7 @@ describe("matchOperator", () => {
 });
 
 describe("openOperators", () => {
-  const open = (log = logger(), processUid = 4242) =>
+  const open = (log = logger(), processUid = 4000042) =>
     openOperators({ path: file, trustedOwnerUid: ME, processUid, logger: log });
 
   it("refuses to boot on an unsafe file, naming the fix", () => {
@@ -275,7 +275,7 @@ describe("openOperators", () => {
   });
 
   it("names its operators at boot, and warns when one shares the host's uid", () => {
-    write([entry("alice", "a", 1001), entry("svc", "s", 4242)]);
+    write([entry("alice", "a", 4000001), entry("svc", "s", 4000042)]);
     const log = logger();
     open(log);
     expect(log.info).toHaveBeenCalledWith("operators file read", {
@@ -284,12 +284,12 @@ describe("openOperators", () => {
     });
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("operator and Sessions are not separated"),
-      { operators: ["svc"], uid: 4242 },
+      { operators: ["svc"], uid: 4000042 },
     );
   });
 
   it("warns when the host runs as the file's owner, and stays quiet when separated", () => {
-    write([entry("alice", "a", 1001)]);
+    write([entry("alice", "a", 4000001)]);
     const asOwner = logger();
     open(asOwner, ME);
     expect(asOwner.warn).toHaveBeenCalledWith(

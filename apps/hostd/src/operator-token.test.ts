@@ -210,11 +210,11 @@ describe("the system ports", () => {
 
     expect(path).toBe(join(home, ".config", "volli", "operator-token"));
     expect(readFileSync(path, "utf8")).toBe("volli_op_abc\n");
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(join(home, ".config", "volli")).mode & 0o777).toBe(0o700);
     // A second issue replaces it in place.
     writeTokenAsUser(user, "volli_op_def", home);
     expect(readFileSync(path, "utf8")).toBe("volli_op_def\n");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(join(home, ".config", "volli")).mode & 0o777).toBe(0o700);
   });
 
   it("reports the child's failure as a sentence, and a refused spawn as itself", () => {
