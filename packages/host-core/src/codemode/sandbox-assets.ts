@@ -19,7 +19,7 @@
  *   import walk the real filesystem, which `app.asar` is not. Nothing here
  *   asks Node to resolve a package inside the archive, so no `app.asar` ->
  *   `app.asar.unpacked` rewrite is involved (compare `unpackedBinaryPath` in
- *   `../file-search.ts`).
+ *   `apps/desktop/src/main/file-search.ts`).
  *
  * Answered whether or not any Session has Code Mode, so a Session born with it
  * keeps a working sandbox. When the files are not there it logs why and

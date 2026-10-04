@@ -12,11 +12,14 @@ import {
   createCheckpointFailureReporter,
   createDesktopSessionEngine,
 } from "@volli/host-core/session-control";
+import type { HostEventBus } from "../ports";
 import { createDesktopSessionLocationResolver } from "./location";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 export interface DesktopSessionRuntimeOptions {
   db: Database.Database;
+  events: HostEventBus;
+  dataDir: string;
   transcriptDirectory: string;
   executor: NativeHarnessAdapter;
   sessionEngine?: SessionEngine;
@@ -54,7 +57,11 @@ export function createDesktopSessionRuntime(
       createDesktopSessionEngine(options.db, { now, nextId, onProjectionCheckpointFailure }),
     executor: options.executor,
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
-    locations: createDesktopSessionLocationResolver(options.db),
+    locations: createDesktopSessionLocationResolver(
+      options.db,
+      { events: options.events },
+      { dataDir: options.dataDir },
+    ),
     clock: { now },
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure,

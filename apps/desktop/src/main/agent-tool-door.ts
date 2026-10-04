@@ -68,13 +68,13 @@ import {
 import type { WatchToolPorts } from "./agent-watch";
 import type { Watches } from "./watches";
 import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
-import { StructuredSessionsError } from "./session-runtime/sessions";
-import { DelegateSessionError } from "./session-runtime/delegate-session";
-import type { Delegations } from "./session-runtime/delegate-session";
+import { StructuredSessionsError } from "@volli/host-core/session-runtime/sessions";
+import { DelegateSessionError } from "@volli/host-core/session-runtime/delegate-session";
+import type { Delegations } from "@volli/host-core/session-runtime/delegate-session";
 import type {
   TicketSessionDelegation,
   TicketSessionDelegationClaims,
-} from "./session-runtime/delegation-policy";
+} from "@volli/host-core/session-runtime/delegation-policy";
 import {
   mcpDisableTool,
   mcpEnableTool,
@@ -84,19 +84,28 @@ import {
   mcpRefreshTool,
   mcpRemoveTool,
   mcpToolsTool,
-} from "./mcp/verbs";
-import type { McpSettingsService } from "./mcp/settings";
-import type { McpVerbOptions } from "./mcp/verbs";
-import { optionalVerbText as optionalText, requiredVerbText as requiredText } from "./verb-input";
-import { sessionCreateCommandId } from "./session-runtime/sessions";
-import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
-import type { StartSessionModelChoice, StartSessionPorts } from "./session-runtime/start-session";
+} from "@volli/host-core/mcp/verbs";
+import type { McpSettingsService } from "@volli/host-core/mcp/settings";
+import type { McpVerbOptions } from "@volli/host-core/mcp/verbs";
+import {
+  optionalVerbText as optionalText,
+  requiredVerbText as requiredText,
+} from "@volli/host-core/verb-input";
+import { sessionCreateCommandId } from "@volli/host-core/session-runtime/sessions";
+import {
+  startSessionModelOverride,
+  startSessionOperation,
+} from "@volli/host-core/session-runtime/start-session";
+import type {
+  StartSessionModelChoice,
+  StartSessionPorts,
+} from "@volli/host-core/session-runtime/start-session";
 import {
   sendSessionMessageOperation,
   stopSessionOperation,
   SuperviseSessionError,
-} from "./session-runtime/supervise-session";
-import type { SuperviseSessionPorts } from "./session-runtime/supervise-session";
+} from "@volli/host-core/session-runtime/supervise-session";
+import type { SuperviseSessionPorts } from "@volli/host-core/session-runtime/supervise-session";
 
 /**
  * The Automation half of this door (VC-134): what a project lists, and the one

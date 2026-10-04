@@ -40,7 +40,7 @@ import type {
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
 } from "@volli/shared";
-import type { ModelAccessSignInBeginResult, Result } from "../../ipc/contract";
+import type { ModelAccessSignInBeginResult, Result } from "@volli/shared";
 
 /**
  * Where one attempt's updates go, and the only thing this service knows about

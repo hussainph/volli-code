@@ -5,7 +5,7 @@ model policy and its whole ledger are durable; only the binding to a process is
 over. This note is about the Sessions stranded by the boot-ordering defect
 fixed in VC-367, and about what a person does with one.
 
-Source: `apps/desktop/src/main/session-runtime/boot-recovery.ts`,
+Source: `packages/host-core/src/session-runtime/boot-recovery.ts`,
 `packages/session-presentation/src/client.ts`.
 
 ## What went wrong

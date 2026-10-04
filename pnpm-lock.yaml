@@ -502,6 +502,9 @@ importers:
 
   packages/host-core:
     dependencies:
+      '@earendil-works/pi-mcp':
+        specifier: 0.99.2
+        version: 0.99.2
       '@volli/agent-runtime':
         specifier: workspace:*
         version: link:../agent-runtime
@@ -521,15 +524,21 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
     devDependencies:
-      ai:
-        specifier: ^7.0.83
-        version: 7.0.84(zod@4.4.3)
+      '@earendil-works/pi-codemode':
+        specifier: 1.0.0
+        version: 1.0.0(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
       '@types/node':
         specifier: 'catalog:'
         version: 26.3.0
+      ai:
+        specifier: ^7.0.83
+        version: 7.0.84(zod@4.4.3)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

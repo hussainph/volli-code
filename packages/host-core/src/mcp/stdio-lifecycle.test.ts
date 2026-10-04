@@ -171,7 +171,7 @@ describe.skipIf(process.platform === "win32")("stdio MCP server lifecycle", () =
     const pidFile = join(dir, "quit-pids.json");
     const child = spawn(process.execPath, [QUITTING_HOST, WRAPPER, SERVER, pidFile], {
       stdio: ["ignore", "pipe", "pipe"],
-      cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+      cwd: fileURLToPath(new URL("../../../../apps/desktop/", import.meta.url)),
     });
     const exited = new Promise<number | null>((resolve) => child.on("exit", resolve));
     let output = "";

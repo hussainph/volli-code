@@ -55,7 +55,7 @@ directories:
 # (vite.config.ts) — but reaches BY PATH: a worker thread started from
 # pi-codemode's own dist/runtime/worker.js, which imports quickjs-wasi, and
 # the quickjs.wasm the host compiles for it (see asarUnpack below and
-# src/main/codemode/sandbox-assets.ts). Only pi-codemode is kept from its
+# packages/host-core/src/codemode/sandbox-assets.ts). Only pi-codemode is kept from its
 # scope; the rest of @earendil-works is bundled. The extglob negation below
 # drops the other ~500 collected packages (~400 MB: monaco, mermaid, icon
 # packs, AI SDK providers — all renderer-only or already bundled). KEEP IN
@@ -146,7 +146,7 @@ asarUnpack:
   # and the host reads quickjs.wasm from the same unpacked copy the worker's
   # import lands on. Main starts from `process.resourcesPath/app.asar.unpacked`
   # itself and resolves the wasm from the unpacked worker's own path
-  # (src/main/codemode/sandbox-assets.ts) — never through the archive, so no
+  # (packages/host-core/src/codemode/sandbox-assets.ts) — never through the archive, so no
   # asar path rewrite is needed.
   # Miss either entry and every Code Mode run in the packaged app fails as a
   # sandbox error while `pnpm start`, which reads the pnpm store, keeps working.

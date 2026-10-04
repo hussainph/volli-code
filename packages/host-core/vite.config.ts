@@ -44,6 +44,8 @@ export default defineConfig({
         // missed no-clobber branch overwrites what a person put in their own
         // login shell. Neither is visible anywhere until the laptop swaps.
         "src/session-concurrency.ts",
+        "src/session-runtime/boot-recovery.ts",
+        "src/session-runtime/sessions.ts",
         "src/session-control/activity-watch.ts",
         // The turn boundary that decides unread (VC-30), beside the watch it
         // decorates: main is the only process that knows both that a turn ended

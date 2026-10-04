@@ -74,7 +74,12 @@ describe("the boot order recovery depends on", () => {
     // it is what keeps a failed recovery from projecting as a live Session, and
     // it is the reason this bug degraded instead of corrupting.
     const recovery = readFileSync(
-      fileURLToPath(new URL("./boot-recovery.ts", import.meta.url)),
+      fileURLToPath(
+        new URL(
+          "../../../../../packages/host-core/src/session-runtime/boot-recovery.ts",
+          import.meta.url,
+        ),
+      ),
       "utf8",
     );
     expect(recovery).toContain("options.onError(attachment.id, error)");

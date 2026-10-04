@@ -30,7 +30,7 @@ import type {
   KeyedWebAccessProvider,
   WebAccessProvider,
   WebAccessSettingsView,
-} from "../../ipc/contract";
+} from "@volli/shared";
 import type { WebCredentialStore } from "./credential";
 
 export type { KeyedWebAccessProvider, WebAccessProvider, WebAccessSettingsView };

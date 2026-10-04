@@ -122,7 +122,7 @@ import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { syncProjectRoots } from "@volli/host-core/project-roots";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */

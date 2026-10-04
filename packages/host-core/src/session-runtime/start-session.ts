@@ -58,7 +58,7 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
-import type { SessionStartedNotice } from "../../ipc/contract";
+import type { SessionStartedNotice } from "@volli/shared";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";

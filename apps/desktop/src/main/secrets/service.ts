@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { SecretRequestMetadata, SecretScope } from "@volli/shared";
 import type { SecretsResult } from "../../ipc/secrets";
-import { isSecretName, type SecretStore } from "@volli/host-core/secrets";
+import { isSecretName, type SecretStore, type SecretWaitPublisher } from "@volli/host-core/secrets";
+export type { SecretWaitPublisher } from "@volli/host-core/secrets";
 
 interface SecretOwner {
   sessionId: string;
@@ -10,10 +11,6 @@ interface SecretOwner {
   projectLabel: string;
 }
 type Outcome = "signed in" | "declined" | "still missing";
-export interface SecretWaitPublisher {
-  opened(metadata: SecretRequestMetadata): Promise<void>;
-  settled(metadata: SecretRequestMetadata, outcome: Outcome): Promise<void>;
-}
 interface Pending {
   metadata: SecretRequestMetadata;
   settle: (outcome: Outcome, announce?: boolean) => Promise<void>;

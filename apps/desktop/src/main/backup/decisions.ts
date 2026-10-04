@@ -27,7 +27,7 @@
  */
 
 import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
-import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";

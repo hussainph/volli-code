@@ -675,7 +675,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
-        "**/src/main/session-runtime/boot-recovery.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
@@ -686,7 +685,6 @@ export default defineConfig(({ mode }) => ({
         "**/packages/host-core/src/db/export.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
-        "**/src/main/session-runtime/sessions.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

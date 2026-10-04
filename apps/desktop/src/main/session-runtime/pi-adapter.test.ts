@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { dirname, join } from "node:path";
 import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
-import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
-import { closeStaleAttachments } from "./boot-recovery";
+import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
+import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
 import { randomUUID } from "node:crypto";
 import { SecretService } from "../secrets/service";
 import { SecretStore } from "@volli/host-core/secrets";
@@ -54,7 +54,7 @@ import {
   PI_ADAPTER_ID,
   type PiAdapterOptions,
   type PiRuntimeContext,
-} from "./pi-adapter";
+} from "@volli/host-core/session-runtime/pi-adapter";
 
 const SESSION_ID = "session-1";
 const ATTACHMENT_ID = "attachment-1";
