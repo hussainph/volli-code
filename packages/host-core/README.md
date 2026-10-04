@@ -199,10 +199,10 @@ the database, and seals the file through a `SecretKeyPort` that the host passes
 to its constructor. It is not on `HostCorePorts`, because the store is built by
 the host, next to the services that use it.
 
-| Host    | Passes                                                         | Envelope |
-| ------- | -------------------------------------------------------------- | -------- |
-| Desktop | `keychainSecretCodec(safeStorage)`, unchanged since VC-481     | `VSC1`   |
-| `hostd` | `fileSecretKey({ path: secretKeyFilePath(dataDir) })`          | `VSF1`   |
+| Host    | Passes                                                     | Envelope |
+| ------- | ---------------------------------------------------------- | -------- |
+| Desktop | `keychainSecretCodec(safeStorage)`, unchanged since VC-481 | `VSC1`   |
+| `hostd` | `fileSecretKey({ path: secretKeyFilePath(dataDir) })`      | `VSF1`   |
 
 The file key is `<dataDir>/session-secrets.key`, or the absolute path in
 `VOLLI_SECRET_KEY_FILE`. It is created atomically with mode 0600 the first

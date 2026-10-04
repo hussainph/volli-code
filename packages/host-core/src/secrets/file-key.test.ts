@@ -115,7 +115,10 @@ function expectRefused(
 ): SecretKeyUnavailableError {
   const error = refusal(run);
   expect(error).toBeInstanceOf(SecretKeyUnavailableError);
-  expect(error).toMatchObject({ name: "SecretKeyUnavailableError", code: "secret-key-unavailable" });
+  expect(error).toMatchObject({
+    name: "SecretKeyUnavailableError",
+    code: "secret-key-unavailable",
+  });
   expect(error.reason).toBe(reason);
   expect(error.message).toMatch(says);
   return error;
@@ -397,7 +400,10 @@ describe("a key file Volli cannot use", () => {
   it.each([
     ["garbage", "not a key at all\n"],
     ["a short key", `${Buffer.alloc(16, 1).toString("base64")}\n`],
-    ["two keys", `${Buffer.alloc(32, 1).toString("base64")}\n${Buffer.alloc(32, 2).toString("base64")}\n`],
+    [
+      "two keys",
+      `${Buffer.alloc(32, 1).toString("base64")}\n${Buffer.alloc(32, 2).toString("base64")}\n`,
+    ],
     ["an oversized file", "A".repeat(4096)],
   ])("refuses %s, without quoting it", (_label, content) => {
     writeFileSync(keyPath, content, { mode: 0o600 });

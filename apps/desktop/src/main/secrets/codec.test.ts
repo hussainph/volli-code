@@ -71,7 +71,10 @@ describe("existing keychain ciphertext (VC-559: macOS unchanged)", () => {
     const dir = mkdtempSync(join(tmpdir(), "volli-keychain-fixture-"));
     try {
       const fileSealed = fileSecretKey({ path: join(dir, "key") }).encryptString("headless");
-      const keychain = { ...FIXTURE_KEYCHAIN, decryptString: vi.fn(FIXTURE_KEYCHAIN.decryptString) };
+      const keychain = {
+        ...FIXTURE_KEYCHAIN,
+        decryptString: vi.fn(FIXTURE_KEYCHAIN.decryptString),
+      };
       expect(() => keychainSecretCodec(keychain).decryptString(fileSealed)).toThrow(
         "Invalid secret storage.",
       );
