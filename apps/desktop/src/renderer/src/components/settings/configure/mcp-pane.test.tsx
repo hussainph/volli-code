@@ -778,6 +778,39 @@ describe("adding a server", () => {
     expect(discardDraft).toHaveBeenCalledWith({ projectId: project.id, serverId: draftId });
   });
 
+  it("clears a rejected draft sign-in, shows the failure and allows another attempt", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const signIn = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ok: true });
+    const test = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "needs sign-in",
+        blocked: { kind: "sign-in", insufficientScope: false },
+      })
+      .mockResolvedValueOnce({ ok: true, catalog });
+    await render({ list: listing([]), test, signIn });
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.sentry.dev/mcp");
+    await click(button("Connect", dialog()));
+    await click(button("Sign in", dialog()));
+    expect(dialog().textContent).toContain("Waiting for the browser");
+    expect(dialog().querySelector("#mcp-url")?.matches(":disabled")).toBe(true);
+
+    await act(async () => pending.reject(new Error("IPC unavailable")));
+
+    expect(dialog().textContent).not.toContain("Waiting for the browser");
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not sign in. Try again.",
+    );
+    expect(button("Sign in", dialog()).disabled).toBe(false);
+    expect(dialog().querySelector("#mcp-url")?.matches(":disabled")).toBe(false);
+    await click(button("Sign in", dialog()));
+    expect(signIn).toHaveBeenCalledTimes(2);
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    expect(dialog().textContent).toContain("Connected · 1 tool");
+  });
+
   it("cancels a sign-in still waiting on the browser", async () => {
     const test = vi.fn(async () => ({
       ok: false as const,
@@ -915,6 +948,39 @@ describe("sign-in and credentials (VC-470)", () => {
     await click(button("Sign out", dialog()));
     expect(signOut).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["row", "saved dialog"] as const)(
+    "recovers from a rejected sign-in in the %s",
+    async (surface) => {
+      const pending = Promise.withResolvers<unknown>();
+      const signIn = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce({ ok: true });
+      await render({
+        list: listing([remote()], {
+          access: { "remote-1": { signIn: "needs-sign-in", missingSecrets: [] } },
+        }),
+        signIn,
+      });
+      if (surface === "saved dialog") await click(labelled("Open Sentry"));
+      const scope = surface === "row" ? document.body : dialog();
+      await click(button("Sign in", scope));
+      expect(text()).toContain(surface === "row" ? "Signing in…" : "Waiting for the browser");
+
+      await act(async () => pending.reject(new Error("IPC unavailable")));
+
+      expect(text()).not.toContain("Signing in…");
+      expect(text()).not.toContain("Waiting for the browser");
+      expect(scope.querySelector('[role="alert"]')?.textContent).toBe(
+        "Could not sign in. Try again.",
+      );
+      expect(button("Sign in", scope).disabled).toBe(false);
+      await click(button("Sign in", scope));
+      expect(signIn).toHaveBeenCalledTimes(2);
+      expect(scope.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
 
   it("shows a sign-in waiting on the browser on its row, with Cancel", async () => {
     let finish: ((value: unknown) => void) | undefined;
