@@ -84,7 +84,7 @@ overrides:
   vite: "catalog:"
   # VC-598 / GHSA-p98j-92pf-mc4p: Monaco 0.57.0 pins vulnerable 3.4.15
   # exactly, so re-resolution cannot select patched 3.4.16. Latest stable
-  # Monaco is still 0.57.0; scope this patch override to that parent only.
+  # Monaco is still 0.57.0; scope this version override to that parent only.
   # Remove when a stable Monaco update declares a patched DOMPurify.
   # This fixes its npm dependency, NOT Monaco's embedded DOMPurify source;
   # that separate upstream blocker is tracked on VC-600.

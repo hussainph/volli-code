@@ -12939,7 +12939,7 @@ in pnpm-workspace.yaml. The patch files are in the repository and state the chan
   @earendil-works/pi-codemode@1.0.0 — patches/@earendil-works__pi-codemode@1.0.0.patch
 
 =========================================================================================================
-9. ADDITIONAL NOTICES (1)
+9. ADDITIONAL NOTICES (2)
 =========================================================================================================
 
 Notices for material no package manifest describes: data bundled inside a package,
@@ -12996,6 +12996,31 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+=========================================================================================================
+Notice: DOMPurify embedded in Monaco Editor
+Source:
+  monaco-editor@0.57.0 esm/vs/base/browser/dompurify/dompurify.js license header and
+  domSanitize.js import; separate from the overridden npm dependency (VC-598, VC-600).
+---------------------------------------------------------------------------------------------------------
+Monaco Editor 0.57.0 embeds DOMPurify 3.4.15 in
+esm/vs/base/browser/dompurify/dompurify.js, imported by domSanitize.js.
+This source is part of Volli Code's bundled Monaco renderer. It is separate
+from Monaco's npm DOMPurify dependency, which resolves to 3.4.16.
+
+The embedded source carries this notice:
+
+/*! @license DOMPurify 3.4.15 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.15/LICENSE */
+
+Volli elects Apache-2.0 for this dual-licensed source, as for the npm
+DOMPurify dependency. The full Apache-2.0 and MPL-2.0 license texts are
+reproduced in the DOMPurify license group of THIRD-PARTY-NOTICES; those
+texts are identical in DOMPurify 3.4.15 and 3.4.16.
+
+Upstream: https://github.com/cure53/DOMPurify/tree/3.4.15
+Security follow-up: VC-600. The npm version override does not patch this
+embedded source. Refresh this notice when Monaco's embedded source changes.
 
 
 =========================================================================================================
