@@ -20,6 +20,7 @@ import {
 } from "./session-event-codec";
 import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
+import { mcpProviderToolName } from "./mcp";
 import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type {
   CommandReceipt,
@@ -778,6 +779,56 @@ const resolved = (resolution: unknown) =>
     },
     "payload",
   );
+
+describe("frozen MCP dialect replay (VC-621)", () => {
+  it.each([
+    "",
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2020-12/meta/core",
+    "https://json-schema.org/draft/2020-12/meta/applicator",
+    "https://json-schema.org/draft/2020-12/meta/validation",
+    "https://json-schema.org/draft/2020-12/meta/unevaluated",
+    "https://json-schema.org/draft/2020-12/meta/format-annotation",
+    "https://json-schema.org/draft/2020-12/meta/content",
+    "https://json-schema.org/draft/2020-12/meta/meta-data",
+    "http://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft/2019-09/schema",
+  ])("replays %s without changing the frozen input or output schema", ($schema) => {
+    const inputSchema = {
+      $schema,
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    };
+    const providerName = mcpProviderToolName("fixture", "Fixture", "query");
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: [providerName],
+        mcpTools: [
+          {
+            serverId: "fixture",
+            toolName: "query",
+            providerName,
+            description: "Query",
+            inputSchema,
+            outputSchema: inputSchema,
+          },
+        ],
+      },
+    };
+    const wire = JSON.parse(encodeSessionJson(payload));
+    const decoded = decodeSessionEventPayload(wire, "payload");
+    expect(decoded).toEqual(payload);
+    expect(encodeSessionJson(decoded)).toBe(encodeSessionJson(payload));
+    // This checks the ordinary renderer decoder, not CSP execution (VC-636).
+    expect(parseRendererSessionEvent(rendererEvent({ payload: wire }), "event")).toMatchObject({
+      ok: true,
+      event: { payload },
+    });
+  });
+});
 
 describe("decodeSessionEventPayload tolerance and corruption", () => {
   it("reads a stopped-run Attention written before `resetsAt` existed as stating no reset", () => {
