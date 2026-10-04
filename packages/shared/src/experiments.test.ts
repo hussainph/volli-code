@@ -31,11 +31,22 @@ describe("experimental registry", () => {
     }
   });
 
-  it("reads a trimmed deduplicated opt-in list and rejects an unknown env id", () => {
-    expect(parseExperimentEnvironment(undefined)).toEqual([]);
-    expect(parseExperimentEnvironment("")).toEqual([]);
-    expect(parseExperimentEnvironment(" cloud, ,cloud ")).toEqual(["cloud"]);
-    expect(() => parseExperimentEnvironment("cloud,other")).toThrow("Unknown experiment: other");
+  it("reads case-insensitive, trimmed, deduplicated opt-ins and reports unknown env ids", () => {
+    expect(parseExperimentEnvironment(undefined)).toEqual({ ids: [], unknownIds: [] });
+    expect(parseExperimentEnvironment("")).toEqual({ ids: [], unknownIds: [] });
+    expect(parseExperimentEnvironment(" cloud, ,Cloud ")).toEqual({
+      ids: ["cloud"],
+      unknownIds: [],
+    });
+    expect(parseExperimentEnvironment("Cloud")).toEqual({ ids: ["cloud"], unknownIds: [] });
+    expect(parseExperimentEnvironment("cloud,retired-flag")).toEqual({
+      ids: ["cloud"],
+      unknownIds: ["retired-flag"],
+    });
+    expect(parseExperimentEnvironment(" retired-flag, RETIRED-FLAG,other ")).toEqual({
+      ids: [],
+      unknownIds: ["retired-flag", "other"],
+    });
   });
 
   it("ignores stored unknown ids without losing known settings", () => {

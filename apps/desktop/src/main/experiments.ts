@@ -30,7 +30,13 @@ export class ExperimentalSettings {
     environment: string | undefined,
     private readonly now: () => number = Date.now,
   ) {
-    this.#environment = parseExperimentEnvironment(environment);
+    const parsed = parseExperimentEnvironment(environment);
+    this.#environment = parsed.ids;
+    if (parsed.unknownIds.length > 0) {
+      console.warn(
+        `[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: ${parsed.unknownIds.join(", ")}`,
+      );
+    }
     this.#stored = readStoredExperiments(
       db === null ? undefined : getAppState(db, EXPERIMENTS_APP_STATE_KEY),
     );

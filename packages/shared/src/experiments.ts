@@ -30,24 +30,36 @@ export type ExperimentSnapshot = Record<
   { enabled: boolean; source: "default" | "storage" | "environment" }
 >;
 
-/** Commands and environment configuration are strict; durable reads are tolerant. */
+/** Code APIs and commands are strict; environment and durable reads are tolerant. */
 export function requireExperimentId(id: unknown): ExperimentId {
   const known = EXPERIMENTS.find((entry) => entry.id === id);
   if (!known) throw new Error(`Unknown experiment: ${String(id)}`);
   return known.id;
 }
 
-/** A comma-separated opt-in list, read once by the host at boot, packaged or not. */
-export function parseExperimentEnvironment(value: string | undefined): readonly ExperimentId[] {
-  return [
-    ...new Set(
-      (value ?? "")
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean)
-        .map(requireExperimentId),
-    ),
-  ];
+/**
+ * A case-insensitive opt-in list, read once at boot, packaged or not.
+ * Retired or unknown ids must not prevent launch; the host warns once about
+ * the returned unknown list, keeping logging out of this pure registry.
+ */
+export function parseExperimentEnvironment(value: string | undefined): {
+  ids: readonly ExperimentId[];
+  unknownIds: readonly string[];
+} {
+  const ids: ExperimentId[] = [];
+  const unknownIds: string[] = [];
+  const requested = new Set(
+    (value ?? "")
+      .split(",")
+      .map((id) => id.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  for (const id of requested) {
+    const known = EXPERIMENTS.find((entry) => entry.id === id);
+    if (known) ids.push(known.id);
+    else unknownIds.push(id);
+  }
+  return { ids, unknownIds };
 }
 
 /** The opaque storage record, including fields a newer build may own. */

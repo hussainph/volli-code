@@ -21,6 +21,7 @@ afterEach(() => {
   ctx?.cleanup();
   ctx = undefined;
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 function boot(environment?: string): ExperimentalSettings {
@@ -99,9 +100,38 @@ describe("experimental host settings", () => {
     ).toBe(false);
   });
 
-  it("rejects unknown environment ids, reader ids and commands before writing", async () => {
+  it("ignores retired environment ids with one warning and still enables known flags", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("VOLLI_EXPERIMENTAL", "cloud,retired-flag");
+    expect(() => boot(process.env["VOLLI_EXPERIMENTAL"])).not.toThrow();
+    expect(readExperiments().cloud).toEqual({ enabled: true, source: "environment" });
+    expect(isExperimentEnabled("cloud")).toBe(true);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: retired-flag",
+    );
+    expect(getAppState(ctx!.db, EXPERIMENTS_APP_STATE_KEY)).toBeUndefined();
+  });
+
+  it("matches environment ids case-insensitively without warning for known ids", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("VOLLI_EXPERIMENTAL", "Cloud");
+    boot(process.env["VOLLI_EXPERIMENTAL"]);
+    expect(readExperiments().cloud).toEqual({ enabled: true, source: "environment" });
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("keeps flags dark for unknown-only env ids and groups warnings once at boot", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    boot(" Retired-Flag,retired-flag,other ");
+    expect(isExperimentEnabled("cloud")).toBe(false);
+    expect(readExperiments().cloud.source).toBe("default");
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: retired-flag, other",
+    );
+  });
+
+  it("rejects unknown reader ids and commands before writing", async () => {
     boot();
-    expect(() => new ExperimentalSettings(ctx!.db, "other")).toThrow("Unknown experiment");
     // @ts-expect-error Runtime clients cannot bypass the registry either.
     expect(() => isExperimentEnabled("other")).toThrow("Unknown experiment");
     // @ts-expect-error Runtime commands are validated as well as typed.

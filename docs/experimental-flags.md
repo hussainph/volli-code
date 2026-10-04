@@ -28,9 +28,13 @@ No schema migration is needed. Device-scoped flags are device-local, never
 portable workspace preferences; the registry carries each flag's scope.
 
 `VOLLI_EXPERIMENTAL=cloud` opts in at boot in both dev and packaged builds.
-The value is a comma-separated list of registered ids; whitespace and duplicate
-ids are accepted, unknown ids are rejected. Only listed flags are overridden;
-an empty or absent variable leaves storage/defaults in effect. The environment
+The value is a comma-separated list of ids, trimmed and matched case-insensitively
+(`Cloud` enables `cloud`); duplicate ids are accepted. Unknown or retired env ids
+are ignored and logged together in one warning at boot, never a launch failure.
+For example, `VOLLI_EXPERIMENTAL=cloud,retired-flag` enables cloud and warns about
+`retired-flag`. Code APIs and RPC commands still reject unknown ids strictly.
+Only listed registered flags are overridden; an empty or absent variable leaves
+storage/defaults in effect. The environment
 is captured once, never persisted, and wins over stored `false`. Settings shows
 **Set by environment** and disables that toggle. The host also refuses a write
 to an environment-controlled flag.
