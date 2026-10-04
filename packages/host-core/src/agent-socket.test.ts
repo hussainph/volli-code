@@ -398,6 +398,26 @@ describe("agent socket", () => {
     });
   });
 
+  it("refuses an operator token that is not a string before anything executes (VC-623)", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    const execute = vi.fn(async (): Promise<AgentResponse> => ({ v: 1, ok: true, data: {} }));
+    server = await startAgentSocket({ socketPath, execute });
+
+    expect(
+      await rawRoundTrip(
+        socketPath,
+        JSON.stringify({
+          v: 1,
+          cmd: "board",
+          args: {},
+          ctx: { cwd: "/repo/volli", env: { operatorToken: { forged: true } } },
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "SOCKET_PROTOCOL" } });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("still writes the reply after the client half-closes, even when execute awaits", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");

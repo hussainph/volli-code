@@ -73,6 +73,18 @@ export interface AgentRequestContext {
      * the unauthenticated actor.
      */
     token?: string;
+    /**
+     * A hostd-issued operator token (VC-623): proof that the PERSON is at the
+     * host's shell, from `VOLLI_OPERATOR_TOKEN` or the operator's own 0600
+     * token file.
+     *
+     * Weaker in precedence than everything above, on purpose. The door never
+     * reads it when {@link token} is present, and refuses to reconcile it with
+     * a {@link session} claim, so a request carrying Session evidence is judged
+     * exactly as it was before this field existed. A host that verifies no
+     * operator tokens (desktop) ignores it.
+     */
+    operatorToken?: string;
     ticket?: string;
     socket?: string;
   };

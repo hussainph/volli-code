@@ -282,6 +282,9 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
     "worktree.sync": { ticket: "VC-1" },
     conflicts: { project: "/repo/volli" },
     "project.list": {},
+    // A Session is refused at admission (VC-623), which is exactly the point:
+    // the person's verb never reaches a handler that could fold anything.
+    "project.add": { id: "/repo/volli" },
     "label.list": { project: "/repo/volli" },
     "label.merge": { project: "/repo/volli", from: "bug", into: "defect" },
     "model.list": {},

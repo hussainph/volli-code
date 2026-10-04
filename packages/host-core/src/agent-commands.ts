@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 
 import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
 import type {
+  AgentRequest,
   AgentResponse,
   SessionProjection,
   SessionRecord,
@@ -31,6 +32,7 @@ import { coordinationRefusal } from "./agent-dispatch/admission";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
+import type { DoorActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, listProjects } from "@volli/host-core/db/projects-repo";
 import { terminalSessionRecord } from "@volli/host-core/session-control";
 import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
@@ -118,7 +120,7 @@ export function createAgentCommandService(
       // Identity first, and it costs a map lookup: no database, no Session
       // Engine. That is what lets the `hook` hot path be judged without paying
       // for the identity resolution its table entry deliberately skips.
-      const door = doorActor(request, verifyToken);
+      const door = doorActor(request, verifyToken, options.verifyOperatorToken);
       const projects = listProjects(options.db);
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
@@ -185,7 +187,7 @@ export function createAgentCommandService(
       // registry declaration, so a verb added later is judged by what it
       // declares rather than by whether someone remembered to list it.
       const refusal = coordinationRefusal(readPolicy, projects, envSession, request, door);
-      if (refusal !== null) return refusal;
+      if (refusal !== null) return auditOperatorWrite(door, request, refusal);
       // Attribution is resolved only for a verb that will WRITE attributed
       // history — a coordination verb whose table entry also resolved the
       // identity. Both halves of that condition are load-bearing:
@@ -198,7 +200,8 @@ export function createAgentCommandService(
       //   `session.link`, `session.harness`) resolve their own terminal record
       //   and write no ticket history, so they need no attribution either.
       let actor: TicketEventActor | null = null;
-      if (binding.envSession === "resolve" && verbEntry(request.cmd)?.actor === "session") {
+      const writer = verbEntry(request.cmd)?.actor;
+      if (binding.envSession === "resolve" && (writer === "session" || writer === "user")) {
         const resolved = requestActor(door, envSession);
         if (!resolved.ok) return resolved.response;
         actor = resolved.actor;
@@ -221,7 +224,28 @@ export function createAgentCommandService(
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
       };
-      return binding.handle(context, request);
+      return auditOperatorWrite(door, request, await binding.handle(context, request));
     },
   };
+
+  /**
+   * Reports an operator's write to the host's audit line (VC-623), and hands
+   * the response back untouched. A read is not reported: the audit is of what
+   * the person CHANGED, and a busy operator's `ticket list` is not that.
+   */
+  function auditOperatorWrite(
+    door: DoorActor,
+    request: AgentRequest,
+    response: AgentResponse,
+  ): AgentResponse {
+    if (door.kind === "operator" && verbEntry(request.cmd)?.actor !== "any") {
+      options.onOperatorWrite?.({
+        login: door.login,
+        cmd: request.cmd,
+        ok: response.ok,
+        code: response.ok ? null : response.error.code,
+      });
+    }
+    return response;
+  }
 }

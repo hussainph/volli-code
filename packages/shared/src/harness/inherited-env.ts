@@ -26,6 +26,7 @@ import {
   VOLLI_SOCKET_ENV,
   VOLLI_TICKET_ENV,
 } from "../volli-dir";
+import { VOLLI_OPERATOR_TOKEN_ENV } from "../operator-token";
 import { VOLLI_BIN_DIR_ENV } from "./shell-init";
 import type { HarnessAdapter } from "./types";
 
@@ -52,6 +53,11 @@ import type { HarnessAdapter } from "./types";
  * own. Dropping it is also what keeps the no-clobber rule honest — the budget
  * is only ever skipped for a value a person set, never for one Volli itself
  * exported a launch ago.
+ *
+ * `VOLLI_OPERATOR_TOKEN` is here for the reason the Session token is, turned
+ * around (VC-623): it proves a PERSON, and a terminal Volli spawns is where a
+ * Session runs. An operator who exported it in the shell that launched the host
+ * must not hand every Session that host starts a way to write as them.
  */
 const VOLLI_SESSION_CONTRACT: readonly string[] = [
   VOLLI_SESSION_ENV,
@@ -62,6 +68,7 @@ const VOLLI_SESSION_CONTRACT: readonly string[] = [
   VOLLI_PROJECT_DIR_ENV,
   VOLLI_BIN_DIR_ENV,
   VOLLI_CONCURRENCY_HINT_ENV,
+  VOLLI_OPERATOR_TOKEN_ENV,
 ];
 
 /**
