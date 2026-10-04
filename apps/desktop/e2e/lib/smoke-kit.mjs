@@ -322,7 +322,7 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
  * and return its path for `extraEnv.SHELL`.
  *
  * Why any probe needs this: since VC-94 the app does not run on the PATH it was
- * launched with. At boot `main/login-path-adoption.ts` asks `$SHELL -l [-i] -c
+ * launched with. At boot `@volli/host-core`'s `login-path-adoption.ts` asks `$SHELL -l [-i] -c
  * 'printf __VOLLI_PATH__; printenv PATH'` and installs the UNION of that answer
  * and the launch PATH, with the LOGIN entries FIRST. So a smoke that prepends a
  * scratch bin dir to `extraEnv.PATH` to shadow a real binary no longer shadows

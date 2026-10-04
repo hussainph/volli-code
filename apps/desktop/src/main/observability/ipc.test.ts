@@ -17,9 +17,9 @@ vi.mock("electron", () => ({
 }));
 
 import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
-import { AgentObservability } from "./settings";
+import { AgentObservability } from "@volli/host-core/observability/settings";
 import { registerAgentObservabilityIpcHandlers } from "./ipc";
-import type { ObservabilityExporter } from "./sink";
+import type { ObservabilityExporter } from "@volli/host-core/observability/sink";
 
 const inertExporter: ObservabilityExporter = {
   export: () => {},
