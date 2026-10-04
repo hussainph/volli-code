@@ -9,14 +9,9 @@
 import { execFile } from "node:child_process";
 import { existsSync, statSync, watch as fsWatch } from "node:fs";
 import { join } from "node:path";
-import type { WebContents } from "electron";
+import type { HostClientEventSink } from "../ports";
 import { WORKTREE_MISSING_ON_DISK } from "@volli/shared";
-import type {
-  Result,
-  VolliIpcEvent,
-  WorktreeChangedEvent,
-  WorktreeWatchErrorEvent,
-} from "../../ipc/contract";
+import type { WorktreeChangedEvent, WorktreeWatchErrorEvent } from "@volli/shared";
 import {
   GIT_COMMAND_TIMEOUT_MS,
   GIT_MAX_BUFFER,
@@ -25,6 +20,8 @@ import {
   withGitChildSlot,
 } from "./git";
 import type { RunGitAsync } from "./types";
+
+type Result = { ok: true } | { ok: false; error: string };
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;
@@ -73,7 +70,7 @@ export type WorktreeWatchFn = (
 ) => WorktreeWatchHandle;
 
 interface WorktreeWatchSubscriber {
-  webContents: WebContents;
+  client: HostClientEventSink;
   ticketId: string;
   root: SharedWorktreeWatch;
   /** Only foreground subscribers receive change broadcasts. */
@@ -304,8 +301,8 @@ export class WorktreeChangeWatchManager {
     this.now = options.now ?? Date.now;
   }
 
-  private keyFor(webContents: WebContents, ticketId: string): string {
-    return `${webContents.id}:${ticketId}`;
+  private keyFor(client: HostClientEventSink, ticketId: string): string {
+    return `${client.id}:${ticketId}`;
   }
 
   /**
@@ -329,14 +326,18 @@ export class WorktreeChangeWatchManager {
    * that subscriber to the new root; the old recursive watcher survives only
    * when another subscriber still references it.
    */
-  async watch(webContents: WebContents, ticketId: string, worktreePath: string): Promise<Result> {
-    const key = this.keyFor(webContents, ticketId);
+  async watch(
+    client: HostClientEventSink,
+    ticketId: string,
+    worktreePath: string,
+  ): Promise<Result> {
+    const key = this.keyFor(client, ticketId);
     const existing = this.subs.get(key);
     if (existing) {
       if (existing.root.worktreePath === worktreePath) return { ok: true };
       this.teardownSubscriber(key);
     }
-    if (webContents.isDestroyed()) {
+    if (client.isClosed()) {
       return { ok: false, error: "This window is closing, so its worktree watch was not started." };
     }
 
@@ -369,7 +370,7 @@ export class WorktreeChangeWatchManager {
     }
 
     const sub: WorktreeWatchSubscriber = {
-      webContents,
+      client,
       ticketId,
       root,
       active: true,
@@ -378,7 +379,7 @@ export class WorktreeChangeWatchManager {
     this.subs.set(key, sub);
     root.subscribers.set(key, sub);
     root.knownTickets.add(ticketId);
-    webContents.once("destroyed", sub.onDestroyed);
+    client.onceClosed(sub.onDestroyed);
     return this.ensureRootArmed(root);
   }
 
@@ -435,16 +436,16 @@ export class WorktreeChangeWatchManager {
   }
 
   /** Releases one subscriber and closes its root only when the refcount hits zero. */
-  unwatch(webContents: WebContents, ticketId: string): void {
+  unwatch(client: HostClientEventSink, ticketId: string): void {
     // The renderer's own release: a rail page flip or a StrictMode remount may
     // replace this subscriber in the same commit, so the root waits out the
     // rewatch grace before closing (VC-372).
-    this.teardownSubscriber(this.keyFor(webContents, ticketId), { linger: true });
+    this.teardownSubscriber(this.keyFor(client, ticketId), { linger: true });
   }
 
   /** Pauses one background subscriber and the OS watcher if no foreground ref remains. */
-  pause(webContents: WebContents, ticketId: string): Result {
-    const sub = this.subs.get(this.keyFor(webContents, ticketId));
+  pause(client: HostClientEventSink, ticketId: string): Result {
+    const sub = this.subs.get(this.keyFor(client, ticketId));
     if (!sub) return { ok: false, error: "This worktree watch is not subscribed." };
     sub.active = false;
     if (!this.hasActiveSubscribers(sub.root)) this.disarmRoot(sub.root);
@@ -452,17 +453,17 @@ export class WorktreeChangeWatchManager {
   }
 
   /** Re-arms a paused root and sends this subscriber one catch-up refresh. */
-  async resume(webContents: WebContents, ticketId: string): Promise<Result> {
-    const key = this.keyFor(webContents, ticketId);
+  async resume(client: HostClientEventSink, ticketId: string): Promise<Result> {
+    const key = this.keyFor(client, ticketId);
     const sub = this.subs.get(key);
     if (!sub) return { ok: false, error: "This worktree watch is not subscribed." };
     if (sub.active) return { ok: true };
     sub.active = true;
     const result = await this.ensureRootArmed(sub.root);
     if (!result.ok) return result;
-    if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) return { ok: true };
+    if (this.subs.get(key) !== sub || sub.client.isClosed()) return { ok: true };
     const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
-    sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
+    sub.client.publish("worktree-changed", payload);
     return { ok: true };
   }
 
@@ -632,18 +633,18 @@ export class WorktreeChangeWatchManager {
       root.maxWaitAt = null;
       if (!this.isRootLive(root)) return;
       for (const [key, sub] of root.subscribers) {
-        if (!sub.active || this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
+        if (!sub.active || this.subs.get(key) !== sub || sub.client.isClosed()) continue;
         const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
-        sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
+        sub.client.publish("worktree-changed", payload);
       }
     }, delay);
   }
 
   private emitWatchError(root: SharedWorktreeWatch, message: string): void {
     for (const [key, sub] of root.subscribers) {
-      if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
+      if (this.subs.get(key) !== sub || sub.client.isClosed()) continue;
       const payload: WorktreeWatchErrorEvent = { ticketId: sub.ticketId, error: message };
-      sub.webContents.send("volli:worktree-watch-error" satisfies VolliIpcEvent, payload);
+      sub.client.publish("worktree-watch-error", payload);
     }
   }
 
@@ -652,8 +653,8 @@ export class WorktreeChangeWatchManager {
     if (!sub) return;
     this.subs.delete(key);
     sub.root.subscribers.delete(key);
-    if (!sub.webContents.isDestroyed()) {
-      sub.webContents.removeListener("destroyed", sub.onDestroyed);
+    if (!sub.client.isClosed()) {
+      sub.client.removeCloseListener(sub.onDestroyed);
     }
     if (sub.root.subscribers.size === 0) {
       if (options.linger === true) this.scheduleRootTeardown(sub.root);
@@ -720,8 +721,8 @@ export class WorktreeChangeWatchManager {
 
     for (const [key, sub] of root.subscribers) {
       this.subs.delete(key);
-      if (!sub.webContents.isDestroyed()) {
-        sub.webContents.removeListener("destroyed", sub.onDestroyed);
+      if (!sub.client.isClosed()) {
+        sub.client.removeCloseListener(sub.onDestroyed);
       }
     }
     root.subscribers.clear();

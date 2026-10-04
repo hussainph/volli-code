@@ -24,7 +24,7 @@ import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
 import type { NotificationOutcome, NotificationRequest } from "./notifications/dispatch";
 
 import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot } from "./blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
 import { listComments } from "@volli/host-core/db/comments-repo";
 import {
@@ -61,10 +61,13 @@ import {
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
-import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
+import { archiveTicketCommand, updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
-import { scriptedGit } from "./worktree/scripted-git";
-import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
+import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
+import {
+  getWorktreeSnapshots,
+  resetWorktreeSnapshotsForTest,
+} from "@volli/host-core/worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
 

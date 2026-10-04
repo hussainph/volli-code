@@ -280,7 +280,7 @@ export function updateProjectAuthorityPolicy(
  * The ONE write that moves `projects.path` after creation, and it moves
  * nothing else: the id stays, which is what keeps every ticket, label, event,
  * Session and setting attached to the same project through a rename. Callers
- * come through `relinkProject` (`src/main/project-relink.ts`), which is where
+ * come through `relinkProject` (`packages/host-core/src/project-relink.ts`), which is where
  * the folder is judged before this is reached — this function trusts its
  * argument exactly as its `base_branch`/`setup_command` siblings above do.
  */

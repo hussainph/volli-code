@@ -20,8 +20,8 @@ import {
   runNet,
   type ReclaimDeps,
   type TrimFinishDeps,
-} from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+} from "@volli/host-core/worktree";
+import { worktreeDeps } from "./worktree-host";
 
 let watcher: RetentionWatcher | null = null;
 

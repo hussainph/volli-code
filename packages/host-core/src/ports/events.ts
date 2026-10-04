@@ -6,11 +6,9 @@
  * carries a topic — an Electron channel to every window today, the host
  * protocol tomorrow — is the adapter's business, not the publisher's.
  *
- * Only broadcasts live here. A stream one client subscribed to (a watched
- * worktree, a terminal's output, a file watch) is addressed to that client and
- * has its own lifetime; the move that takes the first of them out of desktop
- * (VC-556, VC-557, VC-560) adds that addressed half beside this bus, over the
- * same topic map.
+ * A stream one client subscribed to (a watched worktree, a terminal's output,
+ * a file watch) goes through HostClientEventSink, over the same topic map.
+ * The sink belongs to exactly one client and carries its connection lifetime.
  *
  * Desktop's adapter is `apps/desktop/src/main/broadcast.ts`: each topic goes
  * out on its `volli:<topic>` channel to every live window, exactly as the
@@ -33,6 +31,8 @@ import type {
   SessionsInterruptedEvent,
   SessionStartedNotice,
   WorktreePhaseEvent,
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
 } from "@volli/shared";
 
 /** Every fact a host announces, by topic. A topic is the channel name minus `volli:`. */
@@ -64,14 +64,39 @@ export interface HostEventMap {
   "pending-armed-run-settled": PendingArmedRunSettledNotice;
   /** A worktree `ensure` moved to its next phase. */
   "worktree-phase": WorktreePhaseEvent;
+  /** A subscribed client's worktree changed. Never broadcast by the watch. */
+  "worktree-changed": WorktreeChangedEvent;
+  /** A subscribed client's worktree watch faulted, before its teardown. */
+  "worktree-watch-error": WorktreeWatchErrorEvent;
 }
 
 export type HostEventTopic = keyof HostEventMap;
+/** Subscription events are addressed only; a broadcast port cannot publish them. */
+export type HostClientEventTopic =
+  | "worktree-changed"
+  | "worktree-watch-error"
+  | "file-changed"
+  | "dir-changed";
+export type HostBroadcastEventTopic = Exclude<HostEventTopic, HostClientEventTopic>;
 
 /**
  * Sends a fact to every connected client. Fire-and-forget: a host never waits
  * on, or learns about, delivery. A host with no client connected drops it.
  */
 export interface HostEventBus {
-  publish<T extends HostEventTopic>(topic: T, payload: HostEventMap[T]): void;
+  publish<T extends HostBroadcastEventTopic>(topic: T, payload: HostEventMap[T]): void;
+}
+
+/**
+ * One client's addressed event stream (VC-556). The host supplies a stable,
+ * connection-scoped id, typed delivery, and disconnect hooks. A service removes
+ * its own hook on unsubscribe; disconnect releases its subscriptions immediately.
+ * Desktop adapts exactly the requesting WebContents, never every window.
+ */
+export interface HostClientEventSink {
+  publish<T extends HostClientEventTopic>(topic: T, payload: HostEventMap[T]): void;
+  readonly id: string;
+  isClosed(): boolean;
+  onceClosed(listener: () => void): void;
+  removeCloseListener(listener: () => void): void;
 }

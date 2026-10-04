@@ -121,3 +121,26 @@ export * from "./theme/editor-themes";
 export * from "./session-origin";
 export * from "./session-stop";
 export * from "./experiments";
+
+export type {
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+  WorktreeBranchListing,
+  DirtyWorktreeOrphan,
+  RemovableWorktreeOrphan,
+  KeptWorktreeOrphan,
+  PrunableWorktreeMetadata,
+  KeptWorktreeMetadata,
+  UnreadableWorktreeProject,
+  WorktreeTrimRemoval,
+  WorktreeTrimKeep,
+  WorktreeTrimReport,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+  WorktreeTrimSettings,
+  WorktreeTrimSettingsInput,
+  WorktreeDiffMode,
+  PrCheckState,
+  PrCheck,
+  TicketRetentionState,
+} from "./worktree-host";

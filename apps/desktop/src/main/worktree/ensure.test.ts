@@ -5,19 +5,19 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot, removeBlob } from "../blob-store";
+import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
 import { listTicketEvents } from "@volli/host-core/db/events-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 import { getTicketRow, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { updateTicketFieldsCommand } from "../ticket-commands";
-import { ensure } from "./ensure";
-import { runGitCapturing, runGitCapturingAsync } from "./git";
-import { resetPhasesForTest } from "./phase";
-import { readWorktreeStatus } from "./read";
-import { resetRepositoryTurnsForTest } from "./repository-turn";
-import { scriptedGit, type GitCall } from "./scripted-git";
-import type { RunGitAsync, WorktreePhase } from "./types";
+import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
+import { ensure } from "@volli/host-core/worktree/ensure";
+import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree/git";
+import { resetPhasesForTest } from "@volli/host-core/worktree/phase";
+import { readWorktreeStatus } from "@volli/host-core/worktree/read";
+import { resetRepositoryTurnsForTest } from "@volli/host-core/worktree/repository-turn";
+import { scriptedGit, type GitCall } from "@volli/host-core/worktree/scripted-git";
+import type { RunGitAsync, WorktreePhase } from "@volli/host-core/worktree/types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];

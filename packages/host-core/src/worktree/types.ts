@@ -5,7 +5,7 @@
  * stage connects — so nothing in here reaches for a process-global.
  */
 import type Database from "better-sqlite3";
-import type { WorktreePhase } from "../../ipc/contract";
+import type { WorktreePhase } from "@volli/shared";
 
 import type { RunGit } from "../project-base-branch";
 
@@ -25,11 +25,11 @@ export type RunGitAsync = (args: readonly string[], cwd: string) => Promise<stri
  * the same reason {@link RunGit} is: the suite drives it, never the disk.
  */
 export type StatMtimeMs = (path: string) => number | null;
-// The phase vocabulary is DEFINED in the IPC contract because the renderer
-// consumes it over `volli:worktree-phase`; this module re-exports it so
+// The phase vocabulary lives in @volli/shared; the renderer consumes it over
+// `volli:worktree-phase`. This module re-exports it so
 // internal callers keep one import site.
 export type { WorktreeIdentity } from "@volli/shared";
-export type { WorktreePhase } from "../../ipc/contract";
+export type { WorktreePhase } from "@volli/shared";
 
 /**
  * The single injected dependency bundle every public entrypoint takes. `home`

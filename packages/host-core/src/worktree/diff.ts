@@ -17,7 +17,7 @@
  * `pre/{old => new}/suf`) — we keep the NEW path, the thing that exists now.
  */
 import { DiffFileStat, DiffStat } from "@volli/shared";
-import type { WorktreeDiffMode } from "../../ipc/contract";
+import type { WorktreeDiffMode } from "@volli/shared";
 
 import { resolveComparisonRefAsync } from "./comparison-ref";
 import { stderrOf } from "./git";

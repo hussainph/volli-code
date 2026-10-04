@@ -88,6 +88,46 @@
     "./skills": {
       "types": "./src/skills.ts",
       "import": "./src/skills.ts"
+    },
+    "./worktree": {
+      "types": "./src/worktree/index.ts",
+      "import": "./src/worktree/index.ts"
+    },
+    "./worktree-runtime": {
+      "types": "./src/worktree-runtime.ts",
+      "import": "./src/worktree-runtime.ts"
+    },
+    "./project-base-branch": {
+      "types": "./src/project-base-branch.ts",
+      "import": "./src/project-base-branch.ts"
+    },
+    "./project-relink": {
+      "types": "./src/project-relink.ts",
+      "import": "./src/project-relink.ts"
+    },
+    "./project-roots": {
+      "types": "./src/project-roots.ts",
+      "import": "./src/project-roots.ts"
+    },
+    "./blob-store": {
+      "types": "./src/blob-store.ts",
+      "import": "./src/blob-store.ts"
+    },
+    "./blob-materialize": {
+      "types": "./src/blob-materialize.ts",
+      "import": "./src/blob-materialize.ts"
+    },
+    "./ticket-commands": {
+      "types": "./src/ticket-commands.ts",
+      "import": "./src/ticket-commands.ts"
+    },
+    "./credential-helper-diagnostics": {
+      "types": "./src/credential-helper-diagnostics.ts",
+      "import": "./src/credential-helper-diagnostics.ts"
+    },
+    "./worktree/*": {
+      "types": "./src/worktree/*.ts",
+      "import": "./src/worktree/*.ts"
     }
   },
   "scripts": {

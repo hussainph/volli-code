@@ -26,7 +26,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { PrCheck, PrCheckState } from "../../ipc/contract";
+import type { PrCheck, PrCheckState } from "@volli/shared";
 import {
   credentialHelperExplanation,
   type CredentialHelperIssue,

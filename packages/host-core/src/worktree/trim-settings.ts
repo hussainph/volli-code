@@ -13,7 +13,7 @@
  * costs a person the least is the one that keeps their machine fast.
  */
 import type Database from "better-sqlite3";
-import type { WorktreeTrimSettings, WorktreeTrimSettingsInput } from "../../ipc/contract";
+import type { WorktreeTrimSettings, WorktreeTrimSettingsInput } from "@volli/shared";
 
 import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 import { DEFAULT_TRIM_KEEP_PATTERNS } from "./trim";

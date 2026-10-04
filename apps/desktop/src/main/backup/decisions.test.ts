@@ -12,7 +12,7 @@ import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { volliRuntimePaths } from "../agent-runtime";
-import { blobsRoot } from "../blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import { browserPicturesRoot } from "../browser/picture-disk";
 import { openTestDb } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";

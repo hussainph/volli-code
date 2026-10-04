@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 
-import { blobFilePath } from "../blob-store";
+import { blobFilePath } from "@volli/host-core/blob-store";
 import {
   createFileTranscriptArtifactStore,
   transcriptReferenceForId,

@@ -40,7 +40,7 @@ import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
-import { isPathWithinRoots } from "../project-roots";
+import { isPathWithinRoots } from "@volli/host-core/project-roots";
 import { ensureProjectArtifactsDir } from "@volli/host-core/volli-fs";
 import {
   acquireWorktreeStartLease,
@@ -48,10 +48,11 @@ import {
   ensure,
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
-} from "../worktree";
-import type { EnsureOutcome, SetupRun } from "../worktree";
-import { worktreeDeps, worktreesHome } from "../worktree-runtime";
-import { isInside } from "../worktree/paths";
+} from "@volli/host-core/worktree";
+import type { EnsureOutcome, SetupRun } from "@volli/host-core/worktree";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
+import { worktreeDeps } from "../worktree-host";
+import { isInside } from "@volli/host-core/worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
 import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";

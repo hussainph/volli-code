@@ -26,7 +26,11 @@ import {
   findLabelRetirement,
   listLabelsByProject,
 } from "@volli/host-core/db/labels-repo";
-import { mergeLabelsCommand, planLabelMerge, type LabelMergePlan } from "../ticket-commands";
+import {
+  mergeLabelsCommand,
+  planLabelMerge,
+  type LabelMergePlan,
+} from "@volli/host-core/ticket-commands";
 import { emitTicketWakesSince, markTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";

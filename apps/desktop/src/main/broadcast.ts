@@ -17,7 +17,7 @@
  * events and are sent directly.
  */
 import { BrowserWindow } from "electron";
-import type { HostEventBus, HostEventMap, HostEventTopic } from "@volli/host-core/ports";
+import type { HostEventBus, HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import type { PendingArmedRun } from "@volli/shared";
 import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
 import type {
@@ -55,9 +55,7 @@ const dataChanges = createDataChangeCoalescer({
 });
 
 /** How each host topic reaches the windows: its channel, and for one, its cadence. */
-const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => void } = {
-  "file-changed": (event) => sendToEveryWindow("volli:file-changed", event),
-  "dir-changed": (event) => sendToEveryWindow("volli:dir-changed", event),
+const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[T]) => void } = {
   "data-changed": (change) => dataChanges.queue(change),
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
   "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),

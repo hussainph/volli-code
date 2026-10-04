@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "../ipc/contract";
 import { FILE_CHANNELS } from "./ipc-descriptors";
-import { syncProjectRoots } from "./project-roots";
+import { syncProjectRoots } from "@volli/host-core/project-roots";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts/data-ipc.test.ts, so the

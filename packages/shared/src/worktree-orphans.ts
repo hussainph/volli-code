@@ -7,7 +7,7 @@
  * half that has to be host-neutral for that to mean anything: a scan proposal,
  * a cleanup command's plan, and the immutable outcome of every item it touched.
  * Electron's channel catalog re-exports these for its own transport; the core
- * that mints and folds them (`apps/desktop/src/main/worktree/cleanup-engine.ts`)
+ * that mints and folds them (`packages/host-core/src/worktree/cleanup-engine.ts`)
  * knows nothing about IPC, SQLite or a renderer.
  *
  * Worktrees remain machine-bound resources — nothing here proposes syncing a

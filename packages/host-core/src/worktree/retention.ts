@@ -31,7 +31,7 @@ import { recordTicketEvent } from "@volli/host-core/db/events-repo";
 import { prepared } from "@volli/host-core/db/prepared";
 import { getTicketRow } from "@volli/host-core/db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
-import type { WorktreeTrimReport } from "../../ipc/contract";
+import type { WorktreeTrimReport } from "@volli/shared";
 import type { BusyWorktreeSites } from "./activity";
 import type { AgentSiteReleaseReport } from "./agent-sites";
 import { remove, type WorktreeRemoveOptions } from "./remove";

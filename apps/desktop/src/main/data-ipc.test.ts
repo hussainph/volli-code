@@ -68,8 +68,8 @@ const { detectAsync, detectSync } = vi.hoisted(() => ({
   detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
-vi.mock("./project-base-branch", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./project-base-branch")>()),
+vi.mock("@volli/host-core/project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@volli/host-core/project-base-branch")>()),
   detectProjectBaseBranchAsync: detectAsync,
   detectProjectBaseBranch: detectSync,
 }));
@@ -134,7 +134,7 @@ vi.mock("electron", () => ({
 // shell out; `worktree-runtime`'s `worktreeDeps` stays real (it just builds a
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
-vi.mock("./worktree", async () => ({
+vi.mock("@volli/host-core/worktree", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   // The rail reads. Mocked so the coalescing/dedup assertions below can count
@@ -158,21 +158,23 @@ vi.mock("./worktree", async () => ({
   // NOT mocked: the cleanup command core and its SQLite ledger are what the
   // channel's receipts and durable history come from, and a stand-in would
   // answer a different question than the one production asks (VC-284 S1).
-  ...(await vi.importActual<typeof import("./worktree/cleanup-engine")>(
-    "./worktree/cleanup-engine",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-engine")>(
+    "@volli/host-core/worktree/cleanup-engine",
   )),
-  ...(await vi.importActual<typeof import("./worktree/cleanup-ledger")>(
-    "./worktree/cleanup-ledger",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-ledger")>(
+    "@volli/host-core/worktree/cleanup-ledger",
   )),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
-  ...(await vi.importActual<typeof import("./worktree/activity")>("./worktree/activity")),
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/activity")>(
+    "@volli/host-core/worktree/activity",
+  )),
   // NOT mocked either: the deletion lease is the serialization the manual
   // delete and the cleanup share (VC-284 review C4), and a stand-in would let
   // this channel claim a lease discipline it does not have.
-  ...(await vi.importActual<typeof import("./worktree/deletion-lease")>(
-    "./worktree/deletion-lease",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/deletion-lease")>(
+    "@volli/host-core/worktree/deletion-lease",
   )),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
@@ -232,8 +234,8 @@ import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { worktreesHome } from "./worktree-runtime";
-import { projectContainerName } from "./worktree/containers";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
+import { projectContainerName } from "@volli/host-core/worktree/containers";
 import {
   archiveAndClean,
   cleanupOrphans,
@@ -253,11 +255,14 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-} from "./worktree";
-import { resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
-import { orphanCleanupEngine } from "./worktree-runtime";
-import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
-import { updateTicketFieldsCommand } from "./ticket-commands";
+} from "@volli/host-core/worktree";
+import { resetWorktreeSnapshotsForTest } from "@volli/host-core/worktree/snapshot";
+import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
+import {
+  acquireDeletionLease,
+  resetDeletionLeasesForTest,
+} from "@volli/host-core/worktree/deletion-lease";
+import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,

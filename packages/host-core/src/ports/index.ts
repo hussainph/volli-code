@@ -12,7 +12,14 @@ export {
   type ClientCapabilityPort,
   type ClientMenuItem,
 } from "./client";
-export type { HostEventBus, HostEventMap, HostEventTopic } from "./events";
+export type {
+  HostClientEventSink,
+  HostClientEventTopic,
+  HostBroadcastEventTopic,
+  HostEventBus,
+  HostEventMap,
+  HostEventTopic,
+} from "./events";
 export { NO_POWER_EVENTS, type PowerEvent, type PowerPort } from "./power";
 export {
   isSecretKeyUnavailable,

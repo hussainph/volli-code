@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessId, HarnessWrapperLookup } from "@volli/shared";
 import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot } from "../blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import type { EnsureOutcome } from "../worktree";
+import type { EnsureOutcome } from "@volli/host-core/worktree";
 import type { SessionScope } from "./scope";
 import { composeWorktreeLaunchCommand } from "./launch";
 
