@@ -7,6 +7,8 @@ repo-import searches across `apps/desktop/src/main`, and transaction-body review
 in `packages/session-engine`. Counts below name transaction boundaries, not
 SQL strings in migration definitions or prose.
 
+> **Paths moved (VC-553).** `apps/desktop/src/main/db/` is now `packages/host-core/src/db/` (`@volli/host-core/db/*`), and its coverage entries moved to `packages/host-core/vite.config.ts`. The paths below are as of this document's writing.
+
 ## Runtime write/read paths
 
 | Paths (relative to `apps/desktop/src/main`) | Ownership |

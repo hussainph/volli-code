@@ -72,8 +72,9 @@ describe("createHostCore", () => {
       },
     );
     if (!strict.database.ok) throw new Error(strict.database.error);
-    expect(() => strict.database.db.exec("BEGIN")).toThrow("transaction ownership");
-    expect(strict.database.db.inTransaction).toBe(false);
+    const strictDb = strict.database.db;
+    expect(() => strictDb.exec("BEGIN")).toThrow("transaction ownership");
+    expect(strictDb.inTransaction).toBe(false);
 
     const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const packaged = compose(
